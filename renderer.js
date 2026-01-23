@@ -3148,18 +3148,17 @@ if (cashOpenCancelBtn) {
 
 if (cashOpenOkBtn) {
   cashOpenOkBtn.onclick = async () => {
-    if (cashOpenOkBtn) cashOpenOkBtn.disabled = true;
+    cashOpenOkBtn.disabled = true;
+
     try {
       if (cashDialogMode === "open") {
         await confirmCashOpening();
         return;
       }
 
-      // ✅ BLOQUEO: no permitir cerrar caja con tickets aparcados
       const parkedCount = Array.isArray(parkedTickets)
         ? parkedTickets.length
         : 0;
-
       if (parkedCount > 0) {
         await confirmModal(
           "No puedes cerrar la caja",
@@ -3169,7 +3168,6 @@ if (cashOpenOkBtn) {
         return;
       }
 
-      // ✅ CONFIRMAR CIERRE
       const ok = await confirmCashCloseModal(
         "¿Seguro que quieres cerrar la caja?\n\nEsta acción registrará el cierre y no se puede deshacer.",
       );
@@ -3177,7 +3175,7 @@ if (cashOpenOkBtn) {
 
       await confirmCashClosing();
     } finally {
-      if (cashOpenOkBtn) cashOpenOkBtn.disabled = false;
+      cashOpenOkBtn.disabled = false;
     }
   };
 }
