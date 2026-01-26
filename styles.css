@@ -2443,3 +2443,46 @@ body.modal-locked .cart-card {
   opacity: 0.65;
   text-align: right;
 }
+
+/* ===== Observaciones en listado tickets ===== */
+.ticket-row {
+  align-items: flex-start; /* ✅ deja que el texto respire arriba */
+}
+
+.ticket-left {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Haz que el bloque del total/botones no “empuje” tanto */
+.ticket-right {
+  flex: 0 0 auto;
+  min-width: 170px; /* ajusta 150-220 según tu UI */
+}
+
+/* Observaciones: grande, visible, 2 líneas */
+.ticket-obs {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #f1f5f9; /* gris suave */
+  font-size: 15px; /* ✅ más grande */
+  font-weight: 700;
+  line-height: 1.25;
+  opacity: 1;
+
+  /* 2 líneas máximo */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+
+  /* ✅ ocupa el ancho disponible */
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Opcional: si hay observaciones, resalta un poco el borde */
+.ticket-has-obs .ticket-obs {
+  border: 1px solid #dbeafe;
+}

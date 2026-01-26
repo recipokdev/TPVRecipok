@@ -1550,6 +1550,32 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
+// ===== Wiring QWERTY para inputs del TPV =====
+function wireQwertyInputs() {
+  // Cobrar -> Observaciones
+  if (payObs) {
+    const open = () => openQwertyForInput(payObs, "text");
+    payObs.addEventListener("focus", open);
+    payObs.addEventListener("click", open);
+  }
+
+  // Cobrar -> Número (si también quieres teclado ahí)
+  if (payNumber) {
+    const open = () => openQwertyForInput(payNumber, "text");
+    payNumber.addEventListener("focus", open);
+    payNumber.addEventListener("click", open);
+  }
+
+  // Tickets -> botón teclado
+  if (ticketsKeyboardBtn && ticketsSearch) {
+    ticketsKeyboardBtn.onclick = () => openQwertyForInput(ticketsSearch, "text");
+  }
+}
+
+// Importante: ejecutar cuando el DOM ya existe
+document.addEventListener("DOMContentLoaded", wireQwertyInputs);
+
+
 // ===== Eventos del carrito =====
 const cartLinesContainer = document.getElementById("cartLines");
 
@@ -4124,8 +4150,22 @@ async function updateFacturaCliente(idfactura, fields) {
   Object.entries(fields).forEach(([k, v]) => {
     if (v === undefined || v === null) return;
 
-    // ✅ no mandar strings vacíos (FK/validaciones)
-    if (typeof v === "string" && v.trim() === "") return;
+    // booleans -> 1/0 (FS lo suele esperar así)
+    if (typeof v === "boolean") v = v ? 1 : 0;
+
+    // números: evita NaN/Infinity
+    const MONEY_FIELDS = new Set(["tpv_efectivo", "tpv_cambio"]);
+
+    if (typeof v === "number") {
+      if (!isFinite(v)) return;
+      if (MONEY_FIELDS.has(k)) v = Number(v.toFixed(2));
+      else v = Math.trunc(v); // ids/estados
+    }
+
+    // no mandar strings vacíos (salvo que tengas un campo donde quieras vaciarlo)
+    const ALLOW_EMPTY = new Set(["numero2", "observaciones"]); // añade los que quieras permitir vaciar
+
+    if (typeof v === "string" && v.trim() === "" && !ALLOW_EMPTY.has(k)) return;
 
     body.append(k, String(v));
   });
@@ -5250,8 +5290,7 @@ function buildFsLinesFromCart(cartArr) {
 }
 
 function round2(n) {
-  const v = Number(n);
-  if (!isFinite(v)) return 0;
+  const v = Number(n) || 0;
   return Math.round((v + Number.EPSILON) * 100) / 100;
 }
 
@@ -5618,10 +5657,11 @@ async function onPayButtonClick() {
 
     // total carrito (ya con IVA)
 
-    const totalCart = getCartTotal(cart);
+    const totalCart = round2(getCartTotal(cart));
+    const payResult = await openPayModal(totalCart);
 
     // 1) Abrimos modal de cobro (formas de pago reales)
-    const payResult = await openPayModal(totalCart);
+
     if (!payResult) {
       setStatusText("Cobro cancelado");
       return;
@@ -5629,6 +5669,9 @@ async function onPayButtonClick() {
 
     // 2) Construimos payload factura
     const ticketPayload = buildTicketPayloadFromCart();
+
+    // ✅ Observaciones del cobro -> FacturaScripts
+    ticketPayload.observaciones = (payResult?.observaciones || "").toString();
 
     // ✅ VINCULAR SIEMPRE A TPV y CAJA ABIERTA
     ticketPayload.idtpv = Number(currentTerminal?.id || 0) || null;
@@ -5691,6 +5734,17 @@ async function onPayButtonClick() {
 
     // ✅ Snapshot INMUTABLE y SIEMPRE array
     const cartSnapshot = Array.isArray(cart) ? cart.map((i) => ({ ...i })) : [];
+
+    // ✅ Datos para OFFLINE post-proceso (emitir/pagar/recibos)
+    ticketPayload._payBreakdown = pagos; // desglose pagos
+    ticketPayload._payCambio = Number(tpv_cambio || 0); // cambio
+    ticketPayload._payNumero2 = (payResult.numero ?? "").toString(); // numero2
+    ticketPayload._payNick = (
+      currentAgent?.nick ||
+      currentAgent?.nombre ||
+      getLoginUser?.() ||
+      "Ventas"
+    ).toString();
 
     const sendResult = await sendOrQueueFactura(ticketPayload);
 
@@ -5815,18 +5869,29 @@ async function onPayButtonClick() {
       const upd = {
         idestado: 11,
         pagada: 1,
+
+        // importante TPV
+        tpv_venta: 1,
+        tpv_efectivo: Number(tpv_efectivo.toFixed(2)),
+        tpv_cambio: Number(tpv_cambio.toFixed(2)),
+
+        // informativos
         codpago: ticketPayload.codpago || "",
         idtpv: currentTerminal?.id || "",
         codalmacen: currentTerminal?.codalmacen || "",
+        observaciones: (payResult?.observaciones || "").toString(),
 
-        // ✅ CLAVE para “Ingresos en efectivo” en tpvcajas
-        tpv_efectivo: Number(tpv_efectivo.toFixed(2)),
-        tpv_cambio: Number(tpv_cambio.toFixed(2)),
+        // ✅ PARA QUE QUEDE IGUAL AL TPV ANTIGUO
+        numero2: (payResult?.numero ?? "").toString(),
+        nick: (
+          currentAgent?.nick ||
+          currentAgent?.nombre ||
+          getLoginUser?.() ||
+          "Ventas"
+        ).toString(),
       };
 
-      // ✅ SOLO enviar codagente si existe (evita FK)
       if (currentAgent?.codagente) upd.codagente = currentAgent.codagente;
-
       await updateFacturaCliente(idfactura, upd);
     }
 
@@ -6175,20 +6240,73 @@ const payNumber = document.getElementById("payNumber");
 const paySerie = document.getElementById("paySerie");
 
 let payModalState = {
-  total: 0,
-  formas: [], // [{codpago, descripcion}]
-  values: {}, // { codpago: "texto" }
-  selectedCodpago: null, // input activo
+  totalCents: 0,
+  formas: [],
+  values: {}, // seguimos guardando strings en inputs
+  selectedCodpago: null,
 };
 
 // utilidades € (sin romper tus eur())
-function parseEuroStr(s) {
-  const v = String(s || "")
-    .trim()
-    .replace(",", ".");
-  const n = Number(v);
-  return isNaN(n) ? 0 : n;
+function toCents(v) {
+  // redondea a 2 decimales antes de pasar a céntimos
+  const r = round2(v);
+  return Math.round((r + Number.EPSILON) * 100);
 }
+function fromCents(c) {
+  return (Number(c) || 0) / 100;
+}
+function euroStrToCents(input) {
+  let s = String(input ?? "")
+    .trim()
+    .replace(/\s/g, "")
+    .replace("€", "");
+
+  if (!s) return 0;
+
+  // deja solo dígitos y separadores
+  s = s.replace(/[^0-9.,-]/g, "");
+
+  // soporta negativo si algún día lo necesitas
+  let sign = 1;
+  if (s.startsWith("-")) {
+    sign = -1;
+    s = s.slice(1);
+  }
+
+  // ¿dónde está el separador decimal? -> el ÚLTIMO '.' o ','
+  const lastDot = s.lastIndexOf(".");
+  const lastComma = s.lastIndexOf(",");
+  const decPos = Math.max(lastDot, lastComma);
+
+  let intPart = s;
+  let decPart = "";
+
+  if (decPos >= 0) {
+    intPart = s.slice(0, decPos);
+    decPart = s.slice(decPos + 1);
+  }
+
+  // quita separadores de miles del entero
+  intPart = intPart.replace(/[.,]/g, "");
+  // decimales: solo dígitos y máx 2
+  decPart = decPart.replace(/[^\d]/g, "").slice(0, 2);
+
+  const intNum = intPart ? Number(intPart) : 0;
+  if (!isFinite(intNum)) return 0;
+
+  const decNum = decPart ? Number(decPart.padEnd(2, "0")) : 0;
+  const cents = intNum * 100 + decNum;
+
+  return sign * cents;
+}
+
+function centsToEuro2(c) {
+  return fromCents(c).toFixed(2);
+}
+function centsToEuro2es(c) {
+  return centsToEuro2(c).replace(".", ",") + " €";
+}
+
 function euro2(n) {
   return (Number(n) || 0).toFixed(2);
 }
@@ -6196,50 +6314,40 @@ function euro2es(n) {
   return euro2(n).replace(".", ",") + " €";
 }
 
-function sumPagos() {
+function sumPagosCents() {
   let sum = 0;
   for (const cod of Object.keys(payModalState.values)) {
-    sum += parseEuroStr(payModalState.values[cod]);
+    sum += euroStrToCents(payModalState.values[cod]);
   }
   return sum;
 }
 
-function remainingToPay() {
-  return Math.max(0, payModalState.total - sumPagos());
+function remainingToPayCents() {
+  return Math.max(0, (payModalState.totalCents || 0) - sumPagosCents());
 }
 
-function calcChange() {
-  return Math.max(0, sumPagos() - payModalState.total);
+function calcChangeCents() {
+  return Math.max(0, sumPagosCents() - (payModalState.totalCents || 0));
 }
 
 function clampNonCashValue(codEdited) {
-  const total = Number(payModalState.total || 0);
+  const totalC = payModalState.totalCents || 0;
 
-  // suma efectivo "entregado" (puede exceder)
-  let cashGiven = 0;
-  // suma no-efectivo (tarjeta/bizum/etc)
-  let nonCashSum = 0;
+  let cashGivenC = 0; // efectivo entregado (puede exceder)
+  let nonCashSumC = 0; // no-efectivo entregado
 
   for (const fp of payModalState.formas) {
     const cod = fp.codpago;
-    const v = parseEuroStr(payModalState.values[cod] || "");
+    const vC = euroStrToCents(payModalState.values[cod] || "");
     if (isCashPago({ codpago: cod, descripcion: fp.descripcion }))
-      cashGiven += v;
-    else nonCashSum += v;
+      cashGivenC += vC;
+    else nonCashSumC += vC;
   }
 
-  cashGiven = Number(cashGiven.toFixed(2));
-  nonCashSum = Number(nonCashSum.toFixed(2));
+  const maxNonCashTotalC = Math.max(0, totalC - Math.min(cashGivenC, totalC));
 
-  // máximo total permitido para NO efectivo:
-  // total - min(efectivo_entregado, total)
-  const maxNonCashTotal = Math.max(0, total - Math.min(cashGiven, total));
+  if (nonCashSumC <= maxNonCashTotalC) return;
 
-  // Si no nos pasamos, ok
-  if (nonCashSum <= maxNonCashTotal + 1e-9) return;
-
-  // Necesitamos recortar "algo".
-  // Regla: recortamos el que se está editando si es no-cash.
   const editedIsCash = isCashPago({
     codpago: codEdited,
     descripcion:
@@ -6252,26 +6360,23 @@ function clampNonCashValue(codEdited) {
   if (!editedIsCash) {
     targetCod = codEdited;
   } else {
-    // si estabas tocando efectivo, recortamos el último no-cash con valor > 0
     const rev = payModalState.formas.slice().reverse();
     const lastNonCash = rev.find((fp) => {
       const cod = fp.codpago;
       if (isCashPago({ codpago: cod, descripcion: fp.descripcion }))
         return false;
-      return parseEuroStr(payModalState.values[cod] || "") > 0;
+      return euroStrToCents(payModalState.values[cod] || "") > 0;
     });
     targetCod = lastNonCash ? lastNonCash.codpago : null;
   }
 
   if (!targetCod) return;
 
-  // cuánto nos pasamos
-  const excess = nonCashSum - maxNonCashTotal;
+  const excessC = nonCashSumC - maxNonCashTotalC;
+  const curC = euroStrToCents(payModalState.values[targetCod] || "");
+  const newC = Math.max(0, curC - excessC);
 
-  const cur = parseEuroStr(payModalState.values[targetCod] || "");
-  const newVal = Math.max(0, cur - excess);
-
-  payModalState.values[targetCod] = euro2(newVal);
+  payModalState.values[targetCod] = centsToEuro2(newC);
 
   const inp = payMethodsList
     ? payMethodsList.querySelector(`.pay-amount[data-codpago="${targetCod}"]`)
@@ -6302,17 +6407,14 @@ function selectPayInput(codpago) {
 }
 
 function renderPayHeaderTotals() {
-  if (payTotalBig) payTotalBig.textContent = euro2es(payModalState.total);
+  const totalC = payModalState.totalCents || 0;
+  if (payTotalBig) payTotalBig.textContent = centsToEuro2es(totalC);
 
-  // Diferencia: pagado - total (positivo = cambio, negativo = falta)
-  const diff = sumPagos() - payModalState.total;
+  const diffC = sumPagosCents() - totalC; // + = cambio, - = falta
+  const sign = diffC < 0 ? "-" : "";
+  const absC = Math.abs(diffC);
 
-  const signed = (n) => {
-    const sign = n < 0 ? "-" : "";
-    return sign + euro2(Math.abs(n)).replace(".", ",") + " €";
-  };
-
-  if (payChangeBig) payChangeBig.textContent = signed(diff);
+  if (payChangeBig) payChangeBig.textContent = sign + centsToEuro2es(absC);
 }
 
 function renderPayMethods() {
@@ -6365,29 +6467,21 @@ function renderPayMethods() {
       // ¿Cuántos métodos tienen importe > 0?
       const nonZeroCods = payModalState.formas
         .map((x) => x.codpago)
-        .filter((c) => parseEuroStr(payModalState.values[c] || "") > 0);
+        .filter((c) => euroStrToCents(payModalState.values[c] || "") > 0);
 
-      const currentVal = parseEuroStr(payModalState.values[cod] || "");
+      let targetC = 0;
 
-      let target = 0;
-
-      // Caso A: solo hay 0 o 1 método con valor y es este -> llenar TOTAL
-      // (aunque tuviera algo, Máx significa "completar con este método")
       if (
         nonZeroCods.length <= 1 &&
         (nonZeroCods.length === 0 || nonZeroCods[0] === cod)
       ) {
-        target = payModalState.total;
+        targetC = payModalState.totalCents || 0;
       } else {
-        // Caso B: pago mixto -> poner SOLO lo que falta para llegar al total
-        target = remainingToPay();
-        // Si ya tiene algo este método, lo sumamos (porque target es "lo que falta global", no "lo que falta en este input")
-        // En mixto, queremos que este método quede exactamente en "lo que falta" (no acumular)
-        // Así que NO sumamos currentVal.
+        targetC = remainingToPayCents();
       }
 
-      payModalState.values[cod] = euro2(target);
-      inp.value = euro2(target);
+      payModalState.values[cod] = centsToEuro2(targetC);
+      inp.value = centsToEuro2(targetC);
 
       selectPayInput(cod);
       renderPayHeaderTotals();
@@ -6447,7 +6541,7 @@ function payKeyAppend(ch) {
   v = v.replace(",", ".");
   if (v.includes(".")) {
     const [a, b] = v.split(".");
-    v = a + "." + (b || "").slice(0, 8); // permitir hasta 8 decimales por si acaso
+    v = a + "." + (b || "").slice(0, 2); // permitir hasta 2 decimales
   }
 
   payModalState.values[cod] = v;
@@ -6512,7 +6606,7 @@ async function openPayModal(total) {
   if (!payOverlay) throw new Error("Falta #payOverlay en index.html");
 
   setPayError("");
-  payModalState.total = Number(total) || 0;
+  payModalState.totalCents = toCents(total);
   payModalState.values = {};
   payModalState.selectedCodpago = null;
 
@@ -6537,6 +6631,32 @@ async function openPayModal(total) {
 
   // limpiar extras
   if (payObs) payObs.value = "";
+  // ✅ QWERTY en Observaciones del cobro
+  if (payObs) {
+    payObs.readOnly = true; // opcional: fuerza uso de teclado en pantalla
+    const open = () => {
+      // Usa tu función existente de teclado si ya la tienes.
+      // Si tu función se llama distinto, cambia window.openQwerty por el nombre real.
+      if (typeof window.openQwerty === "function") {
+        window.openQwerty(
+          String(payObs.value || ""),
+          (txt) => {
+            payObs.value = String(txt || "");
+          },
+          { title: "Observaciones", emailMode: false },
+        );
+      } else if (typeof window.openTextKeyboard === "function") {
+        window.openTextKeyboard(payObs); // si tu implementación trabaja por elemento
+      } else {
+        // fallback: permite teclado físico si no existe función
+        payObs.readOnly = false;
+      }
+    };
+
+    payObs.onfocus = open;
+    payObs.onclick = open;
+  }
+
   if (payNumber) payNumber.value = "";
   if (paySerie) paySerie.value = "";
 
@@ -6582,16 +6702,16 @@ async function openPayModal(total) {
       paySaveBtn.onclick = () => {
         setPayError("");
 
-        // 1) Construimos "entregado" desde inputs
+        // 1) Construimos "entregado" desde inputs (en CÉNTIMOS)
         const entregados = [];
         for (const fp of payModalState.formas) {
           const raw = String(payModalState.values[fp.codpago] || "").trim();
-          const val = parseEuroStr(raw);
-          if (val > 0) {
+          const c = euroStrToCents(raw);
+          if (c > 0) {
             entregados.push({
               codpago: fp.codpago,
               descripcion: fp.descripcion,
-              entregado: Number(euro2(val)), // lo que el cliente "da" en ese método
+              entregadoC: c,
             });
           }
         }
@@ -6601,23 +6721,23 @@ async function openPayModal(total) {
           return;
         }
 
-        const total = Number(payModalState.total || 0);
+        const totalC = payModalState.totalCents || 0;
 
-        // 2) Suma entregado total (sirve para validar que se cubre el total)
-        const pagadoEntregado = entregados.reduce(
-          (s, p) => s + (p.entregado || 0),
+        // 2) Validación: pagado (entregado) >= total
+        const pagadoEntregadoC = entregados.reduce(
+          (s, p) => s + (p.entregadoC || 0),
           0,
         );
 
-        if (pagadoEntregado + 0.00001 < total) {
+        if (pagadoEntregadoC < totalC) {
+          console.log("pagadoEntregadoC:", pagadoEntregadoC, "totalC:", totalC);
           setPayError("El importe pagado es inferior al total.");
           return;
         }
 
-        // 3) Separar no-cash (aplicado=entregado) y cash (entregado puede exceder)
+        // 3) Separar no-cash y cash
         const nonCash = [];
         const cash = [];
-
         for (const p of entregados) {
           const isCash = isCashPago({
             codpago: p.codpago,
@@ -6627,54 +6747,44 @@ async function openPayModal(total) {
           else nonCash.push(p);
         }
 
-        const nonCashSum = Number(
-          nonCash.reduce((s, p) => s + p.entregado, 0).toFixed(2),
-        );
+        // 4) Calcular aplicado + cambio (en céntimos)
+        const nonCashSumC = nonCash.reduce((s, p) => s + p.entregadoC, 0);
 
-        // cash aplicado = lo que falta después del no-cash
-        let cashNeeded = Number(Math.max(0, total - nonCashSum).toFixed(2));
+        let cashNeededC = Math.max(0, totalC - nonCashSumC);
+        const cashGivenC = cash.reduce((s, p) => s + p.entregadoC, 0);
+        const cambioC = Math.max(0, cashGivenC - cashNeededC);
 
-        // cash entregado total (puede ser mayor)
-        const cashGiven = Number(
-          cash.reduce((s, p) => s + p.entregado, 0).toFixed(2),
-        );
-
-        // cambio sale solo del cash
-        const cambio = Number(Math.max(0, cashGiven - cashNeeded).toFixed(2));
-
-        // 4) Construimos pagos APLICADOS:
-        //    - no-cash: importe = entregado (ya viene clamped)
-        //    - cash: importe = distribuimos cashNeeded en el orden de métodos cash
+        // 5) Construir pagos (importe = aplicado, entregado = entregado)
         const pagos = [];
 
-        // no-cash
+        // no-cash: aplicado = entregado
         for (const p of nonCash) {
           pagos.push({
             codpago: p.codpago,
             descripcion: p.descripcion,
-            importe: Number(p.entregado.toFixed(2)), // ✅ APLICADO
-            entregado: Number(p.entregado.toFixed(2)),
+            importe: fromCents(p.entregadoC),
+            entregado: fromCents(p.entregadoC),
           });
         }
 
-        // cash distribuido
+        // cash: aplicado = lo necesario (distribuido)
         for (const p of cash) {
-          const aplicado = Number(Math.min(p.entregado, cashNeeded).toFixed(2));
-          cashNeeded = Number((cashNeeded - aplicado).toFixed(2));
+          const aplicadoC = Math.min(p.entregadoC, cashNeededC);
+          cashNeededC -= aplicadoC;
 
           pagos.push({
             codpago: p.codpago,
             descripcion: p.descripcion,
-            importe: aplicado, // ✅ APLICADO (lo que cuenta como venta)
-            entregado: Number(p.entregado.toFixed(2)), // lo que dio el cliente
+            importe: fromCents(aplicadoC),
+            entregado: fromCents(p.entregadoC),
           });
         }
 
         const result = {
-          pagos, // ✅ ya son importes aplicados
-          total,
-          pagado: pagadoEntregado, // entregado total (para UI si lo quieres)
-          cambio, // ✅ cambio correcto
+          pagos,
+          total: fromCents(totalC),
+          pagado: fromCents(pagadoEntregadoC),
+          cambio: fromCents(cambioC),
           observaciones: payObs ? String(payObs.value || "") : "",
           numero: payNumber ? String(payNumber.value || "") : "",
           serie: paySerie ? String(paySerie.value || "") : "",
@@ -6960,6 +7070,10 @@ function renderTicketsList(tickets) {
     const fechaHora = `${t.fecha || ""} ${t.hora || ""}`.trim();
     const totalNum = Number(t.total || 0);
     const pago = t.codpago || "—";
+    // ✅ observaciones puede venir en el objeto plano o dentro de _raw
+const obs = String(t.observaciones ?? t._raw?.observaciones ?? "")
+  .replace(/\s+/g, " ")
+  .trim();
 
     const refunds = Array.isArray(t._refunds) ? t._refunds : [];
     const hasRefunds = refunds.length > 0 || !!t._hasPartialRefund;
@@ -6968,6 +7082,8 @@ function renderTicketsList(tickets) {
     // ✅ estado visual
     let statusClass = "ticket-status-ok";
     let badgeHtml = `<span class="ticket-badge ticket-badge-ok">OK</span>`;
+
+    if (obs) div.classList.add("ticket-has-obs");
 
     if (hasRefunds && isFullyRefunded) {
       statusClass = "ticket-status-fullref";
@@ -7006,15 +7122,20 @@ function renderTicketsList(tickets) {
           ${devCountTxt}
         </div>
 
-        <div class="ticket-mid">
-          <span class="ticket-client">${escapeHtml(cliente)}</span>
-          <span class="ticket-pay">${escapeHtml(pago)}</span>
-          <span class="ticket-id">${
-            t._offline ? "OFFLINE" : `ID ${t.idfactura}`
-          }</span>
-        </div>
+<div class="ticket-mid">
+  <span class="ticket-client">${escapeHtml(cliente)}</span>
+  <span class="ticket-pay">${escapeHtml(pago)}</span>
+  <span class="ticket-id">${t._offline ? "OFFLINE" : `ID ${t.idfactura}`}</span>
+</div>
 
-        <div class="ticket-bot">${escapeHtml(fechaHora)}</div>
+${
+  obs
+    ? `<div class="ticket-obs">${escapeHtml(obs)}</div>`
+    : ""
+}
+
+<div class="ticket-bot">${escapeHtml(fechaHora)}</div>
+
       </div>
 
       <div class="ticket-right">
@@ -8717,6 +8838,19 @@ window.addEventListener("DOMContentLoaded", async () => {
   warmUpOfflineCaches();
 });
 
+async function refreshTicketsCacheFromServer() {
+  try {
+    // ajusta el endpoint/filtros a tu caso
+    const resp = await apiRead("facturaclientes?limit=300&order=desc");
+    const list = resp?.data || resp?.results || resp?.docs || resp || [];
+    saveTicketsCache(Array.isArray(list) ? list : []);
+    return list;
+  } catch (e) {
+    console.warn("refreshTicketsCacheFromServer:", e?.message || e);
+    return [];
+  }
+}
+
 async function warmUpOfflineCaches() {
   try {
     // precargar formas de pago y tickets para offline
@@ -9051,6 +9185,7 @@ async function sendOrQueueFactura(payload) {
             : null,
           agente: currentAgent ? { codagente: currentAgent.codagente } : null,
           codpago: payload?.codpago || "",
+          observaciones: (payload?.observaciones || "").toString(),
         },
         createdAt: Date.now(),
       });
@@ -9102,17 +9237,44 @@ async function syncQueueNow() {
           if (idfactura) {
             // 1) Emitir y marcar pagada
             try {
+              const pagos = Array.isArray(item.post?.pagos)
+                ? item.post.pagos
+                : [];
+              const tpv_efectivo = pagos
+                .filter((p) =>
+                  isCashPago({
+                    codpago: p.codpago,
+                    descripcion: p.descripcion,
+                  }),
+                )
+                .reduce((s, p) => s + moneyToNumber(p?.importe), 0);
+
+              const tpv_cambio = moneyToNumber(item.post?.cambio || 0);
+
               await updateFacturaCliente(idfactura, {
                 idestado: 11,
                 pagada: 1,
+                tpv_venta: 1, // ✅
+                tpv_efectivo: Number(tpv_efectivo.toFixed(2)),
+                tpv_cambio: Number(tpv_cambio.toFixed(2)),
+                observaciones: (item.post?.observaciones || "").toString(),
+                numero2: (item.post?.numero ?? "").toString(),
+                nick: (
+                  item.post?.nick ||
+                  item.post?.agente?.nick ||
+                  item.post?.agente?.nombre ||
+                  "Ventas"
+                ).toString(),
+
                 codpago: item.post?.codpago || item.payload?.codpago || "",
                 idtpv: currentTerminal?.id || item.post?.terminal?.id || "",
                 codalmacen:
                   currentTerminal?.codalmacen ||
                   item.post?.terminal?.codalmacen ||
                   "",
-                codagente:
-                  currentAgent?.codagente || item.post?.agente?.codagente || "",
+                ...(currentAgent?.codagente
+                  ? { codagente: currentAgent.codagente }
+                  : {}),
               });
             } catch (e) {
               console.warn(
