@@ -67,9 +67,8 @@ body {
   transform: translateY(-1px);
 }
 
-/* Botón Abrir Cajón: empujado a la derecha */
+/* Botón Abrir Cajón*/
 .agent-main-bar .agent-drawer-btn {
-  margin-left: auto; /* CLAVE: lo manda al extremo derecho */
   background: #ffffff;
   color: #fff;
   font-size: 22px;
@@ -80,6 +79,25 @@ body {
 
 /* Hover coherente */
 .agent-main-bar .agent-drawer-btn:hover {
+  transform: translateY(-1px);
+  background: #198cff;
+  color: #fff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+/* Botón Actualizar: empujado a la derecha empuja tambien al de abrir */
+.agent-main-bar .agent-refresh-btn {
+  margin-left: auto; /* CLAVE: lo manda al extremo derecho */
+  background: #ffffff;
+  color: #fff;
+  font-size: 22px;
+  border-radius: 5px;
+  padding: 10px 20px;
+  text-box: auto;
+}
+
+/* Hover coherente */
+.agent-main-bar .agent-refresh-btn:hover {
   transform: translateY(-1px);
   background: #198cff;
   color: #fff;

@@ -1568,13 +1568,13 @@ function wireQwertyInputs() {
 
   // Tickets -> botón teclado
   if (ticketsKeyboardBtn && ticketsSearch) {
-    ticketsKeyboardBtn.onclick = () => openQwertyForInput(ticketsSearch, "text");
+    ticketsKeyboardBtn.onclick = () =>
+      openQwertyForInput(ticketsSearch, "text");
   }
 }
 
 // Importante: ejecutar cuando el DOM ya existe
 document.addEventListener("DOMContentLoaded", wireQwertyInputs);
-
 
 // ===== Eventos del carrito =====
 const cartLinesContainer = document.getElementById("cartLines");
@@ -2138,6 +2138,21 @@ function renderMainAgentBar() {
 
     mainAgentBar.appendChild(btn);
   });
+
+  /* ===== BOTÓN ACTUALIZAR ===== */
+  const refreshBtn = document.createElement("button");
+  refreshBtn.type = "button";
+  refreshBtn.className = "agent-btn agent-refresh-btn";
+  refreshBtn.textContent = "🔄";
+  refreshBtn.title = "Actualizar datos";
+
+  refreshBtn.onclick = () => {
+    refreshAllData().catch(() => {
+      toast("No se pudo actualizar.", "err", "Actualizar");
+    });
+  };
+
+  mainAgentBar.appendChild(refreshBtn);
 
   /* ===== BOTÓN ABRIR CAJÓN (FIJO A LA DERECHA) ===== */
   const drawerBtn = document.createElement("button");
@@ -3103,7 +3118,18 @@ if (terminalOkBtn) {
         agentNameEl.textContent = currentAgent.name;
       }
       renderMainAgentBar();
+      document.dispatchEvent(
+        new CustomEvent("tpv:sessionReady", {
+          detail: {
+            idtpv: currentTerminal?.id || null,
+            codagente: currentAgent?.codagente || null,
+            user: getLoginUser(),
+          },
+        }),
+      );
+
       hideTerminalOverlay();
+      openCashOpenDialog("open");
       return;
     }
 
@@ -3565,7 +3591,7 @@ if (userNameEl) {
 }
 
 // ===== Carga de datos desde la API de Recipok =====
-async function loadDataFromApi() {
+async function loadDataFromApi(opts = {}) {
   console.log("loadDataFromApi() ejecutándose con:", window.RECIPOK_API);
   try {
     const cfg = window.RECIPOK_API || {};
@@ -3907,6 +3933,47 @@ async function loadDataFromApi() {
       ? getAgentsForTerminalId(onlyTerminal.id)
       : [];
 
+    // =========================
+    // MODO REFRESH (NO abrir overlays)
+    // =========================
+    if (opts.refresh === true) {
+      // Mantener terminal si sigue existiendo
+      if (currentTerminal) {
+        const stillExists = terminals.some(
+          (t) => String(t.id) === String(currentTerminal.id),
+        );
+        if (!stillExists) currentTerminal = null;
+      }
+
+      // Si no hay terminal elegido, elegir uno (sin abrir modal)
+      if (!currentTerminal) {
+        if (onlyTerminal) {
+          setCurrentTerminal(onlyTerminal);
+        } else if (terminals.length) {
+          setCurrentTerminal(terminals[0]);
+        }
+      }
+
+      // Mantener agente si sigue existiendo dentro del terminal actual
+      if (currentTerminal) {
+        const listNow = getAgentsForTerminalId(currentTerminal.id);
+        if (currentAgent) {
+          const ok = listNow.some(
+            (a) => String(a.codagente) === String(currentAgent.codagente),
+          );
+          if (!ok) currentAgent = null;
+        }
+        if (!currentAgent) currentAgent = listNow[0] || null;
+      }
+
+      // Repintar sin tocar caja ni overlays
+      renderMainUI();
+      return;
+    }
+
+    // =========================
+    // MODO ARRANQUE (comportamiento original)
+    // =========================
     if (onlyTerminal && listForOnlyTerminal.length <= 1) {
       setCurrentTerminal(onlyTerminal);
       currentAgent = listForOnlyTerminal[0] || null;
@@ -3934,7 +4001,130 @@ async function loadDataFromApi() {
   }
 }
 
+let __refreshingAll = false;
+
+async function refreshAllData() {
+  if (__refreshingAll) return;
+
+  // no refrescar en medio de cobro
+  if (typeof isPayingNow !== "undefined" && isPayingNow) {
+    toast("Termina el cobro antes de actualizar.", "warn", "Actualizar");
+    return;
+  }
+  if (
+    typeof payOverlay !== "undefined" &&
+    payOverlay &&
+    !payOverlay.classList.contains("hidden")
+  ) {
+    toast("Cierra el cobro antes de actualizar.", "warn", "Actualizar");
+    return;
+  }
+
+  if (TPV_STATE?.offline) {
+    toast("Sin internet: no se puede actualizar ahora.", "warn", "Actualizar");
+    return;
+  }
+
+  __refreshingAll = true;
+
+  // feedback en el botón
+  const btn = document.querySelector(".agent-refresh-btn");
+  const oldTxt = btn ? btn.textContent : "🔄";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "⏳";
+  }
+
+  try {
+    setStatusText("Actualizando...");
+    await loadDataFromApi({ refresh: true }); // 👈 clave
+
+    // Por si quieres repintar explícito (renderMainUI ya lo hace, pero no estorba)
+    if (typeof renderProducts === "function") renderProducts();
+    if (typeof renderMainAgentBar === "function") renderMainAgentBar();
+    if (typeof renderCart === "function") renderCart();
+
+    setStatusText("Online Recipok");
+    toast("Datos actualizados ✅", "ok", "Actualizar");
+  } catch (e) {
+    console.warn("refreshAllData error:", e);
+    toast("No se pudo actualizar: " + (e?.message || e), "err", "Actualizar");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldTxt;
+    }
+    __refreshingAll = false;
+  }
+}
+
 refreshLoggedUserUI();
+
+// ====================================================
+// TPV Bootstrap bridge (recuperar caja ya abierta)
+// ====================================================
+window.cargarPantallaTPV = async function (idcaja, idtpv) {
+  console.log("[TPV] Caja asignada desde bootstrap:", idcaja, "TPV:", idtpv);
+  console.log("[TPV] cashSession antes:", {
+    open: cashSession.open,
+    remoteCajaId: cashSession.remoteCajaId,
+  });
+
+  try {
+    if (!idcaja) throw new Error("idcaja inválido");
+
+    // ✅ Marcar caja como abierta (CRÍTICO)
+    cashSession.open = true;
+    cashSession.remoteCajaId = idcaja;
+
+    try {
+      localStorage.setItem("tpv_remoteCajaId", String(idcaja));
+    } catch (e) {}
+
+    // ✅ Cerrar overlays por si estaban abiertos
+    try {
+      hideCashOpenDialog();
+    } catch (e) {}
+    try {
+      hideTerminalOverlay();
+    } catch (e) {}
+
+    // ✅ Asegurar datos cargados
+    if (!categories.length || !products.length) {
+      await loadDataFromApi();
+    }
+
+    // ✅ Seleccionar terminal si nos lo pasan (idtpv)
+    if (idtpv && Array.isArray(terminals) && terminals.length) {
+      const t = terminals.find((x) => String(x.id) === String(idtpv));
+      if (t) setCurrentTerminal(t);
+    }
+
+    // ✅ Actualizar labels de cabecera si aplica
+    if (terminalNameEl && currentTerminal) {
+      terminalNameEl.textContent = currentTerminal.name || "---";
+    }
+    if (agentNameEl) {
+      agentNameEl.textContent = currentAgent ? currentAgent.name : "---";
+    }
+
+    // ✅ Pintar UI como caja abierta
+    renderMainUI();
+    renderMainAgentBar?.();
+    updateCashButtonLabel();
+
+    setStatusText("Caja activa (recuperada)");
+
+    console.log("[TPV] TPV listo con caja", idcaja);
+  } catch (e) {
+    console.error("Error activando TPV:", e);
+    toast("No se pudo activar la caja.", "err", "TPV");
+  }
+  console.log("[TPV] cashSession después:", {
+    open: cashSession.open,
+    remoteCajaId: cashSession.remoteCajaId,
+  });
+};
 
 let companyInfo = null; // ya lo tienes
 let companyLogoUrl = ""; // ✅ GLOBAL
@@ -7071,9 +7261,9 @@ function renderTicketsList(tickets) {
     const totalNum = Number(t.total || 0);
     const pago = t.codpago || "—";
     // ✅ observaciones puede venir en el objeto plano o dentro de _raw
-const obs = String(t.observaciones ?? t._raw?.observaciones ?? "")
-  .replace(/\s+/g, " ")
-  .trim();
+    const obs = String(t.observaciones ?? t._raw?.observaciones ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
 
     const refunds = Array.isArray(t._refunds) ? t._refunds : [];
     const hasRefunds = refunds.length > 0 || !!t._hasPartialRefund;
@@ -7128,11 +7318,7 @@ const obs = String(t.observaciones ?? t._raw?.observaciones ?? "")
   <span class="ticket-id">${t._offline ? "OFFLINE" : `ID ${t.idfactura}`}</span>
 </div>
 
-${
-  obs
-    ? `<div class="ticket-obs">${escapeHtml(obs)}</div>`
-    : ""
-}
+${obs ? `<div class="ticket-obs">${escapeHtml(obs)}</div>` : ""}
 
 <div class="ticket-bot">${escapeHtml(fechaHora)}</div>
 
@@ -9926,3 +10112,24 @@ async function initKioskToggle() {
 }
 
 initKioskToggle();
+// 1) Al recibir caja -> activar UI
+document.addEventListener("tpv:cajaAbierta", (e) => {
+  window.cargarPantallaTPV?.(e.detail.idcaja, e.detail.idtpv);
+});
+
+// 2) Arrancar bootstrap SOLO cuando ya hay sesión TPV lista (terminal/agente)
+document.addEventListener("tpv:sessionReady", () => {
+  console.log("[RENDER] llamando TPV_BOOTSTRAP.init");
+  window.TPV_BOOTSTRAP?.init?.();
+});
+
+console.log("[RENDER] test -> TPV_BOOTSTRAP existe?", !!window.TPV_BOOTSTRAP);
+console.log(
+  "[RENDER] test -> TPV_BOOTSTRAP.init existe?",
+  typeof window.TPV_BOOTSTRAP?.init,
+);
+
+setTimeout(() => {
+  console.log("[RENDER] test -> llamando TPV_BOOTSTRAP.init()");
+  window.TPV_BOOTSTRAP?.init?.();
+}, 1200);

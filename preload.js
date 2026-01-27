@@ -1,5 +1,6 @@
 // preload.js
 const { contextBridge, ipcRenderer } = require("electron");
+const { initTPVBootstrap } = require("./js/tpv/bootstrap.js");
 
 contextBridge.exposeInMainWorld("TPV_PRINT", {
   listPrinters: () => ipcRenderer.invoke("printers:list"),
@@ -59,4 +60,8 @@ contextBridge.exposeInMainWorld("TPV_CFG", {
 
 contextBridge.exposeInMainWorld("TPV_AUTH", {
   setCurrentUser: (user) => ipcRenderer.invoke("auth:setCurrentUser", { user }),
+});
+
+contextBridge.exposeInMainWorld("TPV_BOOTSTRAP", {
+  init: () => initTPVBootstrap(),
 });
