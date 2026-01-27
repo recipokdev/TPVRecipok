@@ -1,17 +1,17 @@
 async function listarCajasAbiertas({ fsApi, idtpv }) {
-  const id = String(idtpv).trim();
-
-  // ✅ Pedimos SOLO abiertas desde el servidor (fechafin_null=1)
   const cajas = await fsApi.get(
     "/tpvcajas",
-    `sort[idcaja]=DESC&filter[fechafin_null]=1&limit=50`
+    "sort[idcaja]=DESC&filter[fechafin_null]=1&limit=50",
   );
 
-  // ✅ Normalizamos tipos: idtpv puede venir number o string
-  return (Array.isArray(cajas) ? cajas : []).filter((c) => String(c.idtpv) === id);
+  return (Array.isArray(cajas) ? cajas : []).filter(
+    (c) =>
+      String(c?.idtpv) === String(idtpv) &&
+      (c?.fechafin === null ||
+        c?.fechafin === "" ||
+        typeof c?.fechafin === "undefined"),
+  );
 }
-
-
 
 async function cerrarCaja({ fsApi, idcaja, observaciones = "" }) {
   const now = new Date();

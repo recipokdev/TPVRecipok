@@ -2292,7 +2292,10 @@ function showTerminalOverlay(mode = "session") {
       currentAgent = list[0];
     }
 
-    openCashOpenDialog("open");
+    dispatchSessionReady();
+
+    // 👇 OJO: NO abras caja aquí a ciegas (ver punto 2)
+    maybeOpenCashOrRecover();
     return;
   }
 
@@ -2407,6 +2410,12 @@ function applyRemoteCajaToSession(remoteCaja) {
       totalSales.toFixed(2).replace(".", ",") + " €";
 }
 
+async function ensurePayMethodLabelsLoaded() {
+  if (window.__PAYMETHOD_LABELS__) return;
+  const fps = await fetchApiResourceWithParams("formapagos", { limit: 0 });
+  window.__PAYMETHOD_LABELS__ = buildPayMethodLabelMap(fps);
+}
+
 function renderPayMethodsSummary() {
   const box = document.getElementById("payMethodsSummary");
   if (!box) return;
@@ -2428,7 +2437,8 @@ function renderPayMethodsSummary() {
   );
 
   entries.forEach((pm) => {
-    const baseLabel = pm.label || pm.code;
+    const labelMap = window.__PAYMETHOD_LABELS__ || {};
+    const baseLabel = labelMap[pm.code] || pm.label || pm.code;
 
     const count = Number(pm.count || 0); // ✅ ESTE ES EL CAMPO REAL
     const label = count > 1 ? `${baseLabel} (${count})` : baseLabel;
@@ -2543,9 +2553,136 @@ function cashResetUIForOpening() {
   cashSession.paymentsByMethod = {};
 }
 
+async function fetchFacturasByCaja(idcaja) {
+  const cfg = window.RECIPOK_API || {};
+  const base = (cfg.baseUrl || "").replace(/\/+$/, "");
+  const url = `${base}/facturaclientes?filter[idcaja]=${encodeURIComponent(idcaja)}&limit=0`;
+
+  const res = await fetch(url, {
+    headers: { Accept: "application/json", Token: cfg.apiKey },
+    cache: "no-store",
+  });
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !Array.isArray(data)) return [];
+  return data;
+}
+
+function chunk(arr, n) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
+
+async function fetchRecibosByFacturasMulti(idfacturas) {
+  const cfg = window.RECIPOK_API || {};
+  const base = (cfg.baseUrl || "").replace(/\/+$/, "");
+  if (!base || !cfg.apiKey) return [];
+
+  const ids = (idfacturas || []).map((x) => String(x)).filter(Boolean);
+  if (!ids.length) return [];
+
+  const all = [];
+  for (const batch of chunk(ids, 30)) {
+    // 30 es un tamaño prudente
+    const url = new URL(`${base}/reciboclientes`);
+    url.searchParams.set("limit", "0");
+    batch.forEach((id) => url.searchParams.append("filter[idfactura]", id));
+
+    const res = await fetch(url.toString(), {
+      headers: { Accept: "application/json", Token: cfg.apiKey },
+      cache: "no-store",
+    });
+    const data = await res.json().catch(() => null);
+    if (res.ok && Array.isArray(data)) all.push(...data);
+  }
+  return all;
+}
+
+function buildPayMethodLabelMap(formapagos) {
+  const m = {};
+  (Array.isArray(formapagos) ? formapagos : []).forEach((fp) => {
+    const code = String(fp.codpago || "").trim();
+    const desc = String(fp.descripcion || fp.codpago || "").trim();
+    if (code) m[code] = desc || code;
+  });
+  return m;
+}
+
+async function hydratePaymentsByMethodForClose(idcaja) {
+  const facturas = await fetchApiResourceWithParams("facturaclientes", {
+    "filter[idcaja]": idcaja,
+    limit: 0,
+  });
+
+  const ids = (Array.isArray(facturas) ? facturas : [])
+    .map((f) => f.idfactura)
+    .filter(Boolean);
+
+  const recibos = await fetchRecibosByFacturasMulti(ids);
+
+  // Agrupar por codpago, sumando IMPORTE (total con IVA)
+  const map = {};
+  for (const r of Array.isArray(recibos) ? recibos : []) {
+    if (r.pagado !== true) continue; // opcional
+    const code = String(r.codpago || "").trim() || "—";
+    const amount = Number(r.importe || 0); // ✅ total
+    if (!map[code]) map[code] = { code, total: 0, count: 0 };
+    map[code].total += amount;
+    map[code].count += 1; // nº recibos (si quieres nº tickets, se calcula distinto)
+  }
+
+  cashSession.paymentsByMethod = map;
+}
+
+function buildPaymentsSummaryFromRecibos(recibos) {
+  const map = {}; // codpago -> { code, count, total }
+
+  for (const r of recibos) {
+    const code = String(r.codpago || "—")
+      .trim()
+      .toUpperCase();
+    const importe = Number(r.importe || 0);
+
+    if (!map[code]) map[code] = { code, count: 0, total: 0 };
+    map[code].count += 1;
+    map[code].total += importe;
+  }
+  return map;
+}
+
+async function hydratePaymentsByMethodForClose(idcaja) {
+  const facturas = await fetchApiResourceWithParams("facturaclientes", {
+    "filter[idcaja]": idcaja,
+    limit: 0,
+  });
+
+  const map = {};
+  for (const f of Array.isArray(facturas) ? facturas : []) {
+    if (f.tpv_venta !== true) continue; // opcional: solo ventas TPV
+    const code = String(f.codpago || "").trim() || "—";
+    const amount = Number(f.total || 0); // ✅ TOTAL con IVA
+    if (!map[code]) map[code] = { code, total: 0, count: 0 };
+    map[code].total += amount;
+    map[code].count += 1;
+  }
+
+  cashSession.paymentsByMethod = map;
+}
+
 // ---- Apertura / cierre de caja ----
 function openCashOpenDialog(mode = "open") {
   setCashDialogMode(mode);
+
+  // ✅ BLOQUEO ABSOLUTO: si hay caja remota ya abierta, no mostrar apertura
+  if (mode === "open") {
+    const remoteId = localStorage.getItem("tpv_remoteCajaId");
+    if (remoteId) {
+      console.log("[TPV] Bloqueo apertura: hay caja remota", remoteId);
+      return;
+    }
+  }
+
   if (LOGIN_ACTIVE) return;
   if (!cashOpenOverlay) return;
   if (!currentTerminal) {
@@ -2592,7 +2729,14 @@ function openCashOpenDialog(mode = "open") {
         const remoteCaja = await apiReadCurrentCaja();
         if (remoteCaja) {
           applyRemoteCajaToSession(remoteCaja);
-          // Conteo de caja inicial = 0
+
+          await ensurePayMethodLabelsLoaded();
+
+          await hydratePaymentsByMethodForClose(
+            cashSession.remoteCajaId || remoteCaja.idcaja,
+          );
+          renderPayMethodsSummary();
+
           updateCloseSummary(0);
         } else {
           // fallback: si no hemos podido leer, usamos lo que ya tuviera cashSession
@@ -3129,7 +3273,7 @@ if (terminalOkBtn) {
       );
 
       hideTerminalOverlay();
-      openCashOpenDialog("open");
+      maybeOpenCashOrRecover();
       return;
     }
 
@@ -3161,8 +3305,22 @@ if (terminalOkBtn) {
       currentAgent = list[0];
     }
 
+    document.dispatchEvent(
+      new CustomEvent("tpv:sessionReady", {
+        detail: {
+          idtpv: selectedTerminal?.id || currentTerminal?.id || null,
+          codagente: currentAgent?.codagente || null,
+          user: getLoginUser(),
+        },
+      }),
+    );
+
     hideTerminalOverlay();
-    openCashOpenDialog("open");
+
+    setTimeout(() => {
+      // si bootstrap no abrió nada, recién ahí mostramos apertura
+      if (!cashSession.open) maybeOpenCashOrRecover();
+    }, 1500);
   };
 }
 
@@ -3556,7 +3714,7 @@ if (cashHeaderBtn) {
       cashResetUIForOpening();
       cashWrapInputsWithSteppers();
 
-      openCashOpenDialog("open");
+      maybeOpenCashOrRecover();
       return;
     }
 
@@ -3977,7 +4135,16 @@ async function loadDataFromApi(opts = {}) {
     if (onlyTerminal && listForOnlyTerminal.length <= 1) {
       setCurrentTerminal(onlyTerminal);
       currentAgent = listForOnlyTerminal[0] || null;
-      openCashOpenDialog("open");
+
+      document.dispatchEvent(
+        new CustomEvent("tpv:sessionReady", {
+          detail: {
+            idtpv: onlyTerminal?.id || null,
+            codagente: currentAgent?.codagente || null,
+            user: getLoginUser(),
+          },
+        }),
+      );
     } else if (numTerminals > 0 || agents.length > 0) {
       showTerminalOverlay("session");
     } else {
@@ -7905,17 +8072,6 @@ async function createReciboCliente({
   return await res.json().catch(() => ({}));
 }
 
-// ===== Recibos: limpieza de duplicados (evita "recibo total" + recibos por método) =====
-async function fetchRecibosByFactura(idfactura) {
-  const data = await fetchApiResourceWithParams("reciboclientes", {
-    "filter[idfactura]": idfactura,
-    limit: 200,
-    "sort[idrecibo]": "DESC",
-  });
-
-  return Array.isArray(data) ? data : [];
-}
-
 async function deleteReciboCliente(idrecibo) {
   const cfg = window.RECIPOK_API || {};
   if (!cfg.baseUrl || !cfg.apiKey) throw new Error("Config API no definida");
@@ -10112,24 +10268,66 @@ async function initKioskToggle() {
 }
 
 initKioskToggle();
-// 1) Al recibir caja -> activar UI
+
+// 1) Caja asignada por bootstrap -> activar UI
 document.addEventListener("tpv:cajaAbierta", (e) => {
-  window.cargarPantallaTPV?.(e.detail.idcaja, e.detail.idtpv);
+  console.log("[RENDER] tpv:cajaAbierta recibido", e.detail);
+  window.cargarPantallaTPV?.(e.detail.idcaja, e.detail.idtpv, e.detail.caja);
 });
 
-// 2) Arrancar bootstrap SOLO cuando ya hay sesión TPV lista (terminal/agente)
+// 2) Arrancar bootstrap SOLO cuando tu app diga "sessionReady" (login+agente listos)
 document.addEventListener("tpv:sessionReady", () => {
-  console.log("[RENDER] llamando TPV_BOOTSTRAP.init");
-  window.TPV_BOOTSTRAP?.init?.();
+  const nick = (localStorage.getItem("tpv_login_user") || "").trim();
+
+  // OJO: esta apiKey/baseUrl deben existir a esta altura (después de bootstrapCompany o equivalente)
+  const apiKey = (window.RECIPOK_API?.apiKey || "").trim();
+  const baseUrl = (
+    window.RECIPOK_API?.baseUrl ||
+    window.TPV_CONFIG?.facturaScriptsApiBase ||
+    ""
+  ).trim();
+  const idtpv = Number(window.TPV_CONFIG?.idtpv || 1);
+
+  console.log("[RENDER] sessionReady -> llamando TPV_BOOTSTRAP.init con", {
+    nick,
+    apiKeyLen: apiKey.length,
+    baseUrl,
+    idtpv,
+  });
+
+  window.TPV_BOOTSTRAP?.init?.({ nick, apiKey, baseUrl, idtpv });
 });
 
-console.log("[RENDER] test -> TPV_BOOTSTRAP existe?", !!window.TPV_BOOTSTRAP);
-console.log(
-  "[RENDER] test -> TPV_BOOTSTRAP.init existe?",
-  typeof window.TPV_BOOTSTRAP?.init,
-);
+function dispatchSessionReady() {
+  document.dispatchEvent(
+    new CustomEvent("tpv:sessionReady", {
+      detail: {
+        terminalId: currentTerminal?.id,
+        agent: currentAgent?.name || currentAgent?.codagente || null,
+      },
+    }),
+  );
+}
 
-setTimeout(() => {
-  console.log("[RENDER] test -> llamando TPV_BOOTSTRAP.init()");
-  window.TPV_BOOTSTRAP?.init?.();
-}, 1200);
+function maybeOpenCashOrRecover() {
+  // Si bootstrap ya recuperó una caja remota, NO pedir apertura
+  const remoteId =
+    cashSession?.remoteCajaId || localStorage.getItem("tpv_remoteCajaId");
+  if (cashSession?.open && remoteId) {
+    console.log("[TPV] Caja ya abierta (remota). Skip apertura:", remoteId);
+    // Asegura UI principal
+    renderMainUI();
+    renderMainAgentBar?.();
+    updateCashButtonLabel();
+    return;
+  }
+
+  // si NO hay caja remota abierta, entonces sí: apertura normal
+  openCashOpenDialog("open");
+
+  console.log("[TPV] maybeOpenCashOrRecover()", {
+    open: cashSession.open,
+    remoteCajaId: cashSession.remoteCajaId,
+    saved: localStorage.getItem("tpv_remoteCajaId"),
+  });
+}

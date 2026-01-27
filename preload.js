@@ -63,5 +63,5 @@ contextBridge.exposeInMainWorld("TPV_AUTH", {
 });
 
 contextBridge.exposeInMainWorld("TPV_BOOTSTRAP", {
-  init: () => initTPVBootstrap(),
+  init: (payload) => initTPVBootstrap(payload),
 });
