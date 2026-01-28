@@ -570,9 +570,19 @@
           <span id="cashSummaryMainLabel">Dinero Asignado:</span>
           <strong id="cashOpenTotal">0,00 €</strong>
         </div>
-        <!-- 🔽 NUEVO: resumen por formas de pago (solo se rellena en cierre) -->
         <div id="cashCloseSummary" style="display: none">
+          <!-- ✅ TOTAL (primero) -->
+          <div
+            id="cashCloseTotalMeta"
+            class="cash-close-total-meta"
+            style="display: none"
+          ></div>
+
+          <!-- ✅ Métodos de pago (TOTAL) -->
           <div id="payMethodsSummary" class="cash-paymethods-cards"></div>
+
+          <!-- ✅ Ventas por agente (después) -->
+          <div id="agentSalesSummary"></div>
         </div>
 
         <!-- Acciones -->
@@ -1011,28 +1021,53 @@
     </div>
 
     <!-- Overlay: Confirmar cierre de caja -->
-<div id="cashCloseConfirmOverlay" class="simple-overlay hidden">
-  <div class="simple-dialog" style="width: 520px; max-width: 94vw">
-    <div style="display:flex; align-items:center; justify-content:space-between;">
-      <h2 style="margin:0">Confirmar cierre de caja</h2>
-      <button type="button" id="cashCloseConfirmCloseX" class="small-btn">✕</button>
-    </div>
+    <div id="cashCloseConfirmOverlay" class="simple-overlay hidden">
+      <div class="simple-dialog" style="width: 520px; max-width: 94vw">
+        <div
+          style="
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+          "
+        >
+          <h2 style="margin: 0">Confirmar cierre de caja</h2>
+          <button type="button" id="cashCloseConfirmCloseX" class="small-btn">
+            ✕
+          </button>
+        </div>
 
-    <div id="cashCloseConfirmText" style="margin-top:10px; font-size:13px; opacity:0.9; white-space:pre-line;">
-      ¿Seguro que quieres cerrar la caja?
-    </div>
+        <div
+          id="cashCloseConfirmText"
+          style="
+            margin-top: 10px;
+            font-size: 13px;
+            opacity: 0.9;
+            white-space: pre-line;
+          "
+        >
+          ¿Seguro que quieres cerrar la caja?
+        </div>
 
-    <div
-      class="dialog-actions"
-      style="margin-top: 16px; display:flex; gap:10px; justify-content:flex-end;"
-    >
-      <button type="button" id="cashCloseConfirmCancelBtn">Cancelar</button>
-      <button type="button" id="cashCloseConfirmOkBtn" class="pay-btn pay-btn-blue">
-        Sí, cerrar caja
-      </button>
+        <div
+          class="dialog-actions"
+          style="
+            margin-top: 16px;
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+          "
+        >
+          <button type="button" id="cashCloseConfirmCancelBtn">Cancelar</button>
+          <button
+            type="button"
+            id="cashCloseConfirmOkBtn"
+            class="pay-btn pay-btn-blue"
+          >
+            Sí, cerrar caja
+          </button>
+        </div>
+      </div>
     </div>
-  </div>
-</div>
 
     <!-- Overlay: Opciones -->
     <div id="optionsOverlay" class="simple-overlay hidden">

@@ -59,6 +59,10 @@ let currentTerminal = null; // { id, name }
 let agents = []; // todos los agentes únicos
 let agentsByTerminal = {}; // { idTPV: [agentesDeEseTPV] }
 let currentAgent = null; // { id, codagente, name }
+let agentNameByCode = {}; // GLOBAL: codagente -> nombre
+
+// intentar recuperar nombres de agentes desde cache al arrancar
+loadAgentNameMapFromCache();
 
 let cashSession = {
   open: false,
@@ -171,6 +175,34 @@ const emailKeyboardBtn = document.getElementById("emailKeyboardBtn");
 // ===== Funciones auxiliares =====
 function isFalseFlag(v) {
   return v === false || v === 0 || v === "0" || v === "false";
+}
+
+function buildAgentNameMap(agentesMaestros) {
+  const map = {};
+  (Array.isArray(agentesMaestros) ? agentesMaestros : []).forEach((a) => {
+    const code = String(a.codagente || "").trim();
+    if (!code) return;
+    map[code] = String(a.nombre || a.name || `Agente ${code}`).trim();
+  });
+
+  agentNameByCode = map;
+
+  // cache opcional (recomendado)
+  try {
+    localStorage.setItem("tpv_agentNameByCode", JSON.stringify(map));
+  } catch {}
+}
+
+function loadAgentNameMapFromCache() {
+  try {
+    const cached = localStorage.getItem("tpv_agentNameByCode");
+    if (cached) agentNameByCode = JSON.parse(cached) || {};
+  } catch {}
+}
+
+function getAgentLabel(codagente) {
+  const c = String(codagente || "").trim() || "—";
+  return agentNameByCode[c] || `Agente ${c}`;
 }
 
 // Extrae el % de IVA desde el código de impuesto.
@@ -2410,10 +2442,128 @@ function applyRemoteCajaToSession(remoteCaja) {
       totalSales.toFixed(2).replace(".", ",") + " €";
 }
 
+function renderCashCloseHeaderCard(remoteCaja) {
+  const box = document.getElementById("cashCloseCard");
+  if (!box) return;
+
+  const idcaja = remoteCaja?.idcaja ?? cashSession.remoteCajaId ?? "—";
+  const idtpv = remoteCaja?.idtpv ?? currentTerminal?.id ?? "—";
+  const fechaini = remoteCaja?.fechaini ? String(remoteCaja.fechaini) : "—";
+
+  const totalVendido = Number(
+    remoteCaja?.totaltickets ?? cashSession.totalSales ?? 0,
+  );
+  const numTickets = Number(remoteCaja?.numtickets ?? 0);
+
+  box.innerHTML = `
+    <div class="cash-close-top">Caja ${escapeHtml(String(idcaja))} (TPV ${escapeHtml(String(idtpv))})</div>
+    <div class="cash-close-sub">Inicio: ${escapeHtml(fechaini)}</div>
+
+    <div class="cash-close-kpis">
+      <div class="cash-close-kpi">
+        <div class="lbl">Total vendido</div>
+        <div class="val">${escapeHtml(eur(totalVendido))}</div>
+      </div>
+      <div class="cash-close-kpi">
+        <div class="lbl">Tickets</div>
+        <div class="val">${escapeHtml(String(numTickets))}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderCashCloseTotalMeta() {
+  const box = document.getElementById("cashCloseTotalMeta");
+  if (!box) return;
+
+  const agents = Array.isArray(cashSession.agentSalesSummary)
+    ? cashSession.agentSalesSummary
+    : [];
+
+  // Siempre mostramos TOTAL
+  let html = ``;
+
+  // Si hay exactamente 1 agente, lo mostramos
+  if (agents.length === 1) {
+    const a = agents[0];
+    html += `<span class="cash-total-agent">Agente: ${escapeHtml(
+      a.agentName || a.agentCode || "—",
+    )}</span>`;
+  }
+
+  box.innerHTML = html;
+  box.style.display = "flex";
+}
+
 async function ensurePayMethodLabelsLoaded() {
   if (window.__PAYMETHOD_LABELS__) return;
   const fps = await fetchApiResourceWithParams("formapagos", { limit: 0 });
   window.__PAYMETHOD_LABELS__ = buildPayMethodLabelMap(fps);
+}
+
+function renderAgentSalesSummary() {
+  const box = document.getElementById("agentSalesSummary");
+  if (!box) return;
+
+  const list = Array.isArray(cashSession.agentSalesSummary)
+    ? cashSession.agentSalesSummary
+    : [];
+
+  // ✅ si 0 o 1 agente, ocultamos (para no duplicar)
+  if (list.length <= 1) {
+    box.style.display = "none";
+    box.innerHTML = "";
+    return;
+  }
+
+  const labelMap = window.__PAYMETHOD_LABELS__ || {};
+
+  // helper local
+  const payLabel = (code) => {
+    const c = String(code || "—")
+      .trim()
+      .toUpperCase();
+    return labelMap[c] || c;
+  };
+
+  box.style.display = "block";
+
+  box.innerHTML = `
+    <div class="cash-agent-title">Ventas por agente</div>
+    ${list
+      .map((ag) => {
+        const methods = Object.values(ag.byMethod || {}).sort((a, b) => {
+          const la = payLabel(a.code);
+          const lb = payLabel(b.code);
+          return String(la).localeCompare(String(lb), "es", {
+            sensitivity: "base",
+          });
+        });
+
+        return `
+          <div class="cash-agent-card">
+            <div class="cash-agent-head">
+              <div class="cash-agent-name">${escapeHtml(ag.agentName || ag.agentCode || "—")}</div>
+              <div class="cash-agent-total">${eur(ag.total || 0)}</div>
+            </div>
+
+            <div class="cash-agent-methods">
+              ${methods
+                .map(
+                  (m) => `
+                    <div class="cash-agent-method">
+                      <div class="cash-agent-method-label">${escapeHtml(payLabel(m.code))} (${Number(m.count || 0)})</div>
+                      <div class="cash-agent-method-amount">${eur(m.total || 0)}</div>
+                    </div>
+                  `,
+                )
+                .join("")}
+            </div>
+          </div>
+        `;
+      })
+      .join("")}
+  `;
 }
 
 function renderPayMethodsSummary() {
@@ -2432,15 +2582,18 @@ function renderPayMethodsSummary() {
 
   box.style.display = "flex";
 
-  entries.sort((a, b) =>
-    (a.label || a.code).localeCompare(b.label || b.code, "es"),
-  );
+  const labelMap = window.__PAYMETHOD_LABELS__ || {};
+
+  // ✅ Orden alfabético por etiqueta visible
+  entries.sort((a, b) => {
+    const la = String(labelMap[a.code] || a.label || a.code || "");
+    const lb = String(labelMap[b.code] || b.label || b.code || "");
+    return la.localeCompare(lb, "es", { sensitivity: "base" });
+  });
 
   entries.forEach((pm) => {
-    const labelMap = window.__PAYMETHOD_LABELS__ || {};
-    const baseLabel = labelMap[pm.code] || pm.label || pm.code;
-
-    const count = Number(pm.count || 0); // ✅ ESTE ES EL CAMPO REAL
+    const baseLabel = labelMap[pm.code] || pm.label || pm.code || "—";
+    const count = Number(pm.count || 0);
     const label = count > 1 ? `${baseLabel} (${count})` : baseLabel;
 
     const total = Number(pm.total) || 0;
@@ -2453,69 +2606,6 @@ function renderPayMethodsSummary() {
     `;
 
     box.appendChild(card);
-  });
-}
-
-function renderCashPayMethodsSummary(payStats) {
-  const wrap = document.getElementById("payMethodsSummary");
-  if (!wrap) return;
-
-  wrap.innerHTML = "";
-
-  const title = document.createElement("div");
-  title.className = "cash-paymethods-title";
-  title.textContent = "Formas de pago usadas";
-  wrap.appendChild(title);
-
-  if (!Array.isArray(payStats) || !payStats.length) {
-    const empty = document.createElement("div");
-    empty.textContent = "Sin ventas en este periodo.";
-    empty.style.fontSize = "12px";
-    empty.style.opacity = "0.7";
-    wrap.appendChild(empty);
-    return;
-  }
-
-  const table = document.createElement("div");
-  table.className = "cash-paymethods-table";
-  wrap.appendChild(table);
-
-  // Cabecera
-  const emptyLabel = document.createElement("div");
-  emptyLabel.className = "pm-label";
-  table.appendChild(emptyLabel);
-
-  payStats.forEach((m) => {
-    const th = document.createElement("div");
-    th.className = "pm-head";
-    th.textContent = m.name;
-    table.appendChild(th);
-  });
-
-  // Fila importes
-  const lblImporte = document.createElement("div");
-  lblImporte.className = "pm-label";
-  lblImporte.textContent = "Importe";
-  table.appendChild(lblImporte);
-
-  payStats.forEach((m) => {
-    const td = document.createElement("div");
-    td.className = "pm-cell";
-    td.textContent = euro2es(m.total); // usa tu helper de € que ya tienes
-    table.appendChild(td);
-  });
-
-  // Fila nº cobros
-  const lblCobros = document.createElement("div");
-  lblCobros.className = "pm-label";
-  lblCobros.textContent = "Cobros";
-  table.appendChild(lblCobros);
-
-  payStats.forEach((m) => {
-    const td = document.createElement("div");
-    td.className = "pm-cell pm-count";
-    td.textContent = String(m.count || 0);
-    table.appendChild(td);
   });
 }
 
@@ -2599,6 +2689,23 @@ async function fetchRecibosByFacturasMulti(idfacturas) {
   return all;
 }
 
+async function fetchRecibosByFactura(idfactura) {
+  const arr = await fetchRecibosByFacturasMulti([idfactura]);
+  return Array.isArray(arr) ? arr : [];
+}
+
+function resetCashRuntimeForNewCaja() {
+  cashSession.paymentsByMethod = {};
+  cashSession.agentSalesSummary = [];
+  cashSession.totalSales = 0;
+
+  cashSession.cashSalesTotal = 0;
+  cashSession.cashMovementsTotal = 0;
+
+  cashSession.expectedCashFS = null;
+  cashSession.closingTotal = 0;
+}
+
 function buildPayMethodLabelMap(formapagos) {
   const m = {};
   (Array.isArray(formapagos) ? formapagos : []).forEach((fp) => {
@@ -2607,32 +2714,6 @@ function buildPayMethodLabelMap(formapagos) {
     if (code) m[code] = desc || code;
   });
   return m;
-}
-
-async function hydratePaymentsByMethodForClose(idcaja) {
-  const facturas = await fetchApiResourceWithParams("facturaclientes", {
-    "filter[idcaja]": idcaja,
-    limit: 0,
-  });
-
-  const ids = (Array.isArray(facturas) ? facturas : [])
-    .map((f) => f.idfactura)
-    .filter(Boolean);
-
-  const recibos = await fetchRecibosByFacturasMulti(ids);
-
-  // Agrupar por codpago, sumando IMPORTE (total con IVA)
-  const map = {};
-  for (const r of Array.isArray(recibos) ? recibos : []) {
-    if (r.pagado !== true) continue; // opcional
-    const code = String(r.codpago || "").trim() || "—";
-    const amount = Number(r.importe || 0); // ✅ total
-    if (!map[code]) map[code] = { code, total: 0, count: 0 };
-    map[code].total += amount;
-    map[code].count += 1; // nº recibos (si quieres nº tickets, se calcula distinto)
-  }
-
-  cashSession.paymentsByMethod = map;
 }
 
 function buildPaymentsSummaryFromRecibos(recibos) {
@@ -2659,15 +2740,58 @@ async function hydratePaymentsByMethodForClose(idcaja) {
 
   const map = {};
   for (const f of Array.isArray(facturas) ? facturas : []) {
-    if (f.tpv_venta !== true) continue; // opcional: solo ventas TPV
-    const code = String(f.codpago || "").trim() || "—";
-    const amount = Number(f.total || 0); // ✅ TOTAL con IVA
+    if (f.tpv_venta !== true) continue;
+    const code =
+      String(f.codpago || "")
+        .trim()
+        .toUpperCase() || "—";
+    const amount = Number(f.total || 0); // TOTAL con IVA
     if (!map[code]) map[code] = { code, total: 0, count: 0 };
     map[code].total += amount;
-    map[code].count += 1;
+    map[code].count += 1; // nº tickets
   }
 
   cashSession.paymentsByMethod = map;
+}
+
+async function buildAgentSalesSummaryForCaja(idcaja) {
+  const facturas = await fetchApiResourceWithParams("facturaclientes", {
+    "filter[idcaja]": idcaja,
+    limit: 0,
+  });
+
+  const map = {}; // codagente -> { agentCode, agentName, total, count, byMethod }
+
+  for (const f of Array.isArray(facturas) ? facturas : []) {
+    if (f.tpv_venta !== true) continue;
+
+    const agentCode = String(f.codagente || "").trim() || "—";
+    const payCode = String(f.codpago || "—")
+      .trim()
+      .toUpperCase();
+    const amount = Number(f.total || 0);
+
+    if (!map[agentCode]) {
+      map[agentCode] = {
+        agentCode,
+        agentName: getAgentLabel(agentCode),
+        total: 0,
+        count: 0,
+        byMethod: {}, // codpago -> { code, total, count }
+      };
+    }
+
+    map[agentCode].total += amount;
+    map[agentCode].count += 1;
+
+    if (!map[agentCode].byMethod[payCode]) {
+      map[agentCode].byMethod[payCode] = { code: payCode, total: 0, count: 0 };
+    }
+    map[agentCode].byMethod[payCode].total += amount;
+    map[agentCode].byMethod[payCode].count += 1;
+  }
+
+  return Object.values(map).sort((a, b) => (b.total || 0) - (a.total || 0));
 }
 
 // ---- Apertura / cierre de caja ----
@@ -2727,21 +2851,35 @@ function openCashOpenDialog(mode = "open") {
     (async () => {
       try {
         const remoteCaja = await apiReadCurrentCaja();
-        if (remoteCaja) {
-          applyRemoteCajaToSession(remoteCaja);
-
-          await ensurePayMethodLabelsLoaded();
-
-          await hydratePaymentsByMethodForClose(
-            cashSession.remoteCajaId || remoteCaja.idcaja,
-          );
-          renderPayMethodsSummary();
-
-          updateCloseSummary(0);
-        } else {
-          // fallback: si no hemos podido leer, usamos lo que ya tuviera cashSession
+        if (!remoteCaja) {
           updateCloseSummary(Number(cashSession.closingTotal || 0));
+          return;
         }
+
+        // 1) aplicar caja remota
+        applyRemoteCajaToSession(remoteCaja);
+        renderCashCloseHeaderCard(remoteCaja);
+
+        // 2) labels
+        await ensurePayMethodLabelsLoaded();
+
+        // 3) construir resumenes (IMPORTANTE: sin duplicar)
+        const cajaId = cashSession.remoteCajaId || remoteCaja.idcaja;
+
+        // Métodos (TOTAL)
+        await hydratePaymentsByMethodForClose(cajaId);
+
+        // Agentes + métodos por agente
+        cashSession.agentSalesSummary =
+          await buildAgentSalesSummaryForCaja(cajaId);
+
+        // 4) pintar UI en el orden correcto
+        renderCashCloseTotalMeta(); // ✅ TOTAL + (Agente si solo 1)
+        renderPayMethodsSummary(); // ✅ TOTAL por métodos
+        renderAgentSalesSummary(); // ✅ por agente (solo si >1)
+
+        // 5) resumen superior (cifra esperada, etc.)
+        updateCloseSummary(Number(cashSession.closingTotal || 0));
       } catch (e) {
         console.warn("No se pudo leer la caja remota:", e);
         updateCloseSummary(Number(cashSession.closingTotal || 0));
@@ -2750,6 +2888,97 @@ function openCashOpenDialog(mode = "open") {
   }
 
   cashOpenOverlay.classList.remove("hidden");
+}
+
+function buildCashClosePrintData(remoteCaja) {
+  const now = new Date();
+  const fecha = now.toLocaleDateString("es-ES");
+  const hora = now.toTimeString().slice(0, 8);
+
+  const cajaId = remoteCaja?.idcaja ?? cashSession.remoteCajaId ?? "";
+
+  const terminal =
+    (
+      currentTerminal?.name ||
+      (remoteCaja?.idtpv != null ? `TPV ${remoteCaja.idtpv}` : "")
+    ).trim() || "—";
+
+  const fechaini = remoteCaja?.fechaini ? String(remoteCaja.fechaini) : "—";
+
+  const totalVendido = Number(
+    remoteCaja?.totaltickets ?? cashSession.totalSales ?? 0,
+  );
+  const numTickets = Number(
+    remoteCaja?.numtickets ?? cashSession.numtickets ?? 0,
+  );
+
+  const openingTotal = Number(
+    cashSession.openingTotal || remoteCaja?.dineroini || 0,
+  );
+  const cashIncome = Number(
+    cashSession.cashSalesTotal || remoteCaja?.ingresos || 0,
+  );
+  const movements = Number(
+    cashSession.cashMovementsTotal || remoteCaja?.totalmovi || 0,
+  );
+
+  const expectedCash =
+    cashSession.expectedCashFS != null
+      ? Number(cashSession.expectedCashFS)
+      : Number(
+          remoteCaja?.totalcaja != null
+            ? remoteCaja.totalcaja
+            : openingTotal + cashIncome + movements,
+        );
+
+  const countedCash = Number(cashSession.closingTotal || 0);
+  const difference = countedCash - expectedCash;
+
+  const labelMap = window.__PAYMETHOD_LABELS__ || {};
+  const methods = Object.values(cashSession.paymentsByMethod || {}).map((m) => {
+    const code =
+      String(m.code || m.codpago || "")
+        .trim()
+        .toUpperCase() || "—";
+    return {
+      code,
+      label: labelMap[code] || m.label || code,
+      total: Number(m.total || 0),
+      count: Number(m.count || 0),
+    };
+  });
+
+  // ✅ orden alfabético para impresión también
+  methods.sort((a, b) =>
+    (a.label || a.code).localeCompare(b.label || b.code, "es", {
+      sensitivity: "base",
+    }),
+  );
+
+  const obs = String(document.getElementById("cashObs")?.value || "").trim();
+
+  return {
+    fecha,
+    hora,
+    companyShortName: companyInfo?.nombrecorto || "",
+    companyLegalName: companyInfo?.nombre || "",
+    cajaId,
+    terminal,
+    fechaini,
+    totalVendido,
+    numTickets,
+    openingTotal,
+    cashIncome,
+    movements,
+    expectedCash,
+    countedCash,
+    difference,
+    methods,
+    agentSales: Array.isArray(cashSession.agentSalesSummary)
+      ? cashSession.agentSalesSummary
+      : [],
+    obs,
+  };
 }
 
 function openCashMoveDialog() {
@@ -2979,6 +3208,10 @@ function registerPayMethodUsageForTicket(pagos) {
 
 async function confirmCashOpening() {
   ensureCashSessionCounters();
+
+  // ✅ RESET DURO: para que jamás se mezclen cajas
+  resetCashRuntimeForNewCaja();
+
   cashSession.open = true;
   cashSession.openedAt = new Date().toISOString();
 
@@ -3382,6 +3615,15 @@ if (cashOpenOkBtn) {
         "¿Seguro que quieres cerrar la caja?\n\nEsta acción registrará el cierre y no se puede deshacer.",
       );
       if (!ok) return;
+
+      // 1) leer caja actual (para numtickets/totaltickets/fechaini)
+      let remoteCaja = null;
+      try {
+        remoteCaja = await apiReadCurrentCaja();
+      } catch {}
+
+      const report = buildCashClosePrintData(remoteCaja); // ✅ aquí
+      await printCashCloseReport(report);
 
       await confirmCashClosing();
     } finally {
@@ -4033,14 +4275,12 @@ async function loadDataFromApi(opts = {}) {
       terminals = [];
     }
 
-    // ===== Agentes =====
-    const agentNameByCode = {};
-    if (Array.isArray(agentesMaestros)) {
-      agentesMaestros.forEach((a) => {
-        const code = String(a.codagente ?? "");
-        if (!code) return;
-        agentNameByCode[code] = a.nombre || a.name || `Agente ${code}`;
-      });
+    // ===== Agentes (mapa global codagente -> nombre) =====
+    if (Array.isArray(agentesMaestros) && agentesMaestros.length) {
+      buildAgentNameMap(agentesMaestros);
+    } else if (!Object.keys(agentNameByCode).length) {
+      // fallback cache si no vino nada de la API
+      loadAgentNameMapFromCache();
     }
 
     agentsByTerminal = {};
@@ -4351,6 +4591,13 @@ async function refreshTerminalsAndAgents() {
       fetchApiResource("agentes"),
     ]);
 
+    // ✅ MAPA GLOBAL codagente -> nombre (+ cache)
+    if (Array.isArray(agentesMaestros) && agentesMaestros.length) {
+      buildAgentNameMap(agentesMaestros);
+    } else {
+      loadAgentNameMapFromCache();
+    }
+
     // ---- Terminales ----
     if (Array.isArray(tpvTerminales) && tpvTerminales.length) {
       terminals = tpvTerminales.map((t, idx) => {
@@ -4366,16 +4613,6 @@ async function refreshTerminalsAndAgents() {
       terminals = [];
     }
 
-    // ---- Mapa codagente -> nombre (desde /agentes) ----
-    const agentNameByCode = {};
-    if (Array.isArray(agentesMaestros)) {
-      agentesMaestros.forEach((a) => {
-        const code = String(a.codagente ?? "");
-        if (!code) return;
-        agentNameByCode[code] = a.nombre || a.name || `Agente ${code}`;
-      });
-    }
-
     // ---- TPV-agente -> agentsByTerminal + lista agents ----
     agentsByTerminal = {};
     const allAgentsMap = {};
@@ -4388,21 +4625,14 @@ async function refreshTerminalsAndAgents() {
 
         const tpvKey = String(tpvIdRaw);
         const code = String(codag);
+
         const name =
           agentNameByCode[code] || rel.nombre || rel.name || `Agente ${code}`;
 
-        const agentObj = {
-          id: code,
-          codagente: code,
-          name,
-        };
+        const agentObj = { id: code, codagente: code, name };
 
         if (!agentsByTerminal[tpvKey]) agentsByTerminal[tpvKey] = [];
-        if (
-          !agentsByTerminal[tpvKey].some(
-            (a) => a.codagente === agentObj.codagente,
-          )
-        ) {
+        if (!agentsByTerminal[tpvKey].some((a) => a.codagente === code)) {
           agentsByTerminal[tpvKey].push(agentObj);
         }
 
@@ -4425,9 +4655,7 @@ async function refreshTerminalsAndAgents() {
         const list = getAgentsForTerminalId(currentTerminal.id);
         if (
           !currentAgent ||
-          !list.some(
-            (a) => a.codagente === (currentAgent && currentAgent.codagente),
-          )
+          !list.some((a) => a.codagente === currentAgent.codagente)
         ) {
           currentAgent = null;
         }
@@ -5963,6 +6191,240 @@ async function printTicket(ticket) {
   } catch (e) {
     console.error("[printTicket] error:", e);
     toast("Error al imprimir: " + (e?.message || e), "err", "Impresión");
+  }
+}
+
+async function printCashCloseReport(report) {
+  try {
+    const isLinux = window.TPV_ENV?.platform === "linux";
+
+    const printerName = await ensurePrinterSelectedForPrint();
+    if (!printerName) {
+      toast("Impresión cancelada (sin impresora).", "warn", "Impresión");
+      return;
+    }
+
+    // -------- Linux: RAW simple (texto) --------
+    if (isLinux) {
+      if (!window.TPV_PRINT?.printRaw) {
+        toast("Falta printRaw en TPV_PRINT (preload/IPC).", "err", "Impresión");
+        return;
+      }
+
+      const lines = [];
+      lines.push("CIERRE DE CAJA");
+      lines.push(`${report.fecha} ${report.hora}`);
+      lines.push("--------------------------------");
+      lines.push(`Caja: ${report.cajaId || "-"}`);
+      lines.push(`TPV: ${report.terminal || "-"}`);
+      lines.push(`Inicio: ${report.fechaini || "-"}`);
+      lines.push("--------------------------------");
+      lines.push(
+        `Total vendido: ${Number(report.totalVendido || 0).toFixed(2)} EUR`,
+      );
+      lines.push(`Tickets: ${Number(report.numTickets || 0)}`);
+      lines.push("--------------------------------");
+      lines.push("Metodos de pago:");
+      (report.methods || []).forEach((m) => {
+        const name = (m.label || m.code || "-").toString();
+        const total = Number(m.total || 0).toFixed(2);
+        const cnt = Number(m.count || 0);
+        lines.push(`${name} (${cnt})  ${total}`);
+      });
+
+      const agents = Array.isArray(report.agentSales) ? report.agentSales : [];
+      if (agents.length > 1) {
+        lines.push("--------------------------------");
+        lines.push("Ventas por agente:");
+        agents.forEach((a) => {
+          const n = (a.agentName || a.name || a.agentCode || "-").toString();
+          const t = Number(a.total || 0).toFixed(2);
+          const c = Number(a.count || 0);
+          lines.push(`${n} (${c})  ${t}`);
+        });
+      }
+
+      if (report.obs) {
+        lines.push("--------------------------------");
+        lines.push("Obs:");
+        lines.push(String(report.obs));
+      }
+
+      lines.push("\n\n");
+
+      const txt = lines.join("\n");
+      const bytes = Array.from(new TextEncoder().encode(txt));
+
+      const r = await window.TPV_PRINT.printRaw({
+        bytes,
+        deviceName: printerName,
+      });
+
+      if (!r || !r.ok) {
+        toast(
+          "No se pudo imprimir cierre: " + (r?.error || "error"),
+          "err",
+          "Impresión",
+        );
+        return;
+      }
+
+      toast("Cierre impreso ✅", "ok", "Impresión");
+      return;
+    }
+
+    // -------- Windows: HTML --------
+    let templateHtml = "";
+    try {
+      const res = await fetch("cash_close_print.html", { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      templateHtml = await res.text();
+    } catch (e) {
+      toast(
+        "No puedo cargar cash_close_print.html: " + (e?.message || e),
+        "err",
+        "Impresión",
+      );
+      return;
+    }
+
+    const doc = new DOMParser().parseFromString(templateHtml, "text/html");
+
+    const eur2 = (n) =>
+      Number(n || 0)
+        .toFixed(2)
+        .replace(".", ",") + " €";
+
+    // Helpers: usa tu setText si ya existe. Si no, dejo fallback:
+    const _setText = (id, v) => {
+      const el = doc.getElementById(id);
+      if (el) el.textContent = v == null ? "" : String(v);
+    };
+
+    // Logo/empresa si quieres (si tu html tiene <img id="companyLogo">)
+    const logoEl = doc.getElementById("companyLogo");
+    if (logoEl && companyLogoUrl) {
+      logoEl.setAttribute("src", companyLogoUrl);
+      logoEl.style.display = "inline-block";
+    }
+    _setText("companyShortName", report.companyShortName || "");
+    _setText("companyLegalName", report.companyLegalName || "");
+
+    _setText("ccDate", `${report.fecha} ${report.hora}`);
+    _setText("ccCajaId", report.cajaId || "—");
+    _setText("ccTerminal", report.terminal || "—");
+    _setText("ccOpeningAt", report.fechaini || "—");
+
+    _setText("ccTotalSales", eur2(report.totalVendido || 0));
+    _setText("ccNumTickets", String(report.numTickets ?? "0"));
+    _setText("ccOpeningCash", eur2(report.openingTotal || 0));
+    _setText("ccCashIncome", eur2(report.cashIncome || 0));
+    _setText("ccMovements", eur2(report.movements || 0));
+    _setText("ccExpectedCash", eur2(report.expectedCash || 0));
+    _setText("ccCountedCash", eur2(report.countedCash || 0));
+    _setText("ccDifference", eur2(report.difference || 0));
+
+    // métodos
+    const methodsBox = doc.getElementById("ccMethods");
+    if (methodsBox) {
+      // Copia segura
+      const ms = Array.isArray(report.methods) ? [...report.methods] : [];
+
+      // ✅ Orden alfabético por nombre
+      ms.sort((a, b) =>
+        String(a.label || a.code || "").localeCompare(
+          String(b.label || b.code || ""),
+          "es",
+          { sensitivity: "base" },
+        ),
+      );
+
+      methodsBox.innerHTML = ms
+        .map((m) => {
+          const label = escapeHtml(String(m.label || m.code || "—"));
+          const cnt = Number(m.count || 0);
+          const total = eur2(m.total || 0);
+
+          return `
+        <div class="row">
+          <div class="left">${label} (${cnt})</div>
+          <div class="right">${total}</div>
+        </div>
+      `;
+        })
+        .join("");
+    }
+
+    // agentes (solo si hay más de 1)
+    const agentsBox = doc.getElementById("ccAgents");
+    const agentsWrap = doc.getElementById("ccAgentsWrap");
+    if (agentsWrap) {
+      const agents = Array.isArray(report.agentSales) ? report.agentSales : [];
+      if (agents.length > 1) {
+        agentsWrap.style.display = "block";
+      } else {
+        agentsWrap.style.display = "none";
+      }
+    }
+
+    if (agentsBox) {
+      const agents = Array.isArray(report.agentSales) ? report.agentSales : [];
+      if (agents.length > 1) {
+        agents.sort((a, b) => Number(b.total || 0) - Number(a.total || 0));
+        agentsBox.style.display = "block";
+        agentsBox.innerHTML = agents
+          .map((a) => {
+            const name = escapeHtml(
+              String(a.agentName || a.name || a.agentCode || "—"),
+            );
+            const cnt = Number(a.count || 0);
+            const total = eur2(a.total || 0);
+            return `
+              <div class="row">
+                <div class="left">${name} (${cnt})</div>
+                <div class="right">${total}</div>
+              </div>
+            `;
+          })
+          .join("");
+      } else {
+        agentsBox.style.display = "none";
+        agentsBox.innerHTML = "";
+      }
+    }
+
+    // observaciones si existe id="ccObs"
+    if (report.obs) _setText("ccObs", report.obs);
+    const obsWrap = doc.getElementById("ccObsWrap");
+    if (obsWrap) {
+      if (report.obs && String(report.obs).trim()) {
+        obsWrap.style.display = "block";
+        _setText("ccObs", report.obs);
+      } else {
+        obsWrap.style.display = "none";
+      }
+    }
+
+    const finalHtml = "<!doctype html>\n" + doc.documentElement.outerHTML;
+
+    const r2 = await window.TPV_PRINT.printTicket({
+      html: finalHtml,
+      deviceName: printerName,
+    });
+
+    if (!r2 || !r2.ok) {
+      toast(
+        "No se pudo imprimir cierre: " + (r2?.error || "error desconocido"),
+        "err",
+        "Impresión",
+      );
+      return;
+    }
+
+    toast("Cierre impreso ✅", "ok", "Impresión");
+  } catch (e) {
+    console.error("[printCashCloseReport] error:", e);
+    toast("Error imprimiendo cierre: " + (e?.message || e), "err", "Impresión");
   }
 }
 

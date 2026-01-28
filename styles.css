@@ -1128,12 +1128,12 @@ body.modal-locked .cart-card {
 
 .cash-summary-label {
   color: #666;
-  font-size: 12px;
+  font-size: 14px;
 }
 .cash-summary-value {
   font-weight: 700;
   margin-top: 3px;
-  font-size: 13px;
+  font-size: 15px;
   color: #222;
 }
 
@@ -2107,7 +2107,7 @@ body.modal-locked .cart-card {
 
 /* Tarjetas de importes rápidos en modal cobrar */
 .cash-paymethods-cards {
-  margin-top: 16px;
+  margin-top: 10px;
   display: flex;
   gap: 16px;
   flex-wrap: wrap;
@@ -2116,7 +2116,7 @@ body.modal-locked .cart-card {
 
 .cash-pay-card {
   flex: 1 1 200px;
-  background: #ffffff;
+  background: #d5dce3;
   border-radius: 12px;
   padding: 14px 18px;
   box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
@@ -2488,4 +2488,57 @@ body.modal-locked .cart-card {
 /* Opcional: si hay observaciones, resalta un poco el borde */
 .ticket-has-obs .ticket-obs {
   border: 1px solid #dbeafe;
+}
+
+/* ===== Cerrar Caja  =====*/
+/*Agent cash close tpv*/
+.cash-agent-title {
+  margin: 10px 0 6px;
+  font-weight: 800;
+}
+.cash-agent-card {
+  border: 1px dashed #c9c9c9;
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 10px;
+  background: #abb2b9;
+}
+.cash-agent-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-weight: 800;
+}
+.cash-agent-methods {
+  margin-top: 8px;
+}
+.cash-agent-method {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  opacity: 0.95;
+  padding: 2px 0;
+}
+.cash-agent-method-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.cash-close-total-meta {
+  margin: 8px 0 0 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.cash-total-agent {
+  font-size: 14px;
+  opacity: 0.85;
+  background: #26476b;
+  color: #fff;
+  flex-direction: column;
+  border-radius: 12px;
+  padding: 6px;
 }
