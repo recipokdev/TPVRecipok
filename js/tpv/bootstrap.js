@@ -9,11 +9,15 @@ let started = false;
 let retryCount = 0;
 
 function openCajaInUI(cajaOrId, fallbackIdtpv) {
-  const caja = (typeof cajaOrId === "object" && cajaOrId) ? cajaOrId : null;
+  const caja = typeof cajaOrId === "object" && cajaOrId ? cajaOrId : null;
   const idcaja = caja ? caja.idcaja : cajaOrId;
   const idtpv = caja ? caja.idtpv : (fallbackIdtpv ?? TPV_CONFIG.idtpv);
 
-  console.log("[BOOT] -> dispatch tpv:cajaAbierta", { idcaja, idtpv, cajaNick: caja?.nick });
+  console.log("[BOOT] -> dispatch tpv:cajaAbierta", {
+    idcaja,
+    idtpv,
+    cajaNick: caja?.nick,
+  });
 
   document.dispatchEvent(
     new CustomEvent("tpv:cajaAbierta", {
@@ -54,10 +58,20 @@ async function initTPVBootstrap(payload = {}) {
   console.log("[BOOT] initTPVBootstrap ejecutándose");
   const { nick, apiKey, baseUrl, idtpv } = pickConfigFromPayload(payload);
 
-  console.log("[BOOT] cfg:", { nick, apiKeyLen: apiKey.length, baseUrl, idtpv });
+  console.log("[BOOT] cfg:", {
+    nick,
+    apiKeyLen: apiKey.length,
+    baseUrl,
+    idtpv,
+  });
 
   if (!nick || !apiKey || !baseUrl || !idtpv) {
-    console.error("[BOOT] Faltan datos para bootstrap:", { nick, apiKeyLen: apiKey.length, baseUrl, idtpv });
+    console.error("[BOOT] Faltan datos para bootstrap:", {
+      nick,
+      apiKeyLen: apiKey.length,
+      baseUrl,
+      idtpv,
+    });
     return;
   }
 
@@ -69,6 +83,7 @@ async function initTPVBootstrap(payload = {}) {
   retryCount++;
 
   const fsApi = new FacturaScriptsApi({ baseUrl, apiKey, token: null });
+  window.fsApi = fsApi; // ✅ para usarla desde cualquier función
 
   const lock = new LockClient({
     baseUrl: TPV_CONFIG.lockServiceBase,
@@ -81,7 +96,7 @@ async function initTPVBootstrap(payload = {}) {
     const sinceDate = formatSince(acquired.since);
     alert(
       `TPV en uso por ${acquired.lockedBy}\n` +
-      `Desde: ${sinceDate ? sinceDate.toLocaleTimeString() : "(sin fecha)"}`
+        `Desde: ${sinceDate ? sinceDate.toLocaleTimeString() : "(sin fecha)"}`,
     );
     return;
   }
@@ -103,13 +118,30 @@ async function initTPVBootstrap(payload = {}) {
   console.log("[BOOT] buscando cajas abiertas (idtpv =", idtpv, ")");
   const abiertas = await listarCajasAbiertas({ fsApi, idtpv });
 
-  console.log("[BOOT] abiertas:", abiertas.map(c => ({ idcaja: c.idcaja, idtpv: c.idtpv, nick: c.nick, fechaini: c.fechaini })));
+  console.log(
+    "[BOOT] abiertas:",
+    abiertas.map((c) => ({
+      idcaja: c.idcaja,
+      idtpv: c.idtpv,
+      nick: c.nick,
+      fechaini: c.fechaini,
+    })),
+  );
 
   if (abiertas.length === 0) {
     console.log("[BOOT] no hay abiertas -> crearCaja()");
     const nueva = await crearCaja({ fsApi, idtpv, nick, dineroini: 0 });
+
     const idcaja = nueva?.idcaja ?? nueva?.data?.idcaja;
-    openCajaInUI({ idcaja, idtpv, nick, fechaini: nueva?.fechaini ?? null }, idtpv);
+
+    if (!idcaja) {
+      throw new Error("No se pudo crear caja remota");
+    }
+
+    openCajaInUI(
+      { idcaja, idtpv, nick, fechaini: nueva?.fechaini ?? null },
+      idtpv,
+    );
     return;
   }
 
@@ -125,7 +157,9 @@ async function initTPVBootstrap(payload = {}) {
     cajas: abiertas,
     onOpen: (idcaja) => {
       hide();
-      const caja = abiertas.find(c => String(c.idcaja) === String(idcaja)) || { idcaja, idtpv };
+      const caja = abiertas.find(
+        (c) => String(c.idcaja) === String(idcaja),
+      ) || { idcaja, idtpv };
       openCajaInUI(caja, idtpv);
     },
     onClose: async (idcaja) => {

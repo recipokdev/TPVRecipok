@@ -173,6 +173,15 @@ const emailCancelBtn = document.getElementById("emailCancelBtn");
 const emailError = document.getElementById("emailError");
 const emailKeyboardBtn = document.getElementById("emailKeyboardBtn");
 // ===== Funciones auxiliares =====
+function getFsApi() {
+  const api = window.fsApi;
+  if (!api)
+    throw new Error(
+      "fsApi no inicializada (window.fsApi vacío). ¿se ejecutó bootstrap?",
+    );
+  return api;
+}
+
 function isFalseFlag(v) {
   return v === false || v === 0 || v === "0" || v === "false";
 }
@@ -2193,9 +2202,9 @@ function renderMainAgentBar() {
   drawerBtn.textContent = "📤";
 
   drawerBtn.onclick = () => {
-    openDrawerNow().catch(() => {
-      toast("No se pudo abrir el cajón.", "err", "Cajón");
-    });
+    openDrawerNow({ source: "MAIN" }).catch(() =>
+      toast("No se pudo abrir el cajón.", "err", "Cajón"),
+    );
   };
 
   mainAgentBar.appendChild(drawerBtn);
@@ -2440,6 +2449,203 @@ function applyRemoteCajaToSession(remoteCaja) {
   if (sumTotalSalesEl)
     sumTotalSalesEl.textContent =
       totalSales.toFixed(2).replace(".", ",") + " €";
+}
+
+// ===============================
+// Observaciones + log (robusto)
+// ===============================
+const CASH_OBS_SEPARATOR = "----- REGISTRO TPV (AUTOMÁTICO) -----";
+
+// Cola por caja para serializar updates y evitar deadlocks/concurrencia
+const __OBS_QUEUE__ = new Map();
+
+// ✅ Helper para acceder a cashSession sin romper si no existe aún
+function getCashSession() {
+  if (window.cashSession) return window.cashSession;
+  if (typeof cashSession !== "undefined") return cashSession;
+  // fallback para no explotar en early-boot
+  window.cashSession = window.cashSession || {
+    open: false,
+    remoteCajaId: null,
+  };
+  return window.cashSession;
+}
+
+function getCajaIdSafe() {
+  // No dependas de getCashSession si no está disponible
+  const cs =
+    typeof getCashSession === "function"
+      ? getCashSession()
+      : window.cashSession || cashSession || null;
+
+  const id =
+    Number(cs?.remoteCajaId) ||
+    Number(localStorage.getItem("tpv_remoteCajaId") || 0) ||
+    0;
+
+  return id > 0 ? id : null;
+}
+
+function getLogCtx() {
+  const agentName =
+    (currentAgent?.name || currentAgent?.nick || getLoginUser?.() || "—")
+      .toString()
+      .trim() || "—";
+  const tpvName = (currentTerminal?.name || "—").toString().trim() || "—";
+
+  return {
+    idcaja: getCajaIdSafe(),
+    agentName,
+    tpvName,
+  };
+}
+
+function formatDateTimeES(d = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return (
+    d.getFullYear() +
+    "-" +
+    pad(d.getMonth() + 1) +
+    "-" +
+    pad(d.getDate()) +
+    " " +
+    pad(d.getHours()) +
+    ":" +
+    pad(d.getMinutes()) +
+    ":" +
+    pad(d.getSeconds())
+  );
+}
+
+function splitCajaObservaciones(rawObs) {
+  const s = String(rawObs || "").replace(/\r\n/g, "\n");
+  const idx = s.indexOf(CASH_OBS_SEPARATOR);
+  if (idx < 0) return { userText: s.trim(), autoLines: [] };
+
+  const userText = s.slice(0, idx).trim();
+  const autoPart = s.slice(idx + CASH_OBS_SEPARATOR.length).trim();
+  const autoLines = autoPart
+    ? autoPart
+        .split("\n")
+        .map((x) => x.trim())
+        .filter(Boolean)
+    : [];
+  return { userText, autoLines };
+}
+
+function buildCajaObservaciones(userText, autoLines) {
+  const u = String(userText || "").trim();
+  const lines = Array.isArray(autoLines) ? autoLines.filter(Boolean) : [];
+
+  if (!u && !lines.length) return "";
+  if (!lines.length) return u;
+
+  return [u, u ? "" : "", CASH_OBS_SEPARATOR, ...lines]
+    .filter((x) => x !== "")
+    .join("\n")
+    .trim();
+}
+
+function buildCajaLogLineWith(ctx, eventName, extra) {
+  const agent = (ctx?.agentName || "—").toString().trim();
+  const tpv = (ctx?.tpvName || "—").toString().trim();
+  const base = `[${formatDateTimeES()}] ${eventName} | Agente: ${agent} | TPV: ${tpv}`;
+  return extra ? `${base} | ${extra}` : base;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function isDeadlockError(e) {
+  const msg = String(e?.message || e || "").toLowerCase();
+  return msg.includes("deadlock");
+}
+
+// Leer caja por id (sin depender de cashSession)
+async function apiReadCajaById(idcaja) {
+  if (!idcaja) return null;
+  const resp = await apiRead(`tpvcajas/${idcaja}`);
+  return resp?.doc || resp?.data || resp || null;
+}
+
+// ✅ IMPORTANTÍSIMO: En FS a veces PATCH/PUT requiere mandar idcaja en body.
+// (No siempre, pero no molesta y suele arreglar 400.)
+async function updateTpvcajaObservaciones(idcaja, observaciones) {
+  if (!idcaja) throw new Error("updateTpvcajaObservaciones: idcaja vacío");
+
+  const body = {
+    idcaja: String(idcaja),
+    observaciones: String(observaciones ?? ""),
+  };
+  const attempts = 5;
+
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      try {
+        return await apiWrite(`tpvcajas/${idcaja}`, "PATCH", body);
+      } catch {
+        return await apiWrite(`tpvcajas/${idcaja}`, "PUT", body);
+      }
+    } catch (e) {
+      if (!isDeadlockError(e) || i === attempts) throw e;
+      await sleep(150 * i); // backoff
+    }
+  }
+}
+
+// Serializa escrituras por caja
+function enqueueCajaObsWrite(idcaja, fn) {
+  const prev = __OBS_QUEUE__.get(idcaja) || Promise.resolve();
+  const next = prev
+    .catch(() => {}) // no rompas la cola si falló antes
+    .then(fn)
+    .finally(() => {
+      // Limpia si este era el último
+      if (__OBS_QUEUE__.get(idcaja) === next) __OBS_QUEUE__.delete(idcaja);
+    });
+
+  __OBS_QUEUE__.set(idcaja, next);
+  return next;
+}
+
+// Añade una línea automática (por id)
+async function appendCajaAutoLogLineForId(idcaja, line) {
+  if (!idcaja) return;
+
+  return enqueueCajaObsWrite(idcaja, async () => {
+    const remoteCaja = await apiReadCajaById(idcaja);
+    const rawObs = remoteCaja?.observaciones ?? "";
+    const { userText, autoLines } = splitCajaObservaciones(rawObs);
+
+    autoLines.push(String(line || "").trim());
+    const merged = buildCajaObservaciones(userText, autoLines);
+
+    await updateTpvcajaObservaciones(idcaja, merged);
+  });
+}
+
+// Guarda el texto del usuario (por id) respetando el bloque automático
+async function saveUserObsToCajaForId(idcaja) {
+  if (!idcaja) return;
+
+  return enqueueCajaObsWrite(idcaja, async () => {
+    const ta = document.getElementById("cashObs");
+    const userText = String(ta?.value || "").trim();
+
+    const remoteCaja = await apiReadCajaById(idcaja);
+    const rawObs = remoteCaja?.observaciones ?? "";
+    const { autoLines } = splitCajaObservaciones(rawObs);
+
+    const merged = buildCajaObservaciones(userText, autoLines);
+    await updateTpvcajaObservaciones(idcaja, merged);
+  });
+}
+
+function fillCashObsTextareaFromRemote(remoteCaja) {
+  const ta = document.getElementById("cashObs");
+  if (!ta) return;
+
+  const { userText } = splitCajaObservaciones(remoteCaja?.observaciones || "");
+  ta.value = userText || "";
 }
 
 function renderCashCloseHeaderCard(remoteCaja) {
@@ -2691,7 +2897,8 @@ async function fetchRecibosByFacturasMulti(idfacturas) {
 
 async function fetchRecibosByFactura(idfactura) {
   const arr = await fetchRecibosByFacturasMulti([idfactura]);
-  return Array.isArray(arr) ? arr : [];
+  const list = Array.isArray(arr) ? arr : [];
+  return list.filter((r) => String(r.idfactura) === String(idfactura));
 }
 
 function resetCashRuntimeForNewCaja() {
@@ -2858,6 +3065,7 @@ function openCashOpenDialog(mode = "open") {
 
         // 1) aplicar caja remota
         applyRemoteCajaToSession(remoteCaja);
+        fillCashObsTextareaFromRemote(remoteCaja);
         renderCashCloseHeaderCard(remoteCaja);
 
         // 2) labels
@@ -2988,13 +3196,28 @@ function openCashMoveDialog() {
   }
   if (!cashMoveOverlay) return;
 
+  // ✅ LOG: abrió modal movimientos
+  try {
+    const idcaja = getCajaIdSafe();
+    const ctx = {
+      agentName: currentAgent?.name || currentAgent?.nick || "—",
+      tpvName: currentTerminal?.name || "—",
+    };
+    if (idcaja) {
+      appendCajaAutoLogLineForId(
+        idcaja,
+        buildCajaLogLineWith(ctx, "ABRIÓ VENTANA MOVIMIENTOS"),
+      ).catch(() => {});
+    }
+  } catch {}
+
   // Reset campos
   if (cashMoveAmountEl) cashMoveAmountEl.value = "";
   if (cashMoveReasonEl) cashMoveReasonEl.value = "";
   if (cashMoveErrorEl) cashMoveErrorEl.textContent = "";
 
   const radios = cashMoveOverlay.querySelectorAll('input[name="cashMoveType"]');
-  if (radios && radios[0]) radios[0].checked = true; // Entrada por defecto
+  if (radios && radios[0]) radios[0].checked = true;
 
   cashMoveOverlay.classList.remove("hidden");
   lockAppUI();
@@ -3007,7 +3230,7 @@ function closeCashMoveDialog() {
 }
 
 if (cashMoveBtn) {
-  cashMoveBtn.onclick = () => {
+  cashMoveBtn.onclick = async () => {
     openCashMoveDialog();
   };
 }
@@ -3208,16 +3431,13 @@ function registerPayMethodUsageForTicket(pagos) {
 
 async function confirmCashOpening() {
   ensureCashSessionCounters();
-
-  // ✅ RESET DURO: para que jamás se mezclen cajas
   resetCashRuntimeForNewCaja();
 
   cashSession.open = true;
   cashSession.openedAt = new Date().toISOString();
 
-  // ✅ Crear log en FacturaScripts (sin romper si falla)
   try {
-    await apiOpenCashInFS();
+    await apiOpenCashInFS(); // aquí se debe setear remoteCajaId + localStorage
   } catch (e) {
     console.warn("No se pudo abrir caja en FacturaScripts:", e?.message || e);
     toast(
@@ -3227,20 +3447,34 @@ async function confirmCashOpening() {
     );
   }
 
+  // ✅ asegúrate de tener idcaja antes del log
+  if (!getCajaIdSafe()) {
+    await apiReadCurrentCaja().catch(() => {});
+  }
+
+  // ✅ LOG: caja abierta
+  try {
+    const idcaja = getCajaIdSafe();
+    if (idcaja) {
+      const ctx = getLogCtx();
+      const extra = `Inicial:${Number(cashSession.openingTotal || 0).toFixed(2)}€`;
+      await appendCajaAutoLogLineForId(
+        idcaja,
+        buildCajaLogLineWith(ctx, "CAJA ABIERTA", extra),
+      );
+    }
+  } catch {}
+
   hideCashOpenDialog();
 
-  if (terminalNameEl && currentTerminal) {
+  if (terminalNameEl && currentTerminal)
     terminalNameEl.textContent = currentTerminal.name || "---";
-  }
-  if (agentNameEl) {
+  if (agentNameEl)
     agentNameEl.textContent = currentAgent ? currentAgent.name : "---";
-  }
 
   renderMainUI();
   renderMainAgentBar();
   updateCashButtonLabel();
-
-  console.log("Caja abierta:", cashSession);
 }
 
 async function confirmCashClosing() {
@@ -3286,7 +3520,7 @@ async function confirmCashClosing() {
 
   mainUiRendered = false;
 
-  console.log("Caja cerrada:", cashSession);
+  console.log("CAJA CERRADA:", cashSession);
   try {
     localStorage.removeItem("tpv_remoteCajaId");
   } catch (e) {}
@@ -3593,6 +3827,8 @@ if (cashOpenOkBtn) {
   cashOpenOkBtn.onclick = async () => {
     cashOpenOkBtn.disabled = true;
 
+    const ctx = getLogCtx(); // idcaja + nombres antes de que se limpien
+
     try {
       if (cashDialogMode === "open") {
         await confirmCashOpening();
@@ -3616,15 +3852,59 @@ if (cashOpenOkBtn) {
       );
       if (!ok) return;
 
-      // 1) leer caja actual (para numtickets/totaltickets/fechaini)
+      // 1) LOG: pulsó cerrar
+      try {
+        if (ctx.idcaja) {
+          await appendCajaAutoLogLineForId(
+            ctx.idcaja,
+            buildCajaLogLineWith(ctx, 'ABRIÓ VENTANA "Cerrar caja"'),
+          );
+        }
+      } catch (e) {
+        console.warn("No pude registrar pulsó cerrar caja:", e?.message || e);
+      }
+
+      // 2) Guardar observaciones del usuario (lo del textarea)
+      try {
+        if (ctx.idcaja) await saveUserObsToCajaForId(ctx.idcaja);
+      } catch (e) {
+        console.warn("No pude guardar observaciones usuario:", e?.message || e);
+      }
+
+      // 3) Leer caja remota para imprimir con datos reales (opcional, pero recomendable)
       let remoteCaja = null;
       try {
-        remoteCaja = await apiReadCurrentCaja();
+        remoteCaja = await apiReadCajaById(ctx.idcaja);
       } catch {}
 
-      const report = buildCashClosePrintData(remoteCaja); // ✅ aquí
-      await printCashCloseReport(report);
+      // 4) Imprimir cierre (esto lo habías “perdido”)
+      try {
+        const report = buildCashClosePrintData(remoteCaja);
+        await printCashCloseReport(report);
+      } catch (e) {
+        console.warn("No pude imprimir cierre:", e?.message || e);
+      }
 
+      // 5) LOG: caja cerrada (antes de apiClose/limpieza)
+      try {
+        if (ctx.idcaja) {
+          await appendCajaAutoLogLineForId(
+            ctx.idcaja,
+            buildCajaLogLineWith(ctx, "CAJA CERRADA"),
+          );
+        }
+      } catch (e) {
+        console.warn("No pude registrar caja cerrada:", e?.message || e);
+      }
+
+      // 6) Cierre remoto FS (IMPORTANTE: que NO borre observaciones)
+      try {
+        await apiCloseCashInFS();
+      } catch (e) {
+        console.warn("No se pudo cerrar caja en FS:", e?.message || e);
+      }
+
+      // 7) Limpieza local
       await confirmCashClosing();
     } finally {
       cashOpenOkBtn.disabled = false;
@@ -3762,6 +4042,16 @@ async function apiOpenCashInFS() {
   if (TPV_STATE.offline || TPV_STATE.locked) return null;
   if (!currentTerminal?.id) throw new Error("No hay terminal seleccionado");
 
+  // ✅ Si ya hay id remoto, NO abras otra caja por accidente
+  const existing =
+    Number(cashSession?.remoteCajaId || 0) ||
+    Number(localStorage.getItem("tpv_remoteCajaId") || 0);
+
+  if (existing) {
+    cashSession.remoteCajaId = existing;
+    return { ok: true, reused: true, idcaja: existing };
+  }
+
   const payload = {
     idtpv: Number(currentTerminal.id),
     fechaini: nowFs(),
@@ -3775,7 +4065,7 @@ async function apiOpenCashInFS() {
   // ✅ FacturaScripts puede devolver el id en distintos formatos
   const doc = resp?.doc || resp?.data || resp;
 
-  const remoteId =
+  const remoteIdRaw =
     doc?.idcaja ??
     doc?.idCaja ??
     doc?.idtpvcaja ??
@@ -3785,16 +4075,24 @@ async function apiOpenCashInFS() {
     resp?.id ??
     null;
 
+  const remoteId = Number(remoteIdRaw || 0) || null;
+
   if (!remoteId) {
     console.warn("⚠️ No pude detectar el id de caja en la respuesta:", resp);
+    // Importante: NO guardes "" porque luego te rompe los flujos
+    try {
+      localStorage.removeItem("tpv_remoteCajaId");
+    } catch {}
+    cashSession.remoteCajaId = null;
+    return resp;
   }
 
   cashSession.remoteCajaId = remoteId;
 
   // ✅ persiste para poder cerrar aunque se recargue la app
   try {
-    localStorage.setItem("tpv_remoteCajaId", String(remoteId || ""));
-  } catch (e) {}
+    localStorage.setItem("tpv_remoteCajaId", String(remoteId));
+  } catch {}
 
   return resp;
 }
@@ -3807,35 +4105,24 @@ try {
 async function apiCloseCashInFS() {
   if (TPV_STATE.offline || TPV_STATE.locked) return null;
 
-  let remoteId = cashSession.remoteCajaId;
-
-  // ✅ si no tenemos id, intentamos encontrar la caja abierta en FS
+  let remoteId = getCajaIdSafe();
   if (!remoteId) {
-    remoteId = await findOpenCajaIdInFS();
-    if (remoteId) {
-      cashSession.remoteCajaId = remoteId;
-      try {
-        localStorage.setItem("tpv_remoteCajaId", String(remoteId));
-      } catch (e) {}
-    }
-  }
-
-  if (!remoteId) {
-    console.warn("No pude encontrar una caja abierta para cerrar en FS.");
+    console.warn("No pude encontrar idcaja para cerrar.");
     return null;
   }
+
+  // 🔒 Leer caja para conservar observaciones actuales
+  let remoteCaja = null;
+  try {
+    remoteCaja = await apiReadCajaById(remoteId);
+  } catch {}
 
   const opening = Number(cashSession.openingTotal || 0);
   const cashIncome = Number(cashSession.cashSalesTotal || 0);
   const movements = Number(cashSession.cashMovementsTotal || 0);
-
-  const expectedCash = opening + cashIncome + movements; // totalcaja
-  const counted = Number(cashSession.closingTotal || 0); // dinerofin
-  const diff = counted - expectedCash; // diferencia
-
-  // Si quieres contar tickets reales, lo calculamos luego.
-  const numtickets = 0;
-  const totaltickets = Number(cashSession.totalSales || 0);
+  const expectedCash = opening + cashIncome + movements;
+  const counted = Number(cashSession.closingTotal || 0);
+  const diff = counted - expectedCash;
 
   const payload = {
     fechafin: nowFs(),
@@ -3845,10 +4132,14 @@ async function apiCloseCashInFS() {
     totalmovi: movements,
     totalcaja: expectedCash,
     diferencia: diff,
-    numtickets,
-    totaltickets,
-    observaciones: "",
+    numtickets: Number(cashSession.numtickets || 0),
+    totaltickets: Number(cashSession.totalSales || 0),
   };
+
+  // ✅ Mantener observaciones (usuario + automático)
+  if (remoteCaja) {
+    payload.observaciones = String(remoteCaja.observaciones || "");
+  }
 
   return await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
 }
@@ -4482,11 +4773,6 @@ window.cargarPantallaTPV = async function (idcaja, idtpv) {
 
     // ✅ Marcar caja como abierta (CRÍTICO)
     cashSession.open = true;
-    cashSession.remoteCajaId = idcaja;
-
-    try {
-      localStorage.setItem("tpv_remoteCajaId", String(idcaja));
-    } catch (e) {}
 
     // ✅ Cerrar overlays por si estaban abiertos
     try {
@@ -4922,7 +5208,7 @@ function openPostPayModal({ docCode, total, cambio }) {
 
   if (postPayOpenDrawerBtn) {
     postPayOpenDrawerBtn.onclick = () =>
-      handleOpenDrawerClick(postPayOpenDrawerBtn);
+      handleOpenDrawerClick(postPayOpenDrawerBtn, "POSTPAY");
   }
 
   if (postPayCloseX) postPayCloseX.onclick = closePostPayModal;
@@ -5292,42 +5578,15 @@ groupLinesToggle?.addEventListener("change", async () => {
   await pushGroupLinesToFS(v);
 });
 
-async function handleOpenDrawerClick(btn) {
+async function handleOpenDrawerClick(btn, source = "MANUAL") {
+  if (btn) {
+    btn.disabled = true;
+    btn.dataset._oldText = btn.textContent;
+    btn.textContent = "Abriendo...";
+  }
+
   try {
-    const printerName = await ensurePrinterSelectedForPrint();
-
-    if (!printerName) {
-      toast?.("Primero selecciona una impresora.", "warn", "Cajón");
-      closeOptions?.();
-      const chosen = await openPrinterPicker();
-      if (chosen) {
-        savePrinterReal(chosen);
-        refreshOptionsUI?.();
-      }
-      openOptions?.();
-      return;
-    }
-
-    if (btn) {
-      btn.disabled = true;
-      btn.dataset._oldText = btn.textContent;
-      btn.textContent = "Abriendo...";
-    }
-
-    const r = await window.TPV_PRINT.openCashDrawer(printerName);
-
-    if (!r || !r.ok) {
-      toast?.(
-        "No se pudo abrir el cajón: " + (r?.error || "error desconocido"),
-        "err",
-        "Cajón",
-      );
-    } else {
-      toast?.("Cajón abierto ✅", "ok", "Cajón");
-    }
-  } catch (e) {
-    console.warn(e);
-    toast?.("Error al abrir el cajón", "err", "Cajón");
+    await openDrawerNow({ source });
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -5349,7 +5608,7 @@ optionsQuitBtn?.addEventListener("click", async () => {
 
 // Opciones
 optionsOpenDrawerBtn?.addEventListener("click", () =>
-  handleOpenDrawerClick(optionsOpenDrawerBtn),
+  handleOpenDrawerClick(optionsOpenDrawerBtn, "OPTIONS"),
 );
 
 // Cobrar
@@ -6452,6 +6711,55 @@ function escapeHtml(str) {
     .replaceAll("'", "&#039;");
 }
 
+async function validateRecibosAgainstFactura(idfactura) {
+  if (!idfactura) return;
+
+  const fc = await fetchFacturaClienteById(idfactura);
+  const totalFactura = round2(fc?.total);
+
+  const recibos = await fetchRecibosByFactura(idfactura);
+  const sumRecibos = round2(
+    (Array.isArray(recibos) ? recibos : []).reduce(
+      (s, r) => s + (Number(r.importe) || 0),
+      0,
+    ),
+  );
+
+  const diff = round2(totalFactura - sumRecibos);
+
+  // tolerancia céntimo
+  if (Math.abs(diff) <= 0.01) return;
+
+  // Aquí decides política: avisar o reparar.
+  console.warn(
+    `[TPV] Recibos no cuadran con factura. totalFactura=${totalFactura} sumRecibos=${sumRecibos} diff=${diff}`,
+  );
+
+  // ✅ Opción “solo warning” (recomendado al principio)
+  toast(
+    "Aviso: los recibos no cuadran con el total. Revisa pagos/recibos.",
+    "warn",
+    "Recibos",
+  );
+
+  // 🔧 Opción “autorreparar” (si quieres activarlo después):
+  // const codcliente = fc?.codcliente;
+  // if (codcliente && Math.abs(diff) >= 0.01) {
+  //   const today = new Date().toISOString().slice(0, 10);
+  //   await createReciboCliente({
+  //     idfactura,
+  //     codcliente,
+  //     codpago: (fc?.codpago || "CONT").toString().trim().toUpperCase(),
+  //     importe: diff,
+  //     fechapago: today,
+  //     fecha: today,
+  //     idempresa: fc?.idempresa,
+  //     codigofactura: fc?.codigo,
+  //     coddivisa: fc?.coddivisa,
+  //   });
+  // }
+}
+
 let isPayingNow = false;
 
 async function onPayButtonClick() {
@@ -6743,6 +7051,11 @@ async function onPayButtonClick() {
     // ✅ Limpieza: elimina el recibo "total" automático y deja SOLO los recibos por método
     try {
       await cleanupRecibosFactura(idfactura, payResult.pagos || []);
+      try {
+        await validateRecibosAgainstFactura(idfactura);
+      } catch (e) {
+        console.warn("validateRecibosAgainstFactura falló:", e?.message || e);
+      }
     } catch (e) {
       console.warn("cleanupRecibosFactura falló:", e?.message || e);
     }
@@ -7616,7 +7929,7 @@ async function openPayModal(total) {
             paySaveBtn.disabled = true;
 
             // NO bloquees el flujo si falla
-            openDrawerNow().catch(() => {});
+            openDrawerNow({ source: "AUTO" }).catch(() => {});
           }
         } catch (e) {
           // no debe impedir el cobro
@@ -8564,12 +8877,16 @@ async function deleteReciboCliente(idrecibo) {
 async function cleanupRecibosFactura(idfactura, pagosEsperados) {
   if (!idfactura) return;
 
-  const round2 = (n) => Number((Number(n) || 0).toFixed(2));
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
-  // Lista esperada (permitimos repetidos)
+  const normCode = (v) =>
+    String(v || "")
+      .trim()
+      .toUpperCase();
+
   const expected = (Array.isArray(pagosEsperados) ? pagosEsperados : [])
     .map((p) => ({
-      codpago: String(p.codpago || "").trim(),
+      codpago: normCode(p.codpago),
       importe: round2(p.importe),
     }))
     .filter((x) => x.codpago && x.importe > 0);
@@ -8577,25 +8894,36 @@ async function cleanupRecibosFactura(idfactura, pagosEsperados) {
   if (!expected.length) return;
 
   const recibos = await fetchRecibosByFactura(idfactura);
+  if (!Array.isArray(recibos) || !recibos.length) return;
 
-  // Vamos consumiendo "expected" para quedarnos con 1 recibo por cada pago esperado.
+  // Pool consumible (permitimos repetidos)
   const expectedPool = expected.slice();
 
+  const sameMoney = (a, b) => Math.abs(round2(a) - round2(b)) <= 0.01;
+
   const matchesOneExpected = (r) => {
-    const cod = String(r.codpago || "").trim();
+    const cod = normCode(r.codpago);
     const imp = round2(r.importe);
 
     const idx = expectedPool.findIndex(
-      (e) => e.codpago === cod && e.importe === imp,
+      (e) => e.codpago === cod && sameMoney(e.importe, imp),
     );
+
     if (idx >= 0) {
-      expectedPool.splice(idx, 1); // consumimos este esperado
+      expectedPool.splice(idx, 1);
       return true;
     }
     return false;
   };
 
-  for (const r of recibos) {
+  // Opcional: procesa primero recibos “más nuevos” (reduce errores raros)
+  const recibosSorted = [...recibos].sort((a, b) => {
+    const ida = Number(a.idrecibo || a.id || a.idrecibocliente || 0);
+    const idb = Number(b.idrecibo || b.id || b.idrecibocliente || 0);
+    return idb - ida;
+  });
+
+  for (const r of recibosSorted) {
     const idrecibo = r.idrecibo || r.id || r.idrecibocliente;
     if (!idrecibo) continue;
 
@@ -9816,8 +10144,10 @@ document.addEventListener("DOMContentLoaded", () => {
   cashWrapInputsWithSteppers();
 });
 
+const DRAWER_LOG_SOURCES = new Set(["MAIN", "OPTIONS", "POSTPAY"]);
+
 /*Abrir Cajon*/
-async function openDrawerNow() {
+async function openDrawerNow({ source = "MAIN" } = {}) {
   try {
     const printerName = await ensurePrinterSelectedForPrint();
     if (!printerName) {
@@ -9842,6 +10172,26 @@ async function openDrawerNow() {
         "Cajón",
       );
       return false;
+    }
+
+    // ✅ Log solo fuentes manuales / humanas
+    if (DRAWER_LOG_SOURCES.has(String(source).toUpperCase())) {
+      const label =
+        source === "POSTPAY"
+          ? "ABRIÓ CAJÓN (POST-PAGO)"
+          : source === "OPTIONS"
+            ? "ABRIÓ CAJÓN (OPCIONES)"
+            : "ABRIÓ CAJÓN (VENTANA PRINCIPAL)";
+
+      try {
+        const ctx = getLogCtx();
+        if (ctx.idcaja) {
+          await appendCajaAutoLogLineForId(
+            ctx.idcaja,
+            buildCajaLogLineWith(ctx, label),
+          );
+        }
+      } catch {}
     }
 
     toast("Cajón abierto ✅", "ok", "Cajón");
@@ -10381,20 +10731,33 @@ async function saveCashMovement() {
     reason = type === "out" ? "Salida de caja" : "Entrada de caja";
   }
 
+  // ctx + idcaja (para logs)
+  const idcaja = getCajaIdSafe();
+  const ctx = {
+    agentName: currentAgent?.name || currentAgent?.nick || "—",
+    tpvName: currentTerminal?.name || "—",
+  };
+
+  if (ctx.idcaja) {
+    const tipoTxt = type === "out" ? "SALIDA" : "ENTRADA";
+    const extra = `Tipo:${tipoTxt} Importe:${amount.toFixed(2)}€ Motivo:${reason} FS:${fsOk ? "OK" : "FAIL"}`;
+    await appendCajaAutoLogLineForId(
+      ctx.idcaja,
+      buildCajaLogLineWith(ctx, "CONFIRMÓ MOVIMIENTO", extra),
+    );
+  }
+
   // 1) Actualizar total de movimientos en la sesión
   const currentMov = Number(cashSession.cashMovementsTotal || 0);
   cashSession.cashMovementsTotal = currentMov + signedAmount;
 
+  let fsOk = false;
+
   // 2) Registrar en FacturaScripts (si es posible)
   try {
-    await apiCreateCashMovementInFS({
-      amount, // cantidad POSITIVA
-      type, // "in" | "out"
-      reason, // texto con motivo
-    });
-
-    // 🔁 actualizar totales de la caja en FS en cada movimiento
+    await apiCreateCashMovementInFS({ amount, type, reason });
     await syncFsCajaTotalsRealtime();
+    fsOk = true;
   } catch (e) {
     console.warn("No se pudo registrar el movimiento en FacturaScripts:", e);
     toast(
@@ -10402,6 +10765,20 @@ async function saveCashMovement() {
       "warn",
       "Caja",
     );
+  }
+
+  // ✅ LOG: confirmó movimiento (con detalle)
+  try {
+    if (idcaja) {
+      const tipoTxt = type === "out" ? "SALIDA" : "ENTRADA";
+      const extra = `Tipo:${tipoTxt} Importe:${amount.toFixed(2)}€ Motivo:${reason} FS:${fsOk ? "OK" : "FAIL"}`;
+      await appendCajaAutoLogLineForId(
+        idcaja,
+        buildCajaLogLineWith(ctx, "CONFIRMÓ MOVIMIENTO", extra),
+      );
+    }
+  } catch (e) {
+    console.warn("No pude registrar log de movimiento:", e?.message || e);
   }
 
   // 3) Aviso y cerrar
@@ -10627,7 +11004,11 @@ async function apiRead(resource) {
 async function apiReadCurrentCaja() {
   if (TPV_STATE.offline || TPV_STATE.locked) return null;
 
-  const remoteId = cashSession.remoteCajaId;
+  const remoteId =
+    cashSession?.remoteCajaId ||
+    Number(localStorage.getItem("tpv_remoteCajaId") || 0) ||
+    null;
+
   if (!remoteId) {
     console.warn("No hay remoteCajaId para leer tpvcajas.");
     return null;
@@ -10635,6 +11016,15 @@ async function apiReadCurrentCaja() {
 
   const resp = await apiRead(`tpvcajas/${remoteId}`);
   const doc = resp?.doc || resp?.data || resp || null;
+
+  // ✅ si viene bien, sincroniza
+  if (doc?.idcaja) {
+    cashSession.remoteCajaId = Number(doc.idcaja);
+    try {
+      localStorage.setItem("tpv_remoteCajaId", String(doc.idcaja));
+    } catch {}
+  }
+
   return doc;
 }
 
@@ -10733,6 +11123,15 @@ initKioskToggle();
 
 // 1) Caja asignada por bootstrap -> activar UI
 document.addEventListener("tpv:cajaAbierta", (e) => {
+  const idcaja = Number(e.detail?.idcaja || 0) || null;
+
+  if (idcaja) {
+    cashSession.remoteCajaId = idcaja;
+    try {
+      localStorage.setItem("tpv_remoteCajaId", String(idcaja));
+    } catch {}
+  }
+
   console.log("[RENDER] tpv:cajaAbierta recibido", e.detail);
   window.cargarPantallaTPV?.(e.detail.idcaja, e.detail.idtpv, e.detail.caja);
 });
