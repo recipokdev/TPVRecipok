@@ -489,6 +489,48 @@ function renderMainUI() {
   mainUiRendered = true;
 }
 
+function eur2(n) {
+  return (
+    Number(n || 0)
+      .toFixed(2)
+      .replace(".", ",") + "€"
+  );
+}
+
+// Construye resumen de devolución a partir de qtyByLineId + lineasPendientes
+function buildRefundLogExtra({ facturaRow, qtyByLineId, lineasFactura }) {
+  const parts = [];
+  let total = 0;
+
+  for (const l of lineasFactura || []) {
+    const id = Number(l.idlinea);
+    const q = Number(qtyByLineId?.[id] || 0);
+    if (!(q > 0)) continue;
+
+    const desc = String(l.descripcion || "Producto").trim();
+    const unit = Number(l.pvpunitario || 0); // neto en FS normalmente
+    const lineTotal = q * unit;
+
+    total += lineTotal;
+    parts.push(`${q}x ${desc} @${eur2(unit)}`);
+  }
+
+  // total devuelto es NEGATIVO (pero en log lo mostramos como -X€)
+  const totalTxt = `Total:-${eur2(total)}`;
+
+  const orig = String(
+    facturaRow?.codigo ||
+      facturaRow?._raw?.codigo ||
+      facturaRow?.idfactura ||
+      "—",
+  );
+  const origTxt = `Orig:${orig}`;
+
+  const linesTxt = parts.length ? `Líneas:${parts.join(" | ")}` : "Líneas:—";
+
+  return `${origTxt} ${totalTxt} ${linesTxt}`;
+}
+
 // ===== Buscador =====
 if (searchInput) {
   searchInput.addEventListener("input", () => {
@@ -1678,6 +1720,35 @@ if (cartLinesContainer) {
     const deleteBtn = e.target.closest(".line-delete-btn");
     if (deleteBtn) {
       const lineId = deleteBtn.getAttribute("data-lineid");
+
+      // 🧠 Captura info ANTES de eliminar
+      const item = Array.isArray(cart)
+        ? cart.find((x) => String(x?._lineId) === String(lineId))
+        : null;
+
+      const name = (
+        item?.name ||
+        item?.descripcion ||
+        item?.nombre ||
+        "Producto"
+      )
+        .toString()
+        .trim();
+      const qty = Number(item?.qty || item?.cantidad || 1) || 1;
+
+      // ✅ LOG: quitó producto
+      try {
+        const ctx = getLogCtx();
+        if (ctx.idcaja) {
+          const extra = `Producto:${name} | Cantidad:${qty}`;
+          appendCajaAutoLogLineForId(
+            ctx.idcaja,
+            buildCajaLogLineWith(ctx, "QUITÓ PRODUCTO", extra),
+          ).catch(() => {});
+        }
+      } catch {}
+
+      // Eliminar
       updateCartItemQuantity(lineId, 0);
     }
   });
@@ -3002,6 +3073,58 @@ async function buildAgentSalesSummaryForCaja(idcaja) {
 }
 
 // ---- Apertura / cierre de caja ----
+// ✅ QWERTY robusto para #cashObs (delegación, no se rompe si re-renderizas)
+function setupCashObsQwertyDelegated() {
+  if (!cashOpenOverlay) return;
+
+  // evita duplicar listeners
+  if (cashOpenOverlay.dataset._cashObsQwerty === "1") return;
+  cashOpenOverlay.dataset._cashObsQwerty = "1";
+
+  const openFor = (ta) => {
+    if (!ta) return;
+
+    // ✅ Tu QWERTY real (el que tienes implementado)
+    if (typeof window.openQwertyForInput === "function") {
+      window.openQwertyForInput(ta, "text");
+      return;
+    }
+
+    // Si existe tu otro teclado
+    if (typeof window.openTextKeyboard === "function") {
+      window.openTextKeyboard(ta);
+      return;
+    }
+
+    // Fallback: al menos permite escribir con teclado físico
+    ta.readOnly = false;
+    try {
+      ta.focus();
+    } catch {}
+    toast?.("No hay teclado QWERTY disponible en este TPV.", "warn", "Teclado");
+  };
+
+  // pointerdown/touchstart es lo más fiable en táctil
+  const handler = (e) => {
+    const ta =
+      e.target && e.target.closest ? e.target.closest("#cashObs") : null;
+    if (!ta) return;
+
+    // evita que otros handlers “se coman” el click
+    e.preventDefault();
+    e.stopPropagation();
+
+    // mantenlo readonly para evitar teclado del sistema si no quieres
+    ta.readOnly = true;
+
+    openFor(ta);
+  };
+
+  cashOpenOverlay.addEventListener("pointerdown", handler, true);
+  cashOpenOverlay.addEventListener("touchstart", handler, true);
+  cashOpenOverlay.addEventListener("mousedown", handler, true);
+}
+
 function openCashOpenDialog(mode = "open") {
   setCashDialogMode(mode);
 
@@ -3096,6 +3219,7 @@ function openCashOpenDialog(mode = "open") {
   }
 
   cashOpenOverlay.classList.remove("hidden");
+  setTimeout(setupCashObsQwertyDelegated, 0);
 }
 
 function buildCashClosePrintData(remoteCaja) {
@@ -3164,6 +3288,11 @@ function buildCashClosePrintData(remoteCaja) {
   );
 
   const obs = String(document.getElementById("cashObs")?.value || "").trim();
+  const rawCajaObs = String(remoteCaja?.observaciones || "");
+  const { autoLines } = splitCajaObservaciones(rawCajaObs);
+
+  // 👇 doble salto para que en ticket respire
+  const autoLogText = Array.isArray(autoLines) ? autoLines.join("\n\n") : "";
 
   return {
     fecha,
@@ -3185,7 +3314,8 @@ function buildCashClosePrintData(remoteCaja) {
     agentSales: Array.isArray(cashSession.agentSalesSummary)
       ? cashSession.agentSalesSummary
       : [],
-    obs,
+    userObs: obs, // 👈 lo del textarea manda
+    autoLogText,
   };
 }
 
@@ -3446,25 +3576,6 @@ async function confirmCashOpening() {
       "Caja",
     );
   }
-
-  // ✅ asegúrate de tener idcaja antes del log
-  if (!getCajaIdSafe()) {
-    await apiReadCurrentCaja().catch(() => {});
-  }
-
-  // ✅ LOG: caja abierta
-  try {
-    const idcaja = getCajaIdSafe();
-    if (idcaja) {
-      const ctx = getLogCtx();
-      const extra = `Inicial:${Number(cashSession.openingTotal || 0).toFixed(2)}€`;
-      await appendCajaAutoLogLineForId(
-        idcaja,
-        buildCajaLogLineWith(ctx, "CAJA ABIERTA", extra),
-      );
-    }
-  } catch {}
-
   hideCashOpenDialog();
 
   if (terminalNameEl && currentTerminal)
@@ -3478,9 +3589,33 @@ async function confirmCashOpening() {
 }
 
 async function confirmCashClosing() {
-  cashSession.open = false;
+  // anti doble click extra
+  try {
+    if (cashOpenOkBtn) cashOpenOkBtn.disabled = true;
+  } catch {}
 
-  // ✅ Cerrar log en FacturaScripts (antes de limpiar estado local)
+  // idcaja estable antes de limpiar nada
+  const idcaja = getCajaIdSafe();
+
+  // 1) Leer caja remota para imprimir con datos reales
+  let remoteCaja = null;
+  try {
+    remoteCaja = idcaja
+      ? await apiReadCajaById(idcaja)
+      : await apiReadCurrentCaja();
+  } catch (e) {
+    console.warn("No pude leer caja para imprimir:", e?.message || e);
+  }
+
+  // 2) Imprimir cierre (SOLO AQUÍ)
+  try {
+    const report = buildCashClosePrintData(remoteCaja || {});
+    await printCashCloseReport(report);
+  } catch (e) {
+    console.warn("No se pudo imprimir el cierre:", e?.message || e);
+  }
+
+  // 3) Cerrar caja en FS
   try {
     await apiCloseCashInFS();
   } catch (e) {
@@ -3492,19 +3627,21 @@ async function confirmCashClosing() {
     );
   }
 
+  // 4) Limpieza local + UI
+  cashSession.open = false;
+
   hideCashOpenDialog();
   updateCashButtonLabel();
 
-  // Dejar TPV y agente "des-seleccionados"
   currentTerminal = null;
   currentAgent = null;
+
   if (terminalNameEl) terminalNameEl.textContent = "---";
   if (agentNameEl) agentNameEl.textContent = "---";
   refreshLoggedUserUI();
 
-  if (mainAgentBar) mainAgentBar.innerHTML = ""; // limpiar barra principal
+  if (mainAgentBar) mainAgentBar.innerHTML = "";
 
-  // Limpiar visor de productos y carrito
   selectedCategory = null;
   activeFamilyParentId = null;
   activeSubfamilyId = null;
@@ -3520,17 +3657,19 @@ async function confirmCashClosing() {
 
   mainUiRendered = false;
 
-  console.log("CAJA CERRADA:", cashSession);
   try {
     localStorage.removeItem("tpv_remoteCajaId");
-  } catch (e) {}
+  } catch {}
   cashSession.remoteCajaId = null;
 
   const printBtn = document.getElementById("printTicketBtn");
-  if (printBtn) {
-    printBtn.disabled = true;
-  }
+  if (printBtn) printBtn.disabled = true;
+
   lastTicket = null;
+
+  try {
+    if (cashOpenOkBtn) cashOpenOkBtn.disabled = false;
+  } catch {}
 }
 
 function resetTPVToEmpty() {
@@ -3825,9 +3964,10 @@ if (cashOpenCancelBtn) {
 
 if (cashOpenOkBtn) {
   cashOpenOkBtn.onclick = async () => {
+    // anti doble click
     cashOpenOkBtn.disabled = true;
 
-    const ctx = getLogCtx(); // idcaja + nombres antes de que se limpien
+    const ctx = getLogCtx();
 
     try {
       if (cashDialogMode === "open") {
@@ -3852,7 +3992,7 @@ if (cashOpenOkBtn) {
       );
       if (!ok) return;
 
-      // 1) LOG: pulsó cerrar
+      // LOG: abrió ventana cerrar caja
       try {
         if (ctx.idcaja) {
           await appendCajaAutoLogLineForId(
@@ -3864,47 +4004,14 @@ if (cashOpenOkBtn) {
         console.warn("No pude registrar pulsó cerrar caja:", e?.message || e);
       }
 
-      // 2) Guardar observaciones del usuario (lo del textarea)
+      // Guardar observaciones del usuario (textarea)
       try {
         if (ctx.idcaja) await saveUserObsToCajaForId(ctx.idcaja);
       } catch (e) {
         console.warn("No pude guardar observaciones usuario:", e?.message || e);
       }
 
-      // 3) Leer caja remota para imprimir con datos reales (opcional, pero recomendable)
-      let remoteCaja = null;
-      try {
-        remoteCaja = await apiReadCajaById(ctx.idcaja);
-      } catch {}
-
-      // 4) Imprimir cierre (esto lo habías “perdido”)
-      try {
-        const report = buildCashClosePrintData(remoteCaja);
-        await printCashCloseReport(report);
-      } catch (e) {
-        console.warn("No pude imprimir cierre:", e?.message || e);
-      }
-
-      // 5) LOG: caja cerrada (antes de apiClose/limpieza)
-      try {
-        if (ctx.idcaja) {
-          await appendCajaAutoLogLineForId(
-            ctx.idcaja,
-            buildCajaLogLineWith(ctx, "CAJA CERRADA"),
-          );
-        }
-      } catch (e) {
-        console.warn("No pude registrar caja cerrada:", e?.message || e);
-      }
-
-      // 6) Cierre remoto FS (IMPORTANTE: que NO borre observaciones)
-      try {
-        await apiCloseCashInFS();
-      } catch (e) {
-        console.warn("No se pudo cerrar caja en FS:", e?.message || e);
-      }
-
-      // 7) Limpieza local
+      // ✅ Cierre completo (imprime + cierra FS + limpia)
       await confirmCashClosing();
     } finally {
       cashOpenOkBtn.disabled = false;
@@ -5626,81 +5733,132 @@ async function createRefundInFacturaScripts(
     window.RECIPOK_API?.defaultCodClienteTPV ||
     "1";
 
+  // ✅ claves para que la devolución cuente en "esta caja"
+  const idtpv = Number(currentTerminal?.id || 0) || null;
+  const idcaja = getCajaIdSafe(); // helper cashSession/localStorage
+  const nick = (getLoginUser?.() || currentAgent?.nick || "admin").toString();
+
+  if (!idtpv || !idcaja) {
+    throw new Error(
+      "No hay caja abierta (idtpv/idcaja). Abre caja antes de devolver.",
+    );
+  }
+
+  // 1) Construir líneas (negativas)
   const lineas = [];
   for (const l of lineasFactura || []) {
     const id = Number(l.idlinea);
     const q = Number(qtyByLineId?.[id] || 0);
     if (!(q > 0)) continue;
 
+    // ✅ evita DEV duplicado
+    const baseDesc = String(l.descripcion || "Producto")
+      .replace(/^DEV\s*-\s*/i, "")
+      .trim();
+
     lineas.push({
-      descripcion: `DEV - ${l.descripcion || "Producto"}`,
+      descripcion: `DEV - ${baseDesc}`,
       cantidad: -q,
       pvpunitario: Number(l.pvpunitario || 0),
       codimpuesto: l.codimpuesto || undefined,
     });
   }
-  if (!lineas.length)
-    throw new Error("Selecciona al menos 1 línea para devolver.");
 
+  if (!lineas.length) {
+    throw new Error("Selecciona al menos 1 línea para devolver.");
+  }
+
+  // 2) Payload para crearFacturaCliente
   const payload = {
     codcliente,
     lineas,
     pagada: 1,
-    codpago: facturaRow.codpago || null,
+    codpago: facturaRow?.codpago || null,
     serie: "R",
+
+    // ✅ IMPORTANTES: enlazar a caja/TPV
+    idtpv,
+    idcaja,
+    nick,
   };
 
-  let resp = null;
+  // 3) Crear rectificativa
+  const resp = await createTicketInFacturaScripts(payload);
 
-  try {
-    resp = await createTicketInFacturaScripts(payload); // ✅ AQUÍ
-  } catch (e) {
-    const msg = e?.message || String(e);
-
-    const isNetwork =
-      msg.includes("Failed to fetch") ||
-      msg.includes("Network") ||
-      msg.includes("timeout");
-
-    if (isNetwork) {
-      await window.TPV_QUEUE.enqueue({
-        type: "CREATE_FACTURACLIENTE",
-        payload,
-        createdAt: Date.now(),
-      });
-
-      setStatusText("Offline · Venta guardada");
-      toast(
-        "Sin conexión. Venta guardada y se enviará al volver internet.",
-        "warn",
-        "Offline",
-      );
-      return { queued: true, payload }; // ✅ salimos sin tocar updateFacturaCliente
-    }
-
-    throw e;
-  }
-
-  // ✅ Ya existe resp aquí
-  const doc = resp.doc || resp.factura || resp.data || resp;
+  const doc = resp?.doc || resp?.factura || resp?.data || resp || null;
   const newId = doc?.idfactura || doc?.id || null;
 
-  const originalId = facturaRow.idfactura;
-  const originalCodigo = facturaRow.codigo || facturaRow._raw?.codigo || "";
+  // 4) LOG DEVOLUCIÓN (total con IVA desde FS)
+  try {
+    const ctx = getLogCtx();
 
-  if (newId && originalId) {
+    const rectCode =
+      String(doc?.codigo || doc?.codigoFactura || "").trim() ||
+      (newId ? `#${newId}` : "—");
+
+    const origCode =
+      String(facturaRow?.codigo || facturaRow?._raw?.codigo || "").trim() ||
+      (facturaRow?.idfactura ? `#${facturaRow.idfactura}` : "—");
+
+    // total FS (con IVA). En rectificativas viene negativo -> mostramos abs
+    const devueltoAbs = Math.abs(Number(doc?.total ?? 0));
+
+    const devueltoTxt = devueltoAbs.toFixed(2).replace(".", ",") + "€";
+
+    const productos = [];
+    for (const l of lineasFactura || []) {
+      const id = Number(l.idlinea);
+      const q = Number(qtyByLineId?.[id] || 0);
+      if (!(q > 0)) continue;
+
+      const name = String(l.descripcion || "Producto")
+        .replace(/^DEV\s*-\s*/i, "")
+        .trim();
+
+      productos.push(`${q}x ${name}`);
+    }
+
+    const productosTxt = productos.length ? productos.join(", ") : "—";
+
+    const line = buildCajaLogLineWith(
+      ctx,
+      `DEVOLUCIÓN CONFIRMADA : ${rectCode}`,
+      `Ticket Original:${origCode} | Devuelto: ${devueltoTxt} | Productos:${productosTxt}`,
+    );
+
+    // ✅ usar idcaja ya calculado (más estable que ctx.idcaja)
+    await appendCajaAutoLogLineForId(idcaja, line);
+  } catch (e) {
+    console.warn("No pude loguear devolución:", e?.message || e);
+  }
+
+  // 5) Enlazar con la original (y forzar idcaja si FS no lo guardó)
+  const originalId = facturaRow?.idfactura || null;
+  const originalCodigo = facturaRow?.codigo || facturaRow?._raw?.codigo || "";
+
+  // ✅ si FS ya devolvió todo correcto, evitamos update innecesario (opcional pero sano)
+  const needsFix =
+    doc?.idcaja == null ||
+    Number(doc?.idfacturarect || 0) !== Number(originalId || 0) ||
+    String(doc?.codserie || "").toUpperCase() !== "R";
+
+  if (newId && originalId && needsFix) {
     const upd = {
       codserie: "R",
       idfacturarect: originalId,
       codigorect: originalCodigo,
+
       idestado: 11,
       pagada: 1,
-      codpago: facturaRow.codpago || "",
-      idtpv: currentTerminal?.id || "",
+      codpago: facturaRow?.codpago || "",
+
+      // ✅ IMPORTANTES: fuerza link a caja/TPV
+      idtpv: String(idtpv),
+      idcaja: Number(idcaja),
+      nick,
       codalmacen: currentTerminal?.codalmacen || "",
     };
 
-    // ✅ SOLO enviar codagente si existe (evita FK)
     if (currentAgent?.codagente) upd.codagente = currentAgent.codagente;
 
     await updateFacturaCliente(newId, upd);
@@ -5733,12 +5891,12 @@ async function createTicketInFacturaScripts(ticketPayload) {
   // Algunos setups usan estos flags
   bodyParams.append("tpv_venta", "1");
 
-  // Intento de registrar forma de pago principal en FacturaScripts (si el endpoint lo soporta)
+  // Intento de registrar forma de pago principal en FacturaScripts
   if (ticketPayload.codpago) {
     bodyParams.append("codpago", String(ticketPayload.codpago));
   }
 
-  // Desglose de pagos (por si el endpoint lo acepta)
+  // Desglose de pagos
   if (Array.isArray(ticketPayload.pagos) && ticketPayload.pagos.length) {
     bodyParams.append("pagos", JSON.stringify(ticketPayload.pagos));
   }
@@ -5748,14 +5906,19 @@ async function createTicketInFacturaScripts(ticketPayload) {
     bodyParams.append("pagada", String(ticketPayload.pagada));
   }
 
-  // Numero2 (FacturaScripts lo llama "numero2" en la UI)
+  // Numero2
   if (ticketPayload.numero2) {
     bodyParams.append("numero2", String(ticketPayload.numero2));
   }
 
-  // Serie: normalmente suele ser "codserie" en FS
+  // Serie
   if (ticketPayload.serie) {
     bodyParams.append("codserie", String(ticketPayload.serie));
+  }
+
+  // ✅ NUEVO: nick (para que no se pierda)
+  if (ticketPayload.nick) {
+    bodyParams.append("nick", String(ticketPayload.nick));
   }
 
   console.log(">>> Enviando a crearFacturaCliente:", bodyParams.toString());
@@ -5770,7 +5933,6 @@ async function createTicketInFacturaScripts(ticketPayload) {
     body: bodyParams.toString(),
   });
 
-  // Manejo especial de 429 (por si volvemos a disparar el límite)
   if (res.status === 429) {
     const text = await res.text().catch(() => "");
     console.error("Error 429 crearFacturaCliente:", text);
@@ -6463,6 +6625,16 @@ async function printCashCloseReport(report) {
       return;
     }
 
+    const decodeEntities = (s) =>
+      String(s || "")
+        .replace(/&quot;/g, '"')
+        .replace(/&#34;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&#39;/g, "'")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">");
+
     // -------- Linux: RAW simple (texto) --------
     if (isLinux) {
       if (!window.TPV_PRINT?.printRaw) {
@@ -6503,10 +6675,16 @@ async function printCashCloseReport(report) {
         });
       }
 
-      if (report.obs) {
+      if (report.userObs && String(report.userObs).trim()) {
         lines.push("--------------------------------");
-        lines.push("Obs:");
-        lines.push(String(report.obs));
+        lines.push("Observaciones:");
+        lines.push(String(report.userObs));
+      }
+
+      if (report.autoLog && String(report.autoLog).trim()) {
+        lines.push("--------------------------------");
+        lines.push("Registro TPV:");
+        lines.push(String(report.autoLog));
       }
 
       lines.push("\n\n");
@@ -6652,15 +6830,28 @@ async function printCashCloseReport(report) {
       }
     }
 
-    // observaciones si existe id="ccObs"
-    if (report.obs) _setText("ccObs", report.obs);
+    // Observaciones usuario
     const obsWrap = doc.getElementById("ccObsWrap");
     if (obsWrap) {
-      if (report.obs && String(report.obs).trim()) {
+      if (report.userObs && String(report.userObs).trim()) {
         obsWrap.style.display = "block";
-        _setText("ccObs", report.obs);
+        _setText("ccObs", report.userObs);
       } else {
         obsWrap.style.display = "none";
+      }
+    }
+
+    // Registro TPV
+    const autoWrap = doc.getElementById("ccAutoLogWrap");
+    if (autoWrap) {
+      const raw = report.autoLogText;
+      const clean = decodeEntities(raw);
+
+      if (clean && String(clean).trim()) {
+        autoWrap.style.display = "block";
+        _setText("ccAutoLog", clean);
+      } else {
+        autoWrap.style.display = "none";
       }
     }
 
@@ -9625,6 +9816,48 @@ async function fetchPagosFacturaByCodigo(codigofactura) {
   }
 }
 
+async function fetchDevolucionesByCaja(idcaja, limit = 50) {
+  if (!idcaja) return [];
+  const q = `sort[idfactura]=DESC&filter[idcaja]=${encodeURIComponent(idcaja)}&filter[codserie]=R&limit=${limit}`;
+  const r = await apiRead(`facturaclientes?${q}`);
+  const arr = r?.data || r?.doc || r;
+  return Array.isArray(arr) ? arr : [];
+}
+
+async function fetchLineasFacturaCliente(idfactura) {
+  if (!idfactura) return [];
+  const q = `filter[idfactura]=${encodeURIComponent(idfactura)}&limit=200`;
+  const r = await apiRead(`lineafacturaclientes?${q}`);
+  const arr = r?.data || r?.doc || r;
+  return Array.isArray(arr) ? arr : [];
+}
+
+async function fetchDevolucionesDetalladasByCaja(idcaja, limit = 30) {
+  const devs = await fetchDevolucionesByCaja(idcaja, limit);
+
+  // ojo: esto hace N+1 requests; para 20-30 va bien
+  const out = [];
+  for (const f of devs) {
+    const lineas = await fetchLineasFacturaCliente(f.idfactura);
+    out.push({
+      idfactura: f.idfactura,
+      codigo: f.codigo,
+      hora: f.hora,
+      fecha: f.fecha,
+      codigorect: f.codigorect,
+      total: Number(f.total || 0),
+      lineas: lineas.map((l) => ({
+        referencia: l.referencia || "",
+        descripcion: l.descripcion || "",
+        cantidad: Number(l.cantidad || 0),
+        pvpunitario: Number(l.pvpunitario || 0),
+        total: Number(l.total || 0),
+      })),
+    });
+  }
+  return out;
+}
+
 async function imprimirFacturaHistorica(facturaRow) {
   console.log("[imprimirFacturaHistorica] raw:", facturaRow?._raw);
 
@@ -9874,6 +10107,7 @@ async function openRefundForFactura(facturaRow) {
       try {
         confirmBtn.disabled = true;
 
+        // ✅ AQUÍ ESTABA EL PROBLEMA: faltaba ejecutar la devolución
         await createRefundInFacturaScripts(
           facturaRow,
           refundState.qtyByLineId,
