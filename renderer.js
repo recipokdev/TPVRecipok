@@ -2443,46 +2443,37 @@ function hideTerminalOverlay() {
 function updateCloseSummary(countedTotal) {
   if (!cashCloseSummary) return;
 
-  const opening = cashSession.openingTotal || 0;
-  const cashIncome = cashSession.cashSalesTotal || 0;
-  const movements = cashSession.cashMovementsTotal || 0;
+  const opening = Number(cashSession.openingTotal || 0);
+  const cashIncome = Number(cashSession.cashSalesTotal || 0);
+  const movements = Number(cashSession.cashMovementsTotal || 0);
 
-  // 👇 si tenemos el totalcaja de FS, usamos ese; si no, calculamos
   const expectedCash =
     cashSession.expectedCashFS != null
       ? Number(cashSession.expectedCashFS)
       : opening + cashIncome + movements;
 
-  const totalSales = cashSession.totalSales || 0;
-
-  // ✅ NUEVO: diferencia (conteo - esperado)
+  const totalSales = Number(cashSession.totalSales || 0);
   const diff = (Number(countedTotal) || 0) - (Number(expectedCash) || 0);
 
-  if (sumOpeningEl)
-    sumOpeningEl.textContent = opening.toFixed(2).replace(".", ",") + " €";
-  if (sumCashIncomeEl)
-    sumCashIncomeEl.textContent =
-      cashIncome.toFixed(2).replace(".", ",") + " €";
-  if (sumMovementsEl)
-    sumMovementsEl.textContent = movements.toFixed(2).replace(".", ",") + " €";
-  if (sumExpectedCashEl)
-    sumExpectedCashEl.textContent =
-      expectedCash.toFixed(2).replace(".", ",") + " €";
+  if (sumOpeningEl) sumOpeningEl.textContent = eur(opening);
+  if (sumCashIncomeEl) sumCashIncomeEl.textContent = eur(cashIncome);
+  if (sumExpectedCashEl) sumExpectedCashEl.textContent = eur(expectedCash);
   if (sumCountedCashEl)
-    sumCountedCashEl.textContent =
-      countedTotal.toFixed(2).replace(".", ",") + " €";
-  if (sumTotalSalesEl)
-    sumTotalSalesEl.textContent =
-      totalSales.toFixed(2).replace(".", ",") + " €";
+    sumCountedCashEl.textContent = eur(Number(countedTotal) || 0);
 
-  // ✅ pintar diferencia con signo
   if (sumDifferenceEl) {
     const sign = diff < 0 ? "-" : "";
     sumDifferenceEl.textContent =
-      sign + Math.abs(diff).toFixed(2).replace(".", ",") + " €";
+      sign + eur(Math.abs(diff)).replace("€", "").trim() + " €";
   }
 
-  renderPayMethodsSummary();
+  // Línea 3: Total ventas grande
+  const l3 = document.getElementById("cashCloseLine3");
+  const l3v = document.getElementById("cashCloseGrandTotalVal");
+  if (l3 && l3v) {
+    l3.style.display = cashDialogMode === "close" ? "block" : "none";
+    l3v.textContent = eur(totalSales);
+  }
 }
 
 // Rellena cashSession y los textos inferiores de cierre con datos reales de FS
@@ -2719,6 +2710,67 @@ function fillCashObsTextareaFromRemote(remoteCaja) {
   ta.value = userText || "";
 }
 
+function isCashCodpago(codpago) {
+  const c = String(codpago || "")
+    .trim()
+    .toUpperCase();
+  return c === "CONT" || c === "EFEC" || c === "CASH";
+}
+
+function renderCloseTotalsRow() {
+  const wrap = document.getElementById("cashCloseLine2");
+  if (!wrap) return;
+
+  wrap.innerHTML = "";
+
+  // 1) Total movimientos
+  const movements = Number(cashSession.cashMovementsTotal || 0);
+
+  const movItem = document.createElement("div");
+  movItem.className = "cash-summary-item";
+  movItem.innerHTML = `
+    <div class="cash-summary-label">Total Movimientos</div>
+    <div class="cash-summary-value">${eur(movements)}</div>
+  `;
+  wrap.appendChild(movItem);
+
+  // 2) Todos los métodos configurados (aunque den 0)
+  const labelMap = window.__PAYMETHOD_LABELS__ || {};
+  const allCodes = Object.keys(labelMap);
+
+  // Si por lo que sea no hay labels cargados, usa lo que venga en paymentsByMethod
+  const fallbackCodes = Object.keys(cashSession.paymentsByMethod || {});
+  const codes = allCodes.length ? allCodes : fallbackCodes;
+
+  const map = cashSession.paymentsByMethod || {};
+
+  // Filtra para que NO metamos efectivo aquí (porque ya está arriba en “Ingresos Efectivo”)
+  const filtered = codes.filter((code) => !isCashCodpago(code));
+
+  // Orden alfabético por etiqueta
+  filtered.sort((a, b) => {
+    const la = String(labelMap[a] || a);
+    const lb = String(labelMap[b] || b);
+    return la.localeCompare(lb, "es", { sensitivity: "base" });
+  });
+
+  filtered.forEach((code) => {
+    const label = labelMap[code] || code;
+    const total = Number(map[code]?.total || 0);
+
+    const item = document.createElement("div");
+    item.className = "cash-summary-item";
+    item.innerHTML = `
+      <div class="cash-summary-label">Total ${escapeHtml(label)}</div>
+      <div class="cash-summary-value">${eur(total)}</div>
+    `;
+    wrap.appendChild(item);
+  });
+
+  // mostrar
+  wrap.style.display = "grid";
+}
+
 function renderCashCloseHeaderCard(remoteCaja) {
   const box = document.getElementById("cashCloseCard");
   if (!box) return;
@@ -2870,17 +2922,29 @@ function renderPayMethodsSummary() {
 
   entries.forEach((pm) => {
     const baseLabel = labelMap[pm.code] || pm.label || pm.code || "—";
-    const count = Number(pm.count || 0);
-    const label = count > 1 ? `${baseLabel} (${count})` : baseLabel;
 
     const total = Number(pm.total) || 0;
+
+    // ✅ separados (si no existen, caen a 0)
+    const salesCount = Number(pm.salesCount || 0);
+    const refundCount = Number(pm.refundCount || 0);
+
+    // Texto “Ventas:X  Devol:Y”
+    let sub = "";
+    if (salesCount && refundCount)
+      sub = `Ventas: ${salesCount} · Devol: ${refundCount}`;
+    else if (salesCount) sub = `Ventas: ${salesCount}`;
+    else if (refundCount) sub = `Devol: ${refundCount}`;
+
+    // Etiqueta final (ya no usamos pm.count para no mezclar)
+    const label = sub ? `${baseLabel} (${sub})` : baseLabel;
 
     const card = document.createElement("div");
     card.className = "cash-pay-card";
     card.innerHTML = `
-      <div class="cash-pay-card-amount">${eur(total)}</div>
-      <div class="cash-pay-card-label">${escapeHtml(label)}</div>
-    `;
+    <div class="cash-pay-card-amount">${eur(total)}</div>
+    <div class="cash-pay-card-label">${escapeHtml(label)}</div>
+  `;
 
     box.appendChild(card);
   });
@@ -3017,16 +3081,48 @@ async function hydratePaymentsByMethodForClose(idcaja) {
   });
 
   const map = {};
+
   for (const f of Array.isArray(facturas) ? facturas : []) {
     if (f.tpv_venta !== true) continue;
+
     const code =
       String(f.codpago || "")
         .trim()
         .toUpperCase() || "—";
-    const amount = Number(f.total || 0); // TOTAL con IVA
-    if (!map[code]) map[code] = { code, total: 0, count: 0 };
-    map[code].total += amount;
-    map[code].count += 1; // nº tickets
+
+    const amount = Number(f.total || 0); // puede ser negativo
+    const isRefund = amount < 0;
+
+    if (!map[code]) {
+      map[code] = {
+        code,
+
+        // neto
+        total: 0,
+        count: 0,
+
+        // separados
+        salesTotal: 0,
+        refundTotal: 0,
+        salesCount: 0,
+        refundCount: 0,
+      };
+    }
+
+    const m = map[code];
+
+    // neto (como hasta ahora)
+    m.total += amount;
+    m.count += 1;
+
+    // separados
+    if (isRefund) {
+      m.refundTotal += Math.abs(amount);
+      m.refundCount += 1;
+    } else {
+      m.salesTotal += amount;
+      m.salesCount += 1;
+    }
   }
 
   cashSession.paymentsByMethod = map;
@@ -3173,11 +3269,23 @@ function openCashOpenDialog(mode = "open") {
 
   // 👉 AQUÍ LA DIFERENCIA:
   if (mode === "open") {
+    const l1 = document.getElementById("cashCloseLine1");
+    const l2 = document.getElementById("cashCloseLine2");
+    const l3 = document.getElementById("cashCloseLine3");
+    if (l1) l1.style.display = "none";
+    if (l2) l2.style.display = "none";
+    if (l3) l3.style.display = "none";
     cashResetUIForOpening();
     cashWrapInputsWithSteppers();
     updateCashOpenTotal(); // solo afecta a apertura
   } else {
     // MODO CIERRE: cargamos datos reales desde FacturaScripts
+    const l1 = document.getElementById("cashCloseLine1");
+    const l2 = document.getElementById("cashCloseLine2");
+    const l3 = document.getElementById("cashCloseLine3");
+    if (l1) l1.style.display = "grid";
+    if (l2) l2.style.display = "none"; // se mostrará cuando haya datos
+    if (l3) l3.style.display = "none"; // se mostrará en updateCloseSummary
     (async () => {
       try {
         const remoteCaja = await apiReadCurrentCaja();
@@ -5723,6 +5831,13 @@ payOpenDrawerBtn?.addEventListener("click", () =>
   handleOpenDrawerClick(payOpenDrawerBtn),
 );
 
+function isCashCodpago(codpago) {
+  const c = String(codpago || "")
+    .trim()
+    .toUpperCase();
+  return c === "CONT" || c === "EFEC" || c === "CASH";
+}
+
 async function createRefundInFacturaScripts(
   facturaRow,
   qtyByLineId,
@@ -5787,6 +5902,9 @@ async function createRefundInFacturaScripts(
 
   const doc = resp?.doc || resp?.factura || resp?.data || resp || null;
   const newId = doc?.idfactura || doc?.id || null;
+  // Total FS (con IVA) en rectificativa viene NEGATIVO
+  const totalRectFS = Number(doc?.total ?? 0); // ej: -2.50
+  const refundCash = isCashCodpago(facturaRow?.codpago) ? totalRectFS : 0;
 
   // 4) LOG DEVOLUCIÓN (total con IVA desde FS)
   try {
@@ -5842,22 +5960,31 @@ async function createRefundInFacturaScripts(
     Number(doc?.idfacturarect || 0) !== Number(originalId || 0) ||
     String(doc?.codserie || "").toUpperCase() !== "R";
 
-  if (newId && originalId && needsFix) {
+  if (newId) {
     const upd = {
-      codserie: "R",
-      idfacturarect: originalId,
-      codigorect: originalCodigo,
-
-      idestado: 11,
-      pagada: 1,
-      codpago: facturaRow?.codpago || "",
-
-      // ✅ IMPORTANTES: fuerza link a caja/TPV
+      // ✅ TPV/caja SIEMPRE
       idtpv: String(idtpv),
       idcaja: Number(idcaja),
       nick,
       codalmacen: currentTerminal?.codalmacen || "",
+
+      // ✅ CLAVE para “Ingresos en efectivo”
+      tpv_venta: 1,
+      tpv_efectivo: Number(refundCash.toFixed(2)), // negativo si era efectivo
+      tpv_cambio: 0,
+
+      // y esto normalmente también conviene:
+      idestado: 11,
+      pagada: 1,
+      codpago: facturaRow?.codpago || "",
     };
+
+    // ✅ link a original SOLO si hace falta (o siempre, si prefieres)
+    if (originalId) {
+      upd.codserie = "R";
+      upd.idfacturarect = originalId;
+      upd.codigorect = originalCodigo;
+    }
 
     if (currentAgent?.codagente) upd.codagente = currentAgent.codagente;
 
@@ -10035,6 +10162,11 @@ function refundSelectNone() {
 }
 
 async function openRefundForFactura(facturaRow) {
+  const ok = await confirmModal(
+    "Atención",
+    "Al confirmar la devolución se comunicará a gerencia.\n\n¿Deseas continuar?",
+  );
+  if (!ok) return;
   const overlay = document.getElementById("refundOverlay");
   if (!overlay) {
     toast("Falta #refundOverlay en el HTML.", "err", "Devolución");

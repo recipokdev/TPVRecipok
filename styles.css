@@ -1118,7 +1118,7 @@ body.modal-locked .cart-card {
   padding-top: 10px;
   border-top: 1px solid #eee;
   display: grid;
-  grid-template-columns: repeat(7, minmax(110px, 1fr));
+  grid-template-columns: repeat(6, minmax(110px, 1fr));
   gap: 8px;
 }
 
@@ -2541,4 +2541,26 @@ body.modal-locked .cart-card {
   flex-direction: column;
   border-radius: 12px;
   padding: 6px;
+}
+
+/* Línea 3: total grande */
+.cash-close-grand-total {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #fff;
+  text-align: center;
+}
+
+.cash-close-grand-total-label {
+  font-size: 13px;
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
+
+.cash-close-grand-total-value {
+  font-size: 28px;
+  font-weight: 900;
+  line-height: 1.1;
 }
