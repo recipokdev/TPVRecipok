@@ -3965,14 +3965,19 @@ if (terminalOkBtn) {
       const list = currentTerminal
         ? getAgentsForTerminalId(currentTerminal.id)
         : [];
+
       if (list.length >= 1 && !currentAgent) {
         terminalErrorEl.textContent = "Selecciona un agente válido.";
         return;
       }
+
       if (agentNameEl && currentAgent) {
         agentNameEl.textContent = currentAgent.name;
       }
+
       renderMainAgentBar();
+
+      // ✅ solo dispara sessionReady
       document.dispatchEvent(
         new CustomEvent("tpv:sessionReady", {
           detail: {
@@ -3984,7 +3989,6 @@ if (terminalOkBtn) {
       );
 
       hideTerminalOverlay();
-      maybeOpenCashOrRecover();
       return;
     }
 
@@ -4016,6 +4020,7 @@ if (terminalOkBtn) {
       currentAgent = list[0];
     }
 
+    // ✅ solo dispara sessionReady
     document.dispatchEvent(
       new CustomEvent("tpv:sessionReady", {
         detail: {
@@ -4027,11 +4032,7 @@ if (terminalOkBtn) {
     );
 
     hideTerminalOverlay();
-
-    setTimeout(() => {
-      // si bootstrap no abrió nada, recién ahí mostramos apertura
-      if (!cashSession.open) maybeOpenCashOrRecover();
-    }, 1500);
+    return;
   };
 }
 
@@ -8112,19 +8113,67 @@ async function openPayModal(total) {
 
   // eventos keypad
   const keypad = payOverlay.querySelector(".pay-keypad");
-  const onKeypadClick = (e) => {
+
+  const activePointers = new Map(); // pointerId -> { k, consumed }
+
+  const getKeyFromEvent = (e) => {
     const btn = e.target.closest("[data-k]");
-    if (!btn) return;
-    const k = btn.getAttribute("data-k");
+    if (!btn) return null;
+    return btn.getAttribute("data-k");
+  };
+
+  const onPointerDown = (e) => {
+    const k = getKeyFromEvent(e);
+    if (!k) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const pid = e.pointerId ?? "nopid";
+
+    activePointers.set(pid, { k, consumed: false });
+
+    try {
+      e.target.setPointerCapture?.(e.pointerId);
+    } catch {}
+  };
+
+  const onPointerUp = (e) => {
+    const k = getKeyFromEvent(e);
+    if (!k) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const pid = e.pointerId ?? "nopid";
+    const st = activePointers.get(pid);
+
+    if (!st) return; // sin down previo
+    if (st.consumed) return; // up duplicado
+    if (st.k !== k) return; // tecla distinta
+
+    st.consumed = true;
+    activePointers.set(pid, st);
+
     if (k === "back") payKeyBackspace();
     else if (k === "clear") payKeyClearAll();
     else payKeyAppend(k);
   };
-  keypad.addEventListener("click", onKeypadClick);
 
-  // cerrar por X / cancelar
+  const onPointerCancel = (e) => {
+    const pid = e.pointerId ?? "nopid";
+    activePointers.delete(pid);
+  };
+
+  keypad.addEventListener("pointerdown", onPointerDown, { passive: false });
+  keypad.addEventListener("pointerup", onPointerUp, { passive: false });
+  keypad.addEventListener("pointercancel", onPointerCancel, { passive: false });
+
   const closeModal = () => {
-    keypad.removeEventListener("click", onKeypadClick);
+    keypad.removeEventListener("pointerdown", onPointerDown);
+    keypad.removeEventListener("pointerup", onPointerUp);
+    keypad.removeEventListener("pointercancel", onPointerCancel);
+
     payOverlay.classList.add("hidden");
   };
 
@@ -11484,12 +11533,13 @@ async function initKioskToggle() {
 
 initKioskToggle();
 
-// 1) Caja asignada por bootstrap -> activar UI
+// 1) Si algún día vuelve el bootstrap remoto y emite cajaAbierta, dejamos esto consistente
 document.addEventListener("tpv:cajaAbierta", (e) => {
   const idcaja = Number(e.detail?.idcaja || 0) || null;
 
   if (idcaja) {
     cashSession.remoteCajaId = idcaja;
+    cashSession.open = true; // ✅ importante
     try {
       localStorage.setItem("tpv_remoteCajaId", String(idcaja));
     } catch {}
@@ -11499,20 +11549,20 @@ document.addEventListener("tpv:cajaAbierta", (e) => {
   window.cargarPantallaTPV?.(e.detail.idcaja, e.detail.idtpv, e.detail.caja);
 });
 
-// 2) Arrancar bootstrap SOLO cuando tu app diga "sessionReady" (login+agente listos)
-document.addEventListener("tpv:sessionReady", (e) => {
+// 2) sessionReady = punto único para decidir caja (bootstrap desactivado)
+document.addEventListener("tpv:sessionReady", () => {
   console.log("[RENDER] sessionReady (BOOTSTRAP DESACTIVADO)");
-
-  // Simplemente entramos en el flujo local
   maybeOpenCashOrRecover();
 });
 
+// helper para emitir sessionReady siempre con el mismo formato
 function dispatchSessionReady() {
   document.dispatchEvent(
     new CustomEvent("tpv:sessionReady", {
       detail: {
-        terminalId: currentTerminal?.id,
-        agent: currentAgent?.name || currentAgent?.codagente || null,
+        idtpv: currentTerminal?.id || null,
+        codagente: currentAgent?.codagente || null,
+        user: getLoginUser?.() || null,
       },
     }),
   );
@@ -11520,6 +11570,8 @@ function dispatchSessionReady() {
 
 let cashRecoverInFlight = false;
 let cashRecoverDone = false; // opcional: si solo quieres hacerlo una vez al arranque
+
+let cashOpenDialogShown = false;
 
 function maybeOpenCashOrRecover() {
   if (cashRecoverInFlight) return;
@@ -11534,7 +11586,6 @@ function maybeOpenCashOrRecover() {
       remoteId,
     });
 
-    // Si ya hay caja activa → cargar UI
     if (cashSession.open && remoteId) {
       renderMainUI();
       renderMainAgentBar?.();
@@ -11542,7 +11593,6 @@ function maybeOpenCashOrRecover() {
       return;
     }
 
-    // Si hay caja guardada pero no marcada como open → recuperarla
     if (!cashSession.open && remoteId) {
       console.log("[TPV] Recuperando caja guardada:", remoteId);
 
@@ -11555,9 +11605,12 @@ function maybeOpenCashOrRecover() {
       return;
     }
 
-    // No hay nada → pedir apertura
-    console.log("[TPV] No hay caja → mostrar modal apertura");
-    openCashOpenDialog("open");
+    // No hay nada → pedir apertura (solo una vez)
+    if (!cashOpenDialogShown) {
+      cashOpenDialogShown = true;
+      console.log("[TPV] No hay caja → mostrar modal apertura");
+      openCashOpenDialog("open");
+    }
   } finally {
     cashRecoverInFlight = false;
   }
