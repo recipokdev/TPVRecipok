@@ -2405,9 +2405,6 @@ function showTerminalOverlay(mode = "session") {
     }
 
     dispatchSessionReady();
-
-    // 👇 OJO: NO abras caja aquí a ciegas (ver punto 2)
-    maybeOpenCashOrRecover();
     return;
   }
 
@@ -11503,26 +11500,11 @@ document.addEventListener("tpv:cajaAbierta", (e) => {
 });
 
 // 2) Arrancar bootstrap SOLO cuando tu app diga "sessionReady" (login+agente listos)
-document.addEventListener("tpv:sessionReady", () => {
-  const nick = (localStorage.getItem("tpv_login_user") || "").trim();
+document.addEventListener("tpv:sessionReady", (e) => {
+  console.log("[RENDER] sessionReady (BOOTSTRAP DESACTIVADO)");
 
-  // OJO: esta apiKey/baseUrl deben existir a esta altura (después de bootstrapCompany o equivalente)
-  const apiKey = (window.RECIPOK_API?.apiKey || "").trim();
-  const baseUrl = (
-    window.RECIPOK_API?.baseUrl ||
-    window.TPV_CONFIG?.facturaScriptsApiBase ||
-    ""
-  ).trim();
-  const idtpv = Number(window.TPV_CONFIG?.idtpv || 1);
-
-  console.log("[RENDER] sessionReady -> llamando TPV_BOOTSTRAP.init con", {
-    nick,
-    apiKeyLen: apiKey.length,
-    baseUrl,
-    idtpv,
-  });
-
-  window.TPV_BOOTSTRAP?.init?.({ nick, apiKey, baseUrl, idtpv });
+  // Simplemente entramos en el flujo local
+  maybeOpenCashOrRecover();
 });
 
 function dispatchSessionReady() {
@@ -11536,25 +11518,47 @@ function dispatchSessionReady() {
   );
 }
 
+let cashRecoverInFlight = false;
+let cashRecoverDone = false; // opcional: si solo quieres hacerlo una vez al arranque
+
 function maybeOpenCashOrRecover() {
-  // Si bootstrap ya recuperó una caja remota, NO pedir apertura
-  const remoteId =
-    cashSession?.remoteCajaId || localStorage.getItem("tpv_remoteCajaId");
-  if (cashSession?.open && remoteId) {
-    console.log("[TPV] Caja ya abierta (remota). Skip apertura:", remoteId);
-    // Asegura UI principal
-    renderMainUI();
-    renderMainAgentBar?.();
-    updateCashButtonLabel();
-    return;
+  if (cashRecoverInFlight) return;
+  cashRecoverInFlight = true;
+
+  try {
+    const remoteId =
+      cashSession?.remoteCajaId || localStorage.getItem("tpv_remoteCajaId");
+
+    console.log("[TPV] maybeOpenCashOrRecover()", {
+      open: cashSession.open,
+      remoteId,
+    });
+
+    // Si ya hay caja activa → cargar UI
+    if (cashSession.open && remoteId) {
+      renderMainUI();
+      renderMainAgentBar?.();
+      updateCashButtonLabel();
+      return;
+    }
+
+    // Si hay caja guardada pero no marcada como open → recuperarla
+    if (!cashSession.open && remoteId) {
+      console.log("[TPV] Recuperando caja guardada:", remoteId);
+
+      cashSession.remoteCajaId = Number(remoteId);
+      cashSession.open = true;
+
+      renderMainUI();
+      renderMainAgentBar?.();
+      updateCashButtonLabel();
+      return;
+    }
+
+    // No hay nada → pedir apertura
+    console.log("[TPV] No hay caja → mostrar modal apertura");
+    openCashOpenDialog("open");
+  } finally {
+    cashRecoverInFlight = false;
   }
-
-  // si NO hay caja remota abierta, entonces sí: apertura normal
-  openCashOpenDialog("open");
-
-  console.log("[TPV] maybeOpenCashOrRecover()", {
-    open: cashSession.open,
-    remoteCajaId: cashSession.remoteCajaId,
-    saved: localStorage.getItem("tpv_remoteCajaId"),
-  });
 }
