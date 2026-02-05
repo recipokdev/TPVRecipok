@@ -1118,7 +1118,7 @@ body.modal-locked .cart-card {
   padding-top: 10px;
   border-top: 1px solid #eee;
   display: grid;
-  grid-template-columns: repeat(5, minmax(110px, 1fr));
+  grid-template-columns: repeat(6, minmax(110px, 1fr));
   gap: 8px;
 }
 
