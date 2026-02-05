@@ -527,47 +527,57 @@
           <textarea id="cashObs" rows="3" placeholder=""></textarea>
         </div>
 
-<!-- Resumen principal (igual que tu JS espera) -->
-<div class="cash-summary-page">
-  <div class="cash-summary-item">
-    <div class="cash-summary-label">Dinero inicial</div>
-    <div class="cash-summary-value" id="sumOpening">0,00 €</div>
-  </div>
+        <!-- Resumen principal (igual que tu JS espera) -->
+        <div class="cash-summary-page">
+          <div class="cash-summary-item">
+            <div class="cash-summary-label">Dinero inicial</div>
+            <div class="cash-summary-value" id="sumOpening">0,00 €</div>
+          </div>
 
+          <!--
   <div class="cash-summary-item">
     <div class="cash-summary-label">Ingresos Efectivo</div>
     <div class="cash-summary-value" id="sumCashIncome">0,00 €</div>
   </div>
+  -->
 
-    <div class="cash-summary-item">
-    <div class="cash-summary-label">Total Movimientos</div>
-    <div class="cash-summary-value" id="sumMovements">0,00 €</div>
-  </div>
+          <div class="cash-summary-item">
+            <div class="cash-summary-label">Ingresos Efectivo</div>
+            <div class="cash-summary-value" id="sumCashIncome">0,00 €</div>
+          </div>
 
-  <div class="cash-summary-item">
-    <div class="cash-summary-label">Total Esperado Caja</div>
-    <div class="cash-summary-value" id="sumExpectedCash">0,00 €</div>
-  </div>
+          <div class="cash-summary-item">
+            <div class="cash-summary-label">Total Movimientos</div>
+            <div class="cash-summary-value" id="sumMovements">0,00 €</div>
+          </div>
 
-  <div class="cash-summary-item">
-    <div class="cash-summary-label">Conteo Caja</div>
-    <div class="cash-summary-value" id="sumCountedCash">0,00 €</div>
-  </div>
+          <div class="cash-summary-item">
+            <div class="cash-summary-label">Total Esperado Caja</div>
+            <div class="cash-summary-value" id="sumExpectedCash">0,00 €</div>
+          </div>
 
-  <div class="cash-summary-item">
-    <div class="cash-summary-label">Diferencia</div>
-    <div class="cash-summary-value" id="sumDifference">0,00 €</div>
-  </div>
-  
-</div>
+          <div class="cash-summary-item">
+            <div class="cash-summary-label">Conteo Caja</div>
+            <div class="cash-summary-value" id="sumCountedCash">0,00 €</div>
+          </div>
 
+          <div class="cash-summary-item">
+            <div class="cash-summary-label">Diferencia</div>
+            <div class="cash-summary-value" id="sumDifference">0,00 €</div>
+          </div>
+        </div>
 
-<!-- ✅ Línea 3: gran total -->
-<div id="cashCloseLine3" class="cash-close-grand-total" style="display:none;">
-  <div class="cash-close-grand-total-label">Total Ventas</div>
-  <div class="cash-close-grand-total-value" id="cashCloseGrandTotalVal">0,00 €</div>
-</div>
-
+        <!-- ✅ Línea 3: gran total -->
+        <div
+          id="cashCloseLine3"
+          class="cash-close-grand-total"
+          style="display: none"
+        >
+          <div class="cash-close-grand-total-label">Total Ventas</div>
+          <div class="cash-close-grand-total-value" id="cashCloseGrandTotalVal">
+            0,00 €
+          </div>
+        </div>
 
         <!-- Total grande (tu JS usa cashOpenTotalEl) -->
         <div class="cash-total-big">

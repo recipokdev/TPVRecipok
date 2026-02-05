@@ -1118,7 +1118,7 @@ body.modal-locked .cart-card {
   padding-top: 10px;
   border-top: 1px solid #eee;
   display: grid;
-  grid-template-columns: repeat(6, minmax(110px, 1fr));
+  grid-template-columns: repeat(5, minmax(110px, 1fr));
   gap: 8px;
 }
 
@@ -2563,4 +2563,27 @@ body.modal-locked .cart-card {
   font-size: 28px;
   font-weight: 900;
   line-height: 1.1;
+}
+
+.agent-btn.is-admin {
+  border: 2px solid #007bff !important;
+  color: #007bff;
+  font-weight: bold;
+}
+.agent-btn.selected {
+  background: #007bff !important;
+  color: white !important;
+  border-color: #0056b3 !important;
+}
+.user-group-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: #666;
+  width: 100%;
+  margin: 8px 0 4px;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 2px;
+}
+.hidden {
+  display: none !important;
 }

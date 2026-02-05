@@ -172,7 +172,38 @@ const emailOkBtn = document.getElementById("emailOkBtn");
 const emailCancelBtn = document.getElementById("emailCancelBtn");
 const emailError = document.getElementById("emailError");
 const emailKeyboardBtn = document.getElementById("emailKeyboardBtn");
+
 // ===== Funciones auxiliares =====
+let BOOT_IN_FLIGHT = false;
+
+async function runBootFlow() {
+  if (BOOT_IN_FLIGHT) return false;
+  BOOT_IN_FLIGHT = true;
+
+  try {
+    // 1) Empresa (email). Si no hay, SOLO esto puede abrir modal.
+    const resolved = await bootstrapCompany();
+    if (!resolved) return false; // cancelado o bloqueado
+
+    // 2) Login (usuario). Si ya hay, no abre modal.
+    const okLogin = await ensureLoginAutoOrPrompt();
+    if (!okLogin) return false;
+
+    // 3) Cargar datos
+    await loadDataFromApi();
+
+    // 4) Terminal+Agente por defecto (NO overlay)
+    await ensureTerminalAgentDefaults();
+
+    // 5) Caja (recupera o abre modal)
+    maybeOpenCashOrRecover();
+
+    return true;
+  } finally {
+    BOOT_IN_FLIGHT = false;
+  }
+}
+
 function getFsApi() {
   const api = window.fsApi;
   if (!api)
@@ -822,235 +853,282 @@ function clearLoginSession() {
 
 function hasCompanyResolved() {
   const cfg = window.RECIPOK_API || {};
-  return !!(
-    cfg.baseUrl &&
-    cfg.apiKey &&
-    (localStorage.getItem("tpv_companyEmail") || "")
-  );
+  const email = (localStorage.getItem("tpv_companyEmail") || "").trim();
+  return !!(cfg.baseUrl && cfg.apiKey && email);
 }
 
 async function openLoginModal() {
-  if (!hasCompanyResolved()) {
-    toast(
-      "Primero debes introducir el email de tu empresa para activar el TPV.",
-      "warn",
-      "Activación",
+  // ✅ No mostrar login si no hay empresa
+  if (!hasCompanyResolved || !hasCompanyResolved()) {
+    console.warn(
+      "[LOGIN] Bloqueado: no hay empresa resuelta (falta email/baseUrl/apiKey).",
     );
-    return false; // ← NO abrir login
+    return false;
   }
+
+  console.log("🚀 [LOGIN] Iniciando con endpoint /users...");
+
   const overlay = document.getElementById("loginOverlay");
-  const usersBar = document.getElementById("loginUsersBar"); // 👈 nuevo
+  const usersBar = document.getElementById("loginUsersBar");
   const passInp = document.getElementById("loginPass");
   const errEl = document.getElementById("loginError");
   const okBtn = document.getElementById("loginOkBtn");
   const exitBtn = document.getElementById("loginExitBtn");
   const pinPad = document.getElementById("loginPinPad");
-  const MAX_PIN = 4;
+  const pinSection = document.querySelector(".login-pin-wrap");
+  const pinTitle = passInp.previousElementSibling;
 
-  if (!overlay || !usersBar || !passInp || !okBtn || !exitBtn) {
-    throw new Error(
-      "Falta el HTML del modal de login (loginUsersBar/loginPass/loginOkBtn/loginExitBtn).",
-    );
-  }
+  if (!overlay || !usersBar || !passInp || !okBtn || !exitBtn) return false;
 
+  let selectedUser = "";
+  let isAdminSelected = false;
+
+  // --- 1) REPARACIÓN DE BOTONES NUMÉRICOS (PINPAD) ---
   if (pinPad && !pinPad.dataset.bound) {
     pinPad.dataset.bound = "1";
-    pinPad.onclick = (e) => {
+    pinPad.addEventListener("click", (e) => {
       const btn = e.target.closest("button[data-k]");
       if (!btn) return;
       const k = btn.getAttribute("data-k");
 
       if (k === "clear") {
         passInp.value = "";
-        passInp.focus();
-        return;
+      } else if (k === "back") {
+        passInp.value = passInp.value.slice(0, -1);
+      } else if (/^\d$/.test(k) && passInp.value.length < 4) {
+        passInp.value += k;
       }
-      if (k === "back") {
-        passInp.value = (passInp.value || "").slice(0, -1);
-        passInp.focus();
-        return;
-      }
-      if (/^\d$/.test(k)) {
-        if ((passInp.value || "").length >= MAX_PIN) return;
-        passInp.value = (passInp.value || "") + k;
-        passInp.focus();
-        return;
-      }
-    };
+      passInp.focus();
+    });
   }
 
-  errEl.textContent = "";
-  passInp.value = "";
-  closeAllOverlaysExceptLogin();
-  LOGIN_ACTIVE = true;
-  okBtn.disabled = false;
-  overlay.classList.remove("hidden");
-  lockAppUI();
+  // --- 2) OBTENER USUARIOS ---
+  const fetchFsUsers = async () => {
+    const cfg = window.RECIPOK_API || {};
+    const url = `${cfg.baseUrl.replace(/\/+$/, "")}/users?limit=200`;
+    try {
+      const res = await fetch(url, {
+        headers: { Accept: "application/json", Token: cfg.apiKey },
+        cache: "no-store",
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !Array.isArray(data)) return [];
+      return data
+        .filter((u) => u && u.nick && u.enabled !== false)
+        .sort((a, b) => a.nick.localeCompare(b.nick, "es"));
+    } catch (e) {
+      console.error("❌ Error fetchFsUsers:", e);
+      return [];
+    }
+  };
 
-  // ✅ usuario seleccionado por botones
-  let selectedUser = "";
-
-  // 1) Helper para pintar botones
+  // --- 3) PINTAR BOTONES POR GRUPOS ---
   function renderUserButtons(userList) {
     usersBar.innerHTML = "";
-    userList.forEach((u) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "agent-btn";
-      btn.textContent = u;
-      btn.onclick = () => {
-        selectedUser = u;
-        [...usersBar.querySelectorAll("button")].forEach((b) =>
-          b.classList.remove("selected"),
-        );
-        btn.classList.add("selected");
-        errEl.textContent = "";
-        passInp.focus();
-      };
-      usersBar.appendChild(btn);
-    });
+
+    const admins = userList.filter((u) => u.admin === true);
+    const staff = userList.filter((u) => u.admin !== true);
+
+    const createGroup = (title, list) => {
+      if (list.length === 0) return;
+      const t = document.createElement("div");
+      t.style =
+        "width:100%; font-size:11px; color:#888; text-transform:uppercase; margin-top:8px; border-bottom:1px solid #eee";
+      t.textContent = title;
+      usersBar.appendChild(t);
+
+      list.forEach((u) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "agent-btn";
+        btn.textContent = u.nick;
+
+        // Estilo Admin: Borde azul sutil
+        if (u.admin) btn.style.boxShadow = "inset 0 0 0 2px #007bff";
+
+        btn.onclick = async () => {
+          selectedUser = u.nick;
+          isAdminSelected = u.admin;
+          [...usersBar.querySelectorAll("button")].forEach((b) =>
+            b.classList.remove("selected"),
+          );
+          btn.classList.add("selected");
+          errEl.textContent = "";
+
+          if (u.admin) {
+            // Admin: Mostrar PIN
+            pinSection.style.display = "block";
+            pinTitle.style.display = "block";
+            passInp.style.display = "block";
+            passInp.value = "";
+            passInp.focus();
+          } else {
+            // Empleado: Login directo con PIN 0000
+            pinSection.style.display = "none";
+            pinTitle.style.display = "none";
+            passInp.style.display = "none";
+            passInp.value = "0000";
+            await doLogin();
+          }
+        };
+        usersBar.appendChild(btn);
+      });
+    };
+
+    createGroup("Administradores", admins);
+    createGroup("Personal TPV", staff);
   }
-
-  // 2) Cargar usuarios desde FS
-  async function fetchFsUsers() {
-    const cfg = window.RECIPOK_API || {};
-    if (!cfg.baseUrl || !cfg.apiKey) return [];
-
-    const url = `${cfg.baseUrl.replace(/\/+$/, "")}/users?limit=200`;
-
-    const res = await fetch(url, {
-      headers: { Accept: "application/json", Token: cfg.apiKey },
-      cache: "no-store",
-    });
-
-    const data = await res.json().catch(() => null);
-    if (!res.ok || !Array.isArray(data)) return [];
-
-    return data
-      .filter((u) => u && u.enabled === true && u.nick)
-      .map((u) => String(u.nick).trim())
-      .filter(Boolean)
-      .sort((a, b) => a.localeCompare(b, "es"));
-  }
-
-  // 3) Pintar botones
-  try {
-    const users = await fetchFsUsers();
-    renderUserButtons(users.length ? users : ["admin"]);
-  } catch (e) {
-    console.warn("No pude cargar /users, fallback:", e);
-    renderUserButtons(["admin"]);
-  }
-
-  // si solo hay 1, lo auto-seleccionamos
-  const firstBtn = usersBar.querySelector("button");
-  if (firstBtn) firstBtn.click();
-
-  passInp.focus();
-
-  const kbBtn = document.getElementById("loginKeyboardBtn");
-  if (kbBtn) {
-    kbBtn.onclick = () => openQwertyForInput(passInp); // 👈 función puente
-  }
-
+  // --- 4) LÓGICA DE LOGIN ---
   const doLogin = async () => {
+    const u = (selectedUser || "").trim();
+    const p = (passInp.value || "").trim();
+
+    // Staff entra con PIN 0000 auto, admin exige PIN
+    if (!u) {
+      errEl.textContent = "Selecciona un usuario.";
+      return false;
+    }
+    if (isAdminSelected && !p) {
+      errEl.textContent = "Introduce el PIN.";
+      return false;
+    }
+
+    const base = window.TPV_CONFIG?.resolverUrl || "";
+    const url = base.replace(/\/clients\.json(\?.*)?$/i, "/tpv_login.php");
+
+    // ⚠️ OJO: ahora la empresa la estás guardando en TPV_CFG,
+    // pero tu backend espera companyEmail desde localStorage.
+    // Mantenemos compatibilidad: si no está en localStorage, intentamos leerla de TPV_CFG.
+    let companyEmail = "";
     try {
-      errEl.textContent = "";
-      okBtn.disabled = true;
+      companyEmail = localStorage.getItem("tpv_companyEmail") || "";
+    } catch {}
+    if (!companyEmail && window.TPV_CFG) {
+      try {
+        companyEmail = (await window.TPV_CFG.get("company.email")) || "";
+      } catch {}
+    }
 
-      const u = (selectedUser || "").trim();
-      const p = (passInp.value || "").trim();
+    const body = new URLSearchParams();
+    body.append("companyEmail", companyEmail);
+    body.append("user", u);
+    body.append("pass", isAdminSelected ? p : "0000");
 
-      if (!u) {
-        errEl.textContent = "Selecciona un usuario.";
-        okBtn.disabled = false;
-        return false;
-      }
-      if (!p) {
-        errEl.textContent = "Escribe la contraseña.";
-        okBtn.disabled = false;
-        return false;
-      }
-
-      const base = window.TPV_CONFIG?.resolverUrl || "";
-      if (!base) throw new Error("Falta TPV_CONFIG.resolverUrl");
-
-      const url = base.replace(/\/clients\.json(\?.*)?$/i, "/tpv_login.php");
-
-      const body = new URLSearchParams();
-      body.append(
-        "companyEmail",
-        localStorage.getItem("tpv_companyEmail") || "",
-      );
-      body.append("user", u);
-      body.append("pass", p);
-
+    try {
       const res = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
-        },
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: body.toString(),
-        cache: "no-store",
       });
 
       const data = await res.json().catch(() => null);
-      if (!res.ok || !data || data.ok !== true) {
-        errEl.textContent = data?.message || "Login incorrecto.";
-        passInp.value = ""; // ✅ limpiar PIN
-        passInp.focus();
-        okBtn.disabled = false;
+
+      if (!data || !data.ok) {
+        errEl.textContent = data?.message || "PIN incorrecto";
         return false;
       }
 
+      // ✅ 1) Sesión runtime (usa tus helpers)
       setLoginSession({
         token: data.token,
         user: data.user,
-        codagente: data.codagente,
-        codalmacen: data.codalmacen,
+        codagente: data.codagente || "",
+        codalmacen: data.codalmacen || "",
       });
 
-      await window.electronAPI?.setCurrentUser?.(data.user);
-      // o el nombre que hayas expuesto en preload
+      // ✅ 2) Persistir “no pedir nunca más”
+      if (window.TPV_CFG) {
+        await window.TPV_CFG.set("auth.username", data.user || "");
+        await window.TPV_CFG.set("auth.token", data.token || "");
 
-      refreshLoggedUserUI();
+        // si tu backend devuelve codagente, lo guardamos (para agente por defecto)
+        if (data.codagente) {
+          await window.TPV_CFG.set("auth.codagente", String(data.codagente));
+        }
+        if (data.codalmacen) {
+          await window.TPV_CFG.set("auth.codalmacen", String(data.codalmacen));
+        }
+      }
 
+      // ✅ 3) Para gating admin en main
+      try {
+        await window.TPV_AUTH?.setCurrentUser?.(data.user || u);
+      } catch {}
+
+      // ✅ 4) UI
       overlay.classList.add("hidden");
       unlockAppUI();
-      toast?.("Sesión iniciada ✅", "ok", "Login");
+      refreshLoggedUserUI?.();
       LOGIN_ACTIVE = false;
 
       return true;
     } catch (e) {
-      errEl.textContent = e?.message || String(e);
-      passInp.value = ""; // ✅ limpiar PIN
-      passInp.focus();
-      okBtn.disabled = false;
+      errEl.textContent = "Error de conexión";
       return false;
     }
   };
 
+  // --- ESTADO INICIAL ---
+  errEl.textContent = "";
+  passInp.value = "";
+  overlay.classList.remove("hidden");
+  lockAppUI();
+  LOGIN_ACTIVE = true;
+
+  try {
+    const users = await fetchFsUsers();
+    renderUserButtons(users);
+  } catch (e) {
+    renderUserButtons([{ nick: "admin", admin: true }]);
+  }
+
   return await new Promise((resolve) => {
     okBtn.onclick = async () => {
-      const ok = await doLogin();
-      if (ok) resolve(true); // ✅ solo resolvemos si entra bien
+      if (await doLogin()) resolve(true);
     };
     exitBtn.onclick = () => {
-      clearLoginSession();
       overlay.classList.add("hidden");
       unlockAppUI();
-      LOGIN_ACTIVE = false; // ✅ importante
-      window.electronAPI?.quitApp?.();
-      okBtn.disabled = false;
+      LOGIN_ACTIVE = false;
       resolve(false);
     };
-
-    passInp.onkeydown = (e) => {
-      if (e.key === "Enter") okBtn.click();
-      if (e.key === "Escape") exitBtn.click();
-    };
   });
+}
+
+async function ensureLoginAutoOrPrompt() {
+  // Si no hay empresa resuelta, NO abras login jamás
+  if (!hasCompanyResolved || !hasCompanyResolved()) {
+    console.log("[LOGIN] Saltando login: empresa no resuelta");
+    return false;
+  }
+
+  // 1) si ya hay sesión en memoria/localStorage, ok
+  const memUser = getLoginUser?.() || localStorage.getItem("tpv_login_user");
+  const memTok = getLoginToken?.() || localStorage.getItem("tpv_login_token");
+  if (memUser && memTok) return true;
+
+  // 2) intenta recuperar de TPV_CFG (persistente)
+  const TPV_CFG = window.TPV_CFG;
+  const savedUser = TPV_CFG ? await TPV_CFG.get("auth.username") : "";
+  const savedTok = TPV_CFG ? await TPV_CFG.get("auth.token") : "";
+
+  if (savedUser && savedTok) {
+    setLoginSession({
+      user: savedUser,
+      token: savedTok,
+      codagente: "",
+      codalmacen: "",
+    });
+    try {
+      await window.TPV_AUTH?.setCurrentUser?.(savedUser);
+    } catch {}
+    refreshLoggedUserUI?.();
+    return true;
+  }
+
+  // 3) si no hay guardado => pedir login
+  const ok = await openLoginModal();
+  return !!ok;
 }
 
 function grossToNet(gross, taxRate) {
@@ -2158,6 +2236,11 @@ function fillTerminalSelect() {
 
 function setCurrentTerminal(terminal) {
   currentTerminal = terminal || null;
+  try {
+    if (currentTerminal?.id)
+      localStorage.setItem("tpv_terminal", String(currentTerminal.id));
+  } catch {}
+  renderMainAgentBar?.();
 }
 
 function getAgentsForTerminalId(terminalId) {
@@ -2241,6 +2324,13 @@ function renderMainAgentBar() {
         currentList[0] ||
         null;
 
+      try {
+        localStorage.setItem(
+          "tpv_agent",
+          String(currentAgent?.codagente || ""),
+        );
+      } catch {}
+
       if (agentNameEl) {
         agentNameEl.textContent = currentAgent ? currentAgent.name : "---";
       }
@@ -2279,6 +2369,10 @@ function renderMainAgentBar() {
   };
 
   mainAgentBar.appendChild(drawerBtn);
+  // Reflejar agente actual en el header siempre
+  if (agentNameEl) {
+    agentNameEl.textContent = currentAgent ? currentAgent.name : "---";
+  }
 }
 
 function setCurrentAgent(agent) {
@@ -4357,6 +4451,36 @@ async function apiCloseCashInFS() {
   return await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
 }
 
+async function ensureTerminalAgentDefaults() {
+  // 0) si hay terminals cargados, intenta restaurar terminal guardado
+  if (!currentTerminal) {
+    let savedId = null;
+    try {
+      savedId = localStorage.getItem("tpv_terminal");
+    } catch {}
+
+    if (Array.isArray(terminals) && terminals.length) {
+      const found = savedId
+        ? terminals.find((t) => String(t.id) === String(savedId))
+        : null;
+
+      setCurrentTerminal(found || terminals[0]);
+    } else {
+      setCurrentTerminal({ id: "demo", name: "TPV demo" });
+    }
+  }
+
+  // 1) agente por defecto = primero del terminal actual
+  if (!currentAgent && currentTerminal) {
+    const list = getAgentsForTerminalId(currentTerminal.id) || [];
+    currentAgent = list[0] || null;
+  }
+
+  // 2) repintar cabecera SIEMPRE
+  renderMainAgentBar?.();
+  refreshLoggedUserUI?.();
+}
+
 async function findOpenCajaIdInFS() {
   const cfg = window.RECIPOK_API || {};
   if (!cfg.baseUrl || !cfg.apiKey) return null;
@@ -4421,10 +4545,13 @@ if (cashHeaderBtn) {
 
     await ensureDataLoaded();
 
-    // 2) Ya hay empresa → ahora sí exigimos login
-    if (!getLoginToken() || !getLoginUser()) {
-      const ok = await openLoginModal();
-      if (!ok) return;
+    // 2) Ya hay empresa → auto-login si hay usuario guardado
+    if (!getLoginUser?.() && !localStorage.getItem("tpv_login_user")) {
+      const autoOk = await loadPersistedOperatorIntoLogin();
+      if (!autoOk) {
+        const ok = await openLoginModal(); // primera vez: pide PIN
+        if (!ok) return;
+      }
     }
 
     // 3) Comportamiento normal
@@ -4492,6 +4619,91 @@ if (userNameEl) {
   userNameEl.addEventListener("click", async () => {
     await doLogoutFlow();
   });
+}
+
+async function loadPersistedCompanyIntoRecipokApi() {
+  // Usa TPV_CFG (userData) para evitar que se pierda al actualizar
+  const baseUrl = await window.TPV_CFG.get("company.baseUrl");
+  const apiKey = await window.TPV_CFG.get("company.apiKey");
+  const email = await window.TPV_CFG.get("company.email");
+  const slug = await window.TPV_CFG.get("company.slug");
+
+  if (baseUrl && apiKey) {
+    window.RECIPOK_API = window.RECIPOK_API || {};
+    window.RECIPOK_API.baseUrl = String(baseUrl);
+    window.RECIPOK_API.apiKey = String(apiKey);
+
+    // opcional
+    window.RECIPOK_API._savedEmail = email || "";
+    window.RECIPOK_API._savedSlug = slug || "";
+
+    return true;
+  }
+  return false;
+}
+
+async function loadPersistedOperatorIntoLogin() {
+  const username = await window.TPV_CFG.get("auth.username");
+  if (!username) return false;
+
+  // Tu app usa localStorage para login user; lo fijamos aquí
+  try {
+    localStorage.setItem("tpv_login_user", String(username));
+  } catch {}
+
+  // Para gating de admin en main (si usas TPV_AUTH)
+  try {
+    await window.TPV_AUTH?.setCurrentUser?.(String(username));
+  } catch {}
+
+  return true;
+}
+
+async function autoSelectTerminalAndAgentIfPossible() {
+  // Terminal preferido (si lo guardas)
+  const savedIdtpv = await window.TPV_CFG.get("tpv.idtpv");
+  const savedCodAg = await window.TPV_CFG.get("auth.codagente");
+
+  // 1) Terminal
+  if (!currentTerminal) {
+    const pick =
+      (savedIdtpv &&
+        terminals.find((t) => String(t.id) === String(savedIdtpv))) ||
+      (terminals.length ? terminals[0] : null);
+
+    if (pick) setCurrentTerminal(pick);
+  }
+
+  // 2) Agente
+  if (currentTerminal) {
+    const list = getAgentsForTerminalId(currentTerminal.id) || [];
+    if (!currentAgent) {
+      currentAgent =
+        (savedCodAg &&
+          list.find((a) => String(a.codagente) === String(savedCodAg))) ||
+        list[0] ||
+        null;
+    }
+  }
+
+  // Persistimos para el próximo arranque
+  if (currentTerminal?.id)
+    await window.TPV_CFG.set("tpv.idtpv", String(currentTerminal.id));
+  if (currentAgent?.codagente)
+    await window.TPV_CFG.set("auth.codagente", String(currentAgent.codagente));
+}
+
+function fireSessionReady() {
+  document.dispatchEvent(
+    new CustomEvent("tpv:sessionReady", {
+      detail: {
+        idtpv: currentTerminal?.id || null,
+        codagente: currentAgent?.codagente || null,
+        user:
+          getLoginUser?.() || localStorage.getItem("tpv_login_user") || null,
+      },
+    }),
+  );
 }
 
 // ===== Carga de datos desde la API de Recipok =====
@@ -4874,26 +5086,27 @@ async function loadDataFromApi(opts = {}) {
     }
 
     // =========================
-    // MODO ARRANQUE (comportamiento original)
+    // MODO ARRANQUE (AUTO: sin login ni overlay)
     // =========================
-    if (onlyTerminal && listForOnlyTerminal.length <= 1) {
-      setCurrentTerminal(onlyTerminal);
-      currentAgent = listForOnlyTerminal[0] || null;
 
-      document.dispatchEvent(
-        new CustomEvent("tpv:sessionReady", {
-          detail: {
-            idtpv: onlyTerminal?.id || null,
-            codagente: currentAgent?.codagente || null,
-            user: getLoginUser(),
-          },
-        }),
-      );
-    } else if (numTerminals > 0 || agents.length > 0) {
-      showTerminalOverlay("session");
-    } else {
-      renderMainUI();
+    // 1) Terminal + agente por defecto (primero) o los guardados
+    await autoSelectTerminalAndAgentIfPossible();
+
+    // 2) Si no hay terminal/agente (casos raros), cae a overlay
+    if (!currentTerminal) {
+      if (numTerminals > 0 || agents.length > 0) showTerminalOverlay("session");
+      else renderMainUI();
+      return;
     }
+
+    // Si no hay agentes asignados, igualmente dejamos entrar (tu UI debe tolerarlo)
+    if (!currentAgent) {
+      // si quieres forzar overlay cuando no hay agente:
+      // showTerminalOverlay("session"); return;
+    }
+
+    // 3) Dispara sessionReady -> tu listener ya llama maybeOpenCashOrRecover()
+    fireSessionReady();
   } catch (err) {
     console.error("Error llamando a la API de Recipok:", err);
     setStatusText("Offline (demo)");
@@ -5828,13 +6041,6 @@ optionsOpenDrawerBtn?.addEventListener("click", () =>
 payOpenDrawerBtn?.addEventListener("click", () =>
   handleOpenDrawerClick(payOpenDrawerBtn),
 );
-
-function isCashCodpago(codpago) {
-  const c = String(codpago || "")
-    .trim()
-    .toUpperCase();
-  return c === "CONT" || c === "EFEC" || c === "CASH";
-}
 
 async function createRefundInFacturaScripts(
   facturaRow,
@@ -7098,25 +7304,58 @@ async function onPayButtonClick() {
       return;
     }
 
-    // total carrito (ya con IVA)
-
+    // Total carrito (con IVA)
     const totalCart = round2(getCartTotal(cart));
+
+    // 1) Modal cobro
     const payResult = await openPayModal(totalCart);
-
-    // 1) Abrimos modal de cobro (formas de pago reales)
-
     if (!payResult) {
       setStatusText("Cobro cancelado");
       return;
     }
 
-    // 2) Construimos payload factura
+    // ---- Normalizar pagos DESDE YA (evita errores + garantiza entregado/importe) ----
+    const pagosFinal = Array.isArray(payResult?.pagos)
+      ? payResult.pagos.map((p) => ({
+          ...p,
+          codpago: String(p?.codpago || "")
+            .trim()
+            .toUpperCase(),
+          descripcion: String(p?.descripcion || "").trim(),
+          // aplicado a la venta
+          importe:
+            Math.round((Number(p?.importe || 0) + Number.EPSILON) * 100) / 100,
+          // entregado por el cliente (si no viene, asumimos importe)
+          entregado:
+            Math.round(
+              (Number(p?.entregado ?? p?.importe ?? 0) + Number.EPSILON) * 100,
+            ) / 100,
+        }))
+      : [];
+
+    const primary = pagosFinal[0] || null;
+
+    // ✅ Para FacturaScripts: efectivo = ENTREGADO en efectivo, cambio = cambio
+    // (porque FS suele computar ingresos efectivo como efectivo - cambio)
+    const tpv_cambio =
+      Math.round((Number(payResult?.cambio || 0) + Number.EPSILON) * 100) / 100;
+
+    const tpv_efectivo =
+      Math.round(
+        (pagosFinal
+          .filter(isCashPago)
+          .reduce((s, p) => s + (Number(p?.entregado || 0) || 0), 0) +
+          Number.EPSILON) *
+          100,
+      ) / 100;
+
+    // 2) Payload factura
     const ticketPayload = buildTicketPayloadFromCart();
 
-    // ✅ Observaciones del cobro -> FacturaScripts
+    // Observaciones
     ticketPayload.observaciones = (payResult?.observaciones || "").toString();
 
-    // ✅ VINCULAR SIEMPRE A TPV y CAJA ABIERTA
+    // Vincular a TPV / caja
     ticketPayload.idtpv = Number(currentTerminal?.id || 0) || null;
     ticketPayload.idcaja = Number(cashSession?.remoteCajaId || 0) || null;
 
@@ -7126,62 +7365,33 @@ async function onPayButtonClick() {
       );
     }
 
-    // Número 2 y Serie desde el modal
+    // Número2 y serie
     ticketPayload.numero2 = payResult.numero || "";
-
-    // ✅ Si el modal no devuelve serie, forzamos "S" (emitidas / serie principal)
     const serieVenta = (payResult.serie || "S").toString().trim().toUpperCase();
-
-    // Según cómo esté implementado createTicketInFacturaScripts,
-    // a veces usa "serie" y a veces "codserie". Mandamos ambas para asegurar.
     ticketPayload.serie = serieVenta;
     ticketPayload.codserie = serieVenta;
 
-    // 🔥 IMPORTANTE: escoger método principal
-    // - si hay 1 pago, ese
-    // - si hay varios, marcamos como "Mixto" para el ticket, pero para FS enviamos el primero
-    const pagos = payResult.pagos || [];
-    const primary = pagos[0];
-
-    // ✅ Para que FacturaScripts compute “Ingresos en efectivo”
-    const tpv_efectivo = pagos
-      .filter(isCashPago)
-      .reduce((s, p) => s + moneyToNumber(p?.importe), 0);
-
-    const tpv_cambio = moneyToNumber(payResult?.cambio || 0);
-
-    // para ticket (impresión)
-    if (pagos.length === 1) {
-      ticketPayload.paymentMethod = primary.descripcion || primary.codpago;
+    // Para ticket (impresión): método principal / mixto
+    if (pagosFinal.length === 1) {
+      ticketPayload.paymentMethod =
+        primary?.descripcion || primary?.codpago || "—";
     } else {
       ticketPayload.paymentMethod = "Mixto";
     }
 
     setStatusText("Cobrando...");
 
-    // 3) Crear factura en FacturaScripts
-    // ✅ Aquí intentamos registrar el método en FacturaScripts:
-    // - enviamos codpago (si el endpoint lo soporta, quedará guardado)
-    // - y enviamos "pagos" con el desglose (por si tu endpoint lo acepta)
-    // Si FacturaScripts ignorase estos campos, no romperá el cobro.
+    // Para FS: codpago principal + (opcional) desglose pagos
     ticketPayload.codpago = primary ? primary.codpago : null;
-    ticketPayload.pagos = pagos; // opcional
+    ticketPayload.pagos = pagosFinal;
 
-    const isMixto = pagos.length > 1;
-
-    // Para FS:
-    if (isMixto) {
-      ticketPayload.codpago = primary ? primary.codpago : null;
-      ticketPayload.pagos = pagos; // si el endpoint lo admite, perfecto
-    }
-
-    // ✅ Snapshot INMUTABLE y SIEMPRE array
+    // Snapshot carrito (inmutable)
     const cartSnapshot = Array.isArray(cart) ? cart.map((i) => ({ ...i })) : [];
 
-    // ✅ Datos para OFFLINE post-proceso (emitir/pagar/recibos)
-    ticketPayload._payBreakdown = pagos; // desglose pagos
-    ticketPayload._payCambio = Number(tpv_cambio || 0); // cambio
-    ticketPayload._payNumero2 = (payResult.numero ?? "").toString(); // numero2
+    // Datos auxiliares offline/post
+    ticketPayload._payBreakdown = pagosFinal;
+    ticketPayload._payCambio = Number(tpv_cambio || 0);
+    ticketPayload._payNumero2 = (payResult.numero ?? "").toString();
     ticketPayload._payNick = (
       currentAgent?.nick ||
       currentAgent?.nombre ||
@@ -7189,63 +7399,51 @@ async function onPayButtonClick() {
       "Ventas"
     ).toString();
 
+    // 3) Enviar o encolar
     const sendResult = await sendOrQueueFactura(ticketPayload);
 
-    // ✅ OFFLINE (encolado): no seguimos el flujo online
+    // ========= OFFLINE (encolado) =========
     if (!sendResult.ok && sendResult.queued) {
-      // 🔢 Registrar uso de métodos de pago en la sesión de caja
-      registerPaymentsForCurrentSession(pagos);
-      // y en el ticket
-      registerPayMethodUsageForTicket(pagos);
+      // registrar uso de pagos
+      registerPaymentsForCurrentSession(pagosFinal);
+      registerPayMethodUsageForTicket(pagosFinal);
+
       try {
-        // Ticket imprimible mínimo offline (SIN romper nunca)
         lastTicket = buildOfflineTicketPrintData(
           cartSnapshot,
           ticketPayload,
           payResult,
         );
 
-        // ✅ Completar modal post-cobro offline (sí hay ticket imprimible offline)
+        // Completar modal post-cobro offline
         try {
           const docCode = lastTicket?.numero || "OFFLINE";
           const totalDoc = Number(payResult?.total ?? totalCart ?? 0);
           const cambio = Number(payResult?.cambio ?? 0);
-
           openPostPayModal({ docCode, total: totalDoc, cambio });
           setPostPayPrintEnabled(true);
         } catch (e) {
           console.warn("post-cobro offline completar falló:", e?.message || e);
         }
 
-        // ✅ si quieres que aparezca en el modal Tickets mientras está offline:
+        // Guardar en modal Tickets offline
         saveOfflineTicketForTicketsModal({
           _localId: sendResult.localId,
-
-          // Un “número” visible tipo OFF-ABC123
           codigo: `OFF-${String(sendResult.localId || "")
             .slice(0, 6)
             .toUpperCase()}`,
-
           nombrecliente: "Venta en cola",
-
-          // ✅ TOTAL REAL (no ticketPayload.total)
           total: Number(
             payResult?.total ?? totalCart ?? ticketPayload?.total ?? 0,
           ),
-
-          codpago:
-            payResult?.pagos?.[0]?.codpago || ticketPayload.codpago || "—",
+          codpago: pagosFinal?.[0]?.codpago || ticketPayload.codpago || "—",
           fecha: lastTicket.fecha,
           hora: lastTicket.hora,
-
-          // ✅ Guardamos todo para que se vea/imprima bien offline
           lineas: Array.isArray(lastTicket.lineas) ? lastTicket.lineas : [],
           pagos: Array.isArray(lastTicket.pagos)
             ? lastTicket.pagos
-            : payResult.pagos || [],
+            : pagosFinal,
           cambio: Number(lastTicket.cambio || payResult.cambio || 0),
-
-          // marca para que el render/print lo trate como offline
           _offline: true,
         });
 
@@ -7253,46 +7451,34 @@ async function onPayButtonClick() {
         if (printBtn) printBtn.disabled = false;
       } catch (e) {
         console.warn("No se pudo construir ticket offline:", e?.message || e);
-        // NO tiramos error: la venta ya está en cola
       }
 
-      // ✅ Vaciar carrito SIEMPRE aunque falle impresión/ticket offline
       cart = [];
       renderCart();
-
       setStatusText("Venta guardada en cola (offline)");
       toast("Sin internet: venta guardada en cola ✅", "ok", "Cobrar");
-
       return;
     }
 
-    // ✅ ONLINE: seguimos normal
+    // ========= ONLINE =========
     const apiResponse = sendResult.remote;
 
-    // completar código si se puede
     const facturaResp =
       apiResponse.doc || apiResponse.factura || apiResponse.data || apiResponse;
+
     const idfactura = facturaResp?.idfactura || null;
     const codcliente = facturaResp?.codcliente;
     const idempresa = facturaResp?.idempresa;
     const coddivisa = facturaResp?.coddivisa;
-    const fecha = facturaResp?.fecha;
     const codigofactura = facturaResp?.codigo;
 
-    // ✅ TOTAL REAL según FacturaScripts (source of truth)
+    // Total real FS
     const facturaTotalFS =
       Math.round(
         (Number(facturaResp?.total ?? totalCart ?? 0) + Number.EPSILON) * 100,
       ) / 100;
 
-    // ✅ Clonamos pagos y forzamos 2 decimales en importes
-    const pagosFinal = (payResult?.pagos || []).map((p) => ({
-      ...p,
-      importe:
-        Math.round((Number(p?.importe || 0) + Number.EPSILON) * 100) / 100,
-    }));
-
-    // ✅ Ajuste de céntimos: recibos deben sumar EXACTO totalFS (si no, sale "No pagado")
+    // Ajuste céntimos: recibos deben sumar exacto totalFS (usamos pagosFinal)
     const sumPagosFinal = pagosFinal.reduce(
       (s, p) => s + (Number(p.importe) || 0),
       0,
@@ -7308,23 +7494,21 @@ async function onPayButtonClick() {
       pagosFinal[pagosFinal.length - 1] = { ...last, importe: newImp };
     }
 
+    // Actualizar factura (tpv_efectivo = entregado cash, tpv_cambio = cambio)
     if (idfactura) {
       const upd = {
         idestado: 11,
         pagada: 1,
 
-        // importante TPV
         tpv_venta: 1,
         tpv_efectivo: Number(tpv_efectivo.toFixed(2)),
         tpv_cambio: Number(tpv_cambio.toFixed(2)),
 
-        // informativos
         codpago: ticketPayload.codpago || "",
         idtpv: currentTerminal?.id || "",
         codalmacen: currentTerminal?.codalmacen || "",
         observaciones: (payResult?.observaciones || "").toString(),
 
-        // ✅ PARA QUE QUEDE IGUAL AL TPV ANTIGUO
         numero2: (payResult?.numero ?? "").toString(),
         nick: (
           currentAgent?.nick ||
@@ -7338,11 +7522,11 @@ async function onPayButtonClick() {
       await updateFacturaCliente(idfactura, upd);
     }
 
-    // ✅ Crear 1 recibo por cada método de pago usado (pago mixto)
+    // Crear 1 recibo por método (importe = aplicado)
     if (idfactura && codcliente) {
       const today = new Date().toISOString().slice(0, 10);
-      const pagosRecibos = pagosFinal;
-      for (const p of pagosRecibos) {
+
+      for (const p of pagosFinal) {
         const importe = Number(Number(p.importe || 0).toFixed(2));
         if (!(importe > 0)) continue;
 
@@ -7356,7 +7540,6 @@ async function onPayButtonClick() {
           idempresa,
           codigofactura,
           coddivisa,
-          fecha: today,
         });
       }
     } else {
@@ -7364,9 +7547,10 @@ async function onPayButtonClick() {
         "No hay idfactura/codcliente: no se pudieron crear recibos.",
       );
     }
-    // ✅ Limpieza: elimina el recibo "total" automático y deja SOLO los recibos por método
+
+    // Limpieza recibo automático + validar
     try {
-      await cleanupRecibosFactura(idfactura, payResult.pagos || []);
+      await cleanupRecibosFactura(idfactura, pagosFinal);
       try {
         await validateRecibosAgainstFactura(idfactura);
       } catch (e) {
@@ -7375,10 +7559,12 @@ async function onPayButtonClick() {
     } catch (e) {
       console.warn("cleanupRecibosFactura falló:", e?.message || e);
     }
-    // 🔢 Registrar uso de métodos de pago en la sesión de caja
-    registerPaymentsForCurrentSession(pagos);
-    // y en el ticket
-    registerPayMethodUsageForTicket(pagos);
+
+    // Registrar sesión caja / ticket (usar pagosFinal SIEMPRE)
+    registerPaymentsForCurrentSession(pagosFinal);
+    registerPayMethodUsageForTicket(pagosFinal);
+
+    // Completar código factura si hace falta
     if (idfactura) {
       try {
         const fc = await fetchFacturaClienteById(idfactura);
@@ -7394,15 +7580,16 @@ async function onPayButtonClick() {
       }
     }
 
+    // Actualizar caja TPV: suma efectivo por importe (aplicado), NO entregado
     await apiUpdateCajaAfterSale({
-      totalVenta: facturaTotalFS, // mejor usar el total real FS
+      totalVenta: facturaTotalFS,
       pagos: pagosFinal,
     });
 
-    // 4) Guardamos ticket para imprimir
+    // Ticket imprimible
     lastTicket = buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot);
 
-    // ✅ Completar modal post-cobro (ya hay ticket) + habilitar imprimir
+    // Completar post-cobro
     try {
       const docCode =
         lastTicket?.numero ||
@@ -7415,7 +7602,6 @@ async function onPayButtonClick() {
       );
       const cambio = Number(payResult?.cambio ?? 0);
 
-      // Si el modal ya estaba abierto, refrescamos los datos
       updatePostPayModal({
         docCode,
         total: totalDoc,
@@ -7427,39 +7613,14 @@ async function onPayButtonClick() {
       console.warn("No pude completar post-cobro:", e?.message || e);
     }
 
-    // ✅ Guardamos desglose de pagos para imprimirlo
+    // Guardar pagos/cambio en ticket
     lastTicket.pagos = pagosFinal;
     lastTicket.cambio = payResult.cambio || 0;
 
     const printBtn = document.getElementById("printTicketBtn");
     if (printBtn) printBtn.disabled = false;
 
-    // 5) Caja: SOLO efectivo suma a cashSalesTotal
-    // (si hay varios métodos, solo suma la parte del método "Al contado" / "CONT" (si existe))
-    const totalVenta = lastTicket.total || totalCart || 0;
-
-    let efectivo = 0;
-    pagosFinal.forEach((p) => {
-      const code = String(p.codpago || "").toUpperCase();
-      const desc = String(p.descripcion || "").toLowerCase();
-      // criterio: CONT o “al contado” lo consideramos efectivo
-      if (
-        code === "CONT" ||
-        desc.includes("contado") ||
-        desc.includes("efectivo")
-      ) {
-        efectivo += Number(p.importe || 0);
-      }
-    });
-
-    /*
-    const hasCash = efectivo > 0;
-    if (hasCash) {
-      await openDrawerNow();
-    }
-    */
-
-    // 6) Vaciar carrito
+    // Vaciar carrito
     cart = [];
     renderCart();
     clearPaidParkedTicket();
@@ -7472,7 +7633,8 @@ async function onPayButtonClick() {
       "ok",
       "Cobrar",
     );
-    // ✅ Auto-impresión (solo si el check está activado)
+
+    // Auto-impresión
     if (isAutoPrintEnabled()) {
       try {
         await printTicket(lastTicket);
@@ -8980,66 +9142,100 @@ async function forceReconnectFlow() {
 }
 
 async function bootstrapApp() {
-  const resolved = await bootstrapCompany(); // ← importante capturar retorno
-  if (!resolved) {
-    // Cancelado o bloqueado: NO seguimos
-    return;
+  const ok = await runBootFlow(); // 👈 IMPORTANTE: capturar retorno
+  if (!ok) return false;
+
+  // ✅ guardia: solo si hay empresa y login válidos
+  if (!hasCompanyResolved() || !getLoginUser() || !getLoginToken()) {
+    return false;
   }
 
-  const ok = await openLoginModal();
-  if (!ok) return;
-
-  await loadDataFromApi();
-
-  // ✅ Precarga/caché de formas de pago para modo offline (sin abrir modal)
+  // Precargas (una sola vez)
   try {
-    const methods = await fetchFormasPagoActivas(); // esta función debe guardar cache
+    const methods = await fetchFormasPagoActivas({
+      forceOnlineIfPossible: true,
+    });
     console.log("Formas de pago precargadas:", methods?.length || 0);
   } catch (e) {
     console.warn("No se pudieron precargar formapagos:", e?.message || e);
   }
 
-  // ✅ Precarga/caché de tickets (para modo offline)
   try {
-    const list = await fetchUltimosTickets(60);
-    saveTicketsCache(list);
+    const list = await refreshTicketsCacheFromServer(); // usa tu función (limit 300)
     console.log("Tickets precargados:", list?.length || 0);
   } catch (e) {
     console.warn("No se pudieron precargar tickets:", e?.message || e);
   }
+
+  return true;
 }
 
 /*bootstrapApp();*/
+async function getPersistedCompanyCfg() {
+  try {
+    return JSON.parse(localStorage.getItem("tpv_company_cfg") || "{}");
+  } catch {
+    return {};
+  }
+}
+
+async function persistCompanyCfg(resolved) {
+  if (!resolved) return;
+
+  const data = {
+    email: resolved.email || null,
+    slug: resolved.slug || null,
+    baseUrl: resolved.baseUrl,
+    apiKey: resolved.apiKey,
+  };
+
+  localStorage.setItem("tpv_company_cfg", JSON.stringify(data));
+}
 
 async function bootstrapCompany() {
   console.log("bootstrapCompany() ejecutándose...");
 
-  const saved = getSavedConfig();
-  const savedEmail = normalizeEmail(saved.companyEmail);
+  // Leer config persistente (userData)
+  const saved = await getPersistedCompanyCfg();
+  const savedEmail = normalizeEmail(saved?.email || null);
 
   const applyResolved = ({ baseUrl, apiKey }) => {
     window.RECIPOK_API.baseUrl = baseUrl;
     window.RECIPOK_API.apiKey = apiKey;
   };
 
-  // 0) Siempre leemos clients.json para decidir si puede entrar o no
+  const persistLegacyLocal = ({ email, baseUrl, apiKey }) => {
+    try {
+      if (email) localStorage.setItem("tpv_companyEmail", String(email));
+    } catch {}
+    try {
+      if (baseUrl) localStorage.setItem("tpv_baseUrl", String(baseUrl));
+    } catch {}
+    try {
+      if (apiKey) localStorage.setItem("tpv_apiKey", String(apiKey));
+    } catch {}
+  };
+
+  // 0) Cargar clients.json
   let clientsData = null;
+
   try {
     clientsData = await fetchClientsJson();
   } catch (e) {
-    console.warn("No se pudo cargar clients.json. Modo tolerante:", e);
+    console.warn("No se pudo cargar clients.json:", e);
     clientsData = { clients: [] };
   }
 
   const findClientByEmail = (email) => {
     const e = normalizeEmail(email);
+
     return (
       (clientsData.clients || []).find((c) => normalizeEmail(c.email) === e) ||
       null
     );
   };
 
-  // Helper: pide email hasta que sea válido / cancel
+  // Pedir email hasta que sea válido
   const askAndResolve = async () => {
     while (true) {
       let email = await askEmailWithModal();
@@ -9051,102 +9247,128 @@ async function bootstrapCompany() {
           "warn",
           "Activación",
         );
+
         TPV_STATE.offline = true;
         TPV_STATE.locked = false;
         updateCashButtonLabel();
-        return null; // cancelado
+
+        return null;
       }
 
       const client = findClientByEmail(email);
 
       if (!client) {
-        alert("Email no encontrado. Revisa el email o contacta con soporte.");
+        alert("Email no encontrado.");
         continue;
       }
 
       if (client.active === false) {
         TPV_STATE.locked = true;
         TPV_STATE.offline = false;
+
         updateCashButtonLabel();
+
         showMessageModal(
           "Acceso bloqueado",
-          "Tu cuenta de TPV está desactivada. Contacta con soporte.",
+          "Tu cuenta de TPV está desactivada.",
         );
-        return null; // bloqueado
+
+        return null;
       }
 
       const resolved = await resolveCompanyByEmail(email);
-      return resolved;
+      return { ...resolved, email }; // asegura email dentro del objeto
     }
   };
 
-  // 1) Si hay email guardado, comprobamos SIEMPRE contra clients.json
+  // =================================================
+  // 1) SI YA HAY EMAIL GUARDADO
+  // =================================================
   if (savedEmail) {
     const client = findClientByEmail(savedEmail);
 
     if (!client) {
-      console.warn(
-        "Email guardado ya no existe en clients.json. Pidiendo de nuevo...",
-      );
+      console.warn("Email guardado inválido. Re-pidiendo...");
+
       const resolved = await askAndResolve();
       if (!resolved) return false;
 
-      saveResolvedCompany(resolved);
+      await persistCompanyCfg(resolved);
       applyResolved(resolved);
+      persistLegacyLocal(resolved);
+
       await validateBaseUrlOrThrow(resolved.baseUrl, resolved.apiKey);
+
       TPV_STATE.offline = false;
       TPV_STATE.locked = false;
       updateCashButtonLabel();
+
       return true;
     }
 
     if (client.active === false) {
       TPV_STATE.locked = true;
       TPV_STATE.offline = false;
+
       updateCashButtonLabel();
-      showMessageModal(
-        "Acceso bloqueado",
-        "Tu cuenta de TPV está desactivada. Contacta con soporte.",
-      );
+
+      showMessageModal("Acceso bloqueado", "Cuenta desactivada.");
+
       return false;
     }
 
-    // Existe y está activa: resolvemos desde email (que construye baseUrl/apiKey)
+    // Email válido → resolver
     try {
       const resolved = await resolveCompanyByEmail(savedEmail);
-      saveResolvedCompany(resolved);
+
+      await persistCompanyCfg(resolved);
       applyResolved(resolved);
+      persistLegacyLocal(resolved);
+
       await validateBaseUrlOrThrow(resolved.baseUrl, resolved.apiKey);
+
       TPV_STATE.offline = false;
       TPV_STATE.locked = false;
       updateCashButtonLabel();
+
       return true;
     } catch (e) {
-      console.warn("Email activo pero fallo al validar. Pidiendo email...", e);
+      console.warn("Validación fallida:", e);
+
       const resolved2 = await askAndResolve();
       if (!resolved2) return false;
 
-      saveResolvedCompany(resolved2);
+      await persistCompanyCfg(resolved2);
       applyResolved(resolved2);
+
       await validateBaseUrlOrThrow(resolved2.baseUrl, resolved2.apiKey);
+
       TPV_STATE.offline = false;
       TPV_STATE.locked = false;
       updateCashButtonLabel();
-      return true; // ✅ antes tenías return; (undefined)
+
+      return true;
     }
   }
 
-  // 2) Si no hay email guardado: pedirlo
+  // =================================================
+  // 2) NO HAY EMAIL → PEDIR
+  // =================================================
   const resolved = await askAndResolve();
+
   if (!resolved) return false;
 
-  saveResolvedCompany(resolved);
+  await persistCompanyCfg(resolved);
   applyResolved(resolved);
+  persistLegacyLocal(resolved);
+
   await validateBaseUrlOrThrow(resolved.baseUrl, resolved.apiKey);
+
   TPV_STATE.offline = false;
   TPV_STATE.locked = false;
   updateCashButtonLabel();
-  return true; // ✅ antes faltaba
+
+  return true;
 }
 
 async function fetchFacturaClienteById(idfactura) {
@@ -10306,19 +10528,62 @@ async function openRefundForFactura(facturaRow) {
 }
 
 async function doLogoutFlow() {
-  if (!getLoginToken() && !getLoginUser()) return;
-
   const ok = await confirmModal(
-    "Cerrar sesión",
-    "¿Estás seguro de cerrar sesión?",
+    "Cambiar usuario",
+    "Se cerrará la sesión actual para poder elegir otro usuario.",
   );
   if (!ok) return;
 
-  clearLoginSession();
-  refreshLoggedUserUI();
-  resetTPVToEmpty();
+  // 1) Borrar sesión runtime
+  try {
+    clearLoginSession();
+  } catch {}
 
+  // 2) Borrar persistencia (para forzar modal login la próxima vez)
+  if (window.TPV_CFG) {
+    await window.TPV_CFG.set("auth.username", "");
+    await window.TPV_CFG.set("auth.token", "");
+    await window.TPV_CFG.set("auth.codagente", "");
+    await window.TPV_CFG.set("auth.codalmacen", "");
+    // Si quieres resetear terminal también:
+    // await window.TPV_CFG.set("tpv.idtpv", "");
+  }
+
+  // 3) Reset de selección en runtime para evitar “Terminal/Agente vacíos”
+  try {
+    currentAgent = null;
+    // currentTerminal = null; // opcional, normalmente NO
+  } catch {}
+
+  // 4) Refrescar UI
+  refreshLoggedUserUI?.();
+  renderMainAgentBar?.();
+  updateCashButtonLabel?.();
   toast?.("Sesión cerrada", "info", "Usuario");
+
+  // 5) Abrir login inmediatamente (no dependas de “Abrir caja”)
+  const ok2 = await openLoginModal();
+  if (!ok2) return;
+
+  // 6) Tras login, refresca datos y fija defaults
+  try {
+    await loadDataFromApi({ refresh: true });
+  } catch {}
+
+  // Si tienes esta función, úsala. Si no, me dices y te la escribo.
+  if (typeof ensureTerminalAgentDefaults === "function") {
+    await ensureTerminalAgentDefaults();
+  } else {
+    // fallback mínimo: repinta header
+    renderMainAgentBar?.();
+  }
+
+  // 7) continúa flujo de caja
+  if (typeof fireSessionReady === "function") {
+    fireSessionReady();
+  } else {
+    document.dispatchEvent(new CustomEvent("tpv:sessionReady", { detail: {} }));
+  }
 }
 
 async function ensureDataLoaded() {
@@ -10373,13 +10638,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   updateParkedCountBadge();
   refreshOptionsUI();
 
-  // ✅ Arranca el monitor ANTES del bootstrap (para que actualice el badge siempre)
   startOnlineMonitor();
 
-  await bootstrapApp();
-
-  // ✅ precarga caches una vez logueado y con company resuelta
-  warmUpOfflineCaches();
+  await bootstrapApp(); // y listo
 });
 
 async function refreshTicketsCacheFromServer() {
@@ -10395,26 +10656,85 @@ async function refreshTicketsCacheFromServer() {
   }
 }
 
-async function warmUpOfflineCaches() {
-  try {
-    // precargar formas de pago y tickets para offline
-    await fetchFormasPagoActivas({ forceOnlineIfPossible: true });
-    await refreshTicketsCacheFromServer();
-  } catch (e) {
-    // no pasa nada si falla (por ejemplo, sin internet)
-    console.warn("warmUpOfflineCaches:", e?.message || e);
-  }
-}
+// ===== Atajo de teclado para reset de fábrica (Ctrl+Shift+R) =====
+window.addEventListener("keydown", async (e) => {
+  if (!(e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "r")) return;
 
-// ===== Atajo de teclado para resetear TPV (Ctrl+Shift+R) =====
-window.addEventListener("keydown", (e) => {
-  if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "r") {
+  e.preventDefault();
+
+  const ok = await confirmModal(
+    "Reset de fábrica",
+    "Esto borrará empresa, usuario, token, terminal, agente y caja guardada.\n\n¿Continuar?",
+  );
+  if (!ok) return;
+
+  // 1) Limpiar localStorage (compat + cachés)
+  try {
+    // empresa (viejo + nuevo)
     localStorage.removeItem("tpv_companyEmail");
     localStorage.removeItem("tpv_baseUrl");
     localStorage.removeItem("tpv_apiKey");
-    toast("TPV reseteado. Reinicia la app.", "ok", "Reset");
-    setStatusText("TPV reseteado");
-  }
+
+    // sesión
+    clearLoginSession?.(); // borra tpv_login_user/token/codagente/codalmacen
+
+    // selección terminal/agente (si los usaste alguna vez en localStorage)
+    localStorage.removeItem("tpv_terminal");
+    localStorage.removeItem("tpv_agent");
+
+    // caja guardada para recuperación post-corte
+    localStorage.removeItem("tpv_remoteCajaId");
+
+    // ✅ NUEVO: borrar persistencia nueva de empresa (localStorage)
+    try {
+      localStorage.removeItem("tpv_company_cfg");
+    } catch {}
+    try {
+      localStorage.removeItem("tpv_cached_formapagos");
+    } catch {}
+    try {
+      localStorage.removeItem("tpv_cached_tickets");
+    } catch {}
+
+    // opcional: cualquier cache que uses
+    // localStorage.removeItem("tpv_cached_formapagos");
+    // localStorage.removeItem("tpv_cached_tickets");
+  } catch {}
+
+  // 2) Limpiar persistencia durable (TPV_CFG en userData)
+  try {
+    const TPV_CFG = window.TPV_CFG;
+    if (TPV_CFG) {
+      // empresa
+      await TPV_CFG.set("company.email", "");
+      await TPV_CFG.set("company.slug", "");
+      await TPV_CFG.set("company.baseUrl", "");
+      await TPV_CFG.set("company.apiKey", "");
+
+      // auth
+      await TPV_CFG.set("auth.username", "");
+      await TPV_CFG.set("auth.token", "");
+      await TPV_CFG.set("auth.codagente", "");
+      await TPV_CFG.set("auth.codalmacen", "");
+
+      // tpv
+      await TPV_CFG.set("tpv.idtpv", "");
+    }
+  } catch {}
+
+  // 3) Reset runtime (por si no recargas)
+  try {
+    currentAgent = null;
+    currentTerminal = null;
+    cashSession.open = false;
+    cashSession.remoteCajaId = null;
+  } catch {}
+
+  toast("Reset realizado. Reiniciando...", "ok", "Reset");
+  setStatusText?.("TPV reseteado");
+
+  // 4) Recargar app para volver a flujo inicial
+  window.location.reload();
 });
 
 /* =============================================================
@@ -11536,12 +11856,20 @@ initKioskToggle();
 // 1) Si algún día vuelve el bootstrap remoto y emite cajaAbierta, dejamos esto consistente
 document.addEventListener("tpv:cajaAbierta", (e) => {
   const idcaja = Number(e.detail?.idcaja || 0) || null;
+  const idtpv = e.detail?.idtpv != null ? String(e.detail.idtpv) : "";
 
   if (idcaja) {
     cashSession.remoteCajaId = idcaja;
-    cashSession.open = true; // ✅ importante
+    cashSession.open = true;
     try {
       localStorage.setItem("tpv_remoteCajaId", String(idcaja));
+    } catch {}
+  }
+
+  // ✅ GUARDAR TERMINAL para que tras corte no salga "----"
+  if (idtpv) {
+    try {
+      localStorage.setItem("tpv_terminal", idtpv);
     } catch {}
   }
 
@@ -11551,8 +11879,13 @@ document.addEventListener("tpv:cajaAbierta", (e) => {
 
 // 2) sessionReady = punto único para decidir caja (bootstrap desactivado)
 document.addEventListener("tpv:sessionReady", () => {
-  console.log("[RENDER] sessionReady (BOOTSTRAP DESACTIVADO)");
-  maybeOpenCashOrRecover();
+  // Si el bootflow está corriendo, NO hagas nada (ya lo hace runBootFlow)
+  if (BOOT_IN_FLIGHT) return;
+
+  // Si estamos ya logueados y con empresa, ok
+  if (hasCompanyResolved?.() && getLoginUser?.() && getLoginToken?.()) {
+    maybeOpenCashOrRecover();
+  }
 });
 
 // helper para emitir sessionReady siempre con el mismo formato
