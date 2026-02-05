@@ -3075,6 +3075,109 @@ function cashResetUIForOpening() {
   cashSession.paymentsByMethod = {};
 }
 
+function isCajaOpen(remoteCaja) {
+  const ff = remoteCaja?.fechafin;
+  return ff == null || String(ff).trim() === "";
+}
+
+async function apiReadLastOpenCajaForTpv(idtpv) {
+  // usa tu fetchApiResourceWithParams o apiRead con querystring
+  // (esto está alineado con tu endpoint y filtros)
+  const list = await fetchApiResourceWithParams("tpvcajas", {
+    "sort[idcaja]": "DESC",
+    "filter[fechafin_null]": 1,
+    "filter[idtpv]": idtpv,
+    limit: 1,
+  });
+  return Array.isArray(list) && list[0] ? list[0] : null;
+}
+
+async function maybeOpenCashOrRecover() {
+  if (cashRecoverInFlight) return;
+  cashRecoverInFlight = true;
+
+  try {
+    const storedIdRaw = localStorage.getItem("tpv_remoteCajaId");
+    const storedId = Number(storedIdRaw || 0) || 0;
+
+    console.log("[TPV] maybeOpenCashOrRecover()", {
+      open: cashSession.open,
+      storedId,
+      sessionId: cashSession?.remoteCajaId || null,
+      idtpv: currentTerminal?.id || null,
+    });
+
+    // Si no hay terminal, no podemos consultar abiertas por TPV
+    const idtpv = Number(currentTerminal?.id || 0) || 0;
+
+    // 1) Si hay ID guardado, VALIDAR en FS si sigue abierta
+    if (storedId) {
+      try {
+        const remoteCaja = await apiReadCajaById(storedId);
+
+        if (remoteCaja && isCajaOpen(remoteCaja)) {
+          // ✅ recuperable
+          cashSession.remoteCajaId = Number(remoteCaja.idcaja || storedId);
+          cashSession.open = true;
+
+          renderMainUI();
+          renderMainAgentBar?.();
+          updateCashButtonLabel();
+          return;
+        }
+
+        // ❌ estaba cerrada (o no existe)
+        console.warn(
+          "[TPV] Caja guardada no está abierta. Limpiando:",
+          storedId,
+        );
+      } catch (e) {
+        console.warn(
+          "[TPV] No se pudo validar caja guardada. Limpiando:",
+          storedId,
+          e,
+        );
+      }
+
+      // limpiar SIEMPRE si no validó como abierta
+      cashSession.remoteCajaId = null;
+      cashSession.open = false;
+      localStorage.removeItem("tpv_remoteCajaId");
+    }
+
+    // 2) Si NO hay caja guardada válida, buscar una ABIERTA en FS para este TPV
+    if (idtpv) {
+      try {
+        const lastOpen = await apiReadLastOpenCajaForTpv(idtpv);
+        if (lastOpen && isCajaOpen(lastOpen)) {
+          cashSession.remoteCajaId = Number(lastOpen.idcaja);
+          cashSession.open = true;
+          localStorage.setItem("tpv_remoteCajaId", String(lastOpen.idcaja));
+
+          renderMainUI();
+          renderMainAgentBar?.();
+          updateCashButtonLabel();
+          return;
+        }
+      } catch (e) {
+        console.warn("[TPV] No se pudo buscar caja abierta por TPV:", e);
+      }
+    }
+
+    // 3) No hay nada abierto → pedir apertura (solo una vez)
+    cashSession.remoteCajaId = null;
+    cashSession.open = false;
+
+    if (!cashOpenDialogShown) {
+      cashOpenDialogShown = true;
+      console.log("[TPV] No hay caja abierta → mostrar modal apertura");
+      openCashOpenDialog("open");
+    }
+  } finally {
+    cashRecoverInFlight = false;
+  }
+}
+
 async function fetchFacturasByCaja(idcaja) {
   const cfg = window.RECIPOK_API || {};
   const base = (cfg.baseUrl || "").replace(/\/+$/, "");
@@ -3315,11 +3418,14 @@ function setupCashObsQwertyDelegated() {
 function openCashOpenDialog(mode = "open") {
   setCashDialogMode(mode);
 
-  // ✅ BLOQUEO ABSOLUTO: si hay caja remota ya abierta, no mostrar apertura
+  // ✅ BLOQUEO SOLO SI REALMENTE TENEMOS CAJA ABIERTA EN SESIÓN
   if (mode === "open") {
-    const remoteId = localStorage.getItem("tpv_remoteCajaId");
-    if (remoteId) {
-      console.log("[TPV] Bloqueo apertura: hay caja remota", remoteId);
+    const remoteId = Number(localStorage.getItem("tpv_remoteCajaId") || 0) || 0;
+    if (cashSession?.open && remoteId) {
+      console.log(
+        "[TPV] Apertura bloqueada: ya hay caja abierta en sesión",
+        remoteId,
+      );
       return;
     }
   }
@@ -4448,7 +4554,17 @@ async function apiCloseCashInFS() {
     payload.observaciones = String(remoteCaja.observaciones || "");
   }
 
-  return await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
+  const resp = await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
+
+  // ✅ IMPORTANTE: si se cerró, no permitir recovery de una caja cerrada
+  try {
+    localStorage.removeItem("tpv_remoteCajaId");
+  } catch {}
+  cashSession.open = false;
+  cashSession.remoteCajaId = null;
+  updateCashButtonLabel?.();
+
+  return resp;
 }
 
 async function ensureTerminalAgentDefaults() {
@@ -11905,46 +12021,3 @@ let cashRecoverInFlight = false;
 let cashRecoverDone = false; // opcional: si solo quieres hacerlo una vez al arranque
 
 let cashOpenDialogShown = false;
-
-function maybeOpenCashOrRecover() {
-  if (cashRecoverInFlight) return;
-  cashRecoverInFlight = true;
-
-  try {
-    const remoteId =
-      cashSession?.remoteCajaId || localStorage.getItem("tpv_remoteCajaId");
-
-    console.log("[TPV] maybeOpenCashOrRecover()", {
-      open: cashSession.open,
-      remoteId,
-    });
-
-    if (cashSession.open && remoteId) {
-      renderMainUI();
-      renderMainAgentBar?.();
-      updateCashButtonLabel();
-      return;
-    }
-
-    if (!cashSession.open && remoteId) {
-      console.log("[TPV] Recuperando caja guardada:", remoteId);
-
-      cashSession.remoteCajaId = Number(remoteId);
-      cashSession.open = true;
-
-      renderMainUI();
-      renderMainAgentBar?.();
-      updateCashButtonLabel();
-      return;
-    }
-
-    // No hay nada → pedir apertura (solo una vez)
-    if (!cashOpenDialogShown) {
-      cashOpenDialogShown = true;
-      console.log("[TPV] No hay caja → mostrar modal apertura");
-      openCashOpenDialog("open");
-    }
-  } finally {
-    cashRecoverInFlight = false;
-  }
-}
