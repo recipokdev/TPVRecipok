@@ -317,17 +317,12 @@ function getTaxRateForProduct(product) {
 function refreshLoggedUserUI() {
   if (!userNameEl) return;
 
-  const live = (getLoginUser?.() || "").trim();
-  if (live) {
-    userNameEl.textContent = live;
-    return;
-  }
+  // Fuente única: sesión runtime → localStorage → vacío
+  const u =
+    String(getLoginUser?.() || "").trim() ||
+    String(localStorage.getItem("tpv_login_user") || "").trim();
 
-  let last = "";
-  try {
-    last = (localStorage.getItem("tpv_last_user") || "").trim();
-  } catch {}
-  userNameEl.textContent = last || "---";
+  userNameEl.textContent = u ? u : "---";
 }
 
 function updateCashButtonLabel() {
