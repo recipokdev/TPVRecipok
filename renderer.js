@@ -852,9 +852,10 @@ function clearLoginSession() {
 }
 
 function hasCompanyResolved() {
-  const cfg = window.RECIPOK_API || {};
   const email = (localStorage.getItem("tpv_companyEmail") || "").trim();
-  return !!(cfg.baseUrl && cfg.apiKey && email);
+  const baseUrl = (localStorage.getItem("tpv_baseUrl") || "").trim();
+  const apiKey = (localStorage.getItem("tpv_apiKey") || "").trim();
+  return !!(email && baseUrl && apiKey);
 }
 
 async function openLoginModal() {
@@ -9143,10 +9144,29 @@ function getSavedConfig() {
   };
 }
 
-function saveResolvedCompany({ email, baseUrl, apiKey }) {
-  localStorage.setItem("tpv_companyEmail", email);
-  localStorage.setItem("tpv_baseUrl", baseUrl);
+async function saveResolvedCompany({ email, baseUrl, apiKey }) {
+  // legacy
+  localStorage.setItem("tpv_companyEmail", email || "");
+  localStorage.setItem("tpv_baseUrl", baseUrl || "");
   localStorage.setItem("tpv_apiKey", apiKey || "");
+
+  // ✅ hidratar runtime también (para hasCompanyResolved)
+  try {
+    if (window.RECIPOK_API) {
+      window.RECIPOK_API.baseUrl = baseUrl || "";
+      window.RECIPOK_API.apiKey = apiKey || "";
+    }
+  } catch {}
+
+  // durable
+  try {
+    const TPV_CFG = window.TPV_CFG;
+    if (TPV_CFG) {
+      await TPV_CFG.set("company.email", String(email || ""));
+      await TPV_CFG.set("company.baseUrl", String(baseUrl || ""));
+      await TPV_CFG.set("company.apiKey", String(apiKey || ""));
+    }
+  } catch {}
 }
 
 async function fetchClientsJson() {
@@ -9219,10 +9239,7 @@ async function forceReconnectFlow() {
     // Esto ya valida si existe y si está activa
     const resolved = await resolveCompanyByEmail(email);
 
-    saveResolvedCompany(resolved);
-
-    window.RECIPOK_API.baseUrl = resolved.baseUrl;
-    window.RECIPOK_API.apiKey = resolved.apiKey;
+    await saveResolvedCompany(resolved);
 
     await validateBaseUrlOrThrow(resolved.baseUrl, resolved.apiKey);
 
@@ -9260,6 +9277,7 @@ async function forceReconnectFlow() {
 async function bootstrapApp() {
   const ok = await runBootFlow(); // 👈 IMPORTANTE: capturar retorno
   if (!ok) return false;
+  await hydrateLegacyCompanyFromCfg();
 
   // ✅ guardia: solo si hay empresa y login válidos
   if (!hasCompanyResolved() || !getLoginUser() || !getLoginToken()) {
@@ -11078,14 +11096,6 @@ async function checkFSOnline() {
   }
 }
 
-function updateOnlineBadge(ok) {
-  const dot = document.getElementById("statusDot");
-  const strong = document.querySelector("#statusBar strong");
-  if (dot) dot.style.background = ok ? "#22c55e" : "#ef4444";
-  if (strong)
-    strong.textContent = ok ? "Online Recipok" : "Sin internet (modo offline)";
-}
-
 let isOnlineFS = null; // 👈 para forzar primera actualización
 
 async function startOnlineMonitor() {
@@ -12021,3 +12031,24 @@ let cashRecoverInFlight = false;
 let cashRecoverDone = false; // opcional: si solo quieres hacerlo una vez al arranque
 
 let cashOpenDialogShown = false;
+
+async function hydrateLegacyCompanyFromCfg() {
+  try {
+    const TPV_CFG = window.TPV_CFG;
+    if (!TPV_CFG) return;
+
+    const email = (await TPV_CFG.get("company.email")) || "";
+    const baseUrl = (await TPV_CFG.get("company.baseUrl")) || "";
+    const apiKey = (await TPV_CFG.get("company.apiKey")) || "";
+
+    if (email) localStorage.setItem("tpv_companyEmail", email);
+    if (baseUrl) localStorage.setItem("tpv_baseUrl", baseUrl);
+    if (apiKey) localStorage.setItem("tpv_apiKey", apiKey);
+
+    // ✅ IMPORTANTÍSIMO: hidratar RECIPOK_API también
+    if (window.RECIPOK_API) {
+      if (baseUrl) window.RECIPOK_API.baseUrl = baseUrl;
+      if (apiKey) window.RECIPOK_API.apiKey = apiKey;
+    }
+  } catch {}
+}

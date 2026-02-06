@@ -12,6 +12,46 @@ let mainWin = null;
 let splashWin = null;
 let currentUser = "admin"; // por defecto si quieres
 
+function readChannel() {
+  try {
+    const p = app.isPackaged
+      ? path.join(process.resourcesPath, "channel.json")
+      : path.join(__dirname, "build", "channel-stable.json"); // en dev, stable
+    const data = JSON.parse(fs.readFileSync(p, "utf8"));
+    return data.channel === "beta" ? "beta" : "stable";
+  } catch {
+    return "stable";
+  }
+}
+
+function getChannelSafe() {
+  try {
+    return readChannel();
+  } catch {
+    return "stable";
+  }
+}
+
+(function isolateUserDataPerChannel() {
+  const ch = getChannelSafe();
+  if (ch !== "beta") return;
+  const oldPath = app.getPath("userData");
+  app.setPath("userData", oldPath + "-beta");
+})();
+
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (mainWin) {
+      if (mainWin.isMinimized()) mainWin.restore();
+      mainWin.show();
+      mainWin.focus();
+    }
+  });
+}
+
 function queueFilePath() {
   return path.join(app.getPath("userData"), "sync-queue.json");
 }
@@ -29,6 +69,11 @@ function readQueue() {
 function writeQueue(items) {
   const p = queueFilePath();
   fs.writeFileSync(p, JSON.stringify(items, null, 2), "utf8");
+}
+
+function getWindowTitle() {
+  const ch = readChannel(); // "beta" | "stable"
+  return ch === "beta" ? "TPV Recipok (BETA)" : "TPV Recipok";
 }
 
 function lpPdf(deviceName, pdfPath) {
@@ -138,9 +183,8 @@ function createWindow() {
   const kioskMode = isKioskMode();
 
   mainWin = new BrowserWindow({
-    // SIEMPRE frame true para poder tener botones cuando no kiosk
+    title: getWindowTitle(),
     frame: true,
-
     show: false,
     icon: path.join(__dirname, "assets", "icon.png"),
     webPreferences: {
@@ -150,6 +194,8 @@ function createWindow() {
       devTools: isDev,
     },
   });
+
+  mainWin.setTitle(getWindowTitle());
 
   // ✅ Bloquear cierre con la X si hay caja abierta o tickets aparcados
   let allowMainClose = false;
@@ -368,18 +414,6 @@ function closeSplash() {
     } catch (_) {}
   }
   splashWin = null;
-}
-
-function readChannel() {
-  try {
-    const p = app.isPackaged
-      ? path.join(process.resourcesPath, "channel.json")
-      : path.join(__dirname, "build", "channel-stable.json"); // en dev, stable
-    const data = JSON.parse(fs.readFileSync(p, "utf8"));
-    return data.channel === "beta" ? "beta" : "stable";
-  } catch {
-    return "stable";
-  }
 }
 
 // (opcional) log a fichero para depurar en clientes
@@ -629,24 +663,41 @@ if (process.platform === "win32") {
   );
 }
 
-app.whenReady().then(async () => {
-  await runAutoUpdateGate();
-
-  createWindow();
-  registerShortcuts(); // ✅ AQUÍ (después de createWindow)
-
-  closeSplash();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      registerShortcuts(); // ✅ por si se recrea ventana
+function cleanOldAutoStartIfWrong() {
+  if (!app.isPackaged) return;
+  try {
+    const cur = app.getLoginItemSettings();
+    const exe = String(cur?.executable || "");
+    if (cur.openAtLogin && exe && exe !== process.execPath) {
+      app.setLoginItemSettings({ openAtLogin: false });
     }
-  });
-});
+  } catch {}
+}
 
-app.setLoginItemSettings({
-  openAtLogin: true,
-  openAsHidden: false,
+function configureAutoStart() {
+  if (!app.isPackaged) return;
+
+  const cfg = readCfg();
+
+  if (cfg.autostart === false) {
+    app.setLoginItemSettings({ openAtLogin: false });
+    return;
+  }
+
+  app.setLoginItemSettings({
+    openAtLogin: true,
+    openAsHidden: false,
+    path: process.execPath,
+  });
+}
+
+app.whenReady().then(async () => {
+  cleanOldAutoStartIfWrong();
+  configureAutoStart();
+  await runAutoUpdateGate();
+  createWindow();
+  registerShortcuts();
+  closeSplash();
 });
 
 app.on("window-all-closed", () => {
@@ -1142,15 +1193,13 @@ function getIndexHtmlPath() {
 const { pathToFileURL } = require("url");
 
 function loadUI(win) {
-  const indexPath = getIndexHtmlPath(); // el que ya tienes
+  const indexPath = path.join(__dirname, "index.html");
   const url = pathToFileURL(indexPath).toString();
 
   console.log("Loading UI:", indexPath);
   console.log("Loading URL:", url);
 
-  return win.loadURL(url).catch((e) => {
-    console.log("loadURL error:", e);
-  });
+  return win.loadFile(indexPath).catch(console.log);
 }
 
 ipcMain.handle("auth:setCurrentUser", async (_e, { user } = {}) => {
@@ -1161,3 +1210,14 @@ ipcMain.handle("auth:setCurrentUser", async (_e, { user } = {}) => {
 function isAdmin() {
   return String(currentUser || "").toLowerCase() === "admin";
 }
+
+ipcMain.handle("cfg:setAutostart", (_e, val) => {
+  writeCfg({ autostart: !!val });
+  configureAutoStart();
+  return { ok: true, autostart: !!val };
+});
+
+ipcMain.handle("cfg:getAutostart", () => {
+  const cfg = readCfg();
+  return { ok: true, autostart: cfg.autostart !== false };
+});
