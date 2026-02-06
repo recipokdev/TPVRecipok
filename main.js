@@ -10,7 +10,7 @@ const { globalShortcut } = require("electron");
 let isRecreatingWindow = false;
 let mainWin = null;
 let splashWin = null;
-let currentUser = "admin"; // por defecto si quieres
+let currentUser = { name: "admin", isAdmin: true };
 
 function readChannel() {
   try {
@@ -1202,16 +1202,20 @@ function loadUI(win) {
   return win.loadFile(indexPath).catch(console.log);
 }
 
-ipcMain.handle("auth:setCurrentUser", async (_e, { user } = {}) => {
-  currentUser = String(user || "").toLowerCase();
+ipcMain.handle("auth:setCurrentUser", async (_e, { user, isAdmin } = {}) => {
+  currentUser = {
+    name: String(user || "").toLowerCase(),
+    isAdmin: !!isAdmin,
+  };
   return { ok: true };
 });
 
 function isAdmin() {
-  return String(currentUser || "").toLowerCase() === "admin";
+  return !!currentUser?.isAdmin;
 }
 
 ipcMain.handle("cfg:setAutostart", (_e, val) => {
+  if (!isAdmin()) return { ok: false, error: "FORBIDDEN" };
   writeCfg({ autostart: !!val });
   configureAutoStart();
   return { ok: true, autostart: !!val };
@@ -1220,4 +1224,8 @@ ipcMain.handle("cfg:setAutostart", (_e, val) => {
 ipcMain.handle("cfg:getAutostart", () => {
   const cfg = readCfg();
   return { ok: true, autostart: cfg.autostart !== false };
+});
+
+ipcMain.handle("app:getVersion", () => {
+  return { ok: true, version: app.getVersion() };
 });

@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld("TPV_QUEUE", {
 
 contextBridge.exposeInMainWorld("TPV_SYS", {
   quit: () => ipcRenderer.invoke("app:quit"),
+  getVersion: () => ipcRenderer.invoke("app:getVersion"),
 });
 
 contextBridge.exposeInMainWorld("TPV_SETUP", {
@@ -59,9 +60,15 @@ contextBridge.exposeInMainWorld("TPV_CFG", {
 });
 
 contextBridge.exposeInMainWorld("TPV_AUTH", {
-  setCurrentUser: (user) => ipcRenderer.invoke("auth:setCurrentUser", { user }),
+  setCurrentUser: (user, isAdmin) =>
+    ipcRenderer.invoke("auth:setCurrentUser", { user, isAdmin }),
 });
 
 contextBridge.exposeInMainWorld("TPV_BOOTSTRAP", {
   init: (payload) => initTPVBootstrap(payload),
+});
+
+contextBridge.exposeInMainWorld("TPV_AUTOSTART", {
+  get: () => ipcRenderer.invoke("cfg:getAutostart"),
+  set: (val) => ipcRenderer.invoke("cfg:setAutostart", !!val),
 });

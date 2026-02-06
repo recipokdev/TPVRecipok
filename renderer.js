@@ -99,6 +99,7 @@ let qwertyMode = "text"; // "text" | "email"
 let TPV_STATE = {
   locked: false, // cuenta desactivada (clients.json active:false)
   offline: false, // sin conexión / sin config / ping falló
+  isAdmin: false, // cuenta para ver mas opciones adicionales en el modal opciones
 };
 
 // Estado para bloquear cierres
@@ -174,13 +175,42 @@ const emailError = document.getElementById("emailError");
 const emailKeyboardBtn = document.getElementById("emailKeyboardBtn");
 
 // ===== Funciones auxiliares =====
+
+function renderCashIdChip() {
+  const el = document.getElementById("cashInfo");
+  if (!el) return;
+
+  const id = Number(cashSession?.remoteCajaId || 0) || 0;
+  const open = !!cashSession?.open;
+
+  if (open && id) {
+    el.style.display = "";
+    el.textContent = ` | Caja: ${id}`;
+  } else {
+    el.style.display = "none";
+    el.textContent = "";
+  }
+}
+
 let BOOT_IN_FLIGHT = false;
+
+function applyAdminOnlyUI() {
+  const isAdmin = !!TPV_STATE.isAdmin;
+  document.querySelectorAll("[data-admin-only]").forEach((el) => {
+    el.style.display = isAdmin ? "" : "none";
+  });
+}
 
 async function runBootFlow() {
   if (BOOT_IN_FLIGHT) return false;
   BOOT_IN_FLIGHT = true;
 
   try {
+    // 0) Hidratar y reparar persistencia ANTES de decidir si hay empresa
+    await hydrateLegacyCompanyFromCfg();
+    await repairCompanyPersistenceIfNeeded();
+    await renderAppVersion();
+
     // 1) Empresa (email). Si no hay, SOLO esto puede abrir modal.
     const resolved = await bootstrapCompany();
     if (!resolved) return false; // cancelado o bloqueado
@@ -202,6 +232,16 @@ async function runBootFlow() {
   } finally {
     BOOT_IN_FLIGHT = false;
   }
+}
+
+async function renderAppVersion() {
+  const el = document.getElementById("appVersion");
+  if (!el) return;
+
+  try {
+    const r = await window.TPV_SYS?.getVersion?.();
+    if (r?.ok && r.version) el.textContent = `v${r.version}`;
+  } catch {}
 }
 
 function getFsApi() {
@@ -276,8 +316,18 @@ function getTaxRateForProduct(product) {
 
 function refreshLoggedUserUI() {
   if (!userNameEl) return;
-  const u = (getLoginUser() || "").trim();
-  userNameEl.textContent = u ? u : "---";
+
+  const live = (getLoginUser?.() || "").trim();
+  if (live) {
+    userNameEl.textContent = live;
+    return;
+  }
+
+  let last = "";
+  try {
+    last = (localStorage.getItem("tpv_last_user") || "").trim();
+  } catch {}
+  userNameEl.textContent = last || "---";
 }
 
 function updateCashButtonLabel() {
@@ -514,6 +564,17 @@ function renderProducts() {
 }
 
 function renderMainUI() {
+  if (!cashSession?.open) {
+    // dejar todo vacío
+    const grid = document.getElementById("productsGrid");
+    const catContainer = document.getElementById("categories");
+    const subCatContainer = document.getElementById("subcategories");
+    if (grid) grid.innerHTML = "";
+    if (catContainer) catContainer.innerHTML = "";
+    if (subCatContainer) subCatContainer.innerHTML = "";
+    renderCart?.();
+    return;
+  }
   if (mainUiRendered) return;
   renderCategories();
   renderProducts();
@@ -860,7 +921,7 @@ function hasCompanyResolved() {
 
 async function openLoginModal() {
   // ✅ No mostrar login si no hay empresa
-  if (!hasCompanyResolved || !hasCompanyResolved()) {
+  if (typeof hasCompanyResolved !== "function" || !hasCompanyResolved()) {
     console.warn(
       "[LOGIN] Bloqueado: no hay empresa resuelta (falta email/baseUrl/apiKey).",
     );
@@ -950,6 +1011,14 @@ async function openLoginModal() {
         btn.onclick = async () => {
           selectedUser = u.nick;
           isAdminSelected = u.admin;
+          // 👇 guarda estado admin en runtime
+          TPV_STATE.isAdmin = !!u.admin;
+
+          // opcional: persistir para recordar UI si recargas
+          try {
+            localStorage.setItem("tpv_isAdmin", TPV_STATE.isAdmin ? "1" : "0");
+          } catch {}
+
           [...usersBar.querySelectorAll("button")].forEach((b) =>
             b.classList.remove("selected"),
           );
@@ -984,7 +1053,6 @@ async function openLoginModal() {
     const u = (selectedUser || "").trim();
     const p = (passInp.value || "").trim();
 
-    // Staff entra con PIN 0000 auto, admin exige PIN
     if (!u) {
       errEl.textContent = "Selecciona un usuario.";
       return false;
@@ -997,23 +1065,29 @@ async function openLoginModal() {
     const base = window.TPV_CONFIG?.resolverUrl || "";
     const url = base.replace(/\/clients\.json(\?.*)?$/i, "/tpv_login.php");
 
-    // ⚠️ OJO: ahora la empresa la estás guardando en TPV_CFG,
-    // pero tu backend espera companyEmail desde localStorage.
-    // Mantenemos compatibilidad: si no está en localStorage, intentamos leerla de TPV_CFG.
+    // companyEmail: compat LS + TPV_CFG
     let companyEmail = "";
     try {
-      companyEmail = localStorage.getItem("tpv_companyEmail") || "";
+      companyEmail = (localStorage.getItem("tpv_companyEmail") || "").trim();
     } catch {}
     if (!companyEmail && window.TPV_CFG) {
       try {
         companyEmail = (await window.TPV_CFG.get("company.email")) || "";
+        companyEmail = String(companyEmail).trim();
       } catch {}
+    }
+
+    if (!companyEmail) {
+      errEl.textContent = "Falta activar la empresa (companyEmail).";
+      return false;
     }
 
     const body = new URLSearchParams();
     body.append("companyEmail", companyEmail);
     body.append("user", u);
     body.append("pass", isAdminSelected ? p : "0000");
+
+    errEl.textContent = "";
 
     try {
       const res = await fetch(url, {
@@ -1029,20 +1103,47 @@ async function openLoginModal() {
         return false;
       }
 
-      // ✅ 1) Sesión runtime (usa tus helpers)
+      const loggedUser = (data.user || u || "").trim();
+      const token = (data.token || "").trim();
+
+      if (!loggedUser || !token) {
+        errEl.textContent = "Respuesta inválida del servidor (sin token).";
+        return false;
+      }
+
+      try {
+        localStorage.setItem("tpv_login_user", loggedUser);
+        localStorage.setItem("tpv_login_token", token);
+      } catch {}
+
+      // ✅ 1) Sesión runtime
       setLoginSession({
-        token: data.token,
-        user: data.user,
+        token,
+        user: loggedUser,
         codagente: data.codagente || "",
         codalmacen: data.codalmacen || "",
       });
 
-      // ✅ 2) Persistir “no pedir nunca más”
-      if (window.TPV_CFG) {
-        await window.TPV_CFG.set("auth.username", data.user || "");
-        await window.TPV_CFG.set("auth.token", data.token || "");
+      // Persistir usuario activo TPV (para recuperación tras corte)
+      try {
+        localStorage.setItem("tpv_last_user", loggedUser);
+      } catch {}
 
-        // si tu backend devuelve codagente, lo guardamos (para agente por defecto)
+      try {
+        if (window.TPV_CFG)
+          await window.TPV_CFG.set("tpv.lastUser", loggedUser);
+      } catch {}
+
+      // ✅ 2) Estado admin runtime + UI
+      TPV_STATE.isAdmin = !!isAdminSelected;
+      applyAdminOnlyUI();
+
+      // ✅ 3) Persistencia “no pedir nunca más”
+      if (window.TPV_CFG) {
+        await window.TPV_CFG.set("auth.username", loggedUser);
+        await window.TPV_CFG.set("auth.token", token);
+        await window.TPV_CFG.set("auth.isAdmin", !!isAdminSelected);
+
         if (data.codagente) {
           await window.TPV_CFG.set("auth.codagente", String(data.codagente));
         }
@@ -1051,16 +1152,24 @@ async function openLoginModal() {
         }
       }
 
-      // ✅ 3) Para gating admin en main
+      // ✅ 4) Gating admin en main
       try {
-        await window.TPV_AUTH?.setCurrentUser?.(data.user || u);
+        await window.TPV_AUTH?.setCurrentUser?.(loggedUser, !!isAdminSelected);
       } catch {}
 
-      // ✅ 4) UI
+      // ✅ 5) UI final
       overlay.classList.add("hidden");
       unlockAppUI();
       refreshLoggedUserUI?.();
+
       LOGIN_ACTIVE = false;
+      cashOpenDialogShown = false;
+
+      await loadDataFromApi({ refresh: true }); // si lo haces aquí o antes, ok
+      await ensureTerminalAgentDefaults(); // ✅ SIEMPRE después del refresh
+
+      await maybeOpenCashOrRecover();
+      renderCashIdChip();
 
       return true;
     } catch (e) {
@@ -1098,7 +1207,7 @@ async function openLoginModal() {
 
 async function ensureLoginAutoOrPrompt() {
   // Si no hay empresa resuelta, NO abras login jamás
-  if (!hasCompanyResolved || !hasCompanyResolved()) {
+  if (typeof hasCompanyResolved !== "function" || !hasCompanyResolved()) {
     console.log("[LOGIN] Saltando login: empresa no resuelta");
     return false;
   }
@@ -1106,23 +1215,32 @@ async function ensureLoginAutoOrPrompt() {
   // 1) si ya hay sesión en memoria/localStorage, ok
   const memUser = getLoginUser?.() || localStorage.getItem("tpv_login_user");
   const memTok = getLoginToken?.() || localStorage.getItem("tpv_login_token");
-  if (memUser && memTok) return true;
+  if (memUser && memTok) {
+    // opcional: si guardas admin en localStorage, aplícalo aquí
+    return true;
+  }
 
   // 2) intenta recuperar de TPV_CFG (persistente)
   const TPV_CFG = window.TPV_CFG;
   const savedUser = TPV_CFG ? await TPV_CFG.get("auth.username") : "";
   const savedTok = TPV_CFG ? await TPV_CFG.get("auth.token") : "";
+  const savedIsAdmin = TPV_CFG ? await TPV_CFG.get("auth.isAdmin") : false;
 
   if (savedUser && savedTok) {
     setLoginSession({
       user: savedUser,
       token: savedTok,
-      codagente: "",
-      codalmacen: "",
+      codagente: (await TPV_CFG.get("auth.codagente")) || "",
+      codalmacen: (await TPV_CFG.get("auth.codalmacen")) || "",
     });
+
+    TPV_STATE.isAdmin = !!savedIsAdmin;
+    applyAdminOnlyUI();
+
     try {
-      await window.TPV_AUTH?.setCurrentUser?.(savedUser);
+      await window.TPV_AUTH?.setCurrentUser?.(savedUser, !!savedIsAdmin);
     } catch {}
+
     refreshLoggedUserUI?.();
     return true;
   }
@@ -3121,9 +3239,11 @@ async function maybeOpenCashOrRecover() {
           cashSession.remoteCajaId = Number(remoteCaja.idcaja || storedId);
           cashSession.open = true;
 
+          await ensureTerminalAgentDefaults();
           renderMainUI();
           renderMainAgentBar?.();
           updateCashButtonLabel();
+          renderCashIdChip();
           return;
         }
 
@@ -3146,18 +3266,48 @@ async function maybeOpenCashOrRecover() {
       localStorage.removeItem("tpv_remoteCajaId");
     }
 
-    // 2) Si NO hay caja guardada válida, buscar una ABIERTA en FS para este TPV
+    // 2) Si NO hay caja guardada válida, buscar ABIERTAS en FS para este TPV
     if (idtpv) {
       try {
-        const lastOpen = await apiReadLastOpenCajaForTpv(idtpv);
-        if (lastOpen && isCajaOpen(lastOpen)) {
-          cashSession.remoteCajaId = Number(lastOpen.idcaja);
+        const resp = await apiReadLastOpenCajaForTpv(idtpv);
+
+        // ✅ soporta: objeto o array
+        const list = Array.isArray(resp) ? resp : resp ? [resp] : [];
+
+        const openOnes = list.filter((c) => c && isCajaOpen(c));
+
+        if (openOnes.length > 0) {
+          // elegir la más reciente por fecha (ajusta el campo según tu modelo)
+          const pick = openOnes.sort((a, b) => {
+            const da =
+              new Date(
+                a?.fecha || a?.createdAt || a?.fcreacion || 0,
+              ).getTime() || 0;
+            const db =
+              new Date(
+                b?.fecha || b?.createdAt || b?.fcreacion || 0,
+              ).getTime() || 0;
+            return db - da;
+          })[0];
+
+          cashSession.remoteCajaId = Number(pick.idcaja);
           cashSession.open = true;
-          localStorage.setItem("tpv_remoteCajaId", String(lastOpen.idcaja));
+          localStorage.setItem("tpv_remoteCajaId", String(pick.idcaja));
+
+          await ensureTerminalAgentDefaults();
 
           renderMainUI();
           renderMainAgentBar?.();
           updateCashButtonLabel();
+          renderCashIdChip();
+
+          // opcional: avisar si hay más de una abierta (caso raro)
+          if (openOnes.length > 1) {
+            toast(
+              "Hay más de una caja abierta. Se recuperó la más reciente.",
+              "warn",
+            );
+          }
           return;
         }
       } catch (e) {
@@ -3168,10 +3318,12 @@ async function maybeOpenCashOrRecover() {
     // 3) No hay nada abierto → pedir apertura (solo una vez)
     cashSession.remoteCajaId = null;
     cashSession.open = false;
+    renderCashIdChip();
 
     if (!cashOpenDialogShown) {
       cashOpenDialogShown = true;
       console.log("[TPV] No hay caja abierta → mostrar modal apertura");
+      await ensureTerminalAgentDefaults();
       openCashOpenDialog("open");
     }
   } finally {
@@ -3525,6 +3677,7 @@ function openCashOpenDialog(mode = "open") {
   }
 
   cashOpenOverlay.classList.remove("hidden");
+  lockAppUI?.();
   setTimeout(setupCashObsQwertyDelegated, 0);
 }
 
@@ -3731,7 +3884,7 @@ if (cashOpenOverlay && !cashOpenOverlay.dataset.cashBound) {
     const editBtn = e.target.closest('.cash-qty-btn[data-action="edit"]');
 
     // Averigua denom desde el botón o desde la celda
-    const cell = e.target.closest(".cash-cell");
+    const cell = e.target.closest(".cash-cell-page");
     if (!cell) return;
 
     const denom =
@@ -3770,6 +3923,7 @@ if (cashOpenOverlay && !cashOpenOverlay.dataset.cashBound) {
 function hideCashOpenDialog() {
   if (!cashOpenOverlay) return;
   cashOpenOverlay.classList.add("hidden");
+  unlockAppUI?.();
 }
 
 function updateCashOpenTotal() {
@@ -3892,18 +4046,16 @@ async function confirmCashOpening() {
   renderMainUI();
   renderMainAgentBar();
   updateCashButtonLabel();
+  renderCashIdChip();
 }
 
 async function confirmCashClosing() {
-  // anti doble click extra
   try {
     if (cashOpenOkBtn) cashOpenOkBtn.disabled = true;
   } catch {}
 
-  // idcaja estable antes de limpiar nada
   const idcaja = getCajaIdSafe();
 
-  // 1) Leer caja remota para imprimir con datos reales
   let remoteCaja = null;
   try {
     remoteCaja = idcaja
@@ -3913,7 +4065,6 @@ async function confirmCashClosing() {
     console.warn("No pude leer caja para imprimir:", e?.message || e);
   }
 
-  // 2) Imprimir cierre (SOLO AQUÍ)
   try {
     const report = buildCashClosePrintData(remoteCaja || {});
     await printCashCloseReport(report);
@@ -3921,28 +4072,46 @@ async function confirmCashClosing() {
     console.warn("No se pudo imprimir el cierre:", e?.message || e);
   }
 
-  // 3) Cerrar caja en FS
+  let closedOk = false;
   try {
     await apiCloseCashInFS();
+
+    // ✅ verificar (si podemos) que ya NO está abierta
+    const check = idcaja ? await apiReadCajaById(idcaja) : null;
+    closedOk = !!check && !isCajaOpen(check);
+
+    // si no pudimos verificar por cualquier cosa, asumimos OK
+    if (!check) closedOk = true;
   } catch (e) {
     console.warn("No se pudo cerrar caja en FacturaScripts:", e?.message || e);
-    toast(
-      "Caja cerrada, pero no se pudo registrar el cierre en FacturaScripts.",
-      "warn",
-      "Caja",
-    );
+    toast("No se pudo registrar el cierre en FacturaScripts.", "warn", "Caja");
   }
 
-  // 4) Limpieza local + UI
+  if (!closedOk) {
+    toast("No se pudo cerrar la caja. Reintenta.", "warn", "Caja");
+    try {
+      if (cashOpenOkBtn) cashOpenOkBtn.disabled = false;
+    } catch {}
+    return;
+  }
+
   cashSession.open = false;
+  cashSession.remoteCajaId = null;
+  try {
+    localStorage.removeItem("tpv_remoteCajaId");
+  } catch {}
 
   hideCashOpenDialog();
   updateCashButtonLabel();
+  renderCashIdChip();
+  cashOpenDialogShown = false;
 
-  currentTerminal = null;
+  // ✅ al cerrar caja: mantenemos terminal (para evitar limbos)
+  // y vaciamos agente (o ponemos el default luego)
   currentAgent = null;
 
-  if (terminalNameEl) terminalNameEl.textContent = "---";
+  if (terminalNameEl)
+    terminalNameEl.textContent = currentTerminal?.name || "---";
   if (agentNameEl) agentNameEl.textContent = "---";
   refreshLoggedUserUI();
 
@@ -3963,15 +4132,12 @@ async function confirmCashClosing() {
 
   mainUiRendered = false;
 
-  try {
-    localStorage.removeItem("tpv_remoteCajaId");
-  } catch {}
-  cashSession.remoteCajaId = null;
-
   const printBtn = document.getElementById("printTicketBtn");
   if (printBtn) printBtn.disabled = true;
 
   lastTicket = null;
+
+  renderCashIdChip(); // redundante pero evita “reaparición” por renders tardíos
 
   try {
     if (cashOpenOkBtn) cashOpenOkBtn.disabled = false;
@@ -4256,6 +4422,18 @@ const cashOpenOkBtn = document.getElementById("cashOpenOkBtn");
 
 if (cashOpenCancelBtn) {
   cashOpenCancelBtn.onclick = () => {
+    // ✅ Si cancela apertura, permitir que vuelva a mostrarse luego
+    if (cashDialogMode === "open") {
+      cashOpenDialogShown = false; // <-- CLAVE anti-limbo
+      cashSession.open = false;
+      cashSession.remoteCajaId = null;
+      try {
+        localStorage.removeItem("tpv_remoteCajaId");
+      } catch {}
+      renderCashIdChip();
+      updateCashButtonLabel?.();
+    }
+
     hideCashOpenDialog();
 
     // Si estábamos abriendo caja y aún no hay caja abierta,
@@ -4557,43 +4735,73 @@ async function apiCloseCashInFS() {
 
   const resp = await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
 
-  // ✅ IMPORTANTE: si se cerró, no permitir recovery de una caja cerrada
-  try {
-    localStorage.removeItem("tpv_remoteCajaId");
-  } catch {}
-  cashSession.open = false;
-  cashSession.remoteCajaId = null;
-  updateCashButtonLabel?.();
-
-  return resp;
+  // ✅ Si FS responde vacío pero fue OK, apiWrite devuelve null.
+  // Normalizamos a {ok:true} para que el caller pueda decidir bien.
+  return resp ?? { ok: true };
 }
 
-async function ensureTerminalAgentDefaults() {
-  // 0) si hay terminals cargados, intenta restaurar terminal guardado
-  if (!currentTerminal) {
-    let savedId = null;
+async function ensureTerminalAgentDefaults({ refresh = false } = {}) {
+  // 0) Opcional: refrescar datos remotos aquí (solo si lo pides)
+  if (refresh) {
     try {
-      savedId = localStorage.getItem("tpv_terminal");
+      await refreshTerminalsAndAgents();
+    } catch {}
+  }
+
+  // 1) Terminal: restaurar o elegir primero
+  if (!currentTerminal) {
+    let savedTpv = "";
+    try {
+      savedTpv = (localStorage.getItem("tpv_terminal") || "").trim();
     } catch {}
 
-    if (Array.isArray(terminals) && terminals.length) {
-      const found = savedId
-        ? terminals.find((t) => String(t.id) === String(savedId))
-        : null;
+    const pickTerminal =
+      (savedTpv &&
+        Array.isArray(terminals) &&
+        terminals.find((t) => String(t.id) === String(savedTpv))) ||
+      (Array.isArray(terminals) && terminals[0]) ||
+      null;
 
-      setCurrentTerminal(found || terminals[0]);
-    } else {
-      setCurrentTerminal({ id: "demo", name: "TPV demo" });
+    if (pickTerminal) setCurrentTerminal(pickTerminal);
+    else setCurrentTerminal({ id: "demo", name: "TPV demo" });
+  }
+
+  // 2) Agente: restaurar o elegir primero del terminal
+  if (currentTerminal && !currentAgent) {
+    const list = getAgentsForTerminalId(currentTerminal.id) || [];
+
+    let savedAgent = "";
+    try {
+      savedAgent = (localStorage.getItem("tpv_agent") || "").trim();
+    } catch {}
+
+    const pickAgent =
+      (savedAgent &&
+        list.find(
+          (a) =>
+            String(a.codagente || a.id || a.nick || a.name) ===
+            String(savedAgent),
+        )) ||
+      list[0] ||
+      null;
+
+    if (pickAgent) {
+      currentAgent = pickAgent;
+      try {
+        localStorage.setItem(
+          "tpv_agent",
+          String(pickAgent.codagente || pickAgent.id || pickAgent.nick || ""),
+        );
+      } catch {}
     }
   }
 
-  // 1) agente por defecto = primero del terminal actual
-  if (!currentAgent && currentTerminal) {
-    const list = getAgentsForTerminalId(currentTerminal.id) || [];
-    currentAgent = list[0] || null;
-  }
+  // 3) Pintar cabecera SIEMPRE (sin depender de renderMainAgentBar)
+  if (terminalNameEl)
+    terminalNameEl.textContent = currentTerminal?.name || "---";
+  if (agentNameEl)
+    agentNameEl.textContent = currentAgent?.name || currentAgent?.nick || "---";
 
-  // 2) repintar cabecera SIEMPRE
   renderMainAgentBar?.();
   refreshLoggedUserUI?.();
 }
@@ -4646,10 +4854,8 @@ if (cashHeaderBtn) {
     // 1.5) Si hay empresa pero seguimos OFFLINE, intentamos reconectar sin pedir email
     if (TPV_STATE.offline) {
       try {
-        await loadDataFromApi(); // esto ya pone offline=false si conecta
-      } catch (e) {
-        // si sigue offline, paramos aquí para evitar abrir caja/login en demo
-      }
+        await loadDataFromApi(); // pone offline=false si conecta
+      } catch {}
       if (TPV_STATE.offline) {
         toast(
           "Sin conexión. Reintenta cuando tengas internet.",
@@ -4660,18 +4866,19 @@ if (cashHeaderBtn) {
       }
     }
 
+    // 2) Asegurar datos base (categorías/productos, etc.)
     await ensureDataLoaded();
 
-    // 2) Ya hay empresa → auto-login si hay usuario guardado
+    // 3) Login: si no hay sesión, intenta auto-login; si falla, abre modal
     if (!getLoginUser?.() && !localStorage.getItem("tpv_login_user")) {
       const autoOk = await loadPersistedOperatorIntoLogin();
       if (!autoOk) {
-        const ok = await openLoginModal(); // primera vez: pide PIN
+        const ok = await openLoginModal();
         if (!ok) return;
       }
     }
 
-    // 3) Comportamiento normal
+    // 4) Si caja abierta => cerrar (con control tickets aparcados)
     if (cashSession.open) {
       const parkedCount = Array.isArray(parkedTickets)
         ? parkedTickets.length
@@ -4680,9 +4887,7 @@ if (cashHeaderBtn) {
       if (parkedCount > 0) {
         await confirmModal(
           "Tickets aparcados",
-          `Tienes ${parkedCount} ticket${
-            parkedCount === 1 ? "" : "s"
-          } aparcado${
+          `Tienes ${parkedCount} ticket${parkedCount === 1 ? "" : "s"} aparcado${
             parkedCount === 1 ? "" : "s"
           }.\n\nAntes de cerrar la caja, recupera o elimina los tickets aparcados.`,
         );
@@ -4694,21 +4899,56 @@ if (cashHeaderBtn) {
       return;
     }
 
+    // 5) Caja cerrada => refrescar terminales/agentes y auto-seleccionar defaults
     await refreshTerminalsAndAgents();
 
-    if (terminals.length === 0) {
+    // Si no hay terminales (demo)
+    if (!Array.isArray(terminals) || terminals.length === 0) {
       if (!currentTerminal)
         setCurrentTerminal({ id: "demo", name: "TPV demo" });
 
-      // ✅ Resetear valores y reenganchar steppers ANTES de mostrar
+      // reset UI apertura (por si vienes de un estado raro)
       cashResetUIForOpening();
       cashWrapInputsWithSteppers();
 
-      maybeOpenCashOrRecover();
+      cashOpenDialogShown = false;
+      await maybeOpenCashOrRecover(); // abrirá modal de apertura si no hay caja abierta
       return;
     }
 
-    showTerminalOverlay("session");
+    // Auto-asignar terminal/agente (sin overlays)
+    await ensureTerminalAgentDefaults(); // NO refresh aquí, ya hicimos refresh arriba
+
+    // Si aún no hay terminal (caso raro) => overlay
+    if (!currentTerminal) {
+      showTerminalOverlay("session");
+      return;
+    }
+
+    // Si no hay agente pero sí hay lista => tomar primero
+    const list = getAgentsForTerminalId(currentTerminal.id) || [];
+    if (!currentAgent && list.length > 0) {
+      currentAgent = list[0];
+      try {
+        localStorage.setItem(
+          "tpv_agent",
+          String(
+            currentAgent.codagente ||
+              currentAgent.id ||
+              currentAgent.nick ||
+              "",
+          ),
+        );
+      } catch {}
+      if (agentNameEl)
+        agentNameEl.textContent =
+          currentAgent.name || currentAgent.nick || "---";
+      renderMainAgentBar?.();
+    }
+
+    // 6) Decidir recovery o apertura
+    cashOpenDialogShown = false;
+    await maybeOpenCashOrRecover(); // si no hay caja abierta, mostrará modal "open"
   };
 }
 
@@ -4760,20 +5000,59 @@ async function loadPersistedCompanyIntoRecipokApi() {
 }
 
 async function loadPersistedOperatorIntoLogin() {
-  const username = await window.TPV_CFG.get("auth.username");
-  if (!username) return false;
-
-  // Tu app usa localStorage para login user; lo fijamos aquí
   try {
-    localStorage.setItem("tpv_login_user", String(username));
-  } catch {}
+    const TPV_CFG = window.TPV_CFG;
+    if (!TPV_CFG) return false;
 
-  // Para gating de admin en main (si usas TPV_AUTH)
-  try {
-    await window.TPV_AUTH?.setCurrentUser?.(String(username));
-  } catch {}
+    // 1) Leer credenciales persistidas
+    const username = String((await TPV_CFG.get("auth.username")) || "").trim();
+    const token = String((await TPV_CFG.get("auth.token")) || "").trim();
+    const isAdmin = !!(await TPV_CFG.get("auth.isAdmin"));
 
-  return true;
+    if (!username || !token) return false;
+
+    // 2) Reconstruir sesión runtime (CRÍTICO)
+    try {
+      setLoginSession({
+        user: username,
+        token: token,
+        codagente: String((await TPV_CFG.get("auth.codagente")) || ""),
+        codalmacen: String((await TPV_CFG.get("auth.codalmacen")) || ""),
+      });
+    } catch (e) {
+      console.warn("[AUTOLOGIN] setLoginSession falló:", e?.message || e);
+    }
+
+    // 3) Mantener compatibilidad con tu localStorage actual
+    try {
+      localStorage.setItem("tpv_login_user", username);
+      localStorage.setItem("tpv_login_token", token);
+      localStorage.setItem("tpv_last_user", username);
+      localStorage.setItem("tpv_isAdmin", isAdmin ? "1" : "0");
+    } catch {}
+
+    // 4) Estado admin runtime + UI
+    TPV_STATE.isAdmin = isAdmin;
+    try {
+      applyAdminOnlyUI?.();
+    } catch {}
+
+    // 5) Informar a main del usuario + admin (CRÍTICO)
+    try {
+      await window.TPV_AUTH?.setCurrentUser?.(username, isAdmin);
+    } catch {}
+
+    // 6) Refrescar header
+    refreshLoggedUserUI?.();
+
+    return true;
+  } catch (e) {
+    console.warn(
+      "[AUTOLOGIN] No se pudo cargar operador persistido:",
+      e?.message || e,
+    );
+    return false;
+  }
 }
 
 async function autoSelectTerminalAndAgentIfPossible() {
@@ -5304,8 +5583,15 @@ refreshLoggedUserUI();
 // ====================================================
 // TPV Bootstrap bridge (recuperar caja ya abierta)
 // ====================================================
-window.cargarPantallaTPV = async function (idcaja, idtpv) {
-  console.log("[TPV] Caja asignada desde bootstrap:", idcaja, "TPV:", idtpv);
+window.cargarPantallaTPV = async function (idcaja, idtpv, caja) {
+  console.log(
+    "[TPV] Caja asignada desde bootstrap:",
+    idcaja,
+    "TPV:",
+    idtpv,
+    "Caja:",
+    caja,
+  );
   console.log("[TPV] cashSession antes:", {
     open: cashSession.open,
     remoteCajaId: cashSession.remoteCajaId,
@@ -5314,8 +5600,16 @@ window.cargarPantallaTPV = async function (idcaja, idtpv) {
   try {
     if (!idcaja) throw new Error("idcaja inválido");
 
-    // ✅ Marcar caja como abierta (CRÍTICO)
+    // ✅ Marcar caja como abierta + guardar ID (CRÍTICO)
+    cashSession.remoteCajaId = Number(idcaja) || null;
     cashSession.open = true;
+
+    try {
+      localStorage.setItem(
+        "tpv_remoteCajaId",
+        String(cashSession.remoteCajaId),
+      );
+    } catch {}
 
     // ✅ Cerrar overlays por si estaban abiertos
     try {
@@ -5336,6 +5630,8 @@ window.cargarPantallaTPV = async function (idcaja, idtpv) {
       if (t) setCurrentTerminal(t);
     }
 
+    await ensureTerminalAgentDefaults();
+
     // ✅ Actualizar labels de cabecera si aplica
     if (terminalNameEl && currentTerminal) {
       terminalNameEl.textContent = currentTerminal.name || "---";
@@ -5348,6 +5644,7 @@ window.cargarPantallaTPV = async function (idcaja, idtpv) {
     renderMainUI();
     renderMainAgentBar?.();
     updateCashButtonLabel();
+    renderCashIdChip();
 
     setStatusText("Caja activa (recuperada)");
 
@@ -5893,17 +6190,19 @@ function refreshOptionsUI() {
   refreshPrinterButtonsUI();
 }
 
-function openOptions() {
+async function openOptions() {
   refreshOptionsUI();
+  applyAdminOnlyUI();
   optionsOverlay?.classList.remove("hidden");
   syncGroupLinesFromFS();
+  await bindAutostartToggle();
 }
 
 function closeOptions() {
   optionsOverlay?.classList.add("hidden");
 }
 
-optionsBtn?.addEventListener("click", openOptions);
+optionsBtn?.addEventListener("click", () => openOptions());
 optionsCloseX?.addEventListener("click", closeOptions);
 optionsCloseBtn?.addEventListener("click", closeOptions);
 
@@ -9329,6 +9628,10 @@ async function persistCompanyCfg(resolved) {
 async function bootstrapCompany() {
   console.log("bootstrapCompany() ejecutándose...");
 
+  // 👇 0) compat/migración antes de leer nada
+  await hydrateLegacyCompanyFromCfg();
+  await repairCompanyPersistenceIfNeeded();
+
   // Leer config persistente (userData)
   const saved = await getPersistedCompanyCfg();
   const savedEmail = normalizeEmail(saved?.email || null);
@@ -10673,6 +10976,11 @@ async function doLogoutFlow() {
     clearLoginSession();
   } catch {}
 
+  try {
+    localStorage.removeItem("tpv_login_user");
+    localStorage.removeItem("tpv_login_token");
+  } catch {}
+
   // 2) Borrar persistencia (para forzar modal login la próxima vez)
   if (window.TPV_CFG) {
     await window.TPV_CFG.set("auth.username", "");
@@ -10694,6 +11002,8 @@ async function doLogoutFlow() {
   renderMainAgentBar?.();
   updateCashButtonLabel?.();
   toast?.("Sesión cerrada", "info", "Usuario");
+
+  cashOpenDialogShown = false;
 
   // 5) Abrir login inmediatamente (no dependas de “Abrir caja”)
   const ok2 = await openLoginModal();
@@ -12051,4 +12361,52 @@ async function hydrateLegacyCompanyFromCfg() {
       if (apiKey) window.RECIPOK_API.apiKey = apiKey;
     }
   } catch {}
+}
+
+async function repairCompanyPersistenceIfNeeded() {
+  try {
+    const emailLS = (localStorage.getItem("tpv_companyEmail") || "").trim();
+    const baseUrlLS = (localStorage.getItem("tpv_baseUrl") || "").trim();
+    const apiKeyLS = (localStorage.getItem("tpv_apiKey") || "").trim();
+    if (!emailLS || !baseUrlLS || !apiKeyLS) return;
+
+    const TPV_CFG = window.TPV_CFG;
+    if (!TPV_CFG) return;
+
+    const email = (await TPV_CFG.get("company.email")) || "";
+    const baseUrl = (await TPV_CFG.get("company.baseUrl")) || "";
+    const apiKey = (await TPV_CFG.get("company.apiKey")) || "";
+
+    // si TPV_CFG aún no tiene datos, migramos desde localStorage
+    if (!email || !baseUrl || !apiKey) {
+      await TPV_CFG.set("company.email", emailLS);
+      await TPV_CFG.set("company.baseUrl", baseUrlLS);
+      await TPV_CFG.set("company.apiKey", apiKeyLS);
+    }
+  } catch {}
+}
+
+async function bindAutostartToggle() {
+  const el = document.getElementById("autostartToggle");
+  if (!el) return;
+
+  try {
+    const r = await window.TPV_AUTOSTART.get();
+    el.checked = !!r?.autostart;
+  } catch {}
+
+  el.onchange = async () => {
+    try {
+      const val = !!el.checked;
+      const r = await window.TPV_AUTOSTART.set(val);
+      if (!r?.ok) throw new Error(r?.error || "No se pudo guardar");
+      toast(val ? "Autoinicio activado" : "Autoinicio desactivado", "ok");
+    } catch {
+      toast("No se pudo cambiar autoinicio", "warn");
+      try {
+        const r = await window.TPV_AUTOSTART.get();
+        el.checked = !!r?.autostart;
+      } catch {}
+    }
+  };
 }

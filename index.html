@@ -41,6 +41,7 @@
           "
         ></span>
         <strong>Online Recipok</strong>
+        <span id="appVersion" style="opacity: 0.65"></span>
       </div>
     </div>
 
@@ -81,13 +82,11 @@
           &nbsp;|&nbsp; Agente:
           <span id="agentName" class="agent-name">---</span>
           &nbsp;|&nbsp; Usuario:
-          <span
-            id="userName"
-            class="agent-name user-name"
-            title="Cerrar sesión"
+          <span id="userName" class="agent-name user-name" title="Cerrar sesión"
+            >---</span
           >
-            ---
-          </span>
+
+          <span id="cashInfo" style="margin-left: 6px; opacity: 0.85"></span>
         </span>
       </div>
 
@@ -1090,6 +1089,7 @@
           <button type="button" id="optionsCloseX" class="small-btn">✕</button>
         </div>
 
+        <!-- Caja -->
         <div
           style="
             margin-top: 16px;
@@ -1123,40 +1123,63 @@
           </div>
         </div>
 
-        <div data-admin-only>
+        <!-- Pantalla (ADMIN ONLY) -->
+        <div
+          data-admin-only
+          style="
+            margin-top: 16px;
+            border-top: 1px solid #eee;
+            padding-top: 12px;
+          "
+        >
           <div
             style="
-              margin-top: 16px;
-              border-top: 1px solid #eee;
-              padding-top: 12px;
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              margin-bottom: 6px;
             "
           >
-            <div style="font-weight: 700; margin-bottom: 6px">Pantalla</div>
-
-            <div
+            <div style="font-weight: 700">Pantalla</div>
+            <span
               style="
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 10px;
-                flex-wrap: wrap;
+                font-size: 10px;
+                padding: 2px 6px;
+                border-radius: 999px;
+                border: 1px solid rgba(37, 99, 235, 0.35);
+                background: rgba(37, 99, 235, 0.1);
+                color: #2563eb;
+                letter-spacing: 0.5px;
+                user-select: none;
               "
+              title="Solo administradores"
+              >ADMIN</span
             >
-              <div style="font-size: 13px; opacity: 0.85">Modo TPV (kiosk)</div>
+          </div>
 
-              <label class="switch">
-                <input type="checkbox" id="kioskToggle" />
-                <span class="slider"></span>
-              </label>
-            </div>
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 10px;
+              flex-wrap: wrap;
+            "
+          >
+            <div style="font-size: 13px; opacity: 0.85">Modo TPV (kiosk)</div>
 
-            <div style="font-size: 12px; opacity: 0.7; margin-top: 6px">
-              Si desactivas, podrás minimizar y usar el equipo como un PC
-              normal.
-            </div>
+            <label class="switch">
+              <input type="checkbox" id="kioskToggle" />
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div style="font-size: 12px; opacity: 0.7; margin-top: 6px">
+            Si desactivas, podrás minimizar y usar el equipo como un PC normal.
           </div>
         </div>
 
+        <!-- Impresora -->
         <div style="margin-top: 12px">
           <div style="font-weight: 700; margin-bottom: 6px">Impresora</div>
 
@@ -1194,6 +1217,7 @@
           </div>
         </div>
 
+        <!-- Impresión -->
         <div
           style="
             margin-top: 16px;
@@ -1223,6 +1247,7 @@
           </div>
         </div>
 
+        <!-- Carrito -->
         <div
           style="
             margin-top: 16px;
@@ -1255,6 +1280,7 @@
           </div>
         </div>
 
+        <!-- Apertura de cajón -->
         <div
           style="
             margin-top: 16px;
@@ -1293,6 +1319,65 @@
           </div>
         </div>
 
+        <!-- Inicio (ADMIN ONLY) -->
+        <div
+          data-admin-only
+          style="
+            margin-top: 16px;
+            border-top: 1px solid #eee;
+            padding-top: 12px;
+          "
+        >
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              margin-bottom: 6px;
+            "
+          >
+            <div style="font-weight: 700">Inicio</div>
+            <span
+              style="
+                font-size: 10px;
+                padding: 2px 6px;
+                border-radius: 999px;
+                border: 1px solid rgba(37, 99, 235, 0.35);
+                background: rgba(37, 99, 235, 0.1);
+                color: #2563eb;
+                letter-spacing: 0.5px;
+                user-select: none;
+              "
+              title="Solo administradores"
+              >ADMIN</span
+            >
+          </div>
+
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 10px;
+              flex-wrap: wrap;
+            "
+          >
+            <div style="font-size: 13px; opacity: 0.85">
+              Iniciar TPV al encender el PC
+            </div>
+
+            <label class="switch">
+              <input type="checkbox" id="autostartToggle" />
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div style="font-size: 12px; opacity: 0.7; margin-top: 6px">
+            Recomendado solo en equipos dedicados a TPV.
+          </div>
+        </div>
+
+        <!-- Acciones -->
         <div
           class="dialog-actions"
           style="
