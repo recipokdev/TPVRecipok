@@ -1505,6 +1505,11 @@ body.modal-locked .cart-card {
   font-size: 16px;
 }
 
+.ticket-payedit {
+  background: #16a34a; /* verde */
+  color: #fff;
+}
+
 /* =============================================================
    9) MODAL ENVÍO POR EMAIL
    ============================================================= */

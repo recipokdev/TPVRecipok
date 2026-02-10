@@ -982,6 +982,35 @@
       </div>
     </div>
 
+    <!-- Overlay: Cambiar método de pago (recibos) -->
+<div id="payEditOverlay" class="simple-overlay hidden">
+  <div class="pay-modal" style="max-width: 920px">
+    <header class="pay-header">
+      <h2 style="margin: 0">Cambiar método de pago</h2>
+      <button type="button" id="payEditCloseX" class="pay-x">✕</button>
+    </header>
+
+    <div style="padding: 12px 14px; font-size: 14px">
+      <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+        <div>Ticket: <strong id="payEditTicketNum">—</strong></div>
+        <div>Cliente: <strong id="payEditClient">—</strong></div>
+        <div>Total ticket: <strong id="payEditTicketTotal">—</strong></div>
+      </div>
+
+      <div style="margin-top:12px; border-top:1px solid #ddd; padding-top:10px;">
+        <strong>Recibos (pagos)</strong>
+        <div id="payEditRecibos" style="margin-top:10px"></div>
+
+        <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:10px">
+          <button id="payEditCancelBtn" class="pay-btn" type="button">Cerrar</button>
+        </div>
+
+        <div id="payEditError" class="dialog-error" style="margin-top:10px"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
     <!-- Overlay: Post-cobro -->
     <div id="postPayOverlay" class="simple-overlay hidden">
       <div

@@ -2919,6 +2919,9 @@ function isCashCodpago(codpago) {
   const c = String(codpago || "")
     .trim()
     .toUpperCase();
+  if (CASH_CODPAGOS && CASH_CODPAGOS instanceof Set && CASH_CODPAGOS.size) {
+    return CASH_CODPAGOS.has(c);
+  }
   return c === "CONT" || c === "EFEC" || c === "CASH";
 }
 
@@ -3035,6 +3038,396 @@ async function ensurePayMethodLabelsLoaded() {
   window.__PAYMETHOD_LABELS__ = buildPayMethodLabelMap(fps);
 }
 
+async function getPayEditsCountForCaja(idcaja) {
+  const cid = Number(idcaja || 0);
+  if (!cid) return 0;
+
+  const facturas = await fetchApiResourceWithParams("facturaclientes", {
+    "filter[idcaja]": cid,
+    limit: 0,
+  });
+
+  return countPayChangesInFacturas(facturas);
+}
+
+/*----------------------*/
+/*cambiar metodo de pago*/
+/*----------------------*/
+function getPayChangeInfoFromNumero2(numero2) {
+  const s = String(numero2 || "").trim();
+  const m = s.match(/^(PAYCHGREF|PAYCHG)\|/i);
+  if (!m) return null;
+  return { type: m[1].toUpperCase() };
+}
+
+function countPayChangesInFacturas(facturas) {
+  const arr = Array.isArray(facturas) ? facturas : [];
+  let n = 0;
+
+  for (const f of arr) {
+    const numero2 = f?.numero2 ?? f?._raw?.numero2 ?? "";
+    const info = getPayChangeInfoFromNumero2(numero2);
+    if (info?.type === "PAYCHG") n += 1; // 1 cambio
+  }
+  return n;
+}
+
+async function fillCloseCashTicket({ idcaja /*...*/ }) {
+  // 1) cargar facturas de la caja (o usa las que ya tengas en memoria)
+  const facturas = await fetchApiResourceWithParams("facturaclientes", {
+    "filter[idcaja]": idcaja,
+    limit: 0,
+  });
+
+  // 2) contar cambios
+  const payChanges = countPayChangesInFacturas(facturas);
+
+  // 3) pintar
+  const el = document.getElementById("ccPayChanges");
+  if (el) el.textContent = String(payChanges);
+}
+
+function getCurrentCodAgenteSafe() {
+  return currentAgent?.codagente || window.currentAgent?.codagente || null;
+}
+
+async function ensurePayMethodsLoaded() {
+  await ensurePayMethodLabelsLoaded();
+  if (window.__PAYMETHOD_LIST__) return;
+
+  const fps = await fetchApiResourceWithParams("formapagos", { limit: 0 });
+  window.__PAYMETHOD_LIST__ = (Array.isArray(fps) ? fps : [])
+    .map((x) => ({
+      codpago: String(x.codpago || x.codigo || "")
+        .trim()
+        .toUpperCase(),
+      descripcion: String(x.descripcion || x.name || "").trim(),
+    }))
+    .filter((x) => x.codpago);
+}
+
+function payLabelFromMap(code) {
+  const c = String(code || "")
+    .trim()
+    .toUpperCase();
+  const map = window.__PAYMETHOD_LABELS__ || {};
+  return map[c] || c || "—";
+}
+
+const payEditState = { factura: null };
+
+async function openPayEditForFactura(facturaRow) {
+  const ok = await confirmModal(
+    "Atención",
+    "Al cambiar el método de pago se comunicará a gerencia.\n\n¿Deseas continuar?",
+  );
+  if (!ok) return;
+
+  const overlay = document.getElementById("payEditOverlay");
+  const errEl = document.getElementById("payEditError");
+  if (!overlay) return toast("Falta #payEditOverlay.", "err", "Pago");
+  if (errEl) errEl.textContent = "";
+
+  // cabecera
+  document.getElementById("payEditTicketNum").textContent =
+    facturaRow.codigo || `#${facturaRow.idfactura}`;
+  document.getElementById("payEditClient").textContent =
+    facturaRow.nombrecliente || "Cliente";
+  document.getElementById("payEditTicketTotal").textContent = eurES(
+    facturaRow.total || 0,
+  );
+
+  // cerrar
+  const close = () => overlay.classList.add("hidden");
+  const x = document.getElementById("payEditCloseX");
+  const cancel = document.getElementById("payEditCancelBtn");
+  if (x) x.onclick = close;
+  if (cancel) cancel.onclick = close;
+
+  payEditState.factura = facturaRow;
+  overlay.classList.remove("hidden");
+
+  try {
+    await ensurePayMethodsLoaded();
+    renderPayEditForTicket();
+  } catch (e) {
+    console.error(e);
+    if (errEl) errEl.textContent = "No se pudieron cargar las formas de pago.";
+  }
+}
+
+function renderPayEditForTicket() {
+  const wrap = document.getElementById("payEditRecibos");
+  const errEl = document.getElementById("payEditError");
+  if (!wrap) return;
+
+  wrap.innerHTML = "";
+
+  const factura = payEditState.factura;
+  if (!factura) {
+    wrap.innerHTML = `<div style="color:#666">No hay ticket cargado.</div>`;
+    return;
+  }
+
+  const oldCod = String(factura.codpago || "")
+    .trim()
+    .toUpperCase();
+  const methods = Array.isArray(window.__PAYMETHOD_LIST__)
+    ? window.__PAYMETHOD_LIST__
+    : [];
+
+  const row = document.createElement("div");
+  row.style = `
+    display:flex; justify-content:space-between; gap:10px; align-items:center;
+    border:1px solid #eee; padding:10px; border-radius:10px; margin-bottom:10px;
+  `;
+
+  const left = document.createElement("div");
+  left.innerHTML = `
+    <div style="color:#666; font-size:12px">
+      Actual: <strong>${escapeHtml(payLabelFromMap(oldCod))}</strong> (${escapeHtml(oldCod || "—")})
+    </div>
+    <div style="color:#999; font-size:12px">
+      Este cambio creará 2 tickets (rectificativa + nuevo).
+    </div>
+  `;
+
+  const right = document.createElement("div");
+  right.style = "display:flex; gap:8px; align-items:center;";
+
+  const sel = document.createElement("select");
+  sel.className = "cart-btn";
+  sel.style = "padding:8px 10px;";
+
+  const opt0 = document.createElement("option");
+  opt0.value = "";
+  opt0.textContent = "Cambiar a…";
+  sel.appendChild(opt0);
+
+  methods
+    .filter((m) => String(m.codpago).toUpperCase() !== oldCod)
+    .forEach((m) => {
+      const o = document.createElement("option");
+      o.value = m.codpago;
+      o.textContent = `${m.descripcion || m.codpago} (${m.codpago})`;
+      sel.appendChild(o);
+    });
+
+  sel.onchange = async () => {
+    const newCod = String(sel.value || "")
+      .trim()
+      .toUpperCase();
+    if (!newCod) return;
+
+    sel.disabled = true;
+    if (errEl) errEl.textContent = "";
+
+    try {
+      const ok = await confirmModal(
+        "Confirmar cambio",
+        `Vas a cambiar "${payLabelFromMap(oldCod)}" → "${payLabelFromMap(newCod)}".\n\nEsto creará una rectificativa y un ticket nuevo.\n\n¿Deseas continuar?`,
+      );
+      if (!ok) return;
+
+      await changeTicketPaymentMethodByReissue({
+        facturaRow: factura,
+        newCodpago: newCod,
+      });
+
+      toast("Método de pago actualizado ✅", "ok", "Pago");
+
+      // refrescar tickets
+      await loadAndRenderTickets?.();
+
+      // cerrar
+      document.getElementById("payEditOverlay")?.classList.add("hidden");
+    } catch (e) {
+      console.error(e);
+      if (errEl) errEl.textContent = e?.message || "Error al reemitir ticket.";
+      toast("No se pudo cambiar el método de pago.", "err", "Pago");
+    } finally {
+      sel.value = "";
+      sel.disabled = false;
+    }
+  };
+
+  right.appendChild(sel);
+  row.appendChild(left);
+  row.appendChild(right);
+  wrap.appendChild(row);
+}
+
+/* ========= REEMISIÓN (rectificativa + nuevo ticket) ========= */
+
+async function fetchLineasFacturaCliente(idfactura) {
+  const list = await fetchApiResourceWithParams("lineafacturaclientes", {
+    limit: 0,
+    "filter[idfactura]": idfactura,
+    "sort[idlinea]": "ASC",
+  });
+  return Array.isArray(list) ? list : [];
+}
+
+function buildReissueLine(l, sign) {
+  const baseDesc = String(l.descripcion || "Producto")
+    .replace(/^DEV\s*-\s*/i, "")
+    .replace(/^AJUSTE PAGO\s*-\s*/i, "")
+    .trim();
+
+  return {
+    descripcion: sign < 0 ? `AJUSTE PAGO - ${baseDesc}` : baseDesc,
+    cantidad: (Number(l.cantidad || 0) || 0) * sign,
+    pvpunitario: Number(l.pvpunitario || 0),
+    codimpuesto: l.codimpuesto || undefined,
+  };
+}
+
+async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
+  const originalId = Number(facturaRow?.idfactura || 0);
+  if (!originalId) throw new Error("Ticket original sin idfactura.");
+
+  const oldCod = String(facturaRow?.codpago || "")
+    .trim()
+    .toUpperCase();
+  const newCod = String(newCodpago || "")
+    .trim()
+    .toUpperCase();
+  if (!newCod || newCod === oldCod) return;
+
+  // ✅ ahora sí (ya existen originalId/oldCod/newCod)
+  const n2New = `PAYCHG|ORIG=${originalId}|FROM=${oldCod}|TO=${newCod}`;
+  const n2Rect = `PAYCHGREF|ORIG=${originalId}|FROM=${oldCod}|TO=${newCod}`;
+
+  if (TPV_STATE?.offline) {
+    throw new Error("Sin internet: no se puede cambiar el método de pago.");
+  }
+
+  const idtpv = Number(currentTerminal?.id || 0) || null;
+  const idcaja = getCajaIdSafe();
+  const nick = (getLoginUser?.() || currentAgent?.nick || "admin").toString();
+
+  if (!idtpv || !idcaja) throw new Error("No hay caja abierta (idtpv/idcaja).");
+
+  const codcliente =
+    facturaRow?._raw?.codcliente ||
+    facturaRow?.codcliente ||
+    window.RECIPOK_API?.defaultCodClienteTPV ||
+    "1";
+
+  const lineasFactura = await fetchLineasFacturaCliente(originalId);
+  if (!lineasFactura.length)
+    throw new Error("No pude cargar líneas del ticket.");
+
+  // 1) Rectificativa (serie R) con codpago ORIGINAL
+  const payloadRect = {
+    codcliente,
+    lineas: lineasFactura.map((l) => buildReissueLine(l, -1)),
+    pagada: 1,
+    codpago: oldCod || null,
+    serie: "R",
+    idtpv,
+    idcaja,
+    nick,
+    numero2: n2Rect,
+  };
+
+  const respRect = await createTicketInFacturaScripts(payloadRect);
+  const docRect =
+    respRect?.doc || respRect?.factura || respRect?.data || respRect || null;
+  const rectId = Number(docRect?.idfactura || docRect?.id || 0);
+  if (!rectId) throw new Error("No pude crear rectificativa.");
+
+  const totalRectFS = Number(docRect?.total ?? 0); // negativo
+  const rectCash = isCashCodpago(oldCod) ? totalRectFS : 0;
+
+  const codagente = getCurrentCodAgenteSafe();
+
+  await updateFacturaCliente(rectId, {
+    idtpv: String(idtpv),
+    idcaja: Number(idcaja),
+    nick,
+    codalmacen: currentTerminal?.codalmacen || "",
+
+    tpv_venta: 1,
+    tpv_efectivo: Number(Number(rectCash).toFixed(2)),
+    tpv_cambio: 0,
+
+    idestado: 11,
+    pagada: 1,
+    codpago: oldCod || "",
+
+    codserie: "R",
+    idfacturarect: originalId,
+    codigorect: facturaRow?.codigo || facturaRow?._raw?.codigo || "",
+    codagente: codagente || undefined,
+    numero2: n2Rect,
+  });
+
+  // 2) Nuevo ticket (serie original) con codpago NUEVO
+  const payloadNew = {
+    codcliente,
+    lineas: lineasFactura.map((l) => buildReissueLine(l, +1)),
+    pagada: 1,
+    codpago: newCod,
+    serie: facturaRow?.codserie || "S",
+    idtpv,
+    idcaja,
+    nick,
+    numero2: n2New,
+  };
+
+  const respNew = await createTicketInFacturaScripts(payloadNew);
+  const docNew =
+    respNew?.doc || respNew?.factura || respNew?.data || respNew || null;
+  const newId = Number(docNew?.idfactura || docNew?.id || 0);
+  if (!newId) throw new Error("No pude crear el ticket nuevo.");
+
+  const totalNewFS = Number(docNew?.total ?? 0); // positivo
+  const newCash = isCashCodpago(newCod) ? totalNewFS : 0;
+
+  await updateFacturaCliente(newId, {
+    idtpv: String(idtpv),
+    idcaja: Number(idcaja),
+    nick,
+    codalmacen: currentTerminal?.codalmacen || "",
+
+    tpv_venta: 1,
+    tpv_efectivo: Number(Number(newCash).toFixed(2)),
+    tpv_cambio: 0,
+
+    idestado: 11,
+    pagada: 1,
+    codpago: newCod,
+    codagente: codagente || undefined,
+    numero2: n2New,
+  });
+
+  // 3) Log
+  try {
+    const ctx = getLogCtx();
+    const origCode =
+      String(facturaRow?.codigo || facturaRow?._raw?.codigo || "").trim() ||
+      `#${originalId}`;
+    const rectCode = String(docRect?.codigo || "").trim() || `#${rectId}`;
+    const newCode = String(docNew?.codigo || "").trim() || `#${newId}`;
+
+    const line = buildCajaLogLineWith(
+      ctx,
+      "Cambio método de pago (reemisión)",
+      `Orig:${origCode} | Rect:${rectCode} | Nuevo:${newCode} | ${oldCod} → ${newCod} | Importe:${eurES(Math.abs(totalNewFS))}`,
+    );
+    await appendCajaAutoLogLineForId(idcaja, line);
+  } catch (e) {
+    console.warn("[PAYEDIT] No pude escribir log:", e?.message || e);
+  }
+
+  return { rectId, newId };
+}
+
+/*----------------------*/
+/*fin cambiar metodo de pago*/
+/*----------------------*/
+
 function renderAgentSalesSummary() {
   const box = document.getElementById("agentSalesSummary");
   if (!box) return;
@@ -3108,17 +3501,14 @@ function renderPayMethodsSummary() {
   const entries = Object.values(map);
 
   box.innerHTML = "";
-
   if (!entries.length) {
     box.style.display = "none";
     return;
   }
-
   box.style.display = "flex";
 
   const labelMap = window.__PAYMETHOD_LABELS__ || {};
 
-  // ✅ Orden alfabético por etiqueta visible
   entries.sort((a, b) => {
     const la = String(labelMap[a.code] || a.label || a.code || "");
     const lb = String(labelMap[b.code] || b.label || b.code || "");
@@ -3127,30 +3517,26 @@ function renderPayMethodsSummary() {
 
   entries.forEach((pm) => {
     const baseLabel = labelMap[pm.code] || pm.label || pm.code || "—";
-
     const total = Number(pm.total) || 0;
 
-    // ✅ separados (si no existen, caen a 0)
     const salesCount = Number(pm.salesCount || 0);
     const refundCount = Number(pm.refundCount || 0);
+    const edits = Number(pm.editCount || 0);
 
-    // Texto “Ventas:X  Devol:Y”
     let sub = "";
-    if (salesCount && refundCount)
-      sub = `Ventas: ${salesCount} · Devol: ${refundCount}`;
-    else if (salesCount) sub = `Ventas: ${salesCount}`;
-    else if (refundCount) sub = `Devol: ${refundCount}`;
+    if (salesCount) sub = `Ventas: ${salesCount}`;
+    if (refundCount)
+      sub = sub ? `${sub} · Devol: ${refundCount}` : `Devol: ${refundCount}`;
+    if (edits) sub = sub ? `${sub} · Cambios: ${edits}` : `Cambios: ${edits}`;
 
-    // Etiqueta final (ya no usamos pm.count para no mezclar)
     const label = sub ? `${baseLabel} (${sub})` : baseLabel;
 
     const card = document.createElement("div");
     card.className = "cash-pay-card";
     card.innerHTML = `
-    <div class="cash-pay-card-amount">${eur(total)}</div>
-    <div class="cash-pay-card-label">${escapeHtml(label)}</div>
-  `;
-
+      <div class="cash-pay-card-amount">${eur(total)}</div>
+      <div class="cash-pay-card-label">${escapeHtml(label)}</div>
+    `;
     box.appendChild(card);
   });
 }
@@ -4062,6 +4448,7 @@ async function confirmCashClosing() {
 
   try {
     const report = buildCashClosePrintData(remoteCaja || {});
+    report.payEditsCount = await getPayEditsCountForCaja(idcaja);
     await printCashCloseReport(report);
   } catch (e) {
     console.warn("No se pudo imprimir el cierre:", e?.message || e);
@@ -7404,6 +7791,10 @@ async function printCashCloseReport(report) {
         const cnt = Number(m.count || 0);
         lines.push(`${name} (${cnt})  ${total}`);
       });
+      if (Number(report.payEditsCount || 0) > 0) {
+        const edits = Number(report.payEditsCount || 0);
+        if (edits > 0) lines.push(`Nº cambios pago: ${edits}`);
+      }
 
       const agents = Array.isArray(report.agentSales) ? report.agentSales : [];
       if (agents.length > 1) {
@@ -7506,10 +7897,8 @@ async function printCashCloseReport(report) {
     // métodos
     const methodsBox = doc.getElementById("ccMethods");
     if (methodsBox) {
-      // Copia segura
       const ms = Array.isArray(report.methods) ? [...report.methods] : [];
 
-      // ✅ Orden alfabético por nombre
       ms.sort((a, b) =>
         String(a.label || a.code || "").localeCompare(
           String(b.label || b.code || ""),
@@ -7523,7 +7912,6 @@ async function printCashCloseReport(report) {
           const label = escapeHtml(String(m.label || m.code || "—"));
           const cnt = Number(m.count || 0);
           const total = eur2(m.total || 0);
-
           return `
         <div class="row">
           <div class="left">${label} (${cnt})</div>
@@ -7532,6 +7920,20 @@ async function printCashCloseReport(report) {
       `;
         })
         .join("");
+    }
+
+    // ✅ cambios de pago (solo si > 0)
+    const edits = Number(report.payEditsCount || 0);
+    const payWrap = doc.getElementById("ccPayChangesWrap");
+    const payVal = doc.getElementById("ccPayChanges");
+
+    if (payWrap) {
+      if (edits > 0) {
+        payWrap.style.display = "block";
+        if (payVal) payVal.textContent = String(edits);
+      } else {
+        payWrap.style.display = "none";
+      }
     }
 
     // agentes (solo si hay más de 1)
@@ -9206,13 +9608,20 @@ ${obs ? `<div class="ticket-obs">${escapeHtml(obs)}</div>` : ""}
       <div class="ticket-right">
         <div class="ticket-total">${totalHtml}</div>
 
-        <div class="ticket-actions">
+        <div class="ticket-actions"><div class="ticket-actions">
           <button type="button" class="ticket-btn ticket-print" title="Imprimir">🖨</button>
+
           ${
-            // Si está devuelto completo, normalmente NO quieres devolver más
             hasRefunds && isFullyRefunded
               ? ""
               : `<button type="button" class="ticket-btn ticket-refund" title="Devolver">↩</button>`
+          }
+
+          ${
+            // ✅ NO mostrar si DEVUELTO completo o si es OFFLINE
+            (hasRefunds && isFullyRefunded) || t._offline
+              ? ""
+              : `<button type="button" class="ticket-btn ticket-payedit" title="Cambiar pago">💳</button>`
           }
         </div>
       </div>
@@ -9253,6 +9662,15 @@ ${obs ? `<div class="ticket-obs">${escapeHtml(obs)}</div>` : ""}
       refundBtn.onclick = async (e) => {
         e.stopPropagation();
         await openRefundForFactura(t);
+      };
+    }
+
+    // ✅ cambiar pago (solo si existe el botón)
+    const payEditBtn = div.querySelector(".ticket-payedit");
+    if (payEditBtn) {
+      payEditBtn.onclick = async (e) => {
+        e.stopPropagation();
+        await openPayEditForFactura(t);
       };
     }
 
