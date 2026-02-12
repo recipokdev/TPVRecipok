@@ -65,7 +65,17 @@ contextBridge.exposeInMainWorld("TPV_AUTH", {
 });
 
 contextBridge.exposeInMainWorld("TPV_BOOTSTRAP", {
-  init: (payload) => initTPVBootstrap(payload),
+  init: (payload) => {
+    try {
+      console.log("[BOOT payload]", {
+        nick: payload?.nick,
+        apiKeyLen: String(payload?.apiKey || "").length,
+        baseUrl: payload?.baseUrl,
+        idtpv: payload?.idtpv,
+      });
+    } catch {}
+    return initTPVBootstrap(payload);
+  },
 });
 
 contextBridge.exposeInMainWorld("TPV_AUTOSTART", {

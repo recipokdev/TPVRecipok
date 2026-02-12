@@ -176,6 +176,28 @@ const emailKeyboardBtn = document.getElementById("emailKeyboardBtn");
 
 // ===== Funciones auxiliares =====
 
+/* =========================
+   ESTADO GLOBAL TPV
+========================= */
+
+window.TPV_STATE = window.TPV_STATE || {};
+
+function setAdminFlag(isAdmin, source = "unknown") {
+  window.TPV_STATE = window.TPV_STATE || {};
+  window.TPV_STATE.isAdmin = !!isAdmin;
+
+  try {
+    localStorage.setItem(
+      "tpv_login_isAdmin",
+      window.TPV_STATE.isAdmin ? "1" : "0",
+    );
+  } catch {}
+
+  applyAdminOnlyUI?.();
+  refreshOptionsUI?.();
+  renderProducts?.(); // 🔥 importante para el lápiz
+}
+
 function renderCashIdChip() {
   const el = document.getElementById("cashInfo");
   if (!el) return;
@@ -195,8 +217,15 @@ function renderCashIdChip() {
 let BOOT_IN_FLIGHT = false;
 
 function applyAdminOnlyUI() {
-  const isAdmin = !!TPV_STATE.isAdmin;
-  document.querySelectorAll("[data-admin-only]").forEach((el) => {
+  const isAdmin = !!window.TPV_STATE?.isAdmin;
+  const els = document.querySelectorAll("[data-admin-only]");
+
+  console.log("[ADMIN] applyAdminOnlyUI", {
+    isAdmin,
+    adminOnlyCount: els.length,
+  });
+
+  els.forEach((el) => {
     el.style.display = isAdmin ? "" : "none";
   });
 }
@@ -215,12 +244,20 @@ async function runBootFlow() {
     const resolved = await bootstrapCompany();
     if (!resolved) return false; // cancelado o bloqueado
 
-    // 2) Login (usuario). Si ya hay, no abre modal.
+    // 2) Login
     const okLogin = await ensureLoginAutoOrPrompt();
     if (!okLogin) return false;
 
-    // 3) Cargar datos
+    // ✅ aplica SIEMPRE tras login
+    applyAdminOnlyUI?.();
+    refreshOptionsUI?.();
+
+    // 3) Datos
     await loadDataFromApi();
+
+    // ✅ y otra vez después de cargar UI/datos
+    applyAdminOnlyUI?.();
+    refreshOptionsUI?.();
 
     // 4) Terminal+Agente por defecto (NO overlay)
     await ensureTerminalAgentDefaults();
@@ -490,36 +527,30 @@ function renderProducts() {
   if (!grid) return;
   grid.innerHTML = "";
 
-  const term = searchTerm.trim().toLowerCase();
-  let filtered = [...products];
+  const term = (searchTerm || "").trim().toLowerCase();
+  let filtered = Array.isArray(products) ? [...products] : [];
 
   // Filtro por familia / subfamilia
   if (activeFamilyParentId) {
-    // Estamos en un padre (Accesorios, etc.)
     if (activeSubfamilyId) {
-      // Solo una subfamilia
       filtered = filtered.filter((p) => p.category === activeSubfamilyId);
     } else {
-      // Todas las subfamilias + el propio padre
       const allowedIds = new Set();
       allowedIds.add(activeFamilyParentId);
-      categories.forEach((c) => {
-        if (c.parentId === activeFamilyParentId) {
-          allowedIds.add(c.id);
-        }
+      (categories || []).forEach((c) => {
+        if (c.parentId === activeFamilyParentId) allowedIds.add(c.id);
       });
       filtered = filtered.filter((p) => allowedIds.has(p.category));
     }
   } else if (selectedCategory) {
-    // Filtro sencillo por una familia
     filtered = filtered.filter((p) => p.category === selectedCategory);
   }
 
   // Filtro por buscador
   if (term) {
     filtered = filtered.filter((p) => {
-      const n1 = (p.name || "").toLowerCase();
-      const n2 = (p.secondaryName || "").toLowerCase();
+      const n1 = String(p.name || "").toLowerCase();
+      const n2 = String(p.secondaryName || "").toLowerCase();
       return n1.includes(term) || n2.includes(term);
     });
   }
@@ -532,28 +563,48 @@ function renderProducts() {
 
     // Precio mostrado al público = precio neto * (1 + IVA)
     const taxRate = getTaxRateForProduct(p);
-    const priceGross = (p.price || 0) * (1 + taxRate / 100);
+    const priceGross =
+      (Number(p.price || 0) || 0) * (1 + (Number(taxRate) || 0) / 100);
 
     tile.innerHTML = `
-    <div class="product-img-wrapper">
-      ${p.imageUrl ? `<img src="${p.imageUrl}" class="product-img">` : ""}
-    </div>
+      <div class="product-img-wrapper">
+        ${p.imageUrl ? `<img src="${p.imageUrl}" class="product-img">` : ""}
+      </div>
 
-    <div class="product-overlay-top">
-      <div class="product-name">${p.name}</div>
-      ${
-        p.secondaryName
-          ? `<div class="product-secondary">${p.secondaryName}</div>`
-          : ""
-      }
-    </div>
+      <div class="product-overlay-top">
+        <div class="product-name">${p.name || ""}</div>
+        ${p.secondaryName ? `<div class="product-secondary">${p.secondaryName}</div>` : ""}
+      </div>
 
-    <div class="product-footer">
-      <div class="product-price">${priceGross.toFixed(2)} €</div>
-    </div>
-  `;
+      <div class="product-footer">
+        <div class="product-price">${priceGross.toFixed(2)} €</div>
+      </div>
+    `;
 
+    const canEditPrices = isAdminUser() && isPriceEditModeEnabled();
+
+    // ✅ SIEMPRE añadir al carrito al tocar el producto
     tile.onclick = () => addToCart(p);
+
+    // ✅ botón ✎ solo si admin + modo activo (y NO debe añadir al carrito)
+    if (canEditPrices) {
+      tile.style.position = "relative";
+
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "price-edit-badge";
+      editBtn.textContent = "✎";
+      editBtn.title = "Editar precio (IVA incl.)";
+
+      editBtn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation(); // ✅ evita tile.onclick
+        openPriceEditForProduct(p);
+      };
+
+      tile.appendChild(editBtn);
+    }
+
     grid.appendChild(tile);
   });
 }
@@ -1130,8 +1181,9 @@ async function openLoginModal() {
       } catch {}
 
       // ✅ 2) Estado admin runtime + UI
-      TPV_STATE.isAdmin = !!isAdminSelected;
-      applyAdminOnlyUI();
+      setAdminFlag(!!isAdminSelected, "login");
+      await loadPriceEditModeFromCfg?.();
+      renderProducts?.();
 
       // ✅ 3) Persistencia “no pedir nunca más”
       if (window.TPV_CFG) {
@@ -1200,22 +1252,47 @@ async function openLoginModal() {
   });
 }
 
+async function readIsAdminFromPersistence() {
+  const TPV_CFG = window.TPV_CFG;
+
+  // 1) cfg
+  try {
+    const v = TPV_CFG ? await TPV_CFG.get("auth.isAdmin") : null;
+    if (v != null) return !!v;
+  } catch {}
+
+  // 2) fallback LS
+  try {
+    const ls = localStorage.getItem("tpv_login_isAdmin");
+    if (ls != null) return ls === "1" || ls === "true";
+  } catch {}
+
+  return false;
+}
+
 async function ensureLoginAutoOrPrompt() {
-  // Si no hay empresa resuelta, NO abras login jamás
   if (typeof hasCompanyResolved !== "function" || !hasCompanyResolved()) {
     console.log("[LOGIN] Saltando login: empresa no resuelta");
     return false;
   }
 
-  // 1) si ya hay sesión en memoria/localStorage, ok
+  // 1) sesión ya en memoria/localStorage
   const memUser = getLoginUser?.() || localStorage.getItem("tpv_login_user");
   const memTok = getLoginToken?.() || localStorage.getItem("tpv_login_token");
+
   if (memUser && memTok) {
-    // opcional: si guardas admin en localStorage, aplícalo aquí
+    const isAdmin = await readIsAdminFromPersistence(); // lee TPV_CFG + fallback LS
+    setAdminFlag(isAdmin, "autologin(mem)");
+
+    // 🔥 importante: cargar el modo edición desde cfg en autologin
+    await loadPriceEditModeFromCfg?.();
+
+    renderProducts?.();
+    refreshLoggedUserUI?.();
     return true;
   }
 
-  // 2) intenta recuperar de TPV_CFG (persistente)
+  // 2) TPV_CFG
   const TPV_CFG = window.TPV_CFG;
   const savedUser = TPV_CFG ? await TPV_CFG.get("auth.username") : "";
   const savedTok = TPV_CFG ? await TPV_CFG.get("auth.token") : "";
@@ -1225,31 +1302,19 @@ async function ensureLoginAutoOrPrompt() {
     setLoginSession({
       user: savedUser,
       token: savedTok,
-      codagente: (await TPV_CFG.get("auth.codagente")) || "",
-      codalmacen: (await TPV_CFG.get("auth.codalmacen")) || "",
+      codagente: (TPV_CFG ? await TPV_CFG.get("auth.codagente") : "") || "",
+      codalmacen: (TPV_CFG ? await TPV_CFG.get("auth.codalmacen") : "") || "",
     });
 
-    TPV_STATE.isAdmin = !!savedIsAdmin;
-    applyAdminOnlyUI();
-
-    try {
-      await window.TPV_AUTH?.setCurrentUser?.(savedUser, !!savedIsAdmin);
-    } catch {}
-
+    setAdminFlag(!!savedIsAdmin, "autologin(cfg)");
+    await loadPriceEditModeFromCfg?.();
     refreshLoggedUserUI?.();
     return true;
   }
 
-  // 3) si no hay guardado => pedir login
+  // 3) pedir login
   const ok = await openLoginModal();
   return !!ok;
-}
-
-function grossToNet(gross, taxRate) {
-  const g = Number(gross) || 0;
-  const t = Number(taxRate) || 0;
-  const divisor = 1 + t / 100;
-  return divisor > 0 ? round2(g / divisor) : round2(g);
 }
 
 // ===== Modal genérico de confirmación (usa msgOverlay) =====
@@ -6559,25 +6624,124 @@ function refreshPrinterButtonsUI() {
 }
 
 function refreshOptionsUI() {
-  if (autoPrintToggle) autoPrintToggle.checked = isAutoPrintEnabled();
-  if (groupLinesToggle) groupLinesToggle.checked = isGroupLinesEnabled();
-  if (openDrawerAlwaysToggle)
-    openDrawerAlwaysToggle.checked = isOpenDrawerAlwaysEnabled();
+  autoPrintToggle && (autoPrintToggle.checked = isAutoPrintEnabled());
+  groupLinesToggle && (groupLinesToggle.checked = isGroupLinesEnabled());
+  openDrawerAlwaysToggle &&
+    (openDrawerAlwaysToggle.checked = isOpenDrawerAlwaysEnabled());
 
-  if (currentPrinterNameEl) {
-    const p = getSavedPrinterNameForUI();
-    currentPrinterNameEl.textContent = p ? p : "—";
+  const t = document.getElementById("priceEditModeToggle");
+  if (t) {
+    t.disabled = !isAdminUser();
+    t.checked = isAdminUser() ? isPriceEditModeEnabled() : false;
   }
 
-  refreshPrinterButtonsUI();
+  if (currentPrinterNameEl) {
+    const p = getSavedPrinterNameForUI?.();
+    currentPrinterNameEl.textContent = p ? p : "—";
+  }
+  refreshPrinterButtonsUI?.();
+}
+
+const OPTS_ACC_KEY = "ui.optionsAccordion"; // TPV_CFG
+let optionsAccordionBound = false;
+
+async function loadOptionsAccordionState() {
+  // default: caja abierto
+  let state = { caja: true };
+
+  try {
+    if (window.TPV_CFG) {
+      const v = await window.TPV_CFG.get(OPTS_ACC_KEY);
+      if (v && typeof v === "object") state = { ...state, ...v };
+    }
+  } catch {}
+
+  // fallback localStorage
+  try {
+    const ls = localStorage.getItem("tpv_opts_acc");
+    if (ls) state = { ...state, ...JSON.parse(ls) };
+  } catch {}
+
+  return state;
+}
+
+async function saveOptionsAccordionState(state) {
+  try {
+    if (window.TPV_CFG) await window.TPV_CFG.set(OPTS_ACC_KEY, state);
+  } catch {}
+
+  try {
+    localStorage.setItem("tpv_opts_acc", JSON.stringify(state));
+  } catch {}
+}
+
+async function applyOptionsAccordionState(state) {
+  const secs = document.querySelectorAll("#optionsAccordion .opt-sec");
+  const isAdmin = !!window.TPV_STATE?.isAdmin;
+
+  secs.forEach((sec) => {
+    const key = sec.getAttribute("data-sec");
+    if (!key) return;
+
+    // si no es admin, forzar cerrado y oculto (tu applyAdminOnlyUI lo oculta, pero por si acaso)
+    if (sec.hasAttribute("data-admin-only") && !isAdmin) {
+      sec.dataset.open = "0";
+      return;
+    }
+
+    sec.dataset.open = state[key] ? "1" : "0";
+  });
+}
+
+function bindOptionsAccordionOnce() {
+  if (optionsAccordionBound) return;
+  optionsAccordionBound = true;
+
+  document.addEventListener("click", async (e) => {
+    const btn = e.target.closest("#optionsAccordion .opt-sec-h");
+    if (!btn) return;
+
+    const sec = btn.closest(".opt-sec");
+    if (!sec) return;
+
+    // si es admin-only y no admin, ignorar
+    if (sec.hasAttribute("data-admin-only") && !window.TPV_STATE?.isAdmin)
+      return;
+
+    const key = sec.getAttribute("data-sec");
+    if (!key) return;
+
+    const isOpen = sec.dataset.open === "1";
+    sec.dataset.open = isOpen ? "0" : "1";
+
+    // persistir
+    const state = await loadOptionsAccordionState();
+    state[key] = !isOpen;
+    await saveOptionsAccordionState(state);
+  });
 }
 
 async function openOptions() {
-  refreshOptionsUI();
-  applyAdminOnlyUI();
+  try {
+    await ensureLoginAutoOrPrompt?.();
+  } catch {}
+
+  await loadPriceEditModeFromCfg?.();
+
+  applyAdminOnlyUI?.(); // ya usa window.TPV_STATE
+  refreshOptionsUI?.();
+  refreshPriceEditToggleUI?.();
+  bindPriceEditToggleOnce?.();
+
+  // acordeón
+  bindOptionsAccordionOnce();
+  const st = await loadOptionsAccordionState();
+  await applyOptionsAccordionState(st);
+
   optionsOverlay?.classList.remove("hidden");
-  syncGroupLinesFromFS();
-  await bindAutostartToggle();
+
+  syncGroupLinesFromFS?.();
+  await bindAutostartToggle?.();
 }
 
 function closeOptions() {
@@ -8954,8 +9118,7 @@ function payKeyAppend(ch) {
     if (v.includes(".") || v.includes(",")) return;
     v = v ? v + "." : "0.";
   } else if (ch === "00") {
-    if (!v) v = "0";
-    v += "00";
+    v = v ? v + "00" : "00";
   } else {
     v += String(ch);
   }
@@ -9025,8 +9188,101 @@ function shouldOpenDrawerForPayResult(payResult) {
   return payResultHasCash(payResult);
 }
 
+// ===== Pay keypad binding (UNA SOLA VEZ, robusto para táctil) =====
+let PAY_KEYPAD_BOUND = false;
+
+function bindPayKeypadOnce() {
+  if (PAY_KEYPAD_BOUND) return;
+
+  if (!payOverlay) return;
+  const keypad = payOverlay.querySelector(".pay-keypad");
+  if (!keypad) return;
+
+  PAY_KEYPAD_BOUND = true;
+
+  // Anti-duplicado: misma tecla muy seguida => ignorar
+  let lastKey = null;
+  let lastTs = 0;
+  const DUP_MS = 90; // prueba 70-120 si quieres
+
+  // pointerId activos (para no procesar dos veces el mismo dedo)
+  const activePointers = new Set();
+
+  const getKeyFromEvent = (e) => {
+    const btn = e.target.closest("[data-k]");
+    return btn ? btn.getAttribute("data-k") : null;
+  };
+
+  const consumeKey = (k) => {
+    const now = performance.now();
+    if (k === lastKey && now - lastTs < DUP_MS) return;
+    lastKey = k;
+    lastTs = now;
+
+    if (k === "back") payKeyBackspace();
+    else if (k === "clear") payKeyClearAll();
+    else payKeyAppend(k);
+  };
+
+  // ✅ Procesamos en POINTERDOWN (aquí el target es fiable)
+  const onPointerDown = (e) => {
+    const k = getKeyFromEvent(e);
+    if (!k) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const pid = e.pointerId ?? "nopid";
+    if (activePointers.has(pid)) return; // evita down duplicado
+    activePointers.add(pid);
+
+    consumeKey(k);
+
+    // captura para recibir cancel/up y limpiar
+    try {
+      e.target.setPointerCapture?.(e.pointerId);
+    } catch {}
+  };
+
+  const onPointerUp = (e) => {
+    const pid = e.pointerId ?? "nopid";
+    activePointers.delete(pid);
+
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const onPointerCancel = (e) => {
+    const pid = e.pointerId ?? "nopid";
+    activePointers.delete(pid);
+
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  keypad.addEventListener("pointerdown", onPointerDown, { passive: false });
+  keypad.addEventListener("pointerup", onPointerUp, { passive: false });
+  keypad.addEventListener("pointercancel", onPointerCancel, { passive: false });
+
+  // ✅ Bloquea click “fantasma” (muy típico en táctil Windows)
+  keypad.addEventListener(
+    "click",
+    (e) => {
+      if (e.target.closest("[data-k]")) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    },
+    true,
+  );
+}
+
+// ===== Modal Cobrar =====
 async function openPayModal(total) {
   if (!payOverlay) throw new Error("Falta #payOverlay en index.html");
+
+  // bind 1 vez (clave para evitar “se me duplica”)
+  bindPayKeypadOnce();
 
   setPayError("");
   payModalState.totalCents = toCents(total);
@@ -9035,7 +9291,7 @@ async function openPayModal(total) {
 
   // cargar formas de pago reales
   const formas = await fetchFormasPagoActivas();
-  payModalState.formas = formas
+  payModalState.formas = (formas || [])
     .map((f) => ({
       codpago: String(f.codpago || "").trim(),
       descripcion: String(f.descripcion || f.codpago || "").trim(),
@@ -9049,110 +9305,41 @@ async function openPayModal(total) {
     ];
   }
 
-  // pintar lista
   renderPayMethods();
 
   // limpiar extras
   if (payObs) payObs.value = "";
-  // ✅ QWERTY en Observaciones del cobro
+  if (payNumber) payNumber.value = "";
+  if (paySerie) paySerie.value = "";
+
+  // QWERTY en Observaciones
   if (payObs) {
-    payObs.readOnly = true; // opcional: fuerza uso de teclado en pantalla
+    payObs.readOnly = true;
     const open = () => {
-      // Usa tu función existente de teclado si ya la tienes.
-      // Si tu función se llama distinto, cambia window.openQwerty por el nombre real.
       if (typeof window.openQwerty === "function") {
         window.openQwerty(
           String(payObs.value || ""),
-          (txt) => {
-            payObs.value = String(txt || "");
-          },
+          (txt) => (payObs.value = String(txt || "")),
           { title: "Observaciones", emailMode: false },
         );
       } else if (typeof window.openTextKeyboard === "function") {
-        window.openTextKeyboard(payObs); // si tu implementación trabaja por elemento
+        window.openTextKeyboard(payObs);
       } else {
-        // fallback: permite teclado físico si no existe función
         payObs.readOnly = false;
       }
     };
-
     payObs.onfocus = open;
     payObs.onclick = open;
   }
 
-  if (payNumber) payNumber.value = "";
-  if (paySerie) paySerie.value = "";
-
   payOverlay.classList.remove("hidden");
   if (paySaveBtn) paySaveBtn.disabled = false;
 
-  // eventos keypad
-  const keypad = payOverlay.querySelector(".pay-keypad");
-
-  const activePointers = new Map(); // pointerId -> { k, consumed }
-
-  const getKeyFromEvent = (e) => {
-    const btn = e.target.closest("[data-k]");
-    if (!btn) return null;
-    return btn.getAttribute("data-k");
-  };
-
-  const onPointerDown = (e) => {
-    const k = getKeyFromEvent(e);
-    if (!k) return;
-
-    e.preventDefault();
-    e.stopPropagation();
-
-    const pid = e.pointerId ?? "nopid";
-
-    activePointers.set(pid, { k, consumed: false });
-
-    try {
-      e.target.setPointerCapture?.(e.pointerId);
-    } catch {}
-  };
-
-  const onPointerUp = (e) => {
-    const k = getKeyFromEvent(e);
-    if (!k) return;
-
-    e.preventDefault();
-    e.stopPropagation();
-
-    const pid = e.pointerId ?? "nopid";
-    const st = activePointers.get(pid);
-
-    if (!st) return; // sin down previo
-    if (st.consumed) return; // up duplicado
-    if (st.k !== k) return; // tecla distinta
-
-    st.consumed = true;
-    activePointers.set(pid, st);
-
-    if (k === "back") payKeyBackspace();
-    else if (k === "clear") payKeyClearAll();
-    else payKeyAppend(k);
-  };
-
-  const onPointerCancel = (e) => {
-    const pid = e.pointerId ?? "nopid";
-    activePointers.delete(pid);
-  };
-
-  keypad.addEventListener("pointerdown", onPointerDown, { passive: false });
-  keypad.addEventListener("pointerup", onPointerUp, { passive: false });
-  keypad.addEventListener("pointercancel", onPointerCancel, { passive: false });
-
-  const closeModal = () => {
-    keypad.removeEventListener("pointerdown", onPointerDown);
-    keypad.removeEventListener("pointerup", onPointerUp);
-    keypad.removeEventListener("pointercancel", onPointerCancel);
-
-    payOverlay.classList.add("hidden");
-  };
-
   return await new Promise((resolve) => {
+    const closeModal = () => {
+      payOverlay.classList.add("hidden");
+    };
+
     const cleanupBtns = () => {
       if (payCancelBtn) payCancelBtn.onclick = null;
       if (paySaveBtn) paySaveBtn.onclick = null;
@@ -9173,7 +9360,7 @@ async function openPayModal(total) {
       paySaveBtn.onclick = () => {
         setPayError("");
 
-        // 1) Construimos "entregado" desde inputs (en CÉNTIMOS)
+        // 1) Construir entregados (céntimos)
         const entregados = [];
         for (const fp of payModalState.formas) {
           const raw = String(payModalState.values[fp.codpago] || "").trim();
@@ -9194,19 +9381,18 @@ async function openPayModal(total) {
 
         const totalC = payModalState.totalCents || 0;
 
-        // 2) Validación: pagado (entregado) >= total
+        // 2) Validación pagado >= total
         const pagadoEntregadoC = entregados.reduce(
           (s, p) => s + (p.entregadoC || 0),
           0,
         );
 
         if (pagadoEntregadoC < totalC) {
-          console.log("pagadoEntregadoC:", pagadoEntregadoC, "totalC:", totalC);
           setPayError("El importe pagado es inferior al total.");
           return;
         }
 
-        // 3) Separar no-cash y cash
+        // 3) Separar cash / no-cash
         const nonCash = [];
         const cash = [];
         for (const p of entregados) {
@@ -9214,21 +9400,18 @@ async function openPayModal(total) {
             codpago: p.codpago,
             descripcion: p.descripcion,
           });
-          if (isCash) cash.push(p);
-          else nonCash.push(p);
+          (isCash ? cash : nonCash).push(p);
         }
 
-        // 4) Calcular aplicado + cambio (en céntimos)
+        // 4) Calcular cambio
         const nonCashSumC = nonCash.reduce((s, p) => s + p.entregadoC, 0);
-
         let cashNeededC = Math.max(0, totalC - nonCashSumC);
         const cashGivenC = cash.reduce((s, p) => s + p.entregadoC, 0);
         const cambioC = Math.max(0, cashGivenC - cashNeededC);
 
-        // 5) Construir pagos (importe = aplicado, entregado = entregado)
+        // 5) Pagos (importe=aplicado, entregado=entregado)
         const pagos = [];
 
-        // no-cash: aplicado = entregado
         for (const p of nonCash) {
           pagos.push({
             codpago: p.codpago,
@@ -9238,7 +9421,6 @@ async function openPayModal(total) {
           });
         }
 
-        // cash: aplicado = lo necesario (distribuido)
         for (const p of cash) {
           const aplicadoC = Math.min(p.entregadoC, cashNeededC);
           cashNeededC -= aplicadoC;
@@ -9261,34 +9443,24 @@ async function openPayModal(total) {
           serie: paySerie ? String(paySerie.value || "") : "",
         };
 
-        // ✅ Abrir cajón INMEDIATO al confirmar pago
+        // abrir cajón inmediato si toca
         try {
           if (shouldOpenDrawerForPayResult({ pagos })) {
-            // evitar doble click rápido
             paySaveBtn.disabled = true;
-
-            // NO bloquees el flujo si falla
             openDrawerNow({ source: "AUTO" }).catch(() => {});
           }
-        } catch (e) {
-          // no debe impedir el cobro
-        }
+        } catch {}
 
-        // ✅ Abrir modal post-cobro INMEDIATO (aún sin ticket)
+        // post-pago inmediato
         try {
-          // Guardamos para que el flujo online lo "complete" luego
           window.__POSTPAY_PENDING__ = {
             docCode: "Procesando…",
             total: result.total,
             cambio: result.cambio,
           };
-
-          // Abre modal ahora (imprimir queda desactivado hasta que exista lastTicket)
           openPostPayModal(window.__POSTPAY_PENDING__);
           setPostPayPrintEnabled(false);
-        } catch (e) {
-          console.warn("No pude abrir modal post-cobro:", e?.message || e);
-        }
+        } catch {}
 
         cleanupBtns();
         closeModal();
@@ -10038,6 +10210,40 @@ async function persistCompanyCfg(resolved) {
   localStorage.setItem("tpv_company_cfg", JSON.stringify(data));
 }
 
+function logCompanyCfg(where = "") {
+  try {
+    const base = (
+      window.RECIPOK_API?.baseUrl ||
+      localStorage.getItem("tpv_baseUrl") ||
+      ""
+    ).trim();
+
+    console.log(`[CFG] ${where}`, {
+      RECIPOK_API_baseUrl: window.RECIPOK_API?.baseUrl || "",
+      RECIPOK_API_apiKeyLen: String(window.RECIPOK_API?.apiKey || "").length,
+      LS_baseUrl: localStorage.getItem("tpv_baseUrl") || "",
+      LS_companyEmail: localStorage.getItem("tpv_companyEmail") || "",
+      isDemo: /\/demo\/api\/\d+/i.test(base),
+    });
+  } catch (e) {
+    console.warn("[CFG] logCompanyCfg error:", e?.message || e);
+  }
+}
+
+function warnIfDemoBaseUrl(where = "") {
+  try {
+    const base = (
+      window.RECIPOK_API?.baseUrl ||
+      localStorage.getItem("tpv_baseUrl") ||
+      ""
+    ).trim();
+
+    if (/\/demo\/api\/\d+/i.test(base)) {
+      console.warn(`[WARN] baseUrl apunta a DEMO ${where}:`, base);
+    }
+  } catch {}
+}
+
 async function bootstrapCompany() {
   console.log("bootstrapCompany() ejecutándose...");
 
@@ -10146,6 +10352,8 @@ async function bootstrapCompany() {
       await persistCompanyCfg(resolved);
       applyResolved(resolved);
       persistLegacyLocal(resolved);
+      logCompanyCfg("after applyResolved");
+      warnIfDemoBaseUrl("(boot)");
 
       await validateBaseUrlOrThrow(resolved.baseUrl, resolved.apiKey);
 
@@ -10174,6 +10382,8 @@ async function bootstrapCompany() {
       await persistCompanyCfg(resolved);
       applyResolved(resolved);
       persistLegacyLocal(resolved);
+      logCompanyCfg("after applyResolved");
+      warnIfDemoBaseUrl("(boot)");
 
       await validateBaseUrlOrThrow(resolved.baseUrl, resolved.apiKey);
 
@@ -10211,6 +10421,8 @@ async function bootstrapCompany() {
   await persistCompanyCfg(resolved);
   applyResolved(resolved);
   persistLegacyLocal(resolved);
+  logCompanyCfg("after applyResolved");
+  warnIfDemoBaseUrl("(boot)");
 
   await validateBaseUrlOrThrow(resolved.baseUrl, resolved.apiKey);
 
@@ -12823,3 +13035,263 @@ async function bindAutostartToggle() {
     }
   };
 }
+
+/*----------------------*/
+/* editar precio (ADMIN) */
+/*----------------------*/
+
+window.TPV_STATE = window.TPV_STATE || {};
+window.TPV_STATE.priceEditMode = false;
+
+let PRICE_EDIT_BOUND = false;
+
+function isAdminUser() {
+  return !!window.TPV_STATE?.isAdmin;
+}
+
+function isPriceEditModeEnabled() {
+  return !!window.TPV_STATE?.priceEditMode;
+}
+
+async function loadPriceEditModeFromCfg() {
+  try {
+    const TPV_CFG = window.TPV_CFG;
+    const v = TPV_CFG ? await TPV_CFG.get("ui.priceEditMode") : false;
+    window.TPV_STATE.priceEditMode = !!v;
+  } catch {
+    window.TPV_STATE.priceEditMode = false;
+  }
+}
+
+async function setPriceEditMode(v) {
+  window.TPV_STATE.priceEditMode = !!v;
+  try {
+    const TPV_CFG = window.TPV_CFG;
+    if (TPV_CFG) await TPV_CFG.set("ui.priceEditMode", !!v);
+  } catch {}
+  renderProducts?.();
+}
+
+function grossToNet(gross, taxRate) {
+  const g = Number(gross) || 0;
+  const t = Number(taxRate) || 0;
+  const divisor = 1 + t / 100;
+  return divisor > 0 ? round2(g / divisor) : round2(g);
+}
+
+function refreshPriceEditToggleUI() {
+  const tog = document.getElementById("priceEditModeToggle");
+  if (!tog) return;
+
+  if (!isAdminUser()) {
+    tog.checked = false;
+    tog.disabled = true;
+    return;
+  }
+
+  tog.disabled = false;
+  tog.checked = isPriceEditModeEnabled();
+}
+
+function bindPriceEditToggleOnce() {
+  const tog = document.getElementById("priceEditModeToggle");
+  if (!tog || tog.dataset.bound) return;
+  tog.dataset.bound = "1";
+
+  tog.addEventListener("change", async () => {
+    if (!isAdminUser()) {
+      tog.checked = false;
+      toast?.("Solo administradores.", "warn", "Opciones");
+      return;
+    }
+    await setPriceEditMode(!!tog.checked);
+    renderProducts?.();
+  });
+}
+
+/* ===== Modal editar precio ===== */
+
+const priceEditState = { product: null };
+
+function openPriceEditForProduct(p) {
+  if (!isAdminUser())
+    return toast?.("Solo administradores.", "warn", "Productos");
+  if (!isPriceEditModeEnabled()) return;
+
+  const overlay = document.getElementById("priceEditOverlay");
+  if (!overlay) return toast?.("Falta #priceEditOverlay.", "err", "Productos");
+
+  priceEditState.product = p;
+
+  const taxRate = getTaxRateForProduct(p);
+  const grossNow = round2(Number(p.price || 0) * (1 + taxRate / 100) || 0);
+
+  const nameEl = document.getElementById("priceEditName");
+  const curEl = document.getElementById("priceEditCurrent");
+  const inp = document.getElementById("priceEditInput");
+  const err = document.getElementById("priceEditError");
+
+  if (nameEl) nameEl.textContent = p.name || "Producto";
+  if (curEl) curEl.textContent = eur2(grossNow);
+  if (inp) inp.value = grossNow.toFixed(2);
+  if (err) err.textContent = "";
+
+  const keypadBtn = document.getElementById("priceEditKeypadBtn");
+  if (keypadBtn && inp) {
+    keypadBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const taxRate = getTaxRateForProduct(p);
+      const grossNow = round2(Number(p.price || 0) * (1 + taxRate / 100) || 0);
+
+      openNumPad(
+        String(inp.value || grossNow.toFixed(2)), // valor inicial
+        (val) => {
+          inp.value = formatPrice2(val);
+        }, // callback
+        p.name || "Producto",
+        "price",
+        grossNow, // originalValue (para “Restaurar”)
+        null,
+      );
+    };
+  }
+
+  const close = () => overlay.classList.add("hidden");
+  document
+    .getElementById("priceEditCloseX")
+    ?.addEventListener("click", close, { once: true });
+  document
+    .getElementById("priceEditCancelBtn")
+    ?.addEventListener("click", close, { once: true });
+
+  const saveBtn = document.getElementById("priceEditSaveBtn");
+  if (saveBtn) {
+    saveBtn.onclick = async () => {
+      saveBtn.disabled = true;
+      try {
+        await confirmAndSaveProductPrice();
+      } finally {
+        saveBtn.disabled = false;
+      }
+    };
+  }
+
+  overlay.classList.remove("hidden");
+}
+
+async function confirmAndSaveProductPrice() {
+  const p = priceEditState.product;
+  if (!p) return;
+
+  const err = document.getElementById("priceEditError");
+  if (err) err.textContent = "";
+
+  const inp = document.getElementById("priceEditInput");
+  const raw = String(inp?.value ?? "")
+    .trim()
+    .replace(",", ".");
+  const newGross = round2(Number(raw));
+  if (!isFinite(newGross) || newGross < 0) {
+    if (err) err.textContent = "Precio no válido.";
+    return;
+  }
+
+  const taxRate = getTaxRateForProduct(p);
+  const grossNow = round2(Number(p.price || 0) * (1 + taxRate / 100) || 0);
+  if (round2(newGross) === round2(grossNow)) {
+    toast?.("El precio no ha cambiado.", "info", "Productos");
+    document.getElementById("priceEditOverlay")?.classList.add("hidden");
+    return;
+  }
+
+  const ok = await confirmModal(
+    "Actualizar precio",
+    `Vas a cambiar el precio de "${p.name}"\n\n` +
+      `De: ${grossNow.toFixed(2)} € (IVA incl.)\n` +
+      `A:  ${newGross.toFixed(2)} € (IVA incl.)\n\n` +
+      `¿Quieres actualizarlo permanentemente?`,
+  );
+  if (!ok) return;
+
+  const newNet = grossToNet(newGross, taxRate);
+
+  try {
+    if (p.isVariant) {
+      await apiUpdateVariantePrecioNet(p.id, newNet);
+    } else {
+      await apiUpdateProductoPrecioNet(p.baseProductId || p.id, newNet);
+    }
+
+    // ✅ LOG solo si la API fue OK
+    await logPermanentPriceChange({
+      product: p,
+      oldGross: grossNow,
+      newGross,
+      taxRate,
+    });
+  } catch (e) {
+    console.error(e);
+    if (err) err.textContent = e?.message || "No se pudo actualizar el precio.";
+    toast?.("No se pudo actualizar el precio.", "err", "Productos");
+    return;
+  }
+
+  // actualiza memoria y UI
+  p.price = newNet;
+  const idx = (products || []).findIndex((x) => Number(x.id) === Number(p.id));
+  if (idx >= 0) products[idx].price = newNet;
+
+  renderProducts?.();
+  toast?.("Precio actualizado ✅", "ok", "Productos");
+  document.getElementById("priceEditOverlay")?.classList.add("hidden");
+}
+
+async function apiUpdateProductoPrecioNet(idproducto, precioNet) {
+  const id = Number(idproducto || 0);
+  if (!id) throw new Error("idproducto inválido");
+  const payload = { idproducto: id, precio: Number(precioNet || 0) };
+  try {
+    return await apiWrite(`productos/${id}`, "PATCH", payload);
+  } catch {
+    return await apiWrite(`productos/${id}`, "PUT", payload);
+  }
+}
+
+async function apiUpdateVariantePrecioNet(idvariante, precioNet) {
+  const id = Number(idvariante || 0);
+  if (!id) throw new Error("idvariante inválido");
+  const payload = { idvariante: id, precio: Number(precioNet || 0) };
+  try {
+    return await apiWrite(`variantes/${id}`, "PATCH", payload);
+  } catch {
+    return await apiWrite(`variantes/${id}`, "PUT", payload);
+  }
+}
+
+async function logPermanentPriceChange({ product, oldGross, newGross }) {
+  try {
+    const idcaja = getCajaIdSafe?.() || null;
+    if (!idcaja) return;
+
+    const ctx = getLogCtx?.() || { idcaja };
+
+    const from = Number(oldGross || 0);
+    const to = Number(newGross || 0);
+
+    const line = buildCajaLogLineWith(
+      ctx,
+      "Cambio de precio",
+      `${String(product?.name || "Producto")} | ${from.toFixed(2)}€ → ${to.toFixed(2)}€ (IVA incl.)`,
+    );
+
+    await appendCajaAutoLogLineForId(idcaja, line);
+  } catch (e) {
+    console.warn("[PRICECHG] No pude escribir log:", e?.message || e);
+  }
+}
+
+/*----------------------*/
+/* fin editar precio     */
+/*----------------------*/

@@ -983,33 +983,59 @@
     </div>
 
     <!-- Overlay: Cambiar método de pago (recibos) -->
-<div id="payEditOverlay" class="simple-overlay hidden">
-  <div class="pay-modal" style="max-width: 920px">
-    <header class="pay-header">
-      <h2 style="margin: 0">Cambiar método de pago</h2>
-      <button type="button" id="payEditCloseX" class="pay-x">✕</button>
-    </header>
+    <div id="payEditOverlay" class="simple-overlay hidden">
+      <div class="pay-modal" style="max-width: 920px">
+        <header class="pay-header">
+          <h2 style="margin: 0">Cambiar método de pago</h2>
+          <button type="button" id="payEditCloseX" class="pay-x">✕</button>
+        </header>
 
-    <div style="padding: 12px 14px; font-size: 14px">
-      <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-        <div>Ticket: <strong id="payEditTicketNum">—</strong></div>
-        <div>Cliente: <strong id="payEditClient">—</strong></div>
-        <div>Total ticket: <strong id="payEditTicketTotal">—</strong></div>
-      </div>
+        <div style="padding: 12px 14px; font-size: 14px">
+          <div
+            style="
+              display: flex;
+              justify-content: space-between;
+              gap: 12px;
+              flex-wrap: wrap;
+            "
+          >
+            <div>Ticket: <strong id="payEditTicketNum">—</strong></div>
+            <div>Cliente: <strong id="payEditClient">—</strong></div>
+            <div>Total ticket: <strong id="payEditTicketTotal">—</strong></div>
+          </div>
 
-      <div style="margin-top:12px; border-top:1px solid #ddd; padding-top:10px;">
-        <strong>Recibos (pagos)</strong>
-        <div id="payEditRecibos" style="margin-top:10px"></div>
+          <div
+            style="
+              margin-top: 12px;
+              border-top: 1px solid #ddd;
+              padding-top: 10px;
+            "
+          >
+            <strong>Recibos (pagos)</strong>
+            <div id="payEditRecibos" style="margin-top: 10px"></div>
 
-        <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:10px">
-          <button id="payEditCancelBtn" class="pay-btn" type="button">Cerrar</button>
+            <div
+              style="
+                margin-top: 12px;
+                display: flex;
+                justify-content: flex-end;
+                gap: 10px;
+              "
+            >
+              <button id="payEditCancelBtn" class="pay-btn" type="button">
+                Cerrar
+              </button>
+            </div>
+
+            <div
+              id="payEditError"
+              class="dialog-error"
+              style="margin-top: 10px"
+            ></div>
+          </div>
         </div>
-
-        <div id="payEditError" class="dialog-error" style="margin-top:10px"></div>
       </div>
     </div>
-  </div>
-</div>
 
     <!-- Overlay: Post-cobro -->
     <div id="postPayOverlay" class="simple-overlay hidden">
@@ -1104,318 +1130,199 @@
       </div>
     </div>
 
-    <!-- Overlay: Opciones -->
+    <!-- Overlay: Opciones (ACORDEÓN) -->
     <div id="optionsOverlay" class="simple-overlay hidden">
-      <div class="simple-dialog" style="width: 520px; max-width: 94vw">
-        <div
-          style="
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-          "
-        >
-          <h2 style="margin: 0">Opciones</h2>
+      <div class="simple-dialog opt-dialog">
+        <div class="opt-head">
+          <h2 class="opt-title">Opciones</h2>
           <button type="button" id="optionsCloseX" class="small-btn">✕</button>
         </div>
 
-        <!-- Caja -->
-        <div
-          style="
-            margin-top: 16px;
-            border-top: 1px solid #eee;
-            padding-top: 12px;
-          "
-        >
-          <div style="font-weight: 700; margin-bottom: 6px">Caja</div>
-
-          <div
-            style="
-              display: flex;
-              align-items: center;
-              justify-content: space-between;
-              gap: 10px;
-              flex-wrap: wrap;
-            "
-          >
-            <div style="font-size: 13px; opacity: 0.85">
-              Abrir cajón con todos los pagos
-            </div>
-
-            <label class="switch">
-              <input type="checkbox" id="openDrawerAlwaysToggle" />
-              <span class="slider"></span>
-            </label>
-          </div>
-
-          <div style="font-size: 12px; opacity: 0.7; margin-top: 6px">
-            Si lo desactivas, el cajón solo se abrirá con pagos en efectivo.
-          </div>
-        </div>
-
-        <!-- Pantalla (ADMIN ONLY) -->
-        <div
-          data-admin-only
-          style="
-            margin-top: 16px;
-            border-top: 1px solid #eee;
-            padding-top: 12px;
-          "
-        >
-          <div
-            style="
-              display: flex;
-              align-items: center;
-              justify-content: space-between;
-              margin-bottom: 6px;
-            "
-          >
-            <div style="font-weight: 700">Pantalla</div>
-            <span
-              style="
-                font-size: 10px;
-                padding: 2px 6px;
-                border-radius: 999px;
-                border: 1px solid rgba(37, 99, 235, 0.35);
-                background: rgba(37, 99, 235, 0.1);
-                color: #2563eb;
-                letter-spacing: 0.5px;
-                user-select: none;
-              "
-              title="Solo administradores"
-              >ADMIN</span
-            >
-          </div>
-
-          <div
-            style="
-              display: flex;
-              align-items: center;
-              justify-content: space-between;
-              gap: 10px;
-              flex-wrap: wrap;
-            "
-          >
-            <div style="font-size: 13px; opacity: 0.85">Modo TPV (kiosk)</div>
-
-            <label class="switch">
-              <input type="checkbox" id="kioskToggle" />
-              <span class="slider"></span>
-            </label>
-          </div>
-
-          <div style="font-size: 12px; opacity: 0.7; margin-top: 6px">
-            Si desactivas, podrás minimizar y usar el equipo como un PC normal.
-          </div>
-        </div>
-
-        <!-- Impresora -->
-        <div style="margin-top: 12px">
-          <div style="font-weight: 700; margin-bottom: 6px">Impresora</div>
-
-          <div
-            style="
-              display: flex;
-              align-items: center;
-              justify-content: space-between;
-              gap: 10px;
-              flex-wrap: wrap;
-            "
-          >
-            <div style="font-size: 13px; opacity: 0.85">
-              Impresora actual: <strong id="currentPrinterName">—</strong>
-            </div>
-
-            <div style="display: inline-flex; gap: 8px; align-items: center">
-              <button
-                type="button"
-                id="optionsChangePrinterBtn"
-                class="small-btn"
-              >
-                Cambiar
-              </button>
-
-              <button
-                type="button"
-                id="optionsTestPrinterBtn"
-                class="small-btn"
-                style="display: none; opacity: 0.9"
-              >
-                Probar
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Impresión -->
-        <div
-          style="
-            margin-top: 16px;
-            border-top: 1px solid #eee;
-            padding-top: 12px;
-          "
-        >
-          <div style="font-weight: 700; margin-bottom: 6px">Impresión</div>
-
-          <div
-            style="
-              display: flex;
-              align-items: center;
-              justify-content: space-between;
-              gap: 10px;
-              flex-wrap: wrap;
-            "
-          >
-            <div style="font-size: 13px; opacity: 0.85">
-              Imprimir automáticamente al cobrar
-            </div>
-
-            <label class="switch">
-              <input type="checkbox" id="autoPrintToggle" />
-              <span class="slider"></span>
-            </label>
-          </div>
-        </div>
-
-        <!-- Carrito -->
-        <div
-          style="
-            margin-top: 16px;
-            border-top: 1px solid #eee;
-            padding-top: 12px;
-          "
-        >
-          <div style="font-weight: 700; margin-bottom: 6px">Carrito</div>
-
-          <div
-            style="
-              display: flex;
-              align-items: center;
-              justify-content: space-between;
-              gap: 10px;
-              flex-wrap: wrap;
-            "
-          >
-            <div style="font-size: 13px; opacity: 0.85">Desagrupar líneas</div>
-
-            <label class="switch">
-              <input type="checkbox" id="groupLinesToggle" />
-              <span class="slider"></span>
-            </label>
-          </div>
-
-          <div style="font-size: 12px; opacity: 0.7; margin-top: 6px">
-            Si activas, cada toque crea una línea nueva aunque sea el mismo
-            producto.
-          </div>
-        </div>
-
-        <!-- Apertura de cajón -->
-        <div
-          style="
-            margin-top: 16px;
-            border-top: 1px solid #eee;
-            padding-top: 12px;
-          "
-        >
-          <div style="font-weight: 700; margin-bottom: 6px">
-            Apertura de cajón
-          </div>
-
-          <div
-            style="
-              display: flex;
-              align-items: center;
-              justify-content: space-between;
-              gap: 10px;
-              flex-wrap: wrap;
-            "
-          >
-            <div style="font-size: 13px; opacity: 0.85">
-              Abrir el cajón manualmente
-            </div>
-
-            <button
-              type="button"
-              id="optionsOpenDrawerBtn"
-              class="pay-btn pay-btn-blue"
-            >
-              🧾 Abrir cajón
+        <div class="opt-acc" id="optionsAccordion">
+          <!-- CAJA -->
+          <section class="opt-sec" data-sec="caja">
+            <button type="button" class="opt-sec-h">
+              <span>Caja</span>
+              <span class="opt-sec-chev">▾</span>
             </button>
-          </div>
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Abrir cajón con todos los pagos
+                  </div>
+                  <div class="opt-row-sub">
+                    Si lo desactivas, solo se abrirá con efectivo.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="openDrawerAlwaysToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
 
-          <div style="font-size: 12px; opacity: 0.7; margin-top: 6px">
-            Se usa la impresora seleccionada para enviar la señal al cajón.
-          </div>
-        </div>
-
-        <!-- Inicio (ADMIN ONLY) -->
-        <div
-          data-admin-only
-          style="
-            margin-top: 16px;
-            border-top: 1px solid #eee;
-            padding-top: 12px;
-          "
-        >
-          <div
-            style="
-              display: flex;
-              align-items: center;
-              justify-content: space-between;
-              margin-bottom: 6px;
-            "
-          >
-            <div style="font-weight: 700">Inicio</div>
-            <span
-              style="
-                font-size: 10px;
-                padding: 2px 6px;
-                border-radius: 999px;
-                border: 1px solid rgba(37, 99, 235, 0.35);
-                background: rgba(37, 99, 235, 0.1);
-                color: #2563eb;
-                letter-spacing: 0.5px;
-                user-select: none;
-              "
-              title="Solo administradores"
-              >ADMIN</span
-            >
-          </div>
-
-          <div
-            style="
-              display: flex;
-              align-items: center;
-              justify-content: space-between;
-              gap: 10px;
-              flex-wrap: wrap;
-            "
-          >
-            <div style="font-size: 13px; opacity: 0.85">
-              Iniciar TPV al encender el PC
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Abrir cajón manualmente</div>
+                  <div class="opt-row-sub">
+                    Usa la impresora seleccionada para enviar la señal.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  id="optionsOpenDrawerBtn"
+                  class="pay-btn pay-btn-blue"
+                >
+                  🧾 Abrir cajón
+                </button>
+              </div>
             </div>
+          </section>
 
-            <label class="switch">
-              <input type="checkbox" id="autostartToggle" />
-              <span class="slider"></span>
-            </label>
-          </div>
+          <!-- IMPRESORA -->
+          <section class="opt-sec" data-sec="impresora">
+            <button type="button" class="opt-sec-h">
+              <span>Impresora</span>
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Impresora actual: <strong id="currentPrinterName">—</strong>
+                  </div>
+                  <div class="opt-row-sub">
+                    Se guardará para próximas impresiones.
+                  </div>
+                </div>
 
-          <div style="font-size: 12px; opacity: 0.7; margin-top: 6px">
-            Recomendado solo en equipos dedicados a TPV.
-          </div>
+                <div class="opt-row-actions">
+                  <button
+                    type="button"
+                    id="optionsChangePrinterBtn"
+                    class="small-btn"
+                  >
+                    Cambiar
+                  </button>
+                  <button
+                    type="button"
+                    id="optionsTestPrinterBtn"
+                    class="small-btn"
+                    style="display: none; opacity: 0.9"
+                  >
+                    Probar
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Imprimir automáticamente al cobrar
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="autoPrintToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </section>
+
+          <!-- CARRITO -->
+          <section class="opt-sec" data-sec="carrito">
+            <button type="button" class="opt-sec-h">
+              <span>Carrito</span>
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Desagrupar líneas</div>
+                  <div class="opt-row-sub">
+                    Cada toque crea una línea nueva aunque sea el mismo
+                    producto.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="groupLinesToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </section>
+
+          <!-- PRODUCTOS (ADMIN ONLY) -->
+          <section class="opt-sec" data-sec="productos" data-admin-only>
+            <button type="button" class="opt-sec-h">
+              <span>Productos <span class="opt-admin-pill">ADMIN</span></span>
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Modo edición de precio</div>
+                  <div class="opt-row-sub">
+                    Muestra el icono ✎ en los productos para cambiar precio (IVA
+                    incl.).
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="priceEditModeToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </section>
+
+          <!-- PANTALLA (ADMIN ONLY) -->
+          <section class="opt-sec" data-sec="pantalla" data-admin-only>
+            <button type="button" class="opt-sec-h">
+              <span>Pantalla <span class="opt-admin-pill">ADMIN</span></span>
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Modo TPV (kiosk)</div>
+                  <div class="opt-row-sub">
+                    Si desactivas, podrás minimizar y usar el equipo como un PC
+                    normal.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="kioskToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </section>
+
+          <!-- INICIO (ADMIN ONLY) -->
+          <section class="opt-sec" data-sec="inicio" data-admin-only>
+            <button type="button" class="opt-sec-h">
+              <span>Inicio <span class="opt-admin-pill">ADMIN</span></span>
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Iniciar TPV al encender el PC</div>
+                  <div class="opt-row-sub">
+                    Recomendado solo en equipos dedicados a TPV.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="autostartToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </section>
         </div>
 
-        <!-- Acciones -->
-        <div
-          class="dialog-actions"
-          style="
-            margin-top: 16px;
-            display: flex;
-            gap: 10px;
-            justify-content: flex-end;
-          "
-        >
+        <div class="dialog-actions opt-actions">
           <button type="button" id="optionsQuitBtn" class="pay-btn pay-btn-red">
             Salir del Programa
           </button>
@@ -1423,7 +1330,6 @@
         </div>
       </div>
     </div>
-
     <!-- Overlay: Login -->
     <div id="loginOverlay" class="simple-overlay hidden">
       <div class="simple-dialog" style="width: 520px; max-width: 94vw">
@@ -1550,6 +1456,85 @@
         <div class="dialog-actions">
           <button id="parkObsCancelBtn">Cancelar</button>
           <button id="parkObsOkBtn">Aparcar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Overlay: Editar precio -->
+    <div id="priceEditOverlay" class="simple-overlay hidden">
+      <div class="simple-dialog" style="width: 520px; max-width: 94vw">
+        <div
+          style="
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+          "
+        >
+          <h2 style="margin: 0">Editar precio</h2>
+          <button type="button" id="priceEditCloseX" class="small-btn">
+            ✕
+          </button>
+        </div>
+
+        <div style="margin-top: 14px; font-size: 14px">
+          <div>Producto: <strong id="priceEditName">—</strong></div>
+          <div style="margin-top: 6px">
+            Actual (IVA incl.): <strong id="priceEditCurrent">—</strong>
+          </div>
+
+          <div style="margin-top: 12px">
+            <div style="font-size: 12px; opacity: 0.75; margin-bottom: 6px">
+              Nuevo precio (IVA incluido)
+            </div>
+
+            <div style="display: flex; gap: 8px; align-items: center">
+              <input
+                id="priceEditInput"
+                type="text"
+                inputmode="decimal"
+                style="
+                  flex: 1;
+                  padding: 10px;
+                  border: 1px solid #ddd;
+                  border-radius: 10px;
+                "
+              />
+              <button
+                type="button"
+                id="priceEditKeypadBtn"
+                class="small-btn"
+                title="Teclado numérico"
+                style="height: 42px; min-width: 42px"
+              >
+                ⌨
+              </button>
+            </div>
+          </div>
+
+          <div
+            id="priceEditError"
+            class="dialog-error"
+            style="margin-top: 10px"
+          ></div>
+        </div>
+
+        <div
+          class="dialog-actions"
+          style="
+            margin-top: 16px;
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+          "
+        >
+          <button type="button" id="priceEditCancelBtn">Cancelar</button>
+          <button
+            type="button"
+            id="priceEditSaveBtn"
+            class="pay-btn pay-btn-green"
+          >
+            Guardar
+          </button>
         </div>
       </div>
     </div>

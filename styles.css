@@ -1963,6 +1963,12 @@ body.modal-locked .cart-card {
   }
 }
 
+.pay-keypad, .pay-keypad * {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
 /* =============================================================
    CAJA - INPUTS TÁCTILES CON + / - (sin flechas nativas)
    Pegar al FINAL del CSS
@@ -2591,4 +2597,134 @@ body.modal-locked .cart-card {
 }
 .hidden {
   display: none !important;
+}
+
+/*Edit permanent price*/
+.price-edit-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  background: rgba(255, 255, 255, 0.92);
+  font-weight: 700;
+  cursor: pointer;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Opciones - dialog grande */
+.opt-dialog {
+  width: 720px;
+  max-width: 96vw;
+  max-height: 88vh; /* ✅ no se sale de pantalla */
+  display: flex;
+  flex-direction: column;
+}
+
+/* header */
+.opt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 10px;
+}
+.opt-title {
+  margin: 0;
+}
+
+/* acordeón */
+
+.opt-acc {
+  margin-top: 10px;
+  overflow-y: auto; /* ✅ scroll */
+  padding-right: 6px; /* evita que el scroll tape contenido */
+  flex: 1; /* ✅ ocupa el alto disponible */
+}
+.opt-sec {
+  border: 1px solid #eee;
+  border-radius: 12px;
+  margin-top: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+.opt-sec-h {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  background: #fafafa;
+  border: 0;
+  cursor: pointer;
+  font-weight: 700;
+  text-align: left;
+}
+.opt-sec-chev {
+  opacity: 0.7;
+  font-size: 14px;
+  transform: rotate(0deg);
+  transition: transform 0.15s ease;
+}
+
+.opt-sec[data-open="1"] .opt-sec-chev {
+  transform: rotate(180deg);
+}
+
+.opt-sec-b {
+  display: none;
+  padding: 10px 14px 12px;
+}
+.opt-sec[data-open="1"] .opt-sec-b {
+  display: block;
+}
+
+.opt-admin-pill {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(37, 99, 235, 0.35);
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+  font-weight: 700;
+  margin-left: 8px;
+}
+
+.opt-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+}
+.opt-row + .opt-row {
+  border-top: 1px dashed #eee;
+}
+.opt-row-title {
+  font-size: 13px;
+  opacity: 0.9;
+}
+.opt-row-sub {
+  font-size: 12px;
+  opacity: 0.65;
+  margin-top: 4px;
+}
+.opt-row-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.opt-actions {
+  margin-top: 14px;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
 }

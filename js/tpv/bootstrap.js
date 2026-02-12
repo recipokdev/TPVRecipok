@@ -34,9 +34,13 @@ function safeNum(v, fallback) {
 function pickConfigFromPayload(payload = {}) {
   const nick = String(payload.nick || "").trim();
   const apiKey = String(payload.apiKey || "").trim();
-  const baseUrl =
-    String(payload.baseUrl || "").trim() ||
-    String(TPV_CONFIG.facturaScriptsApiBase || "").trim();
+
+  const baseUrl = String(payload.baseUrl || "").trim();
+
+  if (!baseUrl) {
+    // aquí decides: o modo demo explícito, o lanzar error
+    throw new Error("Falta baseUrl en payload (no se permite fallback).");
+  }
 
   const idtpv = safeNum(payload.idtpv, safeNum(TPV_CONFIG.idtpv, 1));
   return { nick, apiKey, baseUrl, idtpv };
