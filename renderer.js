@@ -13073,10 +13073,13 @@ async function setPriceEditMode(v) {
 }
 
 function grossToNet(gross, taxRate) {
-  const g = Number(gross) || 0;
+  const g = Number(String(gross).replace(",", ".")) || 0;
   const t = Number(taxRate) || 0;
   const divisor = 1 + t / 100;
-  return divisor > 0 ? round2(g / divisor) : round2(g);
+  const net = divisor > 0 ? g / divisor : g;
+
+  // ✅ guarda con más precisión (ajusta 8/10 según quieras)
+  return Number(net.toFixed(8));
 }
 
 function refreshPriceEditToggleUI() {
