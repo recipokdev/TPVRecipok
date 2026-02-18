@@ -1,0 +1,275 @@
+/* ===== customer.css (2 columnas + total derecha) ===== */
+:root {
+  --bg: #0b1220;
+  --panel: rgba(17, 24, 39, 0.9);
+  --panel2: rgba(15, 23, 42, 0.86);
+  --txt: #e5e7eb;
+  --muted: rgba(229, 231, 235, 0.78);
+  --line: rgba(255, 255, 255, 0.06);
+  --shadow: rgba(0, 0, 0, 0.35);
+  --badge: #f59e0b;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    Arial,
+    sans-serif;
+  background:
+    radial-gradient(
+      1200px 600px at 30% 0%,
+      rgba(43, 108, 255, 0.12),
+      transparent 60%
+    ),
+    radial-gradient(
+      1000px 500px at 80% 20%,
+      rgba(245, 158, 11, 0.06),
+      transparent 55%
+    ),
+    linear-gradient(180deg, #0b1220 0%, #071024 100%);
+  color: var(--txt);
+  overflow: hidden;
+}
+
+.wrap {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 18px;
+  gap: 14px;
+}
+
+/* ===== Header ===== */
+.top {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px 18px;
+  box-shadow: 0 14px 45px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(6px);
+}
+
+.title {
+  font-size: 28px;
+  font-weight: 950;
+  letter-spacing: 0.06em;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sub {
+  margin-top: 8px;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+/* ===== List wrapper ===== */
+.list {
+  flex: 1;
+  min-height: 0; /* crucial para que flex calcule bien */
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 14px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+}
+
+/* ===== Items: 2 columnas top->bottom ===== */
+#items {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  /* 2 columnas, llenado vertical y luego pasa a la segunda */
+  column-count: 2;
+  column-gap: 14px;
+  column-fill: auto;
+
+  /* aire para scrollbar */
+  padding-right: 8px;
+}
+
+/* Scrollbar (webkit) */
+#items::-webkit-scrollbar {
+  width: 10px;
+}
+#items::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+}
+#items::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 999px;
+}
+
+/* Cada fila debe “no partirse” entre columnas */
+.row {
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+
+  display: flex;
+  gap: 14px;
+  align-items: center;
+
+  padding: 14px;
+  border-radius: 16px;
+
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.05),
+    rgba(255, 255, 255, 0.03)
+  );
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+
+  /* IMPORTANTE: al usar columns, el “gap” vertical se hace con margin */
+  margin: 0 0 12px 0;
+  width: 100%;
+}
+
+.thumb {
+  width: 96px;
+  height: 96px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.06);
+  object-fit: cover;
+  flex: 0 0 auto;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
+}
+
+.info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.name {
+  font-size: 22px;
+  font-weight: 950;
+  line-height: 1.05;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.secondary {
+  font-size: 15px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meta {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  opacity: 0.96;
+}
+
+.qty {
+  font-weight: 950;
+  font-size: 16px;
+}
+
+.unit {
+  font-size: 13px;
+  opacity: 0.85;
+}
+
+.badge {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 950;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--badge);
+  color: #111827;
+  box-shadow: 0 6px 18px rgba(245, 158, 11, 0.25);
+}
+
+.lineTotal {
+  font-size: 18px;
+  font-weight: 950;
+  min-width: 110px;
+  text-align: right;
+  letter-spacing: 0.2px;
+}
+
+/* ===== Footer: TOTAL a la derecha ===== */
+.bottom {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end; /* derecha */
+}
+
+.total {
+  width: 440px; /* fijo a la derecha */
+  background: linear-gradient(
+    135deg,
+    rgba(29, 78, 216, 0.98),
+    rgba(37, 99, 235, 0.98)
+  );
+  border-radius: 18px;
+  padding: 18px 22px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: 0 16px 45px var(--shadow);
+}
+
+.total .label {
+  font-size: 13px;
+  opacity: 0.9;
+  font-weight: 930;
+  letter-spacing: 0.11em;
+}
+
+.total .amount {
+  font-size: 60px;
+  font-weight: 950;
+  line-height: 1;
+}
+
+/* ===== Estado vacío ===== */
+.empty {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  font-size: 42px;
+  font-weight: 950;
+  opacity: 0.6;
+  letter-spacing: 0.04em;
+}
+
+/* ===== Ajuste por pantallas pequeñas ===== */
+@media (max-width: 1100px) {
+  #items {
+    column-count: 1;
+  }
+  .total {
+    width: 360px;
+  }
+}
+
+#items {
+  overflow-x: auto;
+  overflow-y: hidden; /* en 2 columnas suele sobrar */
+}

@@ -82,3 +82,7 @@ contextBridge.exposeInMainWorld("TPV_AUTOSTART", {
   get: () => ipcRenderer.invoke("cfg:getAutostart"),
   set: (val) => ipcRenderer.invoke("cfg:setAutostart", !!val),
 });
+
+contextBridge.exposeInMainWorld("TPV_CUSTOMER", {
+  setState: (state) => ipcRenderer.send("customer:setState", state),
+});

@@ -176,6 +176,64 @@ const emailKeyboardBtn = document.getElementById("emailKeyboardBtn");
 
 // ===== Funciones auxiliares =====
 
+function pushCustomerState() {
+  try {
+    const cashOpen = !!cashSession?.open;
+
+    // Si NO hay caja abierta: pantalla cliente debe quedar en "Caja cerrada"
+    if (!cashOpen) {
+      window.TPV_CUSTOMER?.setState?.({
+        cashOpen: false,
+        items: [],
+        total: 0,
+        statusText: "CAJA CERRADA",
+        subLine: currentTerminal?.name
+          ? `Terminal: ${currentTerminal.name}`
+          : "",
+        ts: Date.now(),
+      });
+      return;
+    }
+
+    const items = (Array.isArray(cart) ? cart : []).map((item) => {
+      const unitPrice = Number(getUnitGross(item) || 0);
+      const qty = Number(item.qty || 0);
+      const lineTotal = unitPrice * qty;
+
+      return {
+        lineId: item._lineId,
+        name: item.name || "",
+        secondaryName: item.secondaryName || "",
+        qty,
+        unitPrice,
+        lineTotal,
+        imageUrl: item.imageUrl || item.imgUrl || null, // si no existe, da igual
+        modified: !!isPriceModified?.(item),
+      };
+    });
+
+    const total = items.reduce((a, it) => a + Number(it.lineTotal || 0), 0);
+
+    const subLine = [
+      currentTerminal?.name ? `Terminal: ${currentTerminal.name}` : "",
+      cashSession?.remoteCajaId ? `Caja: ${cashSession.remoteCajaId}` : "",
+    ]
+      .filter(Boolean)
+      .join(" | ");
+
+    window.TPV_CUSTOMER?.setState?.({
+      cashOpen: true,
+      items,
+      total,
+      statusText: "LISTO",
+      subLine,
+      ts: Date.now(),
+    });
+  } catch (_) {
+    // no romper TPV si falla la pantalla cliente
+  }
+}
+
 /* =========================
    ESTADO GLOBAL TPV
 ========================= */
@@ -193,9 +251,18 @@ function setAdminFlag(isAdmin, source = "unknown") {
     );
   } catch {}
 
+  // UI de permisos (botones admin, etc.)
   applyAdminOnlyUI?.();
   refreshOptionsUI?.();
-  renderProducts?.(); // 🔥 importante para el lápiz
+
+  // ✅ SOLO si hay caja abierta: repintar productos (lápiz / modo edición)
+  if (cashSession?.open) {
+    renderProducts?.();
+  } else {
+    // ✅ si la caja está cerrada, aseguramos que no haya “restos” visibles
+    // (renderMainUI ya vacía todo si open=false)
+    renderMainUI?.();
+  }
 }
 
 function renderCashIdChip() {
@@ -395,6 +462,7 @@ function getSubcategoriesContainer() {
 
 // ===== Categorías (familias) =====
 function renderCategories() {
+  console.trace("[TRACE] renderCategories()");
   const container = document.getElementById("categories");
   if (!container) return;
 
@@ -523,6 +591,7 @@ function formatPayLabel(descripcion, codpago) {
 
 // ===== Productos =====
 function renderProducts() {
+  console.trace("[TRACE] renderProducts()");
   const grid = document.getElementById("productsGrid");
   if (!grid) return;
   grid.innerHTML = "";
@@ -610,6 +679,7 @@ function renderProducts() {
 }
 
 function renderMainUI() {
+  console.log("[TRACE] renderMainUI cashSession.open=", cashSession?.open);
   if (!cashSession?.open) {
     // dejar todo vacío
     const grid = document.getElementById("productsGrid");
@@ -697,9 +767,17 @@ function buildCartLine(product, quantity) {
 
   return {
     _lineId: makeLineId(),
+
+    // ✅ IDs (útil para variantes y para empatar luego si hiciera falta)
     id: product.id,
+    baseProductId: product.baseProductId || product.id,
+
     name: product.name,
     secondaryName: product.secondaryName || "",
+
+    // ✅ Imagen para pantalla cliente
+    imageUrl: product.imageUrl || null,
+
     price: priceNet,
     taxRate,
     grossPrice: priceGross,
@@ -882,6 +960,14 @@ function renderCart() {
   if (totalEl) {
     totalEl.textContent = eur(total);
   }
+
+  cart.forEach((item) => {
+    if (!item.imageUrl && item.id != null) {
+      const p = (products || []).find((x) => String(x.id) === String(item.id));
+      if (p?.imageUrl) item.imageUrl = p.imageUrl;
+    }
+  });
+  pushCustomerState();
 }
 
 const LOGIN_TOKEN_KEY = "tpv_login_token";
@@ -1012,20 +1098,37 @@ async function openLoginModal() {
 
   // --- 2) OBTENER USUARIOS ---
   const fetchFsUsers = async () => {
-    const cfg = window.RECIPOK_API || {};
-    const url = `${cfg.baseUrl.replace(/\/+$/, "")}/users?limit=200`;
+    // 1) conseguir companyEmail (igual que haces en doLogin)
+    let companyEmail = "";
     try {
-      const res = await fetch(url, {
-        headers: { Accept: "application/json", Token: cfg.apiKey },
-        cache: "no-store",
-      });
+      companyEmail = (localStorage.getItem("tpv_companyEmail") || "").trim();
+    } catch {}
+    if (!companyEmail && window.TPV_CFG) {
+      try {
+        companyEmail = String(
+          (await window.TPV_CFG.get("company.email")) || "",
+        ).trim();
+      } catch {}
+    }
+    if (!companyEmail) return [];
+
+    // 2) construir URL a tpv_users.php
+    const base = window.TPV_CONFIG?.resolverUrl || "";
+    const url =
+      base.replace(/\/clients\.json(\?.*)?$/i, "/tpv_users.php") +
+      `?email=${encodeURIComponent(companyEmail)}`;
+
+    try {
+      const res = await fetch(url, { cache: "no-store" });
       const data = await res.json().catch(() => null);
-      if (!res.ok || !Array.isArray(data)) return [];
-      return data
-        .filter((u) => u && u.nick && u.enabled !== false)
-        .sort((a, b) => a.nick.localeCompare(b.nick, "es"));
+      if (!res.ok || !data || data.ok !== true || !Array.isArray(data.users))
+        return [];
+
+      return data.users
+        .filter((u) => u && u.nick) // ya viene filtrado desde PHP
+        .sort((a, b) => String(a.nick).localeCompare(String(b.nick), "es"));
     } catch (e) {
-      console.error("❌ Error fetchFsUsers:", e);
+      console.error("❌ Error fetch tpv_users.php:", e);
       return [];
     }
   };
@@ -1183,7 +1286,6 @@ async function openLoginModal() {
       // ✅ 2) Estado admin runtime + UI
       setAdminFlag(!!isAdminSelected, "login");
       await loadPriceEditModeFromCfg?.();
-      renderProducts?.();
 
       // ✅ 3) Persistencia “no pedir nunca más”
       if (window.TPV_CFG) {
@@ -1204,19 +1306,45 @@ async function openLoginModal() {
         await window.TPV_AUTH?.setCurrentUser?.(loggedUser, !!isAdminSelected);
       } catch {}
 
+      // ✅ cambio de usuario “en caliente”
+
+      try {
+        const idcaja = getCajaIdSafe?.();
+        if (idcaja) {
+          await apiWrite(`tpvcajas/${idcaja}`, "PATCH", {
+            idcaja: String(idcaja),
+            nick: String(loggedUser || "").trim(),
+          });
+        }
+      } catch (e) {
+        console.warn(
+          "[LOGIN] No pude actualizar nick en caja:",
+          e?.message || e,
+        );
+      }
+
       // ✅ 5) UI final
       overlay.classList.add("hidden");
       unlockAppUI();
       refreshLoggedUserUI?.();
 
       LOGIN_ACTIVE = false;
-      cashOpenDialogShown = false;
 
-      await loadDataFromApi({ refresh: true }); // si lo haces aquí o antes, ok
-      await ensureTerminalAgentDefaults(); // ✅ SIEMPRE después del refresh
+      // ✅ No tocar cashOpenDialogShown aquí
 
-      await maybeOpenCashOrRecover();
+      // Siempre refrescar cabecera/terminal/agente
+      await ensureTerminalAgentDefaults();
       renderCashIdChip();
+
+      // ✅ Si hay caja abierta, no hace falta forzar loadDataFromApi aquí
+      // (solo si realmente necesitas refrescar catálogo por cambio de empresa, etc.)
+      if (cashSession?.open) {
+        // opcional: si de verdad lo necesitas:
+        // await loadDataFromApi({ refresh: true });
+        renderMainUI?.(); // esto pintará porque cashSession.open = true
+      } else {
+        renderMainUI?.(); // vaciará por tu gating (open=false)
+      }
 
       return true;
     } catch (e) {
@@ -3709,6 +3837,7 @@ async function maybeOpenCashOrRecover() {
       // limpiar SIEMPRE si no validó como abierta
       cashSession.remoteCajaId = null;
       cashSession.open = false;
+      pushCustomerState();
       localStorage.removeItem("tpv_remoteCajaId");
     }
 
@@ -3764,6 +3893,7 @@ async function maybeOpenCashOrRecover() {
     // 3) No hay nada abierto → pedir apertura (solo una vez)
     cashSession.remoteCajaId = null;
     cashSession.open = false;
+    pushCustomerState();
     renderCashIdChip();
 
     if (!cashOpenDialogShown) {
@@ -4543,6 +4673,7 @@ async function confirmCashClosing() {
   }
 
   cashSession.open = false;
+  pushCustomerState();
   cashSession.remoteCajaId = null;
   try {
     localStorage.removeItem("tpv_remoteCajaId");
@@ -4612,6 +4743,7 @@ function resetTPVToEmpty() {
 
   // Estado de caja / selección
   cashSession.open = false;
+  pushCustomerState();
   currentTerminal = null;
   currentAgent = null;
 
@@ -4873,6 +5005,7 @@ if (cashOpenCancelBtn) {
     if (cashDialogMode === "open") {
       cashOpenDialogShown = false; // <-- CLAVE anti-limbo
       cashSession.open = false;
+      pushCustomerState();
       cashSession.remoteCajaId = null;
       try {
         localStorage.removeItem("tpv_remoteCajaId");
@@ -5164,16 +5297,22 @@ async function apiCloseCashInFS() {
   const diff = counted - expectedCash;
 
   const payload = {
+    idcaja: String(remoteId),
     fechafin: nowFs(),
     dinerofin: counted,
     ingresos: cashIncome,
-    nick: getLoginUser(),
+    nick: String(getLoginUser() || "").trim(),
     totalmovi: movements,
     totalcaja: expectedCash,
     diferencia: diff,
     numtickets: Number(cashSession.numtickets || 0),
     totaltickets: Number(cashSession.totalSales || 0),
   };
+
+  payload.nick =
+    String(
+      getLoginUser?.() || localStorage.getItem("tpv_login_user") || "",
+    ).trim() || "—";
 
   // ✅ Mantener observaciones (usuario + automático)
   if (remoteCaja) {
@@ -5318,11 +5457,8 @@ if (cashHeaderBtn) {
 
     // 3) Login: si no hay sesión, intenta auto-login; si falla, abre modal
     if (!getLoginUser?.() && !localStorage.getItem("tpv_login_user")) {
-      const autoOk = await loadPersistedOperatorIntoLogin();
-      if (!autoOk) {
-        const ok = await openLoginModal();
-        if (!ok) return;
-      }
+      const ok = await ensureLoginAutoOrPrompt();
+      if (!ok) return;
     }
 
     // 4) Si caja abierta => cerrar (con control tickets aparcados)
@@ -5444,62 +5580,6 @@ async function loadPersistedCompanyIntoRecipokApi() {
     return true;
   }
   return false;
-}
-
-async function loadPersistedOperatorIntoLogin() {
-  try {
-    const TPV_CFG = window.TPV_CFG;
-    if (!TPV_CFG) return false;
-
-    // 1) Leer credenciales persistidas
-    const username = String((await TPV_CFG.get("auth.username")) || "").trim();
-    const token = String((await TPV_CFG.get("auth.token")) || "").trim();
-    const isAdmin = !!(await TPV_CFG.get("auth.isAdmin"));
-
-    if (!username || !token) return false;
-
-    // 2) Reconstruir sesión runtime (CRÍTICO)
-    try {
-      setLoginSession({
-        user: username,
-        token: token,
-        codagente: String((await TPV_CFG.get("auth.codagente")) || ""),
-        codalmacen: String((await TPV_CFG.get("auth.codalmacen")) || ""),
-      });
-    } catch (e) {
-      console.warn("[AUTOLOGIN] setLoginSession falló:", e?.message || e);
-    }
-
-    // 3) Mantener compatibilidad con tu localStorage actual
-    try {
-      localStorage.setItem("tpv_login_user", username);
-      localStorage.setItem("tpv_login_token", token);
-      localStorage.setItem("tpv_last_user", username);
-      localStorage.setItem("tpv_isAdmin", isAdmin ? "1" : "0");
-    } catch {}
-
-    // 4) Estado admin runtime + UI
-    TPV_STATE.isAdmin = isAdmin;
-    try {
-      applyAdminOnlyUI?.();
-    } catch {}
-
-    // 5) Informar a main del usuario + admin (CRÍTICO)
-    try {
-      await window.TPV_AUTH?.setCurrentUser?.(username, isAdmin);
-    } catch {}
-
-    // 6) Refrescar header
-    refreshLoggedUserUI?.();
-
-    return true;
-  } catch (e) {
-    console.warn(
-      "[AUTOLOGIN] No se pudo cargar operador persistido:",
-      e?.message || e,
-    );
-    return false;
-  }
 }
 
 async function autoSelectTerminalAndAgentIfPossible() {
@@ -11796,6 +11876,7 @@ window.addEventListener("keydown", async (e) => {
     currentAgent = null;
     currentTerminal = null;
     cashSession.open = false;
+    pushCustomerState();
     cashSession.remoteCajaId = null;
   } catch {}
 

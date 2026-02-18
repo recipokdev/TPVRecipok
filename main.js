@@ -1,5 +1,5 @@
 // main.js
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, screen } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const { execFile, spawn } = require("child_process");
 const path = require("path");
@@ -10,7 +10,10 @@ const { globalShortcut } = require("electron");
 let isRecreatingWindow = false;
 let mainWin = null;
 let splashWin = null;
-let currentUser = { name: "admin", isAdmin: true };
+let currentUser = { name: null, isAdmin: false };
+let customerWin = null;
+let customerCreating = false;
+let lastCustomerState = null;
 
 function readChannel() {
   try {
@@ -696,6 +699,7 @@ app.whenReady().then(async () => {
   configureAutoStart();
   await runAutoUpdateGate();
   createWindow();
+  ensureCustomerWindow();
   registerShortcuts();
   closeSplash();
 });
@@ -1228,4 +1232,97 @@ ipcMain.handle("cfg:getAutostart", () => {
 
 ipcMain.handle("app:getVersion", () => {
   return { ok: true, version: app.getVersion() };
+});
+
+function pickCustomerDisplay() {
+  const displays = screen.getAllDisplays();
+  const primary = screen.getPrimaryDisplay();
+
+  // intenta usar otra distinta a la principal
+  const other = displays.find((d) => d.id !== primary.id);
+
+  return other || primary;
+}
+
+async function ensureCustomerWindow() {
+  if (customerWin && !customerWin.isDestroyed()) return customerWin;
+  if (customerCreating) return null;
+
+  customerCreating = true;
+
+  try {
+    const isDev = !app.isPackaged;
+    const target = pickCustomerDisplay();
+    const b = target.bounds;
+
+    customerWin = new BrowserWindow({
+      x: b.x,
+      y: b.y,
+      width: b.width,
+      height: b.height,
+      frame: false,
+      show: false,
+      backgroundColor: "#0b1220",
+      webPreferences: {
+        contextIsolation: true,
+        preload: path.join(__dirname, "customer_preload.js"),
+        sandbox: false,
+        devTools: isDev,
+      },
+    });
+
+    customerWin.setMenuBarVisibility(false);
+    customerWin.setAutoHideMenuBar(true);
+
+    // Si quieres asegurar que cae en ese monitor incluso si cambia:
+    customerWin.setBounds(b);
+
+    customerWin.on("closed", () => {
+      customerWin = null;
+    });
+
+    // Carga
+    await customerWin.loadFile(path.join(__dirname, "customer.html"));
+
+    customerWin.once("ready-to-show", () => {
+      if (!customerWin || customerWin.isDestroyed()) return;
+      customerWin.show();
+      try {
+        customerWin.setFullScreen(true);
+      } catch {}
+    });
+
+    // Cada vez que termina de cargar (reload, etc.), reinyectamos estado
+    customerWin.webContents.on("did-finish-load", () => {
+      if (lastCustomerState && customerWin && !customerWin.isDestroyed()) {
+        customerWin.webContents.send("customer:state", lastCustomerState);
+      }
+    });
+
+    return customerWin;
+  } catch (e) {
+    console.log("[CUSTOMER] No se pudo crear/cargar ventana:", e?.message || e);
+    try {
+      if (customerWin && !customerWin.isDestroyed()) customerWin.destroy();
+    } catch {}
+    customerWin = null;
+    return null;
+  } finally {
+    customerCreating = false;
+  }
+}
+
+// Recibe estado desde TPV (renderer) y lo manda a la pantalla cliente
+ipcMain.on("customer:setState", async (_e, state) => {
+  lastCustomerState = state || null;
+
+  const win = await ensureCustomerWindow();
+  if (!win || win.isDestroyed()) return;
+
+  // Si aún no cargó, did-finish-load hará el envío.
+  try {
+    if (win.webContents.isLoading()) return;
+  } catch {}
+
+  win.webContents.send("customer:state", lastCustomerState);
 });
