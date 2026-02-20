@@ -102,6 +102,13 @@ let TPV_STATE = {
   isAdmin: false, // cuenta para ver mas opciones adicionales en el modal opciones
 };
 
+let customerMode = "CART";
+let customerThanksUntil = 0;
+let customerLastSale = null;
+
+// ✅ lo que se verá mientras el carrito real esté vacío tras el cobro
+let customerDisplayOverride = null;
+
 // Estado para bloquear cierres
 window.__TPV_GUARDS__ = () => {
   const cashOpen = !!(cashSession && cashSession.open);
@@ -176,26 +183,68 @@ const emailKeyboardBtn = document.getElementById("emailKeyboardBtn");
 
 // ===== Funciones auxiliares =====
 
+function customerSetMode(mode, opts = {}) {
+  customerMode = String(mode || "CART").toUpperCase();
+
+  if (customerMode === "THANKS") {
+    const ttlMs = Number(opts.ttlMs ?? 12000);
+    customerThanksUntil = Date.now() + Math.max(1000, ttlMs);
+
+    customerLastSale = {
+      total: Number(opts.total ?? 0),
+      ticket: opts.ticket ? String(opts.ticket) : "",
+      paymentMethod: opts.paymentMethod ? String(opts.paymentMethod) : "",
+      agent: opts.agent ? String(opts.agent) : "",
+      ts: Date.now(),
+      items: Array.isArray(opts.items) ? opts.items : [],
+    };
+
+    // ✅ CLAVE: congelar lo que se mostrará después del cobro
+    customerDisplayOverride = {
+      items: customerLastSale.items,
+      total: customerLastSale.total,
+    };
+  }
+
+  pushCustomerState();
+}
+
+function customerTickThanksExpiry() {
+  if (customerMode === "THANKS" && Date.now() > (customerThanksUntil || 0)) {
+    customerMode = "CART"; // ✅ ocultar notice
+    customerThanksUntil = 0;
+    pushCustomerState();
+  }
+}
+
 function pushCustomerState() {
   try {
-    const cashOpen = !!cashSession?.open;
+    const cashOpen = !!cashSession?.open || !!cashSession?.remoteCajaId;
 
-    // Si NO hay caja abierta: pantalla cliente debe quedar en "Caja cerrada"
+    // Si se quedó en CLOSED y ahora hay caja, vuelve a CART
+    if (cashOpen && (customerMode === "CLOSED" || !customerMode)) {
+      customerMode = "CART";
+      customerThanksUntil = 0;
+    }
+
     if (!cashOpen) {
+      customerMode = "CLOSED";
       window.TPV_CUSTOMER?.setState?.({
         cashOpen: false,
+        mode: "CLOSED",
         items: [],
         total: 0,
-        statusText: "CAJA CERRADA",
         subLine: currentTerminal?.name
           ? `Terminal: ${currentTerminal.name}`
           : "",
+        lastSale: customerLastSale || null,
         ts: Date.now(),
       });
       return;
     }
 
-    const items = (Array.isArray(cart) ? cart : []).map((item) => {
+    // Items reales desde carrito
+    const cartItems = (Array.isArray(cart) ? cart : []).map((item) => {
       const unitPrice = Number(getUnitGross(item) || 0);
       const qty = Number(item.qty || 0);
       const lineTotal = unitPrice * qty;
@@ -207,32 +256,54 @@ function pushCustomerState() {
         qty,
         unitPrice,
         lineTotal,
-        imageUrl: item.imageUrl || item.imgUrl || null, // si no existe, da igual
+        imageUrl: item.imageUrl || item.imgUrl || null,
         modified: !!isPriceModified?.(item),
       };
     });
 
-    const total = items.reduce((a, it) => a + Number(it.lineTotal || 0), 0);
+    const cartTotal = cartItems.reduce(
+      (a, it) => a + Number(it.lineTotal || 0),
+      0,
+    );
+
+    // ✅ LÓGICA CLAVE:
+    // - Si el carrito está vacío pero existe override, mostramos override.
+    // - Si hay carrito (nuevo cliente), mostramos carrito real.
+    let itemsToShow = cartItems;
+    let totalToShow = cartTotal;
+
+    if (cartItems.length === 0 && customerDisplayOverride?.items?.length) {
+      itemsToShow = customerDisplayOverride.items;
+      totalToShow = Number(customerDisplayOverride.total || 0);
+    }
 
     const subLine = [
       currentTerminal?.name ? `Terminal: ${currentTerminal.name}` : "",
       cashSession?.remoteCajaId ? `Caja: ${cashSession.remoteCajaId}` : "",
+      currentAgent?.nick ? `Agente: ${currentAgent.nick}` : "",
     ]
       .filter(Boolean)
       .join(" | ");
 
     window.TPV_CUSTOMER?.setState?.({
       cashOpen: true,
-      items,
-      total,
-      statusText: "LISTO",
+      mode: customerMode || "CART",
+      items: itemsToShow,
+      total: totalToShow,
       subLine,
+      lastSale: customerLastSale || null,
       ts: Date.now(),
     });
-  } catch (_) {
-    // no romper TPV si falla la pantalla cliente
-  }
+  } catch (_) {}
 }
+
+(function startCustomerTicker() {
+  setInterval(() => {
+    try {
+      customerTickThanksExpiry();
+    } catch {}
+  }, 500);
+})();
 
 /* =========================
    ESTADO GLOBAL TPV
@@ -967,6 +1038,12 @@ function renderCart() {
       if (p?.imageUrl) item.imageUrl = p.imageUrl;
     }
   });
+  // ✅ si empieza un nuevo carrito, dejamos de mostrar el último cobrado
+  if ((cart?.length || 0) > 0 && customerDisplayOverride) {
+    customerDisplayOverride = null;
+    // opcional: también limpiar lastSale si quieres
+    // customerLastSale = null;
+  }
   pushCustomerState();
 }
 
@@ -6822,6 +6899,7 @@ async function openOptions() {
 
   syncGroupLinesFromFS?.();
   await bindAutostartToggle?.();
+  bindCustomerDisplayToggle();
 }
 
 function closeOptions() {
@@ -8367,6 +8445,7 @@ async function onPayButtonClick() {
     // 1) Modal cobro
     const payResult = await openPayModal(totalCart);
     if (!payResult) {
+      customerSetMode("CART");
       setStatusText("Cobro cancelado");
       return;
     }
@@ -8436,6 +8515,7 @@ async function onPayButtonClick() {
       ticketPayload.paymentMethod = "Mixto";
     }
 
+    customerSetMode("PAYING");
     setStatusText("Cobrando...");
 
     // Para FS: codpago principal + (opcional) desglose pagos
@@ -8444,6 +8524,23 @@ async function onPayButtonClick() {
 
     // Snapshot carrito (inmutable)
     const cartSnapshot = Array.isArray(cart) ? cart.map((i) => ({ ...i })) : [];
+
+    const cartSnapshotToCustomerItems = cartSnapshot.map((item) => {
+      const unitPrice = Number(getUnitGross(item) || 0);
+      const qty = Number(item.qty || 0);
+      const lineTotal = unitPrice * qty;
+
+      return {
+        lineId: item._lineId,
+        name: item.name || "",
+        secondaryName: item.secondaryName || "",
+        qty,
+        unitPrice,
+        lineTotal,
+        imageUrl: item.imageUrl || item.imgUrl || null,
+        modified: !!isPriceModified?.(item),
+      };
+    });
 
     // Datos auxiliares offline/post
     ticketPayload._payBreakdown = pagosFinal;
@@ -8509,6 +8606,15 @@ async function onPayButtonClick() {
       } catch (e) {
         console.warn("No se pudo construir ticket offline:", e?.message || e);
       }
+
+      customerSetMode("THANKS", {
+        ttlMs: 12000,
+        total: Number(payResult?.total ?? totalCart ?? 0),
+        ticket: lastTicket?.numero || "OFFLINE",
+        paymentMethod: ticketPayload.paymentMethod || "",
+        agent: ticketPayload._payNick || "",
+        items: cartSnapshotToCustomerItems,
+      });
 
       cart = [];
       renderCart();
@@ -8678,9 +8784,19 @@ async function onPayButtonClick() {
     if (printBtn) printBtn.disabled = false;
 
     // Vaciar carrito
+    customerSetMode("THANKS", {
+      ttlMs: 12000,
+      total: facturaTotalFS,
+      ticket: lastTicket?.numero || facturaResp?.codigo || "",
+      paymentMethod: ticketPayload.paymentMethod || "",
+      agent: ticketPayload._payNick || "",
+      items: cartSnapshotToCustomerItems, // ✅ IMPORTANTE
+    });
+
     cart = [];
     renderCart();
     clearPaidParkedTicket();
+
     setStatusText("Venta cobrada");
 
     toast(
@@ -8706,6 +8822,7 @@ async function onPayButtonClick() {
     }
   } catch (err) {
     console.error("Error al cobrar:", err);
+    customerSetMode("CART"); // ✅ evita quedarse en PAYING
     toast("Error al cobrar: " + (err.message || err), "err", "Cobrar");
     setStatusText("Error al cobrar");
   } finally {
@@ -13112,6 +13229,34 @@ async function bindAutostartToggle() {
       try {
         const r = await window.TPV_AUTOSTART.get();
         el.checked = !!r?.autostart;
+      } catch {}
+    }
+  };
+}
+
+async function bindCustomerDisplayToggle() {
+  const el = document.getElementById("customerDisplayToggle");
+  if (!el) return;
+
+  try {
+    const r = await window.TPV_CUSTOMER_CTRL.getEnabled();
+    el.checked = !!r?.enabled;
+  } catch {}
+
+  el.onchange = async () => {
+    try {
+      const val = !!el.checked;
+      const r = await window.TPV_CUSTOMER_CTRL.setEnabled(val);
+      if (!r?.ok) throw new Error(r?.error || "No se pudo guardar");
+      toast(
+        val ? "Pantalla cliente activada" : "Pantalla cliente desactivada",
+        "ok",
+      );
+    } catch {
+      toast("No se pudo cambiar pantalla cliente", "warn");
+      try {
+        const r = await window.TPV_CUSTOMER_CTRL.getEnabled();
+        el.checked = !!r?.enabled;
       } catch {}
     }
   };

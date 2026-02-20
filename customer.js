@@ -6,6 +6,94 @@ function eur(n) {
   );
 }
 
+/* ===== Reloj ===== */
+(function startClock() {
+  const el = document.getElementById("clock");
+  if (!el) return;
+
+  const tick = () => {
+    const d = new Date();
+    el.textContent = d.toLocaleTimeString("es-ES", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+  tick();
+  setInterval(tick, 1000);
+})();
+
+/* ===== Banner (usa tu HTML/CSS de .banner) =====
+   Si ya tienes setNotice(), lo usamos; si no, lo creamos aquí.
+*/
+let noticeTimer = null;
+
+function setNotice(show, title = "", sub = "", ttlMs = 0) {
+  const box = document.getElementById("notice");
+  const tEl = document.getElementById("noticeTitle");
+  const sEl = document.getElementById("noticeSub");
+  if (!box || !tEl || !sEl) return;
+
+  if (!show) {
+    box.classList.add("hidden");
+    if (noticeTimer) clearTimeout(noticeTimer);
+    noticeTimer = null;
+    return;
+  }
+
+  tEl.textContent = title || "";
+  sEl.textContent = sub || "";
+
+  box.classList.remove("hidden");
+
+  if (noticeTimer) clearTimeout(noticeTimer);
+  noticeTimer = null;
+
+  if (ttlMs > 0) {
+    noticeTimer = setTimeout(() => {
+      box.classList.add("hidden");
+      noticeTimer = null;
+    }, ttlMs);
+  }
+}
+
+function applyDynamicGridLayout(itemCount) {
+  const el = document.getElementById("items");
+  if (!el) return;
+
+  // Altura disponible real
+  const H = el.clientHeight;
+
+  // 1) Decide cuántas filas quieres “máximo” por columna
+  //    (tu caso: 5-6 suele quedar bien)
+  const targetRows = 5; // prueba 5; si quieres más compacto, 6
+  const rows = Math.max(1, targetRows);
+
+  // 2) Calcula altura de cada fila para que NO quede hueco abajo
+  //    Restamos gaps: (rows-1)*gap
+  const gap = 12;
+  const rowH = Math.floor((H - gap * (rows - 1)) / rows);
+
+  // 3) Cuántas columnas necesitas para itemCount
+  const colsNeeded = Math.max(1, Math.ceil((itemCount || 0) / rows));
+
+  // 4) Intentar que quepan sin scroll hasta cierto mínimo
+  const W = el.clientWidth;
+  const minColW = 430; // mínimo legible (ajusta)
+  const maxColsFit = Math.max(1, Math.floor((W + gap) / (minColW + gap)));
+
+  // si caben, ajustamos ancho para encajar justo; si no, usamos minColW y habrá scroll
+  let colW;
+  if (colsNeeded <= maxColsFit) {
+    colW = Math.floor((W - gap * (colsNeeded - 1)) / colsNeeded);
+  } else {
+    colW = minColW;
+  }
+
+  el.style.setProperty("--rows", String(rows));
+  el.style.setProperty("--rowH", `${rowH}px`);
+  el.style.setProperty("--colW", `${colW}px`);
+}
+
 function render(state) {
   const itemsEl = document.getElementById("items");
   const totalEl = document.getElementById("total");
@@ -14,27 +102,67 @@ function render(state) {
   const cashOpen = !!state?.cashOpen;
   const items = Array.isArray(state?.items) ? state.items : [];
   const total = Number(state?.total || 0);
+  const mode = String(state?.mode || "").toUpperCase();
 
   subEl.textContent = state?.subLine || "---";
   totalEl.textContent = eur(total);
 
+  if (!cashOpen || mode === "CLOSED") {
+    setNotice(true, "CAJA CERRADA", state?.subLine || "");
+    itemsEl.innerHTML = "";
+    return;
+  }
+
+  if (mode === "PAYING") {
+    // sin TTL: mientras se está cobrando
+    setNotice(true, "COBRANDO…", "Espere por favor");
+  } else if (mode === "THANKS") {
+    const t = state?.lastSale?.ticket ? `Ticket: ${state.lastSale.ticket}` : "";
+    const pm = state?.lastSale?.paymentMethod
+      ? `Pago: ${state.lastSale.paymentMethod}`
+      : "";
+    const agent = state?.lastSale?.agent
+      ? `Agente: ${state.lastSale.agent}`
+      : "";
+
+    // ✅ CON TTL: se oculta solo aunque el modo THANKS siga
+    setNotice(
+      true,
+      "✅ PAGO REALIZADO",
+      [t, pm, agent].filter(Boolean).join(" · "),
+      5000, // 5s (ajusta)
+    );
+  } else {
+    setNotice(false);
+  }
+
+  (function watchItemsResize() {
+    const el = document.getElementById("items");
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      // recalcula con lo último que haya en DOM
+      const count = el.querySelectorAll(".row").length;
+      applyDynamicGridLayout(count);
+    });
+    ro.observe(el);
+  })();
+  // ✅ render normal de lista (SIEMPRE)
   itemsEl.innerHTML = "";
 
-  // Si caja cerrada: lista vacía
-  if (!cashOpen) return;
-
-  const MAX = 999; // prueba 12–16 según tu monitor cliente
-  const slice = items.slice(-MAX);
-
-  for (const it of slice) {
+  for (const it of items) {
     const row = document.createElement("div");
     row.className = "row";
 
     const img = document.createElement("img");
     img.className = "thumb";
     img.alt = it.name || "";
-    if (it.imageUrl) img.src = it.imageUrl;
-    else img.style.display = "none";
+    if (it.imageUrl) {
+      img.src = it.imageUrl;
+      img.style.visibility = "visible";
+    } else {
+      img.removeAttribute("src");
+      img.style.visibility = "hidden"; // ocupa espacio igual, pero no se ve
+    }
 
     const info = document.createElement("div");
     info.className = "info";
@@ -83,6 +211,7 @@ function render(state) {
 
     itemsEl.appendChild(row);
   }
+
   requestAnimationFrame(() => startAutoScroll());
 }
 
@@ -92,6 +221,7 @@ window.TPV_CUSTOMER_IPC?.onState?.((state) => {
   } catch {}
 });
 
+/* ===== Autoscroll ===== */
 let autoScrollTimer = null;
 let autoScrollDir = 1;
 
@@ -107,30 +237,27 @@ function startAutoScroll() {
     const maxX = scroller.scrollWidth - scroller.clientWidth;
     const maxY = scroller.scrollHeight - scroller.clientHeight;
 
-    // Si hay overflow horizontal (caso 2 columnas)
+    // preferimos horizontal si hay overflow
     if (maxX > 4) {
-      scroller.scrollLeft += autoScrollDir * 1.6; // velocidad horizontal
-
+      scroller.scrollLeft += autoScrollDir * 2.0;
       if (scroller.scrollLeft >= maxX) autoScrollDir = -1;
       if (scroller.scrollLeft <= 0) autoScrollDir = 1;
       return;
     }
 
-    // Si no hay overflow horizontal pero sí vertical (fallback 1 columna / pantallas pequeñas)
+    // fallback vertical
     if (maxY > 4) {
-      scroller.scrollTop += autoScrollDir * 1.6; // velocidad vertical
-
+      scroller.scrollTop += autoScrollDir * 1.4;
       if (scroller.scrollTop >= maxY) autoScrollDir = -1;
       if (scroller.scrollTop <= 0) autoScrollDir = 1;
       return;
     }
 
-    // Nada que scrollear
     scroller.scrollLeft = 0;
     scroller.scrollTop = 0;
   };
 
-  autoScrollTimer = setInterval(tick, 60);
+  autoScrollTimer = setInterval(tick, 40);
 }
 
 function stopAutoScroll() {

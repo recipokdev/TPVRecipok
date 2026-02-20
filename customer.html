@@ -9,13 +9,23 @@
   <body>
     <div class="wrap">
       <header class="top">
-        <div class="title">🛒CARRITO</div>
+        <div class="topRow">
+          <div class="title">🛒CARRITO</div>
+          <div class="clock" id="clock"></div>
+        </div>
+
         <div class="sub" id="subLine">---</div>
+
+        <!-- ✅ notice flotante, NO ocupa espacio -->
+        <div id="notice" class="notice hidden">
+          <div class="noticeTitle" id="noticeTitle"></div>
+          <div class="noticeSub" id="noticeSub"></div>
+        </div>
       </header>
 
       <main class="list">
-  <div class="listInner" id="items"></div>
-</main>
+        <div class="listInner" id="items"></div>
+      </main>
 
       <footer class="bottom">
         <div class="total">

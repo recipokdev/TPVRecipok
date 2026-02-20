@@ -14,6 +14,7 @@ let currentUser = { name: null, isAdmin: false };
 let customerWin = null;
 let customerCreating = false;
 let lastCustomerState = null;
+let allowCustomerClose = false;
 
 function readChannel() {
   try {
@@ -239,6 +240,7 @@ function createWindow() {
     // ✅ permitir cierre real
     allowMainClose = true;
     mainWin.close();
+    destroyCustomerWindow();
   });
 
   // aplica el modo inicial
@@ -261,6 +263,114 @@ function createWindow() {
     }
   });
 }
+
+let preCashUpdateTimer = null;
+let preCashUpdateRunning = false;
+
+async function isCashOpenSafe() {
+  if (!mainWin || mainWin.isDestroyed()) return false;
+  try {
+    const guards = await mainWin.webContents.executeJavaScript(
+      "window.__TPV_GUARDS__ && window.__TPV_GUARDS__()",
+      true,
+    );
+    return !!guards?.cashOpen;
+  } catch {
+    return false;
+  }
+}
+
+async function runUpdateCheckOncePreCash() {
+  // evita solapes
+  if (preCashUpdateRunning) return { ok: false, reason: "busy" };
+  preCashUpdateRunning = true;
+
+  try {
+    // si ya hay caja, no tocar
+    if (await isCashOpenSafe()) return { ok: false, reason: "cashOpen" };
+
+    // listeners locales SOLO para este intento
+    autoUpdater.removeAllListeners();
+
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = false;
+
+    return await new Promise((resolve) => {
+      let finished = false;
+      const done = (r) => {
+        if (finished) return;
+        finished = true;
+        try { autoUpdater.removeAllListeners(); } catch {}
+        resolve(r);
+      };
+
+      autoUpdater.once("error", (err) => {
+        done({ ok: false, reason: "error", error: err?.message || String(err) });
+      });
+
+      autoUpdater.once("update-not-available", () => {
+        done({ ok: true, updated: false });
+      });
+
+      autoUpdater.once("update-available", () => {
+        // seguirá con descarga automática
+      });
+
+      autoUpdater.once("update-downloaded", async () => {
+        // última comprobación: si alguien abrió caja justo ahora, NO instalar
+        const cashOpen = await isCashOpenSafe();
+        if (cashOpen) return done({ ok: false, reason: "cashOpenedDuringDownload" });
+
+        // instalar (tu comportamiento actual)
+        try {
+          setTimeout(() => autoUpdater.quitAndInstall(true, true), 400);
+        } catch {}
+        done({ ok: true, updated: true, installing: true });
+      });
+
+      try {
+        autoUpdater.checkForUpdates();
+      } catch (e) {
+        done({ ok: false, reason: "throw", error: e?.message || String(e) });
+      }
+    });
+  } finally {
+    preCashUpdateRunning = false;
+  }
+}
+
+function startPreCashUpdateRetries() {
+  // seguridad
+  stopPreCashUpdateRetries();
+
+  const maxMinutes = 12;          // límite total de reintentos
+  const everyMs = 45 * 1000;      // cada 45s
+  const startedAt = Date.now();
+
+  preCashUpdateTimer = setInterval(async () => {
+    // corta por tiempo
+    if (Date.now() - startedAt > maxMinutes * 60 * 1000) {
+      stopPreCashUpdateRetries();
+      return;
+    }
+
+    // si ya hay caja abierta, parar
+    const cashOpen = await isCashOpenSafe();
+    if (cashOpen) {
+      stopPreCashUpdateRetries();
+      return;
+    }
+
+    // intenta check
+    await runUpdateCheckOncePreCash();
+  }, everyMs);
+}
+
+function stopPreCashUpdateRetries() {
+  if (preCashUpdateTimer) clearInterval(preCashUpdateTimer);
+  preCashUpdateTimer = null;
+}
+
 
 function createSplashWindow() {
   splashWin = new BrowserWindow({
@@ -465,10 +575,12 @@ async function runAutoUpdateGate() {
   return await new Promise((resolve) => {
     let finished = false;
     const done = (r) => {
-      if (finished) return;
-      finished = true;
-      resolve(r);
-    };
+  if (finished) return;
+  finished = true;
+
+  try { autoUpdater.removeAllListeners(); } catch {}
+  resolve(r);
+};
 
     const onProgress = (p) => {
       const pct = typeof p?.percent === "number" ? p.percent : 0;
@@ -694,12 +806,32 @@ function configureAutoStart() {
   });
 }
 
+function bootstrapCurrentUserFromCfg() {
+  try {
+    const cfg = readCfg();
+    currentUser = {
+      name: String(
+        cfg["auth.username"] || cfg["tpv.lastUser"] || "",
+      ).toLowerCase(),
+      isAdmin: !!cfg["auth.isAdmin"],
+    };
+  } catch {}
+}
+
 app.whenReady().then(async () => {
+  bootstrapCurrentUserFromCfg();
   cleanOldAutoStartIfWrong();
   configureAutoStart();
+
   await runAutoUpdateGate();
+
   createWindow();
-  ensureCustomerWindow();
+
+  // ✅ reintentos solo mientras NO haya caja abierta
+  startPreCashUpdateRetries();
+
+  if (isCustomerDisplayEnabled()) ensureCustomerWindow();
+
   registerShortcuts();
   closeSplash();
 });
@@ -1130,6 +1262,11 @@ function writeCfg(patch) {
   return next;
 }
 
+function isCustomerDisplayEnabled() {
+  const cfg = readCfg();
+  return cfg.customerDisplay === true; // default OFF
+}
+
 ipcMain.handle("cfg:get", (_e, key) => readCfg()[key]);
 ipcMain.handle("cfg:set", (_e, key, value) => writeCfg({ [key]: value }));
 
@@ -1219,10 +1356,15 @@ function isAdmin() {
 }
 
 ipcMain.handle("cfg:setAutostart", (_e, val) => {
-  if (!isAdmin()) return { ok: false, error: "FORBIDDEN" };
-  writeCfg({ autostart: !!val });
+  const want = !!val;
+
+  // ✅ permitir DESACTIVAR aunque no seas admin
+  // ✅ exigir admin solo si se quiere ACTIVAR
+  if (want && !isAdmin()) return { ok: false, error: "FORBIDDEN" };
+
+  writeCfg({ autostart: want });
   configureAutoStart();
-  return { ok: true, autostart: !!val };
+  return { ok: true, autostart: want };
 });
 
 ipcMain.handle("cfg:getAutostart", () => {
@@ -1271,6 +1413,13 @@ async function ensureCustomerWindow() {
       },
     });
 
+    customerWin.on("close", (e) => {
+      // Si está habilitada, no se puede cerrar manualmente
+      if (!allowCustomerClose && isCustomerDisplayEnabled()) {
+        e.preventDefault();
+      }
+    });
+
     customerWin.setMenuBarVisibility(false);
     customerWin.setAutoHideMenuBar(true);
 
@@ -1316,13 +1465,65 @@ async function ensureCustomerWindow() {
 ipcMain.on("customer:setState", async (_e, state) => {
   lastCustomerState = state || null;
 
+  if (!isCustomerDisplayEnabled()) return; // ✅ NO crear si está OFF
+
   const win = await ensureCustomerWindow();
   if (!win || win.isDestroyed()) return;
 
-  // Si aún no cargó, did-finish-load hará el envío.
   try {
     if (win.webContents.isLoading()) return;
   } catch {}
 
   win.webContents.send("customer:state", lastCustomerState);
+});
+
+async function setCustomerDisplayEnabled(enabled) {
+  writeCfg({ customerDisplay: !!enabled });
+
+  if (enabled) {
+    await ensureCustomerWindow();
+    // reinyecta estado si existe
+    if (lastCustomerState && customerWin && !customerWin.isDestroyed()) {
+      try {
+        customerWin.webContents.send("customer:state", lastCustomerState);
+      } catch {}
+    }
+  } else {
+    destroyCustomerWindow();
+  }
+}
+
+function destroyCustomerWindow() {
+  if (!customerWin || customerWin.isDestroyed()) return;
+  try {
+    allowCustomerClose = true;
+    customerWin.destroy();
+  } catch {}
+  customerWin = null;
+  allowCustomerClose = false;
+}
+
+ipcMain.handle("customer:getEnabled", async () => {
+  return { ok: true, enabled: isCustomerDisplayEnabled() };
+});
+
+ipcMain.handle("customer:setEnabled", async (_e, enabled) => {
+  if (!isAdmin()) return { ok: false, error: "FORBIDDEN" };
+
+  const val = !!enabled;
+  writeCfg({ customerDisplay: val });
+
+  if (val) {
+    await ensureCustomerWindow();
+    // reinyecta el último estado
+    if (lastCustomerState && customerWin && !customerWin.isDestroyed()) {
+      try {
+        customerWin.webContents.send("customer:state", lastCustomerState);
+      } catch {}
+    }
+  } else {
+    destroyCustomerWindow();
+  }
+
+  return { ok: true, enabled: val };
 });

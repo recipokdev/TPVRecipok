@@ -86,3 +86,8 @@ contextBridge.exposeInMainWorld("TPV_AUTOSTART", {
 contextBridge.exposeInMainWorld("TPV_CUSTOMER", {
   setState: (state) => ipcRenderer.send("customer:setState", state),
 });
+
+contextBridge.exposeInMainWorld("TPV_CUSTOMER_CTRL", {
+  getEnabled: () => ipcRenderer.invoke("customer:getEnabled"),
+  setEnabled: (val) => ipcRenderer.invoke("customer:setEnabled", !!val),
+});
