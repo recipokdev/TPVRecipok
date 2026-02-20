@@ -516,138 +516,111 @@ function updateCashButtonLabel() {
   cashHeaderLabel.textContent = cashSession.open ? "Cerrar caja" : "Abrir caja";
 }
 
-// ===== Helpers DOM para subcategorías =====
-function getSubcategoriesContainer() {
-  const wrapper = document.querySelector(".categories-wrapper");
-  if (!wrapper) return null;
-
-  let sub = document.getElementById("subcategories");
-  if (!sub) {
-    sub = document.createElement("div");
-    sub.id = "subcategories";
-    sub.className = "categories subcategories-container";
-    wrapper.appendChild(sub);
-  }
-  return sub;
-}
-
 // ===== Categorías (familias) =====
 function renderCategories() {
   console.trace("[TRACE] renderCategories()");
   const container = document.getElementById("categories");
   if (!container) return;
 
-  const sub = getSubcategoriesContainer();
-
-  container.innerHTML = "";
+  // Si existía contenedor de subcategorías (columna 2), lo ocultamos
+  const sub = document.getElementById("subcategories");
   if (sub) {
     sub.innerHTML = "";
     sub.style.display = "none";
   }
 
-  // Familias raíz (madre == null)
-  const rootFamilies = categories.filter((c) => !c.parentId);
+  container.innerHTML = "";
 
-  rootFamilies.forEach((cat) => {
-    const btn = document.createElement("button");
-    btn.className = "category-btn";
-    btn.dataset.cat = cat.id;
+  const inDrillDown = !!activeFamilyParentId;
 
-    const isActiveParent = activeFamilyParentId === cat.id;
-    const hasChildren = categories.some((c) => c.parentId === cat.id);
+  // ======================
+  // VISTA ROOT: familias raíz
+  // ======================
+  if (!inDrillDown) {
+    const rootFamilies = categories.filter((c) => !c.parentId);
 
-    if (isActiveParent) {
-      // Estamos dentro de este padre -> se convierte en "Volver"
-      btn.textContent = "Volver";
-      btn.classList.add("category-btn-back");
-    } else {
+    rootFamilies.forEach((cat) => {
+      const btn = document.createElement("button");
+      btn.className = "category-btn";
+      btn.dataset.cat = cat.id;
       btn.textContent = cat.name;
-    }
 
-    btn.onclick = () => {
-      // Si estábamos ya dentro del padre -> salir
-      if (isActiveParent) {
-        activeFamilyParentId = null;
-        activeSubfamilyId = null;
-        selectedCategory = null;
-        renderCategories();
-        renderProducts();
-        return;
+      const hasChildren = categories.some((c) => c.parentId === cat.id);
+
+      // Marcar activa si es filtro simple
+      if (!hasChildren && selectedCategory === cat.id) {
+        btn.classList.add("active");
       }
 
-      const children = categories.filter((c) => c.parentId === cat.id);
+      btn.onclick = () => {
+        const children = categories.filter((c) => c.parentId === cat.id);
 
-      if (children.length) {
-        // Padre con hijas -> entramos en modo familia con subfamilias
-        activeFamilyParentId = cat.id;
-        activeSubfamilyId = null;
-        selectedCategory = null;
-        renderCategories();
-        renderProducts();
-      } else {
-        // Familia sin hijas -> filtro simple
-        if (selectedCategory === cat.id) {
-          selectedCategory = null; // quitar filtro
-        } else {
-          selectedCategory = cat.id; // aplicar filtro
-        }
-        activeFamilyParentId = null;
-        activeSubfamilyId = null;
-        renderCategories();
-        renderProducts();
-      }
-    };
+        if (children.length) {
+          // Entramos en drill-down
+          activeFamilyParentId = cat.id;
+          activeSubfamilyId = null;
+          selectedCategory = null;
 
-    // <<< NUEVO: marcar familia raíz activa cuando actúa como filtro simple
-    if (!hasChildren && selectedCategory === cat.id) {
-      btn.classList.add("active");
-    }
-
-    container.appendChild(btn);
-  });
-
-  // Subfamilias visibles solo si hay padre activo
-  if (sub && activeFamilyParentId) {
-    const children = categories.filter(
-      (c) => c.parentId === activeFamilyParentId,
-    );
-
-    if (children.length) {
-      sub.style.display = "flex";
-
-      const inner = document.createElement("div");
-      inner.className = "subcategories-inner";
-
-      children.forEach((child) => {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.className = "category-btn subcategory-btn";
-        b.dataset.cat = child.id;
-        b.textContent = child.name;
-
-        if (activeSubfamilyId === child.id) {
-          b.classList.add("active");
-        }
-
-        b.onclick = () => {
-          if (activeSubfamilyId === child.id) {
-            // Si ya está activa -> volvemos a "todas las subfamilias"
-            activeSubfamilyId = null;
-          } else {
-            activeSubfamilyId = child.id;
-          }
           renderCategories();
           renderProducts();
-        };
+          return;
+        }
 
-        inner.appendChild(b);
-      });
+        // Filtro simple (toggle)
+        selectedCategory = selectedCategory === cat.id ? null : cat.id;
+        activeFamilyParentId = null;
+        activeSubfamilyId = null;
 
-      sub.appendChild(inner);
-    } else {
-      sub.style.display = "none";
-    }
+        renderCategories();
+        renderProducts();
+      };
+
+      container.appendChild(btn);
+    });
+
+    return;
   }
+
+  // ======================
+  // VISTA DRILL-DOWN: volver + subfamilias del padre
+  // ======================
+
+  // 1) Botón volver
+  const backBtn = document.createElement("button");
+  backBtn.className = "category-btn category-btn-back";
+  backBtn.textContent = "Volver";
+  backBtn.onclick = () => {
+    activeFamilyParentId = null;
+    activeSubfamilyId = null;
+    selectedCategory = null;
+
+    renderCategories();
+    renderProducts();
+  };
+  container.appendChild(backBtn);
+
+  // 2) Subfamilias
+  const children = categories.filter(
+    (c) => c.parentId === activeFamilyParentId,
+  );
+
+  children.forEach((child) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "category-btn subcategory-btn";
+    b.dataset.cat = child.id;
+    b.textContent = child.name;
+
+    if (activeSubfamilyId === child.id) b.classList.add("active");
+
+    b.onclick = () => {
+      activeSubfamilyId = activeSubfamilyId === child.id ? null : child.id;
+      renderCategories();
+      renderProducts();
+    };
+
+    container.appendChild(b);
+  });
 }
 
 function formatPayLabel(descripcion, codpago) {
@@ -3530,6 +3503,7 @@ function renderPayEditForTicket() {
 /* ========= REEMISIÓN (rectificativa + nuevo ticket) ========= */
 
 async function fetchLineasFacturaCliente(idfactura) {
+  if (!idfactura) return [];
   const list = await fetchApiResourceWithParams("lineafacturaclientes", {
     limit: 0,
     "filter[idfactura]": idfactura,
@@ -7669,29 +7643,77 @@ function calcTotalsAndTaxMap(lineas, totalsOnlyPositive) {
 }
 
 function renderItemsHtml(doc, lineas) {
-  const itemsEl = doc.getElementById("items");
-  if (!itemsEl) return;
+  const box = doc.getElementById("items");
+  if (!box) return;
 
-  itemsEl.innerHTML = "";
+  const safe = (s) => escapeHtml(String(s ?? ""));
 
-  for (const l of lineas || []) {
-    const name = (l.name || l.descripcion || "Producto").toString().trim();
-    const qty = Number(l.qty ?? l.cantidad ?? 1) || 1;
+  // Ref/código (lo corto) + descripción (lo largo)
+  const pickMainAndDesc = (l) => {
+    const main = (
+      l.ref ??
+      l.referencia ??
+      l.codigo ??
+      l.codarticulo ??
+      l.sku ??
+      l.name ??
+      l.nombre ??
+      ""
+    ) // si no hay nada corto, lo resolveremos abajo
+      .toString()
+      .trim();
 
-    const unitGross = getUnitGrossForPrint(l);
-    const lineGross = unitGross * qty;
+    let desc = (
+      l.secondaryName ??
+      l.descripcion2 ??
+      l.detalle ??
+      l.descripcion ??
+      ""
+    )
+      .toString()
+      .trim();
 
-    const div = doc.createElement("div");
-    div.className = "item";
-    div.innerHTML = `
-      <div class="item-top">
-        <div class="qty">${qty}</div>
-        <div class="desc">${escapeHtml(name)}</div>
-        <div class="ltotal">${eurTicket(lineGross)}</div>
-      </div>
-    `;
-    itemsEl.appendChild(div);
-  }
+    // Si no hay main pero sí descripción, la usamos como main
+    if (!main && desc) return { main: desc, desc: "" };
+
+    // Evita duplicar si son iguales
+    if (main && desc && main.toLowerCase() === desc.toLowerCase()) desc = "";
+
+    return { main, desc };
+  };
+
+  const getQtyForPrint = (l) => {
+    // cubre carrito/offline/FS
+    const q = l.qty ?? l.cantidad ?? l.quantity ?? l.cant ?? 0;
+
+    const n = Number(q);
+    return isNaN(n) ? 0 : n;
+  };
+
+  box.innerHTML = (Array.isArray(lineas) ? lineas : [])
+    .map((l) => {
+      const qty = getQtyForPrint(l);
+
+      // ✅ precio unitario bruto usando TU lógica centralizada
+      const unitGross = getUnitGrossForPrint(l);
+
+      // total línea
+      const lineTotal = qty * unitGross;
+
+      const { main, desc } = pickMainAndDesc(l);
+
+      return `
+        <div class="item">
+          <div class="item-top">
+            <div class="qty">${safe(qty)}</div>
+            <div class="desc">${safe(main)}</div>
+            <div class="ltotal">${eurTicket(lineTotal)}</div>
+          </div>
+          ${desc ? `<div class="item-sub small muted">${safe(desc)}</div>` : ""}
+        </div>
+      `;
+    })
+    .join("");
 }
 
 function renderTaxSummaryHtml(doc, taxMap) {
@@ -7817,6 +7839,41 @@ function buildEscposTicketBytes(ticket, lineas, totalToShow) {
   const push = (s) => out.push(...enc.encode(String(s)));
   const hr = () => push("--------------------------------\n");
 
+  const pickMainAndDesc = (l) => {
+    const main = (
+      l.ref ??
+      l.referencia ??
+      l.codigo ??
+      l.codarticulo ??
+      l.sku ??
+      l.name ??
+      l.nombre ??
+      ""
+    )
+      .toString()
+      .trim();
+
+    let desc = (
+      l.secondaryName ??
+      l.descripcion2 ??
+      l.detalle ??
+      l.descripcion ??
+      ""
+    )
+      .toString()
+      .trim();
+
+    if (!main && desc) return { main: desc, desc: "" };
+    if (main && desc && main.toLowerCase() === desc.toLowerCase()) desc = "";
+    return { main, desc };
+  };
+
+  const getQtyForPrint = (l) => {
+    const q = l.qty ?? l.cantidad ?? l.quantity ?? l.cant ?? 0;
+    const n = Number(q);
+    return isNaN(n) ? 0 : n;
+  };
+
   out.push(ESC, 0x40); // init
 
   const emp = ticket.company || companyInfo || {};
@@ -7837,14 +7894,19 @@ function buildEscposTicketBytes(ticket, lineas, totalToShow) {
   push("\n");
 
   for (const l of lineas || []) {
-    const name = (l.name || l.descripcion || "Producto").toString().trim();
-    const qty = Number(l.qty ?? l.cantidad ?? 1) || 1;
-
+    const qty = getQtyForPrint(l);
     const unitGross = getUnitGrossForPrint(l);
     const lineGross = unitGross * qty;
 
-    push(`${qty} x ${name}\n`);
-    push(`   ${eurTicket(lineGross)}\n`);
+    const { main, desc } = pickMainAndDesc(l);
+
+    // Línea principal
+    push(`${qty}  ${main}\n`);
+    // Descripción debajo (si existe)
+    if (desc) push(`    ${desc}\n`);
+
+    // Total alineado a la derecha aproximado (simple)
+    push(`    ${eurTicket(lineGross)}\n`);
   }
 
   push("\n");
@@ -11474,14 +11536,6 @@ async function fetchDevolucionesByCaja(idcaja, limit = 50) {
   if (!idcaja) return [];
   const q = `sort[idfactura]=DESC&filter[idcaja]=${encodeURIComponent(idcaja)}&filter[codserie]=R&limit=${limit}`;
   const r = await apiRead(`facturaclientes?${q}`);
-  const arr = r?.data || r?.doc || r;
-  return Array.isArray(arr) ? arr : [];
-}
-
-async function fetchLineasFacturaCliente(idfactura) {
-  if (!idfactura) return [];
-  const q = `filter[idfactura]=${encodeURIComponent(idfactura)}&limit=200`;
-  const r = await apiRead(`lineafacturaclientes?${q}`);
   const arr = r?.data || r?.doc || r;
   return Array.isArray(arr) ? arr : [];
 }

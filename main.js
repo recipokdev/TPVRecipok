@@ -6,6 +6,8 @@ const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const { globalShortcut } = require("electron");
+const https = require("https");
+const dns = require("dns");
 
 let isRecreatingWindow = false;
 let mainWin = null;
@@ -15,6 +17,20 @@ let customerWin = null;
 let customerCreating = false;
 let lastCustomerState = null;
 let allowCustomerClose = false;
+let lastSecondInstanceUpdateCheckAt = 0;
+
+async function triggerUpdateCheckIfSafe(reason = "manual") {
+  // 1 check/min para evitar martillazos
+  if (Date.now() - lastSecondInstanceUpdateCheckAt < 60_000) return;
+  lastSecondInstanceUpdateCheckAt = Date.now();
+
+  try {
+    // intenta un check “pre-caja” (respeta caja abierta)
+    await runUpdateCheckOncePreCash();
+    // y arranca reintentos si procede
+    startPreCashUpdateRetries();
+  } catch {}
+}
 
 function readChannel() {
   try {
@@ -47,12 +63,15 @@ const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
+  app.on("second-instance", async () => {
     if (mainWin) {
       if (mainWin.isMinimized()) mainWin.restore();
       mainWin.show();
       mainWin.focus();
     }
+
+    // ✅ CLAVE: aunque ya exista instancia, chequear updates
+    triggerUpdateCheckIfSafe("second-instance");
   });
 }
 
@@ -300,12 +319,18 @@ async function runUpdateCheckOncePreCash() {
       const done = (r) => {
         if (finished) return;
         finished = true;
-        try { autoUpdater.removeAllListeners(); } catch {}
+        try {
+          autoUpdater.removeAllListeners();
+        } catch {}
         resolve(r);
       };
 
       autoUpdater.once("error", (err) => {
-        done({ ok: false, reason: "error", error: err?.message || String(err) });
+        done({
+          ok: false,
+          reason: "error",
+          error: err?.message || String(err),
+        });
       });
 
       autoUpdater.once("update-not-available", () => {
@@ -319,7 +344,8 @@ async function runUpdateCheckOncePreCash() {
       autoUpdater.once("update-downloaded", async () => {
         // última comprobación: si alguien abrió caja justo ahora, NO instalar
         const cashOpen = await isCashOpenSafe();
-        if (cashOpen) return done({ ok: false, reason: "cashOpenedDuringDownload" });
+        if (cashOpen)
+          return done({ ok: false, reason: "cashOpenedDuringDownload" });
 
         // instalar (tu comportamiento actual)
         try {
@@ -343,8 +369,8 @@ function startPreCashUpdateRetries() {
   // seguridad
   stopPreCashUpdateRetries();
 
-  const maxMinutes = 12;          // límite total de reintentos
-  const everyMs = 45 * 1000;      // cada 45s
+  const maxMinutes = 12; // límite total de reintentos
+  const everyMs = 45 * 1000; // cada 45s
   const startedAt = Date.now();
 
   preCashUpdateTimer = setInterval(async () => {
@@ -370,7 +396,6 @@ function stopPreCashUpdateRetries() {
   if (preCashUpdateTimer) clearInterval(preCashUpdateTimer);
   preCashUpdateTimer = null;
 }
-
 
 function createSplashWindow() {
   splashWin = new BrowserWindow({
@@ -537,60 +562,213 @@ function logUpdater(...args) {
   } catch {}
 }
 
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function dnsOk(hostname) {
+  try {
+    await dns.promises.lookup(hostname);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function httpsGetOk(url, { headers = {}, timeoutMs = 7000 } = {}) {
+  return new Promise((resolve) => {
+    try {
+      const u = new URL(url);
+
+      const req = https.request(
+        {
+          method: "GET",
+          hostname: u.hostname,
+          path: u.pathname + (u.search || ""),
+          headers,
+          timeout: timeoutMs,
+        },
+        (res) => {
+          const ok = res.statusCode >= 200 && res.statusCode < 400;
+          res.resume();
+          resolve({ ok, status: res.statusCode || 0 });
+        },
+      );
+
+      req.on("timeout", () => {
+        req.destroy();
+        resolve({ ok: false, status: 0, error: "timeout" });
+      });
+      req.on("error", (e) =>
+        resolve({ ok: false, status: 0, error: e?.message || String(e) }),
+      );
+      req.end();
+    } catch (e) {
+      resolve({ ok: false, status: 0, error: e?.message || String(e) });
+    }
+  });
+}
+
+function getCompanyFromCfgForMain() {
+  const cfg = readCfg();
+  const baseUrl = String(cfg["company.baseUrl"] || "").trim();
+  const apiKey = String(cfg["company.apiKey"] || "").trim();
+  const email = String(cfg["company.email"] || "").trim();
+  return { baseUrl, apiKey, email };
+}
+
+async function waitForInternetAndApiGate() {
+  // 1) Internet real (evita "wifi con portal cautivo" o sin salida)
+  let attempt = 0;
+
+  // Probes: si alguno responde, consideramos "hay salida"
+  // (usa varios por si GitHub está bloqueado en alguna red)
+  const internetProbes = [
+    // Google 204: si devuelve 204/3xx suele indicar salida real
+    { url: "https://www.google.com/generate_204", label: "Google" },
+    // Cloudflare: muy disponible
+    { url: "https://1.1.1.1", label: "Cloudflare" },
+    // GitHub: útil para tu updater (pero no depender SOLO de él)
+    { url: "https://github.com", label: "GitHub" },
+  ];
+
+  while (true) {
+    attempt++;
+
+    splashSet(`Comprobando internet... (intento ${attempt})`, 10);
+
+    // DNS rápido (con 2-3 hosts distintos)
+    const dnsAny =
+      (await dnsOk("google.com")) ||
+      (await dnsOk("cloudflare.com")) ||
+      (await dnsOk("github.com"));
+
+    if (!dnsAny) {
+      splashSet("Sin internet (DNS). Esperando conexión...", 10);
+      await sleep(2500);
+      continue;
+    }
+
+    splashSet("Internet detectado. Verificando salida...", 25);
+
+    // HTTPS real: basta con que UNO funcione
+    let okOut = false;
+    for (const p of internetProbes) {
+      const r = await httpsGetOk(p.url, { timeoutMs: 7000 });
+      if (r.ok || (r.status >= 200 && r.status < 500)) {
+        // Nota: algunos probes pueden devolver 403/404 pero eso confirma salida.
+        // Con tu httpsGetOk actual, ok = 200..399, pero aquí aceptamos 4xx como "hay internet".
+        okOut = true;
+        break;
+      }
+    }
+
+    if (!okOut) {
+      splashSet(
+        "Conectado a red, pero sin salida a internet. Reintentando...",
+        25,
+      );
+      await sleep(2500);
+      continue;
+    }
+
+    break; // ✅ Internet OK
+  }
+
+  // 2) API OK (solo si ya hay empresa configurada en cfg)
+  const { baseUrl, apiKey, email } = getCompanyFromCfgForMain();
+
+  // Si todavía no hay empresa resuelta, no bloqueamos por API:
+  // la UI necesitará internet igual para activarse (y pedirá email).
+  if (!baseUrl || !apiKey) {
+    splashSet("Internet OK. Preparando...", 55);
+    return true;
+  }
+
+  let apiAttempt = 0;
+  while (true) {
+    apiAttempt++;
+    splashSet(
+      `Conectando con servidor... (${email || "empresa"}) (intento ${apiAttempt})`,
+      55,
+    );
+
+    const url = `${baseUrl.replace(/\/+$/, "")}/productos?limit=1`;
+    const rr = await httpsGetOk(url, {
+      timeoutMs: 7000,
+      headers: { Accept: "application/json", Token: apiKey },
+    });
+
+    if (rr.ok) {
+      splashSet("Servidor OK. Buscando actualizaciones...", 70);
+      return true;
+    }
+
+    // Si el token/baseUrl están mal, no nos quedamos en bucle infinito:
+    // dejamos que la UI gestione re-activación / re-login.
+    if ([401, 403, 404].includes(rr.status)) {
+      splashSet(
+        "Servidor responde pero credenciales no válidas. Abriendo...",
+        70,
+      );
+      await sleep(400);
+      return true;
+    }
+
+    splashSet("Servidor no disponible todavía. Esperando...", 55);
+    await sleep(2500);
+  }
+}
+
 async function runAutoUpdateGate() {
-  // Linux: solo auto-update si es AppImage
   if (process.platform === "linux" && !process.env.APPIMAGE) {
     return { updatedOrReady: true };
   }
   if (!app.isPackaged) return { updatedOrReady: true };
 
+  // ✅ splash visible
   createSplashWindow();
+  splashSet("Comprobando conexión…", 5);
+
+  // ✅ BLOQUEA aquí hasta internet (y API si hay cfg)
+  await waitForInternetAndApiGate();
+
+  // ✅ recién ahora: updater
   splashSet("Buscando actualizaciones...", 20);
 
-  // Limpieza total ANTES de registrar eventos
   autoUpdater.removeAllListeners();
-
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
 
-  // ✅ Canal (viene de channel.json dentro de resources)
-  const channel = readChannel(); // "beta" | "stable"
-
-  // ✅ Separación por comportamiento (ya que separaste por repos)
+  const channel = readChannel();
   autoUpdater.allowPrerelease = channel === "beta";
   autoUpdater.allowDowngrade = false;
 
-  // ✅ Importantísimo: no fuerces channel (evita buscar beta.yml / latest-latest.yml)
   try {
     delete autoUpdater.channel;
   } catch {}
 
-  logUpdater(
-    "UPDATER start channel=",
-    channel,
-    "APPIMAGE=",
-    !!process.env.APPIMAGE,
-  );
-
   return await new Promise((resolve) => {
     let finished = false;
     const done = (r) => {
-  if (finished) return;
-  finished = true;
-
-  try { autoUpdater.removeAllListeners(); } catch {}
-  resolve(r);
-};
+      if (finished) return;
+      finished = true;
+      try {
+        autoUpdater.removeAllListeners();
+      } catch {}
+      resolve(r);
+    };
 
     const onProgress = (p) => {
       const pct = typeof p?.percent === "number" ? p.percent : 0;
       splashSet("Descargando actualización…", pct);
     };
 
+    // ✅ ahora que ya hay internet, watchdog puede ser más largo
     const watchdog = setTimeout(() => {
       splashSet("Conexión lenta. Abriendo…", 40);
       setTimeout(() => done({ updatedOrReady: true }), 200);
-    }, 15000);
+    }, 45000);
 
     const finishOk = (msg, percent = 60, delay = 200) => {
       clearTimeout(watchdog);
@@ -599,17 +777,14 @@ async function runAutoUpdateGate() {
     };
 
     autoUpdater.once("error", (err) => {
-      logUpdater("UPDATER error:", err?.message || err);
       finishOk("No se pudo comprobar. Abriendo…", 40, 300);
     });
 
     autoUpdater.once("update-not-available", () => {
-      logUpdater("UPDATER: update-not-available");
       finishOk("Todo al día. Abriendo…", 60, 200);
     });
 
     autoUpdater.once("update-available", () => {
-      logUpdater("UPDATER: update-available");
       clearTimeout(watchdog);
       splashSet("Actualización encontrada. Descargando…", 25);
     });
@@ -617,12 +792,8 @@ async function runAutoUpdateGate() {
     autoUpdater.on("download-progress", onProgress);
 
     autoUpdater.once("update-downloaded", () => {
-      logUpdater("UPDATER: update-downloaded");
       splashSet("Instalando actualización…", 100);
-
-      // Windows: silent = true => NO abre instalador
       setTimeout(() => autoUpdater.quitAndInstall(true, true), 600);
-
       setTimeout(() => {
         try {
           app.exit(0);
@@ -780,10 +951,24 @@ if (process.platform === "win32") {
 
 function cleanOldAutoStartIfWrong() {
   if (!app.isPackaged) return;
+
   try {
     const cur = app.getLoginItemSettings();
+    if (!cur?.openAtLogin) return;
+
     const exe = String(cur?.executable || "");
-    if (cur.openAtLogin && exe && exe !== process.execPath) {
+
+    // ✅ Permitimos dos casos válidos:
+    // - electron-builder/NSIS: executable === process.execPath
+    // - Squirrel: executable termina en Update.exe
+    const isSquirrelUpdateExe =
+      process.platform === "win32" &&
+      exe &&
+      exe.toLowerCase().endsWith("\\update.exe");
+
+    const isOk = exe === process.execPath || isSquirrelUpdateExe;
+
+    if (!isOk) {
       app.setLoginItemSettings({ openAtLogin: false });
     }
   } catch {}
@@ -793,16 +978,52 @@ function configureAutoStart() {
   if (!app.isPackaged) return;
 
   const cfg = readCfg();
+  const want = cfg.autostart !== false;
 
-  if (cfg.autostart === false) {
+  if (!want) {
     app.setLoginItemSettings({ openAtLogin: false });
     return;
   }
 
+  // ✅ Siempre pasamos flag para poder distinguir en main si viene por autostart
+  const autostartArgs = ["--autostart"];
+
+  // --- Windows: si existe Update.exe (Squirrel), usarlo ---
+  if (process.platform === "win32") {
+    try {
+      const exePath = process.execPath; // ...\app.exe
+      const exeName = path.basename(exePath);
+
+      // app.exe suele estar en ...\app-1.2.3\TPV Recipok.exe
+      // Update.exe suele estar en ...\Update.exe (un nivel arriba)
+      const appFolder = path.dirname(exePath);
+      const updateExe = path.resolve(appFolder, "..", "Update.exe");
+
+      if (fs.existsSync(updateExe)) {
+        app.setLoginItemSettings({
+          openAtLogin: true,
+          openAsHidden: false,
+          path: updateExe,
+          args: [
+            "--processStart",
+            exeName,
+            "--process-start-args",
+            autostartArgs.join(" "),
+          ],
+        });
+        return;
+      }
+    } catch (_) {
+      // si falla, caemos al modo NSIS / normal
+    }
+  }
+
+  // --- Default (NSIS / Linux / macOS): ejecutable directo + args ---
   app.setLoginItemSettings({
     openAtLogin: true,
     openAsHidden: false,
     path: process.execPath,
+    args: autostartArgs,
   });
 }
 
@@ -823,15 +1044,13 @@ app.whenReady().then(async () => {
   cleanOldAutoStartIfWrong();
   configureAutoStart();
 
+  // ✅ updater ya bloquea hasta internet (+ API si hay cfg)
   await runAutoUpdateGate();
 
   createWindow();
-
-  // ✅ reintentos solo mientras NO haya caja abierta
   startPreCashUpdateRetries();
 
   if (isCustomerDisplayEnabled()) ensureCustomerWindow();
-
   registerShortcuts();
   closeSplash();
 });

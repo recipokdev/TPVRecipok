@@ -108,6 +108,46 @@
         width: 20mm;
         text-align: right;
       }
+
+      /* Ajuste columnas: Cant más estrecha y menos “aire” */
+      .item-top {
+        display: grid;
+        grid-template-columns: 8mm 1fr 20mm; /* Cant | Ref | Total */
+        column-gap: 4px; /* antes gap grande */
+        align-items: start;
+      }
+
+      .qty {
+        width: auto; /* ya manda el grid */
+        text-align: left; /* más pegado a la izquierda */
+        white-space: nowrap;
+        overflow: hidden;
+      }
+
+      /* La descripción secundaria debajo, alineada con “Ref.” */
+      .item-sub {
+        margin-left: 8mm; /* igual que la columna Cant */
+        padding-left: 4px; /* igual al column-gap */
+        word-break: break-word;
+      }
+
+      .thead {
+        display: grid;
+        grid-template-columns: 8mm 1fr 20mm;
+        column-gap: 4px;
+      }
+
+      .thead .qty,
+      .thead .desc,
+      .thead .ltotal {
+        width: auto;
+      }
+      .thead .qty {
+        text-align: left;
+      }
+      .thead .ltotal {
+        text-align: right;
+      }
     </style>
   </head>
   <body>

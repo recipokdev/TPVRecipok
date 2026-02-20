@@ -344,3 +344,65 @@ body {
     width: 360px;
   }
 }
+
+/* ===== 1366x768 SAFE ===== */
+@media (max-height: 800px) {
+  .wrap {
+    padding: 14px;
+    gap: 10px;
+  }
+
+  .top {
+    padding: 12px 14px;
+  }
+  .title {
+    font-size: 24px;
+  }
+  .sub {
+    font-size: 14px;
+    margin-top: 6px;
+  }
+
+  .list {
+    padding: 10px;
+    border-radius: 16px;
+  }
+
+  .row {
+    padding: 12px;
+    border-radius: 14px;
+    margin-bottom: 10px;
+    gap: 12px;
+  }
+  .thumb {
+    width: 78px;
+    height: 78px;
+    border-radius: 14px;
+  }
+
+  .name {
+    font-size: 18px;
+  }
+  .secondary {
+    font-size: 13px;
+  }
+  .qty {
+    font-size: 14px;
+  }
+  .unit {
+    font-size: 12px;
+  }
+  .lineTotal {
+    font-size: 16px;
+    min-width: 96px;
+  }
+
+  .total {
+    width: 360px;
+    padding: 14px 18px;
+    border-radius: 16px;
+  }
+  .total .amount {
+    font-size: 48px;
+  }
+}
