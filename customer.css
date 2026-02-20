@@ -1,4 +1,4 @@
-/* ===== customer.css (GRID columnas dinámicas + total derecha) ===== */
+/* ===== customer.css (GRID 5 filas por columna + scroll solo si hace falta) ===== */
 :root {
   --bg: #0b1220;
   --panel: rgba(17, 24, 39, 0.9);
@@ -11,7 +11,11 @@
 
   /* GRID tuning */
   --grid-gap: 12px; /* separación entre tarjetas */
-  --col-min: 520px; /* ancho mínimo de columna */
+  --col-min: 520px; /* ancho mínimo de columna (cuando hay scroll) */
+
+  /* Controlado por JS */
+  --rows: 5; /* filas por columna */
+  --colW: 520px; /* ancho efectivo de columna */
 }
 
 * {
@@ -60,8 +64,8 @@ body {
 /* ===== Header ===== */
 .top {
   position: relative;
-  z-index: 20; /* header por encima del main */
-  overflow: visible; /* deja ver el notice */
+  z-index: 20;
+  overflow: visible;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -99,11 +103,11 @@ body {
   color: var(--muted);
 }
 
-/* ===== NOTICE flotante dentro del HEADER (no ocupa espacio) ===== */
+/* ===== NOTICE flotante (no ocupa espacio) ===== */
 .notice {
   position: absolute;
   left: 50%;
-  top: 50%; /* centro vertical del header */
+  top: 50%;
   transform: translate(-50%, calc(-50% - 6px));
   z-index: 999;
 
@@ -152,7 +156,7 @@ body {
 /* ===== List wrapper ===== */
 .list {
   flex: 1;
-  min-height: 0; /* crucial para que flex calcule bien */
+  min-height: 0;
   position: relative;
   z-index: 1;
 
@@ -169,36 +173,48 @@ body {
 
   display: grid;
   grid-auto-flow: column; /* rellena vertical, luego nueva columna */
-  grid-template-rows: repeat(5, 1fr); /* ✅ 5 productos por columna */
-  grid-auto-columns: minmax(var(--col-min), 1fr);
+  grid-template-rows: repeat(var(--rows), 1fr);
+  grid-auto-columns: var(--colW);
 
   gap: var(--grid-gap);
 
-  overflow-x: auto;
   overflow-y: hidden;
-  padding-right: 8px;
+  overflow-x: auto; /* JS lo pone hidden cuando no hace falta */
+
   scroll-behavior: smooth;
+  padding-right: 8px;
 }
 
-/* Scrollbar (webkit) */
-#items::-webkit-scrollbar {
-  height: 10px; /* horizontal */
+/* ===== Cuando NO hace falta scroll, lo ocultamos de verdad ===== */
+#items.no-scroll {
+  overflow-x: hidden;
+  padding-right: 0;
+  scrollbar-width: none; /* Firefox */
 }
-#items::-webkit-scrollbar-thumb {
+#items.no-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none; /* Webkit */
+}
+
+/* Scrollbar (webkit) SOLO cuando hay scroll */
+#items:not(.no-scroll)::-webkit-scrollbar {
+  height: 10px;
+}
+#items:not(.no-scroll)::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.14);
   border-radius: 999px;
 }
-#items::-webkit-scrollbar-track {
+#items:not(.no-scroll)::-webkit-scrollbar-track {
   background: rgba(255, 255, 255, 0.03);
   border-radius: 999px;
 }
 
 /* ===== Tarjeta producto ===== */
 .row {
-  /* con grid, NO necesitamos margin */
   margin: 0;
   width: 100%;
-  height: 100%; /* ✅ obliga a que cada item ocupe exactamente 1/5 */
+  height: 100%;
 
   display: flex;
   gap: 14px;
@@ -371,7 +387,6 @@ body {
   .row {
     padding: 12px;
     border-radius: 14px;
-    margin-bottom: 10px;
     gap: 12px;
   }
   .thumb {
