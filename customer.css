@@ -1,4 +1,4 @@
-/* ===== customer.css (GRID 5 filas por columna + scroll solo si hace falta) ===== */
+/* ===== customer.css (GRID columnas dinámicas + total derecha) ===== */
 :root {
   --bg: #0b1220;
   --panel: rgba(17, 24, 39, 0.9);
@@ -11,11 +11,29 @@
 
   /* GRID tuning */
   --grid-gap: 12px; /* separación entre tarjetas */
-  --col-min: 520px; /* ancho mínimo de columna (cuando hay scroll) */
+  --col-min: 520px; /* ancho mínimo de columna */
 
-  /* Controlado por JS */
-  --rows: 5; /* filas por columna */
-  --colW: 520px; /* ancho efectivo de columna */
+  /* sizing base */
+  --wrap-pad: 18px;
+  --top-pad-y: 16px;
+  --top-pad-x: 18px;
+  --list-pad: 14px;
+
+  --row-pad: 14px;
+  --row-radius: 16px;
+
+  --thumb: 96px;
+  --name-size: 22px;
+  --sec-size: 15px;
+  --qty-size: 16px;
+  --unit-size: 13px;
+  --lineTotal-size: 18px;
+  --lineTotal-minw: 110px;
+
+  --total-w: 440px;
+  --total-pad-y: 18px;
+  --total-pad-x: 22px;
+  --total-amount: 60px;
 }
 
 * {
@@ -57,7 +75,7 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  padding: 18px;
+  padding: var(--wrap-pad);
   gap: 14px;
 }
 
@@ -69,7 +87,7 @@ body {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 16px;
-  padding: 16px 18px;
+  padding: var(--top-pad-y) var(--top-pad-x);
   box-shadow: 0 14px 45px rgba(0, 0, 0, 0.22);
   backdrop-filter: blur(6px);
 }
@@ -103,7 +121,7 @@ body {
   color: var(--muted);
 }
 
-/* ===== NOTICE flotante (no ocupa espacio) ===== */
+/* ===== NOTICE flotante dentro del HEADER (no ocupa espacio) ===== */
 .notice {
   position: absolute;
   left: 50%;
@@ -163,7 +181,7 @@ body {
   background: var(--panel2);
   border: 1px solid var(--line);
   border-radius: 18px;
-  padding: 14px;
+  padding: var(--list-pad);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
 }
 
@@ -172,56 +190,55 @@ body {
   height: 100%;
 
   display: grid;
-  grid-auto-flow: column; /* rellena vertical, luego nueva columna */
-  grid-template-rows: repeat(var(--rows), 1fr);
-  grid-auto-columns: var(--colW);
-
+  grid-auto-flow: column;
+  grid-template-rows: repeat(
+    5,
+    minmax(0, 1fr)
+  ); /* ✅ 5 productos por columna */
+  grid-auto-columns: minmax(var(--col-min), 1fr);
   gap: var(--grid-gap);
 
-  overflow-y: hidden;
-  overflow-x: auto; /* JS lo pone hidden cuando no hace falta */
-
-  scroll-behavior: smooth;
-  padding-right: 8px;
-}
-
-/* ===== Cuando NO hace falta scroll, lo ocultamos de verdad ===== */
-#items.no-scroll {
-  overflow-x: hidden;
+  /* ✅ importante: no “forzar” scroll horizontal por padding */
   padding-right: 0;
-  scrollbar-width: none; /* Firefox */
-}
-#items.no-scroll::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-  display: none; /* Webkit */
+
+  /* ✅ solo aparece si hace falta */
+  overflow-x: auto;
+  overflow-y: hidden;
+
+  /* mejora de scroll */
+  scroll-behavior: smooth;
+
+  /* evita micro-overflows por subpíxeles */
+  min-width: 0;
+  min-height: 0;
 }
 
-/* Scrollbar (webkit) SOLO cuando hay scroll */
-#items:not(.no-scroll)::-webkit-scrollbar {
+/* Scrollbar (webkit) */
+#items::-webkit-scrollbar {
   height: 10px;
 }
-#items:not(.no-scroll)::-webkit-scrollbar-thumb {
+#items::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.14);
   border-radius: 999px;
 }
-#items:not(.no-scroll)::-webkit-scrollbar-track {
+#items::-webkit-scrollbar-track {
   background: rgba(255, 255, 255, 0.03);
   border-radius: 999px;
 }
 
 /* ===== Tarjeta producto ===== */
 .row {
-  margin: 0;
+  margin: 0; /* ✅ NUNCA margin en grid items */
   width: 100%;
-  height: 100%;
+  height: 100%; /* ocupa la celda */
+  min-height: 0; /* ✅ permite encoger dentro de la celda */
 
   display: flex;
   gap: 14px;
   align-items: center;
 
-  padding: 14px;
-  border-radius: 16px;
+  padding: var(--row-pad);
+  border-radius: var(--row-radius);
 
   background: linear-gradient(
     180deg,
@@ -230,12 +247,14 @@ body {
   );
   border: 1px solid rgba(255, 255, 255, 0.07);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+
+  overflow: hidden; /* ✅ si algo no cabe, recorta, pero no genera scroll vertical */
 }
 
 /* Thumb fijo siempre (con o sin imagen) */
 .thumb {
-  width: 96px;
-  height: 96px;
+  width: var(--thumb);
+  height: var(--thumb);
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.06);
   object-fit: cover;
@@ -252,7 +271,7 @@ body {
 }
 
 .name {
-  font-size: 22px;
+  font-size: var(--name-size);
   font-weight: 950;
   line-height: 1.05;
   white-space: nowrap;
@@ -261,7 +280,7 @@ body {
 }
 
 .secondary {
-  font-size: 15px;
+  font-size: var(--sec-size);
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
@@ -277,11 +296,11 @@ body {
 
 .qty {
   font-weight: 950;
-  font-size: 16px;
+  font-size: var(--qty-size);
 }
 
 .unit {
-  font-size: 13px;
+  font-size: var(--unit-size);
   opacity: 0.85;
 }
 
@@ -297,9 +316,9 @@ body {
 }
 
 .lineTotal {
-  font-size: 18px;
+  font-size: var(--lineTotal-size);
   font-weight: 950;
-  min-width: 110px;
+  min-width: var(--lineTotal-minw);
   text-align: right;
   letter-spacing: 0.2px;
 }
@@ -312,14 +331,14 @@ body {
 }
 
 .total {
-  width: 440px;
+  width: var(--total-w);
   background: linear-gradient(
     135deg,
     rgba(29, 78, 216, 0.98),
     rgba(37, 99, 235, 0.98)
   );
   border-radius: 18px;
-  padding: 18px 22px;
+  padding: var(--total-pad-y) var(--total-pad-x);
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -335,7 +354,7 @@ body {
 }
 
 .total .amount {
-  font-size: 60px;
+  font-size: var(--total-amount);
   font-weight: 950;
   line-height: 1;
 }
@@ -355,69 +374,45 @@ body {
 @media (max-width: 1100px) {
   :root {
     --col-min: 420px;
-  }
-  .total {
-    width: 360px;
+    --total-w: 360px;
   }
 }
 
 /* ===== 1366x768 SAFE ===== */
 @media (max-height: 800px) {
-  .wrap {
-    padding: 14px;
-    gap: 10px;
+  :root {
+    --wrap-pad: 14px;
+    --top-pad-y: 12px;
+    --top-pad-x: 14px;
+    --list-pad: 10px;
+
+    --row-pad: 10px;
+    --row-radius: 14px;
+
+    --thumb: 68px;
+    --name-size: 17px;
+    --sec-size: 12px;
+    --qty-size: 13px;
+    --unit-size: 11px;
+    --lineTotal-size: 15px;
+    --lineTotal-minw: 88px;
+
+    --total-w: 360px;
+    --total-pad-y: 12px;
+    --total-pad-x: 16px;
+    --total-amount: 44px;
+
+    --grid-gap: 10px;
   }
 
-  .top {
-    padding: 12px 14px;
-  }
   .title {
-    font-size: 24px;
+    font-size: 22px;
+  }
+  .clock {
+    font-size: 22px;
   }
   .sub {
-    font-size: 14px;
-    margin-top: 6px;
-  }
-
-  .list {
-    padding: 10px;
-    border-radius: 16px;
-  }
-
-  .row {
-    padding: 12px;
-    border-radius: 14px;
-    gap: 12px;
-  }
-  .thumb {
-    width: 78px;
-    height: 78px;
-    border-radius: 14px;
-  }
-
-  .name {
-    font-size: 18px;
-  }
-  .secondary {
     font-size: 13px;
-  }
-  .qty {
-    font-size: 14px;
-  }
-  .unit {
-    font-size: 12px;
-  }
-  .lineTotal {
-    font-size: 16px;
-    min-width: 96px;
-  }
-
-  .total {
-    width: 360px;
-    padding: 14px 18px;
-    border-radius: 16px;
-  }
-  .total .amount {
-    font-size: 48px;
+    margin-top: 6px;
   }
 }

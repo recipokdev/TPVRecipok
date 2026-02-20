@@ -40,6 +40,7 @@ function setNotice(show, title = "", sub = "", ttlMs = 0) {
 
   tEl.textContent = title || "";
   sEl.textContent = sub || "";
+
   box.classList.remove("hidden");
 
   if (noticeTimer) clearTimeout(noticeTimer);
@@ -53,65 +54,112 @@ function setNotice(show, title = "", sub = "", ttlMs = 0) {
   }
 }
 
-/* ===== Grid layout: 5 filas por columna, scroll SOLO si hace falta ===== */
-let lastItemCountForLayout = 0;
-
+/* ===== Layout (solo ancho de columnas, filas son 5 fijas por CSS) ===== */
 function applyDynamicGridLayout(itemCount) {
   const el = document.getElementById("items");
   if (!el) return;
 
-  const rows = 5; // requisito
-  const gap = 12;
+  const rows = 5;
+  const gap =
+    parseInt(
+      getComputedStyle(document.documentElement).getPropertyValue("--grid-gap"),
+    ) || 12;
 
-  const W = el.clientWidth || 0;
+  const W = el.clientWidth;
+  const minColW =
+    parseInt(
+      getComputedStyle(document.documentElement).getPropertyValue("--col-min"),
+    ) || 520;
+
   const colsNeeded = Math.max(1, Math.ceil((itemCount || 0) / rows));
-
-  // ancho mínimo aceptable por columna (cuando ya toca scroll)
-  const minColW = 520; // puedes bajar a 480/460 si quieres más columnas sin scroll
-
-  // cuántas columnas caben sin scroll si respetamos minColW
   const maxColsFit = Math.max(1, Math.floor((W + gap) / (minColW + gap)));
 
-  const fitsWithoutScroll = colsNeeded <= maxColsFit;
-
-  // Si caben: ajustamos colW para que rellene justo el ancho sin overflow
-  // Si no caben: dejamos colW = minColW y habrá scroll horizontal
+  // Si caben, reparte exacto sin scroll; si no, deja minColW y habrá scroll horizontal
   let colW;
-  if (fitsWithoutScroll) {
+  if (colsNeeded <= maxColsFit) {
     colW = Math.floor((W - gap * (colsNeeded - 1)) / colsNeeded);
-    colW = Math.max(1, colW);
   } else {
     colW = minColW;
   }
 
-  el.style.setProperty("--rows", String(rows));
-  el.style.setProperty("--colW", `${colW}px`);
-
-  // ✅ esto quita el “scrollbar fantasma” en pantallas grandes
-  el.classList.toggle("no-scroll", fitsWithoutScroll);
-
-  // si no hay scroll, reseteamos por si venía de antes
-  if (fitsWithoutScroll) {
-    el.scrollLeft = 0;
-    el.scrollTop = 0;
-  }
+  el.style.setProperty("--col-min", `${colW}px`);
 }
 
-/* ===== ResizeObserver (una sola vez) ===== */
-(function watchItemsResizeOnce() {
+/* ===== Autoscroll ===== */
+let autoScrollTimer = null;
+let autoScrollDir = 1;
+
+function startAutoScrollIfNeeded() {
+  stopAutoScroll();
+
+  const scroller = document.getElementById("items");
+  if (!scroller) return;
+
+  const maxX = scroller.scrollWidth - scroller.clientWidth;
+  const maxY = scroller.scrollHeight - scroller.clientHeight;
+
+  // ✅ solo si hay overflow real
+  if (maxX <= 4 && maxY <= 4) {
+    scroller.scrollLeft = 0;
+    scroller.scrollTop = 0;
+    return;
+  }
+
+  autoScrollDir = 1;
+
+  autoScrollTimer = setInterval(() => {
+    const mx = scroller.scrollWidth - scroller.clientWidth;
+    const my = scroller.scrollHeight - scroller.clientHeight;
+
+    // preferimos horizontal si hay overflow
+    if (mx > 4) {
+      scroller.scrollLeft += autoScrollDir * 2.0;
+      if (scroller.scrollLeft >= mx) autoScrollDir = -1;
+      if (scroller.scrollLeft <= 0) autoScrollDir = 1;
+      return;
+    }
+
+    // fallback vertical (debería NO pasar ya con el CSS corregido)
+    if (my > 4) {
+      scroller.scrollTop += autoScrollDir * 1.4;
+      if (scroller.scrollTop >= my) autoScrollDir = -1;
+      if (scroller.scrollTop <= 0) autoScrollDir = 1;
+      return;
+    }
+  }, 40);
+}
+
+function stopAutoScroll() {
+  if (autoScrollTimer) clearInterval(autoScrollTimer);
+  autoScrollTimer = null;
+}
+
+/* ===== ResizeObserver (UNO SOLO) ===== */
+let itemsResizeObserverBound = false;
+function bindItemsResizeObserverOnce() {
+  if (itemsResizeObserverBound) return;
+  itemsResizeObserverBound = true;
+
   const el = document.getElementById("items");
   if (!el) return;
-  const ro = new ResizeObserver(() =>
-    applyDynamicGridLayout(lastItemCountForLayout),
-  );
+
+  const ro = new ResizeObserver(() => {
+    const count = el.querySelectorAll(".row").length;
+    applyDynamicGridLayout(count);
+    requestAnimationFrame(() => startAutoScrollIfNeeded());
+  });
   ro.observe(el);
-})();
+}
 
 /* ===== Render ===== */
 function render(state) {
   const itemsEl = document.getElementById("items");
   const totalEl = document.getElementById("total");
   const subEl = document.getElementById("subLine");
+
+  if (!itemsEl || !totalEl || !subEl) return;
+
+  bindItemsResizeObserverOnce();
 
   const cashOpen = !!state?.cashOpen;
   const items = Array.isArray(state?.items) ? state.items : [];
@@ -124,8 +172,6 @@ function render(state) {
   if (!cashOpen || mode === "CLOSED") {
     setNotice(true, "CAJA CERRADA", state?.subLine || "");
     itemsEl.innerHTML = "";
-    lastItemCountForLayout = 0;
-    applyDynamicGridLayout(0);
     stopAutoScroll();
     return;
   }
@@ -151,7 +197,7 @@ function render(state) {
     setNotice(false);
   }
 
-  // pinta items
+  // Render lista
   itemsEl.innerHTML = "";
 
   for (const it of items) {
@@ -217,11 +263,9 @@ function render(state) {
     itemsEl.appendChild(row);
   }
 
-  // layout + autoscroll
-  lastItemCountForLayout = items.length;
+  // Ajustar columnas + autoscroll según overflow
   applyDynamicGridLayout(items.length);
-
-  requestAnimationFrame(() => startAutoScroll());
+  requestAnimationFrame(() => startAutoScrollIfNeeded());
 }
 
 window.TPV_CUSTOMER_IPC?.onState?.((state) => {
@@ -229,56 +273,3 @@ window.TPV_CUSTOMER_IPC?.onState?.((state) => {
     render(state);
   } catch {}
 });
-
-/* ===== Autoscroll (solo si hay overflow real) ===== */
-let autoScrollTimer = null;
-let autoScrollDir = 1;
-
-function startAutoScroll() {
-  stopAutoScroll();
-
-  const scroller = document.getElementById("items");
-  if (!scroller) return;
-
-  // si no hay overflow, no arrancamos
-  const maxX = scroller.scrollWidth - scroller.clientWidth;
-  const maxY = scroller.scrollHeight - scroller.clientHeight;
-  if (maxX <= 4 && maxY <= 4) {
-    scroller.scrollLeft = 0;
-    scroller.scrollTop = 0;
-    return;
-  }
-
-  autoScrollDir = 1;
-
-  const tick = () => {
-    const maxX2 = scroller.scrollWidth - scroller.clientWidth;
-    const maxY2 = scroller.scrollHeight - scroller.clientHeight;
-
-    if (maxX2 > 4) {
-      scroller.scrollLeft += autoScrollDir * 2.0;
-      if (scroller.scrollLeft >= maxX2) autoScrollDir = -1;
-      if (scroller.scrollLeft <= 0) autoScrollDir = 1;
-      return;
-    }
-
-    if (maxY2 > 4) {
-      scroller.scrollTop += autoScrollDir * 1.4;
-      if (scroller.scrollTop >= maxY2) autoScrollDir = -1;
-      if (scroller.scrollTop <= 0) autoScrollDir = 1;
-      return;
-    }
-
-    // por si cambió el layout mientras tanto
-    stopAutoScroll();
-    scroller.scrollLeft = 0;
-    scroller.scrollTop = 0;
-  };
-
-  autoScrollTimer = setInterval(tick, 40);
-}
-
-function stopAutoScroll() {
-  if (autoScrollTimer) clearInterval(autoScrollTimer);
-  autoScrollTimer = null;
-}
