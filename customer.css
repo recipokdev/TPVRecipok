@@ -282,9 +282,13 @@ body {
 .secondary {
   font-size: var(--sec-size);
   color: var(--muted);
-  white-space: nowrap;
+
+  /* ✅ en vez de 1 línea con ellipsis */
+  white-space: normal;
   overflow: hidden;
-  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2; /* 2 líneas */
+  -webkit-box-orient: vertical;
 }
 
 .meta {
@@ -415,4 +419,15 @@ body {
     font-size: 13px;
     margin-top: 6px;
   }
+}
+
+.item.pack-child .desc {
+  padding-left: 12px;
+  opacity: 0.95;
+}
+.item.pack-child .qty {
+  opacity: 0.85;
+}
+.item.pack-child .ltotal {
+  opacity: 0.35; /* aunque esté vacío, por si cambia */
 }

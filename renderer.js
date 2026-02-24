@@ -183,6 +183,27 @@ const emailKeyboardBtn = document.getElementById("emailKeyboardBtn");
 
 // ===== Funciones auxiliares =====
 
+function isPackChildForPrint(l) {
+  // 1) si viene meta desde carrito
+  if (l?.meta?.includedInPack) return true;
+
+  // 2) si lo marcaste en buildFsLinesFromCart (recomendado)
+  if (l?.__isPackChild) return true;
+
+  // 3) fallback por texto (por si viene de FS reconstruido)
+  const d = String(l?.descripcion || l?.desc || "").trim();
+  return d.startsWith("↳") || d.startsWith("└") || d.startsWith("↓");
+}
+
+function isPackParentForPrint(l) {
+  if (l?.meta?.isPackOffer) return true;
+  if (l?.__isPackParent) return true;
+
+  // fallback por texto (si en algún momento lo marcas)
+  const d = String(l?.descripcion || "").toLowerCase();
+  return d.includes("pack") && d.includes("oferta");
+}
+
 function customerSetMode(mode, opts = {}) {
   customerMode = String(mode || "CART").toUpperCase();
 
@@ -190,16 +211,22 @@ function customerSetMode(mode, opts = {}) {
     const ttlMs = Number(opts.ttlMs ?? 12000);
     customerThanksUntil = Date.now() + Math.max(1000, ttlMs);
 
+    // ✅ si opts.items viene ya en formato "customer items", ok.
+    // Si viene del carrito, mejor regenerar desde cart para asegurar ocultar hijos.
+    const safeItems =
+      Array.isArray(opts.items) && opts.items.length
+        ? opts.items
+        : buildCustomerItemsFromCart(cart);
+
     customerLastSale = {
       total: Number(opts.total ?? 0),
       ticket: opts.ticket ? String(opts.ticket) : "",
       paymentMethod: opts.paymentMethod ? String(opts.paymentMethod) : "",
       agent: opts.agent ? String(opts.agent) : "",
       ts: Date.now(),
-      items: Array.isArray(opts.items) ? opts.items : [],
+      items: safeItems,
     };
 
-    // ✅ CLAVE: congelar lo que se mostrará después del cobro
     customerDisplayOverride = {
       items: customerLastSale.items,
       total: customerLastSale.total,
@@ -243,8 +270,8 @@ function pushCustomerState() {
       return;
     }
 
-    // Items reales desde carrito
-    const cartItems = (Array.isArray(cart) ? cart : []).map((item) => {
+    // Items "internos" (para total y lógica) = carrito tal cual
+    const cartItemsInternal = (Array.isArray(cart) ? cart : []).map((item) => {
       const unitPrice = Number(getUnitGross(item) || 0);
       const qty = Number(item.qty || 0);
       const lineTotal = unitPrice * qty;
@@ -261,19 +288,27 @@ function pushCustomerState() {
       };
     });
 
-    const cartTotal = cartItems.reduce(
+    const cartTotal = cartItemsInternal.reduce(
       (a, it) => a + Number(it.lineTotal || 0),
       0,
     );
 
-    // ✅ LÓGICA CLAVE:
-    // - Si el carrito está vacío pero existe override, mostramos override.
-    // - Si hay carrito (nuevo cliente), mostramos carrito real.
-    let itemsToShow = cartItems;
+    // ✅ Items VISIBLES para pantalla cliente (oculta hijos + “Incluye”)
+    const cartItemsVisible = buildCustomerItemsFromCart(cart);
+
+    // ✅ LÓGICA CLAVE (igual que la tuya):
+    let itemsToShow = cartItemsVisible;
     let totalToShow = cartTotal;
 
-    if (cartItems.length === 0 && customerDisplayOverride?.items?.length) {
-      itemsToShow = customerDisplayOverride.items;
+    // Si carrito vacío pero existe override, mostramos override (pero filtrado)
+    if (
+      cartItemsInternal.length === 0 &&
+      customerDisplayOverride?.items?.length
+    ) {
+      // Por si el override venía sin filtrar (ej. versiones viejas)
+      itemsToShow = Array.isArray(customerDisplayOverride.items)
+        ? customerDisplayOverride.items
+        : [];
       totalToShow = Number(customerDisplayOverride.total || 0);
     }
 
@@ -834,17 +869,121 @@ function buildCartLine(product, quantity) {
   };
 }
 
-function addToCart(product, quantity = 1) {
-  // ✅ CHECK = separar -> SIEMPRE línea nueva
+async function addToCart(product, quantity = 1) {
+  const prodId = Number(product.baseProductId || product.id || 0);
+
+  // =====================
+  // CASO: ES OFERTA/PACK
+  // =====================
+  if (isOfferPackProductById(prodId)) {
+    const pack = PACKS_STATE.packsByOfferProductId.get(prodId);
+    if (!pack) {
+      // fallback: trátalo como normal
+      cart.push(buildCartLine(product, quantity));
+      renderCart();
+      return;
+    }
+
+    // Si estás en modo “sumar líneas” (groupLines desactivado),
+    // intentamos sumar a un parent existente SOLO si coincide precio unitario actual.
+    if (!isGroupLinesEnabled()) {
+      const taxRate = getTaxRateForProduct(product);
+      const productGross = round2(
+        (Number(product.price || 0) || 0) * (1 + (Number(taxRate) || 0) / 100),
+      );
+      const existingParent = cart.find((c) => {
+        if (!isPackParentLine(c)) return false;
+        if (Number(c.baseProductId || c.id) !== prodId) return false;
+        if (Number(c.meta.packId) !== Number(pack.id)) return false;
+
+        return round2(getUnitGross(c)) === productGross;
+      });
+
+      if (existingParent) {
+        // suma qty parent
+        existingParent.qty = round2(
+          (Number(existingParent.qty) || 0) + Number(quantity || 0),
+        );
+
+        // suma qty hijos proporcionalmente
+        const children = getPackChildren(existingParent._lineId);
+        const lines = PACKS_STATE.linesByPackId.get(pack.id) || [];
+
+        // mapa reference -> quantity por pack
+        const qByRef = new Map();
+        for (const ln of lines) {
+          qByRef.set(String(ln.reference || ""), Number(ln.quantity || 1));
+        }
+
+        for (const ch of children) {
+          const ref = String(ch.meta?.packRef || "");
+          const baseQ = qByRef.get(ref) || 1;
+          ch.qty = round2(
+            (Number(ch.qty) || 0) + baseQ * Number(quantity || 0),
+          );
+        }
+
+        renderCart();
+        return;
+      }
+    }
+
+    // Si es “separar líneas” o no se pudo sumar -> creamos un grupo nuevo
+    const parentLine = buildCartLine(product, quantity);
+    parentLine.meta = { isPackOffer: true, packId: pack.id };
+
+    cart.push(parentLine);
+
+    const packLines = PACKS_STATE.linesByPackId.get(pack.id) || [];
+
+    for (const ln of packLines) {
+      const ref = String(ln.reference || "").trim();
+      const baseQty = Number(ln.quantity || 1);
+
+      const prod = await fetchProductoByReferencia(ref);
+
+      // Creamos producto-hijo a precio 0
+      const fakeProduct = {
+        id: prod ? Number(prod.idproducto) : null,
+        baseProductId: prod ? Number(prod.idproducto) : null,
+        name: prod?.descripcion || ref || "Producto pack",
+        secondaryName: "",
+        imageUrl: null,
+        price: 0, // 👈 neto 0
+        codimpuesto: prod?.codimpuesto || product.codimpuesto || null,
+      };
+
+      const child = buildCartLine(fakeProduct, baseQty * quantity);
+
+      // FORZAR 0 total aunque impuestos
+      child.price = 0;
+      child.grossPrice = 0;
+      child.originalGrossPrice = 0;
+      child.grossPriceOverride = 0;
+
+      child.meta = {
+        includedInPack: true,
+        parentPackLineId: parentLine._lineId,
+        packRef: ref, // para re-sumar correctamente
+      };
+
+      cart.push(child);
+    }
+
+    renderCart();
+    return;
+  }
+
+  // =====================
+  // NORMAL (tu comportamiento)
+  // =====================
   if (isGroupLinesEnabled()) {
     cart.push(buildCartLine(product, quantity));
     renderCart();
     return;
   }
 
-  // ✅ UNCHECK = sumar -> busca línea existente y suma
   const existing = cart.find((c) => c.id === product.id);
-
   if (existing) existing.qty += quantity;
   else cart.push(buildCartLine(product, quantity));
 
@@ -855,12 +994,32 @@ function updateCartItemQuantity(lineId, newQty) {
   const item = cart.find((c) => c._lineId === lineId);
   if (!item) return;
 
+  // ❌ No permitir tocar hijos desde aquí (por seguridad)
+  if (isPackChildLine(item)) {
+    toast("Producto incluido en oferta. Modifica la oferta.", "warn");
+    return;
+  }
+
   let q = Number(newQty);
   if (!isFinite(q)) q = 0;
 
-  // mismo redondeo que el numpad (para consistencia)
   q = Math.round(q * 1000) / 1000;
 
+  // ✅ Si es parent pack: cascada / sync
+  if (isPackParentLine(item)) {
+    if (q <= 0) {
+      removePackCascade(item._lineId);
+      renderCart();
+      return;
+    }
+
+    item.qty = q;
+    syncPackChildrenQty(item);
+    renderCart();
+    return;
+  }
+
+  // ✅ Normal
   if (q <= 0) {
     cart = cart.filter((c) => c._lineId !== lineId);
   } else {
@@ -941,6 +1100,26 @@ function fmtQty(q) {
   return n.toLocaleString("es-ES", { maximumFractionDigits: 3 });
 }
 
+function buildPackIncludesText(parentLine) {
+  try {
+    if (!isPackParentLine(parentLine)) return "";
+
+    const children = getPackChildren(parentLine._lineId);
+    if (!children.length) return "";
+
+    // Texto compacto: "Incluye: Prod x1 · Prod2 x2"
+    const parts = children.map((ch) => {
+      const name = String(ch?.name || ch?.meta?.packRef || "Producto").trim();
+      const q = fmtQty(ch?.qty ?? 0);
+      return `${name} x${q}`;
+    });
+
+    return "Incluye: " + parts.join(" · ");
+  } catch {
+    return "";
+  }
+}
+
 function renderCart() {
   const container = document.getElementById("cartLines");
   if (!container) return;
@@ -948,9 +1127,13 @@ function renderCart() {
 
   let total = 0;
 
-  cart.forEach((item) => {
-    const unitPrice = getUnitGross(item);
+  // ✅ UI: solo pintamos líneas NO-hijas
+  const uiLines = (Array.isArray(cart) ? cart : []).filter((line) => {
+    return !isPackChildLine(line);
+  });
 
+  uiLines.forEach((item) => {
+    const unitPrice = getUnitGross(item);
     const lineTotal = unitPrice * item.qty;
     total += lineTotal;
 
@@ -961,36 +1144,44 @@ function renderCart() {
     const modifiedMark = isPriceModified(item)
       ? " <span class='price-mod'>MOD</span>"
       : "";
+
     const unitTxt = eur(unitPrice) + modifiedMark;
     const lineTxt = eur(lineTotal);
+
+    // ✅ Si es pack, añadimos "Incluye: ..."
+    const includesText = isPackParentLine(item)
+      ? buildPackIncludesText(item)
+      : "";
 
     row.innerHTML = `
       <div class="cart-line-name">
         <div>${item.name}</div>
+
         ${
           item.secondaryName
             ? `<div class="cart-line-secondary">${item.secondaryName}</div>`
             : ""
         }
+
+        ${
+          includesText
+            ? `<div class="cart-line-packincludes">${includesText}</div>`
+            : ""
+        }
+
         <div class="cart-line-unit">${fmtQty(item.qty)} x ${unitTxt}</div>
       </div>
 
       <div class="qty-controls">
-        <button class="qty-btn" data-action="minus" data-lineid="${
-          item._lineId
-        }">-</button>
-        <button type="button" class="qty-display qty-display-btn qty-btn" data-action="edit" data-lineid="${
-          item._lineId
-        }">${fmtQty(item.qty)}</button>
-        <button class="qty-btn" data-action="plus" data-lineid="${
-          item._lineId
-        }">+</button>
+        <button class="qty-btn" data-action="minus" data-lineid="${item._lineId}">-</button>
+        <button type="button" class="qty-display qty-display-btn qty-btn" data-action="edit" data-lineid="${item._lineId}">
+          ${fmtQty(item.qty)}
+        </button>
+        <button class="qty-btn" data-action="plus" data-lineid="${item._lineId}">+</button>
       </div>
 
       <div class="cart-line-total">
-        <button type="button" class="line-price-btn" data-action="price" data-lineid="${
-          item._lineId
-        }">
+        <button type="button" class="line-price-btn" data-action="price" data-lineid="${item._lineId}">
           ${lineTxt}
         </button>
         <button class="line-delete-btn" data-lineid="${item._lineId}">✕</button>
@@ -1001,22 +1192,21 @@ function renderCart() {
   });
 
   const totalEl = document.getElementById("totalAmount");
-  if (totalEl) {
-    totalEl.textContent = eur(total);
-  }
+  if (totalEl) totalEl.textContent = eur(total);
 
+  // ✅ Completar imageUrl para customer display (solo si no viene)
   cart.forEach((item) => {
     if (!item.imageUrl && item.id != null) {
       const p = (products || []).find((x) => String(x.id) === String(item.id));
       if (p?.imageUrl) item.imageUrl = p.imageUrl;
     }
   });
+
   // ✅ si empieza un nuevo carrito, dejamos de mostrar el último cobrado
   if ((cart?.length || 0) > 0 && customerDisplayOverride) {
     customerDisplayOverride = null;
-    // opcional: también limpiar lastSale si quieres
-    // customerLastSale = null;
   }
+
   pushCustomerState();
 }
 
@@ -2099,35 +2289,86 @@ const cartLinesContainer = document.getElementById("cartLines");
 
 if (cartLinesContainer) {
   cartLinesContainer.addEventListener("click", (e) => {
+    const lineId = e.target?.closest(".cart-line")?.dataset?.lineid;
+    const item = lineId ? cart.find((c) => c._lineId === lineId) : null;
+
+    // ✅ Bloquear TOTAL para hijos de pack
+    if (item && isPackChildLine(item)) {
+      toast("Producto incluido en oferta. Modifica la oferta.", "warn");
+      return;
+    }
+
+    // ===== QTY (+/-/edit) =====
     const qtyBtn = e.target.closest(".qty-btn");
     if (qtyBtn) {
       const action = qtyBtn.getAttribute("data-action");
-      const lineId = qtyBtn.getAttribute("data-lineid");
-      const item = cart.find((c) => c._lineId === lineId);
       if (!item) return;
 
+      const roundQty = (n) => Math.round((Number(n) || 0) * 1000) / 1000;
+
       if (action === "plus") {
-        updateCartItemQuantity(lineId, item.qty + 1);
-      } else if (action === "minus") {
-        updateCartItemQuantity(lineId, item.qty - 1);
-      } else if (action === "edit") {
+        if (isPackParentLine(item)) {
+          item.qty = roundQty(item.qty + 1);
+          syncPackChildrenQty(item);
+          renderCart();
+          return;
+        }
+        updateCartItemQuantity(lineId, roundQty(item.qty + 1));
+        return;
+      }
+
+      if (action === "minus") {
+        if (isPackParentLine(item)) {
+          const nextQty = roundQty(item.qty - 1);
+          if (nextQty <= 0) {
+            removePackCascade(item._lineId);
+            renderCart();
+            return;
+          }
+          item.qty = nextQty;
+          syncPackChildrenQty(item);
+          renderCart();
+          return;
+        }
+        updateCartItemQuantity(lineId, roundQty(item.qty - 1));
+        return;
+      }
+
+      if (action === "edit") {
         openNumPad(
           String(item.qty ?? 1),
-          (newQty) => updateCartItemQuantity(lineId, newQty),
+          (newQty) => {
+            const q = Number(String(newQty).replace(",", "."));
+            if (!isFinite(q)) return;
+
+            const qq = roundQty(q);
+
+            if (isPackParentLine(item)) {
+              if (qq <= 0) removePackCascade(item._lineId);
+              else {
+                item.qty = qq;
+                syncPackChildrenQty(item);
+              }
+              renderCart();
+              return;
+            }
+
+            updateCartItemQuantity(lineId, qq);
+          },
           item.name,
-          "qty", // explícito
+          "qty",
           null,
           lineId,
         );
+        return;
       }
 
       return;
     }
 
+    // ===== PRICE EDIT =====
     const priceBtn = e.target.closest('[data-action="price"]');
     if (priceBtn) {
-      const lineId = priceBtn.getAttribute("data-lineid");
-      const item = cart.find((c) => c._lineId === lineId);
       if (!item) return;
 
       const currentUnit = getUnitGross(item);
@@ -2138,9 +2379,10 @@ if (cartLinesContainer) {
         currentUnit.toFixed(2),
         (newUnitGross) => {
           const v = Number(String(newUnitGross).replace(",", "."));
-          if (!isFinite(v) || v < 0) return; // ✅ permite 0
-          const rounded = Math.round(v * 100) / 100; // ✅ 2 decimales reales
-          setUnitGrossOverrideSmart(item, rounded); // ✅ guarda 0 si procede
+          if (!isFinite(v) || v < 0) return;
+
+          const rounded = Math.round(v * 100) / 100;
+          setUnitGrossOverrideSmart(item, rounded);
           renderCart();
         },
         item.name,
@@ -2152,26 +2394,21 @@ if (cartLinesContainer) {
       return;
     }
 
+    // ===== DELETE =====
     const deleteBtn = e.target.closest(".line-delete-btn");
     if (deleteBtn) {
-      const lineId = deleteBtn.getAttribute("data-lineid");
+      if (!item) return;
 
-      // 🧠 Captura info ANTES de eliminar
-      const item = Array.isArray(cart)
-        ? cart.find((x) => String(x?._lineId) === String(lineId))
-        : null;
+      if (isPackParentLine(item)) {
+        removePackCascade(item._lineId);
+        renderCart();
+        return;
+      }
 
-      const name = (
-        item?.name ||
-        item?.descripcion ||
-        item?.nombre ||
-        "Producto"
-      )
-        .toString()
-        .trim();
-      const qty = Number(item?.qty || item?.cantidad || 1) || 1;
+      // (tu log igual)
+      const name = String(item?.name || "Producto").trim();
+      const qty = Number(item?.qty || 1) || 1;
 
-      // ✅ LOG: quitó producto
       try {
         const ctx = getLogCtx();
         if (ctx.idcaja) {
@@ -2183,8 +2420,8 @@ if (cartLinesContainer) {
         }
       } catch {}
 
-      // Eliminar
       updateCartItemQuantity(lineId, 0);
+      return;
     }
   });
 }
@@ -5710,6 +5947,10 @@ async function loadDataFromApi(opts = {}) {
 
     setStatusText("Conectando API...");
 
+    // ✅ IMPORTANTE: para que warmupPacksData no se “salte”
+    TPV_STATE.offline = false;
+    TPV_STATE.locked = false;
+
     // 1) Cargamos lo principal EN PARALELO (sin impuestos todavía)
     const [
       familiasRaw,
@@ -5949,6 +6190,8 @@ async function loadDataFromApi(opts = {}) {
     } else {
       if (!products.length) products = [...demoProducts];
     }
+
+    await warmupPacksData().catch(() => {});
 
     // ===== Terminales -> terminals =====
     if (Array.isArray(tpvTerminales) && tpvTerminales.length) {
@@ -7648,7 +7891,6 @@ function renderItemsHtml(doc, lineas) {
 
   const safe = (s) => escapeHtml(String(s ?? ""));
 
-  // Ref/código (lo corto) + descripción (lo largo)
   const pickMainAndDesc = (l) => {
     const main = (
       l.ref ??
@@ -7659,7 +7901,7 @@ function renderItemsHtml(doc, lineas) {
       l.name ??
       l.nombre ??
       ""
-    ) // si no hay nada corto, lo resolveremos abajo
+    )
       .toString()
       .trim();
 
@@ -7673,41 +7915,42 @@ function renderItemsHtml(doc, lineas) {
       .toString()
       .trim();
 
-    // Si no hay main pero sí descripción, la usamos como main
     if (!main && desc) return { main: desc, desc: "" };
-
-    // Evita duplicar si son iguales
     if (main && desc && main.toLowerCase() === desc.toLowerCase()) desc = "";
-
     return { main, desc };
   };
 
   const getQtyForPrint = (l) => {
-    // cubre carrito/offline/FS
     const q = l.qty ?? l.cantidad ?? l.quantity ?? l.cant ?? 0;
-
     const n = Number(q);
     return isNaN(n) ? 0 : n;
   };
 
   box.innerHTML = (Array.isArray(lineas) ? lineas : [])
     .map((l) => {
+      const isChild = isPackChildForPrint(l);
       const qty = getQtyForPrint(l);
 
-      // ✅ precio unitario bruto usando TU lógica centralizada
       const unitGross = getUnitGrossForPrint(l);
-
-      // total línea
       const lineTotal = qty * unitGross;
 
       const { main, desc } = pickMainAndDesc(l);
 
+      // ✅ hijos: qty a la derecha, sin qty izquierda, sin total
+      const leftQtyHtml = isChild ? "" : safe(qty);
+
+      const nameHtml = isChild
+        ? `↳ ${safe(main)} <span class="muted">x${safe(qty)}</span>`
+        : safe(main);
+
+      const totalHtml = isChild ? "" : eurTicket(lineTotal);
+
       return `
-        <div class="item">
+        <div class="item ${isChild ? "pack-child" : ""}">
           <div class="item-top">
-            <div class="qty">${safe(qty)}</div>
-            <div class="desc">${safe(main)}</div>
-            <div class="ltotal">${eurTicket(lineTotal)}</div>
+            <div class="qty">${leftQtyHtml}</div>
+            <div class="desc">${nameHtml}</div>
+            <div class="ltotal">${totalHtml}</div>
           </div>
           ${desc ? `<div class="item-sub small muted">${safe(desc)}</div>` : ""}
         </div>
@@ -7722,14 +7965,22 @@ function renderTaxSummaryHtml(doc, taxMap) {
 
   taxSummaryEl.innerHTML = "";
 
+  const nearlyZero = (n) => Math.abs(Number(n || 0)) < 0.005;
+
   const ratesSorted = Object.keys(taxMap)
     .map((r) => Number(r))
     .filter((r) => !isNaN(r) && r !== 0)
     .sort((a, b) => a - b);
 
   for (const r of ratesSorted) {
-    appendRow(taxSummaryEl, `Base Imponible ${r}%`, eurTicket(taxMap[r].base));
-    appendRow(taxSummaryEl, `IVA ${r}%`, eurTicket(taxMap[r].iva));
+    const base = Number(taxMap[r]?.base || 0);
+    const iva = Number(taxMap[r]?.iva || 0);
+
+    // 👇 si ambos son 0, no lo muestres
+    if (nearlyZero(base) && nearlyZero(iva)) continue;
+
+    appendRow(taxSummaryEl, `Base Imponible ${r}%`, eurTicket(base));
+    appendRow(taxSummaryEl, `IVA ${r}%`, eurTicket(iva));
   }
 }
 
@@ -7737,29 +7988,31 @@ function buildFsLinesFromCart(cartArr) {
   if (!Array.isArray(cartArr) || cartArr.length === 0) return [];
 
   return cartArr.map((item) => {
+    const isChild = isPackChildLine(item);
+    const isParent = isPackParentLine(item);
+
+    // descripción base SIN flecha (para que FS no la muestre)
     const descripcion = item.secondaryName
       ? `${item.name} - ${item.secondaryName}`
       : item.name;
 
     const qty = Number(item.qty || 1) || 1;
 
-    // ✅ precio efectivo (override o normal)
-    const unitGross = getUnitGross(item);
+    // hijo siempre gratis
+    const unitGross = isChild ? 0 : getUnitGross(item);
 
-    // ✅ neto a enviar a FS (FS espera pvpunitario neto)
-    // IMPORTANTÍSIMO: NO redondear a 2 decimales aquí. Enviar 6-8 decimales.
     const tax = Number(item.taxRate || 0);
     const divisor = 1 + tax / 100;
-    const unitNetRaw =
-      divisor > 0 ? (Number(unitGross) || 0) / divisor : Number(unitGross) || 0;
-
-    // 8 decimales para evitar descuadres (FS recalcula totales desde aquí)
+    const unitNetRaw = divisor > 0 ? unitGross / divisor : unitGross;
     const unitNet = Math.round((unitNetRaw + Number.EPSILON) * 1e8) / 1e8;
 
     const linea = {
       descripcion,
       cantidad: qty,
       pvpunitario: unitNet,
+      // ✅ flags SOLO para tu TPV (FS normalmente los ignora)
+      __isPackChild: !!isChild,
+      __isPackParent: !!isParent,
     };
 
     if (item.codimpuesto) linea.codimpuesto = item.codimpuesto;
@@ -7895,18 +8148,23 @@ function buildEscposTicketBytes(ticket, lineas, totalToShow) {
 
   for (const l of lineas || []) {
     const qty = getQtyForPrint(l);
+    const isChild = isPackChildForPrint(l);
+
     const unitGross = getUnitGrossForPrint(l);
     const lineGross = unitGross * qty;
 
     const { main, desc } = pickMainAndDesc(l);
 
-    // Línea principal
-    push(`${qty}  ${main}\n`);
-    // Descripción debajo (si existe)
-    if (desc) push(`    ${desc}\n`);
-
-    // Total alineado a la derecha aproximado (simple)
-    push(`    ${eurTicket(lineGross)}\n`);
+    if (isChild) {
+      // hijo: sin qty izquierda, qty a la derecha, sin total
+      push(`   ↳ ${main} x${qty}\n`);
+      if (desc) push(`      ${desc}\n`);
+    } else {
+      // normal/parent
+      push(`${qty}  ${main}\n`);
+      if (desc) push(`    ${desc}\n`);
+      push(`    ${eurTicket(lineGross)}\n`);
+    }
   }
 
   push("\n");
@@ -8587,22 +8845,8 @@ async function onPayButtonClick() {
     // Snapshot carrito (inmutable)
     const cartSnapshot = Array.isArray(cart) ? cart.map((i) => ({ ...i })) : [];
 
-    const cartSnapshotToCustomerItems = cartSnapshot.map((item) => {
-      const unitPrice = Number(getUnitGross(item) || 0);
-      const qty = Number(item.qty || 0);
-      const lineTotal = unitPrice * qty;
-
-      return {
-        lineId: item._lineId,
-        name: item.name || "",
-        secondaryName: item.secondaryName || "",
-        qty,
-        unitPrice,
-        lineTotal,
-        imageUrl: item.imageUrl || item.imgUrl || null,
-        modified: !!isPriceModified?.(item),
-      };
-    });
+    const cartSnapshotToCustomerItems =
+      buildCustomerItemsFromCart(cartSnapshot);
 
     // Datos auxiliares offline/post
     ticketPayload._payBreakdown = pagosFinal;
@@ -8675,7 +8919,7 @@ async function onPayButtonClick() {
         ticket: lastTicket?.numero || "OFFLINE",
         paymentMethod: ticketPayload.paymentMethod || "",
         agent: ticketPayload._payNick || "",
-        items: cartSnapshotToCustomerItems,
+        items: buildCustomerItemsFromCart(cartSnapshot),
       });
 
       cart = [];
@@ -8852,7 +9096,7 @@ async function onPayButtonClick() {
       ticket: lastTicket?.numero || facturaResp?.codigo || "",
       paymentMethod: ticketPayload.paymentMethod || "",
       agent: ticketPayload._payNick || "",
-      items: cartSnapshotToCustomerItems, // ✅ IMPORTANTE
+      items: buildCustomerItemsFromCart(cartSnapshot), // ✅ IMPORTANTE
     });
 
     cart = [];
@@ -10881,6 +11125,289 @@ async function fetchApiResourceWithParams(resource, params = {}) {
   return data;
 }
 
+// ==========================
+// PACKS / OFERTAS (Facturascripts plugin)
+// ==========================
+
+function normTxt(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildPackChildRefSet() {
+  const set = new Set();
+  for (const lines of PACKS_STATE.linesByPackId.values()) {
+    for (const ln of lines || []) {
+      const ref = normTxt(ln.reference);
+      if (ref) set.add(ref);
+    }
+  }
+  return set;
+}
+
+function isZeroUnitFsLine(l) {
+  const u = Number(l?.pvpunitario ?? 0);
+  return Math.abs(u) < 1e-9;
+}
+
+function ticketHasOfferByName(fsLines) {
+  // Detecta si el ticket tiene alguna oferta (por nombre del producto oferta)
+  // Usamos tu catálogo `products` (que ya contiene las ofertas como productos)
+  const offerNameSet = new Set(
+    (products || [])
+      .filter((p) => isOfferPackProductById(p.baseProductId || p.id))
+      .map((p) =>
+        normTxt(p.secondaryName ? `${p.name} - ${p.secondaryName}` : p.name),
+      )
+      .filter(Boolean),
+  );
+
+  const lines = Array.isArray(fsLines) ? fsLines : [];
+  return lines.some((l) => {
+    const d = normTxt(l?.descripcion);
+    if (!d) return false;
+    for (const offer of offerNameSet) {
+      if (offer && d.includes(offer)) return true;
+    }
+    return false;
+  });
+}
+
+function looksLikePackChildByRef(fsLine, childRefSet) {
+  const d = normTxt(fsLine?.descripcion);
+  if (!d) return false;
+
+  // coincide si la descripción contiene la reference del packline
+  for (const ref of childRefSet) {
+    if (ref && d.includes(ref)) return true;
+  }
+  return false;
+}
+
+/**
+ * ✅ Filtra líneas para devolución:
+ * - Si no hay PACKS_STATE listo -> no filtra.
+ * - Si el ticket no parece contener ofertas -> no filtra.
+ * - Si hay ofertas -> oculta líneas 0,00 que coinciden con references del pack.
+ */
+function filterRefundLinesForUI(fsLines) {
+  const lines = Array.isArray(fsLines) ? fsLines : [];
+
+  if (!PACKS_STATE?.ready) return lines;
+
+  const hasOffer = ticketHasOfferByName(lines);
+  if (!hasOffer) return lines;
+
+  const childRefSet = buildPackChildRefSet();
+
+  return lines.filter((l) => {
+    if (!isZeroUnitFsLine(l)) return true; // líneas normales
+    // si vale 0, solo la ocultamos si parece hijo de pack
+    return !looksLikePackChildByRef(l, childRefSet);
+  });
+}
+
+function isPackParentLine(line) {
+  return !!line?.meta?.isPackOffer && !!line?.meta?.packId;
+}
+
+function isPackChildLine(line) {
+  return !!line?.meta?.includedInPack && !!line?.meta?.parentPackLineId;
+}
+
+function getPackChildren(parentLineId) {
+  return cart.filter((x) => x?.meta?.parentPackLineId === parentLineId);
+}
+
+function removePackCascade(parentLineId) {
+  cart = cart.filter(
+    (x) =>
+      x._lineId !== parentLineId && x?.meta?.parentPackLineId !== parentLineId,
+  );
+}
+
+function getPackIncludesTextForParentLine(parentLine) {
+  if (!isPackParentLine(parentLine)) return "";
+
+  const packId = Number(parentLine?.meta?.packId || 0);
+  if (!packId) return "";
+
+  const lines = PACKS_STATE.linesByPackId.get(packId) || [];
+  if (!lines.length) return "";
+
+  // Nota: aquí usamos la referencia (más fiable) y multiplicamos por qty del parent
+  const parentQty = Number(parentLine.qty || 0) || 0;
+
+  return lines
+    .map((ln) => {
+      const ref = String(ln.reference || "").trim();
+      const baseQ = Number(ln.quantity || 1) || 1;
+      const q = baseQ * parentQty;
+      return `${ref} x${fmtQty(q)}`;
+    })
+    .join(" · ");
+}
+
+/**
+ * Filtra para UI (cliente): oculta hijos del pack.
+ * Además, para el parent añade "Incluye: ..." en secondaryName.
+ */
+function buildCustomerItemsFromCart(cartArr) {
+  const src = Array.isArray(cartArr) ? cartArr : [];
+
+  // ocultar hijos
+  const visible = src.filter((item) => !isPackChildLine(item));
+
+  return visible.map((item) => {
+    const unitPrice = Number(getUnitGross(item) || 0);
+    const qty = Number(item.qty || 0);
+    const lineTotal = unitPrice * qty;
+
+    const baseSecondary = String(item.secondaryName || "").trim();
+
+    let secondaryName = baseSecondary;
+
+    if (isPackParentLine(item)) {
+      const includes = getPackIncludesTextForParentLine(item);
+      if (includes) {
+        secondaryName = baseSecondary
+          ? `${baseSecondary} · Incluye: ${includes}`
+          : `Incluye: ${includes}`;
+      }
+    }
+
+    return {
+      lineId: item._lineId,
+      name: item.name || "",
+      secondaryName,
+      qty,
+      unitPrice,
+      lineTotal,
+      imageUrl: item.imageUrl || item.imgUrl || null,
+      modified: !!isPriceModified?.(item),
+    };
+  });
+}
+
+/**
+ * Ajusta qty de hijos = qty_padre * qty_base_del_packline
+ * Requiere que cada hijo tenga meta.packRef con la referencia del packline.
+ */
+function syncPackChildrenQty(parentLine) {
+  if (!isPackParentLine(parentLine)) return;
+
+  const packId = Number(parentLine.meta.packId || 0);
+  const lines = PACKS_STATE.linesByPackId.get(packId) || [];
+  if (!lines.length) return;
+
+  const qByRef = new Map();
+  for (const ln of lines) {
+    qByRef.set(String(ln.reference || "").trim(), Number(ln.quantity || 1));
+  }
+
+  const children = getPackChildren(parentLine._lineId);
+  const parentQty = Number(parentLine.qty || 0);
+
+  for (const ch of children) {
+    const ref = String(ch?.meta?.packRef || "").trim();
+    const baseQ = qByRef.get(ref) || 1;
+    ch.qty = baseQ * parentQty;
+
+    // hijos siempre gratis
+    ch.grossPriceOverride = 0;
+    ch.originalGrossPrice =
+      ch.originalGrossPrice ?? ch.grossPrice ?? ch.price ?? 0;
+  }
+}
+
+const PACKS_STATE = {
+  ready: false,
+  packsByOfferProductId: new Map(), // key: idproducto oferta (idproduct en productpacks)
+  linesByPackId: new Map(), // key: idpack -> [lines]
+  productByRefCache: new Map(), // key: referencia -> producto FS (o null)
+};
+
+async function fetchProductoByReferencia(ref) {
+  const key = String(ref || "").trim();
+  if (!key) return null;
+
+  if (PACKS_STATE.productByRefCache.has(key)) {
+    return PACKS_STATE.productByRefCache.get(key);
+  }
+
+  try {
+    const data = await fetchApiResourceWithParams("productos", {
+      "filter[referencia]": key,
+      limit: 1,
+      "sort[idproducto]": "DESC",
+    });
+    const p = Array.isArray(data) && data[0] ? data[0] : null;
+    PACKS_STATE.productByRefCache.set(key, p);
+    return p;
+  } catch {
+    PACKS_STATE.productByRefCache.set(key, null);
+    return null;
+  }
+}
+
+async function warmupPacksData() {
+  PACKS_STATE.ready = false;
+  PACKS_STATE.packsByOfferProductId.clear();
+  PACKS_STATE.linesByPackId.clear();
+  PACKS_STATE.productByRefCache.clear();
+
+  // si estás offline/demo, no hace nada
+  if (TPV_STATE?.offline) return;
+
+  let packs = [];
+  let lines = [];
+
+  try {
+    // ✅ mejor en paralelo
+    [packs, lines] = await Promise.all([
+      fetchApiResource("productpacks").catch(() => []),
+      fetchApiResource("productpacklines").catch(() => []),
+    ]);
+  } catch {}
+
+  if (!Array.isArray(packs)) packs = [];
+  if (!Array.isArray(lines)) lines = [];
+
+  // productpacks: { id, idproduct, name, reference, ... }
+  for (const p of packs) {
+    const offerId = Number(p.idproduct || 0);
+    const packId = Number(p.id || 0);
+    if (!offerId || !packId) continue;
+    PACKS_STATE.packsByOfferProductId.set(offerId, {
+      id: packId,
+      idproduct: offerId,
+      name: p.name || "",
+      reference: p.reference || "",
+      raw: p,
+    });
+  }
+
+  // productpacklines: { idpack, reference, quantity, ... }
+  for (const ln of lines) {
+    const packId = Number(ln.idpack || 0);
+    if (!packId) continue;
+    if (!PACKS_STATE.linesByPackId.has(packId)) {
+      PACKS_STATE.linesByPackId.set(packId, []);
+    }
+    PACKS_STATE.linesByPackId.get(packId).push(ln);
+  }
+
+  PACKS_STATE.ready = true;
+}
+
+function isOfferPackProductById(productId) {
+  const id = Number(productId || 0);
+  if (!id) return false;
+  return PACKS_STATE.ready && PACKS_STATE.packsByOfferProductId.has(id);
+}
+
 // =============================================================
 // IMÁGENES DE PRODUCTOS (attachedfiles + attachedfilerelations)
 // =============================================================
@@ -11755,6 +12282,7 @@ async function openRefundForFactura(facturaRow) {
   }
 
   const lineas = await fetchLineasFactura(facturaRow.idfactura);
+  const lineasFiltradasUI = filterRefundLinesForUI(lineas);
 
   // Map cantidades ya devueltas (por clave consistente)
   let refundedMap = {};
@@ -11780,12 +12308,17 @@ async function openRefundForFactura(facturaRow) {
 
       return {
         ...l,
-        _remainingQty: pending, // <-- lo usa renderRefundLines()
+        _remainingQty: pending,
         __pendingQty: pending,
         __alreadyRefunded: already,
       };
     })
-    .filter((l) => Number(l._remainingQty || 0) > 0);
+    .filter((l) => Number(l._remainingQty || 0) > 0)
+    // ✅ NUEVO: ocultar líneas “gratis” (pack children)
+    .filter((l) => {
+      const u = Number(lineGrossUnit(l) || 0);
+      return u > 0.00001;
+    });
 
   refundState.factura = facturaRow;
   refundState.lineas = lineasPendientes;

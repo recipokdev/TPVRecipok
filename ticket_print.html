@@ -6,8 +6,9 @@
       * {
         box-sizing: border-box;
       }
+
       @page {
-        size: 80mm auto; /* mejor pedir 80mm y controlar ancho con #ticket */
+        size: 80mm auto;
         margin: 0;
       }
 
@@ -18,15 +19,16 @@
       }
 
       #ticket {
-        width: 70mm; /* 👈 más seguro que 72mm en muchas térmicas */
-        padding: 0 2mm; /* 👈 “zona segura” izquierda/derecha */
+        width: 70mm;
+        padding: 0 2mm;
         font-family:
           ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New",
           monospace;
         font-size: 12px;
-        line-height: 1.25; /* un pelín más, evita solapes visuales */
+        line-height: 1.25;
         color: #000;
       }
+
       .center {
         text-align: center;
       }
@@ -36,12 +38,19 @@
       .bold {
         font-weight: 700;
       }
+      .muted {
+        opacity: 0.9;
+      }
+      .small {
+        font-size: 11px;
+      }
+
       .sep {
         border-top: 1px dashed #000;
         margin: 8px 0;
       }
 
-      /* Columnas tipo ticket */
+      /* Bloques tipo ticket */
       .row {
         display: flex;
         justify-content: space-between;
@@ -57,96 +66,79 @@
         white-space: nowrap;
       }
 
-      .muted {
-        opacity: 0.9;
-      }
-      .small {
-        font-size: 11px;
-      }
-
-      /* Línea de producto: Cant + Descripción + Total */
-      .item {
-        margin: 2px 0;
-      }
-      .item-top {
-        display: flex;
-        gap: 6px;
-        align-items: flex-start;
-      }
-      .qty {
-        width: 10mm; /* 👈 antes 6mm (muy justo) */
-        text-align: right;
-        white-space: nowrap; /* 👈 evita que parta raro */
-        overflow: hidden;
-      }
-      .desc {
-        flex: 1;
-        min-width: 0;
-        overflow: hidden;
-        word-break: break-word;
-      }
-      .ltotal {
-        width: 20mm; /* 👈 un poco más ancho */
-        text-align: right;
-        white-space: nowrap;
-        overflow: hidden;
-      }
-
-      /* Encabezado tabla */
+      /* Cabecera tabla */
       .thead {
-        display: flex;
-        gap: 6px;
-      }
-      .thead .qty {
-        width: 10mm;
-        text-align: right;
-      }
-      .thead .desc {
-        flex: 1;
-      }
-      .thead .ltotal {
-        width: 20mm;
-        text-align: right;
-      }
-
-      /* Ajuste columnas: Cant más estrecha y menos “aire” */
-      .item-top {
         display: grid;
         grid-template-columns: 8mm 1fr 20mm; /* Cant | Ref | Total */
-        column-gap: 4px; /* antes gap grande */
-        align-items: start;
-      }
-
-      .qty {
-        width: auto; /* ya manda el grid */
-        text-align: left; /* más pegado a la izquierda */
-        white-space: nowrap;
-        overflow: hidden;
-      }
-
-      /* La descripción secundaria debajo, alineada con “Ref.” */
-      .item-sub {
-        margin-left: 8mm; /* igual que la columna Cant */
-        padding-left: 4px; /* igual al column-gap */
-        word-break: break-word;
-      }
-
-      .thead {
-        display: grid;
-        grid-template-columns: 8mm 1fr 20mm;
         column-gap: 4px;
-      }
-
-      .thead .qty,
-      .thead .desc,
-      .thead .ltotal {
-        width: auto;
+        align-items: start;
       }
       .thead .qty {
         text-align: left;
       }
       .thead .ltotal {
         text-align: right;
+        white-space: nowrap;
+      }
+
+      /* Línea */
+      .item {
+        margin: 2px 0;
+      }
+
+      /* Por defecto: 3 columnas */
+      .item-top {
+        display: grid;
+        grid-template-columns: 8mm 1fr 20mm; /* Cant | Ref | Total */
+        column-gap: 4px;
+        align-items: start;
+      }
+
+      .qty {
+        text-align: left;
+        white-space: nowrap;
+        overflow: hidden;
+      }
+
+      .desc {
+        min-width: 0;
+        overflow: hidden;
+        word-break: break-word;
+      }
+
+      .ltotal {
+        text-align: right;
+        white-space: nowrap;
+        overflow: hidden;
+      }
+
+      /* Sub-línea: que no “rompa” raro y ahorra espacio */
+      .item-sub {
+        max-width: 34ch;
+        font-size: 10px; /* 👈 ayuda a que "Oferta de diferentes productos" no se vaya a 3 líneas */
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      /* ✅ HIJOS DE PACK: sin columna Cant (2 columnas) */
+      .item.pack-child .item-top {
+        grid-template-columns: 1fr 20mm; /* Ref | Total */
+      }
+
+      /* Oculta la celda qty por completo */
+      .item.pack-child .qty {
+        display: none;
+      }
+
+      /* Sangría ligera para que se note que son “incluidos” */
+      .item.pack-child .desc {
+        padding-left: 2mm;
+      }
+
+      /* (Opcional) si quieres que el "xN" tenga un pelín menos de presencia */
+      .item.pack-child .desc .muted {
+        opacity: 0.75;
       }
     </style>
   </head>

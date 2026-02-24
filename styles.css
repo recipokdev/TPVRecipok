@@ -2777,3 +2777,27 @@ body.modal-locked .cart-card {
   gap: 10px;
   justify-content: flex-end;
 }
+
+.cart-line-packincludes {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.8;
+  font-weight: 700;
+  line-height: 1.15;
+  white-space: normal;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.item.pack-child .desc {
+  padding-left: 12px;
+  opacity: 0.95;
+}
+.item.pack-child .qty {
+  opacity: 0.85;
+}
+.item.pack-child .ltotal {
+  opacity: 0.35; /* aunque esté vacío, por si cambia */
+}
