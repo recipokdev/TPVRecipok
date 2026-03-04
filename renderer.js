@@ -161,7 +161,6 @@ const cashMoveSaveBtn = document.getElementById("cashMoveSaveBtn");
 const cashMoveCloseX = document.getElementById("cashMoveCloseX");
 
 // Resumen de caja (label principal + resumen extendido de cierre)
-const cashSummaryMainLabel = document.getElementById("cashSummaryMainLabel");
 const cashCloseSummary = document.getElementById("cashCloseSummary");
 const sumOpeningEl = document.getElementById("sumOpening");
 const sumCashIncomeEl = document.getElementById("sumCashIncome");
@@ -174,14 +173,667 @@ const sumTotalSalesEl = document.getElementById("sumTotalSales");
 // Cliente actual (input del carrito)
 const cartClientInput = document.querySelector(".cart-client-input");
 
-const emailOverlay = document.getElementById("emailOverlay");
-const emailInput = document.getElementById("emailInput");
-const emailOkBtn = document.getElementById("emailOkBtn");
-const emailCancelBtn = document.getElementById("emailCancelBtn");
-const emailError = document.getElementById("emailError");
-const emailKeyboardBtn = document.getElementById("emailKeyboardBtn");
-
 // ===== Funciones auxiliares =====
+
+// ===============================
+// Click en nombre del terminal (cambio rápido SOLO terminal)
+// ===============================
+function setTerminalNameClickable(isClickable) {
+  if (!terminalNameEl) return;
+
+  if (isClickable) {
+    terminalNameEl.style.cursor = "pointer";
+    terminalNameEl.style.textDecoration = "underline";
+    terminalNameEl.title = "Cambiar terminal";
+  } else {
+    terminalNameEl.style.cursor = "";
+    terminalNameEl.style.textDecoration = "";
+    terminalNameEl.title = "";
+  }
+}
+
+// Estado inicial (por si terminals ya está cargado)
+setTerminalNameClickable(Array.isArray(terminals) && terminals.length > 1);
+
+if (terminalNameEl) {
+  terminalNameEl.addEventListener("click", async () => {
+    // Refrescar datos antes de decidir
+    await refreshTerminalsAndAgents();
+
+    const canSwitch = Array.isArray(terminals) && terminals.length > 1;
+    setTerminalNameClickable(canSwitch);
+
+    // Si hay 0/1 terminal: no hacemos nada (y ni siquiera parece botón)
+    if (!canSwitch) return;
+
+    // Abrimos overlay en modo "solo cambiar terminal"
+    showTerminalOverlay("terminalSwitch");
+  });
+}
+
+/*----------------------*/
+/* Inicio pagos con ofertas variables */
+/*----------------------*/
+async function apiUpdateLineaFacturaCliente(idlinea, payload) {
+  const id = Number(idlinea || 0);
+  if (!id) throw new Error("idlinea inválido");
+  try {
+    return await apiWrite(`lineafacturaclientes/${id}`, "PATCH", payload);
+  } catch {
+    return await apiWrite(`lineafacturaclientes/${id}`, "PUT", payload);
+  }
+}
+
+async function apiDeleteLineaFacturaCliente(idlinea) {
+  const id = Number(idlinea || 0);
+  if (!id) throw new Error("idlinea inválido");
+  return await apiWrite(`lineafacturaclientes/${id}`, "DELETE", {});
+}
+
+function buildDesiredPackQtyByIdProducto(cartSnapshot) {
+  const out = {}; // { [idproducto]: qty }
+  const arr = Array.isArray(cartSnapshot) ? cartSnapshot : [];
+
+  for (const it of arr) {
+    if (!it?.meta?.includedInPack) continue;
+
+    const idp = Number(it.baseProductId || it.id || 0);
+    if (!idp) continue;
+
+    const q = Number(it.qty || 0);
+    out[idp] = (out[idp] ?? 0) + q;
+  }
+
+  return out;
+}
+
+async function patchPackChildrenLinesInFactura({ idfactura, cartSnapshot }) {
+  const desired = buildDesiredPackQtyByIdProducto(cartSnapshot);
+  const desiredIds = Object.keys(desired)
+    .map((k) => Number(k))
+    .filter(Boolean);
+
+  // nada que ajustar
+  if (!idfactura || !desiredIds.length) return;
+
+  const raw = await fetchLineasFacturaCliente(idfactura);
+  const lines = Array.isArray(raw) ? raw : [];
+
+  // Candidatas: líneas gratis (pvpunitario 0) que NO sean el pack parent
+  const free = lines.filter((l) => {
+    const unit = Number(l?.pvpunitario ?? 0);
+    const isZero = Math.abs(unit) < 0.00001;
+    if (!isZero) return false;
+
+    const pid = Number(l?.idproducto || 0);
+    if (
+      pid &&
+      typeof isOfferPackProductById === "function" &&
+      isOfferPackProductById(pid)
+    ) {
+      return false; // pack parent fuera
+    }
+    return true;
+  });
+
+  // Agrupar por idproducto
+  const byPid = new Map(); // pid -> [lines]
+  for (const l of free) {
+    const pid = Number(l?.idproducto || 0);
+    if (!pid) continue;
+    if (!byPid.has(pid)) byPid.set(pid, []);
+    byPid.get(pid).push(l);
+  }
+
+  for (const pid of desiredIds) {
+    const want = Number(desired[pid] || 0);
+    const group = byPid.get(pid) || [];
+
+    if (!group.length) continue;
+
+    if (!(want > 0)) {
+      // qty 0 => borrar todas las líneas gratis de ese producto
+      for (const ln of group) {
+        await apiDeleteLineaFacturaCliente(ln.idlinea).catch(() => {});
+      }
+      continue;
+    }
+
+    // 1) Ajustar cantidad en la primera
+    const main = group[0];
+    if (Number(main?.cantidad || 0) !== want) {
+      await apiUpdateLineaFacturaCliente(main.idlinea, { cantidad: want });
+    }
+
+    // 2) Borrar duplicadas (si las hay)
+    for (let i = 1; i < group.length; i++) {
+      await apiDeleteLineaFacturaCliente(group[i].idlinea).catch(() => {});
+    }
+  }
+}
+
+async function patchPackChildrenLinesInFacturaByDesired({
+  idfactura,
+  desiredByPid,
+}) {
+  const desiredRaw =
+    desiredByPid && typeof desiredByPid === "object" ? desiredByPid : {};
+
+  const desiredIds = Object.keys(desiredRaw)
+    .map((k) => Number(k))
+    .filter(Boolean);
+
+  if (!idfactura || !desiredIds.length) return;
+
+  const raw = await fetchLineasFacturaCliente(idfactura);
+  const lines = Array.isArray(raw) ? raw : [];
+
+  const isZero = (n) => Math.abs(Number(n || 0)) < 0.00001;
+
+  // Candidatas: líneas gratis (pvpunitario 0) que NO sean el pack parent
+  const free = lines.filter((l) => {
+    const unit = Number(l?.pvpunitario ?? 0);
+    if (!isZero(unit)) return false;
+
+    const pid = Number(l?.idproducto || 0);
+    if (
+      pid &&
+      typeof isOfferPackProductById === "function" &&
+      isOfferPackProductById(pid)
+    ) {
+      return false; // pack parent fuera
+    }
+    return true;
+  });
+
+  // Agrupar por idproducto
+  const byPid = new Map(); // pid -> [lines]
+  for (const l of free) {
+    const pid = Number(l?.idproducto || 0);
+    if (!pid) continue;
+    if (!byPid.has(pid)) byPid.set(pid, []);
+    byPid.get(pid).push(l);
+  }
+
+  // Solo tocamos pids indicados en desired
+  for (const pid of desiredIds) {
+    const want = Number(desiredRaw[pid] ?? 0); // puede ser negativo
+    const group = byPid.get(pid) || [];
+
+    if (!group.length) {
+      // Si el plugin no creó la línea gratis, no inventamos.
+      continue;
+    }
+
+    if (want === 0) {
+      // qty 0 => borrar todas las líneas gratis de ese producto
+      for (const ln of group) {
+        await apiDeleteLineaFacturaCliente(ln.idlinea).catch(() => {});
+      }
+      continue;
+    }
+
+    // 1) Ajustar cantidad en la primera (acepta negativo)
+    const main = group[0];
+    if (Number(main?.cantidad || 0) !== want) {
+      await apiUpdateLineaFacturaCliente(main.idlinea, { cantidad: want });
+    }
+
+    // 2) Eliminar duplicadas
+    for (let i = 1; i < group.length; i++) {
+      await apiDeleteLineaFacturaCliente(group[i].idlinea).catch(() => {});
+    }
+  }
+}
+
+/* =============================================================
+   Normaliza líneas de FacturaScripts -> formato “línea TPV”
+   (para que tu diseño de ticket no se rompa)
+   ============================================================= */
+function mapFsLineToTpvPrintLine(l) {
+  const qty = Number(l?.cantidad ?? l?.qty ?? 0);
+
+  // Tu ticket suele usar getUnitGross(item). Para históricos no lo tienes,
+  // así que guardamos un campo unitGross “directo” si tu print lo soporta.
+  // Si tu print usa otra cosa, mantenemos pvpunitario y ya.
+  const unitNet = Number(l?.pvpunitario ?? 0);
+
+  return {
+    // campos típicos TPV
+    qty: qty,
+    name: String(l?.descripcion || "").trim() || "Producto",
+    referencia: String(l?.referencia || "").trim() || "-",
+
+    // para impresión / totales
+    pvpunitario: unitNet, // normalmente neto en FS (según tu API)
+    codimpuesto: l?.codimpuesto || "",
+
+    // opcional: idproducto si lo usas en el render
+    id: Number(l?.idproducto || 0) || undefined,
+    idproducto: Number(l?.idproducto || 0) || undefined,
+
+    // marca para depurar
+    _fromFS: true,
+  };
+}
+
+/*----------------------*/
+/* Inicio Cambiar Clientes */
+/*----------------------*/
+
+function renderSelectedCustomerInCartHeader(c) {
+  const input = document.getElementById("cartCustomerInput");
+  const btnClear = document.getElementById("cartCustomerClear");
+
+  const nom = String(c?.nombre || "Ventas tickets");
+
+  if (input) input.value = nom;
+
+  const isDefault = !!c?.isDefault;
+  if (btnClear) btnClear.style.display = isDefault ? "none" : "";
+}
+
+function bindCartCustomerUiEvents() {
+  const input = document.getElementById("cartCustomerInput");
+  const btnOpen = document.getElementById("cartCustomerOpen");
+  const btnClear = document.getElementById("cartCustomerClear");
+
+  const open = () => window.CUSTOMER_SELECTOR?.open?.();
+
+  if (input) input.addEventListener("click", open);
+  if (btnOpen) btnOpen.addEventListener("click", open);
+
+  if (btnClear) {
+    btnClear.addEventListener("click", () => {
+      window.CUSTOMER_SELECTOR?.resetToDefault?.();
+    });
+  }
+}
+
+let __customerSelectorInited = false;
+
+async function initCustomerSelectorOnce() {
+  if (__customerSelectorInited) return;
+  __customerSelectorInited = true;
+
+  const cfg = window.RECIPOK_API || {};
+  const baseUrl = String(cfg.baseUrl || "").replace(/\/+$/, "");
+  const apiKey = String(cfg.apiKey || "").trim();
+
+  if (!window.CUSTOMER_SELECTOR?.mount) {
+    console.error(
+      "CUSTOMER_SELECTOR no está cargado (falta script en index.html).",
+    );
+    return;
+  }
+
+  // demo/offline: deja default 1
+  if (!baseUrl || !apiKey) {
+    renderSelectedCustomerInCartHeader({
+      codcliente: "1",
+      nombre: "Ventas tickets",
+      isDefault: true,
+    });
+    return;
+  }
+
+  await window.CUSTOMER_SELECTOR.mount({
+    baseUrl,
+    apiKey,
+    defaultCodcliente: "1",
+    onChange: (c) => renderSelectedCustomerInCartHeader(c),
+    debug: false,
+  });
+
+  // ✅ bind del botón guardar (una vez)
+  bindTerminalDefaultCustomerSave();
+
+  // ✅ si ya hay terminal seleccionado, aplicar default YA
+  if (currentTerminal?.id) {
+    await applyTerminalDefaultCustomer();
+  }
+}
+
+async function loadClientesForTerminalSelect() {
+  // 1) Intento online
+  try {
+    const data = await fetchApiResource("clientes");
+    if (Array.isArray(data)) {
+      const list = data
+        .filter((c) => !c?.debaja)
+        .map((c) => ({
+          codcliente: String(c.codcliente || "").trim(),
+          nombre: String(c.nombre || "").trim(),
+        }))
+        .filter((c) => c.codcliente);
+
+      list.sort((a, b) => Number(a.codcliente) - Number(b.codcliente));
+      return list;
+    }
+  } catch (e) {
+    // seguimos abajo
+  }
+
+  // 2) Fallback offline: memoria del selector
+  const mem = window.CUSTOMER_SELECTOR?.listCustomers?.();
+  if (Array.isArray(mem) && mem.length) {
+    return mem.map((c) => ({
+      codcliente: String(c.codcliente || "").trim(),
+      nombre: String(c.nombre || "").trim(),
+    }));
+  }
+
+  // 3) Último fallback: solo el default
+  return [{ codcliente: "1", nombre: "Ventas tickets" }];
+}
+
+async function renderTerminalDefaultCustomerSelect() {
+  const sel = document.getElementById("terminalDefaultCustomerSelect");
+  if (!sel) return;
+
+  if (!currentTerminal?.id) {
+    sel.innerHTML = `<option value="">(sin terminal)</option>`;
+    sel.disabled = true;
+    return;
+  }
+
+  sel.disabled = false;
+  sel.innerHTML = `<option value="">Cargando...</option>`;
+
+  let clientes = [];
+  try {
+    clientes = await loadClientesForTerminalSelect();
+  } catch {}
+
+  const curCod = String(currentTerminal?.codcliente || "1");
+
+  try {
+    if (!clientes.length) {
+      sel.innerHTML = `<option value="${escapeHtml(curCod)}">${escapeHtml(curCod)} | (sin lista offline)</option>`;
+      sel.disabled = false; // permite guardar a cola
+      return;
+    }
+
+    sel.innerHTML = clientes
+      .map((c) => {
+        const label = `${c.codcliente} | ${c.nombre || "—"}`;
+        const selected = String(c.codcliente) === curCod ? "selected" : "";
+        return `<option value="${escapeHtml(c.codcliente)}" ${selected}>${escapeHtml(label)}</option>`;
+      })
+      .join("");
+  } catch (e) {
+    // último fallback ultra seguro
+    sel.innerHTML = `<option value="${curCod}">${curCod}</option>`;
+    sel.disabled = false;
+  }
+}
+
+function isNetworkError(e) {
+  const msg = String(e?.message || e || "");
+  return (
+    msg.includes("Failed to fetch") ||
+    msg.includes("NetworkError") ||
+    msg.includes("network") ||
+    msg.includes("timeout")
+  );
+}
+
+async function fetchTpvTerminalByIdtpv(idtpv) {
+  const data = await fetchApiResourceWithParams("tpvterminales", {
+    "filter[idtpv]": String(idtpv),
+    limit: 1,
+  });
+  return Array.isArray(data) ? data[0] : null;
+}
+
+function toFormUrlEncoded(obj) {
+  const sp = new URLSearchParams();
+  Object.entries(obj || {}).forEach(([k, v]) => {
+    if (v === undefined || v === null) return;
+    sp.append(k, String(v));
+  });
+  return sp.toString();
+}
+
+async function updateTpvTerminalForm(idtpv, patch) {
+  const cfg = window.RECIPOK_API || {};
+  if (!cfg.baseUrl || !cfg.apiKey) throw new Error("Sin config API");
+
+  const base = String(cfg.baseUrl).replace(/\/+$/, "");
+  const url = `${base}/tpvterminales/${encodeURIComponent(String(idtpv))}`;
+
+  const body = toFormUrlEncoded(patch || {});
+  if (!body) throw new Error("Patch vacío");
+
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      Token: cfg.apiKey,
+    },
+    body,
+  });
+
+  if (res.status === 429) throw new Error("API 429 (demasiadas peticiones)");
+
+  // A veces FS devuelve JSON, a veces vacío. Lo manejamos.
+  const data = await res.json().catch(() => null);
+
+  if (!res.ok) {
+    const msg =
+      data?.message ||
+      data?.error ||
+      (typeof data === "string" ? data : "") ||
+      `${res.status} ${res.statusText}`;
+    throw new Error(msg);
+  }
+
+  if (data && data.status === "error") {
+    throw new Error(data.message || "Error API");
+  }
+
+  return data;
+}
+
+let __terminalDefaultCustomerBound = false;
+
+function bindTerminalDefaultCustomerSave() {
+  if (__terminalDefaultCustomerBound) return;
+  __terminalDefaultCustomerBound = true;
+
+  const btn = document.getElementById("terminalDefaultCustomerSaveBtn");
+  const sel = document.getElementById("terminalDefaultCustomerSelect");
+  if (!btn || !sel) return;
+
+  btn.addEventListener("click", async () => {
+    if (!currentTerminal?.id) {
+      toast("No hay terminal seleccionado.", "warn", "Cliente terminal");
+      return;
+    }
+
+    const cod = String(sel.value || "").trim();
+    if (!cod) {
+      toast("Selecciona un cliente válido.", "warn", "Cliente terminal");
+      return;
+    }
+
+    btn.disabled = true;
+
+    try {
+      // ✅ PUT form-urlencoded SOLO con codcliente
+      await updateTpvTerminalForm(currentTerminal.id, { codcliente: cod });
+
+      // runtime + aplicar al selector del carrito
+      currentTerminal.codcliente = cod;
+      await applyTerminalDefaultCustomer();
+
+      toast("Cliente por defecto actualizado ✅", "ok", "Cliente terminal");
+    } catch (e) {
+      if (isNetworkError(e)) {
+        // solo aquí cola
+        try {
+          await window.TPV_QUEUE?.enqueue?.({
+            type: "tpvterminal.setCodcliente",
+            idtpv: String(currentTerminal.id),
+            codcliente: cod,
+            createdAt: new Date().toISOString(),
+          });
+        } catch {}
+
+        toast(
+          "Sin conexión: cambio guardado en cola ✅ (se aplicará al volver internet)",
+          "warn",
+          "Cliente terminal",
+        );
+      } else {
+        toast(
+          "No se pudo guardar: " + (e?.message || e),
+          "err",
+          "Cliente terminal",
+        );
+      }
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
+/**
+ * Aplica el codcliente por defecto del terminal al selector de clientes del carrito.
+ * opts:
+ *  - forceReset: si true, vuelve al default aunque el usuario haya elegido manualmente otro.
+ *  - reason: string para log
+ */
+async function applyTerminalDefaultCustomer(opts = {}) {
+  const { forceReset = false, reason = "unknown" } = opts;
+  const selected =
+    typeof window.CUSTOMER_SELECTOR.getSelectedCustomer === "function"
+      ? window.CUSTOMER_SELECTOR.getSelectedCustomer()
+      : null;
+
+  const isDefaultNow = !!selected?.isDefault;
+
+  if (!currentTerminal?.id) return;
+
+  // Si no hay selector, no hay nada que aplicar
+  if (!window.CUSTOMER_SELECTOR) return;
+
+  try {
+    // Si offline, no intentes API
+    if (TPV_STATE?.offline) throw new Error("offline");
+
+    const term = await fetchTpvTerminalByIdtpv(currentTerminal.id);
+    const cod = String(term?.codcliente || "").trim() || "1";
+
+    // runtime
+    currentTerminal.codcliente = cod;
+
+    // set default cod en selector (esto NO cambia selección manual por sí solo)
+    window.CUSTOMER_SELECTOR.setDefaultCodcliente?.(cod);
+
+    // si quieres forzar reset o si está actualmente en default, resetea
+    const selected = window.CUSTOMER_SELECTOR.getSelectedCustomer?.();
+    const isDefaultNow = !!selected?.isDefault;
+
+    if (forceReset || isDefaultNow) {
+      window.CUSTOMER_SELECTOR.resetToDefault?.();
+    }
+
+    // repinta el select de opciones (usa tu función que ya hace fallback a CUSTOMER_SELECTOR si offline)
+    await renderTerminalDefaultCustomerSelect?.();
+  } catch (e) {
+    // fallback sin romper
+    const cod = String(currentTerminal.codcliente || "1").trim() || "1";
+    window.CUSTOMER_SELECTOR.setDefaultCodcliente?.(cod);
+
+    // en fallback NO fuerces reset salvo que te lo pidan
+    const selected = window.CUSTOMER_SELECTOR.getSelectedCustomer?.();
+    const isDefaultNow = !!selected?.isDefault;
+    if (forceReset || isDefaultNow) {
+      window.CUSTOMER_SELECTOR.resetToDefault?.();
+    }
+
+    await renderTerminalDefaultCustomerSelect?.().catch(() => {});
+    // Log suave (evita ruido)
+    // console.warn("[applyTerminalDefaultCustomer]", reason, e?.message || e);
+  }
+}
+
+const __TDC__ = {
+  inFlight: false,
+  lastAt: 0,
+  timer: null,
+};
+
+/**
+ * Refresca codcliente por defecto del terminal desde FS y lo aplica al selector.
+ * - No spamea API (throttle)
+ * - No pisa selección manual (si forceReset=false)
+ */
+async function maybeRefreshTerminalDefaultCustomer(
+  reason = "unknown",
+  opts = {},
+) {
+  const {
+    force = false,
+    minIntervalMs = 4000,
+    forceReset = false, // si true: reset a default sí o sí
+  } = opts;
+
+  if (!currentTerminal?.id)
+    return { ok: false, skipped: true, why: "no-terminal" };
+
+  const cfg = window.RECIPOK_API || {};
+  if (!cfg.baseUrl || !cfg.apiKey)
+    return { ok: false, skipped: true, why: "no-api-config" };
+
+  // si estás marcado offline y no forces, no pegues a FS
+  if (TPV_STATE?.offline && !force)
+    return { ok: false, skipped: true, why: "offline" };
+
+  const now = Date.now();
+
+  // throttle con "debounce" de cola
+  if (!force && now - __TDC__.lastAt < minIntervalMs) {
+    clearTimeout(__TDC__.timer);
+    __TDC__.timer = setTimeout(() => {
+      // re-chequea offline antes de llamar
+      if (TPV_STATE?.offline) return;
+      maybeRefreshTerminalDefaultCustomer("debounced:" + reason, {
+        force: true,
+        forceReset,
+      }).catch(() => {});
+    }, minIntervalMs);
+    return { ok: false, skipped: true, why: "throttled" };
+  }
+
+  if (__TDC__.inFlight) return { ok: false, skipped: true, why: "in-flight" };
+
+  __TDC__.inFlight = true;
+  __TDC__.lastAt = now;
+
+  try {
+    await applyTerminalDefaultCustomer({ forceReset, reason });
+    return { ok: true };
+  } catch (e) {
+    console.warn("[TDC] refresh failed:", reason, e?.message || e);
+    return { ok: false, error: e?.message || String(e) };
+  } finally {
+    __TDC__.inFlight = false;
+  }
+}
+
+/*----------------------*/
+/* Fin Cambiar Clientes */
+/*----------------------*/
+
+function _normTxt(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 function isPackChildForPrint(l) {
   // 1) si viene meta desde carrito
@@ -709,6 +1361,9 @@ function renderProducts() {
     // clase según si tiene imagen o no
     tile.className = "product-tile" + (p.imageUrl ? "" : " no-img");
 
+    const prodId = Number(p.baseProductId || p.id || 0);
+    if (isOfferPackProductById(prodId)) tile.classList.add("is-offer");
+
     // Precio mostrado al público = precio neto * (1 + IVA)
     const taxRate = getTaxRateForProduct(p);
     const priceGross =
@@ -731,8 +1386,15 @@ function renderProducts() {
 
     const canEditPrices = isAdminUser() && isPriceEditModeEnabled();
 
-    // ✅ SIEMPRE añadir al carrito al tocar el producto
-    tile.onclick = () => addToCart(p);
+    // ✅ SIEMPRE añadir al carrito al tocar el producto, excepto si es una oferta, ahi abrira el modal.
+    tile.onclick = async () => {
+      try {
+        await addToCart(p);
+      } catch (e) {
+        console.warn("addToCart error:", e);
+        toast("No se pudo añadir al carrito.", "error");
+      }
+    };
 
     // ✅ botón ✎ solo si admin + modo activo (y NO debe añadir al carrito)
     if (canEditPrices) {
@@ -760,7 +1422,6 @@ function renderProducts() {
 function renderMainUI() {
   console.log("[TRACE] renderMainUI cashSession.open=", cashSession?.open);
   if (!cashSession?.open) {
-    // dejar todo vacío
     const grid = document.getElementById("productsGrid");
     const catContainer = document.getElementById("categories");
     const subCatContainer = document.getElementById("subcategories");
@@ -770,10 +1431,18 @@ function renderMainUI() {
     renderCart?.();
     return;
   }
+
   if (mainUiRendered) return;
+
   renderCategories();
   renderProducts();
   mainUiRendered = true;
+
+  // ✅ Cliente selector (1 vez)
+  initCustomerSelectorOnce().catch((e) =>
+    console.warn("initCustomerSelectorOnce falló:", e?.message || e),
+  );
+  bindCartCustomerUiEvents();
 }
 
 function eur2(n) {
@@ -847,14 +1516,18 @@ function buildCartLine(product, quantity) {
   return {
     _lineId: makeLineId(),
 
-    // ✅ IDs (útil para variantes y para empatar luego si hiciera falta)
     id: product.id,
     baseProductId: product.baseProductId || product.id,
+
+    // ✅ NUEVO: referencia/descripcion separadas (como FS)
+    referencia:
+      product.referencia || product.ref || product.codigo || product.name || "",
+    descripcion: product.name || "",
+    descripcion2: product.secondaryName || "",
 
     name: product.name,
     secondaryName: product.secondaryName || "",
 
-    // ✅ Imagen para pantalla cliente
     imageUrl: product.imageUrl || null,
 
     price: priceNet,
@@ -869,114 +1542,149 @@ function buildCartLine(product, quantity) {
   };
 }
 
+function buildSelectionFromPackLines(packId) {
+  const packLines = PACKS_STATE.linesByPackId.get(packId) || [];
+  return packLines.map((ln) => ({
+    reference: String(ln.reference || "").trim(),
+    qty: Number(ln.quantity || 1) || 1,
+  }));
+}
+
+async function createChildrenFromSelection({
+  parentLine,
+  product,
+  selection,
+  parentQty,
+}) {
+  for (const sel of selection) {
+    const ref = String(sel.reference || "").trim();
+    const baseQty = Number(sel.qty || 0);
+
+    const prodFs = await fetchProductoByReferencia(ref);
+
+    const fakeProduct = {
+      id: prodFs ? Number(prodFs.idproducto) : null,
+      baseProductId: prodFs ? Number(prodFs.idproducto) : null,
+      referencia: ref,
+      name: prodFs?.descripcion || ref || "Producto pack",
+      secondaryName: "",
+      imageUrl: null,
+      price: 0,
+      codimpuesto: prodFs?.codimpuesto || product.codimpuesto || null,
+    };
+
+    const child = buildCartLine(fakeProduct, baseQty * parentQty);
+
+    child.price = 0;
+    child.grossPrice = 0;
+    child.originalGrossPrice = 0;
+    child.grossPriceOverride = 0;
+
+    child.meta = {
+      includedInPack: true,
+      parentPackLineId: parentLine._lineId,
+      packRef: ref,
+    };
+
+    cart.push(child);
+  }
+}
+
 async function addToCart(product, quantity = 1) {
   const prodId = Number(product.baseProductId || product.id || 0);
 
-  // =====================
-  // CASO: ES OFERTA/PACK
-  // =====================
   if (isOfferPackProductById(prodId)) {
     const pack = PACKS_STATE.packsByOfferProductId.get(prodId);
     if (!pack) {
-      // fallback: trátalo como normal
       cart.push(buildCartLine(product, quantity));
       renderCart();
       return;
     }
 
-    // Si estás en modo “sumar líneas” (groupLines desactivado),
-    // intentamos sumar a un parent existente SOLO si coincide precio unitario actual.
+    // Construimos líneas para modal (con nombres)
+    const rawPackLines = PACKS_STATE.linesByPackId.get(pack.id) || [];
+    const refs = rawPackLines.map((ln) => String(ln.reference || "").trim());
+
+    const prods = await Promise.all(
+      refs.map((ref) => fetchProductoByReferencia(ref)),
+    );
+    const packLinesForUI = rawPackLines.map((ln, idx) => {
+      const ref = String(ln.reference || "").trim();
+      const baseQty = Number(ln.quantity || 1) || 1;
+      const prodFs = prods[idx];
+      return {
+        reference: ref,
+        baseQty,
+        productName: prodFs?.descripcion || ref,
+      };
+    });
+
+    // Abrimos modal con valores por defecto del pack
+    const selection = await openPackConfigModal({
+      offerName: product.name || pack.name || "Oferta",
+      offerSecondary: product.secondaryName || "",
+      packLines: packLinesForUI,
+    });
+
+    // Cancelado
+    if (!selection) return;
+
+    const selectionKey = selectionKeyFromArr(selection);
+
+    // Si no groupLines, intentamos sumar SOLO si coincide pack + precio + misma selección
     if (!isGroupLinesEnabled()) {
       const taxRate = getTaxRateForProduct(product);
       const productGross = round2(
         (Number(product.price || 0) || 0) * (1 + (Number(taxRate) || 0) / 100),
       );
+
       const existingParent = cart.find((c) => {
         if (!isPackParentLine(c)) return false;
         if (Number(c.baseProductId || c.id) !== prodId) return false;
-        if (Number(c.meta.packId) !== Number(pack.id)) return false;
+        if (Number(c.meta?.packId) !== Number(pack.id)) return false;
+        if (round2(getUnitGross(c)) !== productGross) return false;
 
-        return round2(getUnitGross(c)) === productGross;
+        const k =
+          c.meta?.packSelectionKey ||
+          selectionKeyFromArr(c.meta?.packSelection);
+        return k === selectionKey;
       });
 
       if (existingParent) {
-        // suma qty parent
         existingParent.qty = round2(
           (Number(existingParent.qty) || 0) + Number(quantity || 0),
         );
 
-        // suma qty hijos proporcionalmente
-        const children = getPackChildren(existingParent._lineId);
-        const lines = PACKS_STATE.linesByPackId.get(pack.id) || [];
-
-        // mapa reference -> quantity por pack
-        const qByRef = new Map();
-        for (const ln of lines) {
-          qByRef.set(String(ln.reference || ""), Number(ln.quantity || 1));
-        }
-
-        for (const ch of children) {
-          const ref = String(ch.meta?.packRef || "");
-          const baseQ = qByRef.get(ref) || 1;
-          ch.qty = round2(
-            (Number(ch.qty) || 0) + baseQ * Number(quantity || 0),
-          );
-        }
-
+        // Recalcular hijos con la selección guardada
+        syncSelectedPackChildrenQty(existingParent);
         renderCart();
         return;
       }
     }
 
-    // Si es “separar líneas” o no se pudo sumar -> creamos un grupo nuevo
+    // Crear grupo nuevo
     const parentLine = buildCartLine(product, quantity);
-    parentLine.meta = { isPackOffer: true, packId: pack.id };
+    parentLine.meta = {
+      isPackOffer: true,
+      packId: pack.id,
+      packSelection: selection,
+      packSelectionKey: selectionKey, // para comparar rápido
+    };
 
     cart.push(parentLine);
 
-    const packLines = PACKS_STATE.linesByPackId.get(pack.id) || [];
-
-    for (const ln of packLines) {
-      const ref = String(ln.reference || "").trim();
-      const baseQty = Number(ln.quantity || 1);
-
-      const prod = await fetchProductoByReferencia(ref);
-
-      // Creamos producto-hijo a precio 0
-      const fakeProduct = {
-        id: prod ? Number(prod.idproducto) : null,
-        baseProductId: prod ? Number(prod.idproducto) : null,
-        name: prod?.descripcion || ref || "Producto pack",
-        secondaryName: "",
-        imageUrl: null,
-        price: 0, // 👈 neto 0
-        codimpuesto: prod?.codimpuesto || product.codimpuesto || null,
-      };
-
-      const child = buildCartLine(fakeProduct, baseQty * quantity);
-
-      // FORZAR 0 total aunque impuestos
-      child.price = 0;
-      child.grossPrice = 0;
-      child.originalGrossPrice = 0;
-      child.grossPriceOverride = 0;
-
-      child.meta = {
-        includedInPack: true,
-        parentPackLineId: parentLine._lineId,
-        packRef: ref, // para re-sumar correctamente
-      };
-
-      cart.push(child);
-    }
+    await createChildrenFromSelection({
+      parentLine,
+      product,
+      selection,
+      parentQty: Number(quantity || 0),
+    });
 
     renderCart();
     return;
   }
 
-  // =====================
   // NORMAL (tu comportamiento)
-  // =====================
   if (isGroupLinesEnabled()) {
     cart.push(buildCartLine(product, quantity));
     renderCart();
@@ -1014,7 +1722,7 @@ function updateCartItemQuantity(lineId, newQty) {
     }
 
     item.qty = q;
-    syncPackChildrenQty(item);
+    syncSelectedPackChildrenQty(item);
     renderCart();
     return;
   }
@@ -1098,6 +1806,25 @@ function fmtQty(q) {
   if (!isFinite(n)) return "0";
   // hasta 3 decimales, sin ceros sobrantes
   return n.toLocaleString("es-ES", { maximumFractionDigits: 3 });
+}
+
+function buildPackIncludesTextFromChildren(cartArr, parentLineId) {
+  const children = (Array.isArray(cartArr) ? cartArr : []).filter(
+    (x) =>
+      x?.meta?.includedInPack && x?.meta?.parentPackLineId === parentLineId,
+  );
+
+  if (!children.length) return "";
+
+  const parts = children.map((ch) => {
+    const name = String(
+      ch?.name || ch?.descripcion || ch?.meta?.packRef || "Producto",
+    ).trim();
+    const q = fmtQty(ch?.qty ?? 0);
+    return `${name} x${q}`;
+  });
+
+  return parts.join(" · ");
 }
 
 function buildPackIncludesText(parentLine) {
@@ -2309,7 +3036,7 @@ if (cartLinesContainer) {
       if (action === "plus") {
         if (isPackParentLine(item)) {
           item.qty = roundQty(item.qty + 1);
-          syncPackChildrenQty(item);
+          syncSelectedPackChildrenQty(item);
           renderCart();
           return;
         }
@@ -2326,7 +3053,7 @@ if (cartLinesContainer) {
             return;
           }
           item.qty = nextQty;
-          syncPackChildrenQty(item);
+          syncSelectedPackChildrenQty(item);
           renderCart();
           return;
         }
@@ -2347,7 +3074,7 @@ if (cartLinesContainer) {
               if (qq <= 0) removePackCascade(item._lineId);
               else {
                 item.qty = qq;
-                syncPackChildrenQty(item);
+                syncSelectedPackChildrenQty(item);
               }
               renderCart();
               return;
@@ -2810,11 +3537,6 @@ function restoreParkedCartByIndex(index) {
   setStatusText("Ticket aparcado cargado en el carrito.");
 }
 
-// Para compatibilidad, si en algún sitio se llamara a restoreParkedCart()
-function restoreParkedCart() {
-  openParkedModal();
-}
-
 // ===== Gestión de terminales / agentes / caja =====
 function fillTerminalSelect() {
   if (!terminalSelect) return;
@@ -2835,6 +3557,9 @@ function setCurrentTerminal(terminal) {
       localStorage.setItem("tpv_terminal", String(currentTerminal.id));
   } catch {}
   renderMainAgentBar?.();
+
+  // ✅ aplicar default sin bloquear (fire & forget)
+  applyTerminalDefaultCustomer?.();
 }
 
 function getAgentsForTerminalId(terminalId) {
@@ -2889,100 +3614,122 @@ function renderMainAgentBar() {
 
   mainAgentBar.innerHTML = "";
 
-  if (!currentTerminal) return;
-
-  const list = getAgentsForTerminalId(currentTerminal.id);
-  if (!list.length) return;
-
-  list.forEach((agent) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className =
-      "agent-btn" +
-      (currentAgent && currentAgent.codagente === agent.codagente
-        ? " selected"
-        : "");
-    btn.textContent = agent.name;
-
-    btn.onclick = async () => {
-      const clickedCode = agent.codagente;
-
-      await refreshTerminalsAndAgents();
-
-      const currentList = currentTerminal
-        ? getAgentsForTerminalId(currentTerminal.id)
-        : [];
-
-      currentAgent =
-        currentList.find((a) => a.codagente === clickedCode) ||
-        currentList[0] ||
-        null;
-
-      try {
-        localStorage.setItem(
-          "tpv_agent",
-          String(currentAgent?.codagente || ""),
-        );
-      } catch {}
-
-      if (agentNameEl) {
-        agentNameEl.textContent = currentAgent ? currentAgent.name : "---";
-      }
-
-      renderMainAgentBar();
+  // Si no hay terminal, igual mostramos al menos actualizar + cajón (si quieres)
+  // Si prefieres ocultarlos sin terminal, cambia este bloque.
+  if (!currentTerminal) {
+    // Botón actualizar
+    const refreshBtn = document.createElement("button");
+    refreshBtn.type = "button";
+    refreshBtn.className = "agent-btn agent-refresh-btn";
+    refreshBtn.textContent = "🔄";
+    refreshBtn.title = "Actualizar datos";
+    refreshBtn.onclick = () => {
+      refreshAllData().catch(() => {
+        toast("No se pudo actualizar.", "err", "Actualizar");
+      });
     };
+    mainAgentBar.appendChild(refreshBtn);
 
-    mainAgentBar.appendChild(btn);
-  });
+    // Botón cajón
+    const drawerBtn = document.createElement("button");
+    drawerBtn.type = "button";
+    drawerBtn.className = "agent-btn agent-drawer-btn";
+    drawerBtn.textContent = "📤";
+    drawerBtn.onclick = () => {
+      openDrawerNow({ source: "MAIN" }).catch(() =>
+        toast("No se pudo abrir el cajón.", "err", "Cajón"),
+      );
+    };
+    mainAgentBar.appendChild(drawerBtn);
 
-  /* ===== BOTÓN ACTUALIZAR ===== */
+    if (agentNameEl) agentNameEl.textContent = "---";
+    return;
+  }
+
+  const list = getAgentsForTerminalId(currentTerminal.id) || [];
+
+  // ✅ Botones de agentes (solo si hay)
+  if (list.length) {
+    list.forEach((agent) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className =
+        "agent-btn" +
+        (currentAgent && currentAgent.codagente === agent.codagente
+          ? " selected"
+          : "");
+      btn.textContent = agent.name;
+
+      btn.onclick = async () => {
+        const clickedCode = agent.codagente;
+
+        await refreshTerminalsAndAgents();
+
+        const currentList = currentTerminal
+          ? getAgentsForTerminalId(currentTerminal.id)
+          : [];
+
+        currentAgent =
+          currentList.find((a) => a.codagente === clickedCode) ||
+          currentList[0] ||
+          null;
+
+        try {
+          localStorage.setItem(
+            "tpv_agent",
+            String(currentAgent?.codagente || ""),
+          );
+        } catch {}
+
+        if (agentNameEl) {
+          agentNameEl.textContent = currentAgent ? currentAgent.name : "---";
+        }
+
+        renderMainAgentBar();
+      };
+
+      mainAgentBar.appendChild(btn);
+    });
+  } else {
+    // Sin agentes: reflejar en header
+    currentAgent = null;
+    if (agentNameEl) agentNameEl.textContent = "---";
+  }
+
+  /* ===== BOTÓN ACTUALIZAR (SIEMPRE) ===== */
   const refreshBtn = document.createElement("button");
   refreshBtn.type = "button";
   refreshBtn.className = "agent-btn agent-refresh-btn";
   refreshBtn.textContent = "🔄";
   refreshBtn.title = "Actualizar datos";
-
   refreshBtn.onclick = () => {
     refreshAllData().catch(() => {
       toast("No se pudo actualizar.", "err", "Actualizar");
     });
   };
-
   mainAgentBar.appendChild(refreshBtn);
 
-  /* ===== BOTÓN ABRIR CAJÓN (FIJO A LA DERECHA) ===== */
+  /* ===== BOTÓN ABRIR CAJÓN (SIEMPRE) ===== */
   const drawerBtn = document.createElement("button");
   drawerBtn.type = "button";
   drawerBtn.className = "agent-btn agent-drawer-btn";
   drawerBtn.textContent = "📤";
-
   drawerBtn.onclick = () => {
     openDrawerNow({ source: "MAIN" }).catch(() =>
       toast("No se pudo abrir el cajón.", "err", "Cajón"),
     );
   };
-
   mainAgentBar.appendChild(drawerBtn);
+
   // Reflejar agente actual en el header siempre
   if (agentNameEl) {
     agentNameEl.textContent = currentAgent ? currentAgent.name : "---";
   }
 }
 
-function setCurrentAgent(agent) {
-  currentAgent = agent || null;
-}
-
-function getAgentsForTerminal(terminalId) {
-  if (!terminalId) return [];
-  const tid = String(terminalId);
-  return agents.filter((a) => String(a.terminalId) === tid);
-}
-
 // Overlay para elegir TPV / agente
 function showTerminalOverlay(mode = "session") {
   if (LOGIN_ACTIVE) return;
-
   if (!terminalOverlay) return;
 
   terminalOverlayMode = mode;
@@ -2990,30 +3737,9 @@ function showTerminalOverlay(mode = "session") {
 
   // Rellenamos select de TPVs
   fillTerminalSelect();
-
   const multipleTpvs = terminals.length > 1;
 
-  // ----- MODO CAMBIO RÁPIDO DE AGENTE -----
-  if (mode === "agentSwitch") {
-    // Solo cambiamos de agente en el TPV actual
-    if (!currentTerminal) return;
-
-    if (terminalSelectWrapper) terminalSelectWrapper.style.display = "none";
-
-    const list = getAgentsForTerminalId(currentTerminal.id);
-    if (list.length === 0) {
-      // No hay agentes asignados a este TPV
-      terminalErrorEl.textContent = "Este terminal no tiene agentes asignados.";
-      return;
-    }
-
-    // Con 1 o más agentes mostramos los botones
-    renderAgentButtonsOverlay(currentTerminal.id);
-    terminalOverlay.classList.remove("hidden");
-    return;
-  }
-
-  // ----- MODO SELECCIÓN PARA ABRIR CAJA -----
+  // helper: copy según UI visible
   function updateTerminalOverlayCopy({ showTerminal, showAgent }) {
     const titleEl = document.getElementById("terminalOverlayTitle");
     const descEl = document.getElementById("terminalOverlayDesc");
@@ -3038,16 +3764,95 @@ function showTerminalOverlay(mode = "session") {
       return;
     }
 
-    // Si no hay nada que elegir (raro, pero por seguridad)
     titleEl.textContent = "Configuración";
     descEl.textContent = "No hay opciones que seleccionar.";
   }
 
+  // ----- MODO CAMBIO RÁPIDO SOLO TERMINAL -----
+  if (mode === "terminalSwitch") {
+    if (!multipleTpvs) return;
+
+    if (terminalSelectWrapper) terminalSelectWrapper.style.display = "block";
+    if (agentSelectWrapper) agentSelectWrapper.style.display = "none";
+
+    updateTerminalOverlayCopy({ showTerminal: true, showAgent: false });
+
+    if (currentTerminal && terminalSelect) {
+      terminalSelect.value = String(currentTerminal.id);
+    }
+
+    terminalOverlay.classList.remove("hidden");
+    return;
+  }
+
+  // ----- MODO CAMBIO RÁPIDO DE AGENTE (y si hay múltiples TPVs, también terminal) -----
+  if (mode === "agentSwitch") {
+    // si no hay currentTerminal, intentamos fijar uno
+    if (!currentTerminal && terminals[0]) {
+      setCurrentTerminal(terminals[0]);
+    }
+    if (!currentTerminal) return;
+
+    // Mostrar selector de terminal solo si hay múltiples
+    if (terminalSelectWrapper) {
+      terminalSelectWrapper.style.display = multipleTpvs ? "block" : "none";
+      if (multipleTpvs && terminalSelect) {
+        terminalSelect.value = String(currentTerminal.id);
+      }
+    }
+
+    const applyTerminalToAgentUI = (terminalId) => {
+      terminalErrorEl.textContent = "";
+
+      const list = getAgentsForTerminalId(terminalId);
+
+      if (!list || list.length === 0) {
+        // ⚠️ no hay agentes: dejamos overlay abierto para poder cambiar TPV
+        if (agentSelectWrapper) agentSelectWrapper.style.display = "none";
+        if (agentButtonsOverlay) agentButtonsOverlay.innerHTML = "";
+        terminalErrorEl.textContent =
+          "Este terminal no tiene agentes asignados.";
+        return;
+      }
+
+      if (agentSelectWrapper) agentSelectWrapper.style.display = "block";
+      renderAgentButtonsOverlay(terminalId);
+    };
+
+    // Si cambia TPV, refrescamos agentes
+    if (multipleTpvs && terminalSelect) {
+      terminalSelect.onchange = () => {
+        const tid = terminalSelect.value || currentTerminal.id;
+        applyTerminalToAgentUI(tid);
+      };
+    } else if (terminalSelect) {
+      // por seguridad: en modo agentSwitch con 1 TPV, no necesitamos onchange
+      terminalSelect.onchange = null;
+    }
+
+    // UI inicial con TPV actual
+    applyTerminalToAgentUI(String(currentTerminal.id));
+
+    // Copy según UI visible
+    updateTerminalOverlayCopy({
+      showTerminal: multipleTpvs,
+      showAgent:
+        agentSelectWrapper &&
+        getComputedStyle(agentSelectWrapper).display !== "none",
+    });
+
+    terminalOverlay.classList.remove("hidden");
+    return;
+  }
+
+  // ==========================
+  // ----- MODO SESIÓN (abrir caja): tu lógica original completa -----
+  // ==========================
+
   // TPV
   if (terminalSelectWrapper) {
     if (multipleTpvs) {
-      terminalSelectWrapper.style.display = "";
-      // si hay un terminal actual, que quede seleccionado
+      terminalSelectWrapper.style.display = "block";
       if (currentTerminal && terminalSelect) {
         terminalSelect.value = String(currentTerminal.id);
       }
@@ -3073,10 +3878,10 @@ function showTerminalOverlay(mode = "session") {
 
   renderAgentButtonsOverlay(selectedTerminalId);
 
-  // Si no hay nada que elegir (<=1 TPV y sin/1 agente), abrimos directamente
   const list = getAgentsForTerminalId(selectedTerminalId);
   const multipleAgents = list.length > 1;
 
+  // Si no hay nada que elegir (<=1 TPV y sin/1 agente), abrimos directamente
   if (!multipleTpvs && !multipleAgents) {
     terminalOverlay.classList.add("hidden");
 
@@ -3096,18 +3901,17 @@ function showTerminalOverlay(mode = "session") {
     return;
   }
 
-  // ✅ Actualizar título/descripcion según lo que se muestra
-  const showTerminal = !!(
-    terminalSelectWrapper && terminalSelectWrapper.style.display !== "none"
-  );
-  const showAgent = multipleAgents; // si no hay múltiples agentes, el wrapper debería ir oculto
-
-  // Si aún no estás ocultando el wrapper de agentes cuando hay 0/1:
+  // Mostrar/ocultar wrapper de agentes según si hay múltiples (si hay 0/1, lo ocultamos)
   if (agentSelectWrapper) {
-    agentSelectWrapper.style.display = showAgent ? "" : "none";
+    agentSelectWrapper.style.display = multipleAgents ? "block" : "none";
   }
 
-  updateTerminalOverlayCopy({ showTerminal, showAgent });
+  updateTerminalOverlayCopy({
+    showTerminal:
+      !!terminalSelectWrapper &&
+      getComputedStyle(terminalSelectWrapper).display !== "none",
+    showAgent: multipleAgents,
+  });
 
   terminalOverlay.classList.remove("hidden");
 }
@@ -3405,60 +4209,6 @@ function isCashCodpago(codpago) {
   return c === "CONT" || c === "EFEC" || c === "CASH";
 }
 
-function renderCloseTotalsRow() {
-  const wrap = document.getElementById("cashCloseLine2");
-  if (!wrap) return;
-
-  wrap.innerHTML = "";
-
-  // 1) Total movimientos
-  const movements = Number(cashSession.cashMovementsTotal || 0);
-
-  const movItem = document.createElement("div");
-  movItem.className = "cash-summary-item";
-  movItem.innerHTML = `
-    <div class="cash-summary-label">Total Movimientos</div>
-    <div class="cash-summary-value">${eur(movements)}</div>
-  `;
-  wrap.appendChild(movItem);
-
-  // 2) Todos los métodos configurados (aunque den 0)
-  const labelMap = window.__PAYMETHOD_LABELS__ || {};
-  const allCodes = Object.keys(labelMap);
-
-  // Si por lo que sea no hay labels cargados, usa lo que venga en paymentsByMethod
-  const fallbackCodes = Object.keys(cashSession.paymentsByMethod || {});
-  const codes = allCodes.length ? allCodes : fallbackCodes;
-
-  const map = cashSession.paymentsByMethod || {};
-
-  // Filtra para que NO metamos efectivo aquí (porque ya está arriba en “Ingresos Efectivo”)
-  const filtered = codes.filter((code) => !isCashCodpago(code));
-
-  // Orden alfabético por etiqueta
-  filtered.sort((a, b) => {
-    const la = String(labelMap[a] || a);
-    const lb = String(labelMap[b] || b);
-    return la.localeCompare(lb, "es", { sensitivity: "base" });
-  });
-
-  filtered.forEach((code) => {
-    const label = labelMap[code] || code;
-    const total = Number(map[code]?.total || 0);
-
-    const item = document.createElement("div");
-    item.className = "cash-summary-item";
-    item.innerHTML = `
-      <div class="cash-summary-label">Total ${escapeHtml(label)}</div>
-      <div class="cash-summary-value">${eur(total)}</div>
-    `;
-    wrap.appendChild(item);
-  });
-
-  // mostrar
-  wrap.style.display = "grid";
-}
-
 function renderCashCloseHeaderCard(remoteCaja) {
   const box = document.getElementById("cashCloseCard");
   if (!box) return;
@@ -3550,21 +4300,6 @@ function countPayChangesInFacturas(facturas) {
     if (info?.type === "PAYCHG") n += 1; // 1 cambio
   }
   return n;
-}
-
-async function fillCloseCashTicket({ idcaja /*...*/ }) {
-  // 1) cargar facturas de la caja (o usa las que ya tengas en memoria)
-  const facturas = await fetchApiResourceWithParams("facturaclientes", {
-    "filter[idcaja]": idcaja,
-    limit: 0,
-  });
-
-  // 2) contar cambios
-  const payChanges = countPayChangesInFacturas(facturas);
-
-  // 3) pintar
-  const el = document.getElementById("ccPayChanges");
-  if (el) el.textContent = String(payChanges);
 }
 
 function getCurrentCodAgenteSafe() {
@@ -3755,8 +4490,14 @@ function buildReissueLine(l, sign) {
     .replace(/^AJUSTE PAGO\s*-\s*/i, "")
     .trim();
 
+  const ref = String(l.referencia || l.ref || l.codigo || baseDesc).trim();
+
   return {
+    referencia: ref || "-", // 🔥 CLAVE
     descripcion: sign < 0 ? `AJUSTE PAGO - ${baseDesc}` : baseDesc,
+
+    idproducto: Number(l.idproducto || 0) || undefined, // 🔥 CLAVE
+
     cantidad: (Number(l.cantidad || 0) || 0) * sign,
     pvpunitario: Number(l.pvpunitario || 0),
     codimpuesto: l.codimpuesto || undefined,
@@ -3775,18 +4516,15 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
     .toUpperCase();
   if (!newCod || newCod === oldCod) return;
 
-  // ✅ ahora sí (ya existen originalId/oldCod/newCod)
   const n2New = `PAYCHG|ORIG=${originalId}|FROM=${oldCod}|TO=${newCod}`;
   const n2Rect = `PAYCHGREF|ORIG=${originalId}|FROM=${oldCod}|TO=${newCod}`;
 
-  if (TPV_STATE?.offline) {
+  if (TPV_STATE?.offline)
     throw new Error("Sin internet: no se puede cambiar el método de pago.");
-  }
 
   const idtpv = Number(currentTerminal?.id || 0) || null;
   const idcaja = getCajaIdSafe();
   const nick = (getLoginUser?.() || currentAgent?.nick || "admin").toString();
-
   if (!idtpv || !idcaja) throw new Error("No hay caja abierta (idtpv/idcaja).");
 
   const codcliente =
@@ -3795,9 +4533,28 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
     window.RECIPOK_API?.defaultCodClienteTPV ||
     "1";
 
-  const lineasFactura = await fetchLineasFacturaCliente(originalId);
-  if (!lineasFactura.length)
+  // ✅ Leer líneas reales ACTUALES (con 6, etc.)
+  const lineasFacturaRaw = await fetchLineasFacturaCliente(originalId);
+  if (!Array.isArray(lineasFacturaRaw) || !lineasFacturaRaw.length) {
     throw new Error("No pude cargar líneas del ticket.");
+  }
+
+  // ✅ NO filtrar pvpunitario 0 (packs variables)
+  // Filtrado mínimo “sanitario”
+  const lineasFactura = lineasFacturaRaw.filter((l) => {
+    const qty = Number(l?.cantidad || 0);
+    if (!isFinite(qty) || qty === 0) return false;
+
+    const desc = String(l?.descripcion || "").trim();
+    const ref = String(l?.referencia || "").trim();
+    // si falta todo, fuera
+    if (!desc && !ref) return false;
+
+    return true;
+  });
+
+  if (!lineasFactura.length)
+    throw new Error("No hay líneas válidas en el ticket.");
 
   // 1) Rectificativa (serie R) con codpago ORIGINAL
   const payloadRect = {
@@ -3818,7 +4575,7 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
   const rectId = Number(docRect?.idfactura || docRect?.id || 0);
   if (!rectId) throw new Error("No pude crear rectificativa.");
 
-  const totalRectFS = Number(docRect?.total ?? 0); // negativo
+  const totalRectFS = Number(docRect?.total ?? 0);
   const rectCash = isCashCodpago(oldCod) ? totalRectFS : 0;
 
   const codagente = getCurrentCodAgenteSafe();
@@ -3863,7 +4620,7 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
   const newId = Number(docNew?.idfactura || docNew?.id || 0);
   if (!newId) throw new Error("No pude crear el ticket nuevo.");
 
-  const totalNewFS = Number(docNew?.total ?? 0); // positivo
+  const totalNewFS = Number(docNew?.total ?? 0);
   const newCash = isCashCodpago(newCod) ? totalNewFS : 0;
 
   await updateFacturaCliente(newId, {
@@ -3883,7 +4640,7 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
     numero2: n2New,
   });
 
-  // 3) Log
+  // Log
   try {
     const ctx = getLogCtx();
     const origCode =
@@ -4195,21 +4952,6 @@ async function maybeOpenCashOrRecover() {
   }
 }
 
-async function fetchFacturasByCaja(idcaja) {
-  const cfg = window.RECIPOK_API || {};
-  const base = (cfg.baseUrl || "").replace(/\/+$/, "");
-  const url = `${base}/facturaclientes?filter[idcaja]=${encodeURIComponent(idcaja)}&limit=0`;
-
-  const res = await fetch(url, {
-    headers: { Accept: "application/json", Token: cfg.apiKey },
-    cache: "no-store",
-  });
-
-  const data = await res.json().catch(() => null);
-  if (!res.ok || !Array.isArray(data)) return [];
-  return data;
-}
-
 function chunk(arr, n) {
   const out = [];
   for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
@@ -4267,22 +5009,6 @@ function buildPayMethodLabelMap(formapagos) {
     if (code) m[code] = desc || code;
   });
   return m;
-}
-
-function buildPaymentsSummaryFromRecibos(recibos) {
-  const map = {}; // codpago -> { code, count, total }
-
-  for (const r of recibos) {
-    const code = String(r.codpago || "—")
-      .trim()
-      .toUpperCase();
-    const importe = Number(r.importe || 0);
-
-    if (!map[code]) map[code] = { code, count: 0, total: 0 };
-    map[code].count += 1;
-    map[code].total += importe;
-  }
-  return map;
 }
 
 async function hydratePaymentsByMethodForClose(idcaja) {
@@ -4833,21 +5559,6 @@ function updateCashOpenTotal() {
   cashOpenTotalEl.textContent = total.toFixed(2).replace(".", ",") + " €";
 }
 
-function syncCashInput(visibleInput) {
-  const denom = visibleInput.dataset.denom;
-  const hidden = document.querySelector(
-    `.cash-hidden-input[data-denom="${denom}"]`,
-  );
-
-  if (!hidden) return;
-
-  const val = Math.max(0, parseInt(visibleInput.value || "0", 10));
-  hidden.value = val;
-  visibleInput.value = val;
-
-  updateCashOpenTotal();
-}
-
 function ensureCashSessionCounters() {
   if (!cashSession) cashSession = {};
   if (!cashSession.payMethodCounts) cashSession.payMethodCounts = {}; // { CONT: 2, BIZU: 1, ... }
@@ -4904,6 +5615,7 @@ async function confirmCashOpening() {
 
   if (terminalNameEl && currentTerminal)
     terminalNameEl.textContent = currentTerminal.name || "---";
+  setTerminalNameClickable(Array.isArray(terminals) && terminals.length > 1);
   if (agentNameEl)
     agentNameEl.textContent = currentAgent ? currentAgent.name : "---";
 
@@ -5008,60 +5720,6 @@ async function confirmCashClosing() {
   try {
     if (cashOpenOkBtn) cashOpenOkBtn.disabled = false;
   } catch {}
-}
-
-function resetTPVToEmpty() {
-  unlockAppUI();
-  // Cierra overlays que pudieran estar abiertos
-  try {
-    hideTerminalOverlay();
-  } catch (e) {}
-  try {
-    hideCashOpenDialog();
-  } catch (e) {}
-  try {
-    closeOptions();
-  } catch (e) {}
-  try {
-    closeParkedModal();
-  } catch (e) {}
-  try {
-    payOverlay?.classList.add("hidden");
-  } catch (e) {}
-
-  // Estado de caja / selección
-  cashSession.open = false;
-  pushCustomerState();
-  currentTerminal = null;
-  currentAgent = null;
-
-  if (terminalNameEl) terminalNameEl.textContent = "---";
-  if (agentNameEl) agentNameEl.textContent = "---";
-
-  if (mainAgentBar) mainAgentBar.innerHTML = "";
-
-  // Limpia carrito y UI productos
-  selectedCategory = null;
-  activeFamilyParentId = null;
-  activeSubfamilyId = null;
-  cart = [];
-  renderCart();
-
-  const grid = document.getElementById("productsGrid");
-  const catContainer = document.getElementById("categories");
-  const subCatContainer = document.getElementById("subcategories");
-  if (grid) grid.innerHTML = "";
-  if (catContainer) catContainer.innerHTML = "";
-  if (subCatContainer) subCatContainer.innerHTML = "";
-
-  mainUiRendered = false;
-  lastTicket = null;
-
-  const printBtn = document.getElementById("printTicketBtn");
-  if (printBtn) printBtn.disabled = true;
-
-  updateCashButtonLabel();
-  setStatusText("—");
 }
 
 // ===== Llamadas a API Recipok / FacturaScripts =====
@@ -5193,14 +5851,70 @@ async function fetchFormasPagoActivas(opts = {}) {
 
 // Eventos overlay terminal (modo selección para abrir caja o cambio rápido)
 if (terminalOkBtn) {
-  terminalOkBtn.onclick = () => {
+  terminalOkBtn.onclick = async () => {
+    // ✅ CAMBIO RÁPIDO SOLO TERMINAL
+    if (terminalOverlayMode === "terminalSwitch") {
+      if (
+        !terminalSelect ||
+        !Array.isArray(terminals) ||
+        terminals.length <= 1
+      ) {
+        hideTerminalOverlay();
+        return;
+      }
+
+      const selectedId = terminalSelect.value;
+      const selectedTerminal = terminals.find(
+        (t) => String(t.id) === String(selectedId),
+      );
+
+      if (!selectedTerminal) {
+        terminalErrorEl.textContent = "Selecciona un terminal válido.";
+        return;
+      }
+
+      setCurrentTerminal(selectedTerminal);
+      await applyTerminalDefaultCustomer?.();
+
+      // UI
+      if (terminalNameEl)
+        terminalNameEl.textContent = selectedTerminal.name || "---";
+
+      // Si el agente actual no pertenece al nuevo terminal, lo anulamos
+      const newAgents = getAgentsForTerminalId(selectedTerminal.id) || [];
+      if (
+        currentAgent &&
+        !newAgents.some((a) => a.codagente === currentAgent.codagente)
+      ) {
+        currentAgent = null;
+        if (agentNameEl) agentNameEl.textContent = "---";
+      }
+
+      renderMainAgentBar();
+      hideTerminalOverlay();
+      return;
+    }
     // CAMBIO RÁPIDO DE AGENTE
     if (terminalOverlayMode === "agentSwitch") {
-      const list = currentTerminal
-        ? getAgentsForTerminalId(currentTerminal.id)
-        : [];
+      // 1) Si hay selector de terminal visible, actualizamos terminal
+      if (terminals.length > 1 && terminalSelectWrapper && terminalSelect) {
+        const selectedId = terminalSelect.value;
+        const t = terminals.find((x) => String(x.id) === String(selectedId));
+        if (t) setCurrentTerminal(t);
+      }
 
-      if (list.length >= 1 && !currentAgent) {
+      const terminalId = currentTerminal?.id || null;
+      const list = terminalId ? getAgentsForTerminalId(terminalId) : [];
+
+      // 2) Si ese terminal no tiene agentes, no permitimos continuar
+      if (!list || list.length === 0) {
+        terminalErrorEl.textContent =
+          "Este terminal no tiene agentes asignados.";
+        return;
+      }
+
+      // 3) Si hay agentes y no hay currentAgent, obligamos a seleccionar
+      if (!currentAgent) {
         terminalErrorEl.textContent = "Selecciona un agente válido.";
         return;
       }
@@ -5211,7 +5925,6 @@ if (terminalOkBtn) {
 
       renderMainAgentBar();
 
-      // ✅ solo dispara sessionReady
       document.dispatchEvent(
         new CustomEvent("tpv:sessionReady", {
           detail: {
@@ -5231,14 +5944,18 @@ if (terminalOkBtn) {
 
     if (terminals.length > 1 && terminalSelectWrapper && terminalSelect) {
       const selectedId = terminalSelect.value;
+
       selectedTerminal = terminals.find(
         (t) => String(t.id) === String(selectedId),
       );
+
       if (!selectedTerminal) {
         terminalErrorEl.textContent = "Selecciona un terminal válido.";
         return;
       }
+
       setCurrentTerminal(selectedTerminal);
+      await applyTerminalDefaultCustomer();
     }
 
     const list = selectedTerminal
@@ -5680,33 +6397,6 @@ async function ensureTerminalAgentDefaults({ refresh = false } = {}) {
   refreshLoggedUserUI?.();
 }
 
-async function findOpenCajaIdInFS() {
-  const cfg = window.RECIPOK_API || {};
-  if (!cfg.baseUrl || !cfg.apiKey) return null;
-  if (!currentTerminal?.id) return null;
-
-  const base = cfg.baseUrl.replace(/\/+$/, "");
-  const url = new URL(`${base}/tpvcajas`);
-
-  // filtros típicos de FacturaScripts API
-  url.searchParams.set("limit", "50");
-  url.searchParams.set("order", "desc");
-  url.searchParams.set("filter[idtpv]", String(currentTerminal.id));
-  url.searchParams.set("filter[nick]", String(getLoginUser() || ""));
-
-  const res = await fetch(url.toString(), {
-    headers: { Accept: "application/json", Token: cfg.apiKey },
-    cache: "no-store",
-  });
-
-  const data = await res.json().catch(() => null);
-  if (!res.ok || !Array.isArray(data)) return null;
-
-  // buscamos una caja SIN fechafin (abierta)
-  const open = data.find((c) => !c.fechafin);
-  return open?.idcaja ?? open?.id ?? null;
-}
-
 // Botón abrir/cerrar caja (header "Caja")
 if (cashHeaderBtn) {
   cashHeaderBtn.onclick = async () => {
@@ -5823,22 +6513,26 @@ if (cashHeaderBtn) {
   };
 }
 
-// Click en nombre de agente para cambio rápido / refrescar lista
+// Click en nombre de agente: cambio rápido (agente y, si hay >1, también terminal)
 if (agentNameEl) {
   agentNameEl.addEventListener("click", async () => {
-    if (!currentTerminal) return;
-
-    // Siempre refrescamos primero desde la API
     await refreshTerminalsAndAgents();
 
-    const list = getAgentsForTerminalId(currentTerminal.id);
+    const tpvs = Array.isArray(terminals) ? terminals : [];
+    if (tpvs.length === 0) return;
 
-    // Si no hay agentes, no hacemos nada
-    if (list.length === 0) {
+    // si hay múltiples TPVs, abrimos siempre (para poder elegir un TPV con agentes)
+    if (tpvs.length > 1) {
+      showTerminalOverlay("agentSwitch");
       return;
     }
 
-    // Con 1 o más agentes abrimos el overlay para que se vea la lista actual
+    // si solo hay 1 TPV, solo abrimos si hay agentes
+    const terminalId = currentTerminal?.id || tpvs[0]?.id;
+    const list = getAgentsForTerminalId(terminalId);
+
+    if (!list || list.length === 0) return;
+
     showTerminalOverlay("agentSwitch");
   });
 }
@@ -5847,27 +6541,6 @@ if (userNameEl) {
   userNameEl.addEventListener("click", async () => {
     await doLogoutFlow();
   });
-}
-
-async function loadPersistedCompanyIntoRecipokApi() {
-  // Usa TPV_CFG (userData) para evitar que se pierda al actualizar
-  const baseUrl = await window.TPV_CFG.get("company.baseUrl");
-  const apiKey = await window.TPV_CFG.get("company.apiKey");
-  const email = await window.TPV_CFG.get("company.email");
-  const slug = await window.TPV_CFG.get("company.slug");
-
-  if (baseUrl && apiKey) {
-    window.RECIPOK_API = window.RECIPOK_API || {};
-    window.RECIPOK_API.baseUrl = String(baseUrl);
-    window.RECIPOK_API.apiKey = String(apiKey);
-
-    // opcional
-    window.RECIPOK_API._savedEmail = email || "";
-    window.RECIPOK_API._savedSlug = slug || "";
-
-    return true;
-  }
-  return false;
 }
 
 async function autoSelectTerminalAndAgentIfPossible() {
@@ -6202,6 +6875,8 @@ async function loadDataFromApi(opts = {}) {
           name: t.name || t.descripcion || `TPV ${id}`,
           codalmacen: t.codalmacen || null,
           productlimit: t.productlimit || null,
+          // ✅ cliente por defecto asignado en FacturaScripts
+          codcliente: String(t.codcliente || "1"),
         };
       });
     } else {
@@ -6280,6 +6955,7 @@ async function loadDataFromApi(opts = {}) {
       if (!currentTerminal) {
         if (onlyTerminal) {
           setCurrentTerminal(onlyTerminal);
+          await renderTerminalDefaultCustomerSelect();
         } else if (terminals.length) {
           setCurrentTerminal(terminals[0]);
         }
@@ -6456,6 +7132,9 @@ window.cargarPantallaTPV = async function (idcaja, idtpv, caja) {
     // ✅ Actualizar labels de cabecera si aplica
     if (terminalNameEl && currentTerminal) {
       terminalNameEl.textContent = currentTerminal.name || "---";
+      setTerminalNameClickable(
+        Array.isArray(terminals) && terminals.length > 1,
+      );
     }
     if (agentNameEl) {
       agentNameEl.textContent = currentAgent ? currentAgent.name : "---";
@@ -6630,8 +7309,9 @@ function buildTicketPayloadFromCart() {
     throw new Error("El carrito está vacío.");
   }
 
-  const cfg = window.RECIPOK_API || {};
-  const codcliente = cfg.defaultCodClienteTPV || "1";
+  const codcliente =
+    window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() ||
+    String(currentTerminal?.codcliente || "1");
 
   const lineas = buildFsLinesFromCart(cart);
 
@@ -6647,8 +7327,9 @@ function buildPresupuestoPayloadFromCart(obs = "") {
     throw new Error("El carrito está vacío.");
   }
 
-  const cfg = window.RECIPOK_API || {};
-  const codcliente = cfg.defaultCodClienteTPV || "1";
+  const codcliente =
+    window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() ||
+    String(currentTerminal?.codcliente || "1");
   const codalmacen = currentTerminal?.codalmacen || getLoginWarehouse() || "";
   const codpago = "CONT";
   const codserie = "S";
@@ -7102,21 +7783,27 @@ async function openOptions() {
 
   await loadPriceEditModeFromCfg?.();
 
-  applyAdminOnlyUI?.(); // ya usa window.TPV_STATE
+  applyAdminOnlyUI?.();
   refreshOptionsUI?.();
   refreshPriceEditToggleUI?.();
   bindPriceEditToggleOnce?.();
 
-  // acordeón
   bindOptionsAccordionOnce();
   const st = await loadOptionsAccordionState();
   await applyOptionsAccordionState(st);
 
   optionsOverlay?.classList.remove("hidden");
 
-  syncGroupLinesFromFS?.();
-  await bindAutostartToggle?.();
-  bindCustomerDisplayToggle();
+  // Cliente default terminal
+  bindTerminalDefaultCustomerSave();
+
+  // 1) refresca codcliente desde FS si se puede
+  await maybeRefreshTerminalDefaultCustomer("open-options", {
+    minIntervalMs: 2000,
+  }).catch(() => {});
+
+  // 2) pinta el select (si offline, tu función ya usa fallback CUSTOMER_SELECTOR)
+  await renderTerminalDefaultCustomerSelect();
 }
 
 function closeOptions() {
@@ -7413,6 +8100,8 @@ async function createRefundInFacturaScripts(
       .trim();
 
     lineas.push({
+      referencia: String(l.referencia || "").trim() || undefined,
+      idproducto: Number(l.idproducto || 0) || undefined,
       descripcion: `DEV - ${baseDesc}`,
       cantidad: -q,
       pvpunitario: Number(l.pvpunitario || 0),
@@ -7767,9 +8456,9 @@ async function openPrinterPicker() {
 
 function normalizeRefundDesc(desc) {
   return String(desc || "")
-    .replace(/^DEV\s*-\s*/i, "")
     .trim()
-    .toLowerCase();
+    .replace(/^DEV\s*-\s*/i, "")
+    .replace(/\s+/g, " ");
 }
 
 function keyForRefundMatch(desc, pvpunitario, codimpuesto) {
@@ -7926,7 +8615,9 @@ function renderItemsHtml(doc, lineas) {
     return isNaN(n) ? 0 : n;
   };
 
-  box.innerHTML = (Array.isArray(lineas) ? lineas : [])
+  const arr = Array.isArray(lineas) ? lineas : [];
+
+  box.innerHTML = arr
     .map((l) => {
       const isChild = isPackChildForPrint(l);
       const qty = getQtyForPrint(l);
@@ -7984,41 +8675,64 @@ function renderTaxSummaryHtml(doc, taxMap) {
   }
 }
 
+function stripIncluyeFromDesc(desc) {
+  const s = String(desc || "").trim();
+  if (!s) return "";
+
+  // Corta desde "· Incluye:" o "Incluye:"
+  return s
+    .replace(/\s*·\s*Incluye\s*:\s*.*$/i, "")
+    .replace(/\s*Incluye\s*:\s*.*$/i, "")
+    .trim();
+}
+
 function buildFsLinesFromCart(cartArr) {
   if (!Array.isArray(cartArr) || cartArr.length === 0) return [];
 
-  return cartArr.map((item) => {
-    const isChild = isPackChildLine(item);
-    const isParent = isPackParentLine(item);
+  return (
+    cartArr
+      // ✅ NO mandar hijos a FS (el plugin los añade/gestiona)
+      .filter((item) => !item?.meta?.includedInPack)
+      .map((item) => {
+        const qty = Number(item.qty || 1) || 1;
 
-    // descripción base SIN flecha (para que FS no la muestre)
-    const descripcion = item.secondaryName
-      ? `${item.name} - ${item.secondaryName}`
-      : item.name;
+        // Precio unitario BRUTO (IVA incl.)
+        const unitGross = Number(getUnitGross(item) || 0);
 
-    const qty = Number(item.qty || 1) || 1;
+        // Convertimos a NETO para FS
+        const tax = Number(item.taxRate || 0);
+        const divisor = 1 + tax / 100;
+        const unitNetRaw = divisor > 0 ? unitGross / divisor : unitGross;
 
-    // hijo siempre gratis
-    const unitGross = isChild ? 0 : getUnitGross(item);
+        // precisión alta para evitar errores de redondeo
+        const unitNet = Math.round((unitNetRaw + Number.EPSILON) * 1e8) / 1e8;
 
-    const tax = Number(item.taxRate || 0);
-    const divisor = 1 + tax / 100;
-    const unitNetRaw = divisor > 0 ? unitGross / divisor : unitGross;
-    const unitNet = Math.round((unitNetRaw + Number.EPSILON) * 1e8) / 1e8;
+        // referencia separada (FS)
+        const ref = String(item.referencia || item.name || "").trim() || "-";
 
-    const linea = {
-      descripcion,
-      cantidad: qty,
-      pvpunitario: unitNet,
-      // ✅ flags SOLO para tu TPV (FS normalmente los ignora)
-      __isPackChild: !!isChild,
-      __isPackParent: !!isParent,
-    };
+        // ✅ Descripción: SIEMPRE la original, sin "Incluye"
+        const baseDesc =
+          item.descripcion2 ||
+          item.secondaryName ||
+          item.descripcion ||
+          item.name ||
+          "-";
 
-    if (item.codimpuesto) linea.codimpuesto = item.codimpuesto;
+        const descClean = stripIncluyeFromDesc(baseDesc) || "-";
 
-    return linea;
-  });
+        const linea = {
+          referencia: ref,
+          descripcion: descClean,
+          cantidad: qty,
+          pvpunitario: unitNet,
+          idproducto: Number(item.baseProductId || item.id || 0) || undefined,
+        };
+
+        if (item.codimpuesto) linea.codimpuesto = item.codimpuesto;
+
+        return linea;
+      })
+  );
 }
 
 function round2(n) {
@@ -8237,6 +8951,12 @@ async function printTicket(ticket) {
 
           if (pending > 0) {
             rebuilt.push({
+              // 🔑 claves para packs/orden
+              idlinea: l.idlinea,
+              orden: l.orden,
+              idproducto: l.idproducto,
+
+              referencia: l.referencia || "",
               descripcion: l.descripcion,
               cantidad: pending,
               pvpunitario: l.pvpunitario,
@@ -8248,6 +8968,11 @@ async function printTicket(ticket) {
 
           if (refunded > 0) {
             rebuilt.push({
+              // 🔑 también mantener ids/orden aunque sea DEV (no molesta)
+              idlinea: l.idlinea,
+              orden: l.orden,
+              idproducto: l.idproducto,
+
               descripcion: `DEV - ${normalizeRefundDesc(l.descripcion)}`,
               cantidad: -refunded,
               pvpunitario: l.pvpunitario,
@@ -8273,6 +8998,28 @@ async function printTicket(ticket) {
     }
 
     if (!isRect && isFullyRefundedOriginal) isRect = true;
+
+    // ✅ Asegurar packs cargados antes de normalizar
+    try {
+      if (!PACKS_STATE?.ready && typeof warmupPacksData === "function") {
+        await warmupPacksData();
+      }
+    } catch (e) {
+      console.warn("[printTicket] warmupPacksData falló:", e?.message || e);
+    }
+
+    // ✅ Normalizar para imprimir packs: quitar hijos 0€ de FS y recrearlos como hijos virtuales
+    try {
+      if (typeof preparePrintableTicket === "function") {
+        const tNorm = preparePrintableTicket({ ...ticket, lineas });
+        lineas = Array.isArray(tNorm?.lineas) ? tNorm.lineas : lineas;
+      }
+    } catch (e) {
+      console.warn(
+        "[printTicket] preparePrintableTicket falló:",
+        e?.message || e,
+      );
+    }
 
     // 3) Totales + IVA/Base (una sola vez)
     const { totalToShow, taxMap } = calcTotalsAndTaxMap(
@@ -8664,9 +9411,20 @@ async function printCashCloseReport(report) {
   }
 }
 
+function decodeHtmlEntities(s) {
+  const raw = String(s ?? "");
+  if (!raw.includes("&")) return raw;
+  const txt = document.createElement("textarea");
+  txt.innerHTML = raw;
+  return txt.value;
+}
+
+// ✅ reemplaza tu setText por este
 function setText(doc, id, value) {
   const el = doc.getElementById(id);
-  if (el) el.textContent = value == null ? "" : String(value);
+  if (!el) return;
+  const raw = value == null ? "" : String(value);
+  el.textContent = raw.includes("&") ? decodeHtmlEntities(raw) : raw;
 }
 
 function appendRow(container, left, right) {
@@ -8679,8 +9437,21 @@ function appendRow(container, left, right) {
   container.appendChild(div);
 }
 
+function isProbablyNetworkError(err) {
+  const msg = String(err?.message || err || "");
+  return (
+    msg.includes("Failed to fetch") ||
+    msg.includes("NetworkError") ||
+    msg.includes("network") ||
+    msg.includes("timeout") ||
+    msg.includes("ETIMEDOUT") ||
+    msg.includes("ECONN") ||
+    msg.includes("ENOTFOUND")
+  );
+}
+
 function escapeHtml(str) {
-  return String(str)
+  return String(str ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
@@ -8759,7 +9530,6 @@ async function onPayButtonClick() {
       return;
     }
 
-    // Total carrito (con IVA)
     const totalCart = round2(getCartTotal(cart));
 
     // 1) Modal cobro
@@ -8770,7 +9540,7 @@ async function onPayButtonClick() {
       return;
     }
 
-    // ---- Normalizar pagos DESDE YA (evita errores + garantiza entregado/importe) ----
+    // ---- Normalizar pagos ----
     const pagosFinal = Array.isArray(payResult?.pagos)
       ? payResult.pagos.map((p) => ({
           ...p,
@@ -8778,10 +9548,8 @@ async function onPayButtonClick() {
             .trim()
             .toUpperCase(),
           descripcion: String(p?.descripcion || "").trim(),
-          // aplicado a la venta
           importe:
             Math.round((Number(p?.importe || 0) + Number.EPSILON) * 100) / 100,
-          // entregado por el cliente (si no viene, asumimos importe)
           entregado:
             Math.round(
               (Number(p?.entregado ?? p?.importe ?? 0) + Number.EPSILON) * 100,
@@ -8791,8 +9559,6 @@ async function onPayButtonClick() {
 
     const primary = pagosFinal[0] || null;
 
-    // ✅ Para FacturaScripts: efectivo = ENTREGADO en efectivo, cambio = cambio
-    // (porque FS suele computar ingresos efectivo como efectivo - cambio)
     const tpv_cambio =
       Math.round((Number(payResult?.cambio || 0) + Number.EPSILON) * 100) / 100;
 
@@ -8805,13 +9571,12 @@ async function onPayButtonClick() {
           100,
       ) / 100;
 
-    // 2) Payload factura
+    // 2) Snapshot carrito (ANTES de enviar)
+    const cartSnapshot = Array.isArray(cart) ? cart.map((i) => ({ ...i })) : [];
+
+    // 3) Payload factura
     const ticketPayload = buildTicketPayloadFromCart();
-
-    // Observaciones
     ticketPayload.observaciones = (payResult?.observaciones || "").toString();
-
-    // Vincular a TPV / caja
     ticketPayload.idtpv = Number(currentTerminal?.id || 0) || null;
     ticketPayload.idcaja = Number(cashSession?.remoteCajaId || 0) || null;
 
@@ -8821,34 +9586,29 @@ async function onPayButtonClick() {
       );
     }
 
-    // Número2 y serie
     ticketPayload.numero2 = payResult.numero || "";
     const serieVenta = (payResult.serie || "S").toString().trim().toUpperCase();
     ticketPayload.serie = serieVenta;
     ticketPayload.codserie = serieVenta;
 
-    // Para ticket (impresión): método principal / mixto
-    if (pagosFinal.length === 1) {
-      ticketPayload.paymentMethod =
-        primary?.descripcion || primary?.codpago || "—";
-    } else {
-      ticketPayload.paymentMethod = "Mixto";
-    }
+    // método para impresión
+    ticketPayload.paymentMethod =
+      pagosFinal.length === 1
+        ? primary?.descripcion || primary?.codpago || "—"
+        : "Mixto";
 
     customerSetMode("PAYING");
     setStatusText("Cobrando...");
 
-    // Para FS: codpago principal + (opcional) desglose pagos
+    // codpago principal + desglose
     ticketPayload.codpago = primary ? primary.codpago : null;
     ticketPayload.pagos = pagosFinal;
 
-    // Snapshot carrito (inmutable)
-    const cartSnapshot = Array.isArray(cart) ? cart.map((i) => ({ ...i })) : [];
+    // ✅ CLAVE: guardar desired pack qty ANTES de enviar/encolar
+    ticketPayload._packDesiredByIdProducto =
+      buildDesiredPackQtyByIdProducto(cartSnapshot);
 
-    const cartSnapshotToCustomerItems =
-      buildCustomerItemsFromCart(cartSnapshot);
-
-    // Datos auxiliares offline/post
+    // extras offline/post
     ticketPayload._payBreakdown = pagosFinal;
     ticketPayload._payCambio = Number(tpv_cambio || 0);
     ticketPayload._payNumero2 = (payResult.numero ?? "").toString();
@@ -8859,12 +9619,11 @@ async function onPayButtonClick() {
       "Ventas"
     ).toString();
 
-    // 3) Enviar o encolar
+    // 4) Enviar o encolar
     const sendResult = await sendOrQueueFactura(ticketPayload);
 
-    // ========= OFFLINE (encolado) =========
+    // ========= OFFLINE =========
     if (!sendResult.ok && sendResult.queued) {
-      // registrar uso de pagos
       registerPaymentsForCurrentSession(pagosFinal);
       registerPayMethodUsageForTicket(pagosFinal);
 
@@ -8875,27 +9634,21 @@ async function onPayButtonClick() {
           payResult,
         );
 
-        // Completar modal post-cobro offline
         try {
           const docCode = lastTicket?.numero || "OFFLINE";
           const totalDoc = Number(payResult?.total ?? totalCart ?? 0);
           const cambio = Number(payResult?.cambio ?? 0);
           openPostPayModal({ docCode, total: totalDoc, cambio });
           setPostPayPrintEnabled(true);
-        } catch (e) {
-          console.warn("post-cobro offline completar falló:", e?.message || e);
-        }
+        } catch {}
 
-        // Guardar en modal Tickets offline
         saveOfflineTicketForTicketsModal({
           _localId: sendResult.localId,
           codigo: `OFF-${String(sendResult.localId || "")
             .slice(0, 6)
             .toUpperCase()}`,
           nombrecliente: "Venta en cola",
-          total: Number(
-            payResult?.total ?? totalCart ?? ticketPayload?.total ?? 0,
-          ),
+          total: Number(payResult?.total ?? totalCart ?? 0),
           codpago: pagosFinal?.[0]?.codpago || ticketPayload.codpago || "—",
           fecha: lastTicket.fecha,
           hora: lastTicket.hora,
@@ -8907,11 +9660,10 @@ async function onPayButtonClick() {
           _offline: true,
         });
 
-        const printBtn = document.getElementById("printTicketBtn");
-        if (printBtn) printBtn.disabled = false;
-      } catch (e) {
-        console.warn("No se pudo construir ticket offline:", e?.message || e);
-      }
+        document
+          .getElementById("printTicketBtn")
+          ?.setAttribute("disabled", "0");
+      } catch {}
 
       customerSetMode("THANKS", {
         ttlMs: 12000,
@@ -8931,23 +9683,31 @@ async function onPayButtonClick() {
 
     // ========= ONLINE =========
     const apiResponse = sendResult.remote;
-
     const facturaResp =
       apiResponse.doc || apiResponse.factura || apiResponse.data || apiResponse;
 
     const idfactura = facturaResp?.idfactura || null;
+
+    // ✅ CLAVE: parchear cantidades de líneas gratis del pack
+    if (idfactura) {
+      try {
+        await patchPackChildrenLinesInFactura({ idfactura, cartSnapshot });
+      } catch (e) {
+        console.warn("No pude parchear líneas pack en FS:", e?.message || e);
+      }
+    }
+
     const codcliente = facturaResp?.codcliente;
     const idempresa = facturaResp?.idempresa;
     const coddivisa = facturaResp?.coddivisa;
     const codigofactura = facturaResp?.codigo;
 
-    // Total real FS
     const facturaTotalFS =
       Math.round(
         (Number(facturaResp?.total ?? totalCart ?? 0) + Number.EPSILON) * 100,
       ) / 100;
 
-    // Ajuste céntimos: recibos deben sumar exacto totalFS (usamos pagosFinal)
+    // Ajuste céntimos: recibos deben sumar totalFS
     const sumPagosFinal = pagosFinal.reduce(
       (s, p) => s + (Number(p.importe) || 0),
       0,
@@ -8957,44 +9717,37 @@ async function onPayButtonClick() {
 
     if (pagosFinal.length && Math.abs(diff) >= 0.01) {
       const last = pagosFinal[pagosFinal.length - 1];
-      const newImp =
-        Math.round((Number(last.importe || 0) + diff + Number.EPSILON) * 100) /
-        100;
-      pagosFinal[pagosFinal.length - 1] = { ...last, importe: newImp };
+      pagosFinal[pagosFinal.length - 1] = {
+        ...last,
+        importe:
+          Math.round(
+            (Number(last.importe || 0) + diff + Number.EPSILON) * 100,
+          ) / 100,
+      };
     }
 
-    // Actualizar factura (tpv_efectivo = entregado cash, tpv_cambio = cambio)
+    // Update factura (tpv_efectivo=entregado cash, tpv_cambio=cambio)
     if (idfactura) {
       const upd = {
         idestado: 11,
         pagada: 1,
-
         tpv_venta: 1,
         tpv_efectivo: Number(tpv_efectivo.toFixed(2)),
         tpv_cambio: Number(tpv_cambio.toFixed(2)),
-
         codpago: ticketPayload.codpago || "",
         idtpv: currentTerminal?.id || "",
         codalmacen: currentTerminal?.codalmacen || "",
         observaciones: (payResult?.observaciones || "").toString(),
-
         numero2: (payResult?.numero ?? "").toString(),
-        nick: (
-          currentAgent?.nick ||
-          currentAgent?.nombre ||
-          getLoginUser?.() ||
-          "Ventas"
-        ).toString(),
+        nick: ticketPayload._payNick || "Ventas",
       };
-
       if (currentAgent?.codagente) upd.codagente = currentAgent.codagente;
       await updateFacturaCliente(idfactura, upd);
     }
 
-    // Crear 1 recibo por método (importe = aplicado)
+    // Recibos
     if (idfactura && codcliente) {
       const today = new Date().toISOString().slice(0, 10);
-
       for (const p of pagosFinal) {
         const importe = Number(Number(p.importe || 0).toFixed(2));
         if (!(importe > 0)) continue;
@@ -9011,29 +9764,20 @@ async function onPayButtonClick() {
           coddivisa,
         });
       }
-    } else {
-      console.warn(
-        "No hay idfactura/codcliente: no se pudieron crear recibos.",
-      );
     }
 
-    // Limpieza recibo automático + validar
+    // Cleanup/validate
     try {
       await cleanupRecibosFactura(idfactura, pagosFinal);
       try {
         await validateRecibosAgainstFactura(idfactura);
-      } catch (e) {
-        console.warn("validateRecibosAgainstFactura falló:", e?.message || e);
-      }
-    } catch (e) {
-      console.warn("cleanupRecibosFactura falló:", e?.message || e);
-    }
+      } catch {}
+    } catch {}
 
-    // Registrar sesión caja / ticket (usar pagosFinal SIEMPRE)
     registerPaymentsForCurrentSession(pagosFinal);
     registerPayMethodUsageForTicket(pagosFinal);
 
-    // Completar código factura si hace falta
+    // completar código si hace falta
     if (idfactura) {
       try {
         const fc = await fetchFacturaClienteById(idfactura);
@@ -9041,34 +9785,24 @@ async function onPayButtonClick() {
           if (!apiResponse.factura) apiResponse.factura = facturaResp;
           apiResponse.factura.codigo = String(fc.codigo);
         }
-      } catch (e) {
-        console.warn(
-          "No se pudo completar codigo desde facturaclientes:",
-          e?.message || e,
-        );
-      }
+      } catch {}
     }
 
-    // Actualizar caja TPV: suma efectivo por importe (aplicado), NO entregado
     await apiUpdateCajaAfterSale({
       totalVenta: facturaTotalFS,
       pagos: pagosFinal,
     });
 
-    // Ticket imprimible
     lastTicket = buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot);
 
-    // Completar post-cobro
+    // Post-cobro
     try {
       const docCode =
         lastTicket?.numero ||
         facturaResp?.codigo ||
         facturaResp?.idfactura ||
         "—";
-
-      const totalDoc = Number(
-        facturaResp?.total ?? lastTicket?.total ?? totalCart ?? 0,
-      );
+      const totalDoc = Number(facturaResp?.total ?? facturaTotalFS ?? 0);
       const cambio = Number(payResult?.cambio ?? 0);
 
       updatePostPayModal({
@@ -9078,31 +9812,26 @@ async function onPayButtonClick() {
         enablePrint: true,
       });
       setPostPayPrintEnabled(true);
-    } catch (e) {
-      console.warn("No pude completar post-cobro:", e?.message || e);
-    }
+    } catch {}
 
-    // Guardar pagos/cambio en ticket
     lastTicket.pagos = pagosFinal;
     lastTicket.cambio = payResult.cambio || 0;
 
     const printBtn = document.getElementById("printTicketBtn");
     if (printBtn) printBtn.disabled = false;
 
-    // Vaciar carrito
     customerSetMode("THANKS", {
       ttlMs: 12000,
       total: facturaTotalFS,
       ticket: lastTicket?.numero || facturaResp?.codigo || "",
       paymentMethod: ticketPayload.paymentMethod || "",
       agent: ticketPayload._payNick || "",
-      items: buildCustomerItemsFromCart(cartSnapshot), // ✅ IMPORTANTE
+      items: buildCustomerItemsFromCart(cartSnapshot),
     });
 
     cart = [];
     renderCart();
     clearPaidParkedTicket();
-
     setStatusText("Venta cobrada");
 
     toast(
@@ -9113,7 +9842,6 @@ async function onPayButtonClick() {
       "Cobrar",
     );
 
-    // Auto-impresión
     if (isAutoPrintEnabled()) {
       try {
         await printTicket(lastTicket);
@@ -9128,7 +9856,7 @@ async function onPayButtonClick() {
     }
   } catch (err) {
     console.error("Error al cobrar:", err);
-    customerSetMode("CART"); // ✅ evita quedarse en PAYING
+    customerSetMode("CART");
     toast("Error al cobrar: " + (err.message || err), "err", "Cobrar");
     setStatusText("Error al cobrar");
   } finally {
@@ -10121,47 +10849,6 @@ async function loadAndRenderTickets() {
   } finally {
     ticketsLoading = false;
   }
-}
-
-// estado de desplegados
-const __ticketsExpanded = new Set(); // guarda idfactura del ORIGINAL expandido
-
-function toggleTicketThread(origId) {
-  const k = String(origId);
-  if (__ticketsExpanded.has(k)) __ticketsExpanded.delete(k);
-  else __ticketsExpanded.add(k);
-}
-
-function isExpanded(origId) {
-  return __ticketsExpanded.has(String(origId));
-}
-
-function renderRefundChildRow(r) {
-  const num = r.codigo || `#${r.idfactura}`;
-  const fechaHora = `${r.fecha || ""} ${r.hora || ""}`.trim();
-  const total = eurES(Number(r.total || 0));
-
-  return `
-    <div class="ticket-row ticket-child" data-id="${r.idfactura}"
-      style="margin-left:18px; padding-left:12px; border-left:3px solid #f3f4f6;">
-      <div class="ticket-left">
-        <div class="ticket-num" style="font-weight:600;">
-          ↩ ${escapeHtml(num)}
-          <span style="margin-left:10px; opacity:.75;">De: ${escapeHtml(
-            r._origCodigo || r.codigorect || "",
-          )}</span>
-        </div>
-        <div class="ticket-bot">${escapeHtml(fechaHora)}</div>
-      </div>
-
-      <div class="ticket-right">
-        <div class="ticket-total">${total}</div>
-        <div class="ticket-actions">
-          <button type="button" class="ticket-btn ticket-print" title="Imprimir">🖨</button>
-        </div>
-      </div>
-    </div>
-  `;
 }
 
 function renderTicketsList(tickets) {
@@ -11270,7 +11957,12 @@ function buildCustomerItemsFromCart(cartArr) {
     let secondaryName = baseSecondary;
 
     if (isPackParentLine(item)) {
-      const includes = getPackIncludesTextForParentLine(item);
+      // ✅ primero: hijos reales (refleja modificaciones del modal)
+      let includes = buildPackIncludesTextFromChildren(src, item._lineId);
+
+      // fallback: si por lo que sea no hay hijos, usar plantilla FS
+      if (!includes) includes = getPackIncludesTextForParentLine(item);
+
       if (includes) {
         secondaryName = baseSecondary
           ? `${baseSecondary} · Incluye: ${includes}`
@@ -11295,31 +11987,45 @@ function buildCustomerItemsFromCart(cartArr) {
  * Ajusta qty de hijos = qty_padre * qty_base_del_packline
  * Requiere que cada hijo tenga meta.packRef con la referencia del packline.
  */
-function syncPackChildrenQty(parentLine) {
+function syncSelectedPackChildrenQty(parentLine) {
   if (!isPackParentLine(parentLine)) return;
 
-  const packId = Number(parentLine.meta.packId || 0);
-  const lines = PACKS_STATE.linesByPackId.get(packId) || [];
-  if (!lines.length) return;
+  const selection = Array.isArray(parentLine?.meta?.packSelection)
+    ? parentLine.meta.packSelection
+    : [];
 
   const qByRef = new Map();
-  for (const ln of lines) {
-    qByRef.set(String(ln.reference || "").trim(), Number(ln.quantity || 1));
+  for (const s of selection) {
+    const ref = String(s.reference || "").trim();
+    const q = Number(s.qty || 0);
+    if (ref && q > 0) qByRef.set(ref, q);
   }
 
   const children = getPackChildren(parentLine._lineId);
-  const parentQty = Number(parentLine.qty || 0);
+  const parentQty = Number(parentLine.qty || 0) || 0;
 
-  for (const ch of children) {
+  // 1) eliminar hijos que ya no están en selección
+  for (const ch of [...children]) {
     const ref = String(ch?.meta?.packRef || "").trim();
-    const baseQ = qByRef.get(ref) || 1;
+    if (!qByRef.has(ref)) {
+      cart = cart.filter((x) => x._lineId !== ch._lineId);
+    }
+  }
+
+  // 2) actualizar qty de los que quedan
+  const updatedChildren = getPackChildren(parentLine._lineId);
+  for (const ch of updatedChildren) {
+    const ref = String(ch?.meta?.packRef || "").trim();
+    const baseQ = qByRef.get(ref) || 0;
     ch.qty = baseQ * parentQty;
 
-    // hijos siempre gratis
     ch.grossPriceOverride = 0;
     ch.originalGrossPrice =
       ch.originalGrossPrice ?? ch.grossPrice ?? ch.price ?? 0;
   }
+
+  // (Opcional) si faltan hijos porque la selección cambió después, aquí podrías crearlos,
+  // pero en tu flujo la selección se define al crear el pack.
 }
 
 const PACKS_STATE = {
@@ -11406,6 +12112,281 @@ function isOfferPackProductById(productId) {
   const id = Number(productId || 0);
   if (!id) return false;
   return PACKS_STATE.ready && PACKS_STATE.packsByOfferProductId.has(id);
+}
+
+function selectionKeyFromArr(arr) {
+  // Normaliza para comparar configuraciones (orden estable)
+  return JSON.stringify(
+    (arr || [])
+      .map((x) => ({
+        reference: String(x.reference || "").trim(),
+        qty: Number(x.qty || 0),
+      }))
+      .filter((x) => x.reference && x.qty > 0)
+      .sort((a, b) => a.reference.localeCompare(b.reference)),
+  );
+}
+
+async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
+  return new Promise((resolve) => {
+    document.body.classList.add("modal-locked");
+
+    const overlay = document.createElement("div");
+    overlay.className = "pack-modal-overlay";
+
+    const modal = document.createElement("div");
+    modal.className = "pack-modal";
+
+    // Header
+    const head = document.createElement("div");
+    head.className = "pack-modal-head";
+
+    const hTitle = document.createElement("div");
+    hTitle.className = "pack-modal-title";
+    hTitle.textContent = offerSecondary
+      ? `${offerName} - ${offerSecondary}`
+      : offerName;
+
+    const xBtn = document.createElement("button");
+    xBtn.type = "button";
+    xBtn.className = "pack-modal-x";
+    xBtn.textContent = "✕";
+
+    head.appendChild(hTitle);
+    head.appendChild(xBtn);
+
+    // Body
+    const body = document.createElement("div");
+    body.className = "pack-modal-body";
+
+    const list = document.createElement("div");
+    list.className = "pack-modal-list";
+
+    // Estado (defaultQty guardado para reset)
+    const state = packLines.map((pl) => {
+      const def = Math.max(1, Math.round(Number(pl.baseQty || 1)));
+      return {
+        reference: String(pl.reference || "").trim(),
+        productName: pl.productName || pl.reference || "Producto",
+        defaultQty: def,
+        checked: true,
+        qty: def,
+      };
+    });
+
+    function close(result) {
+      overlay.remove();
+      document.body.classList.remove("modal-locked");
+      resolve(result);
+    }
+
+    function setRowDisabled(row, disabled) {
+      row.classList.toggle("is-disabled", disabled);
+    }
+
+    function applyQty(i, newQty) {
+      const s = state[i];
+      let q = Number(newQty);
+      if (!isFinite(q)) q = 0;
+      q = Math.max(0, Math.round(q));
+
+      // regla: qty 0 => desmarca
+      if (q === 0) {
+        s.qty = 0;
+        s.checked = false;
+      } else {
+        s.qty = q;
+        s.checked = true;
+      }
+      renderRow(i);
+    }
+
+    // re-render de una sola fila
+    const rowEls = new Map();
+
+    function renderRow(i) {
+      const s = state[i];
+      const row = rowEls.get(i);
+      if (!row) return;
+
+      const chk = row.querySelector("input[type=checkbox]");
+      const valueBtn = row.querySelector(".pack-step-value");
+
+      chk.checked = !!s.checked;
+
+      // si se vuelve a marcar, qty default/1
+      if (s.checked && (!s.qty || s.qty <= 0)) s.qty = s.defaultQty || 1;
+
+      valueBtn.textContent = String(s.qty || 0);
+
+      setRowDisabled(row, !s.checked);
+    }
+
+    function makeRow(i) {
+      const s = state[i];
+
+      const row = document.createElement("div");
+      row.className = "pack-item";
+
+      const left = document.createElement("div");
+      left.className = "pack-item-left";
+
+      const chk = document.createElement("input");
+      chk.type = "checkbox";
+      chk.checked = !!s.checked;
+
+      const name = document.createElement("div");
+      name.className = "pack-item-name";
+      name.textContent = s.productName;
+
+      left.appendChild(chk);
+      left.appendChild(name);
+
+      // Stepper
+      const stepper = document.createElement("div");
+      stepper.className = "pack-stepper";
+
+      const btnReset = document.createElement("button");
+      btnReset.type = "button";
+      btnReset.className = "pack-step-btn reset";
+      btnReset.title = "Restaurar cantidad por defecto";
+      btnReset.textContent = "↺";
+
+      const btnMinus = document.createElement("button");
+      btnMinus.type = "button";
+      btnMinus.className = "pack-step-btn minus";
+      btnMinus.textContent = "−";
+
+      const valueBtn = document.createElement("button");
+      valueBtn.type = "button";
+      valueBtn.className = "pack-step-value";
+      valueBtn.textContent = String(s.qty);
+
+      const btnPlus = document.createElement("button");
+      btnPlus.type = "button";
+      btnPlus.className = "pack-step-btn plus";
+      btnPlus.textContent = "+";
+
+      stepper.appendChild(btnReset);
+      stepper.appendChild(btnMinus);
+      stepper.appendChild(valueBtn);
+      stepper.appendChild(btnPlus);
+
+      row.appendChild(left);
+      row.appendChild(stepper);
+
+      // Behaviors
+      function ensureChecked() {
+        if (!s.checked) {
+          s.checked = true;
+          if (!s.qty || s.qty <= 0) s.qty = s.defaultQty || 1;
+        }
+      }
+
+      chk.addEventListener("change", () => {
+        s.checked = chk.checked;
+
+        if (s.checked) {
+          if (!s.qty || s.qty <= 0) s.qty = s.defaultQty || 1;
+        } else {
+          // al desmarcar, bloqueamos pero dejamos qty recordada o la ponemos 0 (tu preferencia)
+          s.qty = 0;
+        }
+        renderRow(i);
+      });
+
+      btnPlus.addEventListener("click", () => {
+        ensureChecked();
+        applyQty(i, Number(s.qty || 0) + 1);
+      });
+
+      btnMinus.addEventListener("click", () => {
+        ensureChecked();
+        const next = Number(s.qty || 0) - 1;
+        applyQty(i, next <= 0 ? 0 : next);
+      });
+
+      btnReset.addEventListener("click", () => {
+        ensureChecked();
+        applyQty(i, s.defaultQty || 1);
+      });
+
+      // Click en el valor => abre tu numPad
+      valueBtn.addEventListener("click", () => {
+        ensureChecked();
+
+        // Querías: modal oferta arriba, teclado debajo.
+        // Con z-index ya queda así, pero hacemos scroll top por si acaso.
+        modal.scrollTop = 0;
+
+        openNumPad(
+          String(s.qty || s.defaultQty || 1),
+          (val) => {
+            let q = Number(val);
+            if (!isFinite(q)) q = 0;
+            q = Math.max(0, Math.round(q));
+            applyQty(i, q);
+          },
+          s.productName,
+        );
+      });
+
+      // Init disabled
+      rowEls.set(i, row);
+      renderRow(i);
+      return row;
+    }
+
+    for (let i = 0; i < state.length; i++) {
+      list.appendChild(makeRow(i));
+    }
+
+    body.appendChild(list);
+
+    // Footer
+    const actions = document.createElement("div");
+    actions.className = "pack-modal-actions";
+
+    const btnCancel = document.createElement("button");
+    btnCancel.type = "button";
+    btnCancel.className = "pack-btn pack-btn-cancel";
+    btnCancel.textContent = "Cancelar";
+
+    const btnOk = document.createElement("button");
+    btnOk.type = "button";
+    btnOk.className = "pack-btn pack-btn-ok";
+    btnOk.textContent = "Confirmar";
+
+    actions.appendChild(btnCancel);
+    actions.appendChild(btnOk);
+
+    modal.appendChild(head);
+    modal.appendChild(body);
+    modal.appendChild(actions);
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    // Close handlers
+    xBtn.addEventListener("click", () => close(null));
+    btnCancel.addEventListener("click", () => close(null));
+
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) close(null);
+    });
+
+    btnOk.addEventListener("click", () => {
+      const selection = state
+        .filter((s) => s.checked && Number(s.qty || 0) > 0)
+        .map((s) => ({ reference: s.reference, qty: Number(s.qty || 0) }));
+
+      if (!selection.length) {
+        toast("La oferta no puede quedar vacía.", "warn");
+        return;
+      }
+      close(selection);
+    });
+  });
 }
 
 // =============================================================
@@ -11720,13 +12701,6 @@ async function fetchLineasFactura(idfactura) {
   });
   const list = Array.isArray(data) ? data : [];
   return list.filter((l) => Number(l.idfactura) === Number(idfactura));
-}
-
-function normalizeRefundDesc(desc) {
-  return String(desc || "")
-    .trim()
-    .replace(/^DEV\s*-\s*/i, "") // quita "DEV - "
-    .replace(/\s+/g, " ");
 }
 
 function lineKeyForMatch(desc, pvpunitario, codimpuesto) {
@@ -12059,57 +13033,31 @@ async function fetchPagosFacturaByCodigo(codigofactura) {
   }
 }
 
-async function fetchDevolucionesByCaja(idcaja, limit = 50) {
-  if (!idcaja) return [];
-  const q = `sort[idfactura]=DESC&filter[idcaja]=${encodeURIComponent(idcaja)}&filter[codserie]=R&limit=${limit}`;
-  const r = await apiRead(`facturaclientes?${q}`);
-  const arr = r?.data || r?.doc || r;
-  return Array.isArray(arr) ? arr : [];
-}
-
-async function fetchDevolucionesDetalladasByCaja(idcaja, limit = 30) {
-  const devs = await fetchDevolucionesByCaja(idcaja, limit);
-
-  // ojo: esto hace N+1 requests; para 20-30 va bien
-  const out = [];
-  for (const f of devs) {
-    const lineas = await fetchLineasFacturaCliente(f.idfactura);
-    out.push({
-      idfactura: f.idfactura,
-      codigo: f.codigo,
-      hora: f.hora,
-      fecha: f.fecha,
-      codigorect: f.codigorect,
-      total: Number(f.total || 0),
-      lineas: lineas.map((l) => ({
-        referencia: l.referencia || "",
-        descripcion: l.descripcion || "",
-        cantidad: Number(l.cantidad || 0),
-        pvpunitario: Number(l.pvpunitario || 0),
-        total: Number(l.total || 0),
-      })),
-    });
-  }
-  return out;
-}
-
 async function imprimirFacturaHistorica(facturaRow) {
-  console.log("[imprimirFacturaHistorica] raw:", facturaRow?._raw);
-
   const id = Number(facturaRow?.idfactura || 0);
-  const lineas = await fetchLineasFactura(id);
+  if (!id) throw new Error("Factura sin idfactura.");
 
-  const ticketBase = buildTicketFromFacturaRow(facturaRow, lineas) || {};
+  // ✅ LÍNEAS REALES FS
+  const lineasFs = await fetchLineasFacturaCliente(id);
+
+  // ✅ Convertidas a tu formato TPV para no romper diseño
+  const lineasTpv = (Array.isArray(lineasFs) ? lineasFs : []).map(
+    mapFsLineToTpvPrintLine,
+  );
+
+  // Tu builder base (cabecera + totales + datos generales)
+  // OJO: le pasamos lineasTpv (no FS raw)
+  const ticketBase = buildTicketFromFacturaRow(facturaRow, lineasTpv) || {};
   const raw = facturaRow?._raw || facturaRow || {};
 
-  // 1) intentamos desglose real por recibos (si tenemos "codigo")
   const codigo = String(
     raw.codigo || facturaRow?.codigo || ticketBase?.numero || "",
   ).trim();
+
+  // Pagos
   let pagos = await fetchPagosFacturaByCodigo(codigo);
 
-  // 2) fallback: 1 sola línea si no hay recibos
-  if (!pagos.length) {
+  if (!Array.isArray(pagos) || !pagos.length) {
     const cod = String(
       raw.codpago || facturaRow?.codpago || ticketBase.paymentMethod || "—",
     ).trim();
@@ -12127,17 +13075,250 @@ async function imprimirFacturaHistorica(facturaRow) {
     ...ticketBase,
     idfactura: id,
     idfacturarect: Number(raw.idfacturarect || facturaRow?.idfacturarect || 0),
+
+    // ✅ IMPORTANTE: estas son las que usará tu diseño
+    lineas: lineasTpv,
+
     _raw: raw,
-    pagos, // ✅ aquí ya viene MULTI-método si existe
+    pagos,
   };
 
-  console.log("[imprimirFacturaHistorica] ticket.pagos:", ticket.pagos);
-  await printTicket(ticket);
+  const ticketReady = preparePrintableTicket(ticket);
+  await printTicket(ticketReady);
 }
 
-function lineNetTotal(l) {
-  return Number(l.pvpunitario || 0) * Number(l.cantidad || 0);
+function preparePrintableTicket(ticket) {
+  const lineas0 = Array.isArray(ticket?.lineas) ? [...ticket.lineas] : [];
+  if (!lineas0.length) return ticket;
+
+  const isDev = (l) => {
+    const d = String(l?.descripcion || "")
+      .trim()
+      .toUpperCase();
+    return d.startsWith("DEV") || d.startsWith("AJUSTE PAGO");
+  };
+
+  const isZero = (n) => Math.abs(Number(n || 0)) < 0.00001;
+
+  const isPackParent = (l) => {
+    // 1) si viene meta del carrito
+    if (l?.meta?.isPackOffer) return true;
+
+    // 2) si ya lo marcaste tú
+    if (l?.__isPackParent) return true;
+
+    // 3) por catálogo/FS
+    const pid = Number(l?.idproducto || 0);
+    return pid && typeof isOfferPackProductById === "function"
+      ? isOfferPackProductById(pid)
+      : false;
+  };
+
+  // Normalizador seguro
+  const _normTxtSafe = (s) =>
+    String(s || "")
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, " ");
+
+  // Def de pack desde plugin
+  const getPackDef = (parentIdProducto) => {
+    const pack = PACKS_STATE?.packsByOfferProductId?.get(
+      Number(parentIdProducto),
+    );
+    if (!pack) return null;
+
+    const lines = PACKS_STATE?.linesByPackId?.get(pack.id) || [];
+    const def = (lines || [])
+      .map((x) => ({
+        ref: String(x.reference || "").trim(),
+        qty: Number(x.quantity || 1) || 1,
+      }))
+      .filter((x) => x.ref);
+
+    return def.length ? def : null;
+  };
+
+  // 1) separar DEV
+  const devs = lineas0.filter(isDev);
+  const base = lineas0.filter((l) => !isDev(l));
+
+  // 2) detectar parents
+  const parents = base.filter(isPackParent);
+  if (!parents.length) {
+    return { ...ticket, lineas: [...base, ...devs] };
+  }
+
+  // ✅ Asegurar packs cargados (si no están, no intentamos heurísticas agresivas)
+  // (si tu warmup lo haces fuera, esto no molesta)
+  // Nota: aquí NO hacemos await (esta función es sync). Solo comprobación.
+  const packsReady = !!PACKS_STATE?.packsByOfferProductId;
+
+  // 3) construir set de refs hijos esperados (de TODOS los packs presentes)
+  const childRefSet = new Set();
+  if (packsReady) {
+    for (const p of parents) {
+      const def = getPackDef(p.idproducto);
+      for (const d of def || []) childRefSet.add(_normTxtSafe(d.ref));
+    }
+  }
+
+  const looksLikeChildOfPackDef = (fsLine) => {
+    if (!packsReady) return false;
+
+    const r = _normTxtSafe(fsLine?.referencia);
+    const d = _normTxtSafe(fsLine?.descripcion);
+    if (!r && !d) return false;
+
+    if (r && childRefSet.has(r)) return true;
+
+    // fallback: descripción contiene alguna ref
+    for (const ref of childRefSet) {
+      if (ref && d.includes(ref)) return true;
+    }
+    return false;
+  };
+
+  // ✅ 4) Detectar hijos reales de FS (0€ y NO parent) y que parezcan hijos del pack
+  // IMPORTANTE: estos son los que tú editas (cantidades correctas) -> NO hay que recrearlos
+  const fsChildCandidates = base.filter((l) => {
+    if (isPackParent(l)) return false;
+    const unitZero = isZero(l?.pvpunitario);
+    if (!unitZero) return false;
+
+    // si hay definiciones, usamos heurística; si no, conservamos (no tocamos)
+    return packsReady ? looksLikeChildOfPackDef(l) : true;
+  });
+
+  // Para poder quitarlos de "base" sin problemas de referencia
+  const childIdSet = new Set(
+    fsChildCandidates.map((l) => Number(l?.idlinea || 0)).filter((x) => x > 0),
+  );
+
+  // Si no hay idlinea, usamos fallback por clave "ref|desc|qty|0"
+  const childFallbackKey = (l) =>
+    `${_normTxtSafe(l?.referencia)}|${_normTxtSafe(l?.descripcion)}|${Number(
+      l?.cantidad || 0,
+    )}`;
+
+  const childFallbackSet = new Set(
+    fsChildCandidates
+      .filter((l) => !(Number(l?.idlinea || 0) > 0))
+      .map(childFallbackKey),
+  );
+
+  const isSameChildCandidate = (l) => {
+    const idl = Number(l?.idlinea || 0);
+    if (idl > 0) return childIdSet.has(idl);
+    return childFallbackSet.has(childFallbackKey(l));
+  };
+
+  // 5) base sin hijos FS (los pondremos debajo del pack)
+  const baseNoChildren = base.filter((l) => !isSameChildCandidate(l));
+
+  // 6) ordenar estable por orden/idlinea (así parent queda en su lugar)
+  baseNoChildren.sort((a, b) => {
+    const aa = Number(a.orden ?? a.idlinea ?? 0);
+    const bb = Number(b.orden ?? b.idlinea ?? 0);
+    return aa - bb;
+  });
+
+  // 7) Construir índice de hijos FS por "ref normalizada" (y por idproducto)
+  // Vamos a usar estos hijos bajo el parent, manteniendo SUS cantidades (las editadas).
+  const childrenByRef = new Map(); // normRef -> {ref, descripcion, cantidad, codimpuesto}
+  for (const ch of fsChildCandidates) {
+    const refNorm =
+      _normTxtSafe(ch?.referencia) || _normTxtSafe(ch?.descripcion);
+    if (!refNorm) continue;
+
+    const prev = childrenByRef.get(refNorm);
+    const qty = Number(ch?.cantidad || 0);
+
+    if (!prev) {
+      childrenByRef.set(refNorm, {
+        referencia: String(ch?.referencia || ch?.descripcion || "").trim(),
+        descripcion: String(ch?.descripcion || ch?.referencia || "").trim(),
+        cantidad: qty,
+        pvpunitario: 0,
+        __forceUnitGross: 0,
+        codimpuesto: ch?.codimpuesto || null,
+        __isPackChild: true,
+      });
+    } else {
+      prev.cantidad += qty;
+    }
+  }
+
+  // para no repetir hijos si hay varios parents
+  const usedChildRefs = new Set();
+
+  const out = [];
+
+  // 8) expandir: parent + hijos (prioriza los hijos FS reales; si no hay, crea virtuales por def)
+  for (const l of baseNoChildren) {
+    if (!isPackParent(l)) {
+      out.push({ ...l, __isPackParent: false, __isPackChild: false });
+      continue;
+    }
+
+    const parent = { ...l, __isPackParent: true, __isPackChild: false };
+    out.push(parent);
+
+    const def = packsReady ? getPackDef(parent.idproducto) : null;
+
+    // 8.1) si existen hijos FS reales, los ponemos debajo respetando cantidades editadas
+    let pushedAnyRealChild = false;
+
+    if (def?.length) {
+      for (const d of def) {
+        const refNorm = _normTxtSafe(d.ref);
+        if (!refNorm) continue;
+        if (usedChildRefs.has(refNorm)) continue;
+
+        const real = childrenByRef.get(refNorm);
+        if (real && Number(real.cantidad || 0) !== 0) {
+          out.push({
+            referencia: real.referencia || d.ref,
+            descripcion: real.descripcion || d.ref,
+            cantidad: Number(real.cantidad || 0),
+            pvpunitario: 0,
+            __forceUnitGross: 0,
+            codimpuesto: parent.codimpuesto || real.codimpuesto || "IVA4",
+            __isPackParent: false,
+            __isPackChild: true,
+          });
+          usedChildRefs.add(refNorm);
+          pushedAnyRealChild = true;
+        }
+      }
+    }
+
+    // 8.2) si NO había hijos reales (caso raro), recreamos virtuales por definición * parentQty
+    if (!pushedAnyRealChild && def?.length) {
+      const parentQty = Number(parent.cantidad || 1) || 1;
+      for (const d of def) {
+        out.push({
+          referencia: d.ref,
+          descripcion: d.ref,
+          cantidad: (Number(d.qty || 1) || 1) * parentQty,
+          pvpunitario: 0,
+          __forceUnitGross: 0,
+          codimpuesto: parent.codimpuesto || "IVA4",
+          __isPackParent: false,
+          __isPackChild: true,
+        });
+      }
+    }
+  }
+
+  // 9) DEV al final
+  for (const l of devs) {
+    out.push({ ...l, __isPackParent: false, __isPackChild: false });
+  }
+
+  return { ...ticket, lineas: out };
 }
+
 function lineTaxRate(l) {
   // si viene "iva": 10, úsalo; si no, saca de codimpuesto
   const iva = Number(l.iva);
@@ -12275,14 +13456,15 @@ async function openRefundForFactura(facturaRow) {
     "Al confirmar la devolución se comunicará a gerencia.\n\n¿Deseas continuar?",
   );
   if (!ok) return;
+
   const overlay = document.getElementById("refundOverlay");
   if (!overlay) {
     toast("Falta #refundOverlay en el HTML.", "err", "Devolución");
     return;
   }
 
-  const lineas = await fetchLineasFactura(facturaRow.idfactura);
-  const lineasFiltradasUI = filterRefundLinesForUI(lineas);
+  // ✅ IMPORTANTE: traer líneas reales de FS (incluye 0€)
+  const lineasAll = await fetchLineasFactura(facturaRow.idfactura);
 
   // Map cantidades ya devueltas (por clave consistente)
   let refundedMap = {};
@@ -12293,8 +13475,8 @@ async function openRefundForFactura(facturaRow) {
     refundedMap = {};
   }
 
-  // Recalcular pendiente y filtrar agotadas
-  const lineasPendientes = (lineas || [])
+  // Pendientes (para TODAS las líneas)
+  const lineasPendientesAll = (lineasAll || [])
     .map((l) => {
       const key = lineKeyForMatch(
         normalizeRefundDesc(l.descripcion),
@@ -12313,16 +13495,18 @@ async function openRefundForFactura(facturaRow) {
         __alreadyRefunded: already,
       };
     })
-    .filter((l) => Number(l._remainingQty || 0) > 0)
-    // ✅ NUEVO: ocultar líneas “gratis” (pack children)
-    .filter((l) => {
-      const u = Number(lineGrossUnit(l) || 0);
-      return u > 0.00001;
-    });
+    .filter((l) => Number(l._remainingQty || 0) > 0);
+
+  // ✅ UI: ocultamos 0€ (pero NO las perdemos, quedan en lineasAll)
+  const lineasUI = lineasPendientesAll.filter((l) => {
+    const u = Number(lineGrossUnit(l) || 0);
+    return u > 0.00001;
+  });
 
   refundState.factura = facturaRow;
-  refundState.lineas = lineasPendientes;
-  refundState.qtyByLineId = {}; // empezamos en 0
+  refundState.lineas = lineasUI; // lo que se ve
+  refundState.lineasAll = lineasPendientesAll; // ✅ lo real (incluye 0€)
+  refundState.qtyByLineId = {};
 
   // Cabecera
   const n = document.getElementById("refundTicketNum");
@@ -12353,11 +13537,12 @@ async function openRefundForFactura(facturaRow) {
       try {
         confirmBtn.disabled = true;
 
-        // ✅ AQUÍ ESTABA EL PROBLEMA: faltaba ejecutar la devolución
-        await createRefundInFacturaScripts(
+        // ✅ NUEVO: devolución aware de packs usando lineasAll
+        await createRefundInFacturaScriptsPackAware(
           facturaRow,
           refundState.qtyByLineId,
-          refundState.lineas,
+          refundState.lineas, // UI
+          refundState.lineasAll, // REAL
         );
 
         toast("Devolución creada ✅", "ok", "Devolución");
@@ -12371,6 +13556,207 @@ async function openRefundForFactura(facturaRow) {
       }
     };
   }
+}
+
+async function createRefundInFacturaScriptsPackAware(
+  facturaRow,
+  qtyByLineId,
+  uiLines,
+  allLines, // líneas reales del ORIGINAL (incluye 0€ ya parcheadas)
+) {
+  const originalId = Number(facturaRow?.idfactura || 0);
+  if (!originalId) throw new Error("Factura original inválida.");
+
+  const idtpv = Number(currentTerminal?.id || 0) || null;
+  const idcaja = getCajaIdSafe?.() || null;
+  const nick = (getLoginUser?.() || currentAgent?.nick || "TPV").toString();
+  if (!idtpv || !idcaja) throw new Error("No hay caja abierta (idtpv/idcaja).");
+
+  const codcliente =
+    facturaRow?._raw?.codcliente ||
+    facturaRow?.codcliente ||
+    window.RECIPOK_API?.defaultCodClienteTPV ||
+    "1";
+
+  const codpagoOrig = String(
+    facturaRow?._raw?.codpago || facturaRow?.codpago || "",
+  )
+    .trim()
+    .toUpperCase();
+
+  const isZero = (n) => Math.abs(Number(n || 0)) < 0.00001;
+
+  const isPackParent = (l) => {
+    const pid = Number(l?.idproducto || 0);
+    return pid && typeof isOfferPackProductById === "function"
+      ? isOfferPackProductById(pid)
+      : false;
+  };
+
+  // Asegurar datos packs (para identificar hijos por referencia si hace falta)
+  try {
+    if (!PACKS_STATE?.ready && typeof warmupPacksData === "function") {
+      await warmupPacksData();
+    }
+  } catch {}
+
+  const norm = (s) =>
+    String(s || "")
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, " ");
+
+  const getPackDefRefSet = (parentIdProducto) => {
+    const pack = PACKS_STATE?.packsByOfferProductId?.get(
+      Number(parentIdProducto),
+    );
+    if (!pack) return null;
+    const lines = PACKS_STATE?.linesByPackId?.get(pack.id) || [];
+    const refs = (lines || []).map((x) => norm(x.reference)).filter(Boolean);
+    return refs.length ? new Set(refs) : null;
+  };
+
+  // ========= 1) Qué líneas seleccionó en la UI =========
+  const selected = [];
+  for (const l of uiLines || []) {
+    const idlinea = Number(l?.idlinea || 0);
+    if (!idlinea) continue;
+
+    const q = Number(qtyByLineId?.[idlinea] || 0);
+    if (q > 0) selected.push({ line: l, qty: q });
+  }
+  if (!selected.length) throw new Error("No has seleccionado ninguna línea.");
+
+  // ========= 2) Payload rectificativa: SOLO líneas seleccionadas (NO hijos) =========
+  const outLines = [];
+  for (const sel of selected) {
+    const l = sel.line;
+    const refundQty = Number(sel.qty || 0);
+    if (!(refundQty > 0)) continue;
+
+    outLines.push({
+      referencia: l.referencia || "",
+      descripcion: l.descripcion || "",
+      cantidad: -refundQty,
+      pvpunitario: Number(l.pvpunitario || 0),
+      idproducto: Number(l.idproducto || 0) || undefined,
+      ...(l.codimpuesto ? { codimpuesto: l.codimpuesto } : {}),
+    });
+  }
+
+  if (!outLines.length) throw new Error("No se pudo construir la devolución.");
+
+  const numero2 = `REFUND|ORIG=${originalId}`;
+
+  const payloadRect = {
+    codcliente,
+    lineas: outLines,
+    pagada: 1,
+    codpago: codpagoOrig || null,
+    serie: "R",
+    idtpv,
+    idcaja,
+    nick,
+    numero2,
+  };
+
+  const respRect = await createTicketInFacturaScripts(payloadRect);
+  const docRect =
+    respRect?.doc || respRect?.factura || respRect?.data || respRect || null;
+  const rectId = Number(docRect?.idfactura || docRect?.id || 0);
+  if (!rectId) throw new Error("No pude crear la rectificativa.");
+
+  // ========= 3) FIX packs: calcular desiredByPid (hijos) desde ORIGINAL y parchear RECT =========
+  // Queremos que en la rectificativa:
+  // - Los hijos 0€ existan UNA vez
+  // - Su cantidad sea NEGATIVA y proporcional a lo vendido real (ya editado)
+  try {
+    const desiredByPid = {}; // pid -> qty (NEGATIVA)
+
+    // Por cada pack parent seleccionado, buscamos sus hijos reales en el ORIGINAL (0€)
+    for (const sel of selected) {
+      const parent = sel.line;
+      if (!isPackParent(parent)) continue;
+
+      const refundParentQty = Number(sel.qty || 0); // lo que devuelve el usuario (packs)
+      const parentQtySold = Number(parent.cantidad || 0); // packs vendidos en original (normalmente 1)
+      if (!(refundParentQty > 0) || !(parentQtySold > 0)) continue;
+
+      const defRefSet = getPackDefRefSet(parent.idproducto);
+      if (!defRefSet || !defRefSet.size) continue;
+
+      // Hijos del ORIGINAL para este pack (0€) identificados por ref/desc
+      const children = (allLines || []).filter((x) => {
+        if (isPackParent(x)) return false;
+        if (!isZero(x?.pvpunitario)) return false;
+
+        const r = norm(x?.referencia);
+        const d = norm(x?.descripcion);
+
+        if (r && defRefSet.has(r)) return true;
+        for (const rr of defRefSet) {
+          if (rr && d.includes(rr)) return true;
+        }
+        return false;
+      });
+
+      // Totales reales por pid en el ORIGINAL (ya incluyen tu edición 4/5, 4/6, etc.)
+      const totalsByPid = new Map(); // pid -> totalQtyOriginal
+      for (const ch of children) {
+        const pid = Number(ch?.idproducto || 0);
+        if (!pid) continue;
+        const q = Number(ch?.cantidad || 0);
+        totalsByPid.set(pid, (totalsByPid.get(pid) || 0) + q);
+      }
+
+      // Convertimos “total original” a “por pack” y aplicamos refundParentQty
+      for (const [pid, totalQtyOriginal] of totalsByPid.entries()) {
+        const perPack = totalQtyOriginal / parentQtySold;
+        const childRefund = Math.round(perPack * refundParentQty);
+
+        if (!(childRefund > 0)) continue;
+
+        // NEGATIVO porque es rectificativa
+        desiredByPid[pid] = (desiredByPid[pid] || 0) - childRefund;
+      }
+    }
+
+    if (Object.keys(desiredByPid).length) {
+      await patchPackChildrenLinesInFacturaByDesired({
+        idfactura: rectId,
+        desiredByPid,
+      });
+    }
+  } catch (e) {
+    console.warn(
+      "No pude parchear hijos pack en rectificativa:",
+      e?.message || e,
+    );
+  }
+
+  // ========= 4) Marcar relación con original =========
+  await updateFacturaCliente(rectId, {
+    idtpv: String(idtpv),
+    idcaja: Number(idcaja),
+    nick,
+    codalmacen: currentTerminal?.codalmacen || "",
+
+    tpv_venta: 1,
+    tpv_efectivo: 0,
+    tpv_cambio: 0,
+
+    idestado: 11,
+    pagada: 1,
+    codpago: codpagoOrig || "",
+
+    codserie: "R",
+    idfacturarect: originalId,
+    codigorect: facturaRow?.codigo || facturaRow?._raw?.codigo || "",
+    numero2,
+    ...(currentAgent?.codagente ? { codagente: currentAgent.codagente } : {}),
+  });
+
+  return { rectId };
 }
 
 async function doLogoutFlow() {
@@ -12819,16 +14205,34 @@ async function checkFSOnline() {
 let isOnlineFS = null; // 👈 para forzar primera actualización
 
 async function startOnlineMonitor() {
+  let prevOk = null;
+
   async function tick() {
-    const ok = await checkFSOnline();
+    const ok = await checkFSOnline().catch(() => false);
 
-    // ✅ actualiza estado siempre
     TPV_STATE.offline = !ok;
-
-    // ✅ actualiza badge SIEMPRE (no solo cuando cambia)
     updateOnlineBadge(ok);
 
-    // ✅ si vuelve internet, o si hay internet y hay pendientes -> sincroniza
+    const becameOnline = prevOk === false && ok === true;
+    prevOk = ok;
+
+    // ✅ Al volver online: refrescar default customer + sync cola
+    if (becameOnline) {
+      try {
+        await maybeRefreshTerminalDefaultCustomer("online", {
+          force: true,
+          forceReset: false,
+        });
+      } catch {}
+
+      try {
+        await syncQueueNow?.();
+      } catch (e) {
+        console.warn("syncQueueNow falló al volver online:", e?.message || e);
+      }
+    }
+
+    // ✅ Si online y hay pendientes, sincroniza (tu lógica original)
     try {
       if (ok && window.TPV_QUEUE?.count) {
         const c = await window.TPV_QUEUE.count();
@@ -12840,14 +14244,14 @@ async function startOnlineMonitor() {
       console.warn("No se pudo comprobar/sincronizar cola:", e?.message || e);
     }
 
+    // ✅ Si online y modal cobro abierto, refrescar formas y repintar
     if (ok) {
-      // ✅ si está abierto el modal de cobro, refresca formas y repinta
       if (!payOverlay?.classList.contains("hidden")) {
         try {
           const formas = await fetchFormasPagoActivas({
             forceOnlineIfPossible: true,
           });
-          payModalState.formas = formas
+          payModalState.formas = (formas || [])
             .map((f) => ({
               codpago: String(f.codpago || "").trim(),
               descripcion: String(f.descripcion || f.codpago || "").trim(),
@@ -12855,12 +14259,11 @@ async function startOnlineMonitor() {
             }))
             .filter((x) => x.codpago);
 
-          renderPayMethods(); // repinta SIN cerrar el modal
+          renderPayMethods();
         } catch {}
       }
     }
 
-    // solo para tracking interno (opcional)
     isOnlineFS = ok;
   }
 
@@ -12873,57 +14276,46 @@ async function startOnlineMonitor() {
    ============================================================= */
 async function sendOrQueueFactura(payload) {
   try {
-    const r = await createTicketInFacturaScripts(payload); // crea factura
-
-    // ✅ Crear recibo (si procede)
-    const doc = r?.doc || r?.factura || r;
-    const idfactura = doc?.idfactura;
-
-    // Solo si tenemos factura y viene pagada/importe
-    if (idfactura && (doc?.pagada === true || doc?.pagada === 1)) {
-      const codpago = doc?.codpago || payload?.codpago || "CONT";
-      const importe = Number(doc?.total ?? payload?._payTotal ?? 0);
-
-      // fecha pago: FacturaScripts suele usar dd-mm-YYYY en tu API
-      const fechapago = doc?.fecha || new Date().toISOString().slice(0, 10);
-
-      await createReciboCliente({
-        idfactura,
-        codcliente: doc?.codcliente || payload?.codcliente,
-        codpago,
-        importe,
-        fechapago,
-      });
-    }
-
+    const r = await createTicketInFacturaScripts(payload);
     return { ok: true, remote: r };
   } catch (e) {
     const msg = e?.message || String(e);
-    const isNetwork =
-      msg.includes("Failed to fetch") ||
-      msg.includes("Network") ||
-      msg.includes("timeout");
+    const isNetwork = isProbablyNetworkError(e);
 
-    if (isNetwork) {
-      const localId = crypto.randomUUID();
-      await window.TPV_QUEUE.enqueue({
-        type: "CREATE_FACTURACLIENTE",
-        localId,
-        payload,
-        post: {
-          pagos: payload?._payBreakdown || [],
-          terminal: currentTerminal
-            ? { id: currentTerminal.id, codalmacen: currentTerminal.codalmacen }
-            : null,
-          agente: currentAgent ? { codagente: currentAgent.codagente } : null,
-          codpago: payload?.codpago || "",
-          observaciones: (payload?.observaciones || "").toString(),
-        },
-        createdAt: Date.now(),
-      });
+    if (!isNetwork) {
+      return { ok: false, queued: false, error: msg };
+    }
 
-      saveOfflineTicketForTicketsModal({
-        codigo: "OFF-" + localId.slice(0, 6).toUpperCase(),
+    const localId = (
+      crypto?.randomUUID?.() ||
+      `${Date.now()}_${Math.random().toString(16).slice(2)}`
+    ).toString();
+
+    await window.TPV_QUEUE.enqueue({
+      type: "CREATE_FACTURACLIENTE",
+      localId,
+      payload,
+      post: {
+        pagos: payload?._payBreakdown || [],
+        cambio: payload?._payCambio ?? 0,
+        numero: payload?._payNumero2 ?? "",
+        nick: payload?._payNick ?? "",
+        terminal: currentTerminal
+          ? { id: currentTerminal.id, codalmacen: currentTerminal.codalmacen }
+          : null,
+        agente: currentAgent ? { codagente: currentAgent.codagente } : null,
+        codpago: payload?.codpago || "",
+        observaciones: (payload?.observaciones || "").toString(),
+
+        // ✅ IMPORTANTÍSIMO para aplicar luego en sync offline
+        packDesiredByIdProducto: payload?._packDesiredByIdProducto || null,
+      },
+      createdAt: new Date().toISOString(),
+    });
+
+    try {
+      saveOfflineTicketForTicketsModal?.({
+        codigo: "OFF-" + String(localId).slice(0, 6).toUpperCase(),
         idfactura: null,
         nombrecliente: "Venta en cola",
         total: Number(getCartTotal(cart) || 0),
@@ -12931,12 +14323,11 @@ async function sendOrQueueFactura(payload) {
         fecha: new Date().toISOString().slice(0, 10),
         hora: new Date().toTimeString().slice(0, 8),
         _localId: localId,
+        _offline: true,
       });
+    } catch {}
 
-      return { ok: false, queued: true, localId };
-    }
-
-    return { ok: false, queued: false, error: msg };
+    return { ok: false, queued: true, localId };
   }
 }
 
@@ -12955,58 +14346,106 @@ async function syncQueueNow() {
       const item = next.item;
 
       try {
+        // =============================================================
+        // 1) Ventas offline
+        // =============================================================
         if (item.type === "CREATE_FACTURACLIENTE") {
+          // 1) Crear factura
           const resp = await createTicketInFacturaScripts(item.payload);
 
           const idfactura =
-            resp?.idfactura || resp?.doc?.idfactura || resp?.data?.idfactura;
+            resp?.idfactura ||
+            resp?.doc?.idfactura ||
+            resp?.data?.idfactura ||
+            resp?.factura?.idfactura ||
+            null;
 
+          // Guardar timestamp local->remoto si lo usas
           if (idfactura && item.createdAt) {
-            saveFacturaLocalTimestamp(idfactura, item.createdAt);
+            try {
+              saveFacturaLocalTimestamp?.(idfactura, item.createdAt);
+            } catch {}
           }
 
-          // ✅ POST-PROCESO (emitida + pagada + recibos) para tickets offline
           if (idfactura) {
-            // 1) Emitir y marcar pagada
+            // 2) ✅ PATCH packs (offline) usando desiredByPid guardado en cola
+            try {
+              const desired =
+                item.post?.packDesiredByIdProducto ||
+                item.payload?._packDesiredByIdProducto ||
+                null;
+
+              if (desired && typeof desired === "object") {
+                await patchPackChildrenLinesInFacturaByDesired({
+                  idfactura,
+                  desiredByPid: desired,
+                });
+              }
+            } catch (e) {
+              console.warn(
+                "No se pudo parchear líneas pack (offline sync):",
+                e?.message || e,
+              );
+            }
+
+            // 3) Emitir y marcar pagada (tpv_efectivo/tpv_cambio/etc.)
             try {
               const pagos = Array.isArray(item.post?.pagos)
                 ? item.post.pagos
                 : [];
+
+              // efectivo = ENTREGADO en efectivo (como tu criterio en online)
               const tpv_efectivo = pagos
                 .filter((p) =>
                   isCashPago({
-                    codpago: p.codpago,
-                    descripcion: p.descripcion,
+                    codpago: p?.codpago,
+                    descripcion: p?.descripcion,
                   }),
                 )
-                .reduce((s, p) => s + moneyToNumber(p?.importe), 0);
+                .reduce(
+                  (s, p) => s + moneyToNumber(p?.entregado ?? p?.importe ?? 0),
+                  0,
+                );
 
               const tpv_cambio = moneyToNumber(item.post?.cambio || 0);
 
               await updateFacturaCliente(idfactura, {
                 idestado: 11,
                 pagada: 1,
-                tpv_venta: 1, // ✅
-                tpv_efectivo: Number(tpv_efectivo.toFixed(2)),
-                tpv_cambio: Number(tpv_cambio.toFixed(2)),
+
+                tpv_venta: 1,
+                tpv_efectivo: Number(Number(tpv_efectivo || 0).toFixed(2)),
+                tpv_cambio: Number(Number(tpv_cambio || 0).toFixed(2)),
+
                 observaciones: (item.post?.observaciones || "").toString(),
                 numero2: (item.post?.numero ?? "").toString(),
-                nick: (
-                  item.post?.nick ||
-                  item.post?.agente?.nick ||
-                  item.post?.agente?.nombre ||
-                  "Ventas"
-                ).toString(),
+                nick: (item.post?.nick || "Ventas").toString(),
 
                 codpago: item.post?.codpago || item.payload?.codpago || "",
-                idtpv: currentTerminal?.id || item.post?.terminal?.id || "",
+
+                // terminal/caja (si el payload lo llevaba, mejor)
+                idtpv:
+                  item.payload?.idtpv ||
+                  currentTerminal?.id ||
+                  item.post?.terminal?.id ||
+                  "",
+                idcaja:
+                  item.payload?.idcaja ||
+                  cashSession?.remoteCajaId ||
+                  getCajaIdSafe?.() ||
+                  "",
+
                 codalmacen:
+                  item.payload?.codalmacen ||
                   currentTerminal?.codalmacen ||
                   item.post?.terminal?.codalmacen ||
                   "",
-                ...(currentAgent?.codagente
-                  ? { codagente: currentAgent.codagente }
-                  : {}),
+
+                ...(item.post?.agente?.codagente
+                  ? { codagente: item.post.agente.codagente }
+                  : currentAgent?.codagente
+                    ? { codagente: currentAgent.codagente }
+                    : {}),
               });
             } catch (e) {
               console.warn(
@@ -13015,31 +14454,38 @@ async function syncQueueNow() {
               );
             }
 
-            // 2) Recibos por método + cleanup
+            // 4) Recibos por método + cleanup
             try {
               const today = new Date().toISOString().slice(0, 10);
-              const pagos = item.post?.pagos || [];
+              const pagos = Array.isArray(item.post?.pagos)
+                ? item.post.pagos
+                : [];
               const fc = await fetchFacturaClienteById(idfactura);
 
-              if (fc?.codcliente && Array.isArray(pagos) && pagos.length) {
+              if (fc?.codcliente && pagos.length) {
                 for (const p of pagos) {
-                  const importe = Number(Number(p.importe || 0).toFixed(2));
+                  const importe = Number(Number(p?.importe || 0).toFixed(2));
                   if (!(importe > 0)) continue;
 
                   await createReciboCliente({
                     idfactura,
                     codcliente: fc.codcliente,
-                    codpago: p.codpago,
+                    codpago: String(p?.codpago || "").trim(),
                     importe,
                     fechapago: today,
+                    fecha: today,
                     idempresa: fc.idempresa,
                     codigofactura: fc.codigo || fc.codigofactura || "",
                     coddivisa: fc.coddivisa,
-                    fecha: today,
                   });
                 }
 
                 await cleanupRecibosFactura(idfactura, pagos);
+
+                // opcional: valida (si ya tienes función)
+                try {
+                  await validateRecibosAgainstFactura?.(idfactura);
+                } catch {}
               }
             } catch (e) {
               console.warn(
@@ -13048,24 +14494,62 @@ async function syncQueueNow() {
               );
             }
 
-            // 3) Quitar ticket OFFLINE del modal (si lo estabas guardando)
-            if (item.localId)
-              removeOfflineTicketFromModalByLocalId(item.localId);
+            // 5) Quitar del modal offline
+            try {
+              if (item.localId) {
+                removeOfflineTicketFromModalByLocalId?.(item.localId);
+              }
+            } catch {}
           }
 
-          // ✅ marcamos como procesado
+          // 6) Marcar como done
           await window.TPV_QUEUE.done(item.id, { resp });
-        } else {
-          await window.TPV_QUEUE.done(item.id, {});
+          continue;
         }
+
+        // =============================================================
+        // 2) Cambio cliente por defecto de terminal
+        // =============================================================
+        if (item.type === "tpvterminal.setCodcliente") {
+          try {
+            await updateTpvTerminalForm(item.idtpv, {
+              codcliente: item.codcliente,
+            });
+
+            if (
+              currentTerminal?.id &&
+              String(currentTerminal.id) === String(item.idtpv)
+            ) {
+              currentTerminal.codcliente = String(item.codcliente || "1");
+              await applyTerminalDefaultCustomer();
+            }
+
+            await window.TPV_QUEUE.done(item.id, { ok: true });
+          } catch (e) {
+            if (isNetworkError(e)) {
+              await window.TPV_QUEUE.error(item.id, e?.message || String(e));
+            } else {
+              await window.TPV_QUEUE.done(item.id, {
+                ok: false,
+                error: e?.message || String(e),
+              });
+            }
+          }
+          continue;
+        }
+
+        // =============================================================
+        // 3) Otros (done)
+        // =============================================================
+        await window.TPV_QUEUE.done(item.id, {});
       } catch (e) {
+        // Si falla por red, marcamos error y salimos (evita bucles)
         await window.TPV_QUEUE.error(item.id, e?.message || String(e));
-        break; // evita bucle si FS está caído
+        break;
       }
     }
   } finally {
     window.__SYNCING__ = false;
-    if (typeof refreshQueueBadge === "function") refreshQueueBadge();
   }
 }
 
@@ -13855,8 +15339,6 @@ async function bindCustomerDisplayToggle() {
 
 window.TPV_STATE = window.TPV_STATE || {};
 window.TPV_STATE.priceEditMode = false;
-
-let PRICE_EDIT_BOUND = false;
 
 function isAdminUser() {
   return !!window.TPV_STATE?.isAdmin;

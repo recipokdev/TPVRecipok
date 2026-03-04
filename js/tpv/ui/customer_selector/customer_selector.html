@@ -1,0 +1,47 @@
+<!-- js/tpv/ui/customer_selector/customer_selector.html -->
+<div id="custModal" class="cust-modal" style="display: none">
+  <div class="cust-modal__backdrop" data-cust-close="1"></div>
+
+  <div
+    class="cust-modal__panel"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Seleccionar cliente"
+  >
+    <div class="cust-modal__head">
+      <div class="cust-modal__title">Clientes</div>
+      <button
+        class="cust-modal__close"
+        type="button"
+        data-cust-close="1"
+        aria-label="Cerrar"
+      >
+        ✕
+      </button>
+    </div>
+
+    <div class="cust-modal__tools">
+      <input
+        id="custSearch"
+        class="cust-modal__search"
+        type="text"
+        placeholder="Buscar por nombre, NIF, código…"
+      />
+      <button id="custReload" class="cust-modal__btn" type="button">
+        Recargar
+      </button>
+    </div>
+
+    <div id="custList" class="cust-modal__list"></div>
+
+    <div class="cust-modal__foot">
+      <button
+        class="cust-modal__btn"
+        type="button"
+        data-cust-select-default="1"
+      >
+        Volver
+      </button>
+    </div>
+  </div>
+</div>

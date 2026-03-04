@@ -2801,3 +2801,355 @@ body.modal-locked .cart-card {
 .item.pack-child .ltotal {
   opacity: 0.35; /* aunque esté vacío, por si cambia */
 }
+
+.cart-client-btn--clear {
+  color: #fff;
+  background: #e74c3c; /* rojo */
+}
+.cart-client-btn--clear:hover {
+  filter: brightness(0.95);
+}
+
+#terminalDefaultCustomerSelect.cart-client-input {
+  cursor: pointer;
+  padding: 6px 4px;
+}
+#terminalDefaultCustomerSaveBtn {
+  background: #0d6efd;
+  color: #fff;
+  border-color: #0d6efd;
+}
+#terminalDefaultCustomerSaveBtn:hover {
+  filter: brightness(0.95);
+}
+
+/* =============================================================
+   PACK MODAL (estilo TPV)
+   ============================================================= */
+
+.pack-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000100; /* por encima del layout */
+}
+
+.pack-modal {
+  width: min(720px, 96vw);
+  max-height: 82vh;
+  overflow: hidden; /* header fijo + body scroll */
+  background: #f8fbff;
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+}
+
+.pack-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: #1e88e5;
+  color: #fff;
+  padding: 12px 14px;
+}
+
+.pack-modal-title {
+  font-size: 18px;
+  font-weight: 800;
+  margin: 0;
+}
+
+.pack-modal-x {
+  border: none;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 16px;
+  display: grid;
+  place-items: center;
+}
+.pack-modal-x:active {
+  transform: scale(0.98);
+}
+
+.pack-modal-body {
+  padding: 12px;
+  overflow: auto;
+}
+
+.pack-modal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* fila como cart-line */
+.pack-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  border: 1px solid #e6eefb;
+}
+
+.pack-item.is-disabled {
+  opacity: 0.45;
+}
+
+.pack-item-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pack-item-name {
+  font-weight: 800;
+  color: #1f2a4d;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* checkbox más cómodo */
+.pack-item-left input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+}
+
+/* Stepper táctil */
+.pack-stepper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #f2f5ff;
+  padding: 6px;
+  border-radius: 999px;
+}
+
+.pack-step-btn {
+  border: none;
+  border-radius: 999px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  font-size: 18px;
+  font-weight: 900;
+  cursor: pointer;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  display: grid;
+  place-items: center;
+  user-select: none;
+}
+
+.pack-step-btn:active {
+  transform: scale(0.98);
+}
+
+.pack-step-btn.plus {
+  background: #2ecc71;
+  color: #fff;
+}
+.pack-step-btn.minus {
+  background: #e74c3c;
+  color: #fff;
+}
+.pack-step-btn.reset {
+  background: #eef3ff;
+  color: #1d4ed8;
+  border: 1px solid #cbd5f5;
+  box-shadow: none;
+}
+
+.pack-step-value {
+  min-width: 64px;
+  height: 40px;
+  border-radius: 12px;
+  border: 2px solid #d6dde7;
+  background: #fff;
+  font-size: 18px;
+  font-weight: 900;
+  color: #0f172a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0 10px;
+}
+
+.pack-item.is-disabled .pack-step-btn,
+.pack-item.is-disabled .pack-step-value {
+  pointer-events: none;
+  opacity: 0.75;
+}
+
+/* footer */
+.pack-modal-actions {
+  padding: 12px;
+  border-top: 1px solid #e6eefb;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  background: #f8fbff;
+}
+
+.pack-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 10px 16px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.pack-btn-cancel {
+  background: #e5e7eb;
+}
+.pack-btn-ok {
+  background: #111827;
+  color: #fff;
+}
+
+/* --- Z-index stacking con numPad --- */
+/* pack modal debajo del numpad cuando el pack modal esté abierto */
+.num-pad-overlay {
+  z-index: 1000100;
+}
+.pack-modal-overlay {
+  z-index: 1000050;
+}
+
+/* ===== Tiles de oferta / pack ===== */
+.product-tile.is-offer .product-img-wrapper {
+  background: linear-gradient(
+    135deg,
+    #b45309,
+    #92400e
+  ); /* marrón/naranja oscuro */
+}
+
+.product-tile.is-offer.no-img .product-img-wrapper {
+  background: linear-gradient(135deg, #b45309, #7c2d12);
+}
+
+.product-tile.is-offer .product-footer {
+  background: rgba(253, 230, 138, 0.92); /* amarillito suave */
+  border-color: rgba(180, 83, 9, 0.5);
+}
+
+.product-tile.is-offer .product-overlay-top {
+  background: rgba(60, 25, 5, 0.55);
+}
+
+/* =============================================================
+   OVERLAY: Select de terminal con look & feel TPV (pill)
+   Pegar al FINAL del CSS
+   ============================================================= */
+
+/* Wrapper del select en overlay */
+#terminalSelectWrapper {
+  background: linear-gradient(90deg, #e5f0ff, #f5f8ff);
+  border-radius: 16px;
+  padding: 10px 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(25, 140, 255, 0.15);
+}
+
+/* Label con look similar a tus otros labels */
+#terminalSelectWrapper label {
+  color: #1f2a4d;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+}
+
+/* Select estilo "pill" como botones de agente */
+#terminalSelect {
+  width: 100% !important;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+
+  border-radius: 999px !important;
+  padding: 14px 44px 14px 18px !important; /* deja espacio para chevron */
+  border: 1px solid #d2e1ff !important;
+  background: #ffffff !important;
+
+  font-size: 16px !important;
+  font-weight: 800 !important;
+  color: #1f2a4d !important;
+
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08) !important;
+  cursor: pointer;
+  outline: none;
+  transition:
+    transform 0.05s,
+    box-shadow 0.15s,
+    border-color 0.15s;
+}
+
+/* Hover/Focus parecido a los botones */
+#terminalSelect:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.12) !important;
+}
+
+#terminalSelect:focus {
+  border-color: #198cff !important;
+  box-shadow: 0 0 0 3px rgba(25, 140, 255, 0.18) !important;
+}
+
+/* Chevron (flecha) dentro del wrapper */
+#terminalSelectWrapper {
+  position: relative;
+}
+
+/* Flecha centrada verticalmente respecto al select */
+#terminalSelectWrapper::after {
+  content: "▾";
+  position: absolute;
+  right: 22px;
+  top: 50%;
+  transform: translateY(6px); /* ajusta fino: prueba 4px, 6px, 8px */
+  font-size: 16px;
+  font-weight: 900;
+  color: #198cff;
+  pointer-events: none;
+}
+
+/* Opcional: en móvil mejora el toque */
+@media (max-width: 520px) {
+  #terminalSelect {
+    padding: 16px 46px 16px 18px !important;
+    font-size: 17px !important;
+  }
+  #terminalSelectWrapper::after {
+    bottom: 20px;
+  }
+}
+
+/* Opciones (lo que el navegador permita) */
+#terminalSelect option {
+  font-weight: 700;
+  font-size: 15px;
+  color: #1f2a4d;
+}
+
+/* En algunos navegadores ayuda a que el desplegable no se vea tan “cuadrado” */
+#terminalSelect {
+  border: 2px solid #d2e1ff !important; /* un poco más TPV */
+}
+
+#terminalSelect:focus {
+  border-color: #198cff !important;
+}

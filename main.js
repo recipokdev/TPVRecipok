@@ -726,14 +726,12 @@ async function runAutoUpdateGate() {
   }
   if (!app.isPackaged) return { updatedOrReady: true };
 
-  // ✅ splash visible
   createSplashWindow();
   splashSet("Comprobando conexión…", 5);
 
-  // ✅ BLOQUEA aquí hasta internet (y API si hay cfg)
+  // Bloquea hasta internet + API si hay cfg
   await waitForInternetAndApiGate();
 
-  // ✅ recién ahora: updater
   splashSet("Buscando actualizaciones...", 20);
 
   autoUpdater.removeAllListeners();
@@ -748,61 +746,83 @@ async function runAutoUpdateGate() {
     delete autoUpdater.channel;
   } catch {}
 
-  return await new Promise((resolve) => {
-    let finished = false;
-    const done = (r) => {
-      if (finished) return;
-      finished = true;
-      try {
-        autoUpdater.removeAllListeners();
-      } catch {}
-      resolve(r);
-    };
+  // ✅ REINTENTO: si el updater se queda pillado o tarda demasiado, reintenta
+  const CHECK_TIMEOUT_MS = 60_000; // 60s para cada intento
+  const RETRY_WAIT_MS = 5_000; // espera entre intentos
+  let attempt = 0;
 
-    const onProgress = (p) => {
-      const pct = typeof p?.percent === "number" ? p.percent : 0;
-      splashSet("Descargando actualización…", pct);
-    };
+  while (true) {
+    attempt++;
+    splashSet(`Buscando actualizaciones... (intento ${attempt})`, 25);
 
-    // ✅ ahora que ya hay internet, watchdog puede ser más largo
-    const watchdog = setTimeout(() => {
-      splashSet("Conexión lenta. Abriendo…", 40);
-      setTimeout(() => done({ updatedOrReady: true }), 200);
-    }, 45000);
-
-    const finishOk = (msg, percent = 60, delay = 200) => {
-      clearTimeout(watchdog);
-      splashSet(msg, percent);
-      setTimeout(() => done({ updatedOrReady: true }), delay);
-    };
-
-    autoUpdater.once("error", (err) => {
-      finishOk("No se pudo comprobar. Abriendo…", 40, 300);
-    });
-
-    autoUpdater.once("update-not-available", () => {
-      finishOk("Todo al día. Abriendo…", 60, 200);
-    });
-
-    autoUpdater.once("update-available", () => {
-      clearTimeout(watchdog);
-      splashSet("Actualización encontrada. Descargando…", 25);
-    });
-
-    autoUpdater.on("download-progress", onProgress);
-
-    autoUpdater.once("update-downloaded", () => {
-      splashSet("Instalando actualización…", 100);
-      setTimeout(() => autoUpdater.quitAndInstall(true, true), 600);
-      setTimeout(() => {
+    const result = await new Promise((resolve) => {
+      let finished = false;
+      const done = (r) => {
+        if (finished) return;
+        finished = true;
         try {
-          app.exit(0);
+          autoUpdater.removeAllListeners();
         } catch {}
-      }, 20000);
+        resolve(r);
+      };
+
+      const onProgress = (p) => {
+        const pct = typeof p?.percent === "number" ? p.percent : 0;
+        splashSet("Descargando actualización…", pct);
+      };
+
+      autoUpdater.once("error", () => {
+        done({ ok: false, reason: "error" });
+      });
+
+      autoUpdater.once("update-not-available", () => {
+        done({ ok: true, updatedOrReady: true, updated: false });
+      });
+
+      autoUpdater.once("update-available", () => {
+        splashSet("Actualización encontrada. Descargando…", 30);
+      });
+
+      autoUpdater.on("download-progress", onProgress);
+
+      autoUpdater.once("update-downloaded", () => {
+        splashSet("Instalando actualización…", 100);
+        setTimeout(() => autoUpdater.quitAndInstall(true, true), 600);
+        setTimeout(() => {
+          try {
+            app.exit(0);
+          } catch {}
+        }, 20000);
+        done({ ok: true, updatedOrReady: false, installing: true });
+      });
+
+      try {
+        autoUpdater.checkForUpdates();
+      } catch {
+        done({ ok: false, reason: "throw" });
+      }
+
+      // ✅ timeout de este intento: NO ABRIR, solo resolver para reintentar
+      setTimeout(() => {
+        done({ ok: false, reason: "timeout" });
+      }, CHECK_TIMEOUT_MS);
     });
 
-    autoUpdater.checkForUpdates();
-  });
+    // Si todo ok y no hay update -> salimos y abrimos TPV
+    if (result?.ok && result.updatedOrReady) return { updatedOrReady: true };
+
+    // Si está instalando -> no seguimos
+    if (result?.installing) return result;
+
+    // Si falló/timeout -> esperar y reintentar
+    splashSet("Conexión lenta / servidor ocupado. Reintentando…", 25);
+    await sleep(RETRY_WAIT_MS);
+
+    // Muy importante: limpiar listeners antes del siguiente intento
+    try {
+      autoUpdater.removeAllListeners();
+    } catch {}
+  }
 }
 
 async function createHiddenPrintWindow(html) {

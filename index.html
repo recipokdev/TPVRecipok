@@ -90,16 +90,35 @@
         </span>
       </div>
 
-      <!-- Cliente actual (por ahora solo texto fijo, luego lo conectamos) -->
+      <!-- Cliente actual -->
       <div class="cart-client-row">
         <div class="cart-client-icon">👤</div>
+
         <input
+          id="cartCustomerInput"
           type="text"
           class="cart-client-input"
-          value="1 | Ventas tickets"
+          value="Ventas tickets"
           readonly
+          title="Cambiar cliente"
         />
-        <button type="button" class="cart-client-btn" title="Cambiar cliente">
+
+        <button
+          id="cartCustomerClear"
+          type="button"
+          class="cart-client-btn cart-client-btn--clear"
+          title="Volver a cliente por defecto"
+          style="display: none"
+        >
+          ✖
+        </button>
+
+        <button
+          id="cartCustomerOpen"
+          type="button"
+          class="cart-client-btn"
+          title="Cambiar cliente"
+        >
           ➕
         </button>
       </div>
@@ -1250,6 +1269,31 @@
                   <span class="slider"></span>
                 </label>
               </div>
+              <!-- Cliente por defecto de la terminal -->
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Cliente por defecto del terminal
+                  </div>
+                  <div class="opt-row-sub">
+                    Se guarda en FacturaScripts para este TPV.
+                  </div>
+                </div>
+
+                <div class="opt-row-actions">
+                  <select
+                    id="terminalDefaultCustomerSelect"
+                    class="opt-select"
+                  ></select>
+                  <button
+                    type="button"
+                    id="terminalDefaultCustomerSaveBtn"
+                    class="small-btn"
+                  >
+                    Guardar
+                  </button>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -1567,5 +1611,10 @@
         }
       });
     </script>
+    <link
+      rel="stylesheet"
+      href="js/tpv/ui/customer_selector/customer_selector.css"
+    />
+    <script src="js/tpv/ui/customer_selector/customer_selector.js"></script>
   </body>
 </html>
