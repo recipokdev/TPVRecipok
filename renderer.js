@@ -310,71 +310,6 @@ function buildDesiredPackQtyByIdProducto(cartSnapshot) {
   return out;
 }
 
-async function patchPackChildrenLinesInFactura({ idfactura, cartSnapshot }) {
-  const desired = buildDesiredPackQtyByIdProducto(cartSnapshot);
-  const desiredIds = Object.keys(desired)
-    .map((k) => Number(k))
-    .filter(Boolean);
-
-  // nada que ajustar
-  if (!idfactura || !desiredIds.length) return;
-
-  const raw = await fetchLineasFacturaCliente(idfactura);
-  const lines = Array.isArray(raw) ? raw : [];
-
-  // Candidatas: líneas gratis (pvpunitario 0) que NO sean el pack parent
-  const free = lines.filter((l) => {
-    const unit = Number(l?.pvpunitario ?? 0);
-    const isZero = Math.abs(unit) < 0.00001;
-    if (!isZero) return false;
-
-    const pid = Number(l?.idproducto || 0);
-    if (
-      pid &&
-      typeof isOfferPackProductById === "function" &&
-      isOfferPackProductById(pid)
-    ) {
-      return false; // pack parent fuera
-    }
-    return true;
-  });
-
-  // Agrupar por idproducto
-  const byPid = new Map(); // pid -> [lines]
-  for (const l of free) {
-    const pid = Number(l?.idproducto || 0);
-    if (!pid) continue;
-    if (!byPid.has(pid)) byPid.set(pid, []);
-    byPid.get(pid).push(l);
-  }
-
-  for (const pid of desiredIds) {
-    const want = Number(desired[pid] || 0);
-    const group = byPid.get(pid) || [];
-
-    if (!group.length) continue;
-
-    if (!(want > 0)) {
-      // qty 0 => borrar todas las líneas gratis de ese producto
-      for (const ln of group) {
-        await apiDeleteLineaFacturaCliente(ln.idlinea).catch(() => {});
-      }
-      continue;
-    }
-
-    // 1) Ajustar cantidad en la primera
-    const main = group[0];
-    if (Number(main?.cantidad || 0) !== want) {
-      await apiUpdateLineaFacturaCliente(main.idlinea, { cantidad: want });
-    }
-
-    // 2) Borrar duplicadas (si las hay)
-    for (let i = 1; i < group.length; i++) {
-      await apiDeleteLineaFacturaCliente(group[i].idlinea).catch(() => {});
-    }
-  }
-}
-
 async function patchPackChildrenLinesInFacturaByDesired({
   idfactura,
   desiredByPid,
@@ -392,14 +327,13 @@ async function patchPackChildrenLinesInFacturaByDesired({
     const pid = Number(k);
     if (!pid) continue;
     const want = Number(v ?? 0);
-    // OJO: queremos permitir want=0 para borrar
     desired.set(pid, want);
   }
 
   const raw = await fetchLineasFacturaCliente(idfactura);
   const lines = Array.isArray(raw) ? raw : [];
 
-  // Candidatas: líneas gratis (0€) que NO sean el pack parent
+  // Hijos gratis (0€) que NO sean el pack parent
   const free = lines.filter((l) => {
     const unit = Number(l?.pvpunitario ?? 0);
     if (!isZero(unit)) return false;
@@ -410,13 +344,13 @@ async function patchPackChildrenLinesInFacturaByDesired({
       typeof isOfferPackProductById === "function" &&
       isOfferPackProductById(pid)
     ) {
-      return false; // pack parent fuera
+      return false;
     }
     return true;
   });
 
   // Agrupar por idproducto
-  const byPid = new Map(); // pid -> [lines]
+  const byPid = new Map();
   for (const l of free) {
     const pid = Number(l?.idproducto || 0);
     if (!pid) continue;
@@ -424,7 +358,7 @@ async function patchPackChildrenLinesInFacturaByDesired({
     byPid.get(pid).push(l);
   }
 
-  // 1) ✅ LIMPIEZA: si existe pid gratis pero no está en desired => borrar
+  // 1) borrar hijos gratis que ya no deben existir
   for (const [pid, group] of byPid.entries()) {
     if (!desired.has(pid)) {
       for (const ln of group) {
@@ -433,17 +367,12 @@ async function patchPackChildrenLinesInFacturaByDesired({
     }
   }
 
-  // 2) ✅ APLICAR desired (incluye borrado si want==0) + consolidar duplicados
+  // 2) aplicar cantidades deseadas
   for (const [pid, wantRaw] of desired.entries()) {
-    const want = Number(wantRaw ?? 0); // puede ser negativo
+    const want = Number(wantRaw ?? 0);
     const group = byPid.get(pid) || [];
 
-    // Si el plugin no creó línea y want==0 => ok (nada que borrar)
-    if (!group.length) {
-      // Si quisieras “crear” la línea cuando want!=0, aquí podrías,
-      // pero tú decidiste no inventar líneas. Lo dejamos igual:
-      continue;
-    }
+    if (!group.length) continue;
 
     if (want === 0) {
       for (const ln of group) {
@@ -453,8 +382,44 @@ async function patchPackChildrenLinesInFacturaByDesired({
     }
 
     const main = group[0];
-    if (Number(main?.cantidad || 0) !== want) {
-      await apiUpdateLineaFacturaCliente(main.idlinea, { cantidad: want });
+
+    const currentQty = Number(main?.cantidad || 0);
+    const currentPvp = Number(main?.pvpunitario || 0);
+    const currentRecargo = Number(main?.recargo || 0);
+    const currentPvpSinDto = Number(main?.pvpsindto || 0);
+    const currentPvpTotal = Number(main?.pvptotal || 0);
+
+    const needsUpdate =
+      currentQty !== want ||
+      !isZero(currentPvp) ||
+      !isZero(currentRecargo) ||
+      !isZero(currentPvpSinDto) ||
+      !isZero(currentPvpTotal);
+
+    if (needsUpdate) {
+      // intento fuerte: dejar todo monetario a cero
+      await apiUpdateLineaFacturaCliente(main.idlinea, {
+        cantidad: want,
+        pvpunitario: 0,
+        pvpsindto: 0,
+        pvptotal: 0,
+        recargo: 0,
+        dtopor: 0,
+        dtopor2: 0,
+      }).catch(async () => {
+        // fallback 1
+        await apiUpdateLineaFacturaCliente(main.idlinea, {
+          cantidad: want,
+          pvpunitario: 0,
+          recargo: 0,
+        }).catch(async () => {
+          // fallback 2 mínimo
+          await apiUpdateLineaFacturaCliente(main.idlinea, {
+            cantidad: want,
+            pvpunitario: 0,
+          }).catch(() => {});
+        });
+      });
     }
 
     // borrar duplicadas
@@ -1529,40 +1494,6 @@ function eur2(n) {
       .toFixed(2)
       .replace(".", ",") + "€"
   );
-}
-
-// Construye resumen de devolución a partir de qtyByLineId + lineasPendientes
-function buildRefundLogExtra({ facturaRow, qtyByLineId, lineasFactura }) {
-  const parts = [];
-  let total = 0;
-
-  for (const l of lineasFactura || []) {
-    const id = Number(l.idlinea);
-    const q = Number(qtyByLineId?.[id] || 0);
-    if (!(q > 0)) continue;
-
-    const desc = String(l.descripcion || "Producto").trim();
-    const unit = Number(l.pvpunitario || 0); // neto en FS normalmente
-    const lineTotal = q * unit;
-
-    total += lineTotal;
-    parts.push(`${q}x ${desc} @${eur2(unit)}`);
-  }
-
-  // total devuelto es NEGATIVO (pero en log lo mostramos como -X€)
-  const totalTxt = `Total:-${eur2(total)}`;
-
-  const orig = String(
-    facturaRow?.codigo ||
-      facturaRow?._raw?.codigo ||
-      facturaRow?.idfactura ||
-      "—",
-  );
-  const origTxt = `Orig:${orig}`;
-
-  const linesTxt = parts.length ? `Líneas:${parts.join(" | ")}` : "Líneas:—";
-
-  return `${origTxt} ${totalTxt} ${linesTxt}`;
 }
 
 // ===== Buscador =====
@@ -4581,6 +4512,43 @@ function buildReissueLine(l, sign) {
   };
 }
 
+function sortFacturaLinesForPackReissue(lines) {
+  const arr = Array.isArray(lines) ? [...lines] : [];
+  const isZero = (n) => Math.abs(Number(n || 0)) < 0.00001;
+
+  return arr.sort((a, b) => {
+    const aPid = Number(a?.idproducto || 0);
+    const bPid = Number(b?.idproducto || 0);
+
+    const aIsParent =
+      aPid &&
+      typeof isOfferPackProductById === "function" &&
+      isOfferPackProductById(aPid);
+
+    const bIsParent =
+      bPid &&
+      typeof isOfferPackProductById === "function" &&
+      isOfferPackProductById(bPid);
+
+    const aIsChild = !aIsParent && isZero(a?.pvpunitario);
+    const bIsChild = !bIsParent && isZero(b?.pvpunitario);
+
+    const rank = (isParent, isChild) => {
+      if (isParent) return 0; // oferta primero
+      if (isChild) return 1; // hijos gratis después
+      return 2; // resto al final
+    };
+
+    const ra = rank(aIsParent, aIsChild);
+    const rb = rank(bIsParent, bIsChild);
+
+    if (ra !== rb) return ra - rb;
+
+    // orden estable
+    return Number(a?.idlinea || 0) - Number(b?.idlinea || 0);
+  });
+}
+
 async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
   const originalId = Number(facturaRow?.idfactura || 0);
   if (!originalId) throw new Error("Ticket original sin idfactura.");
@@ -4596,13 +4564,17 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
   const n2New = `PAYCHG|ORIG=${originalId}|FROM=${oldCod}|TO=${newCod}`;
   const n2Rect = `PAYCHGREF|ORIG=${originalId}|FROM=${oldCod}|TO=${newCod}`;
 
-  if (TPV_STATE?.offline)
+  if (TPV_STATE?.offline) {
     throw new Error("Sin internet: no se puede cambiar el método de pago.");
+  }
 
   const idtpv = Number(currentTerminal?.id || 0) || null;
   const idcaja = getCajaIdSafe();
   const nick = (getLoginUser?.() || currentAgent?.nick || "admin").toString();
-  if (!idtpv || !idcaja) throw new Error("No hay caja abierta (idtpv/idcaja).");
+
+  if (!idtpv || !idcaja) {
+    throw new Error("No hay caja abierta (idtpv/idcaja).");
+  }
 
   const codcliente =
     facturaRow?._raw?.codcliente ||
@@ -4610,33 +4582,34 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
     window.RECIPOK_API?.defaultCodClienteTPV ||
     "1";
 
-  // ✅ Leer líneas reales ACTUALES (con 6, etc.)
+  // 1) Leer líneas reales actuales
   const lineasFacturaRaw = await fetchLineasFacturaCliente(originalId);
   if (!Array.isArray(lineasFacturaRaw) || !lineasFacturaRaw.length) {
     throw new Error("No pude cargar líneas del ticket.");
   }
 
-  // ✅ PACKS variables: construir "desired" desde el ticket original (0€ lines reales)
+  // 2) Desired real de hijos 0€ desde el ticket original
   const desiredBaseByPid = buildDesiredByPidFromFacturaLines(lineasFacturaRaw);
 
-  // ✅ NO filtrar pvpunitario 0 (packs variables)
-  // Filtrado mínimo “sanitario”
-  const lineasFactura = lineasFacturaRaw.filter((l) => {
-    const qty = Number(l?.cantidad || 0);
-    if (!isFinite(qty) || qty === 0) return false;
+  // 3) Filtrado mínimo + ORDEN CORRECTO para reemisión
+  const lineasFactura = sortFacturaLinesForPackReissue(
+    lineasFacturaRaw.filter((l) => {
+      const qty = Number(l?.cantidad || 0);
+      if (!isFinite(qty) || qty === 0) return false;
 
-    const desc = String(l?.descripcion || "").trim();
-    const ref = String(l?.referencia || "").trim();
-    // si falta todo, fuera
-    if (!desc && !ref) return false;
+      const desc = String(l?.descripcion || "").trim();
+      const ref = String(l?.referencia || "").trim();
 
-    return true;
-  });
+      if (!desc && !ref) return false;
+      return true;
+    }),
+  );
 
-  if (!lineasFactura.length)
+  if (!lineasFactura.length) {
     throw new Error("No hay líneas válidas en el ticket.");
+  }
 
-  // 1) Rectificativa (serie R) con codpago ORIGINAL
+  // 4) Rectificativa
   const payloadRect = {
     codcliente,
     lineas: lineasFactura.map((l) => buildReissueLine(l, -1)),
@@ -4653,9 +4626,12 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
   const docRect =
     respRect?.doc || respRect?.factura || respRect?.data || respRect || null;
   const rectId = Number(docRect?.idfactura || docRect?.id || 0);
-  if (!rectId) throw new Error("No pude crear rectificativa.");
 
-  // ✅ Parche packs en rectificativa: cantidades NEGATIVAS + limpieza de líneas 0€ no deseadas
+  if (!rectId) {
+    throw new Error("No pude crear rectificativa.");
+  }
+
+  // Parche packs rectificativa
   try {
     const desiredRect = negateDesiredByPid(desiredBaseByPid);
     await patchPackChildrenLinesInFacturaByDesired({
@@ -4671,7 +4647,6 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
 
   const totalRectFS = Number(docRect?.total ?? 0);
   const rectCash = isCashCodpago(oldCod) ? totalRectFS : 0;
-
   const codagente = getCurrentCodAgenteSafe();
 
   await updateFacturaCliente(rectId, {
@@ -4695,7 +4670,7 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
     numero2: n2Rect,
   });
 
-  // 2) Nuevo ticket (serie original) con codpago NUEVO
+  // 5) Ticket nuevo
   const payloadNew = {
     codcliente,
     lineas: lineasFactura.map((l) => buildReissueLine(l, +1)),
@@ -4712,9 +4687,12 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
   const docNew =
     respNew?.doc || respNew?.factura || respNew?.data || respNew || null;
   const newId = Number(docNew?.idfactura || docNew?.id || 0);
-  if (!newId) throw new Error("No pude crear el ticket nuevo.");
 
-  // ✅ Parche packs en ticket nuevo: cantidades POSITIVAS + limpieza de líneas 0€ no deseadas
+  if (!newId) {
+    throw new Error("No pude crear el ticket nuevo.");
+  }
+
+  // Parche packs ticket nuevo
   try {
     await patchPackChildrenLinesInFacturaByDesired({
       idfactura: newId,
@@ -8741,32 +8719,42 @@ function renderItemsHtml(doc, lineas) {
 
   const safe = (s) => escapeHtml(String(s ?? ""));
 
-  const pickMainAndDesc = (l) => {
-    const main = (
-      l.ref ??
-      l.referencia ??
-      l.codigo ??
-      l.codarticulo ??
-      l.sku ??
-      l.name ??
-      l.nombre ??
-      ""
-    )
-      .toString()
+  const cleanSpecialPrefix = (s) =>
+    String(s || "")
+      .replace(/^AJUSTE PAGO\s*-\s*/i, "")
+      .replace(/^DEV\s*-\s*/i, "")
       .trim();
 
-    let desc = (
-      l.secondaryName ??
-      l.descripcion2 ??
-      l.detalle ??
-      l.descripcion ??
-      ""
-    )
-      .toString()
-      .trim();
+  const pickMainAndDesc = (l) => {
+    const main = cleanSpecialPrefix(
+      l.ref ??
+        l.referencia ??
+        l.codigo ??
+        l.codarticulo ??
+        l.sku ??
+        l.name ??
+        l.nombre ??
+        "",
+    );
+
+    let desc = cleanSpecialPrefix(
+      l.secondaryName ?? l.descripcion2 ?? l.detalle ?? "",
+    );
+
+    // ✅ fallback: si no hay secundaria, intentar usar descripcion
+    const fallbackDesc = cleanSpecialPrefix(l.descripcion ?? "");
+
+    if (
+      !desc &&
+      fallbackDesc &&
+      fallbackDesc.toLowerCase() !== main.toLowerCase()
+    ) {
+      desc = fallbackDesc;
+    }
 
     if (!main && desc) return { main: desc, desc: "" };
     if (main && desc && main.toLowerCase() === desc.toLowerCase()) desc = "";
+
     return { main, desc };
   };
 
@@ -8783,16 +8771,30 @@ function renderItemsHtml(doc, lineas) {
       const isChild = isPackChildForPrint(l);
       const qty = getQtyForPrint(l);
 
-      const unitGross = getUnitGrossForPrint(l);
-      const lineTotal = qty * unitGross;
+      const unitGross =
+        l.__unitGrossOverride != null
+          ? Number(l.__unitGrossOverride || 0)
+          : l.__forceUnitGross != null
+            ? Number(l.__forceUnitGross || 0)
+            : Number(getUnitGrossForPrint(l) || 0);
+
+      const lineTotal =
+        l.__lineTotalOverride != null
+          ? Number(l.__lineTotalOverride || 0)
+          : isChild
+            ? 0
+            : qty * unitGross;
 
       const { main, desc } = pickMainAndDesc(l);
 
-      // ✅ hijos: qty a la derecha, sin qty izquierda, sin total
       const leftQtyHtml = isChild ? "" : safe(qty);
 
+      // ✅ hijos: xN o x-N
+      const qtyInline =
+        qty < 0 ? `x-${safe(Math.abs(qty))}` : `x${safe(Math.abs(qty))}`;
+
       const nameHtml = isChild
-        ? `↳ ${safe(main)} <span class="muted">x${safe(qty)}</span>`
+        ? `↳ ${safe(main)} <span class="muted">${qtyInline}</span>`
         : safe(main);
 
       const totalHtml = isChild ? "" : eurTicket(lineTotal);
@@ -9051,6 +9053,171 @@ function buildEscposTicketBytes(ticket, lineas, totalToShow) {
   return out;
 }
 
+async function getFacturaLinesForPrint(ticket) {
+  const idfactura = Number(ticket?.idfactura || ticket?._raw?.idfactura || 0);
+  if (!idfactura) {
+    return Array.isArray(ticket?.lineas) ? ticket.lineas : [];
+  }
+
+  const fsLines = await fetchLineasFacturaCliente(idfactura);
+  return Array.isArray(fsLines) ? fsLines : [];
+}
+
+async function getPrintableTicketMeta(ticket) {
+  const raw = ticket?._raw || {};
+
+  const idfactura = Number(ticket?.idfactura || raw?.idfactura || 0);
+
+  const numero2 = String(ticket?.numero2 || raw?.numero2 || "")
+    .trim()
+    .toUpperCase();
+
+  const codserie = String(ticket?.codserie || raw?.codserie || "")
+    .trim()
+    .toUpperCase();
+
+  // -----------------------------
+  // Cambio de método de pago
+  // -----------------------------
+  if (numero2.startsWith("PAYCHGREF|")) {
+    return {
+      kind: "PAYCHG_RECT",
+      label: "Factura Rectificativa",
+      badge: "ANULACIÓN POR CAMBIO DE PAGO",
+      isRect: true,
+    };
+  }
+
+  if (numero2.startsWith("PAYCHG|")) {
+    return {
+      kind: "PAYCHG_NEW",
+      label: "Factura Simplificada",
+      badge: "",
+      isRect: false,
+    };
+  }
+
+  // -----------------------------
+  // Devoluciones reales (ticket negativo)
+  // -----------------------------
+  if (numero2.startsWith("REFUND|")) {
+    return {
+      kind: "REFUND",
+      label: "Factura Rectificativa",
+      badge: "DEVOLUCIÓN",
+      isRect: true,
+    };
+  }
+
+  // -----------------------------
+  // Rectificativa normal
+  // -----------------------------
+  if (codserie === "R") {
+    return {
+      kind: "RECT",
+      label: "Factura Rectificativa",
+      badge: "",
+      isRect: true,
+    };
+  }
+
+  // -----------------------------
+  // Ticket simplificado normal:
+  // comprobar SOLO devoluciones reales
+  // -----------------------------
+  if (idfactura) {
+    try {
+      // ✅ si este ticket fue origen de un cambio de pago,
+      // no debe salir como devuelto/parcial
+      const facturasRelacionadas = await fetchApiResourceWithParams(
+        "facturaclientes",
+        {
+          limit: 0,
+          "filter[numero2_like]": `ORIG=${idfactura}`,
+        },
+      );
+
+      const rel = Array.isArray(facturasRelacionadas)
+        ? facturasRelacionadas
+        : [];
+
+      const hasPayChangeRelation = rel.some((f) => {
+        const n2 = String(f?.numero2 || "")
+          .trim()
+          .toUpperCase();
+        return n2.startsWith("PAYCHG|") || n2.startsWith("PAYCHGREF|");
+      });
+
+      if (hasPayChangeRelation) {
+        return {
+          kind: "NORMAL",
+          label: "Factura Simplificada",
+          badge: "",
+          isRect: false,
+        };
+      }
+
+      // ✅ solo aquí evaluamos devoluciones reales
+      const origLines = await fetchLineasFacturaCliente(idfactura);
+      const refundedMap = await buildRefundedQtyMapForOriginal(idfactura);
+
+      let soldTotal = 0;
+      let refundedTotal = 0;
+
+      for (const l of Array.isArray(origLines) ? origLines : []) {
+        const sold = Math.max(0, Number(l?.cantidad || 0));
+        if (!(sold > 0)) continue;
+
+        const key = lineKeyForMatch(
+          normalizeRefundDesc(l.descripcion),
+          l.pvpunitario,
+          l.codimpuesto,
+        );
+
+        const refunded = Math.max(0, Number(refundedMap?.[key] || 0));
+
+        soldTotal += sold;
+        refundedTotal += Math.min(refunded, sold);
+      }
+
+      if (soldTotal > 0) {
+        if (refundedTotal >= soldTotal) {
+          return {
+            kind: "REFUNDED",
+            label: "Factura Simplificada",
+            badge: "DEVUELTO",
+            isRect: false,
+          };
+        }
+
+        if (refundedTotal > 0) {
+          return {
+            kind: "PARTIAL_REFUND",
+            label: "Factura Simplificada",
+            badge: "DEVOLUCIÓN PARCIAL",
+            isRect: false,
+          };
+        }
+      }
+    } catch (e) {
+      console.warn(
+        "[getPrintableTicketMeta] no pude calcular devoluciones:",
+        e?.message || e,
+      );
+    }
+  }
+
+  // -----------------------------
+  // Ticket normal
+  // -----------------------------
+  return {
+    kind: "NORMAL",
+    label: "Factura Simplificada",
+    badge: "",
+    isRect: false,
+  };
+}
+
 async function printTicket(ticket) {
   try {
     if (!ticket) {
@@ -9073,92 +9240,48 @@ async function printTicket(ticket) {
       ticket.hora ||
       now.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
 
-    // 2) Reconstrucción de líneas (tu lógica intacta)
-    const raw0 = ticket._raw || {};
-    const codserie0 = String(raw0.codserie || "").toUpperCase();
-    let isRect = codserie0 === "R";
-    let isFullyRefundedOriginal = false;
+    // 2) Tipo de ticket
+    const metaPrint = await getPrintableTicketMeta(ticket);
+
+    let isRect = !!metaPrint.isRect;
 
     let lineas = Array.isArray(ticket.lineas) ? ticket.lineas : [];
     let totalsOnlyPositive = false;
 
     try {
-      const raw = ticket._raw || {};
-      const idfacturarect =
-        Number(ticket.idfacturarect || raw.idfacturarect || 0) || 0;
-      const codserie = String(raw.codserie || "").toUpperCase();
-      const isRectificativa = idfacturarect > 0 || codserie === "R";
+      // ✅ SIEMPRE intentar imprimir las líneas REALES del ticket actual
+      if (ticket.idfactura || ticket?._raw?.idfactura) {
+        const fsLines = await getFacturaLinesForPrint(ticket);
 
-      if (!isRectificativa && ticket.idfactura) {
-        const origLines = await fetchLineasFactura(ticket.idfactura);
-        const refundedMap = await buildRefundedQtyMapForOriginal(
-          ticket.idfactura,
-        );
+        if (Array.isArray(fsLines) && fsLines.length) {
+          lineas = fsLines.map((l) => {
+            const tax = Number(extractTaxRateFromCode(l.codimpuesto) || 0);
+            const unitGross = (Number(l.pvpunitario) || 0) * (1 + tax / 100);
 
-        const rebuilt = [];
-
-        for (const l of origLines || []) {
-          const sold = Number(l.cantidad || 0);
-          const k = lineKeyForMatch(
-            l.descripcion,
-            l.pvpunitario,
-            l.codimpuesto,
-          );
-          const refunded = Number(refundedMap[k] || 0);
-          const pending = Math.max(0, sold - refunded);
-
-          const tax = Number(extractTaxRateFromCode(l.codimpuesto) || 0);
-          const unitGross = (Number(l.pvpunitario) || 0) * (1 + tax / 100);
-
-          if (pending > 0) {
-            rebuilt.push({
-              // 🔑 claves para packs/orden
+            return {
               idlinea: l.idlinea,
               orden: l.orden,
               idproducto: l.idproducto,
-
               referencia: l.referencia || "",
               descripcion: l.descripcion,
-              cantidad: pending,
-              pvpunitario: l.pvpunitario,
+              cantidad: Number(l.cantidad || 0),
+              pvpunitario: Number(l.pvpunitario || 0),
               codimpuesto: l.codimpuesto,
               taxRate: tax,
               __forceUnitGross: unitGross,
-            });
-          }
-
-          if (refunded > 0) {
-            rebuilt.push({
-              // 🔑 también mantener ids/orden aunque sea DEV (no molesta)
-              idlinea: l.idlinea,
-              orden: l.orden,
-              idproducto: l.idproducto,
-
-              descripcion: `DEV - ${normalizeRefundDesc(l.descripcion)}`,
-              cantidad: -refunded,
-              pvpunitario: l.pvpunitario,
-              codimpuesto: l.codimpuesto,
-              taxRate: tax,
-              __forceUnitGross: unitGross,
-            });
-          }
+              recargo: Number(l.recargo || 0),
+              pvpsindto: Number(l.pvpsindto || 0),
+              pvptotal: Number(l.pvptotal || 0),
+            };
+          });
         }
-
-        const hasNeg = rebuilt.some((x) => Number(x.cantidad) < 0);
-        const hasPos = rebuilt.some((x) => Number(x.cantidad) > 0);
-        totalsOnlyPositive = hasNeg && hasPos;
-
-        lineas = rebuilt;
-        isFullyRefundedOriginal = hasNeg && !hasPos;
       }
     } catch (e) {
       console.warn(
-        "[printTicket] reconstrucción líneas falló:",
+        "[printTicket] no pude cargar líneas reales para imprimir:",
         e?.message || e,
       );
     }
-
-    if (!isRect && isFullyRefundedOriginal) isRect = true;
 
     // ✅ Asegurar packs cargados antes de normalizar
     try {
@@ -9169,7 +9292,7 @@ async function printTicket(ticket) {
       console.warn("[printTicket] warmupPacksData falló:", e?.message || e);
     }
 
-    // ✅ Normalizar para imprimir packs: quitar hijos 0€ de FS y recrearlos como hijos virtuales
+    // ✅ Normalizar para imprimir packs
     try {
       if (typeof preparePrintableTicket === "function") {
         const tNorm = preparePrintableTicket({ ...ticket, lineas });
@@ -9182,13 +9305,13 @@ async function printTicket(ticket) {
       );
     }
 
-    // 3) Totales + IVA/Base (una sola vez)
+    // 3) Totales + IVA/Base
     const { totalToShow, taxMap } = calcTotalsAndTaxMap(
       lineas,
       totalsOnlyPositive,
     );
 
-    // 4) Linux: RAW ESC/POS y salir
+    // 4) Linux: RAW ESC/POS
     if (isLinux) {
       if (!window.TPV_PRINT?.printRaw) {
         toast("Falta printRaw en TPV_PRINT (preload/IPC).", "err", "Impresión");
@@ -9201,7 +9324,7 @@ async function printTicket(ticket) {
 
       const r = await window.TPV_PRINT.printRaw({
         bytes,
-        deviceName: printerName, // en Linux: RECIPOK_POS
+        deviceName: printerName,
       });
 
       if (!r || !r.ok) {
@@ -9237,8 +9360,19 @@ async function printTicket(ticket) {
     setText(
       doc,
       "invoiceLabel",
-      isRect ? "Factura Rectificativa" : "Factura Simplificada",
+      metaPrint.label ||
+        (isRect ? "Factura Rectificativa" : "Factura Simplificada"),
     );
+    const badgeEl = doc.getElementById("ticketTypeBadge");
+    if (badgeEl) {
+      const badgeTxt = String(metaPrint.badge || "").trim();
+      if (badgeTxt) {
+        badgeEl.textContent = badgeTxt;
+        badgeEl.style.display = "block";
+      } else {
+        badgeEl.style.display = "none";
+      }
+    }
     setText(doc, "invoiceNumber", ticket.numero != null ? ticket.numero : "—");
     setText(doc, "ticketDate", `${fecha} ${hora}`);
     setText(doc, "clientName", (ticket.clientName || "").trim() || "Cliente");
@@ -9697,6 +9831,22 @@ async function onPayButtonClick() {
     const okAgent = await requireAssignedAgentOrBlock({ showModal: true });
     if (!okAgent) return;
 
+    function checkCartStockProblems(cart) {
+      for (const item of cart) {
+        if (item.noStock && item.noVenderSinStock) {
+          return `El producto "${item.descripcion}" no tiene stock y no está permitido vender sin stock.`;
+        }
+      }
+      return null;
+    }
+
+    const stockError = checkCartStockProblems(cart);
+
+    if (stockError) {
+      toast(stockError, "warn", "Stock");
+      return;
+    }
+
     // 1) Modal cobro
     const payResult = await openPayModal(totalCart);
     if (!payResult) {
@@ -9860,7 +10010,12 @@ async function onPayButtonClick() {
     // ✅ CLAVE: parchear cantidades de líneas gratis del pack
     if (idfactura) {
       try {
-        await patchPackChildrenLinesInFactura({ idfactura, cartSnapshot });
+        const desiredByPid = buildDesiredPackQtyByIdProducto(cartSnapshot);
+
+        await patchPackChildrenLinesInFacturaByDesired({
+          idfactura,
+          desiredByPid,
+        });
       } catch (e) {
         console.warn("No pude parchear líneas pack en FS:", e?.message || e);
       }
@@ -10026,7 +10181,14 @@ async function onPayButtonClick() {
   } catch (err) {
     console.error("Error al cobrar:", err);
     customerSetMode("CART");
-    toast("Error al cobrar: " + (err.message || err), "err", "Cobrar");
+    let msg = err.message || "Error desconocido";
+
+    if (msg.toLowerCase().includes("stock")) {
+      msg =
+        "No se puede cobrar porque uno o varios productos no tienen stock disponible.";
+    }
+
+    toast(msg, "err", "Cobrar");
     setStatusText("Error al cobrar");
   } finally {
     isPayingNow = false;
@@ -12962,76 +13124,6 @@ async function buildRefundedQtyMapForOriginal(idfacturaOriginal) {
   return refunded;
 }
 
-async function imprimirFacturaPorId(facturaRow) {
-  const idfactura = facturaRow.idfactura;
-  const lineas = await fetchLineasFactura(idfactura);
-
-  const mapped = lineas.map((l) => {
-    const taxRate = extractTaxRateFromCode(l.codimpuesto);
-    const unitNet = Number(l.pvpunitario || 0);
-    const unitGross = unitNet * (1 + taxRate / 100);
-
-    return {
-      name: l.descripcion || "Producto",
-      qty: Number(l.cantidad || 0),
-      price: unitNet,
-      grossPrice: unitGross,
-      codimpuesto: l.codimpuesto || null,
-      taxRate,
-    };
-  });
-
-  const ticket = {
-    numero: facturaRow.codigo || facturaRow.numero || String(idfactura),
-    fecha: facturaRow.fecha,
-    hora: facturaRow.hora,
-    paymentMethod: facturaRow.formapago || facturaRow.codpago || "—",
-    clientName: facturaRow.nombrecliente || facturaRow.cliente || "Cliente",
-    terminalName: currentTerminal ? currentTerminal.name : "",
-    agentName: currentAgent ? currentAgent.name : facturaRow.codagente || "—",
-
-    company: companyInfo ? { ...companyInfo } : null,
-    lineas: mapped,
-  };
-
-  await printTicket(ticket);
-}
-
-async function onConnectClick() {
-  try {
-    // Si NO hay email/baseUrl/apiKey → pedir email (activar)
-    if (!hasCompanyResolved()) {
-      const ok = await forceReconnectFlow(); // ya la tienes
-      return ok; // true/false
-    }
-
-    // Si ya hay empresa, intentamos reconectar/ping y recargar
-    toast("Conectando…", "info", "Conexión");
-
-    const saved = getSavedConfig();
-    await validateBaseUrlOrThrow(saved.baseUrl, saved.apiKey);
-
-    TPV_STATE.offline = false;
-    TPV_STATE.locked = false;
-    updateCashButtonLabel();
-
-    await loadDataFromApi();
-    await syncQueueNow();
-    toast("Conectado ✅", "ok", "Conexión");
-    return true;
-  } catch (e) {
-    console.warn("Fallo al conectar:", e);
-
-    TPV_STATE.offline = true;
-    updateCashButtonLabel();
-
-    // Si falla (apiKey caducada, url mal, etc.) → forzamos reactivar
-    toast("No se pudo conectar. Vamos a reactivar.", "warn", "Conexión");
-    const ok = await forceReconnectFlow();
-    return ok;
-  }
-}
-
 function askEmailWithModal() {
   return new Promise((resolve) => {
     // ✅ Buscar DOM SIEMPRE aquí (no usar variables globales cacheadas)
@@ -13153,24 +13245,6 @@ if (cashMoveAmountKeyboardBtn && cashMoveAmountInput) {
 if (cashMoveReasonKeyboardBtn && cashMoveReasonInput) {
   cashMoveReasonKeyboardBtn.onclick = () => {
     openQwertyForInput(cashMoveReasonInput, "text");
-  };
-}
-
-function buildDevolucionLineUI(l) {
-  const soldQty = Number(l.cantidad || 0);
-  const taxRate = extractTaxRateFromCode(l.codimpuesto);
-  const unitNet = Number(l.pvpunitario || 0);
-  const unitGross = unitNet * (1 + taxRate / 100);
-
-  return {
-    idlinea: l.idlinea,
-    descripcion: l.descripcion || "",
-    soldQty,
-    returnQty: 0, // <-- esto lo modifica el usuario
-    unitNet,
-    unitGross,
-    codimpuesto: l.codimpuesto || null,
-    taxRate,
   };
 }
 
@@ -13298,229 +13372,150 @@ function preparePrintableTicket(ticket) {
   const lineas0 = Array.isArray(ticket?.lineas) ? [...ticket.lineas] : [];
   if (!lineas0.length) return ticket;
 
-  const isDev = (l) => {
-    const d = String(l?.descripcion || "")
-      .trim()
-      .toUpperCase();
-    return d.startsWith("DEV") || d.startsWith("AJUSTE PAGO");
-  };
-
   const isZero = (n) => Math.abs(Number(n || 0)) < 0.00001;
 
-  const isPackParent = (l) => {
-    // 1) si viene meta del carrito
-    if (l?.meta?.isPackOffer) return true;
+  const cleanSpecialPrefix = (s) =>
+    String(s || "")
+      .replace(/^AJUSTE PAGO\s*-\s*/i, "")
+      .replace(/^DEV\s*-\s*/i, "")
+      .trim();
 
-    // 2) si ya lo marcaste tú
+  const norm = (s) =>
+    cleanSpecialPrefix(s).toUpperCase().replace(/\s+/g, " ").trim();
+
+  const isPackParent = (l) => {
+    if (l?.meta?.isPackOffer) return true;
     if (l?.__isPackParent) return true;
 
-    // 3) por catálogo/FS
     const pid = Number(l?.idproducto || 0);
     return pid && typeof isOfferPackProductById === "function"
       ? isOfferPackProductById(pid)
       : false;
   };
 
-  // Normalizador seguro
-  const _normTxtSafe = (s) =>
-    String(s || "")
-      .trim()
-      .toUpperCase()
-      .replace(/\s+/g, " ");
-
-  // Def de pack desde plugin
   const getPackDef = (parentIdProducto) => {
     const pack = PACKS_STATE?.packsByOfferProductId?.get(
       Number(parentIdProducto),
     );
-    if (!pack) return null;
+    if (!pack) return [];
 
     const lines = PACKS_STATE?.linesByPackId?.get(pack.id) || [];
-    const def = (lines || [])
+    return lines
       .map((x) => ({
         ref: String(x.reference || "").trim(),
         qty: Number(x.quantity || 1) || 1,
       }))
       .filter((x) => x.ref);
-
-    return def.length ? def : null;
   };
 
-  // 1) separar DEV
-  const devs = lineas0.filter(isDev);
-  const base = lineas0.filter((l) => !isDev(l));
+  const pickRefNorm = (l) => {
+    const r = norm(l?.referencia);
+    if (r) return r;
+    return norm(l?.descripcion);
+  };
 
-  // 2) detectar parents
-  const parents = base.filter(isPackParent);
+  const parents = lineas0.filter(isPackParent);
   if (!parents.length) {
-    return { ...ticket, lineas: [...base, ...devs] };
+    return {
+      ...ticket,
+      lineas: lineas0.map((l) => ({
+        ...l,
+        descripcion: cleanSpecialPrefix(l.descripcion),
+      })),
+    };
   }
 
-  // ✅ Asegurar packs cargados (si no están, no intentamos heurísticas agresivas)
-  // (si tu warmup lo haces fuera, esto no molesta)
-  // Nota: aquí NO hacemos await (esta función es sync). Solo comprobación.
-  const packsReady = !!PACKS_STATE?.packsByOfferProductId;
+  const parentDefs = new Map(); // parentPid -> defs
+  const allExpectedRefs = new Set();
 
-  // 3) construir set de refs hijos esperados (de TODOS los packs presentes)
-  const childRefSet = new Set();
-  if (packsReady) {
-    for (const p of parents) {
-      const def = getPackDef(p.idproducto);
-      for (const d of def || []) childRefSet.add(_normTxtSafe(d.ref));
+  for (const p of parents) {
+    const pid = Number(p?.idproducto || 0);
+    const defs = getPackDef(pid);
+    parentDefs.set(pid, defs);
+    for (const d of defs) {
+      const r = norm(d.ref);
+      if (r) allExpectedRefs.add(r);
     }
   }
 
-  const looksLikeChildOfPackDef = (fsLine) => {
-    if (!packsReady) return false;
-
-    const r = _normTxtSafe(fsLine?.referencia);
-    const d = _normTxtSafe(fsLine?.descripcion);
-    if (!r && !d) return false;
-
-    if (r && childRefSet.has(r)) return true;
-
-    // fallback: descripción contiene alguna ref
-    for (const ref of childRefSet) {
-      if (ref && d.includes(ref)) return true;
-    }
-    return false;
-  };
-
-  // ✅ 4) Detectar hijos reales de FS (0€ y NO parent) y que parezcan hijos del pack
-  // IMPORTANTE: estos son los que tú editas (cantidades correctas) -> NO hay que recrearlos
-  const fsChildCandidates = base.filter((l) => {
+  // Hijos reales de FS: 0€, no parent, y parecen pertenecer a un pack
+  const realChildren = lineas0.filter((l) => {
     if (isPackParent(l)) return false;
-    const unitZero = isZero(l?.pvpunitario);
-    if (!unitZero) return false;
+    if (!isZero(l?.pvpunitario)) return false;
 
-    // si hay definiciones, usamos heurística; si no, conservamos (no tocamos)
-    return packsReady ? looksLikeChildOfPackDef(l) : true;
+    const refNorm = pickRefNorm(l);
+    return refNorm && allExpectedRefs.has(refNorm);
   });
 
-  // Para poder quitarlos de "base" sin problemas de referencia
-  const childIdSet = new Set(
-    fsChildCandidates.map((l) => Number(l?.idlinea || 0)).filter((x) => x > 0),
-  );
+  // Líneas normales no-pack
+  const normalLines = lineas0.filter((l) => {
+    if (isPackParent(l)) return false;
 
-  // Si no hay idlinea, usamos fallback por clave "ref|desc|qty|0"
-  const childFallbackKey = (l) =>
-    `${_normTxtSafe(l?.referencia)}|${_normTxtSafe(l?.descripcion)}|${Number(
-      l?.cantidad || 0,
-    )}`;
-
-  const childFallbackSet = new Set(
-    fsChildCandidates
-      .filter((l) => !(Number(l?.idlinea || 0) > 0))
-      .map(childFallbackKey),
-  );
-
-  const isSameChildCandidate = (l) => {
-    const idl = Number(l?.idlinea || 0);
-    if (idl > 0) return childIdSet.has(idl);
-    return childFallbackSet.has(childFallbackKey(l));
-  };
-
-  // 5) base sin hijos FS (los pondremos debajo del pack)
-  const baseNoChildren = base.filter((l) => !isSameChildCandidate(l));
-
-  // 6) ordenar estable por orden/idlinea (así parent queda en su lugar)
-  baseNoChildren.sort((a, b) => {
-    const aa = Number(a.orden ?? a.idlinea ?? 0);
-    const bb = Number(b.orden ?? b.idlinea ?? 0);
-    return aa - bb;
+    const isRealChild = realChildren.includes(l);
+    return !isRealChild;
   });
 
-  // 7) Construir índice de hijos FS por "ref normalizada" (y por idproducto)
-  // Vamos a usar estos hijos bajo el parent, manteniendo SUS cantidades (las editadas).
-  const childrenByRef = new Map(); // normRef -> {ref, descripcion, cantidad, codimpuesto}
-  for (const ch of fsChildCandidates) {
-    const refNorm =
-      _normTxtSafe(ch?.referencia) || _normTxtSafe(ch?.descripcion);
+  // Índice de hijos reales por ref normalizada
+  const childByRef = new Map();
+  for (const ch of realChildren) {
+    const refNorm = pickRefNorm(ch);
     if (!refNorm) continue;
 
-    const prev = childrenByRef.get(refNorm);
-    const qty = Number(ch?.cantidad || 0);
-
-    if (!prev) {
-      childrenByRef.set(refNorm, {
-        referencia: String(ch?.referencia || ch?.descripcion || "").trim(),
-        descripcion: String(ch?.descripcion || ch?.referencia || "").trim(),
-        cantidad: qty,
-        pvpunitario: 0,
-        __forceUnitGross: 0,
-        codimpuesto: ch?.codimpuesto || null,
-        __isPackChild: true,
-      });
-    } else {
-      prev.cantidad += qty;
-    }
+    if (!childByRef.has(refNorm)) childByRef.set(refNorm, []);
+    childByRef.get(refNorm).push(ch);
   }
 
-  // para no repetir hijos si hay varios parents
-  const usedChildRefs = new Set();
+  const byOrder = (a, b) =>
+    Number(a?.orden ?? a?.idlinea ?? 0) - Number(b?.orden ?? b?.idlinea ?? 0);
+
+  const parentsSorted = [...parents].sort(byOrder);
+  const normalsSorted = [...normalLines].sort(byOrder);
 
   const out = [];
+  const usedChildIds = new Set();
 
-  // 8) expandir: parent + hijos (prioriza los hijos FS reales; si no hay, crea virtuales por def)
-  for (const l of baseNoChildren) {
-    if (!isPackParent(l)) {
-      out.push({ ...l, __isPackParent: false, __isPackChild: false });
-      continue;
-    }
+  for (const parent of parentsSorted) {
+    const parentPid = Number(parent?.idproducto || 0);
+    const defs = parentDefs.get(parentPid) || [];
 
-    const parent = { ...l, __isPackParent: true, __isPackChild: false };
-    out.push(parent);
+    out.push({
+      ...parent,
+      descripcion: cleanSpecialPrefix(parent.descripcion),
+      __isPackParent: true,
+      __isPackChild: false,
+    });
 
-    const def = packsReady ? getPackDef(parent.idproducto) : null;
+    // Meter debajo los hijos reales del ticket
+    for (const d of defs) {
+      const refNorm = norm(d.ref);
+      const group = childByRef.get(refNorm) || [];
 
-    // 8.1) si existen hijos FS reales, los ponemos debajo respetando cantidades editadas
-    let pushedAnyRealChild = false;
+      for (const ch of group) {
+        const chId = Number(ch?.idlinea || 0);
+        if (chId && usedChildIds.has(chId)) continue;
+        if (chId) usedChildIds.add(chId);
 
-    if (def?.length) {
-      for (const d of def) {
-        const refNorm = _normTxtSafe(d.ref);
-        if (!refNorm) continue;
-        if (usedChildRefs.has(refNorm)) continue;
-
-        const real = childrenByRef.get(refNorm);
-        if (real && Number(real.cantidad || 0) !== 0) {
-          out.push({
-            referencia: real.referencia || d.ref,
-            descripcion: real.descripcion || d.ref,
-            cantidad: Number(real.cantidad || 0),
-            pvpunitario: 0,
-            __forceUnitGross: 0,
-            codimpuesto: parent.codimpuesto || real.codimpuesto || "IVA4",
-            __isPackParent: false,
-            __isPackChild: true,
-          });
-          usedChildRefs.add(refNorm);
-          pushedAnyRealChild = true;
-        }
-      }
-    }
-
-    // 8.2) si NO había hijos reales (caso raro), recreamos virtuales por definición * parentQty
-    if (!pushedAnyRealChild && def?.length) {
-      const parentQty = Number(parent.cantidad || 1) || 1;
-      for (const d of def) {
         out.push({
-          referencia: d.ref,
-          descripcion: d.ref,
-          cantidad: (Number(d.qty || 1) || 1) * parentQty,
-          pvpunitario: 0,
-          __forceUnitGross: 0,
-          codimpuesto: parent.codimpuesto || "IVA4",
+          ...ch,
+          referencia: cleanSpecialPrefix(ch.referencia || d.ref || ""),
+          descripcion: cleanSpecialPrefix(ch.descripcion || d.ref || ""),
           __isPackParent: false,
           __isPackChild: true,
+          __forceUnitGross: 0,
+          __lineTotalOverride: 0,
         });
       }
     }
   }
 
-  // 9) DEV al final
-  for (const l of devs) {
-    out.push({ ...l, __isPackParent: false, __isPackChild: false });
+  // Añadir resto de líneas normales
+  for (const l of normalsSorted) {
+    out.push({
+      ...l,
+      descripcion: cleanSpecialPrefix(l.descripcion),
+      __isPackParent: false,
+      __isPackChild: false,
+    });
   }
 
   return { ...ticket, lineas: out };
@@ -13536,9 +13531,6 @@ function lineGrossUnit(l) {
   const net = Number(l.pvpunitario || 0);
   const tax = lineTaxRate(l);
   return net * (1 + tax / 100);
-}
-function lineGrossTotal(l) {
-  return lineGrossUnit(l) * Number(l.cantidad || 0);
 }
 
 let refundState = {
@@ -13873,29 +13865,29 @@ async function createRefundInFacturaScriptsPackAware(
   const rectId = Number(docRect?.idfactura || docRect?.id || 0);
   if (!rectId) throw new Error("No pude crear la rectificativa.");
 
-  // ========= 3) FIX packs: calcular desiredByPid (hijos) desde ORIGINAL y parchear RECT =========
-  // Queremos que en la rectificativa:
-  // - Los hijos 0€ existan UNA vez
-  // - Su cantidad sea NEGATIVA y proporcional a lo vendido real (ya editado)
+  // ========= 3) FIX packs: calcular desiredByPid real desde ORIGINAL y parchear RECT =========
   try {
-    const desiredByPid = {}; // pid -> qty (NEGATIVA)
+    const desiredByPid = {}; // pid -> qty NEGATIVA
 
-    // Por cada pack parent seleccionado, buscamos sus hijos reales en el ORIGINAL (0€)
     for (const sel of selected) {
       const parent = sel.line;
       if (!isPackParent(parent)) continue;
 
-      const refundParentQty = Number(sel.qty || 0); // lo que devuelve el usuario (packs)
-      const parentQtySold = Number(parent.cantidad || 0); // packs vendidos en original (normalmente 1)
+      const refundParentQty = Number(sel.qty || 0);
+      const parentQtySold = Number(parent.cantidad || 0);
+
       if (!(refundParentQty > 0) || !(parentQtySold > 0)) continue;
 
       const defRefSet = getPackDefRefSet(parent.idproducto);
       if (!defRefSet || !defRefSet.size) continue;
 
-      // Hijos del ORIGINAL para este pack (0€) identificados por ref/desc
+      // Hijos reales del ticket original para ESTE pack
       const children = (allLines || []).filter((x) => {
         if (isPackParent(x)) return false;
         if (!isZero(x?.pvpunitario)) return false;
+
+        const pid = Number(x?.idproducto || 0);
+        if (!pid) return false;
 
         const r = norm(x?.referencia);
         const d = norm(x?.descripcion);
@@ -13907,24 +13899,30 @@ async function createRefundInFacturaScriptsPackAware(
         return false;
       });
 
-      // Totales reales por pid en el ORIGINAL (ya incluyen tu edición 4/5, 4/6, etc.)
-      const totalsByPid = new Map(); // pid -> totalQtyOriginal
+      const totalsByPid = {};
+
       for (const ch of children) {
         const pid = Number(ch?.idproducto || 0);
         if (!pid) continue;
+
         const q = Number(ch?.cantidad || 0);
-        totalsByPid.set(pid, (totalsByPid.get(pid) || 0) + q);
+        if (!isFinite(q) || q === 0) continue;
+
+        totalsByPid[pid] = (totalsByPid[pid] || 0) + q;
       }
 
-      // Convertimos “total original” a “por pack” y aplicamos refundParentQty
-      for (const [pid, totalQtyOriginal] of totalsByPid.entries()) {
-        const perPack = totalQtyOriginal / parentQtySold;
-        const childRefund = Math.round(perPack * refundParentQty);
+      for (const [pidStr, totalQtyOriginal] of Object.entries(totalsByPid)) {
+        const pid = Number(pidStr);
+        const totalQty = Number(totalQtyOriginal || 0);
 
-        if (!(childRefund > 0)) continue;
+        if (!(totalQty > 0)) continue;
 
-        // NEGATIVO porque es rectificativa
-        desiredByPid[pid] = (desiredByPid[pid] || 0) - childRefund;
+        const perPack = totalQty / parentQtySold;
+        const childRefundQty = Math.round(perPack * refundParentQty);
+
+        if (!(childRefundQty > 0)) continue;
+
+        desiredByPid[pid] = (desiredByPid[pid] || 0) - childRefundQty;
       }
     }
 

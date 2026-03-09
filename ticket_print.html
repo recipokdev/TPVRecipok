@@ -121,24 +121,34 @@
         text-overflow: ellipsis;
       }
 
-      /* ✅ HIJOS DE PACK: sin columna Cant (2 columnas) */
+      /* ✅ HIJOS DE PACK: solo descripción */
       .item.pack-child .item-top {
-        grid-template-columns: 1fr 20mm; /* Ref | Total */
+        grid-template-columns: 1fr;
       }
 
-      /* Oculta la celda qty por completo */
       .item.pack-child .qty {
         display: none;
       }
 
-      /* Sangría ligera para que se note que son “incluidos” */
+      .item.pack-child .ltotal {
+        display: none;
+      }
+
       .item.pack-child .desc {
         padding-left: 2mm;
       }
 
-      /* (Opcional) si quieres que el "xN" tenga un pelín menos de presencia */
       .item.pack-child .desc .muted {
         opacity: 0.75;
+      }
+
+      .ticket-badge {
+        text-align: center;
+        font-size: 10px;
+        font-weight: 700;
+        margin: 3px 0 2px;
+        letter-spacing: 0.3px;
+        text-transform: uppercase;
       }
     </style>
   </head>
@@ -173,6 +183,11 @@
         <span id="invoiceLabel">Factura Simplificada</span>
         <span id="invoiceNumber">---</span>
       </div>
+      <div
+        id="ticketTypeBadge"
+        class="ticket-badge"
+        style="display: none"
+      ></div>
       <div class="small">
         Fecha: <span id="ticketDate">--/--/---- --:--</span>
       </div>
