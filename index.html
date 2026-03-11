@@ -898,12 +898,23 @@
 
         <div class="parked-modal-body">
           <div class="tickets-tools">
-            <input
-              id="ticketsSearch"
-              type="text"
-              placeholder="Buscar (nº, cliente, total...)"
-              autocomplete="off"
-            />
+            <div class="tickets-search-wrap">
+              <input
+                id="ticketsSearch"
+                type="text"
+                placeholder="Buscar (nº, cliente, total...)"
+                autocomplete="off"
+              />
+
+              <button
+                id="ticketsSearchClearBtn"
+                type="button"
+                class="tickets-search-clear hidden"
+                title="Limpiar búsqueda"
+              >
+                ✕
+              </button>
+            </div>
 
             <button
               id="ticketsKeyboardBtn"
@@ -917,6 +928,86 @@
             <button id="ticketsReloadBtn" type="button" class="cart-btn">
               Recargar
             </button>
+          </div>
+
+          <div class="tickets-topbar">
+            <div class="tickets-tabs">
+              <button
+                id="ticketsTabCurrent"
+                type="button"
+                class="cart-btn tickets-tab-btn is-active"
+              >
+                CAJA ACTUAL
+              </button>
+
+              <button
+                id="ticketsTabOther"
+                type="button"
+                class="cart-btn tickets-tab-btn"
+              >
+                CAJAS ANTERIORES
+              </button>
+            </div>
+
+            <div class="tickets-filters">
+              <label class="tickets-filter-chip">
+                <input type="checkbox" id="tkFilterNormal" checked />
+                <span>Normales</span>
+              </label>
+
+              <label class="tickets-filter-chip">
+                <input type="checkbox" id="tkFilterRefunded" checked />
+                <span>Devueltos</span>
+              </label>
+
+              <label class="tickets-filter-chip">
+                <input type="checkbox" id="tkFilterPartial" checked />
+                <span>Parciales</span>
+              </label>
+            </div>
+          </div>
+
+          <div
+            id="ticketsOtherCajaActions"
+            class="tickets-other-actions hidden"
+          >
+            <label class="tickets-filter-chip tickets-filter-chip--small">
+              <input type="checkbox" id="tkFilterOnlyVisibleCajas" checked />
+              <span>Solo Visibles</span>
+            </label>
+
+            <button
+              id="ticketsExpandAllBtn"
+              type="button"
+              class="cart-btn tickets-mini-action"
+            >
+              Abrir Todas
+            </button>
+
+            <button
+              id="ticketsCollapseAllBtn"
+              type="button"
+              class="cart-btn tickets-mini-action"
+            >
+              Cerrar Todas
+            </button>
+          </div>
+
+          <div id="ticketsSummary" class="tickets-summary hidden">
+            <div class="tickets-summary-card">
+              <div class="tickets-summary-value" id="tkSumTickets">0</div>
+              <div class="tickets-summary-label">Tickets</div>
+            </div>
+
+            <div class="tickets-summary-card">
+              <div class="tickets-summary-value" id="tkSumTotal">0,00 €</div>
+              <div class="tickets-summary-label">Neto vendido</div>
+            </div>
+
+            <div class="tickets-summary-card">
+              <div class="tickets-summary-value" id="tkSumRefunds">0</div>
+              <div class="tickets-summary-label">Devoluciones</div>
+            </div>
           </div>
 
           <div id="ticketsList"></div>

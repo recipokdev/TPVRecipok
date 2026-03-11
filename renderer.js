@@ -11110,6 +11110,79 @@ const ticketsCloseBtn = document.getElementById("ticketsCloseBtn");
 const ticketsList = document.getElementById("ticketsList");
 const ticketsReloadBtn = document.getElementById("ticketsReloadBtn");
 const ticketsSearch = document.getElementById("ticketsSearch");
+const ticketsTabCurrent = document.getElementById("ticketsTabCurrent");
+const ticketsTabOther = document.getElementById("ticketsTabOther");
+const ticketsSearchClearBtn = document.getElementById("ticketsSearchClearBtn");
+const ticketsOtherCajaActions = document.getElementById(
+  "ticketsOtherCajaActions",
+);
+const ticketsExpandAllBtn = document.getElementById("ticketsExpandAllBtn");
+const ticketsCollapseAllBtn = document.getElementById("ticketsCollapseAllBtn");
+const tkFilterOnlyVisibleCajas = document.getElementById(
+  "tkFilterOnlyVisibleCajas",
+);
+
+const tkFilterNormal = document.getElementById("tkFilterNormal");
+const tkFilterRefunded = document.getElementById("tkFilterRefunded");
+const tkFilterPartial = document.getElementById("tkFilterPartial");
+const ticketsViewState = {
+  tab: "current",
+  filters: {
+    normal: true,
+    refunded: true,
+    partial: true,
+    onlyVisibleCajas: true,
+  },
+};
+const ticketsCajaCollapseState = {};
+
+function getTicketNetAmountForSummary(t) {
+  const totalNum = Number(t?.total || 0);
+  const refunds = Array.isArray(t?._refunds) ? t._refunds : [];
+  const hasRefunds = refunds.length > 0 || !!t?._hasPartialRefund;
+  const isFullyRefunded = !!t?._isFullyRefunded;
+  const remaining = Number(t?._remainingAfterRefund ?? totalNum);
+
+  if (isFullyRefunded) return 0;
+  if (hasRefunds) return remaining;
+  return totalNum;
+}
+
+function syncTicketsSearchClearBtn() {
+  if (!ticketsSearchClearBtn || !ticketsSearch) return;
+  const hasValue = String(ticketsSearch.value || "").trim().length > 0;
+  ticketsSearchClearBtn.classList.toggle("hidden", !hasValue);
+}
+
+function syncTicketsExtraActionsUI() {
+  if (!ticketsOtherCajaActions) return;
+  ticketsOtherCajaActions.classList.toggle(
+    "hidden",
+    ticketsViewState.tab !== "other",
+  );
+}
+
+function openAllCajaGroups(cajaIds = []) {
+  for (const cajaId of cajaIds) {
+    setCajaGroupOpen(cajaId, true);
+  }
+}
+
+function closeAllCajaGroups(cajaIds = []) {
+  for (const cajaId of cajaIds) {
+    setCajaGroupOpen(cajaId, false);
+  }
+}
+
+function isCajaGroupOpen(cajaId) {
+  const key = String(cajaId || 0);
+  return !!ticketsCajaCollapseState[key];
+}
+
+function setCajaGroupOpen(cajaId, open) {
+  const key = String(cajaId || 0);
+  ticketsCajaCollapseState[key] = !!open;
+}
 
 async function openTicketsModal() {
   if (!ticketsOverlay) {
@@ -11122,8 +11195,10 @@ async function openTicketsModal() {
   }
 
   ticketsOverlay.classList.remove("hidden");
-
-  await renderQueuedTicketsIfAny(); // ✅ NUEVO
+  syncTicketsToolbarUI();
+  syncTicketsSearchClearBtn();
+  syncTicketsExtraActionsUI();
+  await renderQueuedTicketsIfAny();
   await loadAndRenderTickets();
 }
 
@@ -11185,26 +11260,122 @@ async function loadAndRenderTickets() {
   }
 }
 
+function getTicketCajaId(t) {
+  return Number(t?.idcaja ?? t?._raw?.idcaja ?? 0) || 0;
+}
+
+function getCurrentCajaId() {
+  return Number(cashSession?.remoteCajaId || 0) || 0;
+}
+
+function getTicketVisualType(t) {
+  const refunds = Array.isArray(t?._refunds) ? t._refunds : [];
+  const hasRefunds = refunds.length > 0 || !!t?._hasPartialRefund;
+  const isFullyRefunded = !!t?._isFullyRefunded;
+
+  if (hasRefunds && isFullyRefunded) return "refunded";
+  if (hasRefunds) return "partial";
+  return "normal";
+}
+
+function ticketPassesTypeFilters(t) {
+  const type = getTicketVisualType(t);
+  return !!ticketsViewState.filters[type];
+}
+
+function renderTicketsSummary(tickets) {
+  const box = document.getElementById("ticketsSummary");
+  if (!box) return;
+
+  if (ticketsViewState.tab !== "current") {
+    box.classList.add("hidden");
+    return;
+  }
+
+  const currentCajaId = getCurrentCajaId();
+
+  const originals = (Array.isArray(tickets) ? tickets : []).filter((t) => {
+    const raw = t._raw || {};
+    const codserie = String(t.codserie || raw.codserie || "").toUpperCase();
+
+    const isRect =
+      codserie === "R" ||
+      Number(t.idfacturarect || raw.idfacturarect || 0) > 0 ||
+      !!(t.codigorect || raw.codigorect);
+
+    return !isRect && getTicketCajaId(t) === currentCajaId;
+  });
+
+  let ticketsCount = originals.length;
+  let netoVendido = 0;
+  let refundsCount = 0;
+
+  for (const t of originals) {
+    netoVendido += getTicketNetAmountForSummary(t);
+
+    const refunds = Array.isArray(t._refunds) ? t._refunds : [];
+    refundsCount += refunds.length;
+  }
+
+  document.getElementById("tkSumTickets").textContent = String(ticketsCount);
+  document.getElementById("tkSumTotal").textContent = eurES(netoVendido);
+  document.getElementById("tkSumRefunds").textContent = String(refundsCount);
+
+  box.classList.remove("hidden");
+}
+
+function syncTicketsToolbarUI() {
+  ticketsTabCurrent?.classList.toggle(
+    "is-active",
+    ticketsViewState.tab === "current",
+  );
+  ticketsTabOther?.classList.toggle(
+    "is-active",
+    ticketsViewState.tab === "other",
+  );
+
+  if (tkFilterNormal) {
+    tkFilterNormal.checked = !!ticketsViewState.filters.normal;
+  }
+  if (tkFilterRefunded) {
+    tkFilterRefunded.checked = !!ticketsViewState.filters.refunded;
+  }
+  if (tkFilterPartial) {
+    tkFilterPartial.checked = !!ticketsViewState.filters.partial;
+  }
+  if (tkFilterOnlyVisibleCajas) {
+    tkFilterOnlyVisibleCajas.checked =
+      !!ticketsViewState.filters.onlyVisibleCajas;
+  }
+
+  syncTicketsExtraActionsUI();
+  syncTicketsSearchClearBtn();
+}
+
 function renderTicketsList(tickets) {
   if (!ticketsList) return;
 
+  renderTicketsSummary(tickets);
+
   const term = (ticketsSearch?.value || "").trim().toLowerCase();
-  let list = Array.isArray(tickets) ? tickets : [];
+  const sourceList = Array.isArray(tickets) ? tickets : [];
 
-  // Buscar (incluye rectificativas hijas)
+  const matchesTicket = (t) => {
+    const s = `${t.codigo || ""} ${t.nombrecliente || ""} ${t.total || ""} ${
+      t.codpago || ""
+    } ${t.codserie || ""} ${t.idfactura || ""} ${t.codigorect || ""} ${
+      t.idcaja || t?._raw?.idcaja || ""
+    }`.toLowerCase();
+
+    return s.includes(term);
+  };
+
+  // 1) búsqueda
+  let searchedList = sourceList;
   if (term) {
-    const matchesTicket = (t) => {
-      const s = `${t.codigo || ""} ${t.nombrecliente || ""} ${t.total || ""} ${
-        t.codpago || ""
-      } ${t.codserie || ""} ${t.idfactura || ""} ${t.codigorect || ""}`.toLowerCase();
-      return s.includes(term);
-    };
-
-    list = list.filter((t) => {
-      // 1) si el propio ticket coincide, pasa
+    searchedList = sourceList.filter((t) => {
       if (matchesTicket(t)) return true;
 
-      // 2) si alguna rectificativa hija coincide, también pasa el original
       const refunds = Array.isArray(t._refunds) ? t._refunds : [];
       return refunds.some(matchesTicket);
     });
@@ -11212,23 +11383,98 @@ function renderTicketsList(tickets) {
 
   ticketsList.innerHTML = "";
 
-  if (!list.length) {
+  if (!searchedList.length) {
     ticketsList.innerHTML = `<div class="parked-ticket-empty">No hay tickets.</div>`;
     return;
   }
 
-  // ✅ Oculta rectificativas “sueltas”: se verán debajo del original
-  const originals = list.filter((t) => {
+  const currentCajaId = getCurrentCajaId();
+
+  // 2) solo tickets padre/originales, SIN aplicar filtros de tipo todavía
+  const searchedOriginalsAll = searchedList.filter((t) => {
     const raw = t._raw || {};
     const codserie = String(t.codserie || raw.codserie || "").toUpperCase();
     const isRect =
       codserie === "R" ||
       Number(t.idfacturarect || raw.idfacturarect || 0) > 0 ||
       !!(t.codigorect || raw.codigorect);
+
     return !isRect;
   });
 
-  originals.forEach((t) => {
+  // 3) visibles tras filtros de tipo
+  const searchedOriginalsVisible = searchedOriginalsAll.filter(
+    ticketPassesTypeFilters,
+  );
+
+  const originalsCurrent =
+    ticketsViewState.tab === "current"
+      ? searchedOriginalsVisible.filter(
+          (t) => getTicketCajaId(t) === currentCajaId,
+        )
+      : searchedOriginalsVisible.filter(
+          (t) => getTicketCajaId(t) !== currentCajaId,
+        );
+
+  const renderRefundChildren = (
+    parentTicket,
+    parentNum,
+    refunds,
+    mountEl = ticketsList,
+  ) => {
+    if (!refunds.length) return;
+
+    const holder = document.createElement("div");
+    holder.className = "ticket-children";
+
+    holder.innerHTML = refunds
+      .map((r) => {
+        const rnum = r.codigo || `#${r.idfactura}`;
+        const rFechaHora = `${r.fecha || ""} ${r.hora || ""}`.trim();
+        const rTotal = eurES(Number(r.total || 0));
+
+        return `
+          <div class="ticket-row ticket-status-fullref ticket-child" data-id="${Number(
+            r.idfactura || 0,
+          )}">
+            <div class="ticket-left">
+              <div class="ticket-num">
+                ↩ ${escapeHtml(rnum)}
+                <span style="margin-left:8px; font-size:12px; opacity:.7;">De: ${escapeHtml(
+                  parentNum,
+                )}</span>
+              </div>
+              <div class="ticket-bot">${escapeHtml(rFechaHora)}</div>
+            </div>
+
+            <div class="ticket-right">
+              <div class="ticket-total">${rTotal}</div>
+              <div class="ticket-actions">
+                <button type="button" class="ticket-btn ticket-print" title="Imprimir">🖨</button>
+              </div>
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+
+    mountEl.appendChild(holder);
+
+    holder.querySelectorAll(".ticket-child").forEach((rowEl) => {
+      const id = Number(rowEl.getAttribute("data-id") || 0);
+      const rr = refunds.find((x) => Number(x.idfactura) === id);
+      const btn = rowEl.querySelector(".ticket-print");
+
+      if (btn && rr) {
+        btn.onclick = async (e) => {
+          e.stopPropagation();
+          await imprimirFacturaHistorica(rr);
+        };
+      }
+    });
+  };
+
+  const renderOneTicketRow = (t, mountEl = ticketsList) => {
     const div = document.createElement("div");
     div.className = "ticket-row";
 
@@ -11237,7 +11483,8 @@ function renderTicketsList(tickets) {
     const fechaHora = `${t.fecha || ""} ${t.hora || ""}`.trim();
     const totalNum = Number(t.total || 0);
     const pago = t.codpago || "—";
-    // ✅ observaciones puede venir en el objeto plano o dentro de _raw
+    const cajaId = getTicketCajaId(t);
+
     const obs = String(t.observaciones ?? t._raw?.observaciones ?? "")
       .replace(/\s+/g, " ")
       .trim();
@@ -11246,7 +11493,6 @@ function renderTicketsList(tickets) {
     const hasRefunds = refunds.length > 0 || !!t._hasPartialRefund;
     const isFullyRefunded = !!t._isFullyRefunded;
 
-    // ✅ estado visual
     let statusClass = "ticket-status-ok";
     let badgeHtml = `<span class="ticket-badge ticket-badge-ok">OK</span>`;
 
@@ -11262,9 +11508,6 @@ function renderTicketsList(tickets) {
 
     div.classList.add(statusClass);
 
-    // ✅ Total mostrado:
-    // - OK / DEVUELTO completo: mostramos el total “tal cual” (el de facturaclientes)
-    // - PARCIAL: mostramos "TOTAL (REST X€)"
     const remaining = Number(t._remainingAfterRefund ?? 0);
     let totalHtml = eurES(totalNum);
 
@@ -11276,10 +11519,14 @@ function renderTicketsList(tickets) {
       )} Rest)</span>`;
     }
 
-    // ✅ texto Dev: N
     const devCountTxt = hasRefunds
       ? `<span style="margin-left:10px; font-size:12px; opacity:.75;">Dev: ${refunds.length}</span>`
       : "";
+
+    const cajaHtml =
+      ticketsViewState.tab === "other" && cajaId
+        ? `<span class="ticket-id">Caja ${cajaId}</span>`
+        : "";
 
     div.innerHTML = `
       <div class="ticket-left">
@@ -11289,22 +11536,21 @@ function renderTicketsList(tickets) {
           ${devCountTxt}
         </div>
 
-<div class="ticket-mid">
-  <span class="ticket-client">${escapeHtml(cliente)}</span>
-  <span class="ticket-pay">${escapeHtml(pago)}</span>
-  <span class="ticket-id">${t._offline ? "OFFLINE" : `ID ${t.idfactura}`}</span>
-</div>
+        <div class="ticket-mid">
+          <span class="ticket-client">${escapeHtml(cliente)}</span>
+          <span class="ticket-pay">${escapeHtml(pago)}</span>
+          ${cajaHtml}
+          <span class="ticket-id">ID ${t.idfactura}</span>
+        </div>
 
-${obs ? `<div class="ticket-obs">${escapeHtml(obs)}</div>` : ""}
-
-<div class="ticket-bot">${escapeHtml(fechaHora)}</div>
-
+        ${obs ? `<div class="ticket-obs">${escapeHtml(obs)}</div>` : ""}
+        <div class="ticket-bot">${escapeHtml(fechaHora)}</div>
       </div>
 
       <div class="ticket-right">
         <div class="ticket-total">${totalHtml}</div>
 
-        <div class="ticket-actions"><div class="ticket-actions">
+        <div class="ticket-actions">
           <button type="button" class="ticket-btn ticket-print" title="Imprimir">🖨</button>
 
           ${
@@ -11313,46 +11559,19 @@ ${obs ? `<div class="ticket-obs">${escapeHtml(obs)}</div>` : ""}
               : `<button type="button" class="ticket-btn ticket-refund" title="Devolver">↩</button>`
           }
 
-          ${
-            // ✅ NO mostrar si DEVUELTO completo o si es OFFLINE
-            (hasRefunds && isFullyRefunded) || t._offline
-              ? ""
-              : `<button type="button" class="ticket-btn ticket-payedit" title="Cambiar pago">💳</button>`
-          }
+          <button type="button" class="ticket-btn ticket-payedit" title="Cambiar pago">💳</button>
         </div>
       </div>
     `;
 
-    // ✅ imprimir
     const printBtn = div.querySelector(".ticket-print");
     if (printBtn) {
       printBtn.onclick = async (e) => {
         e.stopPropagation();
-
-        if (t && t._offline) {
-          const ticket = {
-            numero: t.codigo || "OFFLINE",
-            fecha: t.fecha || "",
-            hora: t.hora || "",
-            paymentMethod: t.codpago || "—",
-            clientName: t.nombrecliente || "Venta en cola",
-            terminalName: currentTerminal ? currentTerminal.name : "",
-            agentName: currentAgent ? currentAgent.name : "",
-            company: companyInfo ? { ...companyInfo } : null,
-            lineas: Array.isArray(t.lineas) ? t.lineas : [],
-            total: Number(t.total || 0),
-            pagos: Array.isArray(t.pagos) ? t.pagos : [],
-            cambio: Number(t.cambio || 0),
-          };
-          await printTicket(ticket);
-          return;
-        }
-
         await imprimirFacturaHistorica(t);
       };
     }
 
-    // ✅ devolver
     const refundBtn = div.querySelector(".ticket-refund");
     if (refundBtn) {
       refundBtn.onclick = async (e) => {
@@ -11361,7 +11580,6 @@ ${obs ? `<div class="ticket-obs">${escapeHtml(obs)}</div>` : ""}
       };
     }
 
-    // ✅ cambiar pago (solo si existe el botón)
     const payEditBtn = div.querySelector(".ticket-payedit");
     if (payEditBtn) {
       payEditBtn.onclick = async (e) => {
@@ -11370,70 +11588,228 @@ ${obs ? `<div class="ticket-obs">${escapeHtml(obs)}</div>` : ""}
       };
     }
 
-    // ✅ click fila abre devolución (solo si no está devuelto completo)
     div.onclick = async () => {
       if (hasRefunds && isFullyRefunded) return;
       await openRefundForFactura(t);
     };
 
-    ticketsList.appendChild(div);
+    mountEl.appendChild(div);
+    renderRefundChildren(t, num, refunds, mountEl);
+  };
 
-    // ✅ Hijos (rectificativas) siempre debajo si existen
-    if (refunds.length) {
-      const holder = document.createElement("div");
-      holder.className = "ticket-children";
-
-      holder.innerHTML = refunds
-        .map((r) => {
-          const rnum = r.codigo || `#${r.idfactura}`;
-          const rFechaHora = `${r.fecha || ""} ${r.hora || ""}`.trim();
-          const rTotal = eurES(Number(r.total || 0));
-
-          return `
-            <div class="ticket-row ticket-status-fullref ticket-child" data-id="${Number(
-              r.idfactura || 0,
-            )}">
-              <div class="ticket-left">
-                <div class="ticket-num">
-                  ↩ ${escapeHtml(rnum)}
-                  <span style="margin-left:8px; font-size:12px; opacity:.7;">De: ${escapeHtml(
-                    num,
-                  )}</span>
-                </div>
-                <div class="ticket-bot">${escapeHtml(rFechaHora)}</div>
-              </div>
-
-              <div class="ticket-right">
-                <div class="ticket-total">${rTotal}</div>
-                <div class="ticket-actions">
-                  <button type="button" class="ticket-btn ticket-print" title="Imprimir">🖨</button>
-                </div>
-              </div>
-            </div>
-          `;
-        })
-        .join("");
-
-      ticketsList.appendChild(holder);
-
-      // bind imprimir en hijos
-      holder.querySelectorAll(".ticket-child").forEach((rowEl) => {
-        const id = Number(rowEl.getAttribute("data-id") || 0);
-        const rr = refunds.find((x) => Number(x.idfactura) === id);
-        const btn = rowEl.querySelector(".ticket-print");
-        if (btn && rr) {
-          btn.onclick = async (e) => {
-            e.stopPropagation();
-            await imprimirFacturaHistorica(rr);
-          };
-        }
-      });
+  if (ticketsViewState.tab === "current") {
+    if (!originalsCurrent.length) {
+      ticketsList.innerHTML = `<div class="parked-ticket-empty">No hay tickets en esta vista.</div>`;
+      return;
     }
-  });
+
+    sortTicketsByFechaDesc(originalsCurrent).forEach((t) =>
+      renderOneTicketRow(t, ticketsList),
+    );
+    return;
+  }
+
+  // 4) OTRAS CAJAS:
+  //    groupAll = tickets reales de esa caja dentro de la búsqueda
+  //    groupVisible = tickets visibles tras filtros dentro de la búsqueda
+  const allOtherOriginals = searchedOriginalsAll.filter(
+    (t) => getTicketCajaId(t) !== currentCajaId,
+  );
+
+  if (!allOtherOriginals.length) {
+    ticketsList.innerHTML = `<div class="parked-ticket-empty">No hay tickets en esta vista.</div>`;
+    return;
+  }
+
+  const visibleOtherOriginals = searchedOriginalsVisible.filter(
+    (t) => getTicketCajaId(t) !== currentCajaId,
+  );
+
+  const byCajaAll = new Map();
+  for (const t of allOtherOriginals) {
+    const cajaId = getTicketCajaId(t) || 0;
+    if (!byCajaAll.has(cajaId)) byCajaAll.set(cajaId, []);
+    byCajaAll.get(cajaId).push(t);
+  }
+
+  const byCajaVisible = new Map();
+  for (const t of visibleOtherOriginals) {
+    const cajaId = getTicketCajaId(t) || 0;
+    if (!byCajaVisible.has(cajaId)) byCajaVisible.set(cajaId, []);
+    byCajaVisible.get(cajaId).push(t);
+  }
+
+  const orderedCajaIds = Array.from(byCajaAll.keys()).sort((a, b) => b - a);
+
+  for (const cajaId of orderedCajaIds) {
+    const groupAll = sortTicketsByFechaDesc(byCajaAll.get(cajaId) || []);
+    const groupVisible = sortTicketsByFechaDesc(
+      byCajaVisible.get(cajaId) || [],
+    );
+
+    const totalReal = groupAll.length;
+    const totalVisible = groupVisible.length;
+    const totalHidden = Math.max(0, totalReal - totalVisible);
+
+    const totalCajaVisible = groupVisible.reduce(
+      (acc, t) => acc + getTicketNetAmountForSummary(t),
+      0,
+    );
+
+    if (ticketsViewState.filters.onlyVisibleCajas && totalVisible === 0) {
+      continue;
+    }
+
+    const wrap = document.createElement("div");
+    wrap.className = "ticket-caja-group";
+    wrap.setAttribute("data-open", isCajaGroupOpen(cajaId) ? "1" : "0");
+
+    const hiddenText = totalHidden > 0 ? ` · ocultos: ${totalHidden}` : "";
+    const visibleText =
+      totalVisible !== totalReal ? ` · visibles: ${totalVisible}` : "";
+
+    const amountText =
+      Math.abs(Number(totalCajaVisible || 0)) > 0.00001
+        ? ` · ${eurES(totalCajaVisible)}`
+        : "";
+
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "ticket-caja-head";
+    head.innerHTML = `
+    <div class="ticket-caja-head-left">
+      <span>${escapeHtml(cajaId ? `Caja ${cajaId}` : "Sin caja")}</span>
+      <span class="ticket-caja-meta">
+        ${totalReal} tickets${visibleText}${hiddenText}${amountText}
+      </span>
+    </div>
+    <span class="ticket-caja-chevron">▾</span>
+  `;
+
+    const body = document.createElement("div");
+    body.className = "ticket-caja-body";
+
+    head.onclick = () => {
+      const nextOpen = wrap.getAttribute("data-open") !== "1";
+      wrap.setAttribute("data-open", nextOpen ? "1" : "0");
+      setCajaGroupOpen(cajaId, nextOpen);
+    };
+
+    wrap.appendChild(head);
+    wrap.appendChild(body);
+    ticketsList.appendChild(wrap);
+
+    if (!groupVisible.length) {
+      const empty = document.createElement("div");
+      empty.className = "tickets-caja-empty";
+      empty.textContent = "No hay tickets visibles con los filtros actuales.";
+      body.appendChild(empty);
+      continue;
+    }
+
+    groupVisible.forEach((t) => renderOneTicketRow(t, body));
+  }
 }
 
 // Bind botones del overlay
 const ticketsKeyboardBtn = document.getElementById("ticketsKeyboardBtn");
+
+ticketsExpandAllBtn?.addEventListener("click", () => {
+  const source = ticketsUiCache.length ? ticketsUiCache : ticketsCache;
+  const list = Array.isArray(source) ? source : [];
+  const currentCajaId = getCurrentCajaId();
+
+  const cajaIds = Array.from(
+    new Set(
+      list
+        .filter((t) => {
+          const raw = t._raw || {};
+          const codserie = String(
+            t.codserie || raw.codserie || "",
+          ).toUpperCase();
+          const isRect =
+            codserie === "R" ||
+            Number(t.idfacturarect || raw.idfacturarect || 0) > 0 ||
+            !!(t.codigorect || raw.codigorect);
+
+          return !isRect && getTicketCajaId(t) !== currentCajaId;
+        })
+        .map((t) => getTicketCajaId(t) || 0),
+    ),
+  );
+
+  openAllCajaGroups(cajaIds);
+  renderTicketsList(source);
+});
+
+ticketsCollapseAllBtn?.addEventListener("click", () => {
+  const source = ticketsUiCache.length ? ticketsUiCache : ticketsCache;
+  const list = Array.isArray(source) ? source : [];
+  const currentCajaId = getCurrentCajaId();
+
+  const cajaIds = Array.from(
+    new Set(
+      list
+        .filter((t) => {
+          const raw = t._raw || {};
+          const codserie = String(
+            t.codserie || raw.codserie || "",
+          ).toUpperCase();
+          const isRect =
+            codserie === "R" ||
+            Number(t.idfacturarect || raw.idfacturarect || 0) > 0 ||
+            !!(t.codigorect || raw.codigorect);
+
+          return !isRect && getTicketCajaId(t) !== currentCajaId;
+        })
+        .map((t) => getTicketCajaId(t) || 0),
+    ),
+  );
+
+  closeAllCajaGroups(cajaIds);
+  renderTicketsList(source);
+});
+
+tkFilterOnlyVisibleCajas?.addEventListener("change", () => {
+  ticketsViewState.filters.onlyVisibleCajas =
+    !!tkFilterOnlyVisibleCajas.checked;
+  renderTicketsList(ticketsUiCache.length ? ticketsUiCache : ticketsCache);
+});
+
+ticketsSearchClearBtn?.addEventListener("click", () => {
+  if (!ticketsSearch) return;
+  ticketsSearch.value = "";
+  syncTicketsSearchClearBtn();
+  renderTicketsList(ticketsUiCache.length ? ticketsUiCache : ticketsCache);
+  ticketsSearch.focus();
+});
+
+ticketsTabCurrent?.addEventListener("click", () => {
+  ticketsViewState.tab = "current";
+  syncTicketsToolbarUI();
+  renderTicketsList(ticketsUiCache.length ? ticketsUiCache : ticketsCache);
+});
+
+ticketsTabOther?.addEventListener("click", () => {
+  ticketsViewState.tab = "other";
+  syncTicketsToolbarUI();
+  renderTicketsList(ticketsUiCache.length ? ticketsUiCache : ticketsCache);
+});
+
+tkFilterNormal?.addEventListener("change", () => {
+  ticketsViewState.filters.normal = !!tkFilterNormal.checked;
+  renderTicketsList(ticketsUiCache.length ? ticketsUiCache : ticketsCache);
+});
+
+tkFilterRefunded?.addEventListener("change", () => {
+  ticketsViewState.filters.refunded = !!tkFilterRefunded.checked;
+  renderTicketsList(ticketsUiCache.length ? ticketsUiCache : ticketsCache);
+});
+
+tkFilterPartial?.addEventListener("change", () => {
+  ticketsViewState.filters.partial = !!tkFilterPartial.checked;
+  renderTicketsList(ticketsUiCache.length ? ticketsUiCache : ticketsCache);
+});
 
 ticketsKeyboardBtn?.addEventListener("click", () => {
   if (!ticketsSearch) return;
@@ -11445,9 +11821,10 @@ let ticketsSearchTimer = null;
 
 if (ticketsSearch) {
   ticketsSearch.oninput = () => {
+    syncTicketsSearchClearBtn();
+
     clearTimeout(ticketsSearchTimer);
     ticketsSearchTimer = setTimeout(() => {
-      // ✅ usa la lista final (incluye OFFLINE + refunds linkeados)
       renderTicketsList(ticketsUiCache.length ? ticketsUiCache : ticketsCache);
     }, 250);
   };
@@ -11467,15 +11844,6 @@ function mapFacturaRowToTicketRow(f) {
     hora: f.hora || "",
     _raw: f,
   };
-}
-
-function filterLastNDays(list, days = 30) {
-  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-  return (Array.isArray(list) ? list : []).filter((t) => {
-    const ts = parseFechaHoraFS(t.fecha, t.hora, t.idfactura);
-
-    return ts >= cutoff;
-  });
 }
 
 // Botón "Tickets" (YA FUNCIONAL)
@@ -11521,35 +11889,6 @@ function sortTicketsByFechaDesc(list) {
 
 function normalizeEmail(email) {
   return (email || "").trim().toLowerCase();
-}
-
-function isValidEmailFormat(email) {
-  const e = normalizeEmail(email);
-  // simple y suficiente para TPV (sin RFC loco)
-  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e);
-}
-
-function updateEmailModalValidation() {
-  const emailInput = document.getElementById("emailInput");
-  const emailOkBtn = document.getElementById("emailOkBtn");
-  const emailError = document.getElementById("emailError");
-  if (!emailInput || !emailOkBtn) return;
-
-  const val = (emailInput.value || "").trim();
-  const ok = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(val.toLowerCase());
-
-  emailOkBtn.disabled = !ok;
-  if (emailError)
-    emailError.textContent =
-      !val || ok ? "" : "Email no válido (ej: nombre@dominio.com)";
-}
-
-function getSavedConfig() {
-  return {
-    companyEmail: localStorage.getItem("tpv_companyEmail") || "",
-    baseUrl: localStorage.getItem("tpv_baseUrl") || "",
-    apiKey: localStorage.getItem("tpv_apiKey") || "",
-  };
 }
 
 async function saveResolvedCompany({ email, baseUrl, apiKey }) {
@@ -12528,10 +12867,27 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
     const body = document.createElement("div");
     body.className = "pack-modal-body";
 
+    // ✅ Barra acciones
+    const bulkActions = document.createElement("div");
+    bulkActions.className = "pack-modal-bulk-actions";
+
+    const btnCheckAll = document.createElement("button");
+    btnCheckAll.type = "button";
+    btnCheckAll.className = "pack-btn pack-btn-bulk";
+    btnCheckAll.textContent = "Marcar todo";
+
+    const btnUncheckAll = document.createElement("button");
+    btnUncheckAll.type = "button";
+    btnUncheckAll.className = "pack-btn pack-btn-bulk";
+    btnUncheckAll.textContent = "Desmarcar todo";
+
+    bulkActions.appendChild(btnCheckAll);
+    bulkActions.appendChild(btnUncheckAll);
+
     const list = document.createElement("div");
     list.className = "pack-modal-list";
 
-    // Estado (defaultQty guardado para reset)
+    // Estado
     const state = packLines.map((pl) => {
       const def = Math.max(1, Math.round(Number(pl.baseQty || 1)));
       return {
@@ -12559,7 +12915,6 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
       if (!isFinite(q)) q = 0;
       q = Math.max(0, Math.round(q));
 
-      // regla: qty 0 => desmarca
       if (q === 0) {
         s.qty = 0;
         s.checked = false;
@@ -12567,10 +12922,10 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
         s.qty = q;
         s.checked = true;
       }
+
       renderRow(i);
     }
 
-    // re-render de una sola fila
     const rowEls = new Map();
 
     function renderRow(i) {
@@ -12583,12 +12938,36 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
 
       chk.checked = !!s.checked;
 
-      // si se vuelve a marcar, qty default/1
-      if (s.checked && (!s.qty || s.qty <= 0)) s.qty = s.defaultQty || 1;
+      if (s.checked && (!s.qty || s.qty <= 0)) {
+        s.qty = s.defaultQty || 1;
+      }
 
       valueBtn.textContent = String(s.qty || 0);
-
       setRowDisabled(row, !s.checked);
+    }
+
+    // ✅ re-render global
+    function renderAllRows() {
+      for (let i = 0; i < state.length; i++) {
+        renderRow(i);
+      }
+    }
+
+    // ✅ marcar/desmarcar todo
+    function setAllPackRowsChecked(checked) {
+      for (const s of state) {
+        s.checked = !!checked;
+
+        if (checked) {
+          if (!s.qty || s.qty <= 0) {
+            s.qty = s.defaultQty || 1;
+          }
+        } else {
+          s.qty = 0;
+        }
+      }
+
+      renderAllRows();
     }
 
     function makeRow(i) {
@@ -12611,7 +12990,6 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
       left.appendChild(chk);
       left.appendChild(name);
 
-      // Stepper
       const stepper = document.createElement("div");
       stepper.className = "pack-stepper";
 
@@ -12644,7 +13022,6 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
       row.appendChild(left);
       row.appendChild(stepper);
 
-      // Behaviors
       function ensureChecked() {
         if (!s.checked) {
           s.checked = true;
@@ -12658,9 +13035,9 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
         if (s.checked) {
           if (!s.qty || s.qty <= 0) s.qty = s.defaultQty || 1;
         } else {
-          // al desmarcar, bloqueamos pero dejamos qty recordada o la ponemos 0 (tu preferencia)
           s.qty = 0;
         }
+
         renderRow(i);
       });
 
@@ -12680,12 +13057,8 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
         applyQty(i, s.defaultQty || 1);
       });
 
-      // Click en el valor => abre tu numPad
       valueBtn.addEventListener("click", () => {
         ensureChecked();
-
-        // Querías: modal oferta arriba, teclado debajo.
-        // Con z-index ya queda así, pero hacemos scroll top por si acaso.
         modal.scrollTop = 0;
 
         openNumPad(
@@ -12700,7 +13073,6 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
         );
       });
 
-      // Init disabled
       rowEls.set(i, row);
       renderRow(i);
       return row;
@@ -12710,6 +13082,16 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
       list.appendChild(makeRow(i));
     }
 
+    // ✅ bind acciones masivas
+    btnCheckAll.addEventListener("click", () => {
+      setAllPackRowsChecked(true);
+    });
+
+    btnUncheckAll.addEventListener("click", () => {
+      setAllPackRowsChecked(false);
+    });
+
+    body.appendChild(bulkActions);
     body.appendChild(list);
 
     // Footer
@@ -12736,7 +13118,6 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
 
-    // Close handlers
     xBtn.addEventListener("click", () => close(null));
     btnCancel.addEventListener("click", () => close(null));
 
@@ -12747,12 +13128,16 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
     btnOk.addEventListener("click", () => {
       const selection = state
         .filter((s) => s.checked && Number(s.qty || 0) > 0)
-        .map((s) => ({ reference: s.reference, qty: Number(s.qty || 0) }));
+        .map((s) => ({
+          reference: s.reference,
+          qty: Number(s.qty || 0),
+        }));
 
       if (!selection.length) {
         toast("La oferta no puede quedar vacía.", "warn");
         return;
       }
+
       close(selection);
     });
   });
