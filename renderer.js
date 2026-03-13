@@ -175,6 +175,449 @@ const cartClientInput = document.querySelector(".cart-client-input");
 
 // ===== Funciones auxiliares =====
 
+async function loadCustomerDisplayToggle() {
+  const el = document.getElementById("customerDisplayToggle");
+  if (!el || !window.TPV_CUSTOMER_CTRL?.getEnabled) return;
+
+  try {
+    const r = await window.TPV_CUSTOMER_CTRL.getEnabled();
+    if (r?.ok) {
+      el.checked = !!r.enabled;
+    }
+  } catch (e) {
+    console.error("[OPTIONS] load customer display failed:", e);
+  }
+}
+
+let customerDisplayToggleBound = false;
+
+function bindCustomerDisplayToggleOnce() {
+  if (customerDisplayToggleBound) return;
+  customerDisplayToggleBound = true;
+
+  const el = document.getElementById("customerDisplayToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+
+    try {
+      const r = await window.TPV_CUSTOMER_CTRL?.setEnabled?.(wanted);
+
+      if (!r?.ok) {
+        el.checked = !wanted;
+        console.error("[OPTIONS] set customer display failed:", r?.error);
+        return;
+      }
+
+      el.checked = !!r.enabled;
+    } catch (e) {
+      el.checked = !wanted;
+      console.error("[OPTIONS] set customer display error:", e);
+    }
+  });
+}
+
+// ===============================
+// Opciones de Terminal, elegir grupos ocultos para cada terminal
+// ===============================
+
+const TERMINAL_FAMILY_HIDDEN_CFG_KEY = "ui.terminalFamilyHidden";
+
+let terminalFamiliesDraftHiddenMap = {};
+let terminalFamiliesCurrentTerminalId = null;
+let terminalFamilyHiddenCache = {};
+
+async function getTerminalFamilyHiddenMap() {
+  try {
+    const raw = await window.TPV_CFG?.get?.(TERMINAL_FAMILY_HIDDEN_CFG_KEY);
+    if (!raw) return {};
+    if (typeof raw === "object") return raw;
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+async function saveTerminalFamilyHiddenMap(map) {
+  try {
+    await window.TPV_CFG?.set?.(TERMINAL_FAMILY_HIDDEN_CFG_KEY, map);
+    return true;
+  } catch (e) {
+    console.warn("No se pudo guardar ui.terminalFamilyHidden:", e);
+    return false;
+  }
+}
+
+async function reloadTerminalFamilyHiddenCache() {
+  terminalFamilyHiddenCache = await getTerminalFamilyHiddenMap();
+}
+
+function getHiddenCategoryIdsForTerminalSync(terminalId) {
+  const key = String(terminalId || "");
+  const arr = Array.isArray(terminalFamilyHiddenCache[key])
+    ? terminalFamilyHiddenCache[key]
+    : [];
+  return new Set(arr.map(String));
+}
+
+function getAllCategoriesSorted() {
+  return [...(categories || [])].sort((a, b) =>
+    String(a.name || "").localeCompare(String(b.name || ""), "es"),
+  );
+}
+
+async function openTerminalFamiliesDialog() {
+  const overlay = document.getElementById("terminalFamiliesOverlay");
+  const select = document.getElementById("terminalFamiliesSelect");
+  if (!overlay || !select) return;
+
+  terminalFamiliesDraftHiddenMap = await getTerminalFamilyHiddenMap();
+  terminalFamiliesDraftModeMap = await getTerminalFamilyModeMap();
+
+  select.innerHTML = "";
+  (terminals || []).forEach((t) => {
+    const opt = document.createElement("option");
+    opt.value = String(t.id);
+    opt.textContent = t.name || `TPV ${t.id}`;
+    select.appendChild(opt);
+  });
+
+  terminalFamiliesCurrentTerminalId = String(
+    currentTerminal?.id || terminals?.[0]?.id || "",
+  );
+
+  if (terminalFamiliesCurrentTerminalId) {
+    select.value = terminalFamiliesCurrentTerminalId;
+  }
+
+  renderTerminalFamiliesModeUi();
+  renderTerminalFamiliesList();
+  overlay.classList.remove("hidden");
+}
+
+function closeTerminalFamiliesDialog() {
+  const overlay = document.getElementById("terminalFamiliesOverlay");
+  if (!overlay) return;
+  overlay.classList.add("hidden");
+}
+
+function renderTerminalFamiliesList() {
+  const listEl = document.getElementById("terminalFamiliesList");
+  const select = document.getElementById("terminalFamiliesSelect");
+  if (!listEl || !select) return;
+
+  const terminalId = String(select.value || "");
+  terminalFamiliesCurrentTerminalId = terminalId;
+
+  listEl.innerHTML = "";
+
+  const allCats = getAllCategoriesSorted();
+  const rootCats = allCats.filter((c) => !c.parentId);
+
+  const hiddenIds = Array.isArray(terminalFamiliesDraftHiddenMap[terminalId])
+    ? terminalFamiliesDraftHiddenMap[terminalId].map(String)
+    : [];
+
+  const hiddenSet = new Set(hiddenIds);
+
+  const getChildren = (parentId) =>
+    allCats.filter((c) => String(c.parentId || "") === String(parentId));
+
+  const buildSwitch = (catId, checked, onChange) => {
+    const label = document.createElement("label");
+    label.className = "switch";
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = checked;
+    input.addEventListener("change", onChange);
+
+    const slider = document.createElement("span");
+    slider.className = "slider";
+
+    label.appendChild(input);
+    label.appendChild(slider);
+    return label;
+  };
+
+  const updateHiddenForTerminal = (catId, visible) => {
+    const currentHidden = new Set(
+      Array.isArray(terminalFamiliesDraftHiddenMap[terminalId])
+        ? terminalFamiliesDraftHiddenMap[terminalId].map(String)
+        : [],
+    );
+
+    if (visible) currentHidden.delete(String(catId));
+    else currentHidden.add(String(catId));
+
+    const arr = Array.from(currentHidden);
+
+    if (!arr.length) delete terminalFamiliesDraftHiddenMap[terminalId];
+    else terminalFamiliesDraftHiddenMap[terminalId] = arr;
+  };
+
+  rootCats.forEach((root) => {
+    const card = document.createElement("div");
+    card.className = "terminal-family-card";
+
+    // Cabecera del grupo principal
+    const rootRow = document.createElement("div");
+    rootRow.className = "terminal-family-item terminal-family-item-root";
+
+    const rootText = document.createElement("div");
+    rootText.className = "terminal-family-item-text";
+
+    const rootTitle = document.createElement("div");
+    rootTitle.className = "terminal-family-item-title";
+    rootTitle.textContent = root.name;
+
+    rootText.appendChild(rootTitle);
+
+    const rootVisible = !hiddenSet.has(String(root.id));
+
+    const rootSwitch = buildSwitch(root.id, rootVisible, (e) => {
+      const nextVisible = e.target.checked;
+
+      const children = getChildren(root.id);
+      const currentHidden = new Set(
+        Array.isArray(terminalFamiliesDraftHiddenMap[terminalId])
+          ? terminalFamiliesDraftHiddenMap[terminalId].map(String)
+          : [],
+      );
+
+      if (nextVisible) {
+        // activar padre + hijos
+        currentHidden.delete(String(root.id));
+        children.forEach((child) => currentHidden.delete(String(child.id)));
+      } else {
+        // ocultar padre + hijos
+        currentHidden.add(String(root.id));
+        children.forEach((child) => currentHidden.add(String(child.id)));
+      }
+
+      const arr = Array.from(currentHidden);
+
+      if (!arr.length) delete terminalFamiliesDraftHiddenMap[terminalId];
+      else terminalFamiliesDraftHiddenMap[terminalId] = arr;
+
+      renderTerminalFamiliesList();
+    });
+
+    rootRow.appendChild(rootText);
+    rootRow.appendChild(rootSwitch);
+    card.appendChild(rootRow);
+
+    // Hijos
+    if (rootVisible) {
+      const children = getChildren(root.id);
+
+      if (children.length) {
+        const childrenWrap = document.createElement("div");
+        childrenWrap.className = "terminal-family-children";
+
+        children.forEach((child) => {
+          const childRow = document.createElement("div");
+          childRow.className = "terminal-family-item terminal-family-item-sub";
+
+          const childText = document.createElement("div");
+          childText.className = "terminal-family-item-text";
+
+          const childTitle = document.createElement("div");
+          childTitle.className = "terminal-family-item-title";
+          childTitle.textContent = child.name;
+
+          childText.appendChild(childTitle);
+
+          const childVisible = !hiddenSet.has(String(child.id));
+
+          const childSwitch = buildSwitch(child.id, childVisible, (e) => {
+            updateHiddenForTerminal(child.id, e.target.checked);
+            renderTerminalFamiliesList();
+          });
+
+          childRow.appendChild(childText);
+          childRow.appendChild(childSwitch);
+          childrenWrap.appendChild(childRow);
+        });
+
+        card.appendChild(childrenWrap);
+      }
+    }
+
+    listEl.appendChild(card);
+  });
+}
+
+async function saveTerminalFamiliesDialog() {
+  const okHidden = await saveTerminalFamilyHiddenMap(
+    terminalFamiliesDraftHiddenMap,
+  );
+  const okMode = await saveTerminalFamilyModeMap(terminalFamiliesDraftModeMap);
+
+  if (!okHidden || !okMode) {
+    toast?.("No se pudo guardar la configuración.", "err", "Terminales");
+    return;
+  }
+
+  terminalFamilyHiddenCache = { ...terminalFamiliesDraftHiddenMap };
+  terminalFamilyModeCache = { ...terminalFamiliesDraftModeMap };
+
+  closeTerminalFamiliesDialog();
+
+  if (typeof renderMainUI === "function") renderMainUI(true);
+  if (typeof renderCategories === "function") renderCategories();
+  if (typeof renderProducts === "function") renderProducts();
+
+  toast?.("Configuración guardada.", "ok", "Terminales");
+}
+
+function setupTerminalFamiliesUi() {
+  const openBtn = document.getElementById("optionsTerminalFamiliesBtn");
+  const closeX = document.getElementById("terminalFamiliesCloseX");
+  const cancelBtn = document.getElementById("terminalFamiliesCancelBtn");
+  const saveBtn = document.getElementById("terminalFamiliesSaveBtn");
+  const select = document.getElementById("terminalFamiliesSelect");
+  const modeToggle = document.getElementById("terminalFamiliesShowAllToggle");
+  const checkAllBtn = document.getElementById("terminalFamiliesCheckAllBtn");
+  const uncheckAllBtn = document.getElementById(
+    "terminalFamiliesUncheckAllBtn",
+  );
+
+  if (openBtn && openBtn.dataset.bound !== "1") {
+    openBtn.dataset.bound = "1";
+    openBtn.addEventListener("click", openTerminalFamiliesDialog);
+  }
+
+  if (closeX && closeX.dataset.bound !== "1") {
+    closeX.dataset.bound = "1";
+    closeX.addEventListener("click", closeTerminalFamiliesDialog);
+  }
+
+  if (cancelBtn && cancelBtn.dataset.bound !== "1") {
+    cancelBtn.dataset.bound = "1";
+    cancelBtn.addEventListener("click", closeTerminalFamiliesDialog);
+  }
+
+  if (saveBtn && saveBtn.dataset.bound !== "1") {
+    saveBtn.dataset.bound = "1";
+    saveBtn.addEventListener("click", saveTerminalFamiliesDialog);
+  }
+
+  if (select && select.dataset.bound !== "1") {
+    select.dataset.bound = "1";
+    select.addEventListener("change", () => {
+      renderTerminalFamiliesModeUi();
+      renderTerminalFamiliesList();
+    });
+  }
+  if (modeToggle && modeToggle.dataset.bound !== "1") {
+    modeToggle.dataset.bound = "1";
+    modeToggle.addEventListener("change", () => {
+      const terminalId = String(
+        document.getElementById("terminalFamiliesSelect")?.value || "",
+      );
+      if (!terminalId) return;
+
+      terminalFamiliesDraftModeMap[terminalId] = modeToggle.checked
+        ? "all"
+        : "filtered";
+    });
+  }
+
+  if (checkAllBtn && checkAllBtn.dataset.bound !== "1") {
+    checkAllBtn.dataset.bound = "1";
+    checkAllBtn.addEventListener("click", () => {
+      const terminalId = String(
+        document.getElementById("terminalFamiliesSelect")?.value || "",
+      );
+      if (!terminalId) return;
+
+      delete terminalFamiliesDraftHiddenMap[terminalId];
+      renderTerminalFamiliesList();
+    });
+  }
+
+  if (uncheckAllBtn && uncheckAllBtn.dataset.bound !== "1") {
+    uncheckAllBtn.dataset.bound = "1";
+    uncheckAllBtn.addEventListener("click", () => {
+      const terminalId = String(
+        document.getElementById("terminalFamiliesSelect")?.value || "",
+      );
+      if (!terminalId) return;
+
+      terminalFamiliesDraftHiddenMap[terminalId] = (categories || []).map((c) =>
+        String(c.id),
+      );
+
+      renderTerminalFamiliesList();
+    });
+  }
+}
+
+function getVisibleCategoriesForCurrentTerminal() {
+  const terminalId = currentTerminal?.id;
+  const mode = getTerminalModeSync(terminalId);
+
+  if (mode === "all") {
+    return categories || [];
+  }
+
+  const hiddenSet = getHiddenCategoryIdsForTerminalSync(terminalId);
+  if (!hiddenSet.size) return categories || [];
+
+  return (categories || []).filter((cat) => {
+    return !hiddenSet.has(String(cat.id));
+  });
+}
+
+const TERMINAL_FAMILY_MODE_CFG_KEY = "ui.terminalFamilyMode";
+
+let terminalFamiliesDraftModeMap = {};
+let terminalFamilyModeCache = {};
+
+async function getTerminalFamilyModeMap() {
+  try {
+    const raw = await window.TPV_CFG?.get?.(TERMINAL_FAMILY_MODE_CFG_KEY);
+    if (!raw) return {};
+    if (typeof raw === "object") return raw;
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+async function saveTerminalFamilyModeMap(map) {
+  try {
+    await window.TPV_CFG?.set?.(TERMINAL_FAMILY_MODE_CFG_KEY, map);
+    return true;
+  } catch (e) {
+    console.warn("No se pudo guardar ui.terminalFamilyMode:", e);
+    return false;
+  }
+}
+
+async function reloadTerminalFamilyModeCache() {
+  terminalFamilyModeCache = await getTerminalFamilyModeMap();
+}
+
+function getTerminalModeSync(terminalId) {
+  const key = String(terminalId || "");
+  return terminalFamilyModeCache[key] === "all" ? "all" : "filtered";
+}
+
+function renderTerminalFamiliesModeUi() {
+  const select = document.getElementById("terminalFamiliesSelect");
+  const toggle = document.getElementById("terminalFamiliesShowAllToggle");
+  if (!select || !toggle) return;
+
+  const terminalId = String(select.value || "");
+  const mode =
+    terminalFamiliesDraftModeMap[terminalId] === "all" ? "all" : "filtered";
+
+  toggle.checked = mode === "all";
+}
+
 // ===============================
 // Failsafe, agente tiene que estar siempre asignado.
 // ===============================
@@ -1249,8 +1692,35 @@ function updateCashButtonLabel() {
 // ===== Categorías (familias) =====
 function renderCategories() {
   console.trace("[TRACE] renderCategories()");
+
   const container = document.getElementById("categories");
   if (!container) return;
+
+  const visibleCategories = getVisibleCategoriesForCurrentTerminal();
+
+  // ✅ limpiar estado inválido si alguna categoría quedó oculta/eliminada
+  if (
+    activeFamilyParentId &&
+    !visibleCategories.some(
+      (c) => String(c.id) === String(activeFamilyParentId),
+    )
+  ) {
+    activeFamilyParentId = null;
+  }
+
+  if (
+    activeSubfamilyId &&
+    !visibleCategories.some((c) => String(c.id) === String(activeSubfamilyId))
+  ) {
+    activeSubfamilyId = null;
+  }
+
+  if (
+    selectedCategory &&
+    !visibleCategories.some((c) => String(c.id) === String(selectedCategory))
+  ) {
+    selectedCategory = null;
+  }
 
   // Si existía contenedor de subcategorías (columna 2), lo ocultamos
   const sub = document.getElementById("subcategories");
@@ -1267,15 +1737,16 @@ function renderCategories() {
   // VISTA ROOT: familias raíz
   // ======================
   if (!inDrillDown) {
-    const rootFamilies = categories.filter((c) => !c.parentId);
+    const rootFamilies = visibleCategories.filter((c) => !c.parentId);
 
     rootFamilies.forEach((cat) => {
       const btn = document.createElement("button");
+      btn.type = "button";
       btn.className = "category-btn";
       btn.dataset.cat = cat.id;
       btn.textContent = cat.name;
 
-      const hasChildren = categories.some((c) => c.parentId === cat.id);
+      const hasChildren = visibleCategories.some((c) => c.parentId === cat.id);
 
       // Marcar activa si es filtro simple
       if (!hasChildren && selectedCategory === cat.id) {
@@ -1283,7 +1754,7 @@ function renderCategories() {
       }
 
       btn.onclick = () => {
-        const children = categories.filter((c) => c.parentId === cat.id);
+        const children = visibleCategories.filter((c) => c.parentId === cat.id);
 
         if (children.length) {
           // Entramos en drill-down
@@ -1317,6 +1788,7 @@ function renderCategories() {
 
   // 1) Botón volver
   const backBtn = document.createElement("button");
+  backBtn.type = "button";
   backBtn.className = "category-btn category-btn-back";
   backBtn.textContent = "Volver";
   backBtn.onclick = () => {
@@ -1329,8 +1801,8 @@ function renderCategories() {
   };
   container.appendChild(backBtn);
 
-  // 2) Subfamilias
-  const children = categories.filter(
+  // 2) Subfamilias visibles del padre activo
+  const children = visibleCategories.filter(
     (c) => c.parentId === activeFamilyParentId,
   );
 
@@ -1341,7 +1813,9 @@ function renderCategories() {
     b.dataset.cat = child.id;
     b.textContent = child.name;
 
-    if (activeSubfamilyId === child.id) b.classList.add("active");
+    if (activeSubfamilyId === child.id) {
+      b.classList.add("active");
+    }
 
     b.onclick = () => {
       activeSubfamilyId = activeSubfamilyId === child.id ? null : child.id;
@@ -1353,40 +1827,50 @@ function renderCategories() {
   });
 }
 
-function formatPayLabel(descripcion, codpago) {
-  const base = (descripcion || codpago || "").trim();
-  const cod = String(codpago || "")
-    .trim()
-    .toUpperCase();
-  const n = Number(cashSession?.payMethodCounts?.[cod] || 0);
-
-  return n > 1 ? `${base} (${n})` : base;
-}
-
 // ===== Productos =====
 function renderProducts() {
   console.trace("[TRACE] renderProducts()");
+
   const grid = document.getElementById("productsGrid");
   if (!grid) return;
+
   grid.innerHTML = "";
 
   const term = (searchTerm || "").trim().toLowerCase();
-  let filtered = Array.isArray(products) ? [...products] : [];
+
+  // ✅ categorías visibles según terminal
+  const visibleCategories = getVisibleCategoriesForCurrentTerminal();
+  const visibleCategoryIds = new Set(
+    (visibleCategories || []).map((c) => String(c.id)),
+  );
+
+  // ✅ partir solo de productos cuya categoría siga visible
+  let filtered = Array.isArray(products)
+    ? products.filter((p) => visibleCategoryIds.has(String(p.category)))
+    : [];
 
   // Filtro por familia / subfamilia
   if (activeFamilyParentId) {
     if (activeSubfamilyId) {
-      filtered = filtered.filter((p) => p.category === activeSubfamilyId);
+      filtered = filtered.filter(
+        (p) => String(p.category) === String(activeSubfamilyId),
+      );
     } else {
       const allowedIds = new Set();
-      allowedIds.add(activeFamilyParentId);
-      (categories || []).forEach((c) => {
-        if (c.parentId === activeFamilyParentId) allowedIds.add(c.id);
+      allowedIds.add(String(activeFamilyParentId));
+
+      visibleCategories.forEach((c) => {
+        if (String(c.parentId || "") === String(activeFamilyParentId)) {
+          allowedIds.add(String(c.id));
+        }
       });
-      filtered = filtered.filter((p) => allowedIds.has(p.category));
+
+      filtered = filtered.filter((p) => allowedIds.has(String(p.category)));
     }
   } else if (selectedCategory) {
-    filtered = filtered.filter((p) => p.category === selectedCategory);
+    filtered = filtered.filter(
+      (p) => String(p.category) === String(selectedCategory),
+    );
   }
 
   // Filtro por buscador
@@ -1429,7 +1913,7 @@ function renderProducts() {
 
     const canEditPrices = isAdminUser() && isPriceEditModeEnabled();
 
-    // ✅ SIEMPRE añadir al carrito al tocar el producto, excepto si es una oferta, ahi abrira el modal.
+    // ✅ SIEMPRE añadir al carrito al tocar el producto, excepto si es una oferta
     tile.onclick = async () => {
       try {
         await addToCart(p);
@@ -1439,7 +1923,7 @@ function renderProducts() {
       }
     };
 
-    // ✅ botón ✎ solo si admin + modo activo (y NO debe añadir al carrito)
+    // ✅ botón ✎ solo si admin + modo activo
     if (canEditPrices) {
       tile.style.position = "relative";
 
@@ -1451,7 +1935,7 @@ function renderProducts() {
 
       editBtn.onclick = (e) => {
         e.preventDefault();
-        e.stopPropagation(); // ✅ evita tile.onclick
+        e.stopPropagation();
         openPriceEditForProduct(p);
       };
 
@@ -1462,8 +1946,9 @@ function renderProducts() {
   });
 }
 
-function renderMainUI() {
+function renderMainUI(force = false) {
   console.log("[TRACE] renderMainUI cashSession.open=", cashSession?.open);
+
   if (!cashSession?.open) {
     const grid = document.getElementById("productsGrid");
     const catContainer = document.getElementById("categories");
@@ -1475,13 +1960,12 @@ function renderMainUI() {
     return;
   }
 
-  if (mainUiRendered) return;
+  if (mainUiRendered && !force) return;
 
   renderCategories();
   renderProducts();
   mainUiRendered = true;
 
-  // ✅ Cliente selector (1 vez)
   initCustomerSelectorOnce().catch((e) =>
     console.warn("initCustomerSelectorOnce falló:", e?.message || e),
   );
@@ -2959,7 +3443,13 @@ function wireQwertyInputs() {
 }
 
 // Importante: ejecutar cuando el DOM ya existe
-document.addEventListener("DOMContentLoaded", wireQwertyInputs);
+document.addEventListener("DOMContentLoaded", async () => {
+  wireQwertyInputs();
+  cashWrapInputsWithSteppers();
+
+  await reloadTerminalFamilyHiddenCache().catch(() => {});
+  setupTerminalFamiliesUi();
+});
 
 // ===== Eventos del carrito =====
 const cartLinesContainer = document.getElementById("cartLines");
@@ -3591,10 +4081,22 @@ function renderMainAgentBar() {
 
   mainAgentBar.innerHTML = "";
 
-  // Si no hay terminal, igual mostramos al menos actualizar + cajón (si quieres)
-  // Si prefieres ocultarlos sin terminal, cambia este bloque.
-  if (!currentTerminal) {
-    // Botón actualizar
+  // Estructura principal:
+  // [ agentListWrap -> agentList ] [ agentActions ]
+  const agentListWrap = document.createElement("div");
+  agentListWrap.className = "agent-list-wrap";
+
+  const agentList = document.createElement("div");
+  agentList.className = "agent-list";
+
+  const agentActions = document.createElement("div");
+  agentActions.className = "agent-actions";
+
+  agentListWrap.appendChild(agentList);
+  mainAgentBar.appendChild(agentListWrap);
+  mainAgentBar.appendChild(agentActions);
+
+  const createRefreshBtn = () => {
     const refreshBtn = document.createElement("button");
     refreshBtn.type = "button";
     refreshBtn.className = "agent-btn agent-refresh-btn";
@@ -3605,19 +4107,27 @@ function renderMainAgentBar() {
         toast("No se pudo actualizar.", "err", "Actualizar");
       });
     };
-    mainAgentBar.appendChild(refreshBtn);
+    return refreshBtn;
+  };
 
-    // Botón cajón
+  const createDrawerBtn = () => {
     const drawerBtn = document.createElement("button");
     drawerBtn.type = "button";
     drawerBtn.className = "agent-btn agent-drawer-btn";
     drawerBtn.textContent = "📤";
+    drawerBtn.title = "Abrir cajón";
     drawerBtn.onclick = () => {
       openDrawerNow({ source: "MAIN" }).catch(() =>
         toast("No se pudo abrir el cajón.", "err", "Cajón"),
       );
     };
-    mainAgentBar.appendChild(drawerBtn);
+    return drawerBtn;
+  };
+
+  // Si no hay terminal, mostrar solo acciones
+  if (!currentTerminal) {
+    agentActions.appendChild(createRefreshBtn());
+    agentActions.appendChild(createDrawerBtn());
 
     if (agentNameEl) agentNameEl.textContent = "---";
     return;
@@ -3625,7 +4135,6 @@ function renderMainAgentBar() {
 
   const list = getAgentsForTerminalId(currentTerminal.id) || [];
 
-  // ✅ Botones de agentes (solo si hay)
   if (list.length) {
     list.forEach((agent) => {
       const btn = document.createElement("button");
@@ -3635,6 +4144,7 @@ function renderMainAgentBar() {
         (currentAgent && currentAgent.codagente === agent.codagente
           ? " selected"
           : "");
+
       btn.textContent = agent.name;
 
       btn.onclick = async () => {
@@ -3666,41 +4176,18 @@ function renderMainAgentBar() {
         refreshAgentGuardUI?.();
       };
 
-      mainAgentBar.appendChild(btn);
+      agentList.appendChild(btn);
     });
   } else {
-    // Sin agentes: reflejar en header
     currentAgent = null;
     if (agentNameEl) agentNameEl.textContent = "---";
     refreshAgentGuardUI?.();
   }
 
-  /* ===== BOTÓN ACTUALIZAR (SIEMPRE) ===== */
-  const refreshBtn = document.createElement("button");
-  refreshBtn.type = "button";
-  refreshBtn.className = "agent-btn agent-refresh-btn";
-  refreshBtn.textContent = "🔄";
-  refreshBtn.title = "Actualizar datos";
-  refreshBtn.onclick = () => {
-    refreshAllData().catch(() => {
-      toast("No se pudo actualizar.", "err", "Actualizar");
-    });
-  };
-  mainAgentBar.appendChild(refreshBtn);
+  // Botones fijos a la derecha
+  agentActions.appendChild(createRefreshBtn());
+  agentActions.appendChild(createDrawerBtn());
 
-  /* ===== BOTÓN ABRIR CAJÓN (SIEMPRE) ===== */
-  const drawerBtn = document.createElement("button");
-  drawerBtn.type = "button";
-  drawerBtn.className = "agent-btn agent-drawer-btn";
-  drawerBtn.textContent = "📤";
-  drawerBtn.onclick = () => {
-    openDrawerNow({ source: "MAIN" }).catch(() =>
-      toast("No se pudo abrir el cajón.", "err", "Cajón"),
-    );
-  };
-  mainAgentBar.appendChild(drawerBtn);
-
-  // Reflejar agente actual en el header siempre
   if (agentNameEl) {
     agentNameEl.textContent = currentAgent ? currentAgent.name : "---";
   }
@@ -5194,7 +5681,21 @@ async function buildAgentSalesSummaryForCaja(idcaja) {
 }
 
 // ---- Apertura / cierre de caja ----
-// ✅ QWERTY robusto para #cashObs (delegación, no se rompe si re-renderizas)
+
+function closeCashOpenDialog() {
+  if (!cashOpenOverlay) return;
+
+  cashOpenOverlay.classList.add("hidden");
+  unlockAppUI?.();
+}
+
+const cashOpenCloseX = document.getElementById("cashOpenCloseX");
+const cashOpenCancelBtn = document.getElementById("cashOpenCancelBtn");
+
+cashOpenCloseX?.addEventListener("click", closeCashOpenDialog);
+cashOpenCancelBtn?.addEventListener("click", closeCashOpenDialog);
+
+// ✅ QWERTY robusto para #cashObs (solo abre en tap real, no en scroll)
 function setupCashObsQwertyDelegated() {
   if (!cashOpenOverlay) return;
 
@@ -5202,22 +5703,24 @@ function setupCashObsQwertyDelegated() {
   if (cashOpenOverlay.dataset._cashObsQwerty === "1") return;
   cashOpenOverlay.dataset._cashObsQwerty = "1";
 
+  const MOVE_TOLERANCE = 12; // px táctiles tolerados
+  const TAP_MAX_TIME = 500; // ms máximo para considerarlo tap
+
+  let touchState = null;
+
   const openFor = (ta) => {
     if (!ta) return;
 
-    // ✅ Tu QWERTY real (el que tienes implementado)
     if (typeof window.openQwertyForInput === "function") {
       window.openQwertyForInput(ta, "text");
       return;
     }
 
-    // Si existe tu otro teclado
     if (typeof window.openTextKeyboard === "function") {
       window.openTextKeyboard(ta);
       return;
     }
 
-    // Fallback: al menos permite escribir con teclado físico
     ta.readOnly = false;
     try {
       ta.focus();
@@ -5225,25 +5728,72 @@ function setupCashObsQwertyDelegated() {
     toast?.("No hay teclado QWERTY disponible en este TPV.", "warn", "Teclado");
   };
 
-  // pointerdown/touchstart es lo más fiable en táctil
-  const handler = (e) => {
-    const ta =
-      e.target && e.target.closest ? e.target.closest("#cashObs") : null;
-    if (!ta) return;
+  cashOpenOverlay.addEventListener(
+    "pointerdown",
+    (e) => {
+      const ta =
+        e.target && e.target.closest ? e.target.closest("#cashObs") : null;
+      if (!ta) return;
 
-    // evita que otros handlers “se coman” el click
-    e.preventDefault();
-    e.stopPropagation();
+      touchState = {
+        ta,
+        startX: e.clientX,
+        startY: e.clientY,
+        startTime: Date.now(),
+        moved: false,
+        pointerId: e.pointerId,
+      };
+    },
+    true,
+  );
 
-    // mantenlo readonly para evitar teclado del sistema si no quieres
-    ta.readOnly = true;
+  cashOpenOverlay.addEventListener(
+    "pointermove",
+    (e) => {
+      if (!touchState) return;
+      if (e.pointerId !== touchState.pointerId) return;
 
-    openFor(ta);
-  };
+      const dx = Math.abs(e.clientX - touchState.startX);
+      const dy = Math.abs(e.clientY - touchState.startY);
 
-  cashOpenOverlay.addEventListener("pointerdown", handler, true);
-  cashOpenOverlay.addEventListener("touchstart", handler, true);
-  cashOpenOverlay.addEventListener("mousedown", handler, true);
+      if (dx > MOVE_TOLERANCE || dy > MOVE_TOLERANCE) {
+        touchState.moved = true;
+      }
+    },
+    true,
+  );
+
+  cashOpenOverlay.addEventListener(
+    "pointerup",
+    (e) => {
+      if (!touchState) return;
+      if (e.pointerId !== touchState.pointerId) return;
+
+      const ta = touchState.ta;
+      const elapsed = Date.now() - touchState.startTime;
+      const wasTap = !touchState.moved && elapsed <= TAP_MAX_TIME;
+
+      const state = touchState;
+      touchState = null;
+
+      if (!ta || !wasTap) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      ta.readOnly = true;
+      openFor(ta);
+    },
+    true,
+  );
+
+  cashOpenOverlay.addEventListener(
+    "pointercancel",
+    () => {
+      touchState = null;
+    },
+    true,
+  );
 }
 
 function openCashOpenDialog(mode = "open") {
@@ -6093,7 +6643,6 @@ if (cashOpenOverlay) {
   });
 }
 
-const cashOpenCancelBtn = document.getElementById("cashOpenCancelBtn");
 const cashOpenOkBtn = document.getElementById("cashOpenOkBtn");
 
 if (cashOpenCancelBtn) {
@@ -7074,7 +7623,7 @@ async function loadDataFromApi(opts = {}) {
       }
 
       // Repintar sin tocar caja ni overlays
-      renderMainUI();
+      renderMainUI(true);
       return;
     }
 
@@ -7154,10 +7703,8 @@ async function refreshAllData() {
 
   try {
     setStatusText("Actualizando...");
-    await loadDataFromApi({ refresh: true }); // 👈 clave
+    await loadDataFromApi({ refresh: true });
 
-    // Por si quieres repintar explícito (renderMainUI ya lo hace, pero no estorba)
-    if (typeof renderProducts === "function") renderProducts();
     if (typeof renderMainAgentBar === "function") renderMainAgentBar();
     if (typeof renderCart === "function") renderCart();
 
@@ -7927,21 +8474,21 @@ async function openOptions() {
   refreshPriceEditToggleUI?.();
   bindPriceEditToggleOnce?.();
 
+  bindCustomerDisplayToggleOnce();
+  await loadCustomerDisplayToggle();
+
   bindOptionsAccordionOnce();
   const st = await loadOptionsAccordionState();
   await applyOptionsAccordionState(st);
 
   optionsOverlay?.classList.remove("hidden");
 
-  // Cliente default terminal
   bindTerminalDefaultCustomerSave();
 
-  // 1) refresca codcliente desde FS si se puede
   await maybeRefreshTerminalDefaultCustomer("open-options", {
     minIntervalMs: 2000,
   }).catch(() => {});
 
-  // 2) pinta el select (si offline, tu función ya usa fallback CUSTOMER_SELECTOR)
   await renderTerminalDefaultCustomerSelect();
 }
 
@@ -14701,10 +15248,6 @@ function cashOpenNumPadForInput(input) {
 
   __cashLastFocusedInput = null;
 }
-
-document.addEventListener("DOMContentLoaded", () => {
-  cashWrapInputsWithSteppers();
-});
 
 const DRAWER_LOG_SOURCES = new Set(["MAIN", "OPTIONS", "POSTPAY"]);
 

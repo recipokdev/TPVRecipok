@@ -365,10 +365,16 @@
     <div id="cashOpenOverlay" class="simple-overlay hidden">
       <div class="cash-page-dialog">
         <div class="cash-page-header">
-          <h2 id="cashDialogTitle">Apertura de caja</h2>
-          <p class="cash-subtitle">
-            Terminal: <strong><span id="cashOpenTerminalName"></span></strong>
-          </p>
+          <div class="cash-page-header-text">
+            <h2 id="cashDialogTitle">Apertura de caja</h2>
+            <p class="cash-subtitle">
+              Terminal: <strong><span id="cashOpenTerminalName"></span></strong>
+            </p>
+          </div>
+
+          <button type="button" id="cashOpenCloseX" class="cash-page-close">
+            ✕
+          </button>
         </div>
 
         <!-- GRID billetes/monedas -->
@@ -1422,6 +1428,37 @@
             </div>
           </section>
 
+          <!-- TERMINALES (ADMIN ONLY) -->
+          <section class="opt-sec" data-sec="terminales" data-admin-only>
+            <button type="button" class="opt-sec-h">
+              <span>Terminales <span class="opt-admin-pill">ADMIN</span></span>
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Visibilidad de grupos por terminal
+                  </div>
+                  <div class="opt-row-sub">
+                    Configura qué grupos de productos se ocultan en cada
+                    terminal.
+                  </div>
+                </div>
+
+                <div class="opt-row-actions">
+                  <button
+                    type="button"
+                    id="optionsTerminalFamiliesBtn"
+                    class="small-btn"
+                  >
+                    Configurar
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
           <!-- PANTALLA (ADMIN ONLY) -->
           <section class="opt-sec" data-sec="pantalla" data-admin-only>
             <button type="button" class="opt-sec-h">
@@ -1695,6 +1732,99 @@
           >
             Guardar
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Overlay: Grupos ocultos por terminal -->
+    <div id="terminalFamiliesOverlay" class="simple-overlay hidden">
+      <div class="simple-dialog opt-dialog terminal-families-dialog">
+        <div class="opt-head">
+          <h2 class="opt-title">Grupos visibles por terminal</h2>
+          <button type="button" id="terminalFamiliesCloseX" class="small-btn">
+            ✕
+          </button>
+        </div>
+
+        <div class="opt-sec-b" style="display: block">
+          <div class="opt-row" style="align-items: flex-start">
+            <div class="opt-row-txt" style="min-width: 220px">
+              <div class="opt-row-title">Terminal</div>
+              <div class="opt-row-sub">
+                Selecciona la terminal que quieres configurar.
+              </div>
+            </div>
+
+            <div class="opt-row-actions" style="flex: 1">
+              <select
+                id="terminalFamiliesSelect"
+                class="opt-select"
+                style="min-width: 260px"
+              ></select>
+            </div>
+          </div>
+        </div>
+
+        <div class="opt-sec-b" style="display: block">
+          <div class="opt-row">
+            <div class="opt-row-txt">
+              <div class="opt-row-title">Mostrar todos los productos</div>
+              <div class="opt-row-sub">
+                Si lo activas, esta terminal mostrará todos los productos aunque
+                los grupos estén desmarcados.
+              </div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="terminalFamiliesShowAllToggle" />
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="opt-sec-b terminal-families-body" style="display: block">
+          <div class="opt-row" style="align-items: flex-start">
+            <div class="opt-row-txt">
+              <div class="opt-row-title">Grupos</div>
+              <div class="opt-row-sub">
+                Activa los grupos que deben verse en la terminal seleccionada.
+                Si lo desactivas, se ocultarán.
+              </div>
+            </div>
+          </div>
+
+          <div id="terminalFamiliesList" class="terminal-families-list"></div>
+        </div>
+
+        <div class="dialog-actions opt-actions">
+          <div class="terminal-families-toolbar">
+            <button
+              type="button"
+              id="terminalFamiliesCheckAllBtn"
+              class="small-btn"
+            >
+              Marcar todos
+            </button>
+            <button
+              type="button"
+              id="terminalFamiliesUncheckAllBtn"
+              class="small-btn"
+            >
+              Desmarcar todos
+            </button>
+          </div>
+
+          <div class="terminal-families-savecancel">
+            <button type="button" id="terminalFamiliesCancelBtn">
+              Cancelar
+            </button>
+            <button
+              type="button"
+              id="terminalFamiliesSaveBtn"
+              class="pay-btn pay-btn-blue"
+            >
+              Guardar
+            </button>
+          </div>
         </div>
       </div>
     </div>

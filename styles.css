@@ -34,20 +34,45 @@ body {
 
 .agent-main-bar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
+  flex-wrap: nowrap; /* importante: ya no queremos que todo salte de línea */
+  align-items: flex-start;
+  gap: 10px;
   padding: 4px 6px;
   border-radius: 20px;
   background: linear-gradient(90deg, #e5f0ff, #f5f8ff);
+  overflow: hidden;
+  box-sizing: border-box;
+  align-items: center;
 }
 
+/* Zona izquierda: lista de agentes */
+.agent-list-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
+  padding-bottom: 2px;
+}
+
+/* Grid en 2 filas, creciendo por columnas */
+.agent-list {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(2, auto);
+  grid-auto-columns: max-content;
+  gap: 8px;
+  align-content: start;
+}
+
+/* Botones generales */
 .agent-main-bar .agent-btn {
   border-radius: 999px;
-  padding: 15px 25px;
+  padding: 10px 20px;
   border: none;
   background: #ffffff;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
   cursor: pointer;
@@ -55,6 +80,8 @@ body {
     background 0.15s,
     transform 0.05s,
     box-shadow 0.15s;
+  white-space: nowrap;
+  box-sizing: border-box;
 }
 
 .agent-main-bar .agent-btn.selected {
@@ -67,6 +94,17 @@ body {
   transform: translateY(-1px);
 }
 
+/* Zona derecha: acciones fijas */
+.agent-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding-left: 10px;
+  margin-left: auto;
+}
+
+/* Botones de acciones */
 .agent-main-bar .agent-drawer-btn,
 .agent-main-bar .agent-refresh-btn {
   background: #ffffff;
@@ -75,6 +113,11 @@ body {
   border-radius: 6px;
   padding: 10px 20px;
   border: 1px solid #e5e7eb;
+  min-width: 72px;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .agent-main-bar .agent-drawer-btn:hover,
@@ -85,9 +128,10 @@ body {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
 }
 
-.agent-main-bar .agent-refresh-btn {
+/* Quitar esto porque ya no sirve con la nueva estructura */
+/* .agent-main-bar .agent-refresh-btn {
   margin-left: auto;
-}
+} */
 
 /* --- 1.2 Buscador --- */
 
@@ -95,7 +139,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 3px 10px;
   background: #ffffff;
   border-radius: 999px;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
@@ -172,8 +216,7 @@ body {
 
 /* Botón EXACTO como lo tenías */
 .category-btn {
-  min-width: 140px;
-  padding: 15px 20px;
+  padding: 10px 15px;
   border-radius: 999px;
   border: 1px solid #d2e1ff;
   background: #ffffff;
@@ -282,13 +325,17 @@ body {
 .products-grid {
   margin-top: 8px;
   padding-bottom: 10px;
+  padding-right: 4px;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 8px;
+
   flex: 1;
+  min-height: 0; /* importante en contenedores flex */
   overflow-y: auto;
-  padding-right: 4px;
   -webkit-overflow-scrolling: touch;
+
+  align-content: start; /* clave: evita que las filas se estiren */
 }
 
 /* Cada tarjeta será SIEMPRE cuadrada */
@@ -1243,6 +1290,47 @@ body.modal-locked .cart-card {
   .cash-actions-page {
     flex-direction: column;
   }
+}
+
+.cash-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cash-page-header-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cash-page-close {
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  border: none;
+  border-radius: 10px;
+  background: #eef3ff;
+  color: #1f2937;
+  font-size: 24px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    transform 0.05s,
+    box-shadow 0.15s;
+}
+
+.cash-page-close:hover {
+  background: #dbe7ff;
+  transform: translateY(-1px);
+}
+
+.cash-page-close:active {
+  transform: translateY(0);
 }
 
 /* =============================================================
@@ -3049,7 +3137,7 @@ body.modal-locked .cart-card {
   margin-top: 14px;
   display: flex;
   gap: 10px;
-  justify-content: flex-end;
+  justify-content: space-between;
 }
 
 .cart-line-packincludes {
@@ -3441,4 +3529,96 @@ body.modal-locked .cart-card {
 
 #terminalSelect:focus {
   border-color: #198cff !important;
+}
+
+/* =============================================================
+   OVERLAY: Opciones de Terminal
+   ============================================================= */
+
+.terminal-families-dialog {
+  width: min(980px, 96vw);
+  max-height: 90vh;
+}
+
+.terminal-families-body {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.terminal-families-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-content: start;
+}
+
+.terminal-family-card {
+  background: #ffffff;
+  border: 2px solid #d7dde8;
+  border-radius: 16px;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.terminal-family-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 56px;
+  box-sizing: border-box;
+}
+
+.terminal-family-item-root {
+  padding: 2px 2px 4px 2px;
+}
+
+.terminal-family-children {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.terminal-family-item-sub {
+  padding: 10px 12px;
+  background: #f8fbff;
+  border: 2px solid #dbe7f5;
+  border-radius: 12px;
+  margin-left: 10px;
+}
+
+.terminal-family-item-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.terminal-family-item-title {
+  font-weight: 700;
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.terminal-family-item .switch {
+  flex: 0 0 auto;
+}
+
+.terminal-families-toolbar {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 12px 0;
+}
+
+.terminal-families-savecancel {
+  display: flex;
+  gap: 8px;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .terminal-families-list {
+    grid-template-columns: 1fr;
+  }
 }

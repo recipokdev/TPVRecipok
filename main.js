@@ -1626,6 +1626,7 @@ function pickCustomerDisplay() {
 }
 
 async function ensureCustomerWindow() {
+  if (!isCustomerDisplayEnabled()) return null;
   if (customerWin && !customerWin.isDestroyed()) return customerWin;
   if (customerCreating) return null;
 
@@ -1653,24 +1654,18 @@ async function ensureCustomerWindow() {
     });
 
     customerWin.on("close", (e) => {
-      // Si está habilitada, no se puede cerrar manualmente
       if (!allowCustomerClose && isCustomerDisplayEnabled()) {
         e.preventDefault();
       }
     });
 
-    customerWin.setMenuBarVisibility(false);
-    customerWin.setAutoHideMenuBar(true);
-
-    // Si quieres asegurar que cae en ese monitor incluso si cambia:
-    customerWin.setBounds(b);
-
     customerWin.on("closed", () => {
       customerWin = null;
     });
 
-    // Carga
-    await customerWin.loadFile(path.join(__dirname, "customer.html"));
+    customerWin.setMenuBarVisibility(false);
+    customerWin.setAutoHideMenuBar(true);
+    customerWin.setBounds(b);
 
     customerWin.once("ready-to-show", () => {
       if (!customerWin || customerWin.isDestroyed()) return;
@@ -1680,23 +1675,35 @@ async function ensureCustomerWindow() {
       } catch {}
     });
 
-    // Cada vez que termina de cargar (reload, etc.), reinyectamos estado
     customerWin.webContents.on("did-finish-load", () => {
       if (lastCustomerState && customerWin && !customerWin.isDestroyed()) {
         customerWin.webContents.send("customer:state", lastCustomerState);
       }
     });
 
+    await customerWin.loadFile(path.join(__dirname, "customer.html"));
+
+    // red de seguridad
+    if (customerWin && !customerWin.isDestroyed()) {
+      customerWin.show();
+      try {
+        customerWin.setFullScreen(true);
+      } catch {}
+    }
+
     return customerWin;
   } catch (e) {
-    console.log("[CUSTOMER] No se pudo crear/cargar ventana:", e?.message || e);
     try {
-      if (customerWin && !customerWin.isDestroyed()) customerWin.destroy();
+      if (customerWin && !customerWin.isDestroyed()) {
+        allowCustomerClose = true;
+        customerWin.destroy();
+      }
     } catch {}
     customerWin = null;
     return null;
   } finally {
     customerCreating = false;
+    allowCustomerClose = false;
   }
 }
 
@@ -1716,30 +1723,28 @@ ipcMain.on("customer:setState", async (_e, state) => {
   win.webContents.send("customer:state", lastCustomerState);
 });
 
-async function setCustomerDisplayEnabled(enabled) {
-  writeCfg({ customerDisplay: !!enabled });
-
-  if (enabled) {
-    await ensureCustomerWindow();
-    // reinyecta estado si existe
-    if (lastCustomerState && customerWin && !customerWin.isDestroyed()) {
-      try {
-        customerWin.webContents.send("customer:state", lastCustomerState);
-      } catch {}
-    }
-  } else {
-    destroyCustomerWindow();
-  }
-}
-
 function destroyCustomerWindow() {
-  if (!customerWin || customerWin.isDestroyed()) return;
+  if (!customerWin || customerWin.isDestroyed()) {
+    customerWin = null;
+    allowCustomerClose = false;
+    return;
+  }
+
   try {
     allowCustomerClose = true;
-    customerWin.destroy();
-  } catch {}
-  customerWin = null;
-  allowCustomerClose = false;
+
+    customerWin.removeAllListeners("close");
+    customerWin.close();
+
+    if (customerWin && !customerWin.isDestroyed()) {
+      customerWin.destroy();
+    }
+  } catch (e) {
+    console.log("[CUSTOMER] error al destruir:", e?.message || e);
+  } finally {
+    customerWin = null;
+    allowCustomerClose = false;
+  }
 }
 
 ipcMain.handle("customer:getEnabled", async () => {
@@ -1750,14 +1755,14 @@ ipcMain.handle("customer:setEnabled", async (_e, enabled) => {
   if (!isAdmin()) return { ok: false, error: "FORBIDDEN" };
 
   const val = !!enabled;
+
   writeCfg({ customerDisplay: val });
 
   if (val) {
-    await ensureCustomerWindow();
-    // reinyecta el último estado
-    if (lastCustomerState && customerWin && !customerWin.isDestroyed()) {
+    const win = await ensureCustomerWindow();
+    if (lastCustomerState && win && !win.isDestroyed()) {
       try {
-        customerWin.webContents.send("customer:state", lastCustomerState);
+        win.webContents.send("customer:state", lastCustomerState);
       } catch {}
     }
   } else {
