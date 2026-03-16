@@ -218,7 +218,7 @@ body {
 .category-btn {
   padding: 10px 15px;
   border-radius: 999px;
-  border: 1px solid #d2e1ff;
+  border: 1px solid #d1d5db;
   background: #ffffff;
   color: #1f2a4d;
   font-size: 16px;
@@ -262,7 +262,7 @@ body {
 .category-btn:hover {
   background: #198cff;
   color: #ffffff;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.18);
 }
 
 /* Volver (única definición) */
@@ -3621,4 +3621,39 @@ body.modal-locked .cart-card {
   .terminal-families-list {
     grid-template-columns: 1fr;
   }
+}
+
+/*----------------------------------*/
+/*Colores de las familia(grupos)*/
+/*----------------------------------*/
+
+.family-color-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.family-color-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 2px solid #d1d5db;
+  cursor: pointer;
+  flex: 0 0 auto;
+  background: #ffffff;
+}
+
+.family-color-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
+}
+
+.terminal-family-actions {
+  display: flex;
+  gap: 8px;
+  display: contents;
 }

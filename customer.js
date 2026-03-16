@@ -18,13 +18,81 @@ function eur(n) {
       minute: "2-digit",
     });
   };
+
   tick();
   setInterval(tick, 1000);
 })();
 
-/* ===== Notice ===== */
+/* ===== Estado / timers ===== */
+let thanksClearTimer = null;
+let thanksOverlayTimer = null;
+let autoScrollTimer = null;
+let autoScrollDir = 1;
 let noticeTimer = null;
+let itemsResizeObserverBound = false;
 
+/* Evita rearmar THANKS muchas veces para la misma venta */
+let lastThanksKey = null;
+
+/* Cuando se limpia una venta, bloqueamos repintar ese mismo carrito */
+let lockedEmpty = false;
+let lockedCartKey = null;
+
+function buildCartKey(state) {
+  const items = Array.isArray(state?.items) ? state.items : [];
+  const total = Number(state?.total || 0).toFixed(2);
+
+  const itemsKey = items
+    .map((it) =>
+      [
+        it?.name || "",
+        it?.secondaryName || "",
+        Number(it?.qty || 0),
+        Number(it?.unitPrice || 0).toFixed(2),
+        Number(it?.lineTotal || 0).toFixed(2),
+        it?.modified ? "1" : "0",
+      ].join("|"),
+    )
+    .join("||");
+
+  return `${total}__${itemsKey}`;
+}
+
+function clearThanksTimers() {
+  if (thanksClearTimer) clearTimeout(thanksClearTimer);
+  if (thanksOverlayTimer) clearTimeout(thanksOverlayTimer);
+  thanksClearTimer = null;
+  thanksOverlayTimer = null;
+}
+
+function setThanksOverlay(show, title = "", sub = "") {
+  const box = document.getElementById("thanksOverlay");
+  if (!box) return;
+
+  const titleEl = box.querySelector(".thanks-title");
+  const subEl = box.querySelector(".thanks-sub");
+
+  if (titleEl) titleEl.textContent = title || "";
+  if (subEl) subEl.textContent = sub || "";
+
+  box.classList.toggle("hidden", !show);
+}
+
+function clearCustomerScreen() {
+  const itemsEl = document.getElementById("items");
+  const totalEl = document.getElementById("total");
+  const subEl = document.getElementById("subLine");
+
+  if (itemsEl) itemsEl.innerHTML = "";
+  if (totalEl) totalEl.textContent = eur(0);
+  if (subEl) subEl.textContent = "---";
+
+  stopAutoScroll();
+  setNotice(false);
+  setThanksOverlay(false);
+}
+
+/* ===== Notice ===== */
 function setNotice(show, title = "", sub = "", ttlMs = 0) {
   const box = document.getElementById("notice");
   const tEl = document.getElementById("noticeTitle");
@@ -54,7 +122,7 @@ function setNotice(show, title = "", sub = "", ttlMs = 0) {
   }
 }
 
-/* ===== Layout (solo ancho de columnas, filas son 5 fijas por CSS) ===== */
+/* ===== Layout ===== */
 function applyDynamicGridLayout(itemCount) {
   const el = document.getElementById("items");
   if (!el) return;
@@ -63,18 +131,19 @@ function applyDynamicGridLayout(itemCount) {
   const gap =
     parseInt(
       getComputedStyle(document.documentElement).getPropertyValue("--grid-gap"),
+      10,
     ) || 12;
 
   const W = el.clientWidth;
   const minColW =
     parseInt(
       getComputedStyle(document.documentElement).getPropertyValue("--col-min"),
+      10,
     ) || 520;
 
   const colsNeeded = Math.max(1, Math.ceil((itemCount || 0) / rows));
   const maxColsFit = Math.max(1, Math.floor((W + gap) / (minColW + gap)));
 
-  // Si caben, reparte exacto sin scroll; si no, deja minColW y habrá scroll horizontal
   let colW;
   if (colsNeeded <= maxColsFit) {
     colW = Math.floor((W - gap * (colsNeeded - 1)) / colsNeeded);
@@ -86,9 +155,6 @@ function applyDynamicGridLayout(itemCount) {
 }
 
 /* ===== Autoscroll ===== */
-let autoScrollTimer = null;
-let autoScrollDir = 1;
-
 function startAutoScrollIfNeeded() {
   stopAutoScroll();
 
@@ -98,7 +164,6 @@ function startAutoScrollIfNeeded() {
   const maxX = scroller.scrollWidth - scroller.clientWidth;
   const maxY = scroller.scrollHeight - scroller.clientHeight;
 
-  // ✅ solo si hay overflow real
   if (maxX <= 4 && maxY <= 4) {
     scroller.scrollLeft = 0;
     scroller.scrollTop = 0;
@@ -111,7 +176,6 @@ function startAutoScrollIfNeeded() {
     const mx = scroller.scrollWidth - scroller.clientWidth;
     const my = scroller.scrollHeight - scroller.clientHeight;
 
-    // preferimos horizontal si hay overflow
     if (mx > 4) {
       scroller.scrollLeft += autoScrollDir * 2.0;
       if (scroller.scrollLeft >= mx) autoScrollDir = -1;
@@ -119,12 +183,10 @@ function startAutoScrollIfNeeded() {
       return;
     }
 
-    // fallback vertical (debería NO pasar ya con el CSS corregido)
     if (my > 4) {
       scroller.scrollTop += autoScrollDir * 1.4;
       if (scroller.scrollTop >= my) autoScrollDir = -1;
       if (scroller.scrollTop <= 0) autoScrollDir = 1;
-      return;
     }
   }, 40);
 }
@@ -134,8 +196,7 @@ function stopAutoScroll() {
   autoScrollTimer = null;
 }
 
-/* ===== ResizeObserver (UNO SOLO) ===== */
-let itemsResizeObserverBound = false;
+/* ===== ResizeObserver ===== */
 function bindItemsResizeObserverOnce() {
   if (itemsResizeObserverBound) return;
   itemsResizeObserverBound = true;
@@ -148,56 +209,15 @@ function bindItemsResizeObserverOnce() {
     applyDynamicGridLayout(count);
     requestAnimationFrame(() => startAutoScrollIfNeeded());
   });
+
   ro.observe(el);
 }
 
-/* ===== Render ===== */
-function render(state) {
+/* ===== Render lista ===== */
+function renderItems(items) {
   const itemsEl = document.getElementById("items");
-  const totalEl = document.getElementById("total");
-  const subEl = document.getElementById("subLine");
+  if (!itemsEl) return;
 
-  if (!itemsEl || !totalEl || !subEl) return;
-
-  bindItemsResizeObserverOnce();
-
-  const cashOpen = !!state?.cashOpen;
-  const items = Array.isArray(state?.items) ? state.items : [];
-  const total = Number(state?.total || 0);
-  const mode = String(state?.mode || "").toUpperCase();
-
-  subEl.textContent = state?.subLine || "---";
-  totalEl.textContent = eur(total);
-
-  if (!cashOpen || mode === "CLOSED") {
-    setNotice(true, "CAJA CERRADA", state?.subLine || "");
-    itemsEl.innerHTML = "";
-    stopAutoScroll();
-    return;
-  }
-
-  if (mode === "PAYING") {
-    setNotice(true, "COBRANDO…", "Espere por favor");
-  } else if (mode === "THANKS") {
-    const t = state?.lastSale?.ticket ? `Ticket: ${state.lastSale.ticket}` : "";
-    const pm = state?.lastSale?.paymentMethod
-      ? `Pago: ${state.lastSale.paymentMethod}`
-      : "";
-    const agent = state?.lastSale?.agent
-      ? `Agente: ${state.lastSale.agent}`
-      : "";
-
-    setNotice(
-      true,
-      "✅ PAGO REALIZADO",
-      [t, pm, agent].filter(Boolean).join(" · "),
-      5000,
-    );
-  } else {
-    setNotice(false);
-  }
-
-  // Render lista
   itemsEl.innerHTML = "";
 
   for (const it of items) {
@@ -207,6 +227,7 @@ function render(state) {
     const img = document.createElement("img");
     img.className = "thumb";
     img.alt = it.name || "";
+
     if (it.imageUrl) {
       img.src = it.imageUrl;
       img.style.visibility = "visible";
@@ -263,13 +284,114 @@ function render(state) {
     itemsEl.appendChild(row);
   }
 
-  // Ajustar columnas + autoscroll según overflow
   applyDynamicGridLayout(items.length);
   requestAnimationFrame(() => startAutoScrollIfNeeded());
+}
+
+/* ===== THANKS ===== */
+function handleThanksState(state) {
+  const cartKey = buildCartKey(state);
+
+  if (lastThanksKey === cartKey) return;
+  lastThanksKey = cartKey;
+
+  clearThanksTimers();
+  setNotice(false);
+
+  setThanksOverlay(
+    true,
+    "Pago realizado",
+    "Gracias por su compra. Hasta pronto.",
+  );
+
+  thanksOverlayTimer = setTimeout(() => {
+    setThanksOverlay(false);
+    thanksOverlayTimer = null;
+  }, 15000);
+
+  thanksClearTimer = setTimeout(() => {
+    clearCustomerScreen();
+    lockedEmpty = true;
+    lockedCartKey = cartKey;
+    thanksClearTimer = null;
+  }, 15000);
+}
+
+/* ===== Render principal ===== */
+function render(state) {
+  const itemsEl = document.getElementById("items");
+  const totalEl = document.getElementById("total");
+  const subEl = document.getElementById("subLine");
+
+  if (!itemsEl || !totalEl || !subEl) return;
+
+  bindItemsResizeObserverOnce();
+
+  const cashOpen = !!state?.cashOpen;
+  const items = Array.isArray(state?.items) ? state.items : [];
+  const total = Number(state?.total || 0);
+  const mode = String(state?.mode || "").toUpperCase();
+  const cartKey = buildCartKey(state);
+
+  if (!cashOpen || mode === "CLOSED") {
+    clearThanksTimers();
+    lockedEmpty = false;
+    lockedCartKey = null;
+    lastThanksKey = null;
+
+    setThanksOverlay(false);
+    setNotice(true, "CAJA CERRADA", state?.subLine || "");
+    itemsEl.innerHTML = "";
+    totalEl.textContent = eur(0);
+    subEl.textContent = state?.subLine || "---";
+    stopAutoScroll();
+    return;
+  }
+
+  /* Si ya limpiamos el último carrito y sigue llegando exactamente el mismo estado,
+     mantenemos la pantalla vacía hasta que haya actividad nueva. */
+  if (lockedEmpty) {
+    const hasNewCart =
+      cartKey !== lockedCartKey ||
+      items.length === 0 ||
+      total <= 0 ||
+      mode === "PAYING";
+
+    if (!hasNewCart) {
+      return;
+    }
+
+    lockedEmpty = false;
+    lockedCartKey = null;
+    lastThanksKey = null;
+  }
+
+  subEl.textContent = state?.subLine || "---";
+  totalEl.textContent = eur(total);
+
+  if (mode === "PAYING") {
+    clearThanksTimers();
+    setThanksOverlay(false);
+    setNotice(true, "COBRANDO…", "Espere por favor");
+  } else if (mode === "THANKS") {
+    setNotice(false);
+  } else {
+    /* no cancelamos lockedEmpty aquí, solo limpiamos overlays */
+    setThanksOverlay(false);
+    setNotice(false);
+  }
+
+  renderItems(items);
+
+  if (mode === "THANKS") {
+    handleThanksState(state);
+  }
 }
 
 window.TPV_CUSTOMER_IPC?.onState?.((state) => {
   try {
     render(state);
-  } catch {}
+  } catch (e) {
+    console.error("[CUSTOMER render error]", e);
+  }
 });

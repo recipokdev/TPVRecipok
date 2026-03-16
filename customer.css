@@ -431,3 +431,44 @@ body {
 .item.pack-child .ltotal {
   opacity: 0.35; /* aunque esté vacío, por si cambia */
 }
+
+
+.thanks-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(11, 18, 32, 0.72);
+  backdrop-filter: blur(4px);
+  z-index: 9999;
+}
+
+.thanks-overlay.hidden {
+  display: none;
+}
+
+.thanks-card {
+  min-width: 520px;
+  max-width: 78vw;
+  padding: 36px 42px;
+  border-radius: 24px;
+  background: linear-gradient(180deg, #142033 0%, #0f1728 100%);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+  text-align: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.thanks-title {
+  font-size: 44px;
+  font-weight: 800;
+  line-height: 1.1;
+  color: #ffffff;
+  margin-bottom: 14px;
+}
+
+.thanks-sub {
+  font-size: 22px;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.86);
+}

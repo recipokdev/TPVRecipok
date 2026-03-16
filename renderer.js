@@ -175,6 +175,87 @@ const cartClientInput = document.querySelector(".cart-client-input");
 
 // ===== Funciones auxiliares =====
 
+// ===============================
+// Opciones de Color a las familias(grupos)
+// ===============================
+
+const FAMILY_COLORS_CFG_KEY = "ui.familyColors";
+
+let familyColorsCache = {};
+
+async function getFamilyColorsMap() {
+  try {
+    const raw = await window.TPV_CFG?.get?.(FAMILY_COLORS_CFG_KEY);
+    if (!raw) return {};
+    if (typeof raw === "object") return raw;
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+async function saveFamilyColorsMap(map) {
+  try {
+    await window.TPV_CFG?.set?.(FAMILY_COLORS_CFG_KEY, map);
+    return true;
+  } catch (e) {
+    console.warn("No se pudo guardar ui.familyColors:", e);
+    return false;
+  }
+}
+
+async function reloadFamilyColorsCache() {
+  familyColorsCache = await getFamilyColorsMap();
+}
+
+function getFamilyColorSync(familyId) {
+  return familyColorsCache?.[String(familyId)] || "";
+}
+
+function getContrastTextColor(hex) {
+  if (!hex) return "#111827";
+
+  const c = hex.replace("#", "");
+  const full =
+    c.length === 3
+      ? c
+          .split("")
+          .map((x) => x + x)
+          .join("")
+      : c;
+
+  const r = parseInt(full.substring(0, 2), 16);
+  const g = parseInt(full.substring(2, 4), 16);
+  const b = parseInt(full.substring(4, 6), 16);
+
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.6 ? "#111827" : "#ffffff";
+}
+
+function normalizeHexColor(hex) {
+  const value = String(hex || "").trim();
+  if (!value) return "#ffffff";
+
+  if (/^#[0-9a-fA-F]{6}$/.test(value)) return value;
+
+  if (/^#[0-9a-fA-F]{3}$/.test(value)) {
+    return (
+      "#" +
+      value[1] +
+      value[1] +
+      value[2] +
+      value[2] +
+      value[3] +
+      value[3]
+    ).toLowerCase();
+  }
+
+  return "#ffffff";
+}
+
+// ===============================
+// Opciones de pantalla del cliente en opciones
+// ===============================
 async function loadCustomerDisplayToggle() {
   const el = document.getElementById("customerDisplayToggle");
   if (!el || !window.TPV_CUSTOMER_CTRL?.getEnabled) return;
@@ -324,7 +405,7 @@ function renderTerminalFamiliesList() {
   const getChildren = (parentId) =>
     allCats.filter((c) => String(c.parentId || "") === String(parentId));
 
-  const buildSwitch = (catId, checked, onChange) => {
+  const buildSwitch = (checked, onChange) => {
     const label = document.createElement("label");
     label.className = "switch";
 
@@ -357,11 +438,45 @@ function renderTerminalFamiliesList() {
     else terminalFamiliesDraftHiddenMap[terminalId] = arr;
   };
 
+  const buildColorPicker = (catId) => {
+    const wrap = document.createElement("div");
+    wrap.className = "family-color-wrap";
+
+    const colorBtn = document.createElement("button");
+    colorBtn.type = "button";
+    colorBtn.className = "family-color-btn";
+
+    const currentColor = getFamilyColorSync(catId) || "#ffffff";
+    colorBtn.style.background = currentColor;
+    colorBtn.title = "Cambiar color de la familia";
+
+    const colorInput = document.createElement("input");
+    colorInput.type = "color";
+    colorInput.className = "family-color-input";
+    colorInput.value = normalizeHexColor(currentColor);
+
+    colorBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      colorInput.click();
+    });
+
+    colorInput.addEventListener("input", (e) => {
+      const nextColor = String(e.target.value || "").trim();
+      colorBtn.style.background = nextColor;
+      familyColorsCache[String(catId)] = nextColor;
+    });
+
+    wrap.appendChild(colorBtn);
+    wrap.appendChild(colorInput);
+
+    return wrap;
+  };
+
   rootCats.forEach((root) => {
     const card = document.createElement("div");
     card.className = "terminal-family-card";
 
-    // Cabecera del grupo principal
     const rootRow = document.createElement("div");
     rootRow.className = "terminal-family-item terminal-family-item-root";
 
@@ -376,7 +491,12 @@ function renderTerminalFamiliesList() {
 
     const rootVisible = !hiddenSet.has(String(root.id));
 
-    const rootSwitch = buildSwitch(root.id, rootVisible, (e) => {
+    const rootActions = document.createElement("div");
+    rootActions.className = "terminal-family-actions";
+
+    const rootColor = buildColorPicker(root.id);
+
+    const rootSwitch = buildSwitch(rootVisible, (e) => {
       const nextVisible = e.target.checked;
 
       const children = getChildren(root.id);
@@ -387,11 +507,9 @@ function renderTerminalFamiliesList() {
       );
 
       if (nextVisible) {
-        // activar padre + hijos
         currentHidden.delete(String(root.id));
         children.forEach((child) => currentHidden.delete(String(child.id)));
       } else {
-        // ocultar padre + hijos
         currentHidden.add(String(root.id));
         children.forEach((child) => currentHidden.add(String(child.id)));
       }
@@ -404,11 +522,13 @@ function renderTerminalFamiliesList() {
       renderTerminalFamiliesList();
     });
 
+    rootActions.appendChild(rootColor);
+    rootActions.appendChild(rootSwitch);
+
     rootRow.appendChild(rootText);
-    rootRow.appendChild(rootSwitch);
+    rootRow.appendChild(rootActions);
     card.appendChild(rootRow);
 
-    // Hijos
     if (rootVisible) {
       const children = getChildren(root.id);
 
@@ -431,13 +551,21 @@ function renderTerminalFamiliesList() {
 
           const childVisible = !hiddenSet.has(String(child.id));
 
-          const childSwitch = buildSwitch(child.id, childVisible, (e) => {
+          const childActions = document.createElement("div");
+          childActions.className = "terminal-family-actions";
+
+          const childColor = buildColorPicker(child.id);
+
+          const childSwitch = buildSwitch(childVisible, (e) => {
             updateHiddenForTerminal(child.id, e.target.checked);
             renderTerminalFamiliesList();
           });
 
+          childActions.appendChild(childColor);
+          childActions.appendChild(childSwitch);
+
           childRow.appendChild(childText);
-          childRow.appendChild(childSwitch);
+          childRow.appendChild(childActions);
           childrenWrap.appendChild(childRow);
         });
 
@@ -454,9 +582,10 @@ async function saveTerminalFamiliesDialog() {
     terminalFamiliesDraftHiddenMap,
   );
   const okMode = await saveTerminalFamilyModeMap(terminalFamiliesDraftModeMap);
+  const okColors = await saveFamilyColorsMap(familyColorsCache);
 
-  if (!okHidden || !okMode) {
-    toast?.("No se pudo guardar la configuración.", "err", "Terminales");
+  if (!okHidden || !okMode || !okColors) {
+    toast?.("No se pudo guardar la configuración.", "err", "Familias");
     return;
   }
 
@@ -469,7 +598,7 @@ async function saveTerminalFamiliesDialog() {
   if (typeof renderCategories === "function") renderCategories();
   if (typeof renderProducts === "function") renderProducts();
 
-  toast?.("Configuración guardada.", "ok", "Terminales");
+  toast?.("Configuración guardada.", "ok", "Familias");
 }
 
 function setupTerminalFamiliesUi() {
@@ -555,15 +684,13 @@ function setupTerminalFamiliesUi() {
   }
 }
 
+// OJO:
+// Los grupos visibles del TPV siempre obedecen a los grupos ocultos.
+// El modo "all" solo afecta a los PRODUCTOS, no a los botones de categorías.
 function getVisibleCategoriesForCurrentTerminal() {
   const terminalId = currentTerminal?.id;
-  const mode = getTerminalModeSync(terminalId);
-
-  if (mode === "all") {
-    return categories || [];
-  }
-
   const hiddenSet = getHiddenCategoryIdsForTerminalSync(terminalId);
+
   if (!hiddenSet.size) return categories || [];
 
   return (categories || []).filter((cat) => {
@@ -1698,7 +1825,6 @@ function renderCategories() {
 
   const visibleCategories = getVisibleCategoriesForCurrentTerminal();
 
-  // ✅ limpiar estado inválido si alguna categoría quedó oculta/eliminada
   if (
     activeFamilyParentId &&
     !visibleCategories.some(
@@ -1722,7 +1848,6 @@ function renderCategories() {
     selectedCategory = null;
   }
 
-  // Si existía contenedor de subcategorías (columna 2), lo ocultamos
   const sub = document.getElementById("subcategories");
   if (sub) {
     sub.innerHTML = "";
@@ -1731,11 +1856,26 @@ function renderCategories() {
 
   container.innerHTML = "";
 
+  const applyFamilyButtonColor = (btn, cat, isActive = false) => {
+    const familyColor = getFamilyColorSync(cat.id);
+    if (!familyColor) return;
+
+    const textColor = getContrastTextColor(familyColor);
+
+    if (isActive) {
+      btn.style.background = familyColor;
+      btn.style.borderColor = familyColor;
+      btn.style.color = textColor;
+      return;
+    }
+
+    btn.style.background = familyColor;
+    btn.style.borderColor = familyColor;
+    btn.style.color = textColor;
+  };
+
   const inDrillDown = !!activeFamilyParentId;
 
-  // ======================
-  // VISTA ROOT: familias raíz
-  // ======================
   if (!inDrillDown) {
     const rootFamilies = visibleCategories.filter((c) => !c.parentId);
 
@@ -1747,17 +1887,18 @@ function renderCategories() {
       btn.textContent = cat.name;
 
       const hasChildren = visibleCategories.some((c) => c.parentId === cat.id);
+      const isActive = !hasChildren && selectedCategory === cat.id;
 
-      // Marcar activa si es filtro simple
-      if (!hasChildren && selectedCategory === cat.id) {
+      if (isActive) {
         btn.classList.add("active");
       }
+
+      applyFamilyButtonColor(btn, cat, isActive);
 
       btn.onclick = () => {
         const children = visibleCategories.filter((c) => c.parentId === cat.id);
 
         if (children.length) {
-          // Entramos en drill-down
           activeFamilyParentId = cat.id;
           activeSubfamilyId = null;
           selectedCategory = null;
@@ -1767,7 +1908,6 @@ function renderCategories() {
           return;
         }
 
-        // Filtro simple (toggle)
         selectedCategory = selectedCategory === cat.id ? null : cat.id;
         activeFamilyParentId = null;
         activeSubfamilyId = null;
@@ -1782,11 +1922,6 @@ function renderCategories() {
     return;
   }
 
-  // ======================
-  // VISTA DRILL-DOWN: volver + subfamilias del padre
-  // ======================
-
-  // 1) Botón volver
   const backBtn = document.createElement("button");
   backBtn.type = "button";
   backBtn.className = "category-btn category-btn-back";
@@ -1801,7 +1936,6 @@ function renderCategories() {
   };
   container.appendChild(backBtn);
 
-  // 2) Subfamilias visibles del padre activo
   const children = visibleCategories.filter(
     (c) => c.parentId === activeFamilyParentId,
   );
@@ -1813,9 +1947,12 @@ function renderCategories() {
     b.dataset.cat = child.id;
     b.textContent = child.name;
 
-    if (activeSubfamilyId === child.id) {
+    const isActive = activeSubfamilyId === child.id;
+    if (isActive) {
       b.classList.add("active");
     }
+
+    applyFamilyButtonColor(b, child, isActive);
 
     b.onclick = () => {
       activeSubfamilyId = activeSubfamilyId === child.id ? null : child.id;
@@ -1838,16 +1975,22 @@ function renderProducts() {
 
   const term = (searchTerm || "").trim().toLowerCase();
 
-  // ✅ categorías visibles según terminal
+  const terminalId = currentTerminal?.id;
+  const mode = getTerminalModeSync(terminalId);
+
   const visibleCategories = getVisibleCategoriesForCurrentTerminal();
   const visibleCategoryIds = new Set(
     (visibleCategories || []).map((c) => String(c.id)),
   );
 
-  // ✅ partir solo de productos cuya categoría siga visible
-  let filtered = Array.isArray(products)
-    ? products.filter((p) => visibleCategoryIds.has(String(p.category)))
-    : [];
+  let filtered = Array.isArray(products) ? [...products] : [];
+
+  // ✅ Solo en modo filtered filtramos productos por categorías visibles
+  if (mode === "filtered") {
+    filtered = filtered.filter((p) =>
+      visibleCategoryIds.has(String(p.category)),
+    );
+  }
 
   // Filtro por familia / subfamilia
   if (activeFamilyParentId) {
@@ -1859,7 +2002,9 @@ function renderProducts() {
       const allowedIds = new Set();
       allowedIds.add(String(activeFamilyParentId));
 
-      visibleCategories.forEach((c) => {
+      // aquí usamos TODAS las categorías reales, no solo visibles,
+      // para que el drill-down funcione bien incluso en modo all
+      (categories || []).forEach((c) => {
         if (String(c.parentId || "") === String(activeFamilyParentId)) {
           allowedIds.add(String(c.id));
         }
@@ -1885,13 +2030,11 @@ function renderProducts() {
   filtered.forEach((p) => {
     const tile = document.createElement("div");
 
-    // clase según si tiene imagen o no
     tile.className = "product-tile" + (p.imageUrl ? "" : " no-img");
 
     const prodId = Number(p.baseProductId || p.id || 0);
     if (isOfferPackProductById(prodId)) tile.classList.add("is-offer");
 
-    // Precio mostrado al público = precio neto * (1 + IVA)
     const taxRate = getTaxRateForProduct(p);
     const priceGross =
       (Number(p.price || 0) || 0) * (1 + (Number(taxRate) || 0) / 100);
@@ -1913,7 +2056,6 @@ function renderProducts() {
 
     const canEditPrices = isAdminUser() && isPriceEditModeEnabled();
 
-    // ✅ SIEMPRE añadir al carrito al tocar el producto, excepto si es una oferta
     tile.onclick = async () => {
       try {
         await addToCart(p);
@@ -1923,7 +2065,6 @@ function renderProducts() {
       }
     };
 
-    // ✅ botón ✎ solo si admin + modo activo
     if (canEditPrices) {
       tile.style.position = "relative";
 
@@ -3448,6 +3589,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   cashWrapInputsWithSteppers();
 
   await reloadTerminalFamilyHiddenCache().catch(() => {});
+  await reloadTerminalFamilyModeCache().catch(() => {});
+  await reloadFamilyColorsCache().catch(() => {});
+
   setupTerminalFamiliesUi();
 });
 
@@ -8462,6 +8606,55 @@ function bindOptionsAccordionOnce() {
   });
 }
 
+let autostartToggleBound = false;
+
+async function loadAutostartToggle() {
+  const el = document.getElementById("autostartToggle");
+  if (!el) return;
+
+  try {
+    const r = await window.TPV_AUTOSTART.get();
+
+    if (!r?.ok) return;
+
+    el.checked = !!r.autostart;
+
+    if (!r.packaged) {
+      el.title = "El autoinicio solo se aplica en la versión instalada del TPV";
+    }
+  } catch (e) {
+    console.error("[OPTIONS] autostart load error:", e);
+  }
+}
+
+function bindAutostartToggleOnce() {
+  if (autostartToggleBound) return;
+  autostartToggleBound = true;
+
+  const el = document.getElementById("autostartToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+
+    try {
+      const r = await window.TPV_AUTOSTART.set(wanted);
+
+      console.log("[OPTIONS] autostart set result:", r);
+
+      if (!r?.ok) {
+        el.checked = !wanted;
+        return;
+      }
+
+      el.checked = !!r.autostart;
+    } catch (e) {
+      el.checked = !wanted;
+      console.error("[OPTIONS] autostart set error:", e);
+    }
+  });
+}
+
 async function openOptions() {
   try {
     await ensureLoginAutoOrPrompt?.();
@@ -8476,6 +8669,9 @@ async function openOptions() {
 
   bindCustomerDisplayToggleOnce();
   await loadCustomerDisplayToggle();
+
+  bindAutostartToggleOnce();
+  await loadAutostartToggle();
 
   bindOptionsAccordionOnce();
   const st = await loadOptionsAccordionState();

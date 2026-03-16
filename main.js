@@ -974,77 +974,88 @@ function cleanOldAutoStartIfWrong() {
 
   try {
     const cur = app.getLoginItemSettings();
+    console.log("[AUTOSTART] Estado detectado al arrancar:", cur);
+
     if (!cur?.openAtLogin) return;
 
     const exe = String(cur?.executable || "");
-
-    // ✅ Permitimos dos casos válidos:
-    // - electron-builder/NSIS: executable === process.execPath
-    // - Squirrel: executable termina en Update.exe
     const isSquirrelUpdateExe =
       process.platform === "win32" &&
       exe &&
       exe.toLowerCase().endsWith("\\update.exe");
 
-    const isOk = exe === process.execPath || isSquirrelUpdateExe;
+    const isExactExe = exe === process.execPath;
 
-    if (!isOk) {
+    if (!isExactExe && !isSquirrelUpdateExe) {
+      console.log(
+        "[AUTOSTART] Entrada antigua o extraña detectada. Se desactiva.",
+      );
       app.setLoginItemSettings({ openAtLogin: false });
     }
-  } catch {}
+  } catch (e) {
+    console.log(
+      "[AUTOSTART] Error limpiando autostart antiguo:",
+      e?.message || e,
+    );
+  }
 }
 
 function configureAutoStart() {
-  if (!app.isPackaged) return;
+  if (!app.isPackaged) {
+    return { ok: false, reason: "not-packaged" };
+  }
 
   const cfg = readCfg();
-  const want = cfg.autostart !== false;
+  const want = cfg.autostart === true;
 
-  if (!want) {
-    app.setLoginItemSettings({ openAtLogin: false });
-    return;
-  }
+  try {
+    if (!want) {
+      app.setLoginItemSettings({
+        openAtLogin: false,
+      });
 
-  // ✅ Siempre pasamos flag para poder distinguir en main si viene por autostart
-  const autostartArgs = ["--autostart"];
-
-  // --- Windows: si existe Update.exe (Squirrel), usarlo ---
-  if (process.platform === "win32") {
-    try {
-      const exePath = process.execPath; // ...\app.exe
-      const exeName = path.basename(exePath);
-
-      // app.exe suele estar en ...\app-1.2.3\TPV Recipok.exe
-      // Update.exe suele estar en ...\Update.exe (un nivel arriba)
-      const appFolder = path.dirname(exePath);
-      const updateExe = path.resolve(appFolder, "..", "Update.exe");
-
-      if (fs.existsSync(updateExe)) {
-        app.setLoginItemSettings({
-          openAtLogin: true,
-          openAsHidden: false,
-          path: updateExe,
-          args: [
-            "--processStart",
-            exeName,
-            "--process-start-args",
-            autostartArgs.join(" "),
-          ],
-        });
-        return;
-      }
-    } catch (_) {
-      // si falla, caemos al modo NSIS / normal
+      return { ok: true, enabled: false };
     }
-  }
 
-  // --- Default (NSIS / Linux / macOS): ejecutable directo + args ---
-  app.setLoginItemSettings({
-    openAtLogin: true,
-    openAsHidden: false,
-    path: process.execPath,
-    args: autostartArgs,
-  });
+    const autostartArgs = ["--autostart"];
+
+    if (process.platform === "win32") {
+      try {
+        const exePath = process.execPath;
+        const exeName = path.basename(exePath);
+        const appFolder = path.dirname(exePath);
+        const updateExe = path.resolve(appFolder, "..", "Update.exe");
+
+        if (fs.existsSync(updateExe)) {
+          app.setLoginItemSettings({
+            openAtLogin: true,
+            openAsHidden: false,
+            path: updateExe,
+            args: [
+              "--processStart",
+              exeName,
+              "--process-start-args",
+              autostartArgs.join(" "),
+            ],
+          });
+
+          return { ok: true, mode: "squirrel" };
+        }
+      } catch {}
+    }
+
+    app.setLoginItemSettings({
+      openAtLogin: true,
+      openAsHidden: false,
+      path: process.execPath,
+      args: autostartArgs,
+    });
+
+    return { ok: true, mode: "direct" };
+  } catch (e) {
+    console.log("[AUTOSTART] error:", e);
+    return { ok: false, error: e?.message };
+  }
 }
 
 function bootstrapCurrentUserFromCfg() {
@@ -1594,21 +1605,38 @@ function isAdmin() {
   return !!currentUser?.isAdmin;
 }
 
+ipcMain.handle("cfg:getAutostart", () => {
+  const cfg = readCfg();
+
+  return {
+    ok: true,
+    autostart: cfg.autostart === true,
+    packaged: app.isPackaged,
+  };
+});
+
 ipcMain.handle("cfg:setAutostart", (_e, val) => {
   const want = !!val;
 
-  // ✅ permitir DESACTIVAR aunque no seas admin
-  // ✅ exigir admin solo si se quiere ACTIVAR
-  if (want && !isAdmin()) return { ok: false, error: "FORBIDDEN" };
-
   writeCfg({ autostart: want });
-  configureAutoStart();
-  return { ok: true, autostart: want };
-});
 
-ipcMain.handle("cfg:getAutostart", () => {
-  const cfg = readCfg();
-  return { ok: true, autostart: cfg.autostart !== false };
+  if (!app.isPackaged) {
+    console.log("[AUTOSTART] Guardado pero ignorado (dev mode)");
+    return {
+      ok: true,
+      autostart: want,
+      packaged: false,
+    };
+  }
+
+  const result = configureAutoStart();
+
+  return {
+    ok: !!result?.ok,
+    autostart: want,
+    packaged: true,
+    result,
+  };
 });
 
 ipcMain.handle("app:getVersion", () => {
