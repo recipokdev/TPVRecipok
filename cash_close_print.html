@@ -190,23 +190,45 @@
       <div class="sep"></div>
 
       <!-- Métodos de pago -->
-      <div class="section-title">Métodos de pago</div>
+      <div class="section-title">Pagos</div>
       <div id="ccMethods" class="list"></div>
 
-<!-- Cambios de pago (oculto si 0) -->
-<div id="ccPayChangesWrap" style="display: none">
-  <div class="sep"></div>
-  <div class="row small bold">
-    <div class="col-left">Nº cambios pago</div>
-    <div class="col-right" id="ccPayChanges">0</div>
-  </div>
-</div>
+      <div id="ccMethodsTotalWrap" style="display: none">
+        <div class="row small bold">
+          <div class="col-left">Total pagos</div>
+          <div class="col-right" id="ccMethodsTotal">0,00 €</div>
+        </div>
+      </div>
+
+      <!-- Totales de usos de métodos -->
+      <div id="ccPayUsesWrap" style="display: none">
+        <div class="sep"></div>
+        <div class="row small bold">
+          <div class="col-left">Nº métodos pago usados</div>
+          <div class="col-right" id="ccPayUses">0</div>
+        </div>
+      </div>
+
+      <!-- Cambios de pago (oculto si 0) -->
+      <div id="ccPayChangesWrap" style="display: none">
+        <div class="row small bold">
+          <div class="col-left">Nº cambios pago</div>
+          <div class="col-right" id="ccPayChanges">0</div>
+        </div>
+      </div>
 
       <!-- Ventas por agente (opcional) -->
       <div id="ccAgentsWrap" style="display: none">
         <div class="sep"></div>
         <div class="section-title">Ventas por agente</div>
         <div id="ccAgents" class="list"></div>
+
+        <div id="ccAgentsTotalWrap" style="display: none">
+          <div class="row small bold">
+            <div class="col-left">Total ventas agentes</div>
+            <div class="col-right" id="ccAgentsTotal">0,00 €</div>
+          </div>
+        </div>
       </div>
 
       <!-- Observaciones -->

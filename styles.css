@@ -2958,7 +2958,7 @@ body.modal-locked .cart-card {
 .cash-total-agent {
   font-size: 14px;
   opacity: 0.85;
-  background: #26476b;
+  background: #324559;
   color: #fff;
   flex-direction: column;
   border-radius: 12px;
@@ -3183,6 +3183,92 @@ body.modal-locked .cart-card {
 }
 #terminalDefaultCustomerSaveBtn:hover {
   filter: brightness(0.95);
+}
+
+/* ===== Cierre de caja - badges y claridad visual ===== */
+
+.cash-close-total-meta {
+  margin: 10px 0 8px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cash-total-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 800;
+  flex: 1 1 200px;
+  border-radius: 12px;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
+  text-align: center;
+}
+
+.cash-pay-card-label {
+  font-size: 13px;
+  color: #5b6470;
+  font-weight: 600;
+}
+
+.cash-agent-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.cash-agent-head-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cash-agent-name {
+  font-size: 16px;
+  font-weight: 900;
+  color: #000;
+}
+
+.cash-agent-meta {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f2937;
+  opacity: 0.9;
+}
+
+.cash-agent-total {
+  font-size: 16px;
+  font-weight: 900;
+  white-space: nowrap;
+  color: #000;
+}
+
+.cash-agent-method {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  padding: 3px 0;
+}
+
+.cash-agent-method-label {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.cash-agent-method-amount {
+  white-space: nowrap;
+  font-weight: 700;
+  color: #1f2937;
 }
 
 /* =============================================================
@@ -3656,4 +3742,72 @@ body.modal-locked .cart-card {
   display: flex;
   gap: 8px;
   display: contents;
+}
+
+/* =============================================================
+   CAJA - IMPORTE DIRECTO
+   ============================================================= */
+
+.cash-direct-total-wrap {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #f8fbff;
+}
+
+.cash-direct-total-wrap label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #374151;
+}
+
+.cash-direct-total-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.cash-direct-total-input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  font-size: 16px;
+  outline: none;
+  background: #fffef2;
+}
+
+.cash-direct-total-input:focus {
+  border-color: #198cff;
+  box-shadow: 0 0 0 3px rgba(25, 140, 255, 0.14);
+}
+
+.cash-direct-total-btn {
+  flex: 0 0 auto;
+  min-width: 56px;
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid #198cff;
+  background: #198cff;
+  color: #fff;
+  font-weight: 700;
+  font-size: 20px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.cash-direct-total-btn:active {
+  transform: scale(0.98);
+}
+
+.cash-direct-total-help {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #6b7280;
 }

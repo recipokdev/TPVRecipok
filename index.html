@@ -556,6 +556,35 @@
           <div class="cash-cell-page cash-cell-empty"></div>
         </div>
 
+        <!-- Importe directo (solo apertura) -->
+        <div id="cashDirectTotalWrap" class="cash-direct-total-wrap">
+          <label for="cashDirectTotal">Importe directo</label>
+
+          <div class="cash-direct-total-row">
+            <input
+              id="cashDirectTotal"
+              type="text"
+              inputmode="none"
+              placeholder="Ej: 100,00"
+              class="cash-direct-total-input"
+              readonly
+            />
+
+            <button
+              type="button"
+              id="cashDirectTotalKeyboardBtn"
+              class="cash-direct-total-btn"
+              title="Abrir teclado numérico"
+            >
+              ⌨
+            </button>
+          </div>
+
+          <div class="cash-direct-total-help">
+            Puedes escribir el total directamente sin contar monedas y billetes.
+          </div>
+        </div>
+
         <!-- Observaciones -->
         <div class="cash-obs">
           <label for="cashObs">Observaciones</label>
@@ -1060,13 +1089,32 @@
               "
             >
               <strong>Líneas</strong>
-              <div style="display: flex; gap: 8px">
-                <button id="refundSelectAllBtn" type="button" class="cart-btn">
-                  Todo
-                </button>
-                <button id="refundSelectNoneBtn" type="button" class="cart-btn">
-                  Nada
-                </button>
+              <div
+                style="
+                  display: flex;
+                  justify-content: space-between;
+                  align-items: center;
+                  gap: 8px;
+                  flex-wrap: wrap;
+                "
+              >
+                <strong>Líneas</strong>
+                <div style="display: flex; gap: 8px">
+                  <button
+                    id="refundSelectAllBtn"
+                    type="button"
+                    class="cart-btn"
+                  >
+                    Todo
+                  </button>
+                  <button
+                    id="refundSelectNoneBtn"
+                    type="button"
+                    class="cart-btn"
+                  >
+                    Nada
+                  </button>
+                </div>
               </div>
             </div>
 

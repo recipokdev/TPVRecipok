@@ -80,12 +80,15 @@ let cashSession = {
   currentCashBreakdown: [],
 
   // Totales de la sesión
-  cashSalesTotal: 0, // Ingresos en efectivo
+  cashSalesTotal: 0,
   cashMovementsTotal: 0,
   totalSales: 0,
 
-  // 👇 NUEVO: resumen por forma de pago
-  paymentsByMethod: {}, // { CONT: { code, label, total, count }, BIZUM: {...}, ... }
+  // Resumen por forma de pago
+  paymentsByMethod: {},
+
+  // ✅ NUEVO: ledger persistente de pagos reales por caja
+  paymentLedger: [],
 };
 
 let cashDialogMode = "open"; // "open" (apertura) o "close" (cierre)
@@ -150,6 +153,12 @@ const cashOpenTotalEl = document.getElementById("cashOpenTotal");
 const cashHeaderBtn = document.getElementById("cashHeaderBtn");
 const cashHeaderLabel = document.getElementById("cashHeaderLabel");
 
+const cashDirectTotalWrap = document.getElementById("cashDirectTotalWrap");
+const cashDirectTotalEl = document.getElementById("cashDirectTotal");
+const cashDirectTotalKeyboardBtn = document.getElementById(
+  "cashDirectTotalKeyboardBtn",
+);
+
 // ===== Movimientos de caja =====
 const cashMoveOverlay = document.getElementById("cashMoveOverlay");
 const cashMoveBtn = document.getElementById("cashMoveBtn");
@@ -174,6 +183,291 @@ const sumTotalSalesEl = document.getElementById("sumTotalSales");
 const cartClientInput = document.querySelector(".cart-client-input");
 
 // ===== Funciones auxiliares =====
+
+// ===============================
+// Input directo al abrir o cerrar caja
+// ===============================
+
+function parseCashDirectAmount(value) {
+  const raw = String(value || "")
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(",", ".");
+
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function formatCashDirectAmount(value) {
+  return Number(value || 0)
+    .toFixed(2)
+    .replace(".", ",");
+}
+
+function clearCashBreakdownInputsSilently() {
+  if (!cashOpenOverlay) return;
+
+  const inputs = cashOpenOverlay.querySelectorAll(".cash-hidden-input");
+  inputs.forEach((inp) => {
+    inp.value = "0";
+  });
+
+  cashOpenOverlay.querySelectorAll(".cash-qty").forEach((s) => {
+    s.textContent = "0";
+  });
+}
+
+function applyCashDirectTotal(rawValue) {
+  let total = null;
+
+  if (typeof rawValue === "number") {
+    total = Number.isFinite(rawValue) && rawValue >= 0 ? rawValue : null;
+  } else {
+    total = parseCashDirectAmount(rawValue);
+  }
+
+  if (total == null) {
+    toast("Introduce un importe válido.", "warn", "Caja");
+    return;
+  }
+
+  total = Math.round((Number(total) + Number.EPSILON) * 100) / 100;
+
+  // 1) Limpiar conteo por denominaciones
+  clearCashBreakdownInputsSilently();
+
+  // 2) Vaciar breakdowns porque ahora el total es manual/directo
+  if (cashDialogMode === "open") {
+    cashSession.openingTotal = total;
+    cashSession.openingBreakdown = [];
+    cashSession.currentCashBreakdown = [];
+  } else {
+    cashSession.closingTotal = total;
+    cashSession.closingBreakdown = [];
+  }
+
+  // 3) Refrescar input directo
+  if (cashDirectTotalEl) {
+    cashDirectTotalEl.value = formatCashDirectAmount(total);
+  }
+
+  // 4) Refrescar total principal
+  if (cashOpenTotalEl) {
+    cashOpenTotalEl.textContent = total.toFixed(2).replace(".", ",") + " €";
+  }
+
+  // 5) Si estamos cerrando caja, recalcular resumen
+  if (cashDialogMode !== "open") {
+    updateCloseSummary(total);
+  }
+}
+
+function bindCashDirectTotalInput() {
+  if (cashDirectTotalKeyboardBtn && !cashDirectTotalKeyboardBtn.dataset.bound) {
+    cashDirectTotalKeyboardBtn.dataset.bound = "1";
+
+    cashDirectTotalKeyboardBtn.onclick = () => {
+      openNumPad(
+        cashDirectTotalEl?.value || "0",
+        (value) => {
+          const safeValue =
+            Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+          applyCashDirectTotal(safeValue);
+        },
+        "Importe directo",
+        "cash",
+      );
+    };
+  }
+
+  if (cashDirectTotalEl && !cashDirectTotalEl.dataset.bound) {
+    cashDirectTotalEl.dataset.bound = "1";
+
+    cashDirectTotalEl.onclick = () => {
+      openNumPad(
+        cashDirectTotalEl?.value || "0",
+        (value) => {
+          const safeValue =
+            Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+          applyCashDirectTotal(safeValue);
+        },
+        "Importe directo",
+        "cash",
+      );
+    };
+  }
+}
+
+// ===============================
+// ledger storage (guardar metodos de pago en local)
+// ===============================
+
+function getCashLedgerStorageKey(cajaId) {
+  const id = Number(cajaId || 0) || 0;
+  return `tpv_cash_payment_ledger_${id}`;
+}
+
+function loadCashLedger(cajaId) {
+  const id = Number(cajaId || 0) || 0;
+  if (!id) return [];
+
+  try {
+    const raw = localStorage.getItem(getCashLedgerStorageKey(id));
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCashLedger(cajaId, entries) {
+  const id = Number(cajaId || 0) || 0;
+  if (!id) return;
+
+  const safe = Array.isArray(entries) ? entries : [];
+  try {
+    localStorage.setItem(
+      getCashLedgerStorageKey(id),
+      JSON.stringify(safe.slice(-5000)),
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar cash ledger:", e);
+  }
+}
+
+function clearCashLedger(cajaId) {
+  const id = Number(cajaId || 0) || 0;
+  if (!id) return;
+
+  try {
+    localStorage.removeItem(getCashLedgerStorageKey(id));
+  } catch {}
+}
+
+function loadCashLedgerIntoSession(cajaId) {
+  const ledger = loadCashLedger(cajaId);
+  cashSession.paymentLedger = ledger;
+  return ledger;
+}
+
+function appendPaymentsToCashLedger({
+  cajaId,
+  pagos,
+  kind = "sale", // sale | refund
+  ticketRef = "",
+  source = "runtime", // runtime | offline
+  ts = null,
+  agentCode = "",
+  agentName = "",
+}) {
+  const id = Number(cajaId || 0) || 0;
+  if (!id) return;
+
+  const pagosArr = Array.isArray(pagos) ? pagos : [];
+  if (!pagosArr.length) return;
+
+  const ledger = loadCashLedger(id);
+  const now = ts || new Date().toISOString();
+
+  const safeAgentCode =
+    String(agentCode || currentAgent?.codagente || "").trim() || "—";
+  const safeAgentName =
+    String(
+      agentName || currentAgent?.name || currentAgent?.nick || "",
+    ).trim() ||
+    getAgentLabel?.(safeAgentCode) ||
+    safeAgentCode ||
+    "—";
+
+  const entries = pagosArr
+    .map((p) => {
+      const code = String(p?.codpago || "")
+        .trim()
+        .toUpperCase();
+      if (!code) return null;
+
+      const rawAmount = Number(p?.importe || 0);
+      const absAmount =
+        Math.round((Math.abs(rawAmount) + Number.EPSILON) * 100) / 100;
+      if (!(absAmount > 0)) return null;
+
+      const signedAmount = kind === "refund" ? -absAmount : absAmount;
+
+      return {
+        cajaId: id,
+        ts: now,
+        kind,
+        method: code,
+        label: String(p?.descripcion || p?.codpago || code).trim(),
+        amount: signedAmount,
+        ticketRef: String(ticketRef || "").trim(),
+        source,
+
+        // ✅ NUEVO
+        agentCode: safeAgentCode,
+        agentName: safeAgentName,
+      };
+    })
+    .filter(Boolean);
+
+  if (!entries.length) return;
+
+  const next = ledger.concat(entries);
+  saveCashLedger(id, next);
+  cashSession.paymentLedger = next;
+}
+
+function buildPaymentsByMethodFromLedger(cajaId) {
+  const id = Number(cajaId || 0) || 0;
+  const ledger = loadCashLedger(id);
+  const map = {};
+
+  for (const row of ledger) {
+    const code =
+      String(row?.method || "")
+        .trim()
+        .toUpperCase() || "—";
+
+    const amount = Number(row?.amount || 0);
+    const isRefund = amount < 0;
+
+    if (!map[code]) {
+      map[code] = {
+        code,
+        label: String(row?.label || code).trim() || code,
+
+        total: 0,
+        count: 0,
+
+        salesTotal: 0,
+        refundTotal: 0,
+        salesCount: 0,
+        refundCount: 0,
+        editCount: 0,
+      };
+    }
+
+    const m = map[code];
+
+    if (row?.label && String(row.label).trim()) {
+      m.label = String(row.label).trim();
+    }
+
+    m.total += amount;
+
+    if (isRefund) {
+      m.refundTotal += Math.abs(amount);
+      m.refundCount += 1;
+    } else {
+      m.salesTotal += amount;
+      m.salesCount += 1;
+    }
+
+    m.count = m.salesCount + m.refundCount + m.editCount;
+  }
+
+  return map;
+}
 
 // ===============================
 // Opciones de Color a las familias(grupos)
@@ -3331,39 +3625,6 @@ function numPadConfirm() {
   return;
 }
 
-function safeEvalQtyExpression(exprRaw) {
-  let expr = String(exprRaw || "").trim();
-  if (!expr) return null;
-
-  // Permitir coma decimal
-  expr = expr.replaceAll(",", ".");
-
-  // Mapear símbolos bonitos a operadores reales
-  expr = expr.replaceAll("×", "*").replaceAll("÷", "/").replaceAll("−", "-");
-
-  // Solo permitimos: números, espacios, + - * / ( ) y .
-  if (!/^[0-9+\-*/().\s]+$/.test(expr)) return null;
-
-  // Evitar cosas raras como ** o //
-  if (expr.includes("**") || expr.includes("//")) return null;
-
-  let result;
-  try {
-    result = Function(`"use strict"; return (${expr});`)();
-  } catch {
-    return null;
-  }
-
-  if (!isFinite(result)) return null;
-
-  // Cantidad entera final
-  const qty = Math.round(Number(result));
-  if (!isFinite(qty)) return null;
-
-  // Reglas: mínimo 1, máximo 9999 (ajusta si quieres)
-  return Math.max(1, Math.min(9999, qty));
-}
-
 if (numPadOverlay) {
   numPadOverlay.addEventListener("click", (e) => {
     if (handleOverlayOutsideClick(e, ".num-pad", closeNumPad)) return;
@@ -4859,7 +5120,9 @@ function renderCashCloseHeaderCard(remoteCaja) {
   const totalVendido = Number(
     remoteCaja?.totaltickets ?? cashSession.totalSales ?? 0,
   );
-  const numTickets = Number(remoteCaja?.numtickets ?? 0);
+  const numTickets = Number(
+    cashSession.numtickets ?? remoteCaja?.numtickets ?? 0,
+  );
 
   box.innerHTML = `
     <div class="cash-close-top">Caja ${escapeHtml(String(idcaja))} (TPV ${escapeHtml(String(idtpv))})</div>
@@ -4882,22 +5145,21 @@ function renderCashCloseTotalMeta() {
   const box = document.getElementById("cashCloseTotalMeta");
   if (!box) return;
 
-  const agents = Array.isArray(cashSession.agentSalesSummary)
-    ? cashSession.agentSalesSummary
-    : [];
+  const totalTickets = Number(cashSession.numtickets || 0);
 
-  // Siempre mostramos TOTAL
-  let html = ``;
+  const totalPayments = Object.values(
+    cashSession.paymentsByMethod || {},
+  ).reduce((sum, m) => sum + Number(m.count || 0), 0);
 
-  // Si hay exactamente 1 agente, lo mostramos
-  if (agents.length === 1) {
-    const a = agents[0];
-    html += `<span class="cash-total-agent">Agente: ${escapeHtml(
-      a.agentName || a.agentCode || "—",
-    )}</span>`;
-  }
+  box.innerHTML = `
+    <span class="cash-total-agent cash-total-chip">
+      Tickets: ${totalTickets}
+    </span>
+    <span class="cash-total-agent cash-total-chip">
+      Pagos: ${totalPayments}
+    </span>
+  `;
 
-  box.innerHTML = html;
   box.style.display = "flex";
 }
 
@@ -5390,22 +5652,11 @@ function renderAgentSalesSummary() {
     ? cashSession.agentSalesSummary
     : [];
 
-  // ✅ si 0 o 1 agente, ocultamos (para no duplicar)
-  if (list.length <= 1) {
+  if (!list.length) {
     box.style.display = "none";
     box.innerHTML = "";
     return;
   }
-
-  const labelMap = window.__PAYMETHOD_LABELS__ || {};
-
-  // helper local
-  const payLabel = (code) => {
-    const c = String(code || "—")
-      .trim()
-      .toUpperCase();
-    return labelMap[c] || c;
-  };
 
   box.style.display = "block";
 
@@ -5413,18 +5664,19 @@ function renderAgentSalesSummary() {
     <div class="cash-agent-title">Ventas por agente</div>
     ${list
       .map((ag) => {
-        const methods = Object.values(ag.byMethod || {}).sort((a, b) => {
-          const la = payLabel(a.code);
-          const lb = payLabel(b.code);
-          return String(la).localeCompare(String(lb), "es", {
-            sensitivity: "base",
-          });
-        });
+        const methods = Object.values(ag.byMethod || {}).sort(
+          (a, b) => Number(b.total || 0) - Number(a.total || 0),
+        );
 
         return `
           <div class="cash-agent-card">
             <div class="cash-agent-head">
-              <div class="cash-agent-name">${escapeHtml(ag.agentName || ag.agentCode || "—")}</div>
+              <div>
+                <div class="cash-agent-name">${escapeHtml(ag.agentName || ag.agentCode || "—")}</div>
+                <div style="font-size:12px; opacity:.9; margin-top:4px; font-weight:700;">
+                  Tickets: ${Number(ag.count || 0)} · Pagos: ${Number(ag.paymentUses || 0)}
+                </div>
+              </div>
               <div class="cash-agent-total">${eur(ag.total || 0)}</div>
             </div>
 
@@ -5433,7 +5685,7 @@ function renderAgentSalesSummary() {
                 .map(
                   (m) => `
                     <div class="cash-agent-method">
-                      <div class="cash-agent-method-label">${escapeHtml(payLabel(m.code))} (${Number(m.count || 0)})</div>
+                      <div class="cash-agent-method-label">${escapeHtml(m.label || m.code || "—")} · Pagos: ${Number(m.count || 0)}</div>
                       <div class="cash-agent-method-amount">${eur(m.total || 0)}</div>
                     </div>
                   `,
@@ -5459,37 +5711,29 @@ function renderPayMethodsSummary() {
     box.style.display = "none";
     return;
   }
+
   box.style.display = "flex";
 
   const labelMap = window.__PAYMETHOD_LABELS__ || {};
 
   entries.sort((a, b) => {
-    const la = String(labelMap[a.code] || a.label || a.code || "");
-    const lb = String(labelMap[b.code] || b.label || b.code || "");
+    const la = String(a.label || labelMap[a.code] || a.code || "");
+    const lb = String(b.label || labelMap[b.code] || b.code || "");
     return la.localeCompare(lb, "es", { sensitivity: "base" });
   });
 
   entries.forEach((pm) => {
-    const baseLabel = labelMap[pm.code] || pm.label || pm.code || "—";
+    const baseLabel = pm.label || labelMap[pm.code] || pm.code || "—";
     const total = Number(pm.total) || 0;
-
-    const salesCount = Number(pm.salesCount || 0);
-    const refundCount = Number(pm.refundCount || 0);
-    const edits = Number(pm.editCount || 0);
-
-    let sub = "";
-    if (salesCount) sub = `Ventas: ${salesCount}`;
-    if (refundCount)
-      sub = sub ? `${sub} · Devol: ${refundCount}` : `Devol: ${refundCount}`;
-    if (edits) sub = sub ? `${sub} · Cambios: ${edits}` : `Cambios: ${edits}`;
-
-    const label = sub ? `${baseLabel} (${sub})` : baseLabel;
+    const payCount = Number(pm.count || 0);
 
     const card = document.createElement("div");
     card.className = "cash-pay-card";
     card.innerHTML = `
       <div class="cash-pay-card-amount">${eur(total)}</div>
-      <div class="cash-pay-card-label">${escapeHtml(label)}</div>
+      <div class="cash-pay-card-label">
+        ${escapeHtml(baseLabel)} · Pagos: ${payCount}
+      </div>
     `;
     box.appendChild(card);
   });
@@ -5504,6 +5748,9 @@ function cashResetUIForOpening() {
       inp.dispatchEvent(new Event("input", { bubbles: true }));
       inp.dispatchEvent(new Event("change", { bubbles: true }));
     });
+
+  // input directo
+  if (cashDirectTotalEl) cashDirectTotalEl.value = "0,00";
 
   // Observaciones
   const obs = document.querySelector("#cashOpenOverlay #cashObs");
@@ -5525,7 +5772,6 @@ function cashResetUIForOpening() {
     if (el) el.textContent = "0,00 €";
   });
 
-  // 👇 limpiar formas de pago usadas en la nueva sesión
   cashSession.paymentsByMethod = {};
 }
 
@@ -5573,6 +5819,7 @@ async function maybeOpenCashOrRecover() {
           // ✅ recuperable
           cashSession.remoteCajaId = Number(remoteCaja.idcaja || storedId);
           cashSession.open = true;
+          loadCashLedgerIntoSession(cashSession.remoteCajaId);
 
           await ensureTerminalAgentDefaults();
           renderMainUI();
@@ -5630,6 +5877,7 @@ async function maybeOpenCashOrRecover() {
           cashSession.remoteCajaId = Number(pick.idcaja);
           cashSession.open = true;
           localStorage.setItem("tpv_remoteCajaId", String(pick.idcaja));
+          loadCashLedgerIntoSession(cashSession.remoteCajaId);
 
           await ensureTerminalAgentDefaults();
 
@@ -5702,14 +5950,434 @@ async function fetchRecibosByFacturasMulti(idfacturas) {
   return all;
 }
 
+function normalizePayCode(code) {
+  return (
+    String(code || "")
+      .trim()
+      .toUpperCase() || "—"
+  );
+}
+
+function roundMoney2(n) {
+  return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+}
+
+function sumImportes(list) {
+  return roundMoney2(
+    (Array.isArray(list) ? list : []).reduce(
+      (s, x) => s + Number(x?.importe || 0),
+      0,
+    ),
+  );
+}
+
+function groupRecibosByCodpago(recibos) {
+  const map = {};
+
+  for (const r of Array.isArray(recibos) ? recibos : []) {
+    const codpago = normalizePayCode(r?.codpago);
+    const importe = roundMoney2(r?.importe || 0);
+
+    if (!map[codpago]) {
+      map[codpago] = {
+        codpago,
+        importe: 0,
+        count: 0,
+      };
+    }
+
+    map[codpago].importe = roundMoney2(map[codpago].importe + importe);
+    map[codpago].count += 1;
+  }
+
+  return Object.values(map);
+}
+
+/**
+ * Devuelve el desglose de pagos de una factura.
+ *
+ * Regla:
+ * - Si hay recibos válidos, usamos recibos.
+ * - Si no hay recibos, fallback a factura.codpago + factura.total.
+ *
+ * Resultado:
+ * {
+ *   ticketTotal,
+ *   ticketCount: 1,
+ *   paymentUses,
+ *   lines: [{ codpago, importe, count }]
+ * }
+ */
+async function getFacturaPaymentBreakdown(factura) {
+  const idfactura = Number(factura?.idfactura || 0);
+  const facturaTotal = roundMoney2(factura?.total || 0);
+  const facturaCodpago = normalizePayCode(factura?.codpago);
+
+  if (!idfactura) {
+    return {
+      ticketTotal: facturaTotal,
+      ticketCount: 1,
+      paymentUses: 1,
+      lines: [
+        {
+          codpago: facturaCodpago,
+          importe: facturaTotal,
+          count: 1,
+        },
+      ],
+    };
+  }
+
+  let recibos = [];
+  try {
+    recibos = await fetchRecibosByFactura(idfactura);
+  } catch (e) {
+    console.warn("No pude leer recibos de factura", idfactura, e?.message || e);
+    recibos = [];
+  }
+
+  // Solo recibos con importe real
+  const recibosValidos = (Array.isArray(recibos) ? recibos : []).filter(
+    (r) => roundMoney2(r?.importe || 0) !== 0,
+  );
+
+  if (recibosValidos.length) {
+    const grouped = groupRecibosByCodpago(recibosValidos);
+    const totalRecibos = roundMoney2(
+      grouped.reduce((s, g) => s + Number(g.importe || 0), 0),
+    );
+
+    // Si cuadra razonablemente, usamos recibos como fuente de verdad
+    if (Math.abs(totalRecibos - facturaTotal) <= 0.05) {
+      return {
+        ticketTotal: facturaTotal,
+        ticketCount: 1,
+        paymentUses: grouped.reduce((s, g) => s + Number(g.count || 0), 0),
+        lines: grouped,
+      };
+    }
+  }
+
+  // Fallback
+  return {
+    ticketTotal: facturaTotal,
+    ticketCount: 1,
+    paymentUses: 1,
+    lines: [
+      {
+        codpago: facturaCodpago,
+        importe: facturaTotal,
+        count: 1,
+      },
+    ],
+  };
+}
+
+/**
+ * Construye el reparto de una devolución a partir de los recibos del ticket original.
+ *
+ * Ejemplo:
+ * original: 10 CONT + 40 TARJETA
+ * refundTotalAbs: 50
+ * => -10 CONT + -40 TARJETA
+ *
+ * Si la devolución es parcial, reparte proporcionalmente.
+ */
+async function buildRefundBreakdownFromOriginalRecibos(
+  originalIdfactura,
+  refundTotalAbs,
+  fallbackCodpago = "CONT",
+) {
+  const totalAbs = roundMoney2(Math.abs(refundTotalAbs || 0));
+
+  if (!(totalAbs > 0)) {
+    return [];
+  }
+
+  let originalRecibos = [];
+  try {
+    originalRecibos = await fetchRecibosByFactura(originalIdfactura);
+  } catch (e) {
+    console.warn(
+      "No pude leer recibos originales para devolución:",
+      e?.message || e,
+    );
+    originalRecibos = [];
+  }
+
+  // Nos quedamos con recibos positivos del original
+  const originalesValidos = (
+    Array.isArray(originalRecibos) ? originalRecibos : []
+  ).filter((r) => roundMoney2(r?.importe || 0) > 0);
+
+  const grouped = groupRecibosByCodpago(originalesValidos).filter(
+    (x) => roundMoney2(x.importe) > 0,
+  );
+
+  const originalTotal = roundMoney2(
+    grouped.reduce((s, g) => s + Number(g.importe || 0), 0),
+  );
+
+  // Fallback si no hay recibos utilizables
+  if (!grouped.length || !(originalTotal > 0)) {
+    return [
+      {
+        codpago: normalizePayCode(fallbackCodpago),
+        importe: -totalAbs,
+        count: 1,
+      },
+    ];
+  }
+
+  const out = [];
+  let pendiente = totalAbs;
+
+  grouped.forEach((g, idx) => {
+    const isLast = idx === grouped.length - 1;
+
+    let parte = 0;
+    if (isLast) {
+      parte = pendiente;
+    } else {
+      parte = roundMoney2((totalAbs * Number(g.importe || 0)) / originalTotal);
+      pendiente = roundMoney2(pendiente - parte);
+    }
+
+    out.push({
+      codpago: normalizePayCode(g.codpago),
+      importe: -roundMoney2(parte),
+      count: 1,
+    });
+  });
+
+  return out;
+}
+
+/**
+ * Reescribe los recibos de una rectificativa para que respeten
+ * el reparto del ticket original cuando la venta era mixta.
+ */
+async function rewriteRefundRecibosFromOriginalMix({
+  originalIdfactura,
+  refundIdfactura,
+  refundTotalAbs,
+  codcliente,
+  idempresa,
+  coddivisa,
+  codigofactura,
+  fecha,
+  fallbackCodpago,
+}) {
+  if (!refundIdfactura || !originalIdfactura) return;
+
+  const refundBreakdown = await buildRefundBreakdownFromOriginalRecibos(
+    originalIdfactura,
+    refundTotalAbs,
+    fallbackCodpago,
+  );
+
+  if (!refundBreakdown.length) return;
+
+  // Crear los recibos correctos
+  for (const p of refundBreakdown) {
+    const importe = roundMoney2(p.importe || 0);
+    if (!importe) continue;
+
+    await createReciboCliente({
+      idfactura: refundIdfactura,
+      codcliente,
+      codpago: p.codpago,
+      importe, // NEGATIVO
+      fechapago: fecha,
+      fecha,
+      idempresa,
+      codigofactura,
+      coddivisa,
+    });
+  }
+
+  // Limpiar extras / recibo erróneo autogenerado
+  try {
+    await cleanupRecibosFactura(
+      refundIdfactura,
+      refundBreakdown.map((x) => ({
+        codpago: x.codpago,
+        importe: x.importe,
+      })),
+    );
+  } catch (e) {
+    console.warn("No pude limpiar recibos de rectificativa:", e?.message || e);
+  }
+
+  try {
+    await validateRecibosAgainstFactura?.(refundIdfactura);
+  } catch {}
+}
+
 async function fetchRecibosByFactura(idfactura) {
   const arr = await fetchRecibosByFacturasMulti([idfactura]);
   const list = Array.isArray(arr) ? arr : [];
   return list.filter((r) => String(r.idfactura) === String(idfactura));
 }
 
+async function buildRefundBreakdownFromOriginalFactura(
+  originalId,
+  refundTotalAbs,
+  fallbackCodpago = "",
+) {
+  const totalAbs =
+    Math.round((Number(refundTotalAbs || 0) + Number.EPSILON) * 100) / 100;
+  if (!(totalAbs > 0)) return [];
+
+  let recibos = [];
+  try {
+    recibos = await fetchRecibosByFactura(originalId);
+  } catch (e) {
+    console.warn("No pude leer recibos originales:", e?.message || e);
+    recibos = [];
+  }
+
+  // Nos quedamos solo con importes positivos reales
+  const valid = (Array.isArray(recibos) ? recibos : []).filter((r) => {
+    const imp = Number(r?.importe || 0);
+    const code = String(r?.codpago || "")
+      .trim()
+      .toUpperCase();
+    return imp > 0 && code;
+  });
+
+  // Agrupar por método de pago
+  const byMethod = {};
+  for (const r of valid) {
+    const code = String(r.codpago || "")
+      .trim()
+      .toUpperCase();
+    byMethod[code] = (byMethod[code] || 0) + Number(r.importe || 0);
+  }
+
+  const methods = Object.entries(byMethod).map(([codpago, importe]) => ({
+    codpago,
+    importe: Math.round((Number(importe || 0) + Number.EPSILON) * 100) / 100,
+  }));
+
+  // Si no hay recibos, fallback al codpago de la factura
+  if (!methods.length) {
+    const code =
+      String(fallbackCodpago || "")
+        .trim()
+        .toUpperCase() || "CONT";
+    return [
+      {
+        codpago: code,
+        importe: -totalAbs,
+      },
+    ];
+  }
+
+  const originalSum = methods.reduce((s, x) => s + Number(x.importe || 0), 0);
+  if (!(originalSum > 0)) {
+    const code =
+      String(fallbackCodpago || "")
+        .trim()
+        .toUpperCase() || "CONT";
+    return [
+      {
+        codpago: code,
+        importe: -totalAbs,
+      },
+    ];
+  }
+
+  // Reparto proporcional exacto en céntimos
+  const totalCents = Math.round(totalAbs * 100);
+  let usedCents = 0;
+
+  const out = methods.map((m, idx) => {
+    let cents = 0;
+
+    if (idx < methods.length - 1) {
+      cents = Math.round((Number(m.importe || 0) / originalSum) * totalCents);
+      usedCents += cents;
+    } else {
+      cents = totalCents - usedCents;
+    }
+
+    return {
+      codpago: String(m.codpago || "")
+        .trim()
+        .toUpperCase(),
+      importe: -(cents / 100),
+    };
+  });
+
+  return out.filter((x) => Math.abs(Number(x.importe || 0)) > 0.00001);
+}
+
+async function replaceFacturaRecibosWithBreakdown(idfactura, breakdown) {
+  const rectId = Number(idfactura || 0);
+  if (!rectId) throw new Error("Factura rectificativa inválida.");
+
+  const parts = Array.isArray(breakdown) ? breakdown : [];
+  if (!parts.length) return;
+
+  // 1) Leer factura rectificativa real
+  const fc = await fetchFacturaClienteById(rectId);
+  if (!fc) throw new Error("No pude leer la factura rectificativa.");
+
+  // 2) Borrar recibos existentes de la rectificativa
+  try {
+    const oldRecibos = await fetchRecibosByFactura(rectId);
+    for (const r of oldRecibos) {
+      const idrecibo = Number(r?.idrecibo || 0);
+      if (!idrecibo) continue;
+
+      try {
+        await apiWrite(`reciboclientes/${idrecibo}`, "DELETE");
+      } catch (e) {
+        console.warn(
+          "No pude borrar recibo anterior de rectificativa:",
+          idrecibo,
+          e?.message || e,
+        );
+      }
+    }
+  } catch (e) {
+    console.warn(
+      "No pude limpiar recibos anteriores de la rectificativa:",
+      e?.message || e,
+    );
+  }
+
+  // 3) Crear recibos nuevos repartidos por método
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  for (const part of parts) {
+    const codpago = String(part?.codpago || "")
+      .trim()
+      .toUpperCase();
+    const importe =
+      Math.round((Number(part?.importe || 0) + Number.EPSILON) * 100) / 100;
+
+    if (!codpago) continue;
+    if (Math.abs(importe) < 0.009) continue;
+
+    await createReciboCliente({
+      idfactura: rectId,
+      codcliente: fc.codcliente,
+      codpago,
+      importe, // 👈 negativo en devoluciones
+      fechapago: todayIso,
+      fecha: todayIso,
+      idempresa: fc.idempresa,
+      codigofactura: fc.codigo || fc.codigofactura || "",
+      coddivisa: fc.coddivisa,
+    });
+  }
+}
+
 function resetCashRuntimeForNewCaja() {
   cashSession.paymentsByMethod = {};
+  cashSession.paymentLedger = [];
   cashSession.agentSalesSummary = [];
   cashSession.totalSales = 0;
 
@@ -5737,51 +6405,103 @@ async function hydratePaymentsByMethodForClose(idcaja) {
   });
 
   const map = {};
+  let totalPaymentUses = 0;
 
   for (const f of Array.isArray(facturas) ? facturas : []) {
     if (f.tpv_venta !== true) continue;
 
-    const code =
-      String(f.codpago || "")
-        .trim()
-        .toUpperCase() || "—";
+    const breakdown = await getFacturaPaymentBreakdown(f);
+    totalPaymentUses += Number(breakdown.paymentUses || 0);
 
-    const amount = Number(f.total || 0); // puede ser negativo
-    const isRefund = amount < 0;
+    for (const line of breakdown.lines || []) {
+      const code = normalizePayCode(line.codpago);
+      const amount = roundMoney2(line.importe || 0);
+      const uses = Number(line.count || 0);
+      const isRefund = amount < 0;
 
-    if (!map[code]) {
-      map[code] = {
-        code,
+      if (!map[code]) {
+        map[code] = {
+          code,
+          label: code,
 
-        // neto
-        total: 0,
-        count: 0,
+          // neto por método
+          total: 0,
+          count: 0, // aquí count = nº de pagos/recibos
 
-        // separados
-        salesTotal: 0,
-        refundTotal: 0,
-        salesCount: 0,
-        refundCount: 0,
-      };
-    }
+          // separados
+          salesTotal: 0,
+          refundTotal: 0,
+          salesCount: 0,
+          refundCount: 0,
+        };
+      }
 
-    const m = map[code];
+      const m = map[code];
 
-    // neto (como hasta ahora)
-    m.total += amount;
-    m.count += 1;
+      m.total = roundMoney2(m.total + amount);
+      m.count += uses;
 
-    // separados
-    if (isRefund) {
-      m.refundTotal += Math.abs(amount);
-      m.refundCount += 1;
-    } else {
-      m.salesTotal += amount;
-      m.salesCount += 1;
+      if (isRefund) {
+        m.refundTotal = roundMoney2(m.refundTotal + Math.abs(amount));
+        m.refundCount += uses;
+      } else {
+        m.salesTotal = roundMoney2(m.salesTotal + amount);
+        m.salesCount += uses;
+      }
     }
   }
 
   cashSession.paymentsByMethod = map;
+  cashSession.totalPaymentUses = totalPaymentUses;
+}
+
+async function hydrateCloseTicketStatsForCaja(idcaja) {
+  const cajaId = Number(idcaja || 0) || 0;
+  if (!cajaId) {
+    cashSession.numtickets = 0;
+    cashSession.ticketCountByAgent = {};
+    return { totalTickets: 0, byAgent: {} };
+  }
+
+  const facturas = await fetchApiResourceWithParams("facturaclientes", {
+    "filter[idcaja]": cajaId,
+    limit: 0,
+  });
+
+  const validFacturas = (Array.isArray(facturas) ? facturas : []).filter(
+    (f) => f.tpv_venta === true,
+  );
+
+  const seenTickets = new Set();
+  const byAgent = {};
+
+  for (const f of validFacturas) {
+    const ticketKey = String(f.idfactura || f.codigo || "").trim();
+    if (!ticketKey) continue;
+
+    if (!seenTickets.has(ticketKey)) {
+      seenTickets.add(ticketKey);
+    }
+
+    const agentCode = String(f.codagente || "").trim() || "—";
+    if (!byAgent[agentCode]) byAgent[agentCode] = new Set();
+    byAgent[agentCode].add(ticketKey);
+  }
+
+  const totalTickets = seenTickets.size;
+  const byAgentCounts = {};
+
+  Object.entries(byAgent).forEach(([agentCode, set]) => {
+    byAgentCounts[agentCode] = set.size;
+  });
+
+  cashSession.numtickets = totalTickets;
+  cashSession.ticketCountByAgent = byAgentCounts;
+
+  return {
+    totalTickets,
+    byAgent: byAgentCounts,
+  };
 }
 
 async function buildAgentSalesSummaryForCaja(idcaja) {
@@ -5790,35 +6510,52 @@ async function buildAgentSalesSummaryForCaja(idcaja) {
     limit: 0,
   });
 
-  const map = {}; // codagente -> { agentCode, agentName, total, count, byMethod }
+  const map = {};
+  const labelMap = window.__PAYMETHOD_LABELS__ || {};
 
   for (const f of Array.isArray(facturas) ? facturas : []) {
     if (f.tpv_venta !== true) continue;
 
     const agentCode = String(f.codagente || "").trim() || "—";
-    const payCode = String(f.codpago || "—")
-      .trim()
-      .toUpperCase();
-    const amount = Number(f.total || 0);
+    const ticketTotal = roundMoney2(f.total || 0);
 
     if (!map[agentCode]) {
       map[agentCode] = {
         agentCode,
         agentName: getAgentLabel(agentCode),
         total: 0,
-        count: 0,
-        byMethod: {}, // codpago -> { code, total, count }
+        count: 0, // nº tickets
+        paymentUses: 0, // nº pagos/recibos
+        byMethod: {}, // codpago -> { code, label, total, count }
       };
     }
 
-    map[agentCode].total += amount;
-    map[agentCode].count += 1;
+    const ag = map[agentCode];
+    ag.total = roundMoney2(ag.total + ticketTotal);
+    ag.count += 1;
 
-    if (!map[agentCode].byMethod[payCode]) {
-      map[agentCode].byMethod[payCode] = { code: payCode, total: 0, count: 0 };
+    const breakdown = await getFacturaPaymentBreakdown(f);
+    ag.paymentUses += Number(breakdown.paymentUses || 0);
+
+    for (const line of breakdown.lines || []) {
+      const payCode = normalizePayCode(line.codpago);
+      const amount = roundMoney2(line.importe || 0);
+      const uses = Number(line.count || 0);
+
+      if (!ag.byMethod[payCode]) {
+        ag.byMethod[payCode] = {
+          code: payCode,
+          label: labelMap[payCode] || payCode,
+          total: 0,
+          count: 0,
+        };
+      }
+
+      ag.byMethod[payCode].total = roundMoney2(
+        ag.byMethod[payCode].total + amount,
+      );
+      ag.byMethod[payCode].count += uses;
     }
-    map[agentCode].byMethod[payCode].total += amount;
-    map[agentCode].byMethod[payCode].count += 1;
   }
 
   return Object.values(map).sort((a, b) => (b.total || 0) - (a.total || 0));
@@ -5997,10 +6734,15 @@ function openCashOpenDialog(mode = "open") {
     if (l1) l1.style.display = "none";
     if (l2) l2.style.display = "none";
     if (l3) l3.style.display = "none";
+
+    if (cashDirectTotalWrap) cashDirectTotalWrap.style.display = "block";
+
     cashResetUIForOpening();
     cashWrapInputsWithSteppers();
     updateCashOpenTotal(); // solo afecta a apertura
   } else {
+    if (cashDirectTotalWrap) cashDirectTotalWrap.style.display = "none";
+
     // MODO CIERRE: cargamos datos reales desde FacturaScripts
     const l1 = document.getElementById("cashCloseLine1");
     const l2 = document.getElementById("cashCloseLine2");
@@ -6024,8 +6766,11 @@ function openCashOpenDialog(mode = "open") {
         // 2) labels
         await ensurePayMethodLabelsLoaded();
 
-        // 3) construir resumenes (IMPORTANTE: sin duplicar)
+        // 3) construir resúmenes (IMPORTANTE: sin duplicar)
         const cajaId = cashSession.remoteCajaId || remoteCaja.idcaja;
+
+        // ✅ tickets reales de la caja
+        await hydrateCloseTicketStatsForCaja(cajaId);
 
         // Métodos (TOTAL)
         await hydratePaymentsByMethodForClose(cajaId);
@@ -6041,11 +6786,32 @@ function openCashOpenDialog(mode = "open") {
 
         // 5) resumen superior (cifra esperada, etc.)
         updateCloseSummary(Number(cashSession.closingTotal || 0));
+        if (cashDirectTotalEl) {
+          cashDirectTotalEl.value = formatCashDirectAmount(
+            Number(cashSession.closingTotal || 0),
+          );
+        }
       } catch (e) {
         console.warn("No se pudo leer la caja remota:", e);
         updateCloseSummary(Number(cashSession.closingTotal || 0));
+        if (cashDirectTotalEl) {
+          cashDirectTotalEl.value = formatCashDirectAmount(
+            Number(cashSession.closingTotal || 0),
+          );
+        }
       }
     })();
+  }
+
+  bindCashDirectTotalInput();
+
+  if (cashDirectTotalEl) {
+    const currentTotal =
+      cashDialogMode === "open"
+        ? Number(cashSession.openingTotal || 0)
+        : Number(cashSession.closingTotal || 0);
+
+    cashDirectTotalEl.value = formatCashDirectAmount(currentTotal);
   }
 
   cashOpenOverlay.classList.remove("hidden");
@@ -6099,30 +6865,28 @@ function buildCashClosePrintData(remoteCaja) {
 
   const labelMap = window.__PAYMETHOD_LABELS__ || {};
   const methods = Object.values(cashSession.paymentsByMethod || {}).map((m) => {
-    const code =
-      String(m.code || m.codpago || "")
-        .trim()
-        .toUpperCase() || "—";
+    const code = normalizePayCode(m.code || m.codpago);
     return {
       code,
       label: labelMap[code] || m.label || code,
       total: Number(m.total || 0),
-      count: Number(m.count || 0),
+      count: Number(m.count || 0), // nº pagos/recibos
     };
   });
 
-  // ✅ orden alfabético para impresión también
   methods.sort((a, b) =>
     (a.label || a.code).localeCompare(b.label || b.code, "es", {
       sensitivity: "base",
     }),
   );
 
+  const totalPaymentUses =
+    Number(cashSession.totalPaymentUses || 0) ||
+    methods.reduce((s, m) => s + Number(m.count || 0), 0);
+
   const obs = String(document.getElementById("cashObs")?.value || "").trim();
   const rawCajaObs = String(remoteCaja?.observaciones || "");
   const { autoLines } = splitCajaObservaciones(rawCajaObs);
-
-  // 👇 doble salto para que en ticket respire
   const autoLogText = Array.isArray(autoLines) ? autoLines.join("\n\n") : "";
 
   return {
@@ -6135,6 +6899,7 @@ function buildCashClosePrintData(remoteCaja) {
     fechaini,
     totalVendido,
     numTickets,
+    totalPaymentUses,
     openingTotal,
     cashIncome,
     movements,
@@ -6145,7 +6910,7 @@ function buildCashClosePrintData(remoteCaja) {
     agentSales: Array.isArray(cashSession.agentSalesSummary)
       ? cashSession.agentSalesSummary
       : [],
-    userObs: obs, // 👈 lo del textarea manda
+    userObs: obs,
     autoLogText,
   };
 }
@@ -6323,22 +7088,27 @@ function updateCashOpenTotal() {
     }
   });
 
+  total = Math.round((total + Number.EPSILON) * 100) / 100;
+
   if (cashDialogMode === "open") {
     // Guardamos apertura
     cashSession.openingTotal = total;
     cashSession.openingBreakdown = breakdown.map((b) => ({ ...b }));
-    // Estado actual de la caja al abrir (teórico)
     cashSession.currentCashBreakdown = breakdown.map((b) => ({ ...b }));
   } else {
-    // Guardamos cierre (conteo de caja)
+    // Guardamos cierre
     cashSession.closingTotal = total;
     cashSession.closingBreakdown = breakdown.map((b) => ({ ...b }));
-    // Para el resumen extendido de cierre
     updateCloseSummary(total);
   }
 
-  // Total mostrado en la línea principal del diálogo
+  // Total mostrado en el diálogo
   cashOpenTotalEl.textContent = total.toFixed(2).replace(".", ",") + " €";
+
+  // ✅ sincroniza el input directo
+  if (cashDirectTotalEl) {
+    cashDirectTotalEl.value = formatCashDirectAmount(total);
+  }
 }
 
 function ensureCashSessionCounters() {
@@ -6384,7 +7154,13 @@ async function confirmCashOpening() {
   cashSession.openedAt = new Date().toISOString();
 
   try {
-    await apiOpenCashInFS(); // aquí se debe setear remoteCajaId + localStorage
+    await apiOpenCashInFS();
+
+    const idcaja = getCajaIdSafe();
+    if (idcaja) {
+      clearCashLedger(idcaja);
+      loadCashLedgerIntoSession(idcaja);
+    }
   } catch (e) {
     console.warn("No se pudo abrir caja en FacturaScripts:", e?.message || e);
     toast(
@@ -6393,6 +7169,7 @@ async function confirmCashOpening() {
       "Caja",
     );
   }
+
   hideCashOpenDialog();
 
   if (terminalNameEl && currentTerminal)
@@ -7880,15 +8657,10 @@ window.cargarPantallaTPV = async function (idcaja, idtpv, caja) {
     "Caja:",
     caja,
   );
-  console.log("[TPV] cashSession antes:", {
-    open: cashSession.open,
-    remoteCajaId: cashSession.remoteCajaId,
-  });
 
   try {
     if (!idcaja) throw new Error("idcaja inválido");
 
-    // ✅ Marcar caja como abierta + guardar ID (CRÍTICO)
     cashSession.remoteCajaId = Number(idcaja) || null;
     cashSession.open = true;
 
@@ -7899,20 +8671,19 @@ window.cargarPantallaTPV = async function (idcaja, idtpv, caja) {
       );
     } catch {}
 
-    // ✅ Cerrar overlays por si estaban abiertos
+    loadCashLedgerIntoSession(cashSession.remoteCajaId);
+
     try {
       hideCashOpenDialog();
-    } catch (e) {}
+    } catch {}
     try {
       hideTerminalOverlay();
-    } catch (e) {}
+    } catch {}
 
-    // ✅ Asegurar datos cargados
     if (!categories.length || !products.length) {
       await loadDataFromApi();
     }
 
-    // ✅ Seleccionar terminal si nos lo pasan (idtpv)
     if (idtpv && Array.isArray(terminals) && terminals.length) {
       const t = terminals.find((x) => String(x.id) === String(idtpv));
       if (t) setCurrentTerminal(t);
@@ -7920,7 +8691,6 @@ window.cargarPantallaTPV = async function (idcaja, idtpv, caja) {
 
     await ensureTerminalAgentDefaults();
 
-    // ✅ Actualizar labels de cabecera si aplica
     if (terminalNameEl && currentTerminal) {
       terminalNameEl.textContent = currentTerminal.name || "---";
       setTerminalNameClickable(
@@ -7931,23 +8701,16 @@ window.cargarPantallaTPV = async function (idcaja, idtpv, caja) {
       agentNameEl.textContent = currentAgent ? currentAgent.name : "---";
     }
 
-    // ✅ Pintar UI como caja abierta
     renderMainUI();
     renderMainAgentBar?.();
     updateCashButtonLabel();
     renderCashIdChip();
 
     setStatusText("Caja activa (recuperada)");
-
-    console.log("[TPV] TPV listo con caja", idcaja);
   } catch (e) {
     console.error("Error activando TPV:", e);
     toast("No se pudo activar la caja.", "err", "TPV");
   }
-  console.log("[TPV] cashSession después:", {
-    open: cashSession.open,
-    remoteCajaId: cashSession.remoteCajaId,
-  });
 };
 
 let companyInfo = null; // ya lo tienes
@@ -8948,164 +9711,6 @@ payOpenDrawerBtn?.addEventListener("click", () =>
   handleOpenDrawerClick(payOpenDrawerBtn),
 );
 
-async function createRefundInFacturaScripts(
-  facturaRow,
-  qtyByLineId,
-  lineasFactura,
-) {
-  const codcliente =
-    facturaRow?._raw?.codcliente ||
-    window.RECIPOK_API?.defaultCodClienteTPV ||
-    "1";
-
-  // ✅ claves para que la devolución cuente en "esta caja"
-  const idtpv = Number(currentTerminal?.id || 0) || null;
-  const idcaja = getCajaIdSafe(); // helper cashSession/localStorage
-  const nick = (getLoginUser?.() || currentAgent?.nick || "admin").toString();
-
-  if (!idtpv || !idcaja) {
-    throw new Error(
-      "No hay caja abierta (idtpv/idcaja). Abre caja antes de devolver.",
-    );
-  }
-
-  // 1) Construir líneas (negativas)
-  const lineas = [];
-  for (const l of lineasFactura || []) {
-    const id = Number(l.idlinea);
-    const q = Number(qtyByLineId?.[id] || 0);
-    if (!(q > 0)) continue;
-
-    // ✅ evita DEV duplicado
-    const baseDesc = String(l.descripcion || "Producto")
-      .replace(/^DEV\s*-\s*/i, "")
-      .trim();
-
-    lineas.push({
-      referencia: String(l.referencia || "").trim() || undefined,
-      idproducto: Number(l.idproducto || 0) || undefined,
-      descripcion: `DEV - ${baseDesc}`,
-      cantidad: -q,
-      pvpunitario: Number(l.pvpunitario || 0),
-      codimpuesto: l.codimpuesto || undefined,
-    });
-  }
-
-  if (!lineas.length) {
-    throw new Error("Selecciona al menos 1 línea para devolver.");
-  }
-
-  // 2) Payload para crearFacturaCliente
-  const payload = {
-    codcliente,
-    lineas,
-    pagada: 1,
-    codpago: facturaRow?.codpago || null,
-    serie: "R",
-
-    // ✅ IMPORTANTES: enlazar a caja/TPV
-    idtpv,
-    idcaja,
-    nick,
-  };
-
-  // 3) Crear rectificativa
-  const resp = await createTicketInFacturaScripts(payload);
-
-  const doc = resp?.doc || resp?.factura || resp?.data || resp || null;
-  const newId = doc?.idfactura || doc?.id || null;
-  // Total FS (con IVA) en rectificativa viene NEGATIVO
-  const totalRectFS = Number(doc?.total ?? 0); // ej: -2.50
-  const refundCash = isCashCodpago(facturaRow?.codpago) ? totalRectFS : 0;
-
-  // 4) LOG DEVOLUCIÓN (total con IVA desde FS)
-  try {
-    const ctx = getLogCtx();
-
-    const rectCode =
-      String(doc?.codigo || doc?.codigoFactura || "").trim() ||
-      (newId ? `#${newId}` : "—");
-
-    const origCode =
-      String(facturaRow?.codigo || facturaRow?._raw?.codigo || "").trim() ||
-      (facturaRow?.idfactura ? `#${facturaRow.idfactura}` : "—");
-
-    // total FS (con IVA). En rectificativas viene negativo -> mostramos abs
-    const devueltoAbs = Math.abs(Number(doc?.total ?? 0));
-
-    const devueltoTxt = devueltoAbs.toFixed(2).replace(".", ",") + "€";
-
-    const productos = [];
-    for (const l of lineasFactura || []) {
-      const id = Number(l.idlinea);
-      const q = Number(qtyByLineId?.[id] || 0);
-      if (!(q > 0)) continue;
-
-      const name = String(l.descripcion || "Producto")
-        .replace(/^DEV\s*-\s*/i, "")
-        .trim();
-
-      productos.push(`${q}x ${name}`);
-    }
-
-    const productosTxt = productos.length ? productos.join(", ") : "—";
-
-    const line = buildCajaLogLineWith(
-      ctx,
-      `DEVOLUCIÓN CONFIRMADA : ${rectCode}`,
-      `Ticket Original:${origCode} | Devuelto: ${devueltoTxt} | Productos:${productosTxt}`,
-    );
-
-    // ✅ usar idcaja ya calculado (más estable que ctx.idcaja)
-    await appendCajaAutoLogLineForId(idcaja, line);
-  } catch (e) {
-    console.warn("No pude loguear devolución:", e?.message || e);
-  }
-
-  // 5) Enlazar con la original (y forzar idcaja si FS no lo guardó)
-  const originalId = facturaRow?.idfactura || null;
-  const originalCodigo = facturaRow?.codigo || facturaRow?._raw?.codigo || "";
-
-  // ✅ si FS ya devolvió todo correcto, evitamos update innecesario (opcional pero sano)
-  const needsFix =
-    doc?.idcaja == null ||
-    Number(doc?.idfacturarect || 0) !== Number(originalId || 0) ||
-    String(doc?.codserie || "").toUpperCase() !== "R";
-
-  if (newId) {
-    const upd = {
-      // ✅ TPV/caja SIEMPRE
-      idtpv: String(idtpv),
-      idcaja: Number(idcaja),
-      nick,
-      codalmacen: currentTerminal?.codalmacen || "",
-
-      // ✅ CLAVE para “Ingresos en efectivo”
-      tpv_venta: 1,
-      tpv_efectivo: Number(refundCash.toFixed(2)), // negativo si era efectivo
-      tpv_cambio: 0,
-
-      // y esto normalmente también conviene:
-      idestado: 11,
-      pagada: 1,
-      codpago: facturaRow?.codpago || "",
-    };
-
-    // ✅ link a original SOLO si hace falta (o siempre, si prefieres)
-    if (originalId) {
-      upd.codserie = "R";
-      upd.idfacturarect = originalId;
-      upd.codigorect = originalCodigo;
-    }
-
-    if (currentAgent?.codagente) upd.codagente = currentAgent.codagente;
-
-    await updateFacturaCliente(newId, upd);
-  }
-
-  return resp;
-}
-
 async function createTicketInFacturaScripts(ticketPayload) {
   const cfg = window.RECIPOK_API || {};
   if (!cfg.baseUrl || !cfg.apiKey) {
@@ -9666,22 +10271,30 @@ async function renderPayments(doc, ticket, totalToShow) {
   }
 
   const wrap = doc.getElementById("payments");
+  const cashRow = doc.getElementById("cashRow");
+  const cashGiven = doc.getElementById("cashGiven");
+  const changeRow = doc.getElementById("changeRow");
+  const changeCash = doc.getElementById("changeCash");
+
+  const cashMeta = ticket?.cashMeta || null;
+
   if (!wrap) {
-    // fallback: si no existe el contenedor, al menos deja texto en paymentMethod
     const paymentMethodEl = doc.getElementById("paymentMethod");
     if (paymentMethodEl) {
       paymentMethodEl.textContent = Object.entries(grouped)
         .map(([d, imp]) => `${d}: ${eurTicket(imp)}`)
         .join(" + ");
     }
+
     const paidAmountEl = doc.getElementById("paidAmount");
     if (paidAmountEl) paidAmountEl.textContent = eurTicket(totalToShow);
+
     return;
   }
 
   wrap.innerHTML = "";
 
-  // Total (solo una vez)
+  // Total
   const rowTotal = doc.createElement("div");
   rowTotal.className = "row";
   rowTotal.innerHTML = `
@@ -9700,6 +10313,26 @@ async function renderPayments(doc, ticket, totalToShow) {
     `;
     wrap.appendChild(row);
   });
+
+  // Entregado / Cambio (solo si hubo efectivo real)
+  if (cashMeta && cashMeta.hasCash && Number(cashMeta.cashTendered || 0) > 0) {
+    if (cashRow && cashGiven) {
+      cashRow.style.display = "flex";
+      cashGiven.textContent = eurTicket(cashMeta.cashTendered);
+    }
+
+    if (changeRow && changeCash) {
+      if (Number(cashMeta.change || 0) > 0) {
+        changeRow.style.display = "flex";
+        changeCash.textContent = eurTicket(cashMeta.change);
+      } else {
+        changeRow.style.display = "none";
+      }
+    }
+  } else {
+    if (cashRow) cashRow.style.display = "none";
+    if (changeRow) changeRow.style.display = "none";
+  }
 }
 
 function buildEscposTicketBytes(ticket, lineas, totalToShow) {
@@ -10210,29 +10843,44 @@ async function printCashCloseReport(report) {
         `Total vendido: ${Number(report.totalVendido || 0).toFixed(2)} EUR`,
       );
       lines.push(`Tickets: ${Number(report.numTickets || 0)}`);
+      lines.push(`Métodos usados: ${Number(report.totalPaymentUses || 0)}`);
       lines.push("--------------------------------");
       lines.push("Metodos de pago:");
+      let totalMethods = 0;
+
       (report.methods || []).forEach((m) => {
         const name = (m.label || m.code || "-").toString();
-        const total = Number(m.total || 0).toFixed(2);
+        const totalNum = Number(m.total || 0);
+        const total = totalNum.toFixed(2);
         const cnt = Number(m.count || 0);
+        totalMethods += totalNum;
         lines.push(`${name} (${cnt})  ${total}`);
       });
+
+      lines.push(`TOTAL PAGOS: ${totalMethods.toFixed(2)}`);
+
       if (Number(report.payEditsCount || 0) > 0) {
         const edits = Number(report.payEditsCount || 0);
         if (edits > 0) lines.push(`Nº cambios pago: ${edits}`);
       }
 
       const agents = Array.isArray(report.agentSales) ? report.agentSales : [];
-      if (agents.length > 1) {
+      if (agents.length > 0) {
         lines.push("--------------------------------");
         lines.push("Ventas por agente:");
+
+        let totalAgents = 0;
+
         agents.forEach((a) => {
           const n = (a.agentName || a.name || a.agentCode || "-").toString();
-          const t = Number(a.total || 0).toFixed(2);
+          const tNum = Number(a.total || 0);
+          const t = tNum.toFixed(2);
           const c = Number(a.count || 0);
+          totalAgents += tNum;
           lines.push(`${n} (${c})  ${t}`);
         });
+
+        lines.push(`TOTAL AGENTES: ${totalAgents.toFixed(2)}`);
       }
 
       if (report.userObs && String(report.userObs).trim()) {
@@ -10241,10 +10889,13 @@ async function printCashCloseReport(report) {
         lines.push(String(report.userObs));
       }
 
-      if (report.autoLog && String(report.autoLog).trim()) {
+      const rawAutoLog = report.autoLogText ?? report.autoLog ?? "";
+      const cleanAutoLog = decodeEntities(rawAutoLog);
+
+      if (cleanAutoLog && String(cleanAutoLog).trim()) {
         lines.push("--------------------------------");
         lines.push("Registro TPV:");
-        lines.push(String(report.autoLog));
+        lines.push(String(cleanAutoLog));
       }
 
       lines.push("\n\n");
@@ -10292,18 +10943,17 @@ async function printCashCloseReport(report) {
         .toFixed(2)
         .replace(".", ",") + " €";
 
-    // Helpers: usa tu setText si ya existe. Si no, dejo fallback:
     const _setText = (id, v) => {
       const el = doc.getElementById(id);
       if (el) el.textContent = v == null ? "" : String(v);
     };
 
-    // Logo/empresa si quieres (si tu html tiene <img id="companyLogo">)
     const logoEl = doc.getElementById("companyLogo");
     if (logoEl && companyLogoUrl) {
       logoEl.setAttribute("src", companyLogoUrl);
       logoEl.style.display = "inline-block";
     }
+
     _setText("companyShortName", report.companyShortName || "");
     _setText("companyLegalName", report.companyLegalName || "");
 
@@ -10323,6 +10973,9 @@ async function printCashCloseReport(report) {
 
     // métodos
     const methodsBox = doc.getElementById("ccMethods");
+    const methodsTotalWrap = doc.getElementById("ccMethodsTotalWrap");
+    const methodsTotalEl = doc.getElementById("ccMethodsTotal");
+
     if (methodsBox) {
       const ms = Array.isArray(report.methods) ? [...report.methods] : [];
 
@@ -10341,19 +10994,43 @@ async function printCashCloseReport(report) {
           const total = eur2(m.total || 0);
           return `
         <div class="row">
-          <div class="left">${label} (${cnt})</div>
-          <div class="right">${total}</div>
+          <div class="col-left">${label} (${cnt})</div>
+          <div class="col-right">${total}</div>
         </div>
       `;
         })
         .join("");
+
+      const totalMethodsAmount = ms.reduce(
+        (sum, m) => sum + Number(m.total || 0),
+        0,
+      );
+
+      if (methodsTotalWrap) {
+        methodsTotalWrap.style.display = ms.length ? "block" : "none";
+      }
+      if (methodsTotalEl) {
+        methodsTotalEl.textContent = eur2(totalMethodsAmount);
+      }
     }
 
-    // ✅ cambios de pago (solo si > 0)
+    // total de métodos usados
+    const payUsesWrap = doc.getElementById("ccPayUsesWrap");
+    const payUsesVal = doc.getElementById("ccPayUses");
+    if (payUsesWrap) {
+      const uses = Number(report.totalPaymentUses || 0);
+      if (uses > 0) {
+        payUsesWrap.style.display = "block";
+        if (payUsesVal) payUsesVal.textContent = String(uses);
+      } else {
+        payUsesWrap.style.display = "none";
+      }
+    }
+
+    // cambios de pago
     const edits = Number(report.payEditsCount || 0);
     const payWrap = doc.getElementById("ccPayChangesWrap");
     const payVal = doc.getElementById("ccPayChanges");
-
     if (payWrap) {
       if (edits > 0) {
         payWrap.style.display = "block";
@@ -10363,21 +11040,20 @@ async function printCashCloseReport(report) {
       }
     }
 
-    // agentes (solo si hay más de 1)
+    // agentes
     const agentsBox = doc.getElementById("ccAgents");
     const agentsWrap = doc.getElementById("ccAgentsWrap");
-    if (agentsWrap) {
-      const agents = Array.isArray(report.agentSales) ? report.agentSales : [];
-      if (agents.length > 1) {
-        agentsWrap.style.display = "block";
-      } else {
-        agentsWrap.style.display = "none";
-      }
-    }
+    const agentsTotalWrap = doc.getElementById("ccAgentsTotalWrap");
+    const agentsTotalEl = doc.getElementById("ccAgentsTotal");
 
-    if (agentsBox) {
-      const agents = Array.isArray(report.agentSales) ? report.agentSales : [];
-      if (agents.length > 1) {
+    if (agentsBox && agentsWrap) {
+      const agents = Array.isArray(report.agentSales)
+        ? [...report.agentSales]
+        : [];
+
+      if (agents.length > 0) {
+        agentsWrap.style.display = "block";
+
         agents.sort((a, b) => Number(b.total || 0) - Number(a.total || 0));
         agentsBox.style.display = "block";
         agentsBox.innerHTML = agents
@@ -10388,20 +11064,34 @@ async function printCashCloseReport(report) {
             const cnt = Number(a.count || 0);
             const total = eur2(a.total || 0);
             return `
-              <div class="row">
-                <div class="left">${name} (${cnt})</div>
-                <div class="right">${total}</div>
-              </div>
-            `;
+          <div class="row">
+            <div class="col-left">${name} (${cnt})</div>
+            <div class="col-right">${total}</div>
+          </div>
+        `;
           })
           .join("");
+
+        const totalAgentsAmount = agents.reduce(
+          (sum, a) => sum + Number(a.total || 0),
+          0,
+        );
+
+        if (agentsTotalWrap) {
+          agentsTotalWrap.style.display = "block";
+        }
+        if (agentsTotalEl) {
+          agentsTotalEl.textContent = eur2(totalAgentsAmount);
+        }
       } else {
+        agentsWrap.style.display = "none";
         agentsBox.style.display = "none";
         agentsBox.innerHTML = "";
+        if (agentsTotalWrap) agentsTotalWrap.style.display = "none";
       }
     }
 
-    // Observaciones usuario
+    // observaciones
     const obsWrap = doc.getElementById("ccObsWrap");
     if (obsWrap) {
       if (report.userObs && String(report.userObs).trim()) {
@@ -10412,10 +11102,10 @@ async function printCashCloseReport(report) {
       }
     }
 
-    // Registro TPV
+    // log
     const autoWrap = doc.getElementById("ccAutoLogWrap");
     if (autoWrap) {
-      const raw = report.autoLogText;
+      const raw = report.autoLogText ?? report.autoLog ?? "";
       const clean = decodeEntities(raw);
 
       if (clean && String(clean).trim()) {
@@ -10498,55 +11188,102 @@ function escapeHtml(str) {
 }
 
 async function validateRecibosAgainstFactura(idfactura) {
-  if (!idfactura) return;
+  if (!idfactura) return true;
 
-  const fc = await fetchFacturaClienteById(idfactura);
-  const totalFactura = round2(fc?.total);
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  const recibos = await fetchRecibosByFactura(idfactura);
-  const sumRecibos = round2(
-    (Array.isArray(recibos) ? recibos : []).reduce(
-      (s, r) => s + (Number(r.importe) || 0),
-      0,
-    ),
-  );
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const fc = await fetchFacturaClienteById(idfactura);
+    const totalFactura = round2(fc?.total);
 
-  const diff = round2(totalFactura - sumRecibos);
+    const recibos = await fetchRecibosByFactura(idfactura);
+    const list = Array.isArray(recibos) ? recibos : [];
 
-  // tolerancia céntimo
-  if (Math.abs(diff) <= 0.01) return;
+    const sumRecibos = round2(
+      list.reduce((s, r) => s + (Number(r.importe) || 0), 0),
+    );
 
-  // Aquí decides política: avisar o reparar.
-  console.warn(
-    `[TPV] Recibos no cuadran con factura. totalFactura=${totalFactura} sumRecibos=${sumRecibos} diff=${diff}`,
-  );
+    const diff = round2(totalFactura - sumRecibos);
 
-  // ✅ Opción “solo warning” (recomendado al principio)
-  toast(
-    "Aviso: los recibos no cuadran con el total. Revisa pagos/recibos.",
-    "warn",
-    "Recibos",
-  );
+    const distinctCodpagos = new Set(
+      list
+        .map((r) =>
+          String(r?.codpago || "")
+            .trim()
+            .toUpperCase(),
+        )
+        .filter(Boolean),
+    );
 
-  // 🔧 Opción “autorreparar” (si quieres activarlo después):
-  // const codcliente = fc?.codcliente;
-  // if (codcliente && Math.abs(diff) >= 0.01) {
-  //   const today = new Date().toISOString().slice(0, 10);
-  //   await createReciboCliente({
-  //     idfactura,
-  //     codcliente,
-  //     codpago: (fc?.codpago || "CONT").toString().trim().toUpperCase(),
-  //     importe: diff,
-  //     fechapago: today,
-  //     fecha: today,
-  //     idempresa: fc?.idempresa,
-  //     codigofactura: fc?.codigo,
-  //     coddivisa: fc?.coddivisa,
-  //   });
-  // }
+    const isMixed = distinctCodpagos.size >= 2;
+
+    // ✅ Si es mixto, no lo tratamos como error del TPV
+    if (isMixed) {
+      console.info(
+        `[TPV] Ticket mixto detectado en validación de recibos. idfactura=${idfactura} totalFactura=${totalFactura} sumRecibos=${sumRecibos} diff=${diff}`,
+      );
+      return true;
+    }
+
+    // ✅ Si cuadra, perfecto
+    if (Math.abs(diff) <= 0.01) return true;
+
+    // Reintento corto por si pilla un estado intermedio
+    if (attempt < 2) {
+      await sleep(150);
+      continue;
+    }
+
+    // ⚠️ Aquí ya no decimos “error”, solo aviso suave
+    console.warn(
+      `[TPV] Recibos no cuadran con factura. totalFactura=${totalFactura} sumRecibos=${sumRecibos} diff=${diff}`,
+    );
+
+    toast(
+      "Aviso: el ticket requiere revisión manual de recibos.",
+      "warn",
+      "Recibos",
+    );
+
+    return false;
+  }
+
+  return true;
 }
 
 let isPayingNow = false;
+
+function buildCashTicketMeta({ pagos, total, cambio }) {
+  const pagosArr = Array.isArray(pagos) ? pagos : [];
+
+  const cashLines = pagosArr.filter((p) =>
+    isCashPago({
+      codpago: p?.codpago,
+      descripcion: p?.descripcion,
+    }),
+  );
+
+  const cashPaid = cashLines.reduce(
+    (s, p) => s + (Number(p?.importe || 0) || 0),
+    0,
+  );
+
+  const cashTendered = cashLines.reduce(
+    (s, p) => s + (Number(p?.entregado ?? p?.importe ?? 0) || 0),
+    0,
+  );
+
+  const safeTotal = Number(total || 0) || 0;
+  const safeChange = Number(cambio || 0) || 0;
+
+  return {
+    hasCash: cashLines.length > 0,
+    total: Math.round((safeTotal + Number.EPSILON) * 100) / 100,
+    cashPaid: Math.round((cashPaid + Number.EPSILON) * 100) / 100,
+    cashTendered: Math.round((cashTendered + Number.EPSILON) * 100) / 100,
+    change: Math.round((safeChange + Number.EPSILON) * 100) / 100,
+  };
+}
 
 async function onPayButtonClick() {
   try {
@@ -10624,6 +11361,12 @@ async function onPayButtonClick() {
     const tpv_cambio =
       Math.round((Number(payResult?.cambio || 0) + Number.EPSILON) * 100) / 100;
 
+    const cashTicketMeta = buildCashTicketMeta({
+      pagos: pagosFinal,
+      total: totalCart,
+      cambio: tpv_cambio,
+    });
+
     const tpv_efectivo =
       Math.round(
         (pagosFinal
@@ -10689,12 +11432,24 @@ async function onPayButtonClick() {
       registerPaymentsForCurrentSession(pagosFinal);
       registerPayMethodUsageForTicket(pagosFinal);
 
+      appendPaymentsToCashLedger({
+        cajaId: getCajaIdSafe(),
+        pagos: pagosFinal,
+        kind: "sale",
+        ticketRef: sendResult.localId || "OFFLINE",
+        source: "offline",
+        agentCode: currentAgent?.codagente || "",
+        agentName: currentAgent?.name || currentAgent?.nick || "",
+      });
+
       try {
         lastTicket = buildOfflineTicketPrintData(
           cartSnapshot,
           ticketPayload,
           payResult,
         );
+
+        lastTicket.cashMeta = cashTicketMeta;
 
         try {
           const docCode = lastTicket?.numero || "OFFLINE";
@@ -10844,6 +11599,16 @@ async function onPayButtonClick() {
     registerPaymentsForCurrentSession(pagosFinal);
     registerPayMethodUsageForTicket(pagosFinal);
 
+    appendPaymentsToCashLedger({
+      cajaId: getCajaIdSafe(),
+      pagos: pagosFinal,
+      kind: "sale",
+      ticketRef: facturaResp?.codigo || idfactura || "",
+      source: "runtime",
+      agentCode: currentAgent?.codagente || "",
+      agentName: currentAgent?.name || currentAgent?.nick || "",
+    });
+
     // completar código si hace falta
     if (idfactura) {
       try {
@@ -10861,6 +11626,12 @@ async function onPayButtonClick() {
     });
 
     lastTicket = buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot);
+
+    lastTicket.cashMeta = buildCashTicketMeta({
+      pagos: pagosFinal,
+      total: facturaTotalFS,
+      cambio: tpv_cambio,
+    });
 
     // Post-cobro
     try {
@@ -14671,11 +15442,126 @@ function eurES(n) {
   return (Number(n) || 0).toFixed(2).replace(".", ",") + " €";
 }
 
+function formatRefundOriginalPayments(recibos) {
+  const list = Array.isArray(recibos) ? recibos : [];
+  if (!list.length) return [];
+
+  const grouped = {};
+  list.forEach((r) => {
+    const code =
+      String(r?.codpago || "—")
+        .trim()
+        .toUpperCase() || "—";
+
+    const amount = Number(r?.importe || 0) || 0;
+    if (!(amount > 0)) return;
+
+    grouped[code] = (grouped[code] || 0) + amount;
+  });
+
+  const labelMap = window.__PAYMETHOD_LABELS__ || {};
+
+  return Object.entries(grouped)
+    .map(([code, amount]) => ({
+      code,
+      label: labelMap[code] || code,
+      amount,
+    }))
+    .sort((a, b) =>
+      String(a.label || a.code).localeCompare(String(b.label || b.code), "es", {
+        sensitivity: "base",
+      }),
+    );
+}
+
+function renderRefundPaymentInfo(recibos) {
+  const wrap = document.getElementById("refundPaymentInfoInlineWrap");
+  const box = document.getElementById("refundPaymentInfoInline");
+  if (!wrap || !box) return;
+
+  const rows = formatRefundOriginalPayments(recibos);
+
+  if (!rows.length) {
+    wrap.style.display = "none";
+    box.textContent = "";
+    return;
+  }
+
+  wrap.style.display = "block";
+  box.textContent = rows
+    .map((r) => `${r.label}: ${eurES(r.amount)}`)
+    .join("   ·   ");
+}
+
 function renderRefundLines() {
   const wrap = document.getElementById("refundLines");
   if (!wrap) return;
 
   wrap.innerHTML = "";
+
+  const getRefundLineDisplayName = (line) => {
+    const clean = (v) =>
+      String(v || "")
+        .replace(/^DEV\s*-\s*/i, "")
+        .trim();
+
+    const normalizeCompare = (v) => clean(v).toUpperCase().replace(/\s+/g, " ");
+
+    const ref = clean(line?.referencia);
+    const desc = clean(line?.descripcion);
+    const nombre = clean(line?.nombre);
+
+    const isValid = (s) => !!s && s !== "-" && s !== "—";
+
+    const refOk = isValid(ref);
+    const descOk = isValid(desc);
+    const nombreOk = isValid(nombre);
+
+    if (refOk && descOk && normalizeCompare(ref) === normalizeCompare(desc)) {
+      return ref;
+    }
+
+    if (refOk && descOk) return `${ref} - ${desc}`;
+    if (refOk) return ref;
+    if (descOk) return desc;
+    if (nombreOk) return nombre;
+
+    return "Producto";
+  };
+
+  const buildOriginalPaymentInfoInline = () => {
+    const recibos = Array.isArray(refundState.recibosOriginales)
+      ? refundState.recibosOriginales
+      : [];
+
+    if (!recibos.length) return "";
+
+    const grouped = {};
+    recibos.forEach((r) => {
+      const code =
+        String(r?.codpago || "—")
+          .trim()
+          .toUpperCase() || "—";
+
+      const amount = Number(r?.importe || 0) || 0;
+      if (!(amount > 0)) return;
+
+      grouped[code] = (grouped[code] || 0) + amount;
+    });
+
+    const labelMap = window.__PAYMETHOD_LABELS__ || {};
+
+    const parts = Object.entries(grouped)
+      .map(([code, amount]) => {
+        const label = labelMap[code] || code;
+        return `${label}: ${eurES(amount)}`;
+      })
+      .sort((a, b) => a.localeCompare(b, "es", { sensitivity: "base" }));
+
+    return parts.join("   ");
+  };
+
+  const paymentInfoText = buildOriginalPaymentInfoInline();
 
   refundState.lineas.forEach((l) => {
     const max = Number(
@@ -14686,19 +15572,29 @@ function renderRefundLines() {
 
     const unitGross = lineGrossUnit(l);
     const tax = lineTaxRate(l);
+    const displayName = getRefundLineDisplayName(l);
+
+    const paymentInfoHtml = paymentInfoText
+      ? `
+        <div style="margin-top:6px; font-size:13px; color:#475569; padding-left:4px;">
+          ${escapeHtml(paymentInfoText)}
+        </div>
+      `
+      : "";
 
     const row = document.createElement("div");
     row.style.cssText =
-      "display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 0; border-bottom:1px solid #eee;";
+      "display:flex; align-items:flex-start; justify-content:space-between; gap:10px; padding:10px 0; border-bottom:1px solid #eee;";
 
     row.innerHTML = `
       <div style="flex:1; min-width:0;">
         <div style="font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-          ${escapeHtml(l.descripcion || "Producto")}
+          ${escapeHtml(displayName)}
         </div>
         <div style="font-size:12px; opacity:.8;">
           Vendido: ${max} · ${eurES(unitGross)} / ud · IVA ${tax}%
         </div>
+        ${paymentInfoHtml}
       </div>
 
       <div style="display:flex; align-items:center; gap:6px;">
@@ -14762,6 +15658,37 @@ function bindRefundLineClicks() {
   };
 }
 
+function getLineDisplayNameForLog(line) {
+  const clean = (v) =>
+    String(v || "")
+      .replace(/^DEV\s*-\s*/i, "")
+      .trim();
+
+  const normalizeCompare = (v) => clean(v).toUpperCase().replace(/\s+/g, " ");
+
+  const ref = clean(line?.referencia);
+  const desc = clean(line?.descripcion);
+  const nombre = clean(line?.nombre);
+
+  const isValid = (s) => !!s && s !== "-" && s !== "—";
+
+  const refOk = isValid(ref);
+  const descOk = isValid(desc);
+  const nombreOk = isValid(nombre);
+
+  // Si referencia y descripción son iguales, mostrar solo una
+  if (refOk && descOk && normalizeCompare(ref) === normalizeCompare(desc)) {
+    return ref;
+  }
+
+  if (refOk && descOk) return `${ref} - ${desc}`;
+  if (refOk) return ref;
+  if (descOk) return desc;
+  if (nombreOk) return nombre;
+
+  return "Producto";
+}
+
 function refundSelectAll() {
   refundState.lineas.forEach((line) => {
     const max = Number(
@@ -14792,6 +15719,15 @@ async function openRefundForFactura(facturaRow) {
 
   // ✅ IMPORTANTE: traer líneas reales de FS (incluye 0€)
   const lineasAll = await fetchLineasFactura(facturaRow.idfactura);
+
+  // ✅ NUEVO: traer recibos reales del ticket (información para el trabajador)
+  let recibosOriginales = [];
+  try {
+    recibosOriginales = await fetchRecibosByFactura(facturaRow.idfactura);
+  } catch (e) {
+    console.warn("No se pudieron leer recibos del ticket:", e?.message || e);
+    recibosOriginales = [];
+  }
 
   // Map cantidades ya devueltas (por clave consistente)
   let refundedMap = {};
@@ -14831,14 +15767,18 @@ async function openRefundForFactura(facturaRow) {
   });
 
   refundState.factura = facturaRow;
-  refundState.lineas = lineasUI; // lo que se ve
-  refundState.lineasAll = lineasPendientesAll; // ✅ lo real (incluye 0€)
+  refundState.lineas = lineasUI;
+  refundState.lineasAll = lineasPendientesAll;
   refundState.qtyByLineId = {};
+  refundState.recibosOriginales = Array.isArray(recibosOriginales)
+    ? recibosOriginales
+    : [];
 
   // Cabecera
   const n = document.getElementById("refundTicketNum");
   const c = document.getElementById("refundClient");
   const t = document.getElementById("refundTicketTotal");
+
   if (n) n.textContent = facturaRow.codigo || `#${facturaRow.idfactura}`;
   if (c) c.textContent = facturaRow.nombrecliente || "Cliente";
   if (t) t.textContent = eurES(facturaRow.total || 0);
@@ -14864,12 +15804,11 @@ async function openRefundForFactura(facturaRow) {
       try {
         confirmBtn.disabled = true;
 
-        // ✅ NUEVO: devolución aware de packs usando lineasAll
         await createRefundInFacturaScriptsPackAware(
           facturaRow,
           refundState.qtyByLineId,
-          refundState.lineas, // UI
-          refundState.lineasAll, // REAL
+          refundState.lineas,
+          refundState.lineasAll,
         );
 
         toast("Devolución creada ✅", "ok", "Devolución");
@@ -14897,7 +15836,10 @@ async function createRefundInFacturaScriptsPackAware(
   const idtpv = Number(currentTerminal?.id || 0) || null;
   const idcaja = getCajaIdSafe?.() || null;
   const nick = (getLoginUser?.() || currentAgent?.nick || "TPV").toString();
-  if (!idtpv || !idcaja) throw new Error("No hay caja abierta (idtpv/idcaja).");
+
+  if (!idtpv || !idcaja) {
+    throw new Error("No hay caja abierta (idtpv/idcaja).");
+  }
 
   const codcliente =
     facturaRow?._raw?.codcliente ||
@@ -14920,7 +15862,6 @@ async function createRefundInFacturaScriptsPackAware(
       : false;
   };
 
-  // Asegurar datos packs (para identificar hijos por referencia si hace falta)
   try {
     if (!PACKS_STATE?.ready && typeof warmupPacksData === "function") {
       await warmupPacksData();
@@ -14938,13 +15879,17 @@ async function createRefundInFacturaScriptsPackAware(
       Number(parentIdProducto),
     );
     if (!pack) return null;
+
     const lines = PACKS_STATE?.linesByPackId?.get(pack.id) || [];
     const refs = (lines || []).map((x) => norm(x.reference)).filter(Boolean);
     return refs.length ? new Set(refs) : null;
   };
 
-  // ========= 1) Qué líneas seleccionó en la UI =========
+  // =========================================================
+  // 1) Líneas seleccionadas en UI
+  // =========================================================
   const selected = [];
+
   for (const l of uiLines || []) {
     const idlinea = Number(l?.idlinea || 0);
     if (!idlinea) continue;
@@ -14952,18 +15897,28 @@ async function createRefundInFacturaScriptsPackAware(
     const q = Number(qtyByLineId?.[idlinea] || 0);
     if (q > 0) selected.push({ line: l, qty: q });
   }
-  if (!selected.length) throw new Error("No has seleccionado ninguna línea.");
 
-  // ========= 2) Payload rectificativa: SOLO líneas seleccionadas (NO hijos) =========
+  if (!selected.length) {
+    throw new Error("No has seleccionado ninguna línea.");
+  }
+
+  // =========================================================
+  // 2) Crear líneas de rectificativa (solo seleccionadas)
+  // =========================================================
   const outLines = [];
+
   for (const sel of selected) {
     const l = sel.line;
     const refundQty = Number(sel.qty || 0);
     if (!(refundQty > 0)) continue;
 
+    const baseDesc = String(l.descripcion || "")
+      .replace(/^DEV\s*-\s*/i, "")
+      .trim();
+
     outLines.push({
       referencia: l.referencia || "",
-      descripcion: l.descripcion || "",
+      descripcion: baseDesc ? `DEV - ${baseDesc}` : "DEV",
       cantidad: -refundQty,
       pvpunitario: Number(l.pvpunitario || 0),
       idproducto: Number(l.idproducto || 0) || undefined,
@@ -14971,7 +15926,9 @@ async function createRefundInFacturaScriptsPackAware(
     });
   }
 
-  if (!outLines.length) throw new Error("No se pudo construir la devolución.");
+  if (!outLines.length) {
+    throw new Error("No se pudo construir la devolución.");
+  }
 
   const numero2 = `REFUND|ORIG=${originalId}`;
 
@@ -14979,7 +15936,7 @@ async function createRefundInFacturaScriptsPackAware(
     codcliente,
     lineas: outLines,
     pagada: 1,
-    codpago: codpagoOrig || null,
+    codpago: codpagoOrig || null, // temporal, luego rehacemos recibos
     serie: "R",
     idtpv,
     idcaja,
@@ -14988,12 +15945,18 @@ async function createRefundInFacturaScriptsPackAware(
   };
 
   const respRect = await createTicketInFacturaScripts(payloadRect);
+
   const docRect =
     respRect?.doc || respRect?.factura || respRect?.data || respRect || null;
-  const rectId = Number(docRect?.idfactura || docRect?.id || 0);
-  if (!rectId) throw new Error("No pude crear la rectificativa.");
 
-  // ========= 3) FIX packs: calcular desiredByPid real desde ORIGINAL y parchear RECT =========
+  const rectId = Number(docRect?.idfactura || docRect?.id || 0);
+  if (!rectId) {
+    throw new Error("No pude crear la rectificativa.");
+  }
+
+  // =========================================================
+  // 3) PATCH packs en líneas hijas gratis
+  // =========================================================
   try {
     const desiredByPid = {}; // pid -> qty NEGATIVA
 
@@ -15009,7 +15972,6 @@ async function createRefundInFacturaScriptsPackAware(
       const defRefSet = getPackDefRefSet(parent.idproducto);
       if (!defRefSet || !defRefSet.size) continue;
 
-      // Hijos reales del ticket original para ESTE pack
       const children = (allLines || []).filter((x) => {
         if (isPackParent(x)) return false;
         if (!isZero(x?.pvpunitario)) return false;
@@ -15042,12 +16004,10 @@ async function createRefundInFacturaScriptsPackAware(
       for (const [pidStr, totalQtyOriginal] of Object.entries(totalsByPid)) {
         const pid = Number(pidStr);
         const totalQty = Number(totalQtyOriginal || 0);
-
         if (!(totalQty > 0)) continue;
 
         const perPack = totalQty / parentQtySold;
         const childRefundQty = Math.round(perPack * refundParentQty);
-
         if (!(childRefundQty > 0)) continue;
 
         desiredByPid[pid] = (desiredByPid[pid] || 0) - childRefundQty;
@@ -15067,7 +16027,26 @@ async function createRefundInFacturaScriptsPackAware(
     );
   }
 
-  // ========= 4) Marcar relación con original =========
+  // =========================================================
+  // 4) Repartir devolución por métodos según recibos originales
+  // =========================================================
+  const totalRectAbs = Math.abs(Number(docRect?.total || 0));
+
+  const refundBreakdown = await buildRefundBreakdownFromOriginalFactura(
+    originalId,
+    totalRectAbs,
+    codpagoOrig,
+  );
+
+  const cashRefundAbs = refundBreakdown
+    .filter((x) => isCashCodpago?.(x.codpago))
+    .reduce((s, x) => s + Math.abs(Number(x.importe || 0)), 0);
+
+  const primaryRefundCodpago = refundBreakdown[0]?.codpago || codpagoOrig || "";
+
+  // =========================================================
+  // 5) Actualizar rectificativa
+  // =========================================================
   await updateFacturaCliente(rectId, {
     idtpv: String(idtpv),
     idcaja: Number(idcaja),
@@ -15075,21 +16054,124 @@ async function createRefundInFacturaScriptsPackAware(
     codalmacen: currentTerminal?.codalmacen || "",
 
     tpv_venta: 1,
-    tpv_efectivo: 0,
+    tpv_efectivo: -Number(cashRefundAbs.toFixed(2)), // 👈 solo parte en efectivo
     tpv_cambio: 0,
 
     idestado: 11,
     pagada: 1,
-    codpago: codpagoOrig || "",
+    codpago: primaryRefundCodpago,
 
     codserie: "R",
     idfacturarect: originalId,
     codigorect: facturaRow?.codigo || facturaRow?._raw?.codigo || "",
     numero2,
+
     ...(currentAgent?.codagente ? { codagente: currentAgent.codagente } : {}),
   });
 
-  return { rectId };
+  // ✅ NUEVO: si la venta original era mixta, reescribimos los recibos
+  // de la rectificativa para que el reparto por método quede correcto
+  try {
+    const refundDate = new Date().toISOString().slice(0, 10);
+    const refundTotalAbs = Math.abs(Number(docRect?.total || 0));
+
+    await rewriteRefundRecibosFromOriginalMix({
+      originalIdfactura: originalId,
+      refundIdfactura: rectId,
+      refundTotalAbs,
+      codcliente,
+      idempresa:
+        docRect?.idempresa ||
+        facturaRow?._raw?.idempresa ||
+        facturaRow?.idempresa ||
+        1,
+      coddivisa:
+        docRect?.coddivisa ||
+        facturaRow?._raw?.coddivisa ||
+        facturaRow?.coddivisa ||
+        "EUR",
+      codigofactura: docRect?.codigo || docRect?.codigofactura || `#${rectId}`,
+      fecha: refundDate,
+      fallbackCodpago: codpagoOrig || facturaRow?.codpago || "CONT",
+    });
+  } catch (e) {
+    console.warn(
+      "No pude rehacer recibos mixtos en rectificativa:",
+      e?.message || e,
+    );
+  }
+
+  // =========================================================
+  // 6) Rehacer recibos de la rectificativa con el reparto correcto
+  // =========================================================
+  try {
+    await replaceFacturaRecibosWithBreakdown(rectId, refundBreakdown);
+  } catch (e) {
+    console.warn(
+      "No pude rehacer recibos de la rectificativa:",
+      e?.message || e,
+    );
+  }
+
+  // =========================================================
+  // 7) Log de caja con detalle real del reparto
+  // =========================================================
+  try {
+    const ctx = getLogCtx?.() || {};
+
+    const rectCode =
+      String(docRect?.codigo || docRect?.codigoFactura || "").trim() ||
+      `#${rectId}`;
+
+    const origCode =
+      String(facturaRow?.codigo || facturaRow?._raw?.codigo || "").trim() ||
+      `#${originalId}`;
+
+    const devueltoTxt = totalRectAbs.toFixed(2).replace(".", ",") + "€";
+
+    const productos = [];
+    for (const l of uiLines || []) {
+      const id = Number(l.idlinea);
+      const q = Number(qtyByLineId?.[id] || 0);
+      if (!(q > 0)) continue;
+
+      const ref = String(l.referencia || "").trim();
+      const desc = String(l.descripcion || "")
+        .replace(/^DEV\s*-\s*/i, "")
+        .trim();
+
+      let label = desc || ref || "Producto";
+      if (ref && desc && ref.toUpperCase() !== desc.toUpperCase()) {
+        label = `${ref} - ${desc}`;
+      }
+
+      productos.push(`${q}x ${label}`);
+    }
+
+    const breakdownTxt = refundBreakdown
+      .map((x) => {
+        const imp = Math.abs(Number(x.importe || 0))
+          .toFixed(2)
+          .replace(".", ",");
+        return `${x.codpago}:${imp}€`;
+      })
+      .join(" | ");
+
+    const line = buildCajaLogLineWith(
+      ctx,
+      `DEVOLUCIÓN CONFIRMADA : ${rectCode}`,
+      `Ticket Original:${origCode} | Devuelto: ${devueltoTxt} | Reparto:${breakdownTxt || "—"} | Productos:${productos.join(", ") || "—"}`,
+    );
+
+    await appendCajaAutoLogLineForId(idcaja, line);
+  } catch (e) {
+    console.warn("No pude loguear devolución:", e?.message || e);
+  }
+
+  return {
+    rectId,
+    refundBreakdown,
+  };
 }
 
 async function doLogoutFlow() {

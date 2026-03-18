@@ -64,12 +64,13 @@ if (!gotTheLock) {
   app.quit();
 } else {
   app.on("second-instance", async () => {
+    if (appIsInstallingUpdate) return;
+
     if (mainWin) {
       if (mainWin.isMinimized()) mainWin.restore();
       mainWin.show();
       mainWin.focus();
     }
-
     // ✅ CLAVE: aunque ya exista instancia, chequear updates
     triggerUpdateCheckIfSafe("second-instance");
   });
@@ -202,6 +203,7 @@ function applyKioskMode(win, enabled) {
 }
 
 function createWindow() {
+  if (appIsInstallingUpdate) return;
   const isDev = !app.isPackaged;
   const kioskMode = isKioskMode();
 
@@ -273,6 +275,9 @@ function createWindow() {
   }
 
   mainWin.once("ready-to-show", () => {
+    if (appIsInstallingUpdate) return;
+    if (!mainWin || mainWin.isDestroyed()) return;
+
     mainWin.show();
     // si NO es kiosk, maximiza al arrancar
     if (!kioskMode) {
@@ -720,6 +725,8 @@ async function waitForInternetAndApiGate() {
   }
 }
 
+let appIsInstallingUpdate = false;
+
 async function runAutoUpdateGate() {
   if (process.platform === "linux" && !process.env.APPIMAGE) {
     return { updatedOrReady: true };
@@ -786,6 +793,7 @@ async function runAutoUpdateGate() {
       autoUpdater.on("download-progress", onProgress);
 
       autoUpdater.once("update-downloaded", () => {
+        appIsInstallingUpdate = true;
         splashSet("Instalando actualización…", 100);
         setTimeout(() => autoUpdater.quitAndInstall(true, true), 600);
         setTimeout(() => {
@@ -1006,7 +1014,7 @@ function configureAutoStart() {
   }
 
   const cfg = readCfg();
-  const want = cfg.autostart === true;
+  const want = cfg.autostart !== false; // default ON
 
   try {
     if (!want) {
@@ -1075,8 +1083,15 @@ app.whenReady().then(async () => {
   cleanOldAutoStartIfWrong();
   configureAutoStart();
 
-  // ✅ updater ya bloquea hasta internet (+ API si hay cfg)
-  await runAutoUpdateGate();
+  const updateGate = await runAutoUpdateGate();
+
+  // Si hay instalación en curso, NO abrir el TPV.
+  if (updateGate?.installing) {
+    console.log(
+      "[UPDATER] Instalando actualización. No se abre la ventana principal.",
+    );
+    return;
+  }
 
   createWindow();
   startPreCashUpdateRetries();
@@ -1610,7 +1625,7 @@ ipcMain.handle("cfg:getAutostart", () => {
 
   return {
     ok: true,
-    autostart: cfg.autostart === true,
+    autostart: cfg.autostart !== false, // default ON
     packaged: app.isPackaged,
   };
 });
