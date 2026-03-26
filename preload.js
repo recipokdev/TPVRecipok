@@ -91,3 +91,18 @@ contextBridge.exposeInMainWorld("TPV_CUSTOMER_CTRL", {
   getEnabled: () => ipcRenderer.invoke("customer:getEnabled"),
   setEnabled: (val) => ipcRenderer.invoke("customer:setEnabled", !!val),
 });
+
+contextBridge.exposeInMainWorld("TPV_SCALE", {
+  listPorts: () => ipcRenderer.invoke("scale:listPorts"),
+  getState: () => ipcRenderer.invoke("scale:getState"),
+  connect: (config) => ipcRenderer.invoke("scale:connect", config),
+  disconnect: () => ipcRenderer.invoke("scale:disconnect"),
+  setEnabled: (enabled, config) =>
+    ipcRenderer.invoke("scale:setEnabled", !!enabled, config || null),
+  consumeWeight: () => ipcRenderer.invoke("scale:consumeWeight"),
+  onState: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on("scale:state", handler);
+    return () => ipcRenderer.removeListener("scale:state", handler);
+  },
+});

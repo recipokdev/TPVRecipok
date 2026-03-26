@@ -2513,6 +2513,8 @@ async function createChildrenFromSelection({
 async function addToCart(product, quantity = 1) {
   const prodId = Number(product.baseProductId || product.id || 0);
 
+  // Primera versión:
+  // NO aplicamos báscula a packs/ofertas para no romper esa lógica.
   if (isOfferPackProductById(prodId)) {
     const pack = PACKS_STATE.packsByOfferProductId.get(prodId);
     if (!pack) {
@@ -2602,6 +2604,21 @@ async function addToCart(product, quantity = 1) {
 
     renderCart();
     return;
+  }
+
+  // Báscula: para productos normales
+  if (window.TPV_SCALE_CART?.resolveScaleQuantityIfNeeded) {
+    const scaleResult =
+      await window.TPV_SCALE_CART.resolveScaleQuantityIfNeeded(
+        product,
+        quantity,
+      );
+
+    if (!scaleResult?.ok) {
+      return;
+    }
+
+    quantity = scaleResult.qty;
   }
 
   // NORMAL (tu comportamiento)
@@ -9440,6 +9457,8 @@ async function openOptions() {
   const st = await loadOptionsAccordionState();
   await applyOptionsAccordionState(st);
 
+  await window.initScaleOptionsUI?.();
+
   optionsOverlay?.classList.remove("hidden");
 
   bindTerminalDefaultCustomerSave();
@@ -10766,7 +10785,19 @@ async function printTicket(ticket) {
     setText(doc, "companyZip", emp?.codpostal ? emp.codpostal + ", " : "");
     setText(doc, "companyCity", emp?.ciudad || "");
     setText(doc, "companyCif", emp?.cifnif || "—");
-    setText(doc, "companyPhone", emp?.telefono1 || "");
+    const phones = [emp?.telefono1, emp?.telefono2]
+      .map((p) => String(p || "").trim())
+      .filter(Boolean);
+
+    const phoneRow = doc.getElementById("companyPhoneRow");
+
+    if (phones.length > 0) {
+      setText(doc, "companyPhone", `Tel.: ${phones.join(" / ")}`);
+      if (phoneRow) phoneRow.style.display = "block";
+    } else {
+      setText(doc, "companyPhone", "");
+      if (phoneRow) phoneRow.style.display = "none";
+    }
 
     const terminalTexto =
       (currentTerminal?.name || ticket.terminalName || "").trim() || "—";

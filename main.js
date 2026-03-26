@@ -8,6 +8,7 @@ const crypto = require("crypto");
 const { globalShortcut } = require("electron");
 const https = require("https");
 const dns = require("dns");
+const { ScaleManager } = require("./js/tpv/scale/scale-manager");
 
 let isRecreatingWindow = false;
 let mainWin = null;
@@ -18,6 +19,7 @@ let customerCreating = false;
 let lastCustomerState = null;
 let allowCustomerClose = false;
 let lastSecondInstanceUpdateCheckAt = 0;
+const scaleManager = new ScaleManager();
 
 async function triggerUpdateCheckIfSafe(reason = "manual") {
   // 1 check/min para evitar martillazos
@@ -1078,6 +1080,15 @@ function bootstrapCurrentUserFromCfg() {
   } catch {}
 }
 
+scaleManager.setOnStateChange((payload) => {
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      if (!win || win.isDestroyed()) continue;
+      win.webContents.send("scale:state", payload);
+    } catch (_) {}
+  }
+});
+
 app.whenReady().then(async () => {
   bootstrapCurrentUserFromCfg();
   cleanOldAutoStartIfWrong();
@@ -1534,6 +1545,58 @@ function isCustomerDisplayEnabled() {
 
 ipcMain.handle("cfg:get", (_e, key) => readCfg()[key]);
 ipcMain.handle("cfg:set", (_e, key, value) => writeCfg({ [key]: value }));
+
+ipcMain.handle("scale:listPorts", async () => {
+  try {
+    const ports = await scaleManager.listPorts();
+    return { ok: true, ports };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e), ports: [] };
+  }
+});
+
+ipcMain.handle("scale:getState", async () => {
+  try {
+    return { ok: true, state: scaleManager.getState() };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e), state: null };
+  }
+});
+
+ipcMain.handle("scale:connect", async (_e, config) => {
+  try {
+    const state = await scaleManager.connect(config || {});
+    return { ok: true, state };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+});
+
+ipcMain.handle("scale:disconnect", async () => {
+  try {
+    await scaleManager.disconnect();
+    return { ok: true, state: scaleManager.getState() };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+});
+
+ipcMain.handle("scale:setEnabled", async (_e, enabled, config) => {
+  try {
+    const state = await scaleManager.setEnabled(!!enabled, config || null);
+    return { ok: true, state };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+});
+
+ipcMain.handle("scale:consumeWeight", async () => {
+  try {
+    return scaleManager.consumeWeight();
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+});
 
 function ensureExecutableCopy(srcPath, dstName) {
   const dstDir = path.join(app.getPath("userData"), "linux-tools");

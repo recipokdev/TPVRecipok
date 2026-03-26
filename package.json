@@ -1,6 +1,6 @@
 {
   "name": "tpvrecipok",
-  "version": "0.1.74",
+  "version": "0.1.75-beta.1",
   "description": "",
   "main": "main.js",
   "scripts": {
@@ -83,6 +83,7 @@
     "url": "https://github.com/recipokdev/TPVRecipok.git"
   },
   "dependencies": {
-    "electron-updater": "^6.6.2"
+    "electron-updater": "^6.6.2",
+    "serialport": "^13.0.0"
   }
 }

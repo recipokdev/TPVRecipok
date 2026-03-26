@@ -1405,6 +1405,195 @@
             </div>
           </section>
 
+          <!-- BASCULA -->
+          <section class="opt-sec" data-sec="bascula">
+            <button type="button" class="opt-sec-h">
+              <span>Báscula</span>
+              <span class="opt-sec-chev">▾</span>
+            </button>
+
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Activar báscula</div>
+                  <div class="opt-row-sub">
+                    Si hay un peso mayor de 0, al añadir un producto se usará
+                    ese valor como cantidad.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="scaleEnabledToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Puerto</div>
+                  <div class="opt-row-sub">
+                    Selecciona el puerto de la báscula.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <select id="scalePortSelect" class="opt-select"></select>
+                  <button
+                    type="button"
+                    id="scaleRefreshPortsBtn"
+                    class="small-btn"
+                  >
+                    Actualizar
+                  </button>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Velocidad</div>
+                  <div class="opt-row-sub">
+                    Normalmente 9600. Si no lee bien, luego la ajustamos.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <select id="scaleBaudRateSelect" class="opt-select">
+                    <option value="1200">1200</option>
+                    <option value="2400">2400</option>
+                    <option value="4800">4800</option>
+                    <option value="9600" selected>9600</option>
+                    <option value="19200">19200</option>
+                    <option value="38400">38400</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Unidad que envía la báscula</div>
+                  <div class="opt-row-sub">
+                    Solo se usa para interpretar el dato que llega.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <select id="scaleSourceUnitSelect" class="opt-select">
+                    <option value="g">Gramos</option>
+                    <option value="kg">Kg</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Factor de conversión al cobrar
+                  </div>
+                  <div class="opt-row-sub">
+                    La cantidad final será: peso leído × factor.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <input
+                    type="number"
+                    id="scaleConversionFactorInput"
+                    class="opt-select"
+                    step="0.0001"
+                    min="0"
+                    value="1"
+                  />
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Ajustes rápidos</div>
+                  <div class="opt-row-sub">
+                    Ejemplo: si la báscula manda gramos y cobras por kg, usa
+                    0.001.
+                  </div>
+                </div>
+                <div class="opt-row-actions" style="gap: 8px; flex-wrap: wrap">
+                  <button
+                    type="button"
+                    class="small-btn"
+                    data-scale-factor-preset="1"
+                  >
+                    Directo ×1
+                  </button>
+                  <button
+                    type="button"
+                    class="small-btn"
+                    data-scale-factor-preset="0.001"
+                  >
+                    g → kg
+                  </button>
+                  <button
+                    type="button"
+                    class="small-btn"
+                    data-scale-factor-preset="1000"
+                  >
+                    kg → g
+                  </button>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Modo de uso</div>
+                  <div class="opt-row-sub">
+                    Continuo es más rápido. Consumo único evita reutilizar el
+                    mismo peso.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <select id="scaleConsumeModeSelect" class="opt-select">
+                    <option value="continuous">Continuo</option>
+                    <option value="single">Consumo único</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Decimales</div>
+                  <div class="opt-row-sub">
+                    Solo afecta a básculas que envían números sin punto decimal.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <select id="scaleDecimalPlacesSelect" class="opt-select">
+                    <option value="0">0</option>
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3" selected>3</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Estado</div>
+                  <div class="opt-row-sub" id="scaleStatusText">
+                    Báscula desactivada.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <button
+                    type="button"
+                    id="scaleReconnectBtn"
+                    class="small-btn"
+                  >
+                    Reconectar
+                  </button>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Lectura actual</div>
+                  <div class="opt-row-sub" id="scaleLiveWeight">0 g</div>
+                </div>
+              </div>
+            </div>
+          </section>
+
           <!-- CARRITO -->
           <section class="opt-sec" data-sec="carrito">
             <button type="button" class="opt-sec-h">
@@ -1882,6 +2071,8 @@
     <script src="config.js"></script>
 
     <script src="renderer.js"></script>
+    <script src="./js/tpv/scale/scale-ui.js"></script>
+    <script src="./js/tpv/scale/scale-cart.js"></script>
     <script>
       window.addEventListener("keydown", (e) => {
         const key = (e.key || "").toLowerCase();
