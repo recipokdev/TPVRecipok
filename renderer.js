@@ -2726,8 +2726,8 @@ function getUnitGross(item) {
 function fmtQty(q) {
   const n = Number(q);
   if (!isFinite(n)) return "0";
-  // hasta 3 decimales, sin ceros sobrantes
-  return n.toLocaleString("es-ES", { maximumFractionDigits: 3 });
+  // hasta 6 decimales, sin ceros sobrantes
+  return n.toLocaleString("es-ES", { maximumFractionDigits: 6 });
 }
 
 function buildPackIncludesTextFromChildren(cartArr, parentLineId) {

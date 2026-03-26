@@ -1,4 +1,9 @@
 (function () {
+  function normalizeQty(value, maxDecimals = 6) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Number(n.toFixed(maxDecimals));
+  }
   async function resolveScaleQuantityIfNeeded(product, fallbackQty = 1) {
     try {
       if (!window.TPV_SCALE) {
@@ -38,7 +43,7 @@
         return { ok: true, qty: fallbackQty, usedScale: false };
       }
 
-      qty = Number(qty.toFixed(4));
+      qty = normalizeQty(qty, 6);
 
       return {
         ok: true,
