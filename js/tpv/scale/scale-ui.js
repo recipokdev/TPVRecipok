@@ -9,6 +9,7 @@
     interByteMs: "scale.interByteMs",
     conversionFactor: "scale.conversionFactor",
     consumeMode: "scale.consumeMode",
+    reverseReading: "scale.reverseReading",
   };
 
   let unsubscribeScaleState = null;
@@ -44,6 +45,7 @@
       interByteMs,
       conversionFactor,
       consumeMode,
+      reverseReading,
     ] = await Promise.all([
       window.TPV_CFG.get(SCALE_CFG_KEYS.enabled),
       window.TPV_CFG.get(SCALE_CFG_KEYS.portPath),
@@ -54,6 +56,7 @@
       window.TPV_CFG.get(SCALE_CFG_KEYS.interByteMs),
       window.TPV_CFG.get(SCALE_CFG_KEYS.conversionFactor),
       window.TPV_CFG.get(SCALE_CFG_KEYS.consumeMode),
+      window.TPV_CFG.get(SCALE_CFG_KEYS.reverseReading),
     ]);
 
     return {
@@ -68,7 +71,7 @@
       interByteMs: Number.isFinite(Number(interByteMs))
         ? Number(interByteMs)
         : 20,
-      reverseReading: true,
+      reverseReading: !!reverseReading,
       conversionFactor: parsePositiveNumber(conversionFactor, 1),
       consumeMode: consumeMode === "single" ? "single" : "continuous",
     };
@@ -108,6 +111,7 @@
         SCALE_CFG_KEYS.consumeMode,
         cfg.consumeMode === "single" ? "single" : "continuous",
       ),
+      window.TPV_CFG.set(SCALE_CFG_KEYS.reverseReading, !!cfg.reverseReading),
     ]);
   }
 
@@ -120,7 +124,7 @@
       decimalPlaces: Number($id("scaleDecimalPlacesSelect")?.value || 4),
       parserMode: "timeout",
       interByteMs: 20,
-      reverseReading: true,
+      reverseReading: !!$id("scaleReverseReadingToggle")?.checked,
       conversionFactor: parsePositiveNumber(
         $id("scaleConversionFactorInput")?.value,
         1,
@@ -136,6 +140,7 @@
     const enabledEl = $id("scaleEnabledToggle");
     const baudEl = $id("scaleBaudRateSelect");
     const unitEl = $id("scaleSourceUnitSelect");
+    const reverseEl = $id("scaleReverseReadingToggle");
     const decimalsEl = $id("scaleDecimalPlacesSelect");
     const factorEl = $id("scaleConversionFactorInput");
     const modeEl = $id("scaleConsumeModeSelect");
@@ -143,6 +148,7 @@
     if (enabledEl) enabledEl.checked = !!cfg.enabled;
     if (baudEl) baudEl.value = String(cfg.baudRate || 9600);
     if (unitEl) unitEl.value = cfg.sourceUnit === "kg" ? "kg" : "g";
+    if (reverseEl) reverseEl.checked = !!cfg.reverseReading;
     if (decimalsEl) decimalsEl.value = String(Number(cfg.decimalPlaces ?? 4));
     if (factorEl)
       factorEl.value = String(parsePositiveNumber(cfg.conversionFactor, 1));
@@ -265,6 +271,7 @@
     const portEl = $id("scalePortSelect");
     const baudEl = $id("scaleBaudRateSelect");
     const unitEl = $id("scaleSourceUnitSelect");
+    const reverseEl = $id("scaleReverseReadingToggle");
     const factorEl = $id("scaleConversionFactorInput");
     const modeEl = $id("scaleConsumeModeSelect");
     const decimalsEl = $id("scaleDecimalPlacesSelect");
@@ -277,6 +284,7 @@
       !portEl ||
       !baudEl ||
       !unitEl ||
+      !reverseEl ||
       !factorEl ||
       !modeEl ||
       !decimalsEl ||
@@ -328,6 +336,12 @@
     });
 
     unitEl.addEventListener("change", async () => {
+      const cfgNow = readConfigFromForm();
+      await saveStoredScaleConfig(cfgNow);
+      if (cfgNow.enabled) await applyScaleConfigFromForm(false);
+    });
+
+    reverseEl.addEventListener("change", async () => {
       const cfgNow = readConfigFromForm();
       await saveStoredScaleConfig(cfgNow);
       if (cfgNow.enabled) await applyScaleConfigFromForm(false);

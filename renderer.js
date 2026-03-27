@@ -13676,6 +13676,8 @@ async function validateBaseUrlOrThrow(baseUrl, apiKey) {
 }
 
 async function forceReconnectFlow() {
+  let typedEmail = "";
+
   try {
     toast("Conectando…", "info");
 
@@ -13684,7 +13686,6 @@ async function forceReconnectFlow() {
 
     let resolved = null;
 
-    // Si ya hay cfg completa, intentamos con ella primero
     if (saved.isComplete) {
       resolved = {
         email: saved.email,
@@ -13692,25 +13693,25 @@ async function forceReconnectFlow() {
         apiKey: saved.apiKey,
       };
     } else {
-      if (TPV_STATE?.offline || TPV_STATE?.apiRecovering) {
+      if (TPV_STATE?.apiRecovering) {
         showReconnectIfAvailable(
           "No hay conexión con Recipok. Espera por favor, reconectando...",
         );
         return false;
       }
 
-      let email = await askEmailWithModal();
-      email = normalizeEmail(email);
+      typedEmail = normalizeEmail(await askEmailWithModal());
 
-      if (!email) {
+      if (!typedEmail) {
         toast("Conexión cancelada.", "warn");
         return false;
       }
 
-      resolved = await resolveCompanyByEmail(email);
+      resolved = await resolveCompanyByEmail(typedEmail);
+      resolved = { ...resolved, email: typedEmail };
     }
 
-    await saveResolvedCompany(resolved);
+    await saveResolvedCompanyFull(resolved, resolved.email || typedEmail);
     await validateBaseUrlOrThrow(resolved.baseUrl, resolved.apiKey);
 
     hideReconnectIfAvailable();
@@ -13736,8 +13737,9 @@ async function forceReconnectFlow() {
     }
 
     if (isConnectivityLikeError(e)) {
-      showReconnectIfAvailable(
-        "No hay conexión con Recipok. Espera por favor, reconectando...",
+      setActivationRecovering(
+        "Se perdió la conexión mientras activábamos el TPV. Espera por favor, reconectando...",
+        typedEmail,
       );
       toast("Seguimos intentando reconectar…", "warn");
       return false;
@@ -13833,6 +13835,9 @@ function warnIfDemoBaseUrl(where = "") {
     }
   } catch {}
 }
+
+let PENDING_COMPANY_EMAIL = "";
+let ACTIVATION_RECOVERY_IN_FLIGHT = false;
 
 function getSavedCompanySnapshot(saved = {}) {
   const hasOwn = (obj, key) =>
@@ -13951,6 +13956,87 @@ function hideReconnectIfAvailable() {
   } catch {}
 }
 
+function setActivationRecovering(
+  message = "Se perdió la conexión mientras activábamos el TPV. Espera por favor, reconectando...",
+  email = "",
+) {
+  if (email) {
+    PENDING_COMPANY_EMAIL = normalizeEmail(email);
+  }
+
+  TPV_STATE.offline = true;
+  TPV_STATE.apiRecovering = true;
+  TPV_STATE.locked = false;
+  updateCashButtonLabel();
+
+  showReconnectIfAvailable(message);
+}
+
+async function saveResolvedCompanyFull(resolved, email = "") {
+  const full = {
+    ...resolved,
+    email: normalizeEmail(email || resolved?.email || ""),
+  };
+
+  if (typeof saveResolvedCompany === "function") {
+    await saveResolvedCompany(full);
+  } else if (typeof persistCompanyCfg === "function") {
+    await persistCompanyCfg(full);
+  }
+
+  return full;
+}
+
+async function resumePendingCompanyActivation(opts = {}) {
+  const { promptIfNoPending = false } = opts;
+
+  if (ACTIVATION_RECOVERY_IN_FLIGHT) return false;
+  ACTIVATION_RECOVERY_IN_FLIGHT = true;
+
+  try {
+    let email = normalizeEmail(PENDING_COMPANY_EMAIL || "");
+
+    if (!email && promptIfNoPending) {
+      hideReconnectIfAvailable();
+      email = normalizeEmail(await askEmailWithModal());
+    }
+
+    if (!email) return false;
+
+    const resolved = await resolveCompanyByEmail(email);
+    const full = await saveResolvedCompanyFull(resolved, email);
+
+    PENDING_COMPANY_EMAIL = "";
+
+    await validateBaseUrlOrThrow(full.baseUrl, full.apiKey);
+
+    hideReconnectIfAvailable();
+    setConnectionStateOnline();
+
+    await loadDataFromApi({ refresh: true });
+    return true;
+  } catch (e) {
+    if (isConnectivityLikeError(e)) {
+      setActivationRecovering(
+        "Se perdió la conexión mientras activábamos el TPV. Espera por favor, reconectando...",
+      );
+      return false;
+    }
+
+    PENDING_COMPANY_EMAIL = "";
+    hideReconnectIfAvailable();
+
+    toast(
+      "No se pudo activar el TPV: " + (e?.message || e),
+      "err",
+      "Activación",
+    );
+    return false;
+  } finally {
+    ACTIVATION_RECOVERY_IN_FLIGHT = false;
+  }
+}
+
 async function bootstrapCompany() {
   console.log("bootstrapCompany() ejecutándose...");
 
@@ -14036,8 +14122,20 @@ async function bootstrapCompany() {
         return null;
       }
 
-      const resolved = await resolveCompanyByEmail(email);
-      return { ...resolved, email };
+      try {
+        const resolved = await resolveCompanyByEmail(email);
+        return { ...resolved, email };
+      } catch (e) {
+        if (isConnectivityLikeError(e)) {
+          setActivationRecovering(
+            "Se perdió la conexión mientras validábamos el email. Espera por favor, reconectando...",
+            email,
+          );
+          return null;
+        }
+
+        throw e;
+      }
     }
   };
 
@@ -15090,14 +15188,22 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
 // =============================================================
 // IMÁGENES DE PRODUCTOS (attachedfiles + attachedfilerelations)
 // =============================================================
+// =============================================================
+// IMÁGENES DE PRODUCTOS
+// Prioridad:
+//   1) productoimagenes  -> relación directa producto -> imagen
+//   2) fallback antiguo  -> attachedfiles + attachedfilerelations
+// =============================================================
 
-// Mapa global: { [idproducto]: { idfile, url, filename, mimetype } }
+// Mapa global: { [idproducto]: { idfile, url, filename, mimetype, orden } }
 let PRODUCT_IMAGES_MAP = {};
 
-// Devuelve solo los files que sean imagen
+// -------------------------------------------------------------
+// Fallback antiguo: attachedfiles
+// -------------------------------------------------------------
 async function fetchAttachedImageFiles() {
   const data = await fetchApiResourceWithParams("attachedfiles", {
-    limit: 5000,
+    limit: 0,
     "sort[idfile]": "DESC",
   });
 
@@ -15110,15 +15216,18 @@ async function fetchAttachedImageFiles() {
   });
 }
 
-// Devuelve solo relaciones de tipo Producto
+// -------------------------------------------------------------
+// Fallback antiguo: relaciones solo de Producto
+// -------------------------------------------------------------
 async function fetchProductFileRelations() {
   const data = await fetchApiResourceWithParams("attachedfilerelations", {
     "filter[model]": "Producto",
-    limit: 5000,
-    "sort[id]": "DESC", // o el campo real si lo devuelve como "id"
+    limit: 0,
+    "sort[id]": "DESC",
   });
 
   const list = Array.isArray(data) ? data : [];
+
   return list.filter(
     (r) =>
       String(r.model || "") === "Producto" &&
@@ -15127,8 +15236,77 @@ async function fetchProductFileRelations() {
   );
 }
 
-// Construye el mapa idproducto -> { url, idfile, ... }
+// -------------------------------------------------------------
+// Nuevo endpoint bueno: productoimagenes
+// -------------------------------------------------------------
+async function fetchProductoImagenes() {
+  const data = await fetchApiResourceWithParams("productoimagenes", {
+    limit: 0,
+    "sort[idproducto]": "ASC",
+    "sort[orden]": "ASC",
+    "sort[id]": "ASC",
+  });
+
+  return Array.isArray(data) ? data : [];
+}
+
+// -------------------------------------------------------------
+// Construye mapa idproducto -> imagen
+// Usa primero productoimagenes
+// Si falla o viene vacío, usa fallback antiguo
+// -------------------------------------------------------------
 async function buildProductImagesMap() {
+  const cfg = window.RECIPOK_API || {};
+  const apiBase = (cfg.baseUrl || "").replace(/\/+$/, "");
+  const fileBase = apiBase.replace(/\/api\/[^/]+$/i, "");
+
+  // =========================================================
+  // 1) Intento principal: productoimagenes
+  // =========================================================
+  try {
+    const rows = await fetchProductoImagenes();
+
+    if (Array.isArray(rows) && rows.length) {
+      const map = {};
+
+      rows.forEach((img) => {
+        const idprod = Number(img.idproducto || 0);
+        const idfile = Number(img.idfile || 0);
+        if (!idprod || !idfile) return;
+
+        // Nos quedamos con la primera por orden
+        if (map[idprod]) return;
+
+        const path = img["download-permanent"] || img.download || "";
+
+        if (!path) return;
+
+        const url = `${fileBase}/${String(path).replace(/^\/+/, "")}`;
+        const cleanPath = String(path).split("?")[0];
+        const filename = cleanPath.split("/").pop() || "";
+
+        map[idprod] = {
+          idfile,
+          url,
+          filename,
+          mimetype: "",
+          orden: Number(img.orden || 0),
+        };
+      });
+
+      PRODUCT_IMAGES_MAP = map;
+      return map;
+    }
+  } catch (e) {
+    console.warn(
+      "No se pudo usar productoimagenes. Se intentará el sistema antiguo:",
+      e?.message || e,
+    );
+  }
+
+  // =========================================================
+  // 2) Fallback antiguo: attachedfiles + attachedfilerelations
+  // =========================================================
   const [files, relations] = await Promise.all([
     fetchAttachedImageFiles(),
     fetchProductFileRelations(),
@@ -15139,15 +15317,11 @@ async function buildProductImagesMap() {
     fileById[Number(f.idfile)] = f;
   });
 
-  const cfg = window.RECIPOK_API || {};
-  const apiBase = (cfg.baseUrl || "").replace(/\/+$/, "");
-  const fileBase = apiBase.replace(/\/api\/3$/i, "");
-
   const map = {};
 
   relations.forEach((rel) => {
-    const idprod = Number(rel.modelid);
-    const idfile = Number(rel.idfile);
+    const idprod = Number(rel.modelid || 0);
+    const idfile = Number(rel.idfile || 0);
     if (!idprod || !idfile) return;
 
     if (map[idprod]) return; // nos quedamos con la primera
@@ -15159,13 +15333,14 @@ async function buildProductImagesMap() {
 
     if (!path) return;
 
-    const url = `${fileBase}/${path.replace(/^\/+/, "")}`;
+    const url = `${fileBase}/${String(path).replace(/^\/+/, "")}`;
 
     map[idprod] = {
       idfile,
       url,
       filename: f.filename || "",
       mimetype: f.mimetype || "",
+      orden: 0,
     };
   });
 
@@ -17036,7 +17211,11 @@ async function openDrawerNow({ source = "MAIN" } = {}) {
 async function checkFSOnline() {
   try {
     const cfg = window.RECIPOK_API || {};
-    if (!cfg.baseUrl || !cfg.apiKey) return false;
+
+    // ✅ Si aún no hay empresa/config resuelta, distinguimos este caso
+    if (!cfg.baseUrl || !cfg.apiKey) {
+      return navigator.onLine ? "NO_CFG_ONLINE" : false;
+    }
 
     const base = cfg.baseUrl.replace(/\/+$/, "");
     const url = `${base}/facturaclientes?limit=1`;
@@ -17052,7 +17231,7 @@ async function checkFSOnline() {
         signal: controller.signal,
       });
 
-      return r.ok; // ✅ no uses r.status > 0
+      return r.ok;
     } finally {
       clearTimeout(t);
     }
@@ -17069,15 +17248,43 @@ async function startOnlineMonitor() {
   async function tick() {
     const ok = await checkFSOnline().catch(() => false);
 
+    // ✅ Caso especial: hay internet, pero aún no hay cfg de empresa
+    if (ok === "NO_CFG_ONLINE") {
+      TPV_STATE.offline = false;
+      updateOnlineBadge(true);
+
+      const shouldResumeActivation =
+        !!PENDING_COMPANY_EMAIL || isReconnectOverlayVisible();
+
+      if (shouldResumeActivation) {
+        try {
+          await resumePendingCompanyActivation({
+            promptIfNoPending: !PENDING_COMPANY_EMAIL,
+          });
+        } catch (e) {
+          console.warn(
+            "No se pudo reanudar la activación pendiente:",
+            e?.message || e,
+          );
+        }
+      }
+
+      prevOk = ok;
+      isOnlineFS = ok;
+      return;
+    }
+
     TPV_STATE.offline = !ok;
-    updateOnlineBadge(ok);
+    updateOnlineBadge(!!ok);
 
     if (ok) {
       TPV_STATE.apiRecovering = false;
       hideReconnectIfAvailable();
     }
 
-    const becameOnline = prevOk === false && ok === true;
+    const becameOnline =
+      (prevOk === false || prevOk === "NO_CFG_ONLINE") && ok === true;
+
     prevOk = ok;
 
     if (becameOnline) {
@@ -17099,7 +17306,6 @@ async function startOnlineMonitor() {
         console.warn("syncQueueNow falló al volver online:", e?.message || e);
       }
 
-      // ✅ Auto-recuperar caja o abrir modal de apertura
       try {
         await handleCashHeaderAction({ auto: true });
       } catch (e) {
