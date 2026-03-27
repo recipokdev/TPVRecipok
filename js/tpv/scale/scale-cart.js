@@ -32,6 +32,10 @@
       const factor = Number(state?.config?.conversionFactor || 1);
       const safeFactor = Number.isFinite(factor) && factor > 0 ? factor : 1;
 
+      const saleDecimals = Number.isFinite(Number(state?.config?.decimalPlaces))
+        ? Number(state.config.decimalPlaces)
+        : 4;
+
       const baseQty =
         sourceUnit === "kg"
           ? Number(consumeRes.kg || 0)
@@ -43,7 +47,7 @@
         return { ok: true, qty: fallbackQty, usedScale: false };
       }
 
-      qty = normalizeQty(qty, 6);
+      qty = Number(qty.toFixed(saleDecimals));
 
       return {
         ok: true,

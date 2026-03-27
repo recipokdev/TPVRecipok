@@ -185,6 +185,113 @@ const cartClientInput = document.querySelector(".cart-client-input");
 // ===== Funciones auxiliares =====
 
 // ===============================
+// Comprobar configuracion guardada
+// ===============================
+
+function isFilled(value) {
+  return value !== null && value !== undefined && String(value).trim() !== "";
+}
+
+async function getStoredCompanyConfig() {
+  const [
+    companyEmailNew,
+    companyBaseUrlNew,
+    companyApiKeyNew,
+    companyEmailOld,
+    companyBaseUrlOld,
+    companyApiKeyOld,
+  ] = await Promise.all([
+    window.TPV_CFG.get("company.email"),
+    window.TPV_CFG.get("company.baseUrl"),
+    window.TPV_CFG.get("company.apiKey"),
+    window.TPV_CFG.get("companyEmail"),
+    window.TPV_CFG.get("baseUrl"),
+    window.TPV_CFG.get("apiKey"),
+  ]);
+
+  const email = String(companyEmailNew || companyEmailOld || "").trim();
+  const baseUrl = String(companyBaseUrlNew || companyBaseUrlOld || "").trim();
+  const apiKey = String(companyApiKeyNew || companyApiKeyOld || "").trim();
+
+  return {
+    email,
+    baseUrl,
+    apiKey,
+    hasEmail: isFilled(email),
+    isComplete: isFilled(email) && isFilled(baseUrl) && isFilled(apiKey),
+  };
+}
+
+// ===============================
+// Retry de conexión / sin demo automático
+// ===============================
+const DEMO_FALLBACK_ENABLED = false;
+const API_RETRY_MS = 5000;
+
+let apiRetryTimer = null;
+let apiConnectionWasLost = false;
+
+function clearApiRetryTimer() {
+  if (apiRetryTimer) {
+    clearTimeout(apiRetryTimer);
+    apiRetryTimer = null;
+  }
+}
+
+function scheduleApiRetry() {
+  if (apiRetryTimer) return;
+
+  apiRetryTimer = setTimeout(async () => {
+    apiRetryTimer = null;
+    await loadDataFromApi({ refresh: true, silentRetry: true });
+  }, API_RETRY_MS);
+}
+
+function hasRealDataLoaded() {
+  return Array.isArray(products) && products.length > 0;
+}
+
+function enterApiRetryMode(
+  message = "Sin conexión con Recipok. Reintentando...",
+) {
+  setStatusText(message);
+
+  TPV_STATE.offline = true;
+  TPV_STATE.locked = true;
+  TPV_STATE.apiRecovering = true;
+  updateCashButtonLabel();
+
+  apiConnectionWasLost = true;
+
+  // ✅ Si ya hay caja abierta, no molestamos con overlay modal
+  if (!cashSession?.open) {
+    showReconnectIfAvailable(message);
+  }
+
+  if (hasRealDataLoaded()) {
+    renderMainUI(true);
+  }
+
+  scheduleApiRetry();
+}
+
+function exitApiRetryMode() {
+  clearApiRetryTimer();
+
+  TPV_STATE.offline = false;
+  TPV_STATE.locked = false;
+  TPV_STATE.apiRecovering = false;
+  updateCashButtonLabel();
+
+  hideReconnectIfAvailable();
+
+  if (apiConnectionWasLost) {
+    toast("Conexión con Recipok restablecida.", "success");
+    apiConnectionWasLost = false;
+  }
+}
+
+// ===============================
 // Input directo al abrir o cerrar caja
 // ===============================
 
@@ -6695,6 +6802,16 @@ function setupCashObsQwertyDelegated() {
 }
 
 function openCashOpenDialog(mode = "open") {
+  if (
+    TPV_STATE?.offline ||
+    TPV_STATE?.apiRecovering ||
+    isReconnectOverlayVisible()
+  ) {
+    showReconnectIfAvailable(
+      "No hay conexión con Recipok. Espera por favor, reconectando...",
+    );
+    return;
+  }
   setCashDialogMode(mode);
 
   // ✅ BLOQUEO SOLO SI REALMENTE TENEMOS CAJA ABIERTA EN SESIÓN
@@ -7299,26 +7416,43 @@ async function confirmCashClosing() {
 }
 
 // ===== Llamadas a API Recipok / FacturaScripts =====
-async function fetchApiResource(resource) {
+async function fetchApiResource(resource, opts = {}) {
   const cfg = window.RECIPOK_API;
   if (!cfg || !cfg.baseUrl || !cfg.apiKey) {
     throw new Error("Config API no definida");
   }
 
+  const timeoutMs = Number(opts.timeoutMs || 10000);
   const url = `${cfg.baseUrl}/${resource}?limit=0`;
 
-  const res = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-      Token: cfg.apiKey,
-    },
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-  // Si el servidor devuelve 429, paramos aquí con un mensaje claro
+  let res;
+
+  try {
+    res = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Token: cfg.apiKey,
+      },
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new Error(`Timeout al cargar ${resource}`);
+    }
+
+    throw new Error(`Error de red en ${resource}: ${err?.message || err}`);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
   if (res.status === 429) {
     throw new Error(
-      "La API ha devuelto 429 (demasiadas peticiones). " +
-        "Es un bloqueo temporal por seguridad. Espera unos minutos antes de seguir usando el TPV.",
+      "La API ha devuelto 429 (demasiadas peticiones). Bloqueo temporal.",
     );
   }
 
@@ -7985,118 +8119,127 @@ async function ensureTerminalAgentDefaults({ refresh = false } = {}) {
 }
 
 // Botón abrir/cerrar caja (header "Caja")
-if (cashHeaderBtn) {
-  cashHeaderBtn.onclick = async () => {
-    // 0) Bloqueado
-    if (TPV_STATE.locked) {
-      showMessageModal(
-        "Acceso bloqueado",
-        "Tu cuenta de TPV está desactivada. Contacta con soporte.",
-      );
-      return;
-    }
 
-    // 1) Si NO hay empresa resuelta, el click debe pedir email (no login)
-    if (!hasCompanyResolved()) {
-      await forceReconnectFlow(); // pide email + valida + carga datos
-      if (!hasCompanyResolved()) return; // cancelado o falló
-    }
+async function handleCashHeaderAction(opts = {}) {
+  const { auto = false } = opts;
 
-    // 1.5) Si hay empresa pero seguimos OFFLINE, intentamos reconectar sin pedir email
+  // 0) Bloqueado
+  if (TPV_STATE.locked) {
+    showMessageModal(
+      "Acceso bloqueado",
+      "Tu cuenta de TPV está desactivada. Contacta con soporte.",
+    );
+    return false;
+  }
+
+  // 1) Si NO hay empresa resuelta
+  if (!hasCompanyResolved()) {
+    await forceReconnectFlow();
+    if (!hasCompanyResolved()) return false;
+  }
+
+  // 1.5) Si seguimos offline
+  if (TPV_STATE.offline) {
+    try {
+      await loadDataFromApi({ refresh: true });
+    } catch {}
+
     if (TPV_STATE.offline) {
-      try {
-        await loadDataFromApi(); // pone offline=false si conecta
-      } catch {}
-      if (TPV_STATE.offline) {
+      if (!auto) {
         toast(
           "Sin conexión. Reintenta cuando tengas internet.",
           "warn",
           "Caja",
         );
-        return;
       }
+      return false;
+    }
+  }
+
+  // 2) Datos base
+  await ensureDataLoaded();
+
+  // 3) Login
+  if (!getLoginUser?.() && !localStorage.getItem("tpv_login_user")) {
+    const ok = await ensureLoginAutoOrPrompt();
+    if (!ok) return false;
+  }
+
+  // 4) Si caja abierta => si es automático, recuperar/salir sin abrir cierre
+  if (cashSession.open) {
+    if (auto) {
+      return true;
     }
 
-    // 2) Asegurar datos base (categorías/productos, etc.)
-    await ensureDataLoaded();
+    const parkedCount = Array.isArray(parkedTickets) ? parkedTickets.length : 0;
 
-    // 3) Login: si no hay sesión, intenta auto-login; si falla, abre modal
-    if (!getLoginUser?.() && !localStorage.getItem("tpv_login_user")) {
-      const ok = await ensureLoginAutoOrPrompt();
-      if (!ok) return;
+    if (parkedCount > 0) {
+      await confirmModal(
+        "Tickets aparcados",
+        `Tienes ${parkedCount} ticket${parkedCount === 1 ? "" : "s"} aparcado${
+          parkedCount === 1 ? "" : "s"
+        }.\n\nAntes de cerrar la caja, recupera o elimina los tickets aparcados.`,
+      );
+      openParkedModal();
+      return false;
     }
 
-    // 4) Si caja abierta => cerrar (con control tickets aparcados)
-    if (cashSession.open) {
-      const parkedCount = Array.isArray(parkedTickets)
-        ? parkedTickets.length
-        : 0;
+    openCashOpenDialog("close");
+    return true;
+  }
 
-      if (parkedCount > 0) {
-        await confirmModal(
-          "Tickets aparcados",
-          `Tienes ${parkedCount} ticket${parkedCount === 1 ? "" : "s"} aparcado${
-            parkedCount === 1 ? "" : "s"
-          }.\n\nAntes de cerrar la caja, recupera o elimina los tickets aparcados.`,
-        );
-        openParkedModal();
-        return;
-      }
+  // 5) Refrescar terminales/agentes
+  await refreshTerminalsAndAgents();
 
-      openCashOpenDialog("close");
-      return;
-    }
-
-    // 5) Caja cerrada => refrescar terminales/agentes y auto-seleccionar defaults
-    await refreshTerminalsAndAgents();
-
-    // Si no hay terminales (demo)
-    if (!Array.isArray(terminals) || terminals.length === 0) {
-      if (!currentTerminal)
-        setCurrentTerminal({ id: "demo", name: "TPV demo" });
-
-      // reset UI apertura (por si vienes de un estado raro)
-      cashResetUIForOpening();
-      cashWrapInputsWithSteppers();
-
-      cashOpenDialogShown = false;
-      await maybeOpenCashOrRecover(); // abrirá modal de apertura si no hay caja abierta
-      return;
-    }
-
-    // Auto-asignar terminal/agente (sin overlays)
-    await ensureTerminalAgentDefaults(); // NO refresh aquí, ya hicimos refresh arriba
-
-    // Si aún no hay terminal (caso raro) => overlay
+  if (!Array.isArray(terminals) || terminals.length === 0) {
     if (!currentTerminal) {
-      showTerminalOverlay("session");
-      return;
+      setCurrentTerminal({ id: "demo", name: "TPV demo" });
     }
 
-    // Si no hay agente pero sí hay lista => tomar primero
-    const list = getAgentsForTerminalId(currentTerminal.id) || [];
-    if (!currentAgent && list.length > 0) {
-      currentAgent = list[0];
-      try {
-        localStorage.setItem(
-          "tpv_agent",
-          String(
-            currentAgent.codagente ||
-              currentAgent.id ||
-              currentAgent.nick ||
-              "",
-          ),
-        );
-      } catch {}
-      if (agentNameEl)
-        agentNameEl.textContent =
-          currentAgent.name || currentAgent.nick || "---";
-      renderMainAgentBar?.();
-    }
+    cashResetUIForOpening();
+    cashWrapInputsWithSteppers();
 
-    // 6) Decidir recovery o apertura
     cashOpenDialogShown = false;
-    await maybeOpenCashOrRecover(); // si no hay caja abierta, mostrará modal "open"
+    await maybeOpenCashOrRecover();
+    return true;
+  }
+
+  await ensureTerminalAgentDefaults();
+
+  if (!currentTerminal) {
+    if (!auto) {
+      showTerminalOverlay("session");
+    }
+    return false;
+  }
+
+  const list = getAgentsForTerminalId(currentTerminal.id) || [];
+  if (!currentAgent && list.length > 0) {
+    currentAgent = list[0];
+    try {
+      localStorage.setItem(
+        "tpv_agent",
+        String(
+          currentAgent.codagente || currentAgent.id || currentAgent.nick || "",
+        ),
+      );
+    } catch {}
+
+    if (agentNameEl) {
+      agentNameEl.textContent = currentAgent.name || currentAgent.nick || "---";
+    }
+
+    renderMainAgentBar?.();
+  }
+
+  cashOpenDialogShown = false;
+  await maybeOpenCashOrRecover();
+  return true;
+}
+
+if (cashHeaderBtn) {
+  cashHeaderBtn.onclick = async () => {
+    await handleCashHeaderAction({ auto: false });
   };
 }
 
@@ -8180,22 +8323,33 @@ function fireSessionReady() {
 // ===== Carga de datos desde la API de Recipok =====
 async function loadDataFromApi(opts = {}) {
   console.log("loadDataFromApi() ejecutándose con:", window.RECIPOK_API);
+
   try {
     const cfg = window.RECIPOK_API || {};
 
-    // Si no hay config, usamos modo demo
+    // Si no hay configuración, solo demo si está expresamente permitido
     if (!cfg.baseUrl || !cfg.apiKey) {
-      console.warn("Config API Recipok no definida. Usando datos de demo.");
+      console.warn("Config API Recipok no definida.");
 
-      categories = demoCategories.map((c) => ({ ...c, parentId: null }));
-      products = [...demoProducts];
+      clearApiRetryTimer();
 
-      setStatusText("Offline (demo)");
-      renderMainUI();
-      TPV_STATE.offline = true;
-      TPV_STATE.locked = false;
-      updateCashButtonLabel();
-      toast("Modo demo (sin conexión). Pulsa “Conectar” en Caja.", "info");
+      if (DEMO_FALLBACK_ENABLED) {
+        categories = demoCategories.map((c) => ({ ...c, parentId: null }));
+        products = [...demoProducts];
+
+        setStatusText("Offline (demo)");
+        TPV_STATE.offline = true;
+        TPV_STATE.locked = false;
+        updateCashButtonLabel();
+        renderMainUI();
+        toast("Modo demo (sin conexión). Pulsa “Conectar” en Caja.", "info");
+      } else {
+        setStatusText("API de Recipok no configurada");
+        TPV_STATE.offline = true;
+        TPV_STATE.locked = true;
+        updateCashButtonLabel();
+      }
+
       return;
     }
 
@@ -8207,45 +8361,77 @@ async function loadDataFromApi(opts = {}) {
 
     setStatusText("Conectando API...");
 
-    // ✅ IMPORTANTE: para que warmupPacksData no se “salte”
-    TPV_STATE.offline = false;
-    TPV_STATE.locked = false;
-
-    // 1) Cargamos lo principal EN PARALELO (sin impuestos todavía)
-    const [
-      familiasRaw,
-      productosData,
-      tpvTerminales,
-      variantesData,
-      empresasData,
-      productImagesMap,
-    ] = await Promise.all([
+    // 1) Cargamos recursos principales
+    const results = await Promise.allSettled([
       fetchApiResource("familias"),
       fetchApiResource("productos"),
       fetchApiResource("tpvterminales"),
       fetchApiResource("variantes"),
       fetchApiResource("empresas"),
-      // mapa de imágenes (si falla, devolvemos objeto vacío para no romper nada)
       buildProductImagesMap().catch((e) => {
         console.warn(
           "No se pudieron cargar imágenes de productos:",
-          e.message || e,
+          e?.message || e,
         );
         return {};
       }),
     ]);
 
-    companyInfo =
-      Array.isArray(empresasData) && empresasData[0] ? empresasData[0] : null;
-    await loadCompanyLogoUrl();
+    const [
+      familiasRes,
+      productosRes,
+      tpvTerminalesRes,
+      variantesRes,
+      empresasRes,
+      productImagesRes,
+    ] = results;
 
-    // Mapa de imágenes devuelto (aunque buildProductImagesMap ya lo asigna)
-    if (productImagesMap && typeof productImagesMap === "object") {
-      PRODUCT_IMAGES_MAP = productImagesMap;
+    // Críticos
+    if (
+      familiasRes.status !== "fulfilled" ||
+      productosRes.status !== "fulfilled"
+    ) {
+      throw new Error("No se pudieron cargar recursos críticos de la API.");
     }
 
-    // 2) INTENTAMOS cargar impuestos en una llamada aparte.
-    //    Si falla (429, etc.), seguimos funcionando con el fallback de extractTaxRateFromCode.
+    // No críticos o semi-críticos
+    const familiasRaw = Array.isArray(familiasRes.value)
+      ? familiasRes.value
+      : [];
+    const productosData = Array.isArray(productosRes.value)
+      ? productosRes.value
+      : [];
+    const tpvTerminales =
+      tpvTerminalesRes.status === "fulfilled" &&
+      Array.isArray(tpvTerminalesRes.value)
+        ? tpvTerminalesRes.value
+        : [];
+    const variantesData =
+      variantesRes.status === "fulfilled" && Array.isArray(variantesRes.value)
+        ? variantesRes.value
+        : [];
+    const empresasData =
+      empresasRes.status === "fulfilled" && Array.isArray(empresasRes.value)
+        ? empresasRes.value
+        : [];
+    const productImagesMap =
+      productImagesRes.status === "fulfilled" &&
+      productImagesRes.value &&
+      typeof productImagesRes.value === "object"
+        ? productImagesRes.value
+        : {};
+
+    companyInfo = empresasData[0] || null;
+
+    try {
+      await loadCompanyLogoUrl();
+    } catch (e) {
+      console.warn("No se pudo cargar el logo de empresa:", e?.message || e);
+    }
+
+    PRODUCT_IMAGES_MAP = productImagesMap;
+
+    // 2) Impuestos
     taxRatesByCode = {};
     try {
       const impuestosData = await fetchApiResource("impuestos");
@@ -8256,7 +8442,6 @@ async function loadDataFromApi(opts = {}) {
           ).trim();
           if (!code) return;
 
-          // Diferentes instalaciones pueden usar campos distintos.
           let rate =
             imp.iva ?? imp.porcentaje ?? imp.porcentajeiva ?? imp.impuesto ?? 0;
 
@@ -8268,26 +8453,40 @@ async function loadDataFromApi(opts = {}) {
       }
     } catch (e) {
       console.warn(
-        "No se pudieron cargar los impuestos. Usaremos el % deducido del código (IVA10 → 10, IVA21 → 21, etc.):",
-        e.message || e,
+        "No se pudieron cargar los impuestos. Se usará el fallback del código:",
+        e?.message || e,
       );
-      taxRatesByCode = {}; // forzamos a que se use extractTaxRateFromCode
+      taxRatesByCode = {};
     }
 
-    // 3) TPV-agentes (los envolvemos en su propio try/catch para que no rompa todo)
+    // 3) TPV-agentes
     let tpvAgentesData = [];
     let agentesMaestros = [];
     try {
-      [tpvAgentesData, agentesMaestros] = await Promise.all([
+      const [tpvAgentesRes, agentesRes] = await Promise.allSettled([
         fetchApiResource("tpvagentes"),
         fetchApiResource("agentes"),
       ]);
+
+      tpvAgentesData =
+        tpvAgentesRes.status === "fulfilled" &&
+        Array.isArray(tpvAgentesRes.value)
+          ? tpvAgentesRes.value
+          : [];
+
+      agentesMaestros =
+        agentesRes.status === "fulfilled" && Array.isArray(agentesRes.value)
+          ? agentesRes.value
+          : [];
     } catch (e) {
-      console.warn("No se pudieron cargar tpvagentes/agentes:", e.message || e);
+      console.warn(
+        "No se pudieron cargar tpvagentes/agentes:",
+        e?.message || e,
+      );
     }
 
-    // ===== Familias -> categories (incluye padre/hijos) =====
-    if (Array.isArray(familiasRaw) && familiasRaw.length) {
+    // ===== Familias -> categories =====
+    if (familiasRaw.length) {
       const visibles = familiasRaw.filter((f) => {
         const flag = f.tpv_show ?? f.tpv ?? f.mostrarentpv ?? f.mostrar_en_tpv;
         return !isFalseFlag(flag);
@@ -8297,6 +8496,7 @@ async function loadDataFromApi(opts = {}) {
         const sa = Number(a.tpv_sort ?? a.tpvsort ?? a.orden ?? 0);
         const sb = Number(b.tpv_sort ?? b.tpvsort ?? b.orden ?? 0);
         if (sa !== sb) return sa - sb;
+
         const na = String(a.descripcion ?? a.nombre ?? a.codfamilia ?? "");
         const nb = String(b.descripcion ?? b.nombre ?? b.codfamilia ?? "");
         return na.localeCompare(nb, "es");
@@ -8309,13 +8509,11 @@ async function loadDataFromApi(opts = {}) {
         color: "#007bff",
       }));
     } else {
-      if (!categories.length) {
-        categories = demoCategories.map((c) => ({ ...c, parentId: null }));
-      }
+      categories = [];
     }
 
     // ===== Productos + variantes -> products =====
-    if (Array.isArray(productosData) && productosData.length) {
+    if (productosData.length) {
       const productoById = new Map();
       productosData.forEach((p, idx) => {
         const idProd = Number(p.idproducto ?? p.id ?? idx);
@@ -8323,9 +8521,8 @@ async function loadDataFromApi(opts = {}) {
         productoById.set(idProd, p);
       });
 
-      // Agrupamos variantes por producto
       const variantsByProduct = {};
-      if (Array.isArray(variantesData) && variantesData.length) {
+      if (variantesData.length) {
         variantesData.forEach((v, idx) => {
           const baseId = Number(v.idproducto);
           if (!baseId) return;
@@ -8348,29 +8545,21 @@ async function loadDataFromApi(opts = {}) {
           base.descripcion ?? base.referencia ?? "",
         ).trim();
         const category = String(base.codfamilia ?? "");
-
-        // IVA del producto base
         const codImpuestoBase = base.codimpuesto || null;
         const taxRateBase = extractTaxRateFromCode(codImpuestoBase);
-
         const baseSort = Number(base.tpv_sort ?? base.tpvsort ?? 0) || 0;
         const baseSortKey = baseSort * 1000;
-
-        // 👇 imagen del producto base
         const imgInfoBase = PRODUCT_IMAGES_MAP[baseId] || null;
 
         const sortedVariants = list.slice().sort((a, b) => a.idx - b.idx);
 
-        sortedVariants.forEach(({ v, idx }, pos) => {
+        sortedVariants.forEach(({ v }, pos) => {
           let mainName = String(v.referencia ?? "").trim();
-          if (!mainName) {
-            mainName = baseName;
-          }
+          if (!mainName) mainName = baseName;
           if (!mainName || mainName === "-") return;
 
           const price = Number(v.precio ?? base.precio ?? 0);
           const idVar = Number(v.idvariante ?? v.id ?? baseId * 1000 + pos);
-
           const secondaryName =
             baseName && mainName !== baseName ? baseName : "";
 
@@ -8387,7 +8576,6 @@ async function loadDataFromApi(opts = {}) {
             isPrimaryVariant: pos === 0,
             codimpuesto: codImpuestoBase,
             taxRate: taxRateBase,
-            // 👇 misma imagen que el producto base
             imageUrl: imgInfoBase ? imgInfoBase.url : null,
           });
         });
@@ -8397,9 +8585,7 @@ async function loadDataFromApi(opts = {}) {
       productosData.forEach((p, idx) => {
         const idProd = Number(p.idproducto ?? p.id ?? idx);
         if (!idProd) return;
-
         if (variantsByProduct[idProd]) return;
-
         if (p.bloqueado || isFalseFlag(p.sevende)) return;
 
         const name = String(p.descripcion ?? p.referencia ?? "").trim();
@@ -8407,13 +8593,9 @@ async function loadDataFromApi(opts = {}) {
 
         const price = Number(p.precio ?? 0);
         const category = String(p.codfamilia ?? "");
-
         const codimpuesto = p.codimpuesto || null;
         const taxRate = extractTaxRateFromCode(codimpuesto);
-
         const baseSort = Number(p.tpv_sort ?? p.tpvsort ?? 0) || 0;
-
-        // 👇 imagen directa del producto (si tiene)
         const imgInfo = PRODUCT_IMAGES_MAP[idProd] || null;
 
         combined.push({
@@ -8448,33 +8630,30 @@ async function loadDataFromApi(opts = {}) {
 
       products = combined;
     } else {
-      if (!products.length) products = [...demoProducts];
+      products = [];
     }
 
-    await warmupPacksData().catch(() => {});
+    // Packs: se fuerza porque la carga principal ya salió bien
+    await warmupPacksData({ force: true }).catch(() => {});
 
     // ===== Terminales -> terminals =====
-    if (Array.isArray(tpvTerminales) && tpvTerminales.length) {
-      terminals = tpvTerminales.map((t, idx) => {
-        const id = String(t.idtpv ?? t.id ?? idx);
-        return {
-          id,
-          name: t.name || t.descripcion || `TPV ${id}`,
-          codalmacen: t.codalmacen || null,
-          productlimit: t.productlimit || null,
-          // ✅ cliente por defecto asignado en FacturaScripts
-          codcliente: String(t.codcliente || "1"),
-        };
-      });
-    } else {
-      terminals = [];
-    }
+    terminals = Array.isArray(tpvTerminales)
+      ? tpvTerminales.map((t, idx) => {
+          const id = String(t.idtpv ?? t.id ?? idx);
+          return {
+            id,
+            name: t.name || t.descripcion || `TPV ${id}`,
+            codalmacen: t.codalmacen || null,
+            productlimit: t.productlimit || null,
+            codcliente: String(t.codcliente || "1"),
+          };
+        })
+      : [];
 
-    // ===== Agentes (mapa global codagente -> nombre) =====
-    if (Array.isArray(agentesMaestros) && agentesMaestros.length) {
+    // ===== Agentes =====
+    if (agentesMaestros.length) {
       buildAgentNameMap(agentesMaestros);
     } else if (!Object.keys(agentNameByCode).length) {
-      // fallback cache si no vino nada de la API
       loadAgentNameMapFromCache();
     }
 
@@ -8513,24 +8692,17 @@ async function loadDataFromApi(opts = {}) {
 
     agents = Object.values(allAgentsMap);
 
-    // ===== Estado online + lógica de selección de TPV / agente =====
+    // Aquí sí: ya está todo cargado correctamente
+    exitApiRetryMode();
     setStatusText("Online Recipok");
-
-    TPV_STATE.offline = false;
-    TPV_STATE.locked = false;
-    updateCashButtonLabel();
 
     const numTerminals = terminals.length;
     const onlyTerminal = numTerminals === 1 ? terminals[0] : null;
-    const listForOnlyTerminal = onlyTerminal
-      ? getAgentsForTerminalId(onlyTerminal.id)
-      : [];
 
     // =========================
-    // MODO REFRESH (NO abrir overlays)
+    // MODO REFRESH (sin overlays)
     // =========================
     if (opts.refresh === true) {
-      // Mantener terminal si sigue existiendo
       if (currentTerminal) {
         const stillExists = terminals.some(
           (t) => String(t.id) === String(currentTerminal.id),
@@ -8538,7 +8710,6 @@ async function loadDataFromApi(opts = {}) {
         if (!stillExists) currentTerminal = null;
       }
 
-      // Si no hay terminal elegido, elegir uno (sin abrir modal)
       if (!currentTerminal) {
         if (onlyTerminal) {
           setCurrentTerminal(onlyTerminal);
@@ -8548,60 +8719,48 @@ async function loadDataFromApi(opts = {}) {
         }
       }
 
-      // Mantener agente si sigue existiendo dentro del terminal actual
       if (currentTerminal) {
         const listNow = getAgentsForTerminalId(currentTerminal.id);
+
         if (currentAgent) {
           const ok = listNow.some(
             (a) => String(a.codagente) === String(currentAgent.codagente),
           );
           if (!ok) currentAgent = null;
         }
-        if (!currentAgent) currentAgent = listNow[0] || null;
+
+        if (!currentAgent) {
+          currentAgent = listNow[0] || null;
+        }
       }
 
-      // Repintar sin tocar caja ni overlays
       renderMainUI(true);
       return;
     }
 
     // =========================
-    // MODO ARRANQUE (AUTO: sin login ni overlay)
+    // MODO ARRANQUE
     // =========================
-
-    // 1) Terminal + agente por defecto (primero) o los guardados
     await autoSelectTerminalAndAgentIfPossible();
 
-    // 2) Si no hay terminal/agente (casos raros), cae a overlay
     if (!currentTerminal) {
-      if (numTerminals > 0 || agents.length > 0) showTerminalOverlay("session");
-      else renderMainUI();
+      if (numTerminals > 0 || agents.length > 0) {
+        showTerminalOverlay("session");
+      } else {
+        renderMainUI();
+      }
       return;
     }
 
-    // Si no hay agentes asignados, igualmente dejamos entrar (tu UI debe tolerarlo)
-    if (!currentAgent) {
-      // si quieres forzar overlay cuando no hay agente:
-      // showTerminalOverlay("session"); return;
-    }
-
-    // 3) Dispara sessionReady -> tu listener ya llama maybeOpenCashOrRecover()
     fireSessionReady();
   } catch (err) {
     console.error("Error llamando a la API de Recipok:", err);
-    setStatusText("Offline (demo)");
 
-    TPV_STATE.offline = true;
-    TPV_STATE.locked = false;
-    updateCashButtonLabel();
-    toast("Sin conexión. Modo demo.", "warn");
+    enterApiRetryMode("Sin conexión con Recipok. Reintentando...");
 
-    if (!categories.length) {
-      categories = demoCategories.map((c) => ({ ...c, parentId: null }));
+    if (!opts.silentRetry) {
+      toast("Se ha perdido la conexión con Recipok. Reintentando...", "warn");
     }
-    if (!products.length) products = [...demoProducts];
-
-    renderMainUI();
   }
 }
 
@@ -13520,38 +13679,55 @@ async function forceReconnectFlow() {
   try {
     toast("Conectando…", "info");
 
-    let email = await askEmailWithModal();
-    email = normalizeEmail(email);
+    const savedRaw = await getPersistedCompanyCfg();
+    const saved = getSavedCompanySnapshot(savedRaw);
 
-    if (!email) {
-      toast("Conexión cancelada. Sigues en modo demo.", "warn");
-      return false;
+    let resolved = null;
+
+    // Si ya hay cfg completa, intentamos con ella primero
+    if (saved.isComplete) {
+      resolved = {
+        email: saved.email,
+        baseUrl: saved.baseUrl,
+        apiKey: saved.apiKey,
+      };
+    } else {
+      if (TPV_STATE?.offline || TPV_STATE?.apiRecovering) {
+        showReconnectIfAvailable(
+          "No hay conexión con Recipok. Espera por favor, reconectando...",
+        );
+        return false;
+      }
+
+      let email = await askEmailWithModal();
+      email = normalizeEmail(email);
+
+      if (!email) {
+        toast("Conexión cancelada.", "warn");
+        return false;
+      }
+
+      resolved = await resolveCompanyByEmail(email);
     }
 
-    // Esto ya valida si existe y si está activa
-    const resolved = await resolveCompanyByEmail(email);
-
     await saveResolvedCompany(resolved);
-
     await validateBaseUrlOrThrow(resolved.baseUrl, resolved.apiKey);
 
-    TPV_STATE.offline = false;
-    TPV_STATE.locked = false;
-    updateCashButtonLabel();
+    hideReconnectIfAvailable();
+    setConnectionStateOnline();
 
     toast("Conectado ✅", "ok");
 
-    // Recargamos datos reales
-    await loadDataFromApi();
-
+    await loadDataFromApi({ refresh: true });
     return true;
   } catch (e) {
-    const msg = e && e.message ? e.message : String(e);
+    const msg = e?.message || String(e);
 
     if (msg.toLowerCase().includes("desactivada")) {
       TPV_STATE.locked = true;
       TPV_STATE.offline = false;
       updateCashButtonLabel();
+
       showMessageModal(
         "Acceso bloqueado",
         "Tu cuenta de TPV está desactivada. Contacta con soporte.",
@@ -13559,9 +13735,15 @@ async function forceReconnectFlow() {
       return false;
     }
 
-    TPV_STATE.offline = true;
-    updateCashButtonLabel();
-    toast("No se pudo conectar. Modo demo.", "warn");
+    if (isConnectivityLikeError(e)) {
+      showReconnectIfAvailable(
+        "No hay conexión con Recipok. Espera por favor, reconectando...",
+      );
+      toast("Seguimos intentando reconectar…", "warn");
+      return false;
+    }
+
+    toast("No se pudo conectar: " + msg, "warn");
     return false;
   }
 }
@@ -13652,20 +13834,137 @@ function warnIfDemoBaseUrl(where = "") {
   } catch {}
 }
 
+function getSavedCompanySnapshot(saved = {}) {
+  const hasOwn = (obj, key) =>
+    !!obj && Object.prototype.hasOwnProperty.call(obj, key);
+
+  const hasNewEmailKey = hasOwn(saved, "company.email");
+  const hasNewBaseUrlKey = hasOwn(saved, "company.baseUrl");
+  const hasNewApiKeyKey = hasOwn(saved, "company.apiKey");
+
+  const emailNew = normalizeEmail(saved?.["company.email"] ?? "");
+  const baseUrlNew = String(saved?.["company.baseUrl"] ?? "").trim();
+  const apiKeyNew = String(saved?.["company.apiKey"] ?? "").trim();
+
+  const emailNormalized = normalizeEmail(saved?.email ?? "");
+  const baseUrlNormalized = String(saved?.baseUrl ?? "").trim();
+  const apiKeyNormalized = String(saved?.apiKey ?? "").trim();
+
+  const emailLegacy = normalizeEmail(
+    saved?.companyEmail || localStorage.getItem("tpv_companyEmail") || "",
+  );
+
+  const baseUrlLegacy = String(
+    localStorage.getItem("tpv_baseUrl") || "",
+  ).trim();
+
+  const apiKeyLegacy = String(localStorage.getItem("tpv_apiKey") || "").trim();
+
+  const email = hasNewEmailKey ? emailNew : emailNormalized || emailLegacy;
+
+  const baseUrl = hasNewBaseUrlKey
+    ? baseUrlNew
+    : baseUrlNormalized || baseUrlLegacy;
+
+  const apiKey = hasNewApiKeyKey ? apiKeyNew : apiKeyNormalized || apiKeyLegacy;
+
+  return {
+    email,
+    baseUrl,
+    apiKey,
+    hasEmail: !!email,
+    isComplete: !!(email && baseUrl && apiKey),
+  };
+}
+
+function isConnectivityLikeError(err) {
+  const msg = String(err?.message || err || "").toLowerCase();
+
+  return (
+    !!TPV_STATE?.offline ||
+    !!TPV_STATE?.apiRecovering ||
+    msg.includes("offline") ||
+    msg.includes("network") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("fetch") ||
+    msg.includes("timeout") ||
+    msg.includes("abort") ||
+    msg.includes("429") ||
+    msg.includes("demasiadas peticiones") ||
+    msg.includes("respuesta no válida")
+  );
+}
+
+function ensureRecipokApiObject() {
+  if (!window.RECIPOK_API) window.RECIPOK_API = {};
+}
+
+function setConnectionStateOnline() {
+  TPV_STATE.offline = false;
+  TPV_STATE.locked = false;
+  updateCashButtonLabel();
+}
+
+function isReconnectOverlayVisible() {
+  const overlay = document.getElementById("reconnectOverlay");
+  return !!overlay && !overlay.classList.contains("hidden");
+}
+
+function showReconnectOverlay(
+  message = "No hay conexión con Recipok. Espera por favor, reconectando...",
+) {
+  const overlay = document.getElementById("reconnectOverlay");
+  const text = document.getElementById("reconnectText");
+
+  if (text) {
+    text.textContent = message;
+  }
+
+  if (overlay) {
+    overlay.classList.remove("hidden");
+  }
+}
+
+function hideReconnectOverlay() {
+  const overlay = document.getElementById("reconnectOverlay");
+
+  if (overlay) {
+    overlay.classList.add("hidden");
+  }
+}
+
+function showReconnectIfAvailable(
+  message = "No hay conexión con Recipok. Espera por favor, reconectando...",
+) {
+  try {
+    if (typeof showReconnectOverlay === "function") {
+      showReconnectOverlay(message);
+    }
+  } catch {}
+}
+
+function hideReconnectIfAvailable() {
+  try {
+    if (typeof hideReconnectOverlay === "function") {
+      hideReconnectOverlay();
+    }
+  } catch {}
+}
+
 async function bootstrapCompany() {
   console.log("bootstrapCompany() ejecutándose...");
 
-  // 👇 0) compat/migración antes de leer nada
   await hydrateLegacyCompanyFromCfg();
   await repairCompanyPersistenceIfNeeded();
 
-  // Leer config persistente (userData)
-  const saved = await getPersistedCompanyCfg();
-  const savedEmail = normalizeEmail(saved?.email || null);
+  ensureRecipokApiObject();
+
+  const savedRaw = await getPersistedCompanyCfg();
+  const saved = getSavedCompanySnapshot(savedRaw);
 
   const applyResolved = ({ baseUrl, apiKey }) => {
-    window.RECIPOK_API.baseUrl = baseUrl;
-    window.RECIPOK_API.apiKey = apiKey;
+    window.RECIPOK_API.baseUrl = String(baseUrl || "").trim();
+    window.RECIPOK_API.apiKey = String(apiKey || "").trim();
   };
 
   const persistLegacyLocal = ({ email, baseUrl, apiKey }) => {
@@ -13680,42 +13979,40 @@ async function bootstrapCompany() {
     } catch {}
   };
 
-  // 0) Cargar clients.json
   let clientsData = null;
 
   try {
     clientsData = await fetchClientsJson();
   } catch (e) {
     console.warn("No se pudo cargar clients.json:", e);
-    clientsData = { clients: [] };
+    clientsData = null;
   }
 
   const findClientByEmail = (email) => {
+    if (!clientsData || !Array.isArray(clientsData.clients)) return null;
+
     const e = normalizeEmail(email);
 
     return (
-      (clientsData.clients || []).find((c) => normalizeEmail(c.email) === e) ||
-      null
+      clientsData.clients.find((c) => normalizeEmail(c.email) === e) || null
     );
   };
 
-  // Pedir email hasta que sea válido
   const askAndResolve = async () => {
+    // Si no hay conexión o estamos recuperando, NO pedir email
+    if (TPV_STATE?.apiRecovering || !clientsData) {
+      showReconnectIfAvailable(
+        "No hay conexión con Recipok. Espera por favor, reconectando...",
+      );
+      return null;
+    }
+
     while (true) {
       let email = await askEmailWithModal();
       email = normalizeEmail(email);
 
       if (!email) {
-        toast(
-          "Activación cancelada. Arrancando en modo demo.",
-          "warn",
-          "Activación",
-        );
-
-        TPV_STATE.offline = true;
-        TPV_STATE.locked = false;
-        updateCashButtonLabel();
-
+        toast("Activación cancelada.", "warn", "Activación");
         return null;
       }
 
@@ -13729,7 +14026,6 @@ async function bootstrapCompany() {
       if (client.active === false) {
         TPV_STATE.locked = true;
         TPV_STATE.offline = false;
-
         updateCashButtonLabel();
 
         showMessageModal(
@@ -13741,103 +14037,176 @@ async function bootstrapCompany() {
       }
 
       const resolved = await resolveCompanyByEmail(email);
-      return { ...resolved, email }; // asegura email dentro del objeto
+      return { ...resolved, email };
     }
   };
 
   // =================================================
-  // 1) SI YA HAY EMAIL GUARDADO
+  // 1) SI YA HAY CFG COMPLETA GUARDADA
   // =================================================
-  if (savedEmail) {
-    const client = findClientByEmail(savedEmail);
+  if (saved.isComplete) {
+    applyResolved(saved);
+    persistLegacyLocal(saved);
+    await persistCompanyCfg(saved).catch(() => {});
+    logCompanyCfg("after applyResolved(saved)");
+    warnIfDemoBaseUrl("(boot)");
 
-    if (!client) {
-      console.warn("Email guardado inválido. Re-pidiendo...");
-
-      const resolved = await askAndResolve();
-      if (!resolved) return false;
-
-      await persistCompanyCfg(resolved);
-      applyResolved(resolved);
-      persistLegacyLocal(resolved);
-      logCompanyCfg("after applyResolved");
-      warnIfDemoBaseUrl("(boot)");
-
-      await validateBaseUrlOrThrow(resolved.baseUrl, resolved.apiKey);
-
-      TPV_STATE.offline = false;
-      TPV_STATE.locked = false;
-      updateCashButtonLabel();
-
+    // Si estamos sin conexión o aún recuperando, no repidas email.
+    // Ya tenemos empresa vinculada.
+    if (TPV_STATE?.offline || TPV_STATE?.apiRecovering || !clientsData) {
+      showReconnectIfAvailable(
+        "No hay conexión con Recipok. Espera por favor, reconectando...",
+      );
       return true;
     }
 
-    if (client.active === false) {
+    const client = findClientByEmail(saved.email);
+
+    if (client && client.active === false) {
       TPV_STATE.locked = true;
       TPV_STATE.offline = false;
-
       updateCashButtonLabel();
 
       showMessageModal("Acceso bloqueado", "Cuenta desactivada.");
-
       return false;
     }
 
-    // Email válido → resolver
+    // Si clients.json no encuentra el email guardado, NO repedimos email automáticamente.
+    // Mantenemos la empresa ya vinculada y evitamos molestar al usuario.
+    if (!client) {
+      console.warn(
+        "El email guardado no aparece en clients.json. Se mantiene la configuración guardada.",
+      );
+      return true;
+    }
+
     try {
-      const resolved = await resolveCompanyByEmail(savedEmail);
+      const resolved = await resolveCompanyByEmail(saved.email);
 
       await persistCompanyCfg(resolved);
       applyResolved(resolved);
       persistLegacyLocal(resolved);
-      logCompanyCfg("after applyResolved");
+      logCompanyCfg("after applyResolved(resolved)");
       warnIfDemoBaseUrl("(boot)");
 
       await validateBaseUrlOrThrow(resolved.baseUrl, resolved.apiKey);
 
-      TPV_STATE.offline = false;
-      TPV_STATE.locked = false;
-      updateCashButtonLabel();
-
+      hideReconnectIfAvailable();
+      setConnectionStateOnline();
       return true;
     } catch (e) {
-      console.warn("Validación fallida:", e);
+      console.warn("No se pudo validar la empresa guardada:", e);
 
-      const resolved2 = await askAndResolve();
-      if (!resolved2) return false;
+      // Si es un fallo de conexión/timeout/429, mantenemos la cfg guardada y NO pedimos email.
+      if (isConnectivityLikeError(e)) {
+        showReconnectIfAvailable(
+          "No hay conexión con Recipok. Espera por favor, reconectando...",
+        );
+        return true;
+      }
 
-      await persistCompanyCfg(resolved2);
-      applyResolved(resolved2);
-
-      await validateBaseUrlOrThrow(resolved2.baseUrl, resolved2.apiKey);
-
-      TPV_STATE.offline = false;
-      TPV_STATE.locked = false;
-      updateCashButtonLabel();
-
+      // Si es un fallo real no relacionado con conectividad, mantenemos la cfg
+      // y evitamos abrir el modal automáticamente.
+      toast(
+        "No se pudo validar la empresa guardada. Se mantendrá la configuración actual.",
+        "warn",
+        "Activación",
+      );
       return true;
     }
   }
 
   // =================================================
-  // 2) NO HAY EMAIL → PEDIR
+  // 2) SOLO HAY EMAIL GUARDADO PERO NO CFG COMPLETA
   // =================================================
-  const resolved = await askAndResolve();
+  if (saved.hasEmail && !saved.isComplete) {
+    // Si no hay conexión, no podemos resolver nada todavía
+    if (TPV_STATE?.apiRecovering || !clientsData) {
+      showReconnectIfAvailable(
+        "No hay conexión con Recipok. Espera por favor, reconectando...",
+      );
+      return false;
+    }
 
+    const client = findClientByEmail(saved.email);
+
+    if (client && client.active === false) {
+      TPV_STATE.locked = true;
+      TPV_STATE.offline = false;
+      updateCashButtonLabel();
+
+      showMessageModal("Acceso bloqueado", "Cuenta desactivada.");
+      return false;
+    }
+
+    try {
+      const resolved = await resolveCompanyByEmail(saved.email);
+
+      await persistCompanyCfg(resolved);
+      applyResolved(resolved);
+      persistLegacyLocal(resolved);
+      logCompanyCfg("after applyResolved(savedEmailOnly)");
+      warnIfDemoBaseUrl("(boot)");
+
+      await validateBaseUrlOrThrow(resolved.baseUrl, resolved.apiKey);
+
+      hideReconnectIfAvailable();
+      setConnectionStateOnline();
+      return true;
+    } catch (e) {
+      console.warn(
+        "No se pudo completar la cfg a partir del email guardado:",
+        e,
+      );
+
+      if (isConnectivityLikeError(e)) {
+        showReconnectIfAvailable(
+          "No hay conexión con Recipok. Espera por favor, reconectando...",
+        );
+        return false;
+      }
+
+      // Solo aquí tiene sentido volver a pedir email
+      const resolved2 = await askAndResolve();
+      if (!resolved2) return false;
+
+      await persistCompanyCfg(resolved2);
+      applyResolved(resolved2);
+      persistLegacyLocal(resolved2);
+      logCompanyCfg("after applyResolved(re-asked)");
+      warnIfDemoBaseUrl("(boot)");
+
+      await validateBaseUrlOrThrow(resolved2.baseUrl, resolved2.apiKey);
+
+      hideReconnectIfAvailable();
+      setConnectionStateOnline();
+      return true;
+    }
+  }
+
+  // =================================================
+  // 3) NO HAY NADA GUARDADO
+  // =================================================
+  if (TPV_STATE?.apiRecovering || !clientsData) {
+    showReconnectIfAvailable(
+      "No hay conexión con Recipok. Espera por favor, reconectando...",
+    );
+    return false;
+  }
+
+  const resolved = await askAndResolve();
   if (!resolved) return false;
 
   await persistCompanyCfg(resolved);
   applyResolved(resolved);
   persistLegacyLocal(resolved);
-  logCompanyCfg("after applyResolved");
+  logCompanyCfg("after applyResolved(first-time)");
   warnIfDemoBaseUrl("(boot)");
 
   await validateBaseUrlOrThrow(resolved.baseUrl, resolved.apiKey);
 
-  TPV_STATE.offline = false;
-  TPV_STATE.locked = false;
-  updateCashButtonLabel();
-
+  hideReconnectIfAvailable();
+  setConnectionStateOnline();
   return true;
 }
 
@@ -14311,35 +14680,49 @@ async function fetchProductoByReferencia(ref) {
   }
 }
 
-async function warmupPacksData() {
-  PACKS_STATE.ready = false;
-  PACKS_STATE.packsByOfferProductId.clear();
-  PACKS_STATE.linesByPackId.clear();
-  PACKS_STATE.productByRefCache.clear();
+async function warmupPacksData(opts = {}) {
+  const force = opts.force === true;
 
-  // si estás offline/demo, no hace nada
-  if (TPV_STATE?.offline) return;
+  // Si estamos offline y no se ha forzado, no tocamos nada
+  if (TPV_STATE?.offline && !force) {
+    return false;
+  }
 
   let packs = [];
   let lines = [];
 
   try {
-    // ✅ mejor en paralelo
-    [packs, lines] = await Promise.all([
-      fetchApiResource("productpacks").catch(() => []),
-      fetchApiResource("productpacklines").catch(() => []),
+    const [packsRes, linesRes] = await Promise.allSettled([
+      fetchApiResource("productpacks"),
+      fetchApiResource("productpacklines"),
     ]);
-  } catch {}
 
-  if (!Array.isArray(packs)) packs = [];
-  if (!Array.isArray(lines)) lines = [];
+    // Si falla cualquiera, mantenemos la caché anterior
+    if (packsRes.status !== "fulfilled" || linesRes.status !== "fulfilled") {
+      console.warn(
+        "No se pudieron precargar los packs. Se mantiene la caché anterior.",
+      );
+      return false;
+    }
+
+    packs = Array.isArray(packsRes.value) ? packsRes.value : [];
+    lines = Array.isArray(linesRes.value) ? linesRes.value : [];
+  } catch (e) {
+    console.warn("Error cargando packs:", e?.message || e);
+    return false;
+  }
+
+  // Construimos mapas temporales y solo si todo fue bien sustituimos el estado
+  const nextPacksByOfferProductId = new Map();
+  const nextLinesByPackId = new Map();
 
   // productpacks: { id, idproduct, name, reference, ... }
   for (const p of packs) {
     const offerId = Number(p.idproduct || 0);
     const packId = Number(p.id || 0);
     if (!offerId || !packId) continue;
-    PACKS_STATE.packsByOfferProductId.set(offerId, {
+
+    nextPacksByOfferProductId.set(offerId, {
       id: packId,
       idproduct: offerId,
       name: p.name || "",
@@ -14352,13 +14735,29 @@ async function warmupPacksData() {
   for (const ln of lines) {
     const packId = Number(ln.idpack || 0);
     if (!packId) continue;
-    if (!PACKS_STATE.linesByPackId.has(packId)) {
-      PACKS_STATE.linesByPackId.set(packId, []);
+
+    if (!nextLinesByPackId.has(packId)) {
+      nextLinesByPackId.set(packId, []);
     }
-    PACKS_STATE.linesByPackId.get(packId).push(ln);
+    nextLinesByPackId.get(packId).push(ln);
+  }
+
+  // Reemplazo atómico
+  PACKS_STATE.ready = false;
+  PACKS_STATE.packsByOfferProductId.clear();
+  PACKS_STATE.linesByPackId.clear();
+  PACKS_STATE.productByRefCache.clear();
+
+  for (const [key, value] of nextPacksByOfferProductId.entries()) {
+    PACKS_STATE.packsByOfferProductId.set(key, value);
+  }
+
+  for (const [key, value] of nextLinesByPackId.entries()) {
+    PACKS_STATE.linesByPackId.set(key, value);
   }
 
   PACKS_STATE.ready = true;
+  return true;
 }
 
 function isOfferPackProductById(productId) {
@@ -16390,11 +16789,16 @@ window.addEventListener("keydown", async (e) => {
   try {
     const TPV_CFG = window.TPV_CFG;
     if (TPV_CFG) {
-      // empresa
+      // empresa (nuevo esquema)
       await TPV_CFG.set("company.email", "");
       await TPV_CFG.set("company.slug", "");
       await TPV_CFG.set("company.baseUrl", "");
       await TPV_CFG.set("company.apiKey", "");
+
+      // empresa (legacy)
+      await TPV_CFG.set("companyEmail", "");
+      await TPV_CFG.set("baseUrl", "");
+      await TPV_CFG.set("apiKey", "");
 
       // auth
       await TPV_CFG.set("auth.username", "");
@@ -16414,6 +16818,19 @@ window.addEventListener("keydown", async (e) => {
     cashSession.open = false;
     pushCustomerState();
     cashSession.remoteCajaId = null;
+  } catch {}
+
+  try {
+    if (window.RECIPOK_API) {
+      window.RECIPOK_API.baseUrl = "";
+      window.RECIPOK_API.apiKey = "";
+    }
+
+    TPV_STATE.offline = false;
+    TPV_STATE.apiRecovering = false;
+    TPV_STATE.locked = false;
+
+    hideReconnectIfAvailable?.();
   } catch {}
 
   toast("Reset realizado. Reiniciando...", "ok", "Reset");
@@ -16655,11 +17072,20 @@ async function startOnlineMonitor() {
     TPV_STATE.offline = !ok;
     updateOnlineBadge(ok);
 
+    if (ok) {
+      TPV_STATE.apiRecovering = false;
+      hideReconnectIfAvailable();
+    }
+
     const becameOnline = prevOk === false && ok === true;
     prevOk = ok;
 
-    // ✅ Al volver online: refrescar default customer + sync cola
     if (becameOnline) {
+      try {
+        TPV_STATE.apiRecovering = false;
+        hideReconnectIfAvailable();
+      } catch {}
+
       try {
         await maybeRefreshTerminalDefaultCustomer("online", {
           force: true,
@@ -16672,9 +17098,18 @@ async function startOnlineMonitor() {
       } catch (e) {
         console.warn("syncQueueNow falló al volver online:", e?.message || e);
       }
+
+      // ✅ Auto-recuperar caja o abrir modal de apertura
+      try {
+        await handleCashHeaderAction({ auto: true });
+      } catch (e) {
+        console.warn(
+          "No se pudo relanzar el flujo de caja al volver online:",
+          e?.message || e,
+        );
+      }
     }
 
-    // ✅ Si online y hay pendientes, sincroniza (tu lógica original)
     try {
       if (ok && window.TPV_QUEUE?.count) {
         const c = await window.TPV_QUEUE.count();
@@ -16686,7 +17121,6 @@ async function startOnlineMonitor() {
       console.warn("No se pudo comprobar/sincronizar cola:", e?.message || e);
     }
 
-    // ✅ Si online y modal cobro abierto, refrescar formas y repintar
     if (ok) {
       if (!payOverlay?.classList.contains("hidden")) {
         try {
@@ -17571,10 +18005,16 @@ document.addEventListener("tpv:cajaAbierta", (e) => {
 
 // 2) sessionReady = punto único para decidir caja (bootstrap desactivado)
 document.addEventListener("tpv:sessionReady", () => {
-  // Si el bootflow está corriendo, NO hagas nada (ya lo hace runBootFlow)
   if (BOOT_IN_FLIGHT) return;
 
-  // Si estamos ya logueados y con empresa, ok
+  if (
+    TPV_STATE?.offline ||
+    TPV_STATE?.apiRecovering ||
+    isReconnectOverlayVisible()
+  ) {
+    return;
+  }
+
   if (hasCompanyResolved?.() && getLoginUser?.() && getLoginToken?.()) {
     maybeOpenCashOrRecover();
   }

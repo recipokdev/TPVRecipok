@@ -67,14 +67,8 @@ function parseScalePayload(raw, config = {}) {
   let num = Number(token);
   if (!Number.isFinite(num)) return null;
 
-  const hasExplicitDecimal = token.includes(".");
-
-  if (!hasExplicitDecimal && cfg.decimalPlaces > 0) {
-    num = num / Math.pow(10, cfg.decimalPlaces);
-  }
-
   let grams = cfg.sourceUnit === "kg" ? num * 1000 : num;
-  grams = Number(grams.toFixed(3));
+  grams = Number(grams.toFixed(6));
 
   if (!Number.isFinite(grams) || grams < 0) return null;
 
@@ -84,7 +78,7 @@ function parseScalePayload(raw, config = {}) {
     token,
     parsedValue: num,
     grams,
-    kg: Number((grams / 1000).toFixed(4)),
+    kg: Number((grams / 1000).toFixed(6)),
   };
 }
 

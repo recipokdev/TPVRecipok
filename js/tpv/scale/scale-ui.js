@@ -63,7 +63,7 @@
       sourceUnit: sourceUnit === "kg" ? "kg" : "g",
       decimalPlaces: Number.isFinite(Number(decimalPlaces))
         ? Number(decimalPlaces)
-        : 0,
+        : 4,
       parserMode: parserMode === "timeout" ? "timeout" : "delimiter",
       interByteMs: Number.isFinite(Number(interByteMs))
         ? Number(interByteMs)
@@ -117,7 +117,7 @@
       portPath: String($id("scalePortSelect")?.value || "").trim(),
       baudRate: Number($id("scaleBaudRateSelect")?.value || 9600),
       sourceUnit: $id("scaleSourceUnitSelect")?.value === "kg" ? "kg" : "g",
-      decimalPlaces: Number($id("scaleDecimalPlacesSelect")?.value || 0),
+      decimalPlaces: Number($id("scaleDecimalPlacesSelect")?.value || 4),
       parserMode: "timeout",
       interByteMs: 20,
       reverseReading: true,
@@ -143,7 +143,7 @@
     if (enabledEl) enabledEl.checked = !!cfg.enabled;
     if (baudEl) baudEl.value = String(cfg.baudRate || 9600);
     if (unitEl) unitEl.value = cfg.sourceUnit === "kg" ? "kg" : "g";
-    if (decimalsEl) decimalsEl.value = String(Number(cfg.decimalPlaces || 0));
+    if (decimalsEl) decimalsEl.value = String(Number(cfg.decimalPlaces ?? 4));
     if (factorEl)
       factorEl.value = String(parsePositiveNumber(cfg.conversionFactor, 1));
     if (modeEl)

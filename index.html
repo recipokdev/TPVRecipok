@@ -776,6 +776,20 @@
         <div id="emailError" class="email-error"></div>
       </div>
     </div>
+    <div id="reconnectOverlay" class="simple-overlay hidden">
+      <div
+        class="simple-dialog"
+        style="width: 520px; max-width: 94vw; text-align: center"
+      >
+        <h2>Problemas de conexión</h2>
+        <p id="reconnectText" style="margin: 12px 0; font-size: 14px">
+          Espera por favor, estamos reconectando con Recipok...
+        </p>
+        <div style="font-size: 13px; opacity: 0.8">
+          No hace falta que hagas nada. El sistema lo intentará automáticamente.
+        </div>
+      </div>
+    </div>
     <div id="msgOverlay" class="simple-overlay critical-overlay hidden">
       <div class="simple-dialog">
         <h2 id="msgTitle">Aviso</h2>
@@ -1552,9 +1566,9 @@
 
               <div class="opt-row">
                 <div class="opt-row-txt">
-                  <div class="opt-row-title">Decimales</div>
+                  <div class="opt-row-title">Decimales al cobrar</div>
                   <div class="opt-row-sub">
-                    Solo afecta a básculas que envían números sin punto decimal.
+                    Redondea la cantidad final que se añadirá al carrito.
                   </div>
                 </div>
                 <div class="opt-row-actions">
@@ -1562,7 +1576,10 @@
                     <option value="0">0</option>
                     <option value="1">1</option>
                     <option value="2">2</option>
-                    <option value="3" selected>3</option>
+                    <option value="3">3</option>
+                    <option value="4" selected>4</option>
+                    <option value="5">5</option>
+                    <option value="6">6</option>
                   </select>
                 </div>
               </div>
