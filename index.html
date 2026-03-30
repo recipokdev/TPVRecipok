@@ -135,6 +135,10 @@
       </div>
 
       <!-- LÍNEAS DEL CARRITO -->
+      <div id="parkedEditingBanner" class="parked-editing-banner hidden">
+        <div class="peb-title" id="parkedEditingTitle"></div>
+        <div class="peb-obs" id="parkedEditingObs"></div>
+      </div>
       <div class="cart-lines-wrapper">
         <div id="cartLines"></div>
       </div>
@@ -1462,102 +1466,17 @@
 
               <div class="opt-row">
                 <div class="opt-row-txt">
-                  <div class="opt-row-title">Velocidad</div>
+                  <div class="opt-row-title">Cobrar en</div>
                   <div class="opt-row-sub">
-                    Normalmente 9600. Si no lee bien, luego la ajustamos.
+                    Elige si la cantidad del producto debe entrar en gramos o en
+                    kg.
                   </div>
                 </div>
                 <div class="opt-row-actions">
-                  <select id="scaleBaudRateSelect" class="opt-select">
-                    <option value="1200">1200</option>
-                    <option value="2400">2400</option>
-                    <option value="4800">4800</option>
-                    <option value="9600" selected>9600</option>
-                    <option value="19200">19200</option>
-                    <option value="38400">38400</option>
-                  </select>
-                </div>
-              </div>
-
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Unidad que envía la báscula</div>
-                  <div class="opt-row-sub">
-                    Solo se usa para interpretar el dato que llega.
-                  </div>
-                </div>
-                <div class="opt-row-actions">
-                  <select id="scaleSourceUnitSelect" class="opt-select">
+                  <select id="scaleChargeUnitSelect" class="opt-select">
                     <option value="g">Gramos</option>
                     <option value="kg">Kg</option>
                   </select>
-                </div>
-              </div>
-
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Invertir lectura</div>
-                  <div class="opt-row-sub">
-                    Actívalo solo si la báscula envía el número al revés o un numero que empieza con muchos 0.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="scaleReverseReadingToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Factor de conversión al cobrar
-                  </div>
-                  <div class="opt-row-sub">
-                    La cantidad final será: peso leído × factor.
-                  </div>
-                </div>
-                <div class="opt-row-actions">
-                  <input
-                    type="number"
-                    id="scaleConversionFactorInput"
-                    class="opt-select"
-                    step="0.0001"
-                    min="0"
-                    value="1"
-                  />
-                </div>
-              </div>
-
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Ajustes rápidos</div>
-                  <div class="opt-row-sub">
-                    Ejemplo: si la báscula manda gramos y cobras por kg, usa
-                    0.001.
-                  </div>
-                </div>
-                <div class="opt-row-actions" style="gap: 8px; flex-wrap: wrap">
-                  <button
-                    type="button"
-                    class="small-btn"
-                    data-scale-factor-preset="1"
-                  >
-                    Directo ×1
-                  </button>
-                  <button
-                    type="button"
-                    class="small-btn"
-                    data-scale-factor-preset="0.001"
-                  >
-                    g → kg
-                  </button>
-                  <button
-                    type="button"
-                    class="small-btn"
-                    data-scale-factor-preset="1000"
-                  >
-                    kg → g
-                  </button>
                 </div>
               </div>
 
@@ -1604,21 +1523,100 @@
                     Báscula desactivada.
                   </div>
                 </div>
-                <div class="opt-row-actions">
-                  <button
-                    type="button"
-                    id="scaleReconnectBtn"
-                    class="small-btn"
-                  >
-                    Reconectar
-                  </button>
-                </div>
               </div>
 
               <div class="opt-row">
                 <div class="opt-row-txt">
                   <div class="opt-row-title">Lectura actual</div>
                   <div class="opt-row-sub" id="scaleLiveWeight">0 g</div>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Opciones avanzadas</div>
+                  <div class="opt-row-sub">
+                    Velocidad, reconexión y diagnóstico.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <button
+                    type="button"
+                    id="scaleAdvancedToggleBtn"
+                    class="small-btn"
+                  >
+                    Mostrar
+                  </button>
+                </div>
+              </div>
+
+              <div
+                id="scaleAdvancedBody"
+                style="display: none; margin-top: 8px"
+              >
+                <div class="opt-row">
+                  <div class="opt-row-txt">
+                    <div class="opt-row-title">Velocidad</div>
+                    <div class="opt-row-sub">
+                      Normalmente 9600. Solo cámbiala si una báscula concreta no
+                      responde.
+                    </div>
+                  </div>
+                  <div class="opt-row-actions">
+                    <select id="scaleBaudRateSelect" class="opt-select">
+                      <option value="1200">1200</option>
+                      <option value="2400">2400</option>
+                      <option value="4800">4800</option>
+                      <option value="9600" selected>9600</option>
+                      <option value="19200">19200</option>
+                      <option value="38400">38400</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="opt-row">
+                  <div class="opt-row-txt">
+                    <div class="opt-row-title">Reconectar</div>
+                    <div class="opt-row-sub">
+                      Fuerza una nueva conexión con la báscula.
+                    </div>
+                  </div>
+                  <div class="opt-row-actions">
+                    <button
+                      type="button"
+                      id="scaleReconnectBtn"
+                      class="small-btn"
+                    >
+                      Reconectar
+                    </button>
+                  </div>
+                </div>
+
+                <div class="opt-row">
+                  <div class="opt-row-txt">
+                    <div class="opt-row-title">Perfil detectado</div>
+                    <div class="opt-row-sub" id="scaleDiagParser">—</div>
+                  </div>
+                </div>
+
+                <div class="opt-row">
+                  <div class="opt-row-txt">
+                    <div class="opt-row-title">Token leído</div>
+                    <div class="opt-row-sub" id="scaleDiagToken">—</div>
+                  </div>
+                </div>
+
+                <div class="opt-row">
+                  <div class="opt-row-txt" style="width: 100%">
+                    <div class="opt-row-title">Dato recibido</div>
+                    <div
+                      class="opt-row-sub"
+                      id="scaleDiagRaw"
+                      style="white-space: pre-wrap; word-break: break-all"
+                    >
+                      —
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1874,10 +1872,37 @@
       </div>
     </div>
 
-    <!-- Overlay: Aparcar con observaciones -->
+    <!-- Overlay: Aparcar ticket -->
     <div id="parkObsOverlay" class="simple-overlay hidden">
-      <div class="simple-dialog" style="width: 520px; max-width: 94vw">
+      <div class="simple-dialog" style="width: 560px; max-width: 94vw">
         <h2 style="margin-top: 0">Aparcar ticket</h2>
+
+        <label
+          style="
+            font-size: 13px;
+            font-weight: 600;
+            display: block;
+            margin: 8px 0 6px;
+          "
+        >
+          Nombre del ticket
+        </label>
+
+        <input
+          id="parkNameInput"
+          type="text"
+          placeholder="Ej: Mesa 5, Barra, Pedido Ana..."
+          style="
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+            font-size: 16px;
+            margin-bottom: 12px;
+            box-sizing: border-box;
+          "
+          autocomplete="off"
+        />
 
         <label
           style="
@@ -1893,7 +1918,7 @@
         <input
           id="parkObsInput"
           type="text"
-          placeholder="Ej: Mesa 3, para llevar, sin gluten..."
+          placeholder="Ej: sin cebolla, para llevar, cliente habitual..."
           style="
             width: 100%;
             padding: 10px 12px;
@@ -1912,8 +1937,11 @@
             margin-top: 10px;
           "
         >
+          <button id="parkNameKeyboardBtn" type="button" class="cart-btn">
+            ⌨ Nombre
+          </button>
           <button id="parkObsKeyboardBtn" type="button" class="cart-btn">
-            ⌨ Teclado
+            ⌨ Observación
           </button>
         </div>
 

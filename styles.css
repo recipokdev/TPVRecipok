@@ -1340,10 +1340,10 @@ body.modal-locked .cart-card {
 .parked-modal {
   background: #ffffff;
   border-radius: 10px;
-  max-width: 420px;
-  width: 90%;
-  max-height: 80vh;
-  margin: 40px auto;
+  max-width: 980px;
+  width: 94%;
+  max-height: 86vh;
+  margin: 24px auto;
   display: flex;
   flex-direction: column;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
@@ -1377,14 +1377,45 @@ body.modal-locked .cart-card {
   overflow-y: auto;
 }
 
-/* --- 8.1 Tickets aparcados (compacto) --- */
+/* =============================================================
+   8.1 Toolbar aparcados (buscador + filtros)
+   ============================================================= */
+
+#parkedToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+#parkedToolbar .tickets-search-wrap {
+  min-width: 280px;
+  flex: 1;
+}
+
+#parkedToolbar .tickets-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: 0 !important;
+}
+
+#parkedToolbar .tickets-tab-btn {
+  min-width: 110px;
+}
+
+/* =============================================================
+   8.2 Tickets aparcados (3 columnas)
+   ============================================================= */
 
 .parked-ticket-item.parked-ticket-compact {
   display: grid;
-  grid-template-columns: 220px 1fr 140px;
-  gap: 10px;
+  grid-template-columns: 280px 1fr 140px;
+  gap: 14px;
   align-items: center;
-  padding: 10px 12px;
+  padding: 12px 14px;
   margin-bottom: 10px;
   border-radius: 10px;
   border: 1px solid #e0e0e0;
@@ -1392,7 +1423,8 @@ body.modal-locked .cart-card {
   cursor: pointer;
   transition:
     background 0.1s ease,
-    box-shadow 0.1s ease;
+    box-shadow 0.1s ease,
+    border-color 0.15s ease;
 }
 
 .parked-ticket-item.parked-ticket-compact:hover {
@@ -1400,45 +1432,30 @@ body.modal-locked .cart-card {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
-.parked-ticket-item .pt-title {
-  font-weight: 900;
-  font-size: 16px;
+.parked-ticket-paid {
+  background: #f6fff7 !important;
+  border-color: #86d39a !important;
 }
-.parked-ticket-item .pt-sub {
-  font-size: 13px;
-  opacity: 0.8;
-  margin-top: 4px;
-}
-.parked-ticket-item .pt-mid {
+
+.parked-ticket-item .pt-left,
+.parked-ticket-item .pt-mid,
+.parked-ticket-item .pt-right {
   min-width: 0;
 }
-.parked-ticket-item .pt-obs {
-  font-size: 14px;
-  font-weight: 700;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+
+.pt-left {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
 }
-.parked-ticket-item .pt-obs-muted {
-  font-weight: 600;
-  opacity: 0.5;
-}
-.parked-ticket-item .pt-items {
-  margin-top: 4px;
-  font-size: 13px;
-  opacity: 0.85;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.parked-ticket-item .pt-total {
-  font-weight: 900;
-  font-size: 16px;
-}
-.pt-types {
-  font-size: 13px;
-  opacity: 0.75;
-  line-height: 1.2;
+
+.pt-mid {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .pt-right {
@@ -1446,7 +1463,7 @@ body.modal-locked .cart-card {
   flex-direction: column;
   align-items: flex-end;
   justify-content: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 140px;
   text-align: right;
 }
@@ -1457,6 +1474,66 @@ body.modal-locked .cart-card {
   justify-content: flex-end;
   gap: 10px;
   width: 100%;
+}
+
+.parked-ticket-item .pt-title {
+  font-weight: 900;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  line-height: 1.15;
+}
+
+.parked-ticket-item .pt-sub {
+  font-size: 13px;
+  opacity: 0.8;
+  line-height: 1.35;
+}
+
+.parked-ticket-item .pt-obs {
+  font-size: 14px;
+  font-weight: 800;
+  color: #111827;
+  white-space: normal;
+  overflow: hidden;
+  text-overflow: unset;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  line-height: 1.3;
+}
+
+.parked-ticket-item .pt-obs-muted {
+  font-weight: 600;
+  opacity: 0.5;
+}
+
+.parked-ticket-item .pt-items {
+  font-size: 13px;
+  opacity: 0.9;
+  white-space: normal;
+  overflow: hidden;
+  text-overflow: unset;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  line-clamp: 4;
+  line-height: 1.35;
+}
+
+.parked-ticket-item .pt-total {
+  font-weight: 900;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.pt-types {
+  font-size: 13px;
+  opacity: 0.75;
+  line-height: 1.2;
 }
 
 .pt-del {
@@ -1474,22 +1551,84 @@ body.modal-locked .cart-card {
 .pt-del:hover {
   background: #fbcaca;
 }
+
 .pt-del:active {
   transform: scale(0.97);
 }
-.pt-total {
-  font-weight: 900;
-  font-size: 16px;
+/* =============================================================
+   8.3 Badge estado
+   ============================================================= */
+
+.ticket-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 800;
   line-height: 1;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 
-/* Responsive aparcados */
+.ticket-badge-ok {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #86efac;
+}
+
+.ticket-badge-partial {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fcd34d;
+}
+
+/* =============================================================
+   8.4 Responsive aparcados
+   ============================================================= */
+
 @media (max-width: 720px) {
   .parked-ticket-item.parked-ticket-compact {
-    grid-template-columns: 1fr 120px;
-    grid-template-rows: auto auto;
+    grid-template-columns: 1fr;
+    gap: 10px;
     align-items: start;
   }
+
+  .pt-right {
+    align-items: flex-start;
+    text-align: left;
+    min-width: 0;
+  }
+
+  .pt-right-top {
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .parked-modal {
+    max-width: 96vw;
+    width: 96vw;
+  }
+
+  #parkedToolbar {
+    align-items: stretch;
+  }
+
+  #parkedToolbar .tickets-search-wrap {
+    min-width: 0;
+    width: 100%;
+  }
+
+  #parkedToolbar .tickets-tabs {
+    width: 100%;
+  }
+
+  #parkedToolbar .tickets-tab-btn {
+    flex: 1;
+    min-width: 0;
+  }
+
   .parked-ticket-item .pt-mid {
     grid-column: 1 / span 2;
     grid-row: 2;
@@ -1920,6 +2059,29 @@ body.modal-locked .cart-card {
   color: #fff;
 }
 
+.parked-editing-banner {
+  margin: 8px 12px 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff7e6;
+  border: 1px solid #f5c26b;
+}
+
+.parked-editing-banner.hidden {
+  display: none;
+}
+
+.parked-editing-banner .peb-title {
+  font-size: 14px;
+  font-weight: 800;
+  color: #92400e;
+}
+
+.parked-editing-banner .peb-obs {
+  margin-top: 4px;
+  font-size: 13px;
+  color: #6b7280;
+}
 /* =============================================================
    9) MODAL ENVÍO POR EMAIL
    ============================================================= */

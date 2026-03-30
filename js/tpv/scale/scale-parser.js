@@ -26,51 +26,99 @@ function normalizeScaleConfig(input = {}) {
     delimiter: decodeEscapes(input.delimiter || "\\r\\n"),
     interByteMs: Math.max(5, toInt(input.interByteMs, 20)),
 
-    sourceUnit: input.sourceUnit === "kg" ? "kg" : "g",
-    decimalPlaces: Math.max(0, Math.min(6, toInt(input.decimalPlaces, 0))),
-    reverseReading: !!input.reverseReading,
+    // visibles
+    chargeUnit: input.chargeUnit === "kg" ? "kg" : "g",
+    decimalPlaces: Math.max(0, Math.min(6, toInt(input.decimalPlaces, 4))),
+    consumeMode: input.consumeMode === "single" ? "single" : "continuous",
 
+    // internos / fallback
+    sourceUnit: input.sourceUnit === "kg" ? "kg" : "g",
+    reverseReading: !!input.reverseReading,
     conversionFactor: (() => {
       const n = Number(input.conversionFactor);
       return Number.isFinite(n) && n > 0 ? n : 1;
     })(),
-
-    consumeMode: input.consumeMode === "single" ? "single" : "continuous",
 
     maxAgeMs: Math.max(500, toInt(input.maxAgeMs, 5000)),
     relockToleranceGrams: Math.max(0, toInt(input.relockToleranceGrams, 2)),
   };
 }
 
-function extractNumericToken(raw) {
+function extractAllNumericTokens(raw) {
   const txt = String(raw || "")
     .trim()
     .replace(/,/g, ".");
-  const matches = txt.match(/-?\d+(?:\.\d+)?/g);
-  if (!matches || !matches.length) return null;
-
-  // ✅ importante: usar el ÚLTIMO valor recibido, no el primero
-  return matches[matches.length - 1];
+  return txt.match(/-?\d+(?:\.\d+)?/g) || [];
 }
 
-function parseScalePayload(raw, config = {}) {
+function parseWgtPayload(raw) {
+  const txt = String(raw || "")
+    .trim()
+    .replace(/,/g, ".");
+
+  const m = txt.match(/WGT:\s*\d+\s+(-?\d+(?:\.\d+)?)P\s*(-?\d+(?:\.\d+)?)/i);
+  if (!m) return null;
+
+  const kg = Number(m[1]);
+  if (!Number.isFinite(kg) || kg < 0) return null;
+
+  const grams = Number((kg * 1000).toFixed(6));
+
+  return {
+    raw: txt,
+    originalRaw: txt,
+    token: m[1],
+    parsedValue: kg,
+    grams,
+    kg: Number(kg.toFixed(6)),
+    detectedUnit: "kg",
+    parserKind: "wgt",
+  };
+}
+
+function parseReversedEqualsPayload(raw) {
+  const original = String(raw || "").trim();
+  if (!original.includes("=")) return null;
+  if (/[A-Za-z]/.test(original)) return null;
+
+  const reversed = original.split("").reverse().join("").replace(/,/g, ".");
+  const tokens = extractAllNumericTokens(reversed);
+  if (!tokens.length) return null;
+
+  const token = tokens[0];
+  const grams = Number(token);
+
+  if (!Number.isFinite(grams) || grams < 0) return null;
+
+  return {
+    raw: reversed,
+    originalRaw: original,
+    token,
+    parsedValue: grams,
+    grams: Number(grams.toFixed(6)),
+    kg: Number((grams / 1000).toFixed(6)),
+    detectedUnit: "g",
+    parserKind: "reversed_equals",
+  };
+}
+
+function parseGenericPayload(raw, config = {}) {
   const cfg = normalizeScaleConfig(config);
 
-  const originalRaw = String(raw || "");
+  const originalRaw = String(raw || "").trim();
   const workingRaw = cfg.reverseReading
     ? originalRaw.split("").reverse().join("")
     : originalRaw;
 
-  const token = extractNumericToken(workingRaw);
-  if (!token) return null;
+  const tokens = extractAllNumericTokens(workingRaw);
+  if (!tokens.length) return null;
 
+  const token = tokens[tokens.length - 1];
   let num = Number(token);
-  if (!Number.isFinite(num)) return null;
+  if (!Number.isFinite(num) || num < 0) return null;
 
   let grams = cfg.sourceUnit === "kg" ? num * 1000 : num;
   grams = Number(grams.toFixed(6));
-
-  if (!Number.isFinite(grams) || grams < 0) return null;
 
   return {
     raw: workingRaw,
@@ -79,7 +127,19 @@ function parseScalePayload(raw, config = {}) {
     parsedValue: num,
     grams,
     kg: Number((grams / 1000).toFixed(6)),
+    detectedUnit: cfg.sourceUnit,
+    parserKind: "generic",
   };
+}
+
+function parseScalePayload(raw, config = {}) {
+  const txt = String(raw || "");
+
+  return (
+    parseWgtPayload(txt) ||
+    parseReversedEqualsPayload(txt) ||
+    parseGenericPayload(txt, config)
+  );
 }
 
 module.exports = {

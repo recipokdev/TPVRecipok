@@ -3,17 +3,14 @@
     enabled: "scale.enabled",
     portPath: "scale.portPath",
     baudRate: "scale.baudRate",
-    sourceUnit: "scale.sourceUnit",
+    chargeUnit: "scale.chargeUnit",
     decimalPlaces: "scale.decimalPlaces",
-    parserMode: "scale.parserMode",
-    interByteMs: "scale.interByteMs",
-    conversionFactor: "scale.conversionFactor",
     consumeMode: "scale.consumeMode",
-    reverseReading: "scale.reverseReading",
   };
 
   let unsubscribeScaleState = null;
   let scaleUiInitialized = false;
+  let scaleAdvancedOpen = false;
 
   function $id(id) {
     return document.getElementById(id);
@@ -29,9 +26,27 @@
     console.log(`[${title}] ${msg}`);
   }
 
-  function parsePositiveNumber(value, fallback = 1) {
-    const n = Number(value);
-    return Number.isFinite(n) && n > 0 ? n : fallback;
+  function parserLabel(kind) {
+    switch (kind) {
+      case "wgt":
+        return "WGT / peso en kg";
+      case "reversed_equals":
+        return "Invertida con =";
+      case "generic":
+        return "Genérico";
+      default:
+        return "—";
+    }
+  }
+
+  function setScaleAdvancedOpen(open) {
+    scaleAdvancedOpen = !!open;
+
+    const body = $id("scaleAdvancedBody");
+    const btn = $id("scaleAdvancedToggleBtn");
+
+    if (body) body.style.display = scaleAdvancedOpen ? "block" : "none";
+    if (btn) btn.textContent = scaleAdvancedOpen ? "Ocultar" : "Mostrar";
   }
 
   async function getStoredScaleConfig() {
@@ -39,41 +54,34 @@
       enabled,
       portPath,
       baudRate,
-      sourceUnit,
+      chargeUnit,
       decimalPlaces,
-      parserMode,
-      interByteMs,
-      conversionFactor,
       consumeMode,
-      reverseReading,
     ] = await Promise.all([
       window.TPV_CFG.get(SCALE_CFG_KEYS.enabled),
       window.TPV_CFG.get(SCALE_CFG_KEYS.portPath),
       window.TPV_CFG.get(SCALE_CFG_KEYS.baudRate),
-      window.TPV_CFG.get(SCALE_CFG_KEYS.sourceUnit),
+      window.TPV_CFG.get(SCALE_CFG_KEYS.chargeUnit),
       window.TPV_CFG.get(SCALE_CFG_KEYS.decimalPlaces),
-      window.TPV_CFG.get(SCALE_CFG_KEYS.parserMode),
-      window.TPV_CFG.get(SCALE_CFG_KEYS.interByteMs),
-      window.TPV_CFG.get(SCALE_CFG_KEYS.conversionFactor),
       window.TPV_CFG.get(SCALE_CFG_KEYS.consumeMode),
-      window.TPV_CFG.get(SCALE_CFG_KEYS.reverseReading),
     ]);
 
     return {
       enabled: !!enabled,
       portPath: String(portPath || "").trim(),
       baudRate: Number(baudRate || 9600),
-      sourceUnit: sourceUnit === "kg" ? "kg" : "g",
+      chargeUnit: chargeUnit === "kg" ? "kg" : "g",
       decimalPlaces: Number.isFinite(Number(decimalPlaces))
         ? Number(decimalPlaces)
         : 4,
-      parserMode: parserMode === "timeout" ? "timeout" : "delimiter",
-      interByteMs: Number.isFinite(Number(interByteMs))
-        ? Number(interByteMs)
-        : 20,
-      reverseReading: !!reverseReading,
-      conversionFactor: parsePositiveNumber(conversionFactor, 1),
       consumeMode: consumeMode === "single" ? "single" : "continuous",
+
+      // Internos automáticos
+      parserMode: "timeout",
+      interByteMs: 20,
+      reverseReading: false,
+      sourceUnit: "g",
+      conversionFactor: 1,
     };
   }
 
@@ -86,32 +94,19 @@
       ),
       window.TPV_CFG.set(SCALE_CFG_KEYS.baudRate, Number(cfg.baudRate || 9600)),
       window.TPV_CFG.set(
-        SCALE_CFG_KEYS.sourceUnit,
-        cfg.sourceUnit === "kg" ? "kg" : "g",
+        SCALE_CFG_KEYS.chargeUnit,
+        cfg.chargeUnit === "kg" ? "kg" : "g",
       ),
       window.TPV_CFG.set(
         SCALE_CFG_KEYS.decimalPlaces,
         Number.isFinite(Number(cfg.decimalPlaces))
           ? Number(cfg.decimalPlaces)
-          : 0,
-      ),
-      window.TPV_CFG.set(
-        SCALE_CFG_KEYS.parserMode,
-        cfg.parserMode === "timeout" ? "timeout" : "delimiter",
-      ),
-      window.TPV_CFG.set(
-        SCALE_CFG_KEYS.interByteMs,
-        Number.isFinite(Number(cfg.interByteMs)) ? Number(cfg.interByteMs) : 80,
-      ),
-      window.TPV_CFG.set(
-        SCALE_CFG_KEYS.conversionFactor,
-        parsePositiveNumber(cfg.conversionFactor, 1),
+          : 4,
       ),
       window.TPV_CFG.set(
         SCALE_CFG_KEYS.consumeMode,
         cfg.consumeMode === "single" ? "single" : "continuous",
       ),
-      window.TPV_CFG.set(SCALE_CFG_KEYS.reverseReading, !!cfg.reverseReading),
     ]);
   }
 
@@ -120,46 +115,43 @@
       enabled: !!$id("scaleEnabledToggle")?.checked,
       portPath: String($id("scalePortSelect")?.value || "").trim(),
       baudRate: Number($id("scaleBaudRateSelect")?.value || 9600),
-      sourceUnit: $id("scaleSourceUnitSelect")?.value === "kg" ? "kg" : "g",
+      chargeUnit: $id("scaleChargeUnitSelect")?.value === "kg" ? "kg" : "g",
       decimalPlaces: Number($id("scaleDecimalPlacesSelect")?.value || 4),
-      parserMode: "timeout",
-      interByteMs: 20,
-      reverseReading: !!$id("scaleReverseReadingToggle")?.checked,
-      conversionFactor: parsePositiveNumber(
-        $id("scaleConversionFactorInput")?.value,
-        1,
-      ),
       consumeMode:
         $id("scaleConsumeModeSelect")?.value === "single"
           ? "single"
           : "continuous",
+
+      // Internos automáticos
+      parserMode: "timeout",
+      interByteMs: 20,
+      reverseReading: false,
+      sourceUnit: "g",
+      conversionFactor: 1,
     };
   }
 
   function applyConfigToForm(cfg) {
     const enabledEl = $id("scaleEnabledToggle");
     const baudEl = $id("scaleBaudRateSelect");
-    const unitEl = $id("scaleSourceUnitSelect");
-    const reverseEl = $id("scaleReverseReadingToggle");
+    const chargeUnitEl = $id("scaleChargeUnitSelect");
     const decimalsEl = $id("scaleDecimalPlacesSelect");
-    const factorEl = $id("scaleConversionFactorInput");
     const modeEl = $id("scaleConsumeModeSelect");
 
     if (enabledEl) enabledEl.checked = !!cfg.enabled;
     if (baudEl) baudEl.value = String(cfg.baudRate || 9600);
-    if (unitEl) unitEl.value = cfg.sourceUnit === "kg" ? "kg" : "g";
-    if (reverseEl) reverseEl.checked = !!cfg.reverseReading;
+    if (chargeUnitEl) chargeUnitEl.value = cfg.chargeUnit === "kg" ? "kg" : "g";
     if (decimalsEl) decimalsEl.value = String(Number(cfg.decimalPlaces ?? 4));
-    if (factorEl)
-      factorEl.value = String(parsePositiveNumber(cfg.conversionFactor, 1));
-    if (modeEl)
-      modeEl.value = cfg.consumeMode === "single" ? "single" : "continuous";
+    if (modeEl) modeEl.value = cfg.consumeMode === "single" ? "single" : "continuous";
   }
 
   function updateScaleStateUi(payload) {
     const state = payload?.state || payload || null;
     const statusEl = $id("scaleStatusText");
     const liveEl = $id("scaleLiveWeight");
+    const parserEl = $id("scaleDiagParser");
+    const tokenEl = $id("scaleDiagToken");
+    const rawEl = $id("scaleDiagRaw");
 
     if (!statusEl || !liveEl || !state) return;
 
@@ -177,10 +169,14 @@
     }
 
     if (grams > 0) {
-      liveEl.textContent = `${grams} g (${kg.toFixed(4)} kg)`;
+      liveEl.textContent = `${grams} g (${kg.toFixed(6)} kg)`;
     } else {
       liveEl.textContent = "0 g";
     }
+
+    if (parserEl) parserEl.textContent = parserLabel(state.parserKind);
+    if (tokenEl) tokenEl.textContent = state.lastToken || "—";
+    if (rawEl) rawEl.textContent = state.lastRaw || "—";
   }
 
   async function refreshScalePorts(selectedPath = "") {
@@ -223,13 +219,15 @@
         enabled: false,
         portPath: cfg.portPath,
         baudRate: cfg.baudRate,
-        sourceUnit: cfg.sourceUnit,
+        chargeUnit: cfg.chargeUnit,
         decimalPlaces: cfg.decimalPlaces,
+        consumeMode: cfg.consumeMode,
+
         parserMode: cfg.parserMode,
         interByteMs: cfg.interByteMs,
         reverseReading: cfg.reverseReading,
+        sourceUnit: cfg.sourceUnit,
         conversionFactor: cfg.conversionFactor,
-        consumeMode: cfg.consumeMode,
       });
 
       if (!res?.ok && showToast) {
@@ -249,13 +247,15 @@
       enabled: true,
       portPath: cfg.portPath,
       baudRate: cfg.baudRate,
-      sourceUnit: cfg.sourceUnit,
+      chargeUnit: cfg.chargeUnit,
       decimalPlaces: cfg.decimalPlaces,
+      consumeMode: cfg.consumeMode,
+
       parserMode: cfg.parserMode,
       interByteMs: cfg.interByteMs,
       reverseReading: cfg.reverseReading,
+      sourceUnit: cfg.sourceUnit,
       conversionFactor: cfg.conversionFactor,
-      consumeMode: cfg.consumeMode,
     });
 
     if (!res?.ok && showToast) {
@@ -263,38 +263,7 @@
     }
   }
 
-  async function initScaleOptionsUI() {
-    if (scaleUiInitialized) return;
-    scaleUiInitialized = true;
-
-    const enabledEl = $id("scaleEnabledToggle");
-    const portEl = $id("scalePortSelect");
-    const baudEl = $id("scaleBaudRateSelect");
-    const unitEl = $id("scaleSourceUnitSelect");
-    const reverseEl = $id("scaleReverseReadingToggle");
-    const factorEl = $id("scaleConversionFactorInput");
-    const modeEl = $id("scaleConsumeModeSelect");
-    const decimalsEl = $id("scaleDecimalPlacesSelect");
-    const refreshBtn = $id("scaleRefreshPortsBtn");
-    const reconnectBtn = $id("scaleReconnectBtn");
-    const presetBtns = document.querySelectorAll("[data-scale-factor-preset]");
-
-    if (
-      !enabledEl ||
-      !portEl ||
-      !baudEl ||
-      !unitEl ||
-      !reverseEl ||
-      !factorEl ||
-      !modeEl ||
-      !decimalsEl ||
-      !refreshBtn ||
-      !reconnectBtn
-    ) {
-      console.warn("[SCALE UI] No encuentro los elementos del overlay.");
-      return;
-    }
-
+  async function syncScaleUiFromStoredConfig() {
     const cfg = await getStoredScaleConfig();
     applyConfigToForm(cfg);
     await refreshScalePorts(cfg.portPath);
@@ -304,13 +273,15 @@
         enabled: true,
         portPath: cfg.portPath,
         baudRate: cfg.baudRate,
-        sourceUnit: cfg.sourceUnit,
+        chargeUnit: cfg.chargeUnit,
         decimalPlaces: cfg.decimalPlaces,
+        consumeMode: cfg.consumeMode,
+
         parserMode: cfg.parserMode,
         interByteMs: cfg.interByteMs,
         reverseReading: cfg.reverseReading,
+        sourceUnit: cfg.sourceUnit,
         conversionFactor: cfg.conversionFactor,
-        consumeMode: cfg.consumeMode,
       });
     }
 
@@ -318,84 +289,95 @@
     if (stateRes?.ok && stateRes.state) {
       updateScaleStateUi(stateRes.state);
     }
+  }
 
-    enabledEl.addEventListener("change", async () => {
-      await applyScaleConfigFromForm(false);
-    });
+  async function initScaleOptionsUI() {
+    const enabledEl = $id("scaleEnabledToggle");
+    const portEl = $id("scalePortSelect");
+    const baudEl = $id("scaleBaudRateSelect");
+    const chargeUnitEl = $id("scaleChargeUnitSelect");
+    const modeEl = $id("scaleConsumeModeSelect");
+    const decimalsEl = $id("scaleDecimalPlacesSelect");
+    const refreshBtn = $id("scaleRefreshPortsBtn");
+    const reconnectBtn = $id("scaleReconnectBtn");
+    const advancedBtn = $id("scaleAdvancedToggleBtn");
 
-    portEl.addEventListener("change", async () => {
-      const cfgNow = readConfigFromForm();
-      await saveStoredScaleConfig(cfgNow);
-      if (cfgNow.enabled) await applyScaleConfigFromForm(false);
-    });
-
-    baudEl.addEventListener("change", async () => {
-      const cfgNow = readConfigFromForm();
-      await saveStoredScaleConfig(cfgNow);
-      if (cfgNow.enabled) await applyScaleConfigFromForm(false);
-    });
-
-    unitEl.addEventListener("change", async () => {
-      const cfgNow = readConfigFromForm();
-      await saveStoredScaleConfig(cfgNow);
-      if (cfgNow.enabled) await applyScaleConfigFromForm(false);
-    });
-
-    reverseEl.addEventListener("change", async () => {
-      const cfgNow = readConfigFromForm();
-      await saveStoredScaleConfig(cfgNow);
-      if (cfgNow.enabled) await applyScaleConfigFromForm(false);
-    });
-
-    decimalsEl.addEventListener("change", async () => {
-      const cfgNow = readConfigFromForm();
-      await saveStoredScaleConfig(cfgNow);
-      if (cfgNow.enabled) await applyScaleConfigFromForm(false);
-    });
-
-    factorEl.addEventListener("change", async () => {
-      const cfgNow = readConfigFromForm();
-      factorEl.value = String(parsePositiveNumber(cfgNow.conversionFactor, 1));
-      await saveStoredScaleConfig(cfgNow);
-      if (cfgNow.enabled) await applyScaleConfigFromForm(false);
-    });
-
-    modeEl.addEventListener("change", async () => {
-      const cfgNow = readConfigFromForm();
-      await saveStoredScaleConfig(cfgNow);
-      if (cfgNow.enabled) await applyScaleConfigFromForm(false);
-    });
-
-    presetBtns.forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const preset = parsePositiveNumber(btn.dataset.scaleFactorPreset, 1);
-        factorEl.value = String(preset);
-
-        const cfgNow = readConfigFromForm();
-        await saveStoredScaleConfig(cfgNow);
-
-        if (cfgNow.enabled) {
-          await applyScaleConfigFromForm(false);
-        }
-      });
-    });
-
-    refreshBtn.addEventListener("click", async () => {
-      const current = String(portEl.value || "").trim();
-      await refreshScalePorts(current);
-    });
-
-    reconnectBtn.addEventListener("click", async () => {
-      await applyScaleConfigFromForm(false);
-    });
-
-    if (typeof unsubscribeScaleState === "function") {
-      unsubscribeScaleState();
+    if (
+      !enabledEl ||
+      !portEl ||
+      !baudEl ||
+      !chargeUnitEl ||
+      !modeEl ||
+      !decimalsEl ||
+      !refreshBtn ||
+      !reconnectBtn ||
+      !advancedBtn
+    ) {
+      console.warn("[SCALE UI] No encuentro los elementos del overlay.");
+      return;
     }
 
-    unsubscribeScaleState = window.TPV_SCALE.onState((payload) => {
-      updateScaleStateUi(payload);
-    });
+    if (!scaleUiInitialized) {
+      scaleUiInitialized = true;
+
+      enabledEl.addEventListener("change", async () => {
+        await applyScaleConfigFromForm(false);
+      });
+
+      portEl.addEventListener("change", async () => {
+        const cfgNow = readConfigFromForm();
+        await saveStoredScaleConfig(cfgNow);
+        if (cfgNow.enabled) await applyScaleConfigFromForm(false);
+      });
+
+      baudEl.addEventListener("change", async () => {
+        const cfgNow = readConfigFromForm();
+        await saveStoredScaleConfig(cfgNow);
+        if (cfgNow.enabled) await applyScaleConfigFromForm(false);
+      });
+
+      chargeUnitEl.addEventListener("change", async () => {
+        const cfgNow = readConfigFromForm();
+        await saveStoredScaleConfig(cfgNow);
+        if (cfgNow.enabled) await applyScaleConfigFromForm(false);
+      });
+
+      decimalsEl.addEventListener("change", async () => {
+        const cfgNow = readConfigFromForm();
+        await saveStoredScaleConfig(cfgNow);
+        if (cfgNow.enabled) await applyScaleConfigFromForm(false);
+      });
+
+      modeEl.addEventListener("change", async () => {
+        const cfgNow = readConfigFromForm();
+        await saveStoredScaleConfig(cfgNow);
+        if (cfgNow.enabled) await applyScaleConfigFromForm(false);
+      });
+
+      refreshBtn.addEventListener("click", async () => {
+        const current = String(portEl.value || "").trim();
+        await refreshScalePorts(current);
+      });
+
+      reconnectBtn.addEventListener("click", async () => {
+        await applyScaleConfigFromForm(false);
+      });
+
+      advancedBtn.addEventListener("click", () => {
+        setScaleAdvancedOpen(!scaleAdvancedOpen);
+      });
+
+      if (typeof unsubscribeScaleState === "function") {
+        unsubscribeScaleState();
+      }
+
+      unsubscribeScaleState = window.TPV_SCALE.onState((payload) => {
+        updateScaleStateUi(payload);
+      });
+    }
+
+    setScaleAdvancedOpen(false);
+    await syncScaleUiFromStoredConfig();
   }
 
   window.initScaleOptionsUI = initScaleOptionsUI;

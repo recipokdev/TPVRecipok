@@ -1,9 +1,4 @@
 (function () {
-  function normalizeQty(value, maxDecimals = 6) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return 0;
-    return Number(n.toFixed(maxDecimals));
-  }
   async function resolveScaleQuantityIfNeeded(product, fallbackQty = 1) {
     try {
       if (!window.TPV_SCALE) {
@@ -23,25 +18,19 @@
       }
 
       const consumeRes = await window.TPV_SCALE.consumeWeight();
-
       if (!consumeRes?.ok) {
         return { ok: false, blocked: true, silent: true };
       }
 
-      const sourceUnit = state?.config?.sourceUnit === "kg" ? "kg" : "g";
-      const factor = Number(state?.config?.conversionFactor || 1);
-      const safeFactor = Number.isFinite(factor) && factor > 0 ? factor : 1;
-
+      const chargeUnit = state?.config?.chargeUnit === "kg" ? "kg" : "g";
       const saleDecimals = Number.isFinite(Number(state?.config?.decimalPlaces))
         ? Number(state.config.decimalPlaces)
         : 4;
 
-      const baseQty =
-        sourceUnit === "kg"
+      let qty =
+        chargeUnit === "kg"
           ? Number(consumeRes.kg || 0)
           : Number(consumeRes.grams || 0);
-
-      let qty = baseQty * safeFactor;
 
       if (!Number.isFinite(qty) || qty <= 0) {
         return { ok: true, qty: fallbackQty, usedScale: false };
@@ -53,8 +42,7 @@
         ok: true,
         qty,
         usedScale: true,
-        sourceUnit,
-        factor: safeFactor,
+        chargeUnit,
       };
     } catch (e) {
       console.warn("[scale-cart] resolveScaleQuantityIfNeeded error:", e);

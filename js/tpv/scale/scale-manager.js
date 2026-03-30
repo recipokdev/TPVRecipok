@@ -21,6 +21,9 @@ class ScaleManager {
       error: null,
       lockedUntilWeightChanges: false,
       lastConsumedGrams: null,
+      parserKind: "",
+      lastToken: "",
+      detectedUnit: "",
     };
   }
 
@@ -134,6 +137,9 @@ class ScaleManager {
       currentKg: parsed.kg,
       updatedAt: now,
       error: null,
+      parserKind: parsed.parserKind || "",
+      lastToken: parsed.token || "",
+      detectedUnit: parsed.detectedUnit || "",
     });
   }
 
@@ -192,6 +198,9 @@ class ScaleManager {
       lastRaw: "",
       lockedUntilWeightChanges: false,
       lastConsumedGrams: null,
+      parserKind: "",
+      lastToken: "",
+      detectedUnit: "",
     });
 
     return this.getState();
@@ -245,6 +254,9 @@ class ScaleManager {
         lastRaw: "",
         lockedUntilWeightChanges: false,
         lastConsumedGrams: null,
+        parserKind: "",
+        lastToken: "",
+        detectedUnit: "",
       });
 
       return this.getState();

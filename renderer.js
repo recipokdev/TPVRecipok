@@ -47,7 +47,12 @@ let searchTerm = "";
 
 let lastTicket = null; // guardará el último ticket/factura creada para poder imprimirla
 
-let parkedTickets = []; // cada item: { id, createdAt, items, total }
+let parkedTickets = []; // cada item: { id, createdAt, items, total, clientName, obs, fs, paid, paidAt, paidTicketCode, paidTicketId }
+
+const parkedViewState = {
+  search: "",
+  filter: "pending", // "all" | "pending" | "paid"
+};
 let parkedCounter = 0;
 // Índice del ticket aparcado actualmente cargado en el carrito
 let currentParkedTicketIndex = null;
@@ -2965,6 +2970,13 @@ function renderCart() {
 
   pushCustomerState();
   refreshAgentGuardUI?.();
+
+  if (!uiLines.length && currentParkedTicketIndex !== null) {
+    currentParkedTicketIndex = null;
+  }
+
+  refreshParkButtonUI();
+  refreshParkedEditingBanner();
 }
 
 const LOGIN_TOKEN_KEY = "tpv_login_token";
@@ -4174,7 +4186,11 @@ function updateOnlineBadge(ok) {
 function updateParkedCountBadge() {
   const badge = document.getElementById("parkedCountBadge");
   if (!badge) return;
-  const n = parkedTickets.length;
+
+  const n = Array.isArray(parkedTickets)
+    ? parkedTickets.filter((t) => !t.paid).length
+    : 0;
+
   badge.textContent = n;
 }
 
@@ -4225,13 +4241,11 @@ function registerPaymentsForCurrentSession(pagos) {
   });
 }
 
-async function parkCurrentCart(obs = "") {
+async function parkCurrentCart(name = "", obs = "") {
   if (!cart || cart.length === 0) {
     toast("No hay productos para aparcar.", "warn", "Aparcar");
     return;
   }
-
-  parkedCounter += 1;
 
   const snapshot = cart.map((item) => ({ ...item }));
   const total = getCartTotal(snapshot);
@@ -4240,19 +4254,60 @@ async function parkCurrentCart(obs = "") {
     ? cartClientInput.value || "Cliente"
     : "Cliente";
 
+  const ticketName = String(name || "").trim();
   const observation = String(obs || "").trim();
+
+  // ✅ ACTUALIZAR ticket ya cargado
+  if (
+    currentParkedTicketIndex !== null &&
+    Array.isArray(parkedTickets) &&
+    parkedTickets[currentParkedTicketIndex] &&
+    !parkedTickets[currentParkedTicketIndex].paid
+  ) {
+    const existing = parkedTickets[currentParkedTicketIndex];
+
+    existing.items = snapshot;
+    existing.total = total;
+    existing.clientName = clientName;
+    existing.name = ticketName || existing.name || `Ticket #${existing.id}`;
+    existing.obs = observation;
+    existing.updatedAt = new Date();
+
+    // opcional: si quieres actualizar presupuesto remoto más adelante, aquí irá
+
+    // ✅ limpiar carrito y salir del modo edición
+    cart = [];
+    renderCart();
+
+    currentParkedTicketIndex = null;
+    refreshParkButtonUI();
+    refreshParkedEditingBanner();
+    updateParkedCountBadge();
+
+    toast("Ticket aparcado actualizado ✅", "ok", "Aparcados");
+    setStatusText("Ticket aparcado actualizado.");
+    return;
+  }
+
+  // ✅ CREAR ticket nuevo
+  parkedCounter += 1;
 
   const localTicket = {
     id: parkedCounter,
     createdAt: new Date(),
+    updatedAt: null,
     items: snapshot,
     total,
     clientName,
+    name: ticketName || `Ticket #${parkedCounter}`,
     obs: observation,
+    paid: false,
+    paidAt: null,
+    paidTicketCode: null,
+    paidTicketId: null,
     fs: null,
   };
 
-  // 👉 Aquí llamamos al endpoint de presupuestos
   const remote = await apiCreatePresupuestoFromCart(observation);
   if (remote && (remote.doc || remote.data)) {
     const doc = remote.doc || remote.data;
@@ -4264,10 +4319,16 @@ async function parkCurrentCart(obs = "") {
 
   parkedTickets.push(localTicket);
 
+  // ✅ limpiar carrito
   cart = [];
   renderCart();
+
+  currentParkedTicketIndex = null;
+  refreshParkButtonUI();
+  refreshParkedEditingBanner();
   updateParkedCountBadge();
 
+  toast("Ticket aparcado ✅", "ok", "Aparcados");
   setStatusText("Ticket aparcado.");
 }
 
@@ -4285,6 +4346,242 @@ const parkedTicketsOverlay = document.getElementById("parkedTicketsOverlay");
 const parkedTicketsList = document.getElementById("parkedTicketsList");
 const parkedCloseBtn = document.getElementById("parkedCloseBtn");
 
+function parkedTicketMatchesSearch(t, term) {
+  const q = String(term || "")
+    .trim()
+    .toLowerCase();
+  if (!q) return true;
+
+  const itemsText = Array.isArray(t.items)
+    ? t.items
+        .map((it) =>
+          String(
+            it.name || it.nombre || it.descripcion || it.productName || "",
+          ).trim(),
+        )
+        .join(" ")
+    : "";
+
+  const fecha = t.createdAt ? new Date(t.createdAt) : null;
+  const hora = fecha
+    ? fecha.toLocaleTimeString("es-ES", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "";
+
+  const haystack = [
+    t.id || "",
+    `ticket #${t.id || ""}`,
+    t.name || "",
+    t.clientName || "",
+    t.obs || "",
+    t.total || "",
+    hora,
+    itemsText,
+    t.paidTicketCode || "",
+    t.paidTicketId || "",
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return haystack.includes(q);
+}
+
+function parkedTicketPassesFilter(t) {
+  if (parkedViewState.filter === "all") return true;
+  if (parkedViewState.filter === "paid") return !!t.paid;
+  return !t.paid;
+}
+
+function syncParkedSearchClearBtn() {
+  const btn = document.getElementById("parkedSearchClearBtn");
+  const input = document.getElementById("parkedSearch");
+
+  if (!btn || !input) return;
+
+  const hasValue = String(input.value || "").trim().length > 0;
+  btn.classList.toggle("hidden", !hasValue);
+}
+
+function syncParkedToolbarUI() {
+  const parkedSearch = document.getElementById("parkedSearch");
+  const parkedFilterAll = document.getElementById("parkedFilterAll");
+  const parkedFilterPending = document.getElementById("parkedFilterPending");
+  const parkedFilterPaid = document.getElementById("parkedFilterPaid");
+
+  if (parkedSearch) {
+    parkedSearch.value = parkedViewState.search || "";
+  }
+
+  parkedFilterAll?.classList.toggle(
+    "is-active",
+    parkedViewState.filter === "all",
+  );
+  parkedFilterPending?.classList.toggle(
+    "is-active",
+    parkedViewState.filter === "pending",
+  );
+  parkedFilterPaid?.classList.toggle(
+    "is-active",
+    parkedViewState.filter === "paid",
+  );
+
+  syncParkedSearchClearBtn();
+}
+
+function ensureParkedToolbar() {
+  if (!parkedTicketsOverlay) return null;
+
+  let toolbar = document.getElementById("parkedToolbar");
+  if (toolbar) {
+    syncParkedToolbarUI();
+    return toolbar;
+  }
+
+  const body = parkedTicketsOverlay.querySelector(".parked-modal-body");
+  if (!body || !parkedTicketsList) return null;
+
+  toolbar = document.createElement("div");
+  toolbar.id = "parkedToolbar";
+  toolbar.className = "tickets-tools";
+  toolbar.innerHTML = `
+    <div class="tickets-search-wrap">
+      <input
+        id="parkedSearch"
+        type="text"
+        placeholder="Buscar ticket aparcado..."
+        autocomplete="off"
+      />
+      <button
+      id="parkedKeyboardBtn"
+      type="button"
+      class="cart-btn"
+      title="Teclado"
+    >
+      ⌨
+    </button>
+      <button
+        id="parkedSearchClearBtn"
+        type="button"
+        class="tickets-search-clear hidden"
+        title="Limpiar búsqueda"
+      >
+        ✕
+      </button>
+    </div>
+
+    <div class="tickets-tabs" style="margin-left: 10px;">
+      <button id="parkedFilterAll" type="button" class="cart-btn tickets-tab-btn">
+        Todos
+      </button>
+      <button id="parkedFilterPending" type="button" class="cart-btn tickets-tab-btn">
+        Sin cobrar
+      </button>
+      <button id="parkedFilterPaid" type="button" class="cart-btn tickets-tab-btn">
+        Cobrados
+      </button>
+    </div>
+  `;
+
+  body.insertBefore(toolbar, parkedTicketsList);
+
+  const parkedSearch = document.getElementById("parkedSearch");
+  const parkedSearchClearBtn = document.getElementById("parkedSearchClearBtn");
+  const parkedFilterAll = document.getElementById("parkedFilterAll");
+  const parkedFilterPending = document.getElementById("parkedFilterPending");
+  const parkedFilterPaid = document.getElementById("parkedFilterPaid");
+  const parkedKeyboardBtn = document.getElementById("parkedKeyboardBtn");
+
+  let timer = null;
+
+  parkedSearch?.addEventListener("input", () => {
+    parkedViewState.search = parkedSearch.value || "";
+    syncParkedSearchClearBtn();
+
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      renderParkedTicketsModal();
+    }, 200);
+  });
+
+  parkedSearchClearBtn?.addEventListener("click", () => {
+    parkedViewState.search = "";
+    if (parkedSearch) parkedSearch.value = "";
+    syncParkedToolbarUI();
+    renderParkedTicketsModal();
+    parkedSearch?.focus();
+  });
+
+  parkedFilterAll?.addEventListener("click", () => {
+    parkedViewState.filter = "all";
+    syncParkedToolbarUI();
+    renderParkedTicketsModal();
+  });
+
+  parkedFilterPending?.addEventListener("click", () => {
+    parkedViewState.filter = "pending";
+    syncParkedToolbarUI();
+    renderParkedTicketsModal();
+  });
+
+  parkedFilterPaid?.addEventListener("click", () => {
+    parkedViewState.filter = "paid";
+    syncParkedToolbarUI();
+    renderParkedTicketsModal();
+  });
+
+  parkedKeyboardBtn?.addEventListener("click", () => {
+    if (!parkedSearch) return;
+    openQwertyForInput(parkedSearch, "text");
+  });
+
+  syncParkedToolbarUI();
+  return toolbar;
+}
+
+function refreshParkButtonUI() {
+  if (!parkBtn) return;
+
+  const hasLoadedParkedTicket =
+    currentParkedTicketIndex !== null &&
+    Array.isArray(parkedTickets) &&
+    parkedTickets[currentParkedTicketIndex] &&
+    !parkedTickets[currentParkedTicketIndex].paid;
+
+  parkBtn.textContent = hasLoadedParkedTicket ? "Actualizar" : "Aparcar";
+  parkBtn.title = hasLoadedParkedTicket
+    ? "Actualizar ticket aparcado"
+    : "Aparcar ticket";
+}
+
+function refreshParkedEditingBanner() {
+  const wrap = document.getElementById("parkedEditingBanner");
+  const title = document.getElementById("parkedEditingTitle");
+  const obs = document.getElementById("parkedEditingObs");
+
+  if (!wrap || !title || !obs) return;
+
+  const t =
+    currentParkedTicketIndex !== null &&
+    Array.isArray(parkedTickets) &&
+    parkedTickets[currentParkedTicketIndex]
+      ? parkedTickets[currentParkedTicketIndex]
+      : null;
+
+  if (!t || t.paid) {
+    wrap.classList.add("hidden");
+    title.textContent = "";
+    obs.textContent = "";
+    return;
+  }
+
+  title.textContent = `Ticket Aparcado: ${t.label || `Ticket #${t.id}`}`;
+  obs.textContent = t.obs ? `Observación: ${t.obs}` : "Sin observaciones";
+
+  wrap.classList.remove("hidden");
+}
+
 function openParkedModal() {
   if (!parkedTicketsOverlay) return;
 
@@ -4293,6 +4590,7 @@ function openParkedModal() {
     return;
   }
 
+  ensureParkedToolbar();
   renderParkedTicketsModal();
   parkedTicketsOverlay.classList.remove("hidden");
 }
@@ -4305,12 +4603,23 @@ function closeParkedModal() {
 function renderParkedTicketsModal() {
   if (!parkedTicketsList) return;
 
+  ensureParkedToolbar();
   parkedTicketsList.innerHTML = "";
 
-  if (!parkedTickets || parkedTickets.length === 0) {
+  const term = String(parkedViewState.search || "")
+    .trim()
+    .toLowerCase();
+
+  const source = Array.isArray(parkedTickets) ? parkedTickets : [];
+
+  const filtered = source.filter((t) => {
+    return parkedTicketPassesFilter(t) && parkedTicketMatchesSearch(t, term);
+  });
+
+  if (!filtered.length) {
     const empty = document.createElement("div");
     empty.className = "parked-ticket-empty";
-    empty.textContent = "No hay tickets aparcados.";
+    empty.textContent = "No hay tickets aparcados en esta vista.";
     parkedTicketsList.appendChild(empty);
     return;
   }
@@ -4322,10 +4631,12 @@ function renderParkedTicketsModal() {
 
   const getItemQty = (it) => Number(it.qty ?? it.cantidad ?? 1) || 1;
 
-  parkedTickets.forEach((t, index) => {
+  filtered.forEach((t) => {
+    const realIndex = parkedTickets.indexOf(t);
+
     const div = document.createElement("div");
     div.className = "parked-ticket-item parked-ticket-compact";
-    div.dataset.index = index;
+    div.dataset.index = realIndex;
 
     const fecha = t.createdAt ? new Date(t.createdAt) : new Date();
 
@@ -4336,55 +4647,69 @@ function renderParkedTicketsModal() {
 
     const totalTexto = t.total != null ? t.total.toFixed(2) + " €" : "—";
 
-    // ✅ “tipos” = productos distintos (por nombre/id)
     const items = Array.isArray(t.items) ? t.items : [];
     const keyOf = (it) =>
       String(it.idproducto || it.id || getItemName(it)).toLowerCase();
+
     const uniqueMap = new Map();
     items.forEach((it) => {
       const k = keyOf(it);
       if (!uniqueMap.has(k)) uniqueMap.set(k, it);
     });
+
     const tipos = uniqueMap.size;
 
-    // ✅ resumen de productos (3 máx)
     const preview = Array.from(uniqueMap.values())
-      .slice(0, 3)
+      .slice(0, 8)
       .map((it) => `${getItemQty(it)}× ${getItemName(it)}`)
       .join(" · ");
 
-    const extra = tipos > 3 ? ` · +${tipos - 3}` : "";
-
+    const extra = tipos > 8 ? ` · +${tipos - 8}` : "";
     const obs = (t.obs || "").trim();
+
+    const paidBadge = t.paid
+      ? `<span class="ticket-badge ticket-badge-ok">✔ COBRADO</span>`
+      : `<span class="ticket-badge ticket-badge-partial">PENDIENTE</span>`;
+
+    const paidSub = t.paid
+      ? `<div class="pt-items" style="color:#15803d;">Cobrado${
+          t.paidTicketCode ? ` · ${escapeHtml(t.paidTicketCode)}` : ""
+        }</div>`
+      : "";
+
+    if (t.paid) {
+      div.classList.add("parked-ticket-paid");
+    }
 
     div.innerHTML = `
       <div class="pt-left">
-        <div class="pt-title">Ticket #${t.id}</div>
-        <div class="pt-sub">${hora} · ${escapeHtml(
-          t.clientName || "Cliente",
-        )}</div>
-      </div>
+        <div class="pt-title">
+          ${paidBadge}
+          ${escapeHtml(t.name || `Ticket #${t.id}`)}
+        </div>
 
-      <div class="pt-mid">
         ${
           obs
             ? `<div class="pt-obs">${escapeHtml(obs)}</div>`
             : `<div class="pt-obs pt-obs-muted">Sin observación</div>`
         }
+
+        <div class="pt-sub">
+          ${hora} · ${escapeHtml(t.clientName || "Cliente")} · Ticket #${t.id}
+        </div>
+      </div>
+
+      <div class="pt-mid">
         <div class="pt-items">${escapeHtml(preview + extra)}</div>
+        ${paidSub}
       </div>
 
       <div class="pt-right">
-  <div class="pt-right-top">
-    <div class="pt-total">${totalTexto}</div>
-    <button type="button" class="pt-del" title="Eliminar ticket aparcado" aria-label="Eliminar">🗑</button>
-  </div>
-
-  
-</div>
-
-
-
+        <div class="pt-right-top">
+          <div class="pt-total">${totalTexto}</div>
+          <button type="button" class="pt-del" title="Eliminar ticket aparcado" aria-label="Eliminar">🗑</button>
+        </div>
+      </div>
     `;
 
     const delBtn = div.querySelector(".pt-del");
@@ -4398,20 +4723,21 @@ function renderParkedTicketsModal() {
         );
         if (!ok) return;
 
-        parkedTickets.splice(index, 1);
-        // Si borro el ticket que estaba cargado, lo “desvinculo”
-        if (currentParkedTicketIndex === index) {
+        parkedTickets.splice(realIndex, 1);
+
+        if (currentParkedTicketIndex === realIndex) {
           currentParkedTicketIndex = null;
         } else if (
           currentParkedTicketIndex !== null &&
-          currentParkedTicketIndex > index
+          currentParkedTicketIndex > realIndex
         ) {
-          // Reajustar índice si se borra uno anterior
           currentParkedTicketIndex -= 1;
         }
-        updateParkedCountBadge();
 
-        // Si ya no quedan, cerramos modal
+        updateParkedCountBadge();
+        refreshParkButtonUI();
+        refreshParkedEditingBanner();
+
         if (!parkedTickets.length) {
           closeParkedModal();
           toast("No quedan tickets aparcados.", "info", "Aparcados");
@@ -4424,7 +4750,16 @@ function renderParkedTicketsModal() {
     }
 
     div.onclick = () => {
-      restoreParkedCartByIndex(index);
+      if (t.paid) {
+        toast(
+          "Ese ticket ya está cobrado. No se puede volver a cargar.",
+          "warn",
+          "Aparcados",
+        );
+        return;
+      }
+
+      restoreParkedCartByIndex(realIndex);
       closeParkedModal();
     };
 
@@ -4432,34 +4767,45 @@ function renderParkedTicketsModal() {
   });
 }
 
-function clearPaidParkedTicket() {
-  if (
-    currentParkedTicketIndex === null ||
-    !Array.isArray(parkedTickets) ||
-    parkedTickets.length === 0
-  ) {
-    return;
-  }
+function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
+  if (!Array.isArray(parkedTickets) || !parkedTickets.length) return false;
+  if (index == null || index < 0 || index >= parkedTickets.length) return false;
 
-  const idx = currentParkedTicketIndex;
-  if (idx < 0 || idx >= parkedTickets.length) {
-    currentParkedTicketIndex = null;
-    return;
-  }
+  const ticket = parkedTickets[index];
+  if (!ticket) return false;
 
-  const ticket = parkedTickets[idx];
+  ticket.paid = true;
+  ticket.paidAt = new Date();
+  ticket.paidTicketCode =
+    paidInfo.codigo || paidInfo.numero || ticket.paidTicketCode || null;
+  ticket.paidTicketId = paidInfo.idfactura || ticket.paidTicketId || null;
+
   const fsInfo = ticket.fs || {};
   const idpresupuesto = fsInfo.idpresupuesto || null;
 
-  // Quitamos de la lista local
-  parkedTickets.splice(idx, 1);
-  currentParkedTicketIndex = null;
-  updateParkedCountBadge();
-
-  // Y, si existe en FacturaScripts, lo borramos allí
   if (idpresupuesto) {
-    apiDeletePresupuesto(idpresupuesto);
+    try {
+      const maybePromise = apiDeletePresupuesto(idpresupuesto);
+      if (maybePromise && typeof maybePromise.catch === "function") {
+        maybePromise.catch(() => {});
+      }
+    } catch (e) {
+      console.warn(
+        "No se pudo borrar el presupuesto aparcado en FS:",
+        e?.message || e,
+      );
+    }
   }
+
+  if (currentParkedTicketIndex === index) {
+    currentParkedTicketIndex = null;
+  }
+
+  updateParkedCountBadge();
+  refreshParkButtonUI();
+  refreshParkedEditingBanner();
+
+  return true;
 }
 
 // Cerrar modal al pulsar la X
@@ -4492,18 +4838,23 @@ function restoreParkedCartByIndex(index) {
 
   const ticket = parkedTickets[index];
 
-  // Clonamos líneas al carrito
+  if (ticket.paid) {
+    toast(
+      "Ese ticket ya está cobrado. No se puede volver a cargar.",
+      "warn",
+      "Aparcados",
+    );
+    return;
+  }
+
   cart = (ticket.items || []).map((i) => ({ ...i }));
   renderCart();
 
-  // Guardamos qué ticket aparcado está cargado
   currentParkedTicketIndex = index;
 
-  // 👇 IMPORTANTE: no tocamos parkedTickets ni el contador
-  // parkedTickets.splice(index, 1);
-  // updateParkedCountBadge();
-
   setStatusText("Ticket aparcado cargado en el carrito.");
+  refreshParkButtonUI();
+  refreshParkedEditingBanner();
 }
 
 // ===== Gestión de terminales / agentes / caja =====
@@ -11569,6 +11920,11 @@ async function onPayButtonClick() {
     // 2) Snapshot carrito (ANTES de enviar)
     const cartSnapshot = Array.isArray(cart) ? cart.map((i) => ({ ...i })) : [];
 
+    const parkedIndexToClose =
+      currentParkedTicketIndex !== null
+        ? Number(currentParkedTicketIndex)
+        : null;
+
     // 3) Payload factura
     const ticketPayload = buildTicketPayloadFromCart();
     ticketPayload.observaciones = (payResult?.observaciones || "").toString();
@@ -11857,9 +12213,15 @@ async function onPayButtonClick() {
       items: buildCustomerItemsFromCart(cartSnapshot),
     });
 
+    markParkedTicketAsPaidByIndex(parkedIndexToClose, {
+      idfactura: facturaResp?.idfactura || null,
+      codigo: lastTicket?.numero || facturaResp?.codigo || null,
+    });
+
     cart = [];
     renderCart();
-    clearPaidParkedTicket();
+    refreshParkButtonUI();
+    refreshParkedEditingBanner();
     setStatusText("Venta cobrada");
 
     toast(
@@ -12012,6 +12374,9 @@ if (clearBtn) {
   clearBtn.onclick = () => {
     cart = [];
     renderCart();
+    currentParkedTicketIndex = null;
+    refreshParkButtonUI();
+    refreshParkedEditingBanner();
   };
 }
 
@@ -12747,17 +13112,35 @@ const parkObsInput = document.getElementById("parkObsInput");
 const parkObsCancelBtn = document.getElementById("parkObsCancelBtn");
 const parkObsOkBtn = document.getElementById("parkObsOkBtn");
 const parkObsKeyboardBtn = document.getElementById("parkObsKeyboardBtn");
+const parkNameInput = document.getElementById("parkNameInput");
+const parkNameKeyboardBtn = document.getElementById("parkNameKeyboardBtn");
 
 function openParkObsModal() {
   const overlay = document.getElementById("parkObsOverlay");
-  const input = document.getElementById("parkObsInput");
-  if (!overlay || !input) {
+  const nameInput = document.getElementById("parkNameInput");
+  const obsInput = document.getElementById("parkObsInput");
+
+  if (!overlay || !nameInput || !obsInput) {
     toast("Falta el HTML del modal de aparcar.", "err", "Aparcar");
     return;
   }
-  input.value = "";
+
+  // ✅ si estamos editando un ticket ya cargado, rellenar datos
+  if (
+    currentParkedTicketIndex !== null &&
+    Array.isArray(parkedTickets) &&
+    parkedTickets[currentParkedTicketIndex]
+  ) {
+    const t = parkedTickets[currentParkedTicketIndex];
+    nameInput.value = t.name || "";
+    obsInput.value = t.obs || "";
+  } else {
+    nameInput.value = "";
+    obsInput.value = "";
+  }
+
   overlay.classList.remove("hidden");
-  input.focus();
+  nameInput.focus();
 }
 
 function closeParkObsModal() {
@@ -12786,15 +13169,25 @@ parkObsCancelBtn?.addEventListener("click", () => {
 });
 
 parkObsOkBtn?.addEventListener("click", () => {
-  const obs = parkObsInput.value.trim();
+  const ticketName = (parkNameInput?.value || "").trim();
+  const obs = (parkObsInput?.value || "").trim();
+
   closeParkObsModal();
-  parkCurrentCart(obs || "");
+  parkCurrentCart(ticketName, obs);
 });
 
 parkObsKeyboardBtn?.addEventListener("click", () => {
   // Reutiliza tu teclado QWERTY actual
   // Necesitas una función tipo: openQwerty(targetInput)
   openQwertyForInput(parkObsInput);
+});
+
+parkNameKeyboardBtn?.addEventListener("click", () => {
+  openQwertyForInput(parkNameInput, "text");
+});
+
+parkObsKeyboardBtn?.addEventListener("click", () => {
+  openQwertyForInput(parkObsInput, "text");
 });
 
 // Botón ver/recuperar aparcados
