@@ -190,6 +190,117 @@ const cartClientInput = document.querySelector(".cart-client-input");
 // ===== Funciones auxiliares =====
 
 // ===============================
+// Aparcar o Reservar en Plesk, obtener datos dinamicamente desde plesk
+// ===============================
+
+let REMOTE_PARKED_RESERVATIONS = [];
+let REMOTE_RESERVED_BY_PRODUCT = new Map();
+
+const PARKED_TICKETS_CACHE_KEY = "tpv_parked_tickets_cache_v1";
+const PARKED_SYNC_QUEUE_KEY = "tpv_parked_sync_queue_v1";
+
+let __parkedSyncDrainInFlight = false;
+
+let __parkedReservationsRefreshTimer = null;
+let __parkedReservationsRefreshInFlight = false;
+
+// Ajusta esta URL a tu API TPV real
+const TPV_SYNC_API_URL =
+  window.TPV_CONFIG?.tpvSyncApiUrl ||
+  "https://plus.recipok.com/tpv/api/index.php";
+
+function getTpvSyncApiKey() {
+  const fromCfg = String(window.TPV_CONFIG?.tpvApiKey || "").trim();
+  if (fromCfg) return fromCfg;
+
+  // Compat fallback: if integrators reuse the same key in runtime config.
+  const fromRuntime = String(window.RECIPOK_API?.apiKey || "").trim();
+  if (fromRuntime) return fromRuntime;
+
+  const fromLs = String(localStorage.getItem("tpv_sync_api_key") || "").trim();
+  if (fromLs) return fromLs;
+
+  return "";
+}
+
+async function confirmIfCartExceedsVisibleStock(cartSnapshot) {
+  const requestedByProduct = new Map();
+
+  (Array.isArray(cartSnapshot) ? cartSnapshot : []).forEach((it) => {
+    const idProd = getProductBaseId(it);
+    if (!idProd) return;
+
+    const qty = getCartItemReservedQty(it);
+    requestedByProduct.set(
+      idProd,
+      Number(requestedByProduct.get(idProd) || 0) + qty,
+    );
+  });
+
+  for (const [idProd, qtyToReserve] of requestedByProduct.entries()) {
+    const product = Array.isArray(products)
+      ? products.find((p) => getProductBaseId(p) === idProd)
+      : null;
+    if (!product) continue;
+
+    const visibleStock = getVisibleStockForProduct(product);
+
+    if (qtyToReserve > visibleStock) {
+      const ok = await confirmModal(
+        "Stock insuficiente para aparcar",
+        `Estás intentando aparcar ${qtyToReserve}, cuando solo te quedan ${visibleStock}. ¿Continuar?`,
+      );
+
+      if (!ok) return false;
+    }
+  }
+
+  return true;
+}
+
+// ===============================
+// Actualizar datos cada cierto tiempo automaticamente
+// ===============================
+
+let __stockRefreshTimer = null;
+let __stockRefreshInFlight = false;
+
+async function runProductsStockRefreshOnce() {
+  if (__stockRefreshInFlight) return;
+  if (TPV_STATE?.offline) return;
+  if (!cashSession?.open) return;
+  if (!Array.isArray(products) || !products.length) return;
+
+  __stockRefreshInFlight = true;
+
+  try {
+    await refreshProductsStockOnly();
+  } catch (e) {
+    console.warn("Refresh de stock falló:", e?.message || e);
+  } finally {
+    __stockRefreshInFlight = false;
+  }
+}
+
+function startProductsStockAutoRefresh() {
+  stopProductsStockAutoRefresh();
+
+  // primer refresh inmediato
+  runProductsStockRefreshOnce().catch(() => {});
+
+  __stockRefreshTimer = setInterval(async () => {
+    await runProductsStockRefreshOnce();
+  }, 10000); // 10 segundos
+}
+
+function stopProductsStockAutoRefresh() {
+  if (__stockRefreshTimer) {
+    clearInterval(__stockRefreshTimer);
+    __stockRefreshTimer = null;
+  }
+}
+
+// ===============================
 // Comprobar configuracion guardada
 // ===============================
 
@@ -677,6 +788,53 @@ async function loadCustomerDisplayToggle() {
 }
 
 let customerDisplayToggleBound = false;
+const OPTIONS_SHOW_PRODUCT_STOCK_KEY = "ui.showProductStockBadge";
+let showProductStockBadge = false;
+
+async function loadProductStockToggle() {
+  const el = document.getElementById("productStockToggle");
+  let enabled = false;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(OPTIONS_SHOW_PRODUCT_STOCK_KEY);
+    if (typeof cfgVal === "boolean") {
+      enabled = cfgVal;
+    }
+  } catch {}
+
+  showProductStockBadge = !!enabled;
+  if (el) el.checked = showProductStockBadge;
+}
+
+async function saveProductStockToggle(enabled) {
+  showProductStockBadge = !!enabled;
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_SHOW_PRODUCT_STOCK_KEY,
+      showProductStockBadge,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar toggle de stock en productos:", e);
+  }
+}
+
+let productStockToggleBound = false;
+
+function bindProductStockToggleOnce() {
+  if (productStockToggleBound) return;
+  productStockToggleBound = true;
+
+  const el = document.getElementById("productStockToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+    await saveProductStockToggle(wanted);
+    renderProducts?.();
+    updateRenderedProductStocks?.();
+  });
+}
 
 function bindCustomerDisplayToggleOnce() {
   if (customerDisplayToggleBound) return;
@@ -2371,6 +2529,50 @@ function renderCategories() {
 }
 
 // ===== Productos =====
+function formatProductStock(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+
+  return Number.isInteger(n)
+    ? String(n)
+    : String(n.toFixed(2)).replace(".", ",");
+}
+
+function getProductStockClass(value) {
+  const n = Number(value);
+
+  if (!Number.isFinite(n)) return "is-unknown";
+  if (n < 0) return "is-zero";
+  if (n === 0) return "is-zero";
+  if (n <= 5) return "is-low";
+  return "is-ok";
+}
+
+function updateRenderedProductStocks() {
+  const grid = document.getElementById("productsGrid");
+  if (!grid) return;
+
+  const badges = grid.querySelectorAll(
+    ".product-stock-badge[data-stock-product-id]",
+  );
+
+  badges.forEach((badge) => {
+    const baseId = Number(badge.dataset.stockProductId || 0);
+    if (!baseId) return;
+
+    const visibleStock = getVisibleStockForProduct(baseId);
+    const stockText = formatProductStock(visibleStock);
+    const stockClass = getProductStockClass(visibleStock);
+
+    if (badge.textContent !== stockText) {
+      badge.textContent = stockText;
+    }
+
+    badge.classList.remove("is-unknown", "is-zero", "is-low", "is-ok");
+    badge.classList.add(stockClass);
+  });
+}
+
 function renderProducts() {
   console.trace("[TRACE] renderProducts()");
 
@@ -2408,8 +2610,6 @@ function renderProducts() {
       const allowedIds = new Set();
       allowedIds.add(String(activeFamilyParentId));
 
-      // aquí usamos TODAS las categorías reales, no solo visibles,
-      // para que el drill-down funcione bien incluso en modo all
       (categories || []).forEach((c) => {
         if (String(c.parentId || "") === String(activeFamilyParentId)) {
           allowedIds.add(String(c.id));
@@ -2437,6 +2637,7 @@ function renderProducts() {
     const tile = document.createElement("div");
 
     tile.className = "product-tile" + (p.imageUrl ? "" : " no-img");
+    tile.dataset.productId = String(Number(p.baseProductId || p.id || 0));
 
     const prodId = Number(p.baseProductId || p.id || 0);
     if (isOfferPackProductById(prodId)) tile.classList.add("is-offer");
@@ -2444,6 +2645,10 @@ function renderProducts() {
     const taxRate = getTaxRateForProduct(p);
     const priceGross =
       (Number(p.price || 0) || 0) * (1 + (Number(taxRate) || 0) / 100);
+
+    const stockValue = getVisibleStockForProduct(p);
+    const stockText = formatProductStock(stockValue);
+    const stockClass = getProductStockClass(stockValue);
 
     tile.innerHTML = `
       <div class="product-img-wrapper">
@@ -2456,6 +2661,18 @@ function renderProducts() {
       </div>
 
       <div class="product-footer">
+        ${
+          showProductStockBadge
+            ? `<div
+  class="product-stock-badge ${stockClass}"
+  data-stock-product-id="${Number(p.baseProductId || p.id || 0)}"
+  title="Stock actual"
+>
+  ${stockText}
+</div>`
+            : ""
+        }
+
         <div class="product-price">${priceGross.toFixed(2)} €</div>
       </div>
     `;
@@ -4187,11 +4404,11 @@ function updateParkedCountBadge() {
   const badge = document.getElementById("parkedCountBadge");
   if (!badge) return;
 
-  const n = Array.isArray(parkedTickets)
-    ? parkedTickets.filter((t) => !t.paid).length
-    : 0;
+  const pendingCount = (
+    Array.isArray(parkedTickets) ? parkedTickets : []
+  ).filter((t) => !t.paid).length;
 
-  badge.textContent = n;
+  badge.textContent = String(pendingCount);
 }
 
 function isPriceOverridden(item) {
@@ -4248,6 +4465,8 @@ async function parkCurrentCart(name = "", obs = "") {
   }
 
   const snapshot = cart.map((item) => ({ ...item }));
+  const canContinue = await confirmIfCartExceedsVisibleStock(snapshot);
+  if (!canContinue) return;
   const total = getCartTotal(snapshot);
 
   const clientName = cartClientInput
@@ -4272,6 +4491,26 @@ async function parkCurrentCart(name = "", obs = "") {
     existing.name = ticketName || existing.name || `Ticket #${existing.id}`;
     existing.obs = observation;
     existing.updatedAt = new Date();
+    saveParkedTicketsCache();
+
+    try {
+      await apiSaveParkedReservation(existing);
+      await refreshRemoteParkedReservationsOnly();
+    } catch (e) {
+      enqueueParkedSyncOperation("upsert", existing);
+      console.warn(
+        "No se pudo guardar la reserva remota al actualizar:",
+        e?.message || e,
+      );
+
+      if (isParkedSyncTransientError(e)) {
+        toast(
+          "Sin internet: actualización de aparcado guardada en cola.",
+          "warn",
+          "Aparcados",
+        );
+      }
+    }
 
     // opcional: si quieres actualizar presupuesto remoto más adelante, aquí irá
 
@@ -4318,6 +4557,26 @@ async function parkCurrentCart(name = "", obs = "") {
   }
 
   parkedTickets.push(localTicket);
+  saveParkedTicketsCache();
+
+  try {
+    await apiSaveParkedReservation(localTicket);
+    await refreshRemoteParkedReservationsOnly();
+  } catch (e) {
+    enqueueParkedSyncOperation("upsert", localTicket);
+    console.warn(
+      "No se pudo guardar la reserva remota al aparcar:",
+      e?.message || e,
+    );
+
+    if (isParkedSyncTransientError(e)) {
+      toast(
+        "Sin internet: ticket aparcado guardado en cola.",
+        "warn",
+        "Aparcados",
+      );
+    }
+  }
 
   // ✅ limpiar carrito
   cart = [];
@@ -4409,6 +4668,7 @@ function syncParkedToolbarUI() {
   const parkedFilterAll = document.getElementById("parkedFilterAll");
   const parkedFilterPending = document.getElementById("parkedFilterPending");
   const parkedFilterPaid = document.getElementById("parkedFilterPaid");
+  const parkedClearPaidBtn = document.getElementById("parkedClearPaidBtn");
 
   if (parkedSearch) {
     parkedSearch.value = parkedViewState.search || "";
@@ -4427,7 +4687,33 @@ function syncParkedToolbarUI() {
     parkedViewState.filter === "paid",
   );
 
+  if (parkedClearPaidBtn) {
+    parkedClearPaidBtn.style.display =
+      parkedViewState.filter === "paid" ? "" : "none";
+  }
+
   syncParkedSearchClearBtn();
+}
+
+function clearPaidParkedHistory() {
+  parkedTickets = (Array.isArray(parkedTickets) ? parkedTickets : []).filter(
+    (t) => !t?.paid,
+  );
+
+  saveParkedTicketsCache(parkedTickets);
+
+  if (
+    currentParkedTicketIndex != null &&
+    (!parkedTickets[currentParkedTicketIndex] ||
+      parkedTickets[currentParkedTicketIndex]?.paid)
+  ) {
+    currentParkedTicketIndex = null;
+  }
+
+  updateParkedCountBadge?.();
+  refreshParkButtonUI?.();
+  refreshParkedEditingBanner?.();
+  renderParkedTicketsModal?.();
 }
 
 function ensureParkedToolbar() {
@@ -4482,6 +4768,12 @@ function ensureParkedToolbar() {
         Cobrados
       </button>
     </div>
+
+    <div class="tickets-tabs" style="margin-left: 10px; display:flex; align-items:center; gap:8px;">
+      <button id="parkedClearPaidBtn" type="button" class="cart-btn tickets-tab-btn" title="Limpiar historial de cobrados">
+        Limpiar cobrados
+      </button>
+    </div>
   `;
 
   body.insertBefore(toolbar, parkedTicketsList);
@@ -4492,6 +4784,7 @@ function ensureParkedToolbar() {
   const parkedFilterPending = document.getElementById("parkedFilterPending");
   const parkedFilterPaid = document.getElementById("parkedFilterPaid");
   const parkedKeyboardBtn = document.getElementById("parkedKeyboardBtn");
+  const parkedClearPaidBtn = document.getElementById("parkedClearPaidBtn");
 
   let timer = null;
 
@@ -4534,6 +4827,26 @@ function ensureParkedToolbar() {
   parkedKeyboardBtn?.addEventListener("click", () => {
     if (!parkedSearch) return;
     openQwertyForInput(parkedSearch, "text");
+  });
+
+  parkedClearPaidBtn?.addEventListener("click", async () => {
+    const hasPaid = (Array.isArray(parkedTickets) ? parkedTickets : []).some(
+      (t) => !!t?.paid,
+    );
+
+    if (!hasPaid) {
+      toast("No hay tickets cobrados que limpiar.", "info", "Aparcados");
+      return;
+    }
+
+    const ok = await confirmModal(
+      "Limpiar cobrados",
+      "Se eliminará el historial local de tickets aparcados cobrados. ¿Continuar?",
+    );
+    if (!ok) return;
+
+    clearPaidParkedHistory();
+    toast("Historial de cobrados limpiado.", "ok", "Aparcados");
   });
 
   syncParkedToolbarUI();
@@ -4723,7 +5036,24 @@ function renderParkedTicketsModal() {
         );
         if (!ok) return;
 
+        try {
+          await apiDeleteParkedReservation(t);
+          await refreshRemoteParkedReservationsOnly();
+        } catch (e) {
+          enqueueParkedSyncOperation("delete", t);
+          console.warn("No se pudo borrar la reserva remota:", e?.message || e);
+
+          if (isParkedSyncTransientError(e)) {
+            toast(
+              "Sin internet: borrado de aparcado guardado en cola.",
+              "warn",
+              "Aparcados",
+            );
+          }
+        }
+
         parkedTickets.splice(realIndex, 1);
+        saveParkedTicketsCache();
 
         if (currentParkedTicketIndex === realIndex) {
           currentParkedTicketIndex = null;
@@ -4767,7 +5097,7 @@ function renderParkedTicketsModal() {
   });
 }
 
-function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
+async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
   if (!Array.isArray(parkedTickets) || !parkedTickets.length) return false;
   if (index == null || index < 0 || index >= parkedTickets.length) return false;
 
@@ -4779,6 +5109,7 @@ function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
   ticket.paidTicketCode =
     paidInfo.codigo || paidInfo.numero || ticket.paidTicketCode || null;
   ticket.paidTicketId = paidInfo.idfactura || ticket.paidTicketId || null;
+  saveParkedTicketsCache();
 
   const fsInfo = ticket.fs || {};
   const idpresupuesto = fsInfo.idpresupuesto || null;
@@ -4793,6 +5124,25 @@ function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
       console.warn(
         "No se pudo borrar el presupuesto aparcado en FS:",
         e?.message || e,
+      );
+    }
+  }
+
+  try {
+    await apiDeleteParkedReservation(ticket);
+    await refreshRemoteParkedReservationsOnly();
+  } catch (e) {
+    enqueueParkedSyncOperation("delete", ticket);
+    console.warn(
+      "No se pudo borrar la reserva remota al cobrar:",
+      e?.message || e,
+    );
+
+    if (isParkedSyncTransientError(e)) {
+      toast(
+        "Sin internet: cobro aplicado localmente y borrado en cola.",
+        "warn",
+        "Aparcados",
       );
     }
   }
@@ -4825,6 +5175,48 @@ if (parkedTicketsOverlay) {
   });
 }
 
+function hydrateParkedItemForCart(item) {
+  const src = item && typeof item === "object" ? item : {};
+  const qty = Number(src.qty ?? src.cantidad ?? 1) || 1;
+
+  const toFiniteNumberOrNull = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const srcPrice = toFiniteNumberOrNull(src.price);
+  const srcGross = toFiniteNumberOrNull(src.grossPrice);
+  const srcTax = toFiniteNumberOrNull(src.taxRate);
+
+  const baseId = getProductBaseId(src);
+  const product = Array.isArray(products)
+    ? products.find((p) => getProductBaseId(p) === baseId)
+    : null;
+
+  const built = product ? buildCartLine(product, qty) : null;
+
+  return {
+    ...(built || {}),
+    ...src,
+    qty,
+    _lineId: makeLineId(),
+    id: Number(src.id || src.idproducto || built?.id || baseId || 0) || undefined,
+    baseProductId:
+      Number(
+        src.baseProductId || src.idproducto || built?.baseProductId || baseId || 0,
+      ) || undefined,
+    name: String(src.name || src.descripcion || built?.name || "Producto"),
+    secondaryName: String(
+      src.secondaryName || src.descripcion2 || built?.secondaryName || "",
+    ),
+    imageUrl: src.imageUrl || built?.imageUrl || null,
+    price: srcPrice != null ? srcPrice : Number(built?.price || 0),
+    grossPrice: srcGross != null ? srcGross : Number(built?.grossPrice || built?.price || 0),
+    taxRate: srcTax != null ? srcTax : Number(built?.taxRate || 0),
+    codimpuesto: src.codimpuesto || built?.codimpuesto || null,
+  };
+}
+
 // Recuperar ticket por índice (lo usa el modal)
 function restoreParkedCartByIndex(index) {
   if (!parkedTickets || parkedTickets.length === 0) {
@@ -4847,7 +5239,7 @@ function restoreParkedCartByIndex(index) {
     return;
   }
 
-  cart = (ticket.items || []).map((i) => ({ ...i }));
+  cart = (ticket.items || []).map((i) => hydrateParkedItemForCart(i));
   renderCart();
 
   currentParkedTicketIndex = index;
@@ -6302,6 +6694,9 @@ async function maybeOpenCashOrRecover() {
           refreshAgentGuardUI?.();
           updateCashButtonLabel();
           renderCashIdChip();
+          await refreshStockAndReservationsOnly().catch(() => {});
+          startProductsStockAutoRefresh?.();
+          startParkedReservationsAutoRefresh?.();
           return;
         }
 
@@ -6361,6 +6756,9 @@ async function maybeOpenCashOrRecover() {
           refreshAgentGuardUI?.();
           updateCashButtonLabel();
           renderCashIdChip();
+          await refreshStockAndReservationsOnly().catch(() => {});
+          startProductsStockAutoRefresh?.();
+          startParkedReservationsAutoRefresh?.();
 
           // opcional: avisar si hay más de una abierta (caso raro)
           if (openOnes.length > 1) {
@@ -7667,6 +8065,10 @@ async function confirmCashOpening() {
   renderMainAgentBar();
   updateCashButtonLabel();
   renderCashIdChip();
+
+  await refreshStockAndReservationsOnly().catch(() => {});
+  startProductsStockAutoRefresh?.();
+  startParkedReservationsAutoRefresh?.();
 }
 
 async function confirmCashClosing() {
@@ -7697,11 +8099,9 @@ async function confirmCashClosing() {
   try {
     await apiCloseCashInFS();
 
-    // ✅ verificar (si podemos) que ya NO está abierta
     const check = idcaja ? await apiReadCajaById(idcaja) : null;
     closedOk = !!check && !isCajaOpen(check);
 
-    // si no pudimos verificar por cualquier cosa, asumimos OK
     if (!check) closedOk = true;
   } catch (e) {
     console.warn("No se pudo cerrar caja en FacturaScripts:", e?.message || e);
@@ -7717,7 +8117,10 @@ async function confirmCashClosing() {
   }
 
   cashSession.open = false;
+  stopProductsStockAutoRefresh?.();
+  stopParkedReservationsAutoRefresh?.();
   pushCustomerState();
+
   cashSession.remoteCajaId = null;
   try {
     localStorage.removeItem("tpv_remoteCajaId");
@@ -7728,8 +8131,6 @@ async function confirmCashClosing() {
   renderCashIdChip();
   cashOpenDialogShown = false;
 
-  // ✅ al cerrar caja: mantenemos terminal (para evitar limbos)
-  // y vaciamos agente (o ponemos el default luego)
   currentAgent = null;
 
   if (terminalNameEl)
@@ -7759,7 +8160,7 @@ async function confirmCashClosing() {
 
   lastTicket = null;
 
-  renderCashIdChip(); // redundante pero evita “reaparición” por renders tardíos
+  renderCashIdChip();
 
   try {
     if (cashOpenOkBtn) cashOpenOkBtn.disabled = false;
@@ -8928,6 +9329,7 @@ async function loadDataFromApi(opts = {}) {
             codimpuesto: codImpuestoBase,
             taxRate: taxRateBase,
             imageUrl: imgInfoBase ? imgInfoBase.url : null,
+            stockfis: Number(base.stockfis ?? 0),
           });
         });
       });
@@ -8963,6 +9365,7 @@ async function loadDataFromApi(opts = {}) {
           codimpuesto,
           taxRate,
           imageUrl: imgInfo ? imgInfo.url : null,
+          stockfis: Number(p.stockfis ?? 0),
         });
       });
 
@@ -9804,6 +10207,9 @@ function refreshOptionsUI() {
   openDrawerAlwaysToggle &&
     (openDrawerAlwaysToggle.checked = isOpenDrawerAlwaysEnabled());
 
+  const stockToggle = document.getElementById("productStockToggle");
+  if (stockToggle) stockToggle.checked = !!showProductStockBadge;
+
   const t = document.getElementById("priceEditModeToggle");
   if (t) {
     t.disabled = !isAdminUser();
@@ -9959,6 +10365,9 @@ async function openOptions() {
 
   bindCustomerDisplayToggleOnce();
   await loadCustomerDisplayToggle();
+
+  bindProductStockToggleOnce();
+  await loadProductStockToggle();
 
   bindAutostartToggleOnce();
   await loadAutostartToggle();
@@ -11826,6 +12235,594 @@ function buildCashTicketMeta({ pagos, total, cambio }) {
   };
 }
 
+function getCurrentSlugForReservations() {
+  const saved =
+    getSavedCompanySnapshot?.(
+      JSON.parse(localStorage.getItem("tpv_company_cfg") || "{}"),
+    ) || {};
+  const baseUrl =
+    saved.baseUrl ||
+    window.RECIPOK_API?.baseUrl ||
+    localStorage.getItem("tpv_baseUrl") ||
+    "";
+
+  const m = String(baseUrl).match(/plus\.recipok\.com\/([^/]+)\/api\/\d+/i);
+  return m ? String(m[1]).trim() : "";
+}
+
+function getProductBaseId(product) {
+  return (
+    Number(product?.baseProductId || product?.id || product?.idproducto || 0) ||
+    0
+  );
+}
+
+function getCartItemReservedQty(item) {
+  return Number(item?.qty ?? item?.cantidad ?? 1) || 0;
+}
+
+function rebuildRemoteReservedByProductMap() {
+  const map = new Map();
+
+  (Array.isArray(REMOTE_PARKED_RESERVATIONS)
+    ? REMOTE_PARKED_RESERVATIONS
+    : []
+  ).forEach((ticket) => {
+    const items = Array.isArray(ticket?.items) ? ticket.items : [];
+
+    items.forEach((it) => {
+      const idProd = getProductBaseId(it);
+      if (!idProd) return;
+
+      const qty = getCartItemReservedQty(it);
+      map.set(idProd, Number(map.get(idProd) || 0) + qty);
+    });
+  });
+
+  REMOTE_RESERVED_BY_PRODUCT = map;
+}
+
+function normalizeRemoteParkedTicket(raw) {
+  if (!raw || typeof raw !== "object") return null;
+
+  const rawTicketId =
+    raw.ticketId ?? raw.id ?? raw.ticketid ?? raw.ticket_id ?? null;
+  const numTicketId = Number(rawTicketId);
+
+  const id = Number.isFinite(numTicketId) && numTicketId > 0 ? numTicketId : 0;
+
+  const createdAt = raw.createdAt
+    ? new Date(raw.createdAt)
+    : raw.updatedAt
+      ? new Date(raw.updatedAt)
+      : new Date();
+
+  const updatedAt = raw.updatedAt ? new Date(raw.updatedAt) : null;
+
+  const items = Array.isArray(raw.items)
+    ? raw.items.map((it) => ({
+        ...it,
+        qty: Number(it?.qty ?? it?.cantidad ?? 1) || 1,
+      }))
+    : [];
+
+  return {
+    id,
+    slug: String(raw.slug || "").trim(),
+    cajaId: String(raw.cajaId || raw.cajaid || "").trim(),
+    createdAt,
+    updatedAt,
+    items,
+    total: Number(raw.total || 0),
+    clientName: String(raw.clientName || "").trim() || "Cliente",
+    name:
+      String(raw.ticketName || raw.name || "").trim() ||
+      (id ? `Ticket #${id}` : "Ticket"),
+    obs: String(raw.obs || raw.ticketObs || "").trim(),
+    paid: !!raw.paid,
+    paidAt: raw.paidAt ? new Date(raw.paidAt) : null,
+    paidTicketCode: raw.paidTicketCode || null,
+    paidTicketId: raw.paidTicketId || null,
+    fs: raw.fs && typeof raw.fs === "object" ? raw.fs : null,
+  };
+}
+
+function saveParkedTicketsCache(list = parkedTickets) {
+  const safe = (Array.isArray(list) ? list : []).map((t) => ({
+    ...t,
+    createdAt: t?.createdAt
+      ? new Date(t.createdAt).toISOString()
+      : new Date().toISOString(),
+    updatedAt: t?.updatedAt ? new Date(t.updatedAt).toISOString() : null,
+    paidAt: t?.paidAt ? new Date(t.paidAt).toISOString() : null,
+  }));
+
+  try {
+    localStorage.setItem(PARKED_TICKETS_CACHE_KEY, JSON.stringify(safe));
+  } catch (e) {
+    console.warn("No se pudo guardar cache local de aparcados:", e?.message || e);
+  }
+}
+
+function loadParkedTicketsCache() {
+  try {
+    const raw = localStorage.getItem(PARKED_TICKETS_CACHE_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(arr)) return [];
+
+    return arr.map((it) => normalizeRemoteParkedTicket(it)).filter(Boolean);
+  } catch (e) {
+    console.warn("No se pudo leer cache local de aparcados:", e?.message || e);
+    return [];
+  }
+}
+
+function getParkedTicketSyncKey(ticket) {
+  if (!ticket) return "";
+  const slug = String(ticket.slug || "").trim();
+  const cajaId = String(ticket.cajaId || "").trim();
+  const id = String(ticket.id || ticket.ticketId || "").trim();
+  return `${slug}|${cajaId}|${id}`;
+}
+
+function isParkedSyncTransientError(err) {
+  const msg = String(err?.message || err || "").toLowerCase();
+  return (
+    msg.includes("offline") ||
+    msg.includes("network") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("timeout") ||
+    msg.includes("abort") ||
+    msg.includes("http 5") ||
+    msg.includes("http 429")
+  );
+}
+
+function loadParkedSyncQueue() {
+  try {
+    const raw = localStorage.getItem(PARKED_SYNC_QUEUE_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveParkedSyncQueue(queue) {
+  try {
+    const safe = Array.isArray(queue) ? queue : [];
+    localStorage.setItem(PARKED_SYNC_QUEUE_KEY, JSON.stringify(safe.slice(-2000)));
+  } catch (e) {
+    console.warn("No se pudo guardar cola de aparcados:", e?.message || e);
+  }
+}
+
+function snapshotTicketForSync(ticket) {
+  const t = ticket && typeof ticket === "object" ? ticket : {};
+  return {
+    ...t,
+    createdAt: t?.createdAt ? new Date(t.createdAt).toISOString() : null,
+    updatedAt: t?.updatedAt ? new Date(t.updatedAt).toISOString() : null,
+    paidAt: t?.paidAt ? new Date(t.paidAt).toISOString() : null,
+  };
+}
+
+function enqueueParkedSyncOperation(op, ticket) {
+  const ticketSnapshot = snapshotTicketForSync(ticket);
+  const key = getParkedTicketSyncKey(ticketSnapshot);
+  if (!key) return;
+
+  const queue = loadParkedSyncQueue();
+  const nextEntry = {
+    op: op === "delete" ? "delete" : "upsert",
+    key,
+    ticket: ticketSnapshot,
+    queuedAt: new Date().toISOString(),
+  };
+
+  const idx = queue.findIndex((q) => q?.key === key);
+  if (idx >= 0) queue[idx] = nextEntry;
+  else queue.push(nextEntry);
+
+  saveParkedSyncQueue(queue);
+}
+
+async function processParkedSyncQueue() {
+  if (__parkedSyncDrainInFlight) return false;
+  if (TPV_STATE?.offline) return false;
+
+  const queue = loadParkedSyncQueue();
+  if (!queue.length) return true;
+
+  __parkedSyncDrainInFlight = true;
+  try {
+    const remaining = [];
+
+    for (const entry of queue) {
+      try {
+        if (entry?.op === "delete") {
+          await apiDeleteParkedReservation(entry?.ticket || {});
+        } else {
+          await apiSaveParkedReservation(entry?.ticket || {});
+        }
+      } catch {
+        remaining.push(entry);
+      }
+    }
+
+    saveParkedSyncQueue(remaining);
+    return remaining.length === 0;
+  } finally {
+    __parkedSyncDrainInFlight = false;
+  }
+}
+
+function syncParkedTicketsFromRemote(list) {
+  const prevLoadedTicket =
+    currentParkedTicketIndex != null
+      ? parkedTickets[currentParkedTicketIndex]
+      : null;
+  const prevLoadedKey = getParkedTicketSyncKey(prevLoadedTicket);
+
+  const next = (Array.isArray(list) ? list : [])
+    .map((it) => normalizeRemoteParkedTicket(it))
+    .filter(Boolean)
+    .filter((t) => !t.paid);
+
+  const cachedAll = loadParkedTicketsCache();
+  const paidHistory = cachedAll
+    .filter((t) => !!t.paid)
+    .sort((a, b) => {
+      const ta = new Date(a?.paidAt || a?.updatedAt || a?.createdAt || 0).getTime();
+      const tb = new Date(b?.paidAt || b?.updatedAt || b?.createdAt || 0).getTime();
+      return tb - ta;
+    })
+    .slice(0, 500);
+
+  const pendingKeys = new Set(next.map((t) => getParkedTicketSyncKey(t)));
+  const safePaidHistory = paidHistory.filter(
+    (t) => !pendingKeys.has(getParkedTicketSyncKey(t)),
+  );
+
+  parkedTickets = next.concat(safePaidHistory);
+
+  const maxId = parkedTickets.reduce((m, t) => {
+    const n = Number(t?.id || 0);
+    return n > m ? n : m;
+  }, 0);
+
+  parkedCounter = Math.max(Number(parkedCounter || 0), maxId);
+  saveParkedTicketsCache(parkedTickets);
+
+  if (prevLoadedKey) {
+    const nextIdx = parkedTickets.findIndex(
+      (t) => getParkedTicketSyncKey(t) === prevLoadedKey,
+    );
+    currentParkedTicketIndex = nextIdx >= 0 ? nextIdx : null;
+  } else {
+    currentParkedTicketIndex = null;
+  }
+
+  updateParkedCountBadge?.();
+  refreshParkButtonUI?.();
+  refreshParkedEditingBanner?.();
+
+  if (parkedTicketsOverlay && !parkedTicketsOverlay.classList.contains("hidden")) {
+    renderParkedTicketsModal?.();
+  }
+}
+
+function getReservedQtyForProduct(productOrId) {
+  const idProd =
+    typeof productOrId === "number"
+      ? Number(productOrId || 0)
+      : getProductBaseId(productOrId);
+
+  if (!idProd) return 0;
+  return Number(REMOTE_RESERVED_BY_PRODUCT.get(idProd) || 0);
+}
+
+function getVisibleStockForProduct(productOrId) {
+  const product =
+    typeof productOrId === "object"
+      ? productOrId
+      : Array.isArray(products)
+        ? products.find((p) => getProductBaseId(p) === Number(productOrId))
+        : null;
+
+  if (!product) return 0;
+
+  const realStock = Number(product.stockfis ?? 0);
+  const reserved = getReservedQtyForProduct(product);
+
+  return realStock - reserved;
+}
+
+async function apiListParkedReservations() {
+  const slug = getCurrentSlugForReservations();
+  if (!slug) return [];
+
+  const syncApiKey = getTpvSyncApiKey();
+  if (!syncApiKey) {
+    throw new Error(
+      "Falta TPV_CONFIG.tpvApiKey para listar reservas remotas.",
+    );
+  }
+
+  const url = `${TPV_SYNC_API_URL}?action=list-parked-reservations&slug=${encodeURIComponent(slug)}`;
+
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      "X-TPV-API-KEY": syncApiKey,
+    },
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    throw new Error(`Error listando reservas remotas: HTTP ${res.status}`);
+  }
+
+  const data = await res.json().catch(() => null);
+  return Array.isArray(data?.data) ? data.data : [];
+}
+
+async function apiSaveParkedReservation(ticket) {
+  const slug = String(ticket?.slug || getCurrentSlugForReservations() || "");
+  const cajaId = String(
+    ticket?.cajaId || getCajaIdSafe?.() || currentTerminal?.id || "",
+  );
+  const syncApiKey = getTpvSyncApiKey();
+
+  if (!slug || !cajaId || !ticket?.id) {
+    throw new Error("Faltan datos para guardar la reserva remota.");
+  }
+  if (!syncApiKey) {
+    throw new Error(
+      "Falta TPV_CONFIG.tpvApiKey para guardar reservas remotas.",
+    );
+  }
+
+  const payload = {
+    slug,
+    cajaId,
+    ticketId: String(ticket.id),
+    ticketName: String(ticket.name || `Ticket #${ticket.id}`),
+    obs: String(ticket.obs || ""),
+    clientName: String(ticket.clientName || ""),
+    total: Number(ticket.total || 0),
+    terminalId: String(currentTerminal?.id || ""),
+    terminalName: String(currentTerminal?.name || ""),
+    userName: String(currentAgent?.name || currentAgent?.nick || ""),
+    fs: ticket?.fs || null,
+    items: Array.isArray(ticket.items)
+      ? ticket.items.map((it) => ({
+          id: Number(it?.id || 0) || null,
+          baseProductId: Number(it?.baseProductId || 0) || null,
+          idproducto: getProductBaseId(it),
+          qty: getCartItemReservedQty(it),
+          cantidad: getCartItemReservedQty(it),
+          name: String(it.name || it.nombre || it.descripcion || ""),
+          secondaryName: String(it.secondaryName || it.descripcion2 || ""),
+          descripcion: String(it.descripcion || it.name || ""),
+          descripcion2: String(it.descripcion2 || it.secondaryName || ""),
+          referencia: String(it.referencia || ""),
+          price: Number(it?.price || 0),
+          grossPrice: Number(it?.grossPrice || 0),
+          taxRate: Number(it?.taxRate || 0),
+          codimpuesto: it?.codimpuesto || null,
+          originalNetPrice: Number(it?.originalNetPrice || 0),
+          originalGrossPrice: Number(it?.originalGrossPrice || 0),
+          grossPriceOverride:
+            it?.grossPriceOverride == null
+              ? null
+              : Number(it.grossPriceOverride),
+          imageUrl: it?.imageUrl || null,
+          meta: it?.meta && typeof it.meta === "object" ? it.meta : null,
+        }))
+      : [],
+  };
+
+  const createUrl = `${TPV_SYNC_API_URL}?action=create-parked-reservation`;
+
+  const res = await fetch(createUrl, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-TPV-API-KEY": syncApiKey,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (res.ok) {
+    return await res.json().catch(() => ({}));
+  }
+
+  // Compat: if backend expects update for existing rows, retry once.
+  if (res.status === 409 || res.status === 422 || res.status === 404) {
+    const updateUrl = `${TPV_SYNC_API_URL}?action=update-parked-reservation`;
+
+    const retryRes = await fetch(updateUrl, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (retryRes.ok) {
+      return await retryRes.json().catch(() => ({}));
+    }
+  }
+
+  throw new Error(`Error guardando reserva remota: HTTP ${res.status}`);
+}
+
+async function apiDeleteParkedReservation(ticket) {
+  const slug = String(ticket?.slug || getCurrentSlugForReservations() || "");
+  const cajaId = String(
+    ticket?.cajaId || getCajaIdSafe?.() || currentTerminal?.id || "",
+  );
+  const syncApiKey = getTpvSyncApiKey();
+
+  if (!slug || !cajaId || !ticket?.id) return false;
+  if (!syncApiKey) {
+    throw new Error(
+      "Falta TPV_CONFIG.tpvApiKey para borrar reservas remotas.",
+    );
+  }
+
+  const payload = {
+    slug,
+    cajaId,
+    ticketId: String(ticket.id),
+  };
+
+  const deleteUrl = `${TPV_SYNC_API_URL}?action=delete-parked-reservation`;
+
+  const res = await fetch(deleteUrl, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-TPV-API-KEY": syncApiKey,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Error borrando reserva remota: HTTP ${res.status}`);
+  }
+
+  return true;
+}
+
+async function refreshRemoteParkedReservationsOnly() {
+  if (TPV_STATE?.offline) return false;
+
+  try {
+    await processParkedSyncQueue();
+
+    const list = await apiListParkedReservations();
+    REMOTE_PARKED_RESERVATIONS = Array.isArray(list) ? list : [];
+    syncParkedTicketsFromRemote(REMOTE_PARKED_RESERVATIONS);
+    rebuildRemoteReservedByProductMap();
+    updateRenderedProductStocks();
+    return true;
+  } catch (e) {
+    console.warn("No se pudieron refrescar reservas remotas:", e?.message || e);
+
+    const cached = loadParkedTicketsCache();
+    if (cached.length) {
+      parkedTickets = cached;
+      REMOTE_PARKED_RESERVATIONS = cached.filter((t) => !t.paid);
+      rebuildRemoteReservedByProductMap();
+      updateRenderedProductStocks();
+      updateParkedCountBadge?.();
+      refreshParkButtonUI?.();
+      refreshParkedEditingBanner?.();
+      if (
+        parkedTicketsOverlay &&
+        !parkedTicketsOverlay.classList.contains("hidden")
+      ) {
+        renderParkedTicketsModal?.();
+      }
+      return true;
+    }
+
+    return false;
+  }
+}
+
+async function refreshStockAndReservationsOnly() {
+  await Promise.allSettled([
+    refreshProductsStockOnly(),
+    refreshRemoteParkedReservationsOnly(),
+  ]);
+
+  updateRenderedProductStocks();
+  return true;
+}
+
+function startParkedReservationsAutoRefresh() {
+  stopParkedReservationsAutoRefresh();
+
+  __parkedReservationsRefreshTimer = setInterval(async () => {
+    if (__parkedReservationsRefreshInFlight) return;
+    if (TPV_STATE?.offline) return;
+    if (!cashSession?.open) return;
+
+    __parkedReservationsRefreshInFlight = true;
+    try {
+      await refreshRemoteParkedReservationsOnly();
+    } catch (e) {
+      console.warn("Auto refresh reservas falló:", e?.message || e);
+    } finally {
+      __parkedReservationsRefreshInFlight = false;
+    }
+  }, 10000);
+}
+
+function stopParkedReservationsAutoRefresh() {
+  if (__parkedReservationsRefreshTimer) {
+    clearInterval(__parkedReservationsRefreshTimer);
+    __parkedReservationsRefreshTimer = null;
+  }
+}
+
+async function refreshProductsStockOnly() {
+  if (TPV_STATE?.offline) return false;
+
+  try {
+    const productosData = await fetchApiResource("productos");
+    const list = Array.isArray(productosData) ? productosData : [];
+
+    const stockById = new Map();
+    list.forEach((p, idx) => {
+      const idProd = Number(p.idproducto ?? p.id ?? idx);
+      if (!idProd) return;
+      stockById.set(idProd, Number(p.stockfis ?? 0));
+    });
+
+    if (!Array.isArray(products) || !products.length) {
+      return false;
+    }
+
+    let changed = false;
+
+    products = products.map((p) => {
+      const baseId = Number(p.baseProductId || p.id || 0);
+      if (!baseId) return p;
+      if (!stockById.has(baseId)) return p;
+
+      const nextStock = Number(stockById.get(baseId) ?? 0);
+      const prevStock = Number(p.stockfis ?? 0);
+
+      if (prevStock !== nextStock) {
+        changed = true;
+        return {
+          ...p,
+          stockfis: nextStock,
+        };
+      }
+
+      return p;
+    });
+
+    if (!changed) return true;
+
+    updateRenderedProductStocks();
+    return true;
+  } catch (e) {
+    console.warn("No se pudieron refrescar stocks:", e?.message || e);
+    return false;
+  }
+}
+
 async function onPayButtonClick() {
   try {
     if (isPayingNow) return;
@@ -12037,6 +13034,13 @@ async function onPayButtonClick() {
         items: buildCustomerItemsFromCart(cartSnapshot),
       });
 
+      await markParkedTicketAsPaidByIndex(parkedIndexToClose, {
+        idfactura: null,
+        codigo:
+          lastTicket?.numero ||
+          `OFF-${String(sendResult.localId || "").slice(0, 6).toUpperCase()}`,
+      });
+
       cart = [];
       renderCart();
       setStatusText("Venta guardada en cola (offline)");
@@ -12171,6 +13175,8 @@ async function onPayButtonClick() {
       pagos: pagosFinal,
     });
 
+    await runProductsStockRefreshOnce();
+
     lastTicket = buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot);
 
     lastTicket.cashMeta = buildCashTicketMeta({
@@ -12213,7 +13219,7 @@ async function onPayButtonClick() {
       items: buildCustomerItemsFromCart(cartSnapshot),
     });
 
-    markParkedTicketAsPaidByIndex(parkedIndexToClose, {
+    await markParkedTicketAsPaidByIndex(parkedIndexToClose, {
       idfactura: facturaResp?.idfactura || null,
       codigo: lastTicket?.numero || facturaResp?.codigo || null,
     });
@@ -13339,12 +14345,12 @@ async function loadAndRenderTickets() {
   } catch (e) {
     console.error(e);
 
-    // ✅ fallback final: si falla todo, intenta cache
+    // ✅ fallback final: usa cache + offline local (aunque cache esté vacío)
     const cached = loadTicketsCache();
-    if (cached.length) {
-      ticketsCache = cached;
+    ticketsCache = cached;
 
-      const merged = getAllTicketsForUI(ticketsCache);
+    const merged = getAllTicketsForUI(ticketsCache);
+    if (merged.length) {
       linkTicketsRefundRelations(merged);
       ticketsUiCache = merged;
       renderTicketsList(merged);
@@ -14301,6 +15307,11 @@ function setConnectionStateOnline() {
   TPV_STATE.offline = false;
   TPV_STATE.locked = false;
   updateCashButtonLabel();
+
+  // Reintento rápido al volver internet para sincronizar aparcados en cola.
+  processParkedSyncQueue()
+    .then(() => refreshRemoteParkedReservationsOnly())
+    .catch(() => {});
 }
 
 function isReconnectOverlayVisible() {
@@ -16212,6 +17223,37 @@ async function fetchPagosFacturaByCodigo(codigofactura) {
 }
 
 async function imprimirFacturaHistorica(facturaRow) {
+  if (facturaRow?._offline || !Number(facturaRow?.idfactura || 0)) {
+    const offlineLines = Array.isArray(facturaRow?.lineas)
+      ? facturaRow.lineas
+      : [];
+
+    if (!offlineLines.length) {
+      throw new Error("Ticket offline sin líneas para imprimir.");
+    }
+
+    const ticket = {
+      numero: String(facturaRow?.codigo || "OFFLINE"),
+      fecha: String(facturaRow?.fecha || new Date().toISOString().slice(0, 10)),
+      hora: String(facturaRow?.hora || new Date().toTimeString().slice(0, 8)),
+      paymentMethod: String(facturaRow?.codpago || "—"),
+      clientName: String(facturaRow?.nombrecliente || "Venta en cola"),
+      terminalName: currentTerminal ? currentTerminal.name : "",
+      agentName: currentAgent ? currentAgent.name : "",
+      company: companyInfo ? { ...companyInfo } : null,
+      lineas: offlineLines,
+      total: Number(facturaRow?.total || 0),
+      pagos: Array.isArray(facturaRow?.pagos) ? facturaRow.pagos : [],
+      cambio: Number(facturaRow?.cambio || 0),
+      _offline: true,
+      _localId: facturaRow?._localId || null,
+    };
+
+    const ticketReady = preparePrintableTicket(ticket);
+    await printTicket(ticketReady);
+    return;
+  }
+
   const id = Number(facturaRow?.idfactura || 0);
   if (!id) throw new Error("Factura sin idfactura.");
 
@@ -18050,11 +19092,44 @@ function loadOfflineTicketsForTicketsModal() {
 function saveOfflineTicketForTicketsModal(t) {
   try {
     const curr = loadOfflineTicketsForTicketsModal();
-    curr.unshift(t);
+
+    const lineas = Array.isArray(t?.lineas) ? t.lineas : [];
+    const totalFromLines = lineas.reduce((acc, ln) => {
+      const qty = Number(ln?.qty ?? ln?.cantidad ?? 1) || 1;
+      const unit = Number(ln?.grossPrice ?? ln?.price ?? ln?.pvpunitario ?? 0) || 0;
+      return acc + qty * unit;
+    }, 0);
+
+    const normalized = {
+      ...(t || {}),
+      _offline: true,
+      _localId: String(t?._localId || ""),
+      codigo: String(t?.codigo || "OFFLINE"),
+      nombrecliente: String(t?.nombrecliente || "Venta en cola"),
+      total: Number(t?.total || totalFromLines || 0),
+      codpago: String(t?.codpago || "—"),
+      fecha: String(t?.fecha || new Date().toISOString().slice(0, 10)),
+      hora: String(t?.hora || new Date().toTimeString().slice(0, 8)),
+      idcaja: Number(t?.idcaja || cashSession?.remoteCajaId || 0) || 0,
+      codserie: String(t?.codserie || "S"),
+      lineas,
+      pagos: Array.isArray(t?.pagos) ? t.pagos : [],
+      _raw: {
+        ...(t?._raw || {}),
+        idcaja: Number(t?.idcaja || cashSession?.remoteCajaId || 0) || 0,
+        codserie: String(t?.codserie || "S"),
+      },
+    };
+
+    const next = curr.filter(
+      (x) => String(x?._localId || "") !== String(normalized._localId || ""),
+    );
+
+    next.unshift(normalized);
     // limita para no crecer infinito
     localStorage.setItem(
       OFFLINE_TICKETS_KEY,
-      JSON.stringify(curr.slice(0, 200)),
+      JSON.stringify(next.slice(0, 200)),
     );
   } catch (e) {
     console.warn("No se pudo guardar ticket offline:", e);

@@ -420,15 +420,58 @@ body {
   background: rgba(169, 194, 231, 0.92);
   color: #1f2937;
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between; /* ✅ stock izquierda, precio derecha */
   align-items: center;
+  gap: 8px;
   z-index: 2;
   border: 1px solid #3b82f6;
+}
+
+.product-stock-badge {
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.9);
+  color: #111827;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  min-width: 34px;
+  max-width: 58px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+
+.product-stock-badge.is-ok {
+  background: rgba(220, 252, 231, 0.95);
+  color: #166534;
+  border-color: rgba(22, 101, 52, 0.22);
+}
+
+.product-stock-badge.is-low {
+  background: rgba(254, 243, 199, 0.95);
+  color: #92400e;
+  border-color: rgba(146, 64, 14, 0.22);
+}
+
+.product-stock-badge.is-zero {
+  background: rgba(254, 226, 226, 0.95);
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.22);
+}
+
+.product-stock-badge.is-unknown {
+  background: rgba(229, 231, 235, 0.95);
+  color: #374151;
+  border-color: rgba(55, 65, 81, 0.18);
 }
 
 .product-price {
   font-weight: 800;
   font-size: 14px;
+  margin-left: auto;
 }
 
 /* Bordes redondeados consistentes en overlays */

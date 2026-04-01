@@ -12,4 +12,6 @@ window.RECIPOK_API = {
 
 window.TPV_CONFIG = {
   resolverUrl: "https://plus.recipok.com/tpv/clients.json",
+  tpvSyncApiUrl: "https://plus.recipok.com/tpv/api/index.php",
+  tpvApiKey: "HhF8gfNocCy626jBn6oS5DS9h5xONQ1k",
 };
