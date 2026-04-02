@@ -797,7 +797,7 @@
     <div id="msgOverlay" class="simple-overlay critical-overlay hidden">
       <div class="simple-dialog">
         <h2 id="msgTitle">Aviso</h2>
-        <p id="msgText" style="margin: 10px 0; font-size: 14px"></p>
+        <div id="msgText" style="margin: 10px 0; font-size: 14px"></div>
         <div class="dialog-actions">
           <button id="msgCancelBtn">Cancelar</button>
           <button id="msgOkBtn">Aceptar</button>
@@ -1700,6 +1700,19 @@
                 </div>
                 <label class="switch">
                   <input type="checkbox" id="productStockToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Permitir editar stock</div>
+                  <div class="opt-row-sub">
+                    Muestra un botón ✎ junto al stock para modificarlo desde el
+                    TPV (solo administradores).
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="productStockEditToggle" />
                   <span class="slider"></span>
                 </label>
               </div>

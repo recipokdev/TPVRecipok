@@ -231,28 +231,114 @@ async function confirmIfCartExceedsVisibleStock(cartSnapshot) {
     if (!idProd) return;
 
     const qty = getCartItemReservedQty(it);
-    requestedByProduct.set(
-      idProd,
-      Number(requestedByProduct.get(idProd) || 0) + qty,
-    );
+    const name = String(
+      it?.name || it?.descripcion || it?.referencia || `Producto ${idProd}`,
+    ).trim();
+    const description = String(
+      it?.descripcion2 ||
+        it?.secondaryName ||
+        it?.description2 ||
+        it?.descripcion ||
+        it?.description ||
+        "",
+    ).trim();
+
+    if (!requestedByProduct.has(idProd)) {
+      requestedByProduct.set(idProd, {
+        qty: 0,
+        name,
+        description,
+      });
+    }
+
+    const row = requestedByProduct.get(idProd);
+    row.qty = Number(row.qty || 0) + qty;
+    if (!row.name && name) row.name = name;
+    if (!row.description && description) row.description = description;
   });
 
-  for (const [idProd, qtyToReserve] of requestedByProduct.entries()) {
+  const warnings = [];
+
+  for (const [idProd, row] of requestedByProduct.entries()) {
+    const qtyToReserve = Number(row?.qty || 0);
+
     const product = Array.isArray(products)
       ? products.find((p) => getProductBaseId(p) === idProd)
       : null;
-    if (!product) continue;
 
-    const visibleStock = getVisibleStockForProduct(product);
+    const productName = String(
+      product?.referencia ||
+        product?.name ||
+        product?.descripcion ||
+        row?.name ||
+        `Producto ${idProd}`,
+    ).trim();
+
+    let productDescription = String(
+      product?.descripcion ||
+        product?.descripcion2 ||
+        product?.secondaryName ||
+        product?.description ||
+        row?.description ||
+        row?.name ||
+        "",
+    ).trim();
+
+    // Evita repetir el mismo texto en nombre y descripción.
+    if (
+      productDescription &&
+      productDescription.localeCompare(productName, "es", {
+        sensitivity: "base",
+      }) === 0
+    ) {
+      productDescription = "";
+    }
+
+    const visibleStock = getVisibleStockForProduct(idProd);
 
     if (qtyToReserve > visibleStock) {
-      const ok = await confirmModal(
-        "Stock insuficiente para aparcar",
-        `Estás intentando aparcar ${qtyToReserve}, cuando solo te quedan ${visibleStock}. ¿Continuar?`,
-      );
-
-      if (!ok) return false;
+      warnings.push({
+        productName,
+        productDescription,
+        qtyToReserve,
+        visibleStock,
+      });
     }
+  }
+
+  if (warnings.length) {
+    const blocksHtml = warnings
+      .map((w, idx) => {
+        const title = escapeHtmlForModal(w.productName || `Producto ${idx + 1}`);
+        const desc = escapeHtmlForModal(w.productDescription || "");
+        const qty = escapeHtmlForModal(fmtQty(w.qtyToReserve));
+        const stock = escapeHtmlForModal(formatProductStock(w.visibleStock));
+
+        return [
+          `<div class="stock-warning-item">`,
+          `  <div class="stock-warning-name">${idx + 1}. ${title}</div>`,
+          desc ? `  <div class="stock-warning-desc">${desc}</div>` : "",
+          `  <div class="stock-warning-row">Cantidad a aparcar: <strong>${qty}</strong></div>`,
+          `  <div class="stock-warning-row">Stock actual: <strong>${stock}</strong></div>`,
+          `</div>`,
+        ].join("\n");
+      })
+      .join("\n");
+
+    const html = [
+      `<div class="stock-warning-wrap">`,
+      `  <div class="stock-warning-intro">Hay productos con stock insuficiente para aparcar:</div>`,
+      `  <div class="stock-warning-list">${blocksHtml}</div>`,
+      `  <div class="stock-warning-outro">¿Continuar de todos modos?</div>`,
+      `</div>`,
+    ].join("\n");
+
+    const ok = await confirmModal("Stock insuficiente para aparcar", html, {
+      isHtml: true,
+      textClassName: "stock-warning-content",
+      dialogClassName: "stock-warning-dialog",
+    });
+    if (!ok) return false;
   }
 
   return true;
@@ -789,7 +875,9 @@ async function loadCustomerDisplayToggle() {
 
 let customerDisplayToggleBound = false;
 const OPTIONS_SHOW_PRODUCT_STOCK_KEY = "ui.showProductStockBadge";
+const OPTIONS_ENABLE_STOCK_EDIT_KEY = "ui.enableStockEdition";
 let showProductStockBadge = false;
+let enableProductStockEdition = false;
 
 async function loadProductStockToggle() {
   const el = document.getElementById("productStockToggle");
@@ -799,11 +887,34 @@ async function loadProductStockToggle() {
     const cfgVal = await window.TPV_CFG?.get?.(OPTIONS_SHOW_PRODUCT_STOCK_KEY);
     if (typeof cfgVal === "boolean") {
       enabled = cfgVal;
+    } else if (typeof cfgVal === "string") {
+      const normalized = cfgVal.trim().toLowerCase();
+      if (normalized === "true" || normalized === "1") enabled = true;
+      else if (normalized === "false" || normalized === "0") enabled = false;
     }
   } catch {}
 
   showProductStockBadge = !!enabled;
   if (el) el.checked = showProductStockBadge;
+}
+
+async function loadProductStockEditionToggle() {
+  const el = document.getElementById("productStockEditToggle");
+  let enabled = false;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(OPTIONS_ENABLE_STOCK_EDIT_KEY);
+    if (typeof cfgVal === "boolean") {
+      enabled = cfgVal;
+    } else if (typeof cfgVal === "string") {
+      const normalized = cfgVal.trim().toLowerCase();
+      if (normalized === "true" || normalized === "1") enabled = true;
+      else if (normalized === "false" || normalized === "0") enabled = false;
+    }
+  } catch {}
+
+  enableProductStockEdition = !!enabled;
+  if (el) el.checked = enableProductStockEdition;
 }
 
 async function saveProductStockToggle(enabled) {
@@ -819,7 +930,21 @@ async function saveProductStockToggle(enabled) {
   }
 }
 
+async function saveProductStockEditionToggle(enabled) {
+  enableProductStockEdition = !!enabled;
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_ENABLE_STOCK_EDIT_KEY,
+      enableProductStockEdition,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar toggle de edición de stock:", e);
+  }
+}
+
 let productStockToggleBound = false;
+let productStockEditionToggleBound = false;
 
 function bindProductStockToggleOnce() {
   if (productStockToggleBound) return;
@@ -833,6 +958,20 @@ function bindProductStockToggleOnce() {
     await saveProductStockToggle(wanted);
     renderProducts?.();
     updateRenderedProductStocks?.();
+  });
+}
+
+function bindProductStockEditionToggleOnce() {
+  if (productStockEditionToggleBound) return;
+  productStockEditionToggleBound = true;
+
+  const el = document.getElementById("productStockEditToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+    await saveProductStockEditionToggle(wanted);
+    renderProducts?.();
   });
 }
 
@@ -1292,9 +1431,16 @@ async function reloadTerminalFamilyModeCache() {
   terminalFamilyModeCache = await getTerminalFamilyModeMap();
 }
 
+function getTerminalModeFromMap(modeMap, terminalId) {
+  const key = String(terminalId || "").trim();
+  if (!key) return "all";
+
+  const raw = modeMap && typeof modeMap === "object" ? modeMap[key] : undefined;
+  return raw === "filtered" ? "filtered" : "all";
+}
+
 function getTerminalModeSync(terminalId) {
-  const key = String(terminalId || "");
-  return terminalFamilyModeCache[key] === "all" ? "all" : "filtered";
+  return getTerminalModeFromMap(terminalFamilyModeCache, terminalId);
 }
 
 function renderTerminalFamiliesModeUi() {
@@ -1303,8 +1449,7 @@ function renderTerminalFamiliesModeUi() {
   if (!select || !toggle) return;
 
   const terminalId = String(select.value || "");
-  const mode =
-    terminalFamiliesDraftModeMap[terminalId] === "all" ? "all" : "filtered";
+  const mode = getTerminalModeFromMap(terminalFamiliesDraftModeMap, terminalId);
 
   toggle.checked = mode === "all";
 }
@@ -2250,6 +2395,10 @@ async function runBootFlow() {
     const okLogin = await ensureLoginAutoOrPrompt();
     if (!okLogin) return false;
 
+    // Cargar preferencia de visibilidad de stock antes de pintar UI principal.
+    await loadProductStockToggle?.();
+    await loadProductStockEditionToggle?.();
+
     // ✅ aplica SIEMPRE tras login
     applyAdminOnlyUI?.();
     refreshOptionsUI?.();
@@ -2649,6 +2798,8 @@ function renderProducts() {
     const stockValue = getVisibleStockForProduct(p);
     const stockText = formatProductStock(stockValue);
     const stockClass = getProductStockClass(stockValue);
+    const canShowStockEdit =
+      isAdminUser() && enableProductStockEdition && showProductStockBadge;
 
     tile.innerHTML = `
       <div class="product-img-wrapper">
@@ -2663,12 +2814,24 @@ function renderProducts() {
       <div class="product-footer">
         ${
           showProductStockBadge
-            ? `<div
-  class="product-stock-badge ${stockClass}"
-  data-stock-product-id="${Number(p.baseProductId || p.id || 0)}"
-  title="Stock actual"
->
-  ${stockText}
+            ? `<div class="product-stock-wrap">
+  <div
+    class="product-stock-badge ${stockClass}"
+    data-stock-product-id="${Number(p.baseProductId || p.id || 0)}"
+    title="Stock actual"
+  >
+    ${stockText}
+  </div>
+  ${
+    canShowStockEdit
+      ? `<button
+    type="button"
+    class="product-stock-edit-btn"
+    title="Editar stock"
+    aria-label="Editar stock"
+  >✎</button>`
+      : ""
+  }
 </div>`
             : ""
         }
@@ -2687,6 +2850,17 @@ function renderProducts() {
         toast("No se pudo añadir al carrito.", "error");
       }
     };
+
+    if (canShowStockEdit) {
+      const stockEditBtn = tile.querySelector(".product-stock-edit-btn");
+      if (stockEditBtn) {
+        stockEditBtn.onclick = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          await openProductStockEditFlow(p);
+        };
+      }
+    }
 
     if (canEditPrices) {
       tile.style.position = "relative";
@@ -2779,8 +2953,8 @@ function buildCartLine(product, quantity) {
     // ✅ NUEVO: referencia/descripcion separadas (como FS)
     referencia:
       product.referencia || product.ref || product.codigo || product.name || "",
-    descripcion: product.name || "",
-    descripcion2: product.secondaryName || "",
+    descripcion: product.descripcion || product.name || "",
+    descripcion2: product.descripcion2 || product.secondaryName || "",
 
     name: product.name,
     secondaryName: product.secondaryName || "",
@@ -3635,8 +3809,18 @@ async function ensureLoginAutoOrPrompt() {
 }
 
 // ===== Modal genérico de confirmación (usa msgOverlay) =====
-function confirmModal(title, text) {
+function escapeHtmlForModal(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function confirmModal(title, text, options = {}) {
   const overlay = document.getElementById("msgOverlay");
+  const dialogEl = overlay?.querySelector?.(".simple-dialog");
   const titleEl = document.getElementById("msgTitle");
   const textEl = document.getElementById("msgText");
   const okBtn = document.getElementById("msgOkBtn");
@@ -3648,7 +3832,29 @@ function confirmModal(title, text) {
   }
 
   titleEl.textContent = title || "Confirmar";
-  textEl.textContent = text || "";
+  const {
+    isHtml = false,
+    textClassName = "",
+    dialogClassName = "",
+  } = options || {};
+
+  if (dialogEl) {
+    dialogEl.classList.remove("stock-warning-dialog");
+    if (dialogClassName) dialogEl.classList.add(dialogClassName);
+  }
+
+  if (isHtml) {
+    textEl.innerHTML = text || "";
+    textEl.style.whiteSpace = "normal";
+  } else {
+    textEl.textContent = text || "";
+    textEl.style.whiteSpace = "pre-line";
+  }
+
+  textEl.className = textClassName || "";
+  textEl.style.maxHeight = isHtml ? "none" : "260px";
+  textEl.style.overflowY = isHtml ? "visible" : "auto";
+  textEl.style.paddingRight = "4px";
 
   overlay.classList.remove("hidden");
   lockAppUI();
@@ -3956,6 +4162,19 @@ function numPadConfirm() {
 
     // redondeamos a 2 decimales máximo (0.015 -> 0.02)
     value = Math.round(value * 100) / 100;
+
+    if (typeof numPadOnConfirm === "function") {
+      numPadOnConfirm(value);
+    }
+    closeNumPad();
+    return;
+  }
+
+  if (numPadMode === "stock") {
+    value = Number(value);
+    if (!isFinite(value)) value = 0;
+
+    value = Math.round(value * 1000) / 1000;
 
     if (typeof numPadOnConfirm === "function") {
       numPadOnConfirm(value);
@@ -9319,6 +9538,9 @@ async function loadDataFromApi(opts = {}) {
             id: idVar,
             name: mainName,
             secondaryName,
+            referencia: mainName,
+            descripcion: baseName,
+            descripcion2: secondaryName,
             price,
             category,
             sortKey: baseSortKey + pos,
@@ -9355,6 +9577,9 @@ async function loadDataFromApi(opts = {}) {
           id: idProd,
           name,
           secondaryName: "",
+          referencia: String(p.referencia ?? name).trim(),
+          descripcion: String(p.descripcion ?? name).trim(),
+          descripcion2: "",
           price,
           category,
           sortKey: baseSort * 1000,
@@ -10210,6 +10435,9 @@ function refreshOptionsUI() {
   const stockToggle = document.getElementById("productStockToggle");
   if (stockToggle) stockToggle.checked = !!showProductStockBadge;
 
+  const stockEditToggle = document.getElementById("productStockEditToggle");
+  if (stockEditToggle) stockEditToggle.checked = !!enableProductStockEdition;
+
   const t = document.getElementById("priceEditModeToggle");
   if (t) {
     t.disabled = !isAdminUser();
@@ -10368,6 +10596,9 @@ async function openOptions() {
 
   bindProductStockToggleOnce();
   await loadProductStockToggle();
+
+  bindProductStockEditionToggleOnce();
+  await loadProductStockEditionToggle();
 
   bindAutostartToggleOnce();
   await loadAutostartToggle();
@@ -15899,6 +16130,128 @@ async function fetchApiResourceWithParams(resource, params = {}) {
     throw new Error(data.message || `Error API en ${resource}`);
 
   return data;
+}
+
+function getCurrentWarehouseCode() {
+  return String(currentTerminal?.codalmacen || getLoginWarehouse() || "").trim();
+}
+
+async function fetchStockRowForProduct(product) {
+  const ref = String(product?.referencia || product?.name || "").trim();
+  if (!ref) return null;
+
+  const rows = await fetchApiResourceWithParams("stocks", {
+    "filter[referencia]": ref,
+    limit: 200,
+  });
+
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return null;
+
+  const warehouse = getCurrentWarehouseCode();
+  if (warehouse) {
+    const byWarehouse = list.find(
+      (x) => String(x?.codalmacen || "").trim() === warehouse,
+    );
+    if (byWarehouse) return byWarehouse;
+  }
+
+  return list[0] || null;
+}
+
+async function updateStockRowCantidad(stockRow, nextQty) {
+  const idstock = Number(stockRow?.idstock || 0);
+  if (!idstock) throw new Error("No se encontró idstock para actualizar.");
+
+  const payload = {
+    idstock,
+    cantidad: Number(nextQty),
+    codalmacen: String(stockRow?.codalmacen || getCurrentWarehouseCode() || ""),
+    referencia: String(stockRow?.referencia || "").trim(),
+    idproducto: Number(stockRow?.idproducto || 0) || undefined,
+  };
+
+  try {
+    return await apiWrite(`stocks/${idstock}`, "PATCH", payload);
+  } catch {
+    return await apiWrite(`stocks/${idstock}`, "PUT", payload);
+  }
+}
+
+function applyStockQtyToLocalProducts(product, qty) {
+  const baseId = Number(product?.baseProductId || product?.id || 0);
+  if (!baseId || !Array.isArray(products) || !products.length) return;
+
+  products = products.map((p) => {
+    if (Number(p?.baseProductId || p?.id || 0) !== baseId) return p;
+    return {
+      ...p,
+      stockfis: Number(qty),
+    };
+  });
+
+  renderProducts?.();
+  updateRenderedProductStocks?.();
+}
+
+async function openProductStockEditFlow(product) {
+  if (!isAdminUser()) {
+    toast("Solo administradores.", "warn", "Stock");
+    return;
+  }
+
+  if (TPV_STATE?.offline) {
+    toast("Sin conexión. No se puede editar stock ahora.", "warn", "Stock");
+    return;
+  }
+
+  const productName = String(
+    product?.referencia || product?.name || "Producto",
+  ).trim();
+
+  const stockRow = await fetchStockRowForProduct(product).catch((e) => {
+    console.warn("No se pudo leer stock del producto:", e?.message || e);
+    return null;
+  });
+
+  if (!stockRow) {
+    toast("No se encontró stock para este producto.", "warn", "Stock");
+    return;
+  }
+
+  const currentQty = Number(stockRow?.cantidad ?? product?.stockfis ?? 0) || 0;
+
+  const wantedQty = await new Promise((resolve) => {
+    openNumPad(
+      String(currentQty),
+      (value) => resolve(value),
+      `${productName} · stock actual ${formatProductStock(currentQty)}`,
+      "stock",
+      currentQty,
+      null,
+    );
+  });
+
+  const nextQty = Number(wantedQty);
+  if (!Number.isFinite(nextQty)) return;
+
+  const roundedNext = Math.round(nextQty * 1000) / 1000;
+  if (roundedNext === currentQty) return;
+
+  const ok = await confirmModal(
+    "Confirmar cambio de stock",
+    `Producto: ${productName}\n\nStock actual: ${formatProductStock(currentQty)}\nNuevo stock: ${formatProductStock(roundedNext)}\n\n¿Seguro que quieres guardar este cambio?`,
+  );
+  if (!ok) return;
+
+  try {
+    await updateStockRowCantidad(stockRow, roundedNext);
+    applyStockQtyToLocalProducts(product, roundedNext);
+    toast("Stock actualizado correctamente.", "ok", "Stock");
+  } catch (e) {
+    console.error("Error actualizando stock:", e);
+    toast(e?.message || "No se pudo actualizar el stock.", "err", "Stock");
+  }
 }
 
 // ==========================
