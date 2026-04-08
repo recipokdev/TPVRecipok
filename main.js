@@ -252,7 +252,7 @@ function createWindow() {
       return;
     }
 
-    if ((guards.parkedCount || 0) > 0) {
+    if ((guards.parkedCount || 0) > 0 && !guards.allowCloseWithParked) {
       mainWin.webContents.send("tpv:guard", {
         title: "Tickets aparcados",
         text: "No puedes cerrar el programa hasta recuperar o eliminar los tickets aparcados.",
@@ -1149,7 +1149,7 @@ function registerShortcuts() {
       return;
     }
 
-    if ((guards.parkedCount || 0) > 0) {
+    if ((guards.parkedCount || 0) > 0 && !guards.allowCloseWithParked) {
       mainWin.webContents.send("tpv:guard", {
         title: "Tickets aparcados",
         text: "No puedes cerrar el programa hasta recuperar o eliminar los tickets aparcados.",
@@ -1379,7 +1379,7 @@ ipcMain.handle("app:quit", async () => {
     return { ok: false, reason: "cashOpen" };
   }
 
-  if ((guards.parkedCount || 0) > 0) {
+  if ((guards.parkedCount || 0) > 0 && !guards.allowCloseWithParked) {
     mainWin.webContents.send("tpv:guard", {
       title: "Tickets aparcados",
       text: "No puedes cerrar el programa hasta recuperar o eliminar los tickets aparcados.",
@@ -1410,7 +1410,7 @@ ipcMain.handle("tpv:attemptQuit", async () => {
     return { ok: false, blocked: "cashOpen" };
   }
 
-  if ((guards.parkedCount || 0) > 0) {
+  if ((guards.parkedCount || 0) > 0 && !guards.allowCloseWithParked) {
     mainWin.webContents.send("tpv:guard", {
       title: "Tickets aparcados",
       text: "No puedes cerrar el programa hasta recuperar o eliminar los tickets aparcados.",

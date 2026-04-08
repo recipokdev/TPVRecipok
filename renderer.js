@@ -114,21 +114,52 @@ let customerMode = "CART";
 let customerThanksUntil = 0;
 let customerLastSale = null;
 
+const TPV_DEBUG_LOGS = false;
+const BROKEN_PRODUCT_IMAGE_URLS = new Set();
+
+function debugLog(...args) {
+  if (!TPV_DEBUG_LOGS) return;
+  console.log(...args);
+}
+
+function debugTrace(...args) {
+  if (!TPV_DEBUG_LOGS) return;
+  console.trace(...args);
+}
+
 // ✅ lo que se verá mientras el carrito real esté vacío tras el cobro
 let customerDisplayOverride = null;
 
 // Estado para bloquear cierres
 window.__TPV_GUARDS__ = () => {
   const cashOpen = !!(cashSession && cashSession.open);
-  const parkedCount = Array.isArray(parkedTickets) ? parkedTickets.length : 0;
+  const parkedCount = cashOpen
+    ? Array.isArray(parkedTickets)
+      ? parkedTickets.length
+      : 0
+    : 0;
+  let allowCloseWithParked = false;
+
+  try {
+    const toggleEl = document.getElementById("allowCloseWithParkedToggle");
+    if (toggleEl) {
+      allowCloseWithParked = !!toggleEl.checked;
+    } else {
+      const lsVal = localStorage.getItem("tpv_allowCloseWithParkedTickets");
+      allowCloseWithParked = lsVal === "1" || lsVal === "true";
+    }
+  } catch {
+    allowCloseWithParked = false;
+  }
 
   return {
     cashOpen,
     parkedCount,
+    allowCloseWithParked,
   };
 };
 
-// ===== Referencias básicas =====
+// ===== Referencias basicas =====
 const searchInput = document.getElementById("searchInput");
 const searchClearBtn = document.getElementById("searchClearBtn");
 const searchKeyboardBtn = document.getElementById("searchKeyboardBtn");
@@ -138,7 +169,7 @@ const terminalNameEl = document.getElementById("terminalName");
 const agentNameEl = document.getElementById("agentName");
 const userNameEl = document.getElementById("userName");
 
-// Overlay selección de terminal / agente
+// Overlay seleccion de terminal / agente
 const terminalOverlay = document.getElementById("terminalOverlay");
 const terminalSelect = document.getElementById("terminalSelect");
 const terminalOkBtn = document.getElementById("terminalOkBtn");
@@ -309,7 +340,9 @@ async function confirmIfCartExceedsVisibleStock(cartSnapshot) {
   if (warnings.length) {
     const blocksHtml = warnings
       .map((w, idx) => {
-        const title = escapeHtmlForModal(w.productName || `Producto ${idx + 1}`);
+        const title = escapeHtmlForModal(
+          w.productName || `Producto ${idx + 1}`,
+        );
         const desc = escapeHtmlForModal(w.productDescription || "");
         const qty = escapeHtmlForModal(fmtQty(w.qtyToReserve));
         const stock = escapeHtmlForModal(formatProductStock(w.visibleStock));
@@ -876,8 +909,22 @@ async function loadCustomerDisplayToggle() {
 let customerDisplayToggleBound = false;
 const OPTIONS_SHOW_PRODUCT_STOCK_KEY = "ui.showProductStockBadge";
 const OPTIONS_ENABLE_STOCK_EDIT_KEY = "ui.enableStockEdition";
+const OPTIONS_ALLOW_CLOSE_WITH_PARKED_KEY = "ui.allowCloseWithParkedTickets";
+const LS_ALLOW_CLOSE_WITH_PARKED_KEY = "tpv_allowCloseWithParkedTickets";
 let showProductStockBadge = false;
 let enableProductStockEdition = false;
+let allowCloseWithParkedTickets = false;
+
+function parseBoolLike(value, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value === 1;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true" || normalized === "1") return true;
+    if (normalized === "false" || normalized === "0") return false;
+  }
+  return fallback;
+}
 
 async function loadProductStockToggle() {
   const el = document.getElementById("productStockToggle");
@@ -917,6 +964,32 @@ async function loadProductStockEditionToggle() {
   if (el) el.checked = enableProductStockEdition;
 }
 
+async function loadAllowCloseWithParkedToggle() {
+  const el = document.getElementById("allowCloseWithParkedToggle");
+  let enabled = false;
+  let hasCfgValue = false;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(
+      OPTIONS_ALLOW_CLOSE_WITH_PARKED_KEY,
+    );
+    if (cfgVal !== undefined && cfgVal !== null && cfgVal !== "") {
+      enabled = parseBoolLike(cfgVal, false);
+      hasCfgValue = true;
+    }
+  } catch {}
+
+  if (!hasCfgValue) {
+    try {
+      const lsVal = localStorage.getItem(LS_ALLOW_CLOSE_WITH_PARKED_KEY);
+      if (lsVal !== null) enabled = parseBoolLike(lsVal, false);
+    } catch {}
+  }
+
+  allowCloseWithParkedTickets = !!enabled;
+  if (el) el.checked = allowCloseWithParkedTickets;
+}
+
 async function saveProductStockToggle(enabled) {
   showProductStockBadge = !!enabled;
 
@@ -943,8 +1016,29 @@ async function saveProductStockEditionToggle(enabled) {
   }
 }
 
+async function saveAllowCloseWithParkedToggle(enabled) {
+  allowCloseWithParkedTickets = !!enabled;
+
+  try {
+    localStorage.setItem(
+      LS_ALLOW_CLOSE_WITH_PARKED_KEY,
+      allowCloseWithParkedTickets ? "1" : "0",
+    );
+  } catch {}
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_ALLOW_CLOSE_WITH_PARKED_KEY,
+      allowCloseWithParkedTickets,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar toggle de cierre con aparcados:", e);
+  }
+}
+
 let productStockToggleBound = false;
 let productStockEditionToggleBound = false;
+let allowCloseWithParkedToggleBound = false;
 
 function bindProductStockToggleOnce() {
   if (productStockToggleBound) return;
@@ -972,6 +1066,19 @@ function bindProductStockEditionToggleOnce() {
     const wanted = !!el.checked;
     await saveProductStockEditionToggle(wanted);
     renderProducts?.();
+  });
+}
+
+function bindAllowCloseWithParkedToggleOnce() {
+  if (allowCloseWithParkedToggleBound) return;
+  allowCloseWithParkedToggleBound = true;
+
+  const el = document.getElementById("allowCloseWithParkedToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+    await saveAllowCloseWithParkedToggle(wanted);
   });
 }
 
@@ -1508,7 +1615,10 @@ function updatePayButtonEnabledState() {
 function renderAgentMissingBadge() {
   const b = document.getElementById("agentMissingBadge");
   if (!b) return;
-  b.style.display = hasAssignedAgent() ? "none" : "inline";
+
+  const cashOpen = !!cashSession?.open;
+  const showBadge = cashOpen && !hasAssignedAgent();
+  b.style.display = showBadge ? "inline" : "none";
 }
 
 function refreshAgentGuardUI() {
@@ -2367,7 +2477,7 @@ function applyAdminOnlyUI() {
   const isAdmin = !!window.TPV_STATE?.isAdmin;
   const els = document.querySelectorAll("[data-admin-only]");
 
-  console.log("[ADMIN] applyAdminOnlyUI", {
+  debugLog("[ADMIN] applyAdminOnlyUI", {
     isAdmin,
     adminOnlyCount: els.length,
   });
@@ -2398,15 +2508,12 @@ async function runBootFlow() {
     // Cargar preferencia de visibilidad de stock antes de pintar UI principal.
     await loadProductStockToggle?.();
     await loadProductStockEditionToggle?.();
-
-    // ✅ aplica SIEMPRE tras login
-    applyAdminOnlyUI?.();
-    refreshOptionsUI?.();
+    await loadAllowCloseWithParkedToggle?.();
 
     // 3) Datos
     await loadDataFromApi();
 
-    // ✅ y otra vez después de cargar UI/datos
+    // Aplicar visibilidad/admin una vez tras completar carga inicial.
     applyAdminOnlyUI?.();
     refreshOptionsUI?.();
 
@@ -2527,11 +2634,58 @@ function updateCashButtonLabel() {
   }
 
   cashHeaderLabel.textContent = cashSession.open ? "Cerrar caja" : "Abrir caja";
+  syncCashClosedUiState();
+}
+
+function syncCashClosedUiState() {
+  const cashOpen = !!cashSession?.open;
+
+  const cashMove = document.getElementById("cashMoveBtn");
+  if (cashMove) {
+    cashMove.disabled = !cashOpen;
+    cashMove.title = cashOpen
+      ? "Movimientos de caja"
+      : "Disponible solo con la caja abierta";
+  }
+
+  const options = document.getElementById("optionsBtn");
+  if (options) {
+    options.disabled = !cashOpen;
+    options.title = cashOpen
+      ? "Opciones"
+      : "Disponible solo con la caja abierta";
+  }
+
+  const bottomActionIds = [
+    "clearCartBtn",
+    "ticketsListBtn",
+    "parkBtn",
+    "parkedListBtn",
+    "payBtn",
+  ];
+
+  bottomActionIds.forEach((id) => {
+    const btn = document.getElementById(id);
+    if (btn) btn.disabled = !cashOpen;
+  });
+
+  const badge = document.getElementById("parkedCountBadge");
+  if (!badge) return;
+
+  if (!cashOpen) {
+    badge.textContent = "0";
+    return;
+  }
+
+  const pendingCount = (
+    Array.isArray(parkedTickets) ? parkedTickets : []
+  ).filter((t) => !t.paid).length;
+  badge.textContent = String(pendingCount);
 }
 
 // ===== Categorías (familias) =====
 function renderCategories() {
-  console.trace("[TRACE] renderCategories()");
+  debugTrace("[TRACE] renderCategories()");
 
   const container = document.getElementById("categories");
   if (!container) return;
@@ -2723,7 +2877,7 @@ function updateRenderedProductStocks() {
 }
 
 function renderProducts() {
-  console.trace("[TRACE] renderProducts()");
+  debugTrace("[TRACE] renderProducts()");
 
   const grid = document.getElementById("productsGrid");
   if (!grid) return;
@@ -2785,7 +2939,11 @@ function renderProducts() {
   filtered.forEach((p) => {
     const tile = document.createElement("div");
 
-    tile.className = "product-tile" + (p.imageUrl ? "" : " no-img");
+    const safeImageUrl = BROKEN_PRODUCT_IMAGE_URLS.has(String(p.imageUrl || ""))
+      ? ""
+      : p.imageUrl;
+
+    tile.className = "product-tile" + (safeImageUrl ? "" : " no-img");
     tile.dataset.productId = String(Number(p.baseProductId || p.id || 0));
 
     const prodId = Number(p.baseProductId || p.id || 0);
@@ -2803,7 +2961,7 @@ function renderProducts() {
 
     tile.innerHTML = `
       <div class="product-img-wrapper">
-        ${p.imageUrl ? `<img src="${p.imageUrl}" class="product-img">` : ""}
+        ${safeImageUrl ? `<img src="${safeImageUrl}" class="product-img" loading="lazy" decoding="async">` : ""}
       </div>
 
       <div class="product-overlay-top">
@@ -2862,6 +3020,18 @@ function renderProducts() {
       }
     }
 
+    const imgEl = tile.querySelector(".product-img");
+    if (imgEl) {
+      imgEl.onerror = () => {
+        const src = String(imgEl.getAttribute("src") || "").trim();
+        if (src) BROKEN_PRODUCT_IMAGE_URLS.add(src);
+
+        tile.classList.add("no-img");
+        const wrap = tile.querySelector(".product-img-wrapper");
+        if (wrap) wrap.innerHTML = "";
+      };
+    }
+
     if (canEditPrices) {
       tile.style.position = "relative";
 
@@ -2885,7 +3055,9 @@ function renderProducts() {
 }
 
 function renderMainUI(force = false) {
-  console.log("[TRACE] renderMainUI cashSession.open=", cashSession?.open);
+  debugLog("[TRACE] renderMainUI cashSession.open=", cashSession?.open);
+
+  syncCashClosedUiState();
 
   if (!cashSession?.open) {
     const grid = document.getElementById("productsGrid");
@@ -3825,6 +3997,7 @@ function confirmModal(title, text, options = {}) {
   const textEl = document.getElementById("msgText");
   const okBtn = document.getElementById("msgOkBtn");
   const cancelBtn = document.getElementById("msgCancelBtn");
+  const midBtn = document.getElementById("msgMidBtn");
 
   if (!overlay || !titleEl || !textEl || !okBtn || !cancelBtn) {
     // fallback seguro si falta algo
@@ -3836,6 +4009,8 @@ function confirmModal(title, text, options = {}) {
     isHtml = false,
     textClassName = "",
     dialogClassName = "",
+    middleButtonText = "",
+    middleButtonResult = "middle",
   } = options || {};
 
   if (dialogEl) {
@@ -3856,6 +4031,12 @@ function confirmModal(title, text, options = {}) {
   textEl.style.overflowY = isHtml ? "visible" : "auto";
   textEl.style.paddingRight = "4px";
 
+  if (midBtn) {
+    const hasMiddle = String(middleButtonText || "").trim() !== "";
+    midBtn.textContent = hasMiddle ? String(middleButtonText) : "";
+    midBtn.classList.toggle("hidden", !hasMiddle);
+  }
+
   overlay.classList.remove("hidden");
   lockAppUI();
 
@@ -3863,6 +4044,7 @@ function confirmModal(title, text, options = {}) {
     const cleanup = () => {
       okBtn.onclick = null;
       cancelBtn.onclick = null;
+      if (midBtn) midBtn.onclick = null;
       window.removeEventListener("keydown", onKey);
       overlay.classList.add("hidden");
       unlockAppUI();
@@ -3890,6 +4072,13 @@ function confirmModal(title, text, options = {}) {
       cleanup();
       resolve(true);
     };
+
+    if (midBtn && !midBtn.classList.contains("hidden")) {
+      midBtn.onclick = () => {
+        cleanup();
+        resolve(middleButtonResult);
+      };
+    }
   });
 }
 
@@ -4623,6 +4812,11 @@ function updateParkedCountBadge() {
   const badge = document.getElementById("parkedCountBadge");
   if (!badge) return;
 
+  if (!cashSession?.open) {
+    badge.textContent = "0";
+    return;
+  }
+
   const pendingCount = (
     Array.isArray(parkedTickets) ? parkedTickets : []
   ).filter((t) => !t.paid).length;
@@ -4907,8 +5101,10 @@ function syncParkedToolbarUI() {
   );
 
   if (parkedClearPaidBtn) {
-    parkedClearPaidBtn.style.display =
-      parkedViewState.filter === "paid" ? "" : "none";
+    parkedClearPaidBtn.classList.toggle(
+      "hidden",
+      parkedViewState.filter !== "paid",
+    );
   }
 
   syncParkedSearchClearBtn();
@@ -5093,6 +5289,13 @@ function refreshParkedEditingBanner() {
   const obs = document.getElementById("parkedEditingObs");
 
   if (!wrap || !title || !obs) return;
+
+  if (!cashSession?.open) {
+    wrap.classList.add("hidden");
+    title.textContent = "";
+    obs.textContent = "";
+    return;
+  }
 
   const t =
     currentParkedTicketIndex !== null &&
@@ -5419,10 +5622,15 @@ function hydrateParkedItemForCart(item) {
     ...src,
     qty,
     _lineId: makeLineId(),
-    id: Number(src.id || src.idproducto || built?.id || baseId || 0) || undefined,
+    id:
+      Number(src.id || src.idproducto || built?.id || baseId || 0) || undefined,
     baseProductId:
       Number(
-        src.baseProductId || src.idproducto || built?.baseProductId || baseId || 0,
+        src.baseProductId ||
+          src.idproducto ||
+          built?.baseProductId ||
+          baseId ||
+          0,
       ) || undefined,
     name: String(src.name || src.descripcion || built?.name || "Producto"),
     secondaryName: String(
@@ -5430,7 +5638,10 @@ function hydrateParkedItemForCart(item) {
     ),
     imageUrl: src.imageUrl || built?.imageUrl || null,
     price: srcPrice != null ? srcPrice : Number(built?.price || 0),
-    grossPrice: srcGross != null ? srcGross : Number(built?.grossPrice || built?.price || 0),
+    grossPrice:
+      srcGross != null
+        ? srcGross
+        : Number(built?.grossPrice || built?.price || 0),
     taxRate: srcTax != null ? srcTax : Number(built?.taxRate || 0),
     codimpuesto: src.codimpuesto || built?.codimpuesto || null,
   };
@@ -6192,7 +6403,7 @@ function isCashCodpago(codpago) {
   if (CASH_CODPAGOS && CASH_CODPAGOS instanceof Set && CASH_CODPAGOS.size) {
     return CASH_CODPAGOS.has(c);
   }
-  return c === "CONT" || c === "EFEC" || c === "CASH";
+  return looksLikeCashMethod({ codpago: c, descripcion: "" });
 }
 
 function renderCashCloseHeaderCard(remoteCaja) {
@@ -7658,12 +7869,15 @@ async function buildAgentSalesSummaryForCaja(idcaja) {
 function closeCashOpenDialog() {
   if (!cashOpenOverlay) return;
 
+  closeWithParkedPreConfirmed = false;
   cashOpenOverlay.classList.add("hidden");
   unlockAppUI?.();
+  syncCashClosedUiState?.();
 }
 
 const cashOpenCloseX = document.getElementById("cashOpenCloseX");
 const cashOpenCancelBtn = document.getElementById("cashOpenCancelBtn");
+let closeWithParkedPreConfirmed = false;
 
 cashOpenCloseX?.addEventListener("click", closeCashOpenDialog);
 cashOpenCancelBtn?.addEventListener("click", closeCashOpenDialog);
@@ -8161,6 +8375,7 @@ if (cashOpenOverlay && !cashOpenOverlay.dataset.cashBound) {
 
 function hideCashOpenDialog() {
   if (!cashOpenOverlay) return;
+  closeWithParkedPreConfirmed = false;
   cashOpenOverlay.classList.add("hidden");
   unlockAppUI?.();
 }
@@ -8487,31 +8702,12 @@ async function fetchFormasPagoActivas(opts = {}) {
       }))
       .filter((x) => x.codpago);
 
-    // ✅ Detectar cuáles son "efectivo/contado" desde la API (sin hardcodear códigos)
-    try {
-      window.__CASH_CODPAGOS__ = list
-        .filter((f) => {
-          const desc = String(f.descripcion || "").toLowerCase();
-          return (
-            desc.includes("contado") ||
-            desc.includes("efectivo") ||
-            desc.includes("cash")
-          );
-        })
-        .map((f) =>
-          String(f.codpago || "")
-            .trim()
-            .toUpperCase(),
-        );
-    } catch (e) {
-      window.__CASH_CODPAGOS__ = [];
-    }
-
     // Guardar caché SIEMPRE que haya algo válido
     if (list.length) savePayMethodsCache(list);
 
     // ✅ construir lista de codpago que son EFECTIVO, basado en /formapagos
     CASH_CODPAGOS = buildCashCodpagosFromFormapagos(list);
+    window.__CASH_CODPAGOS__ = Array.from(CASH_CODPAGOS);
 
     return list;
   } catch (e) {
@@ -8519,6 +8715,7 @@ async function fetchFormasPagoActivas(opts = {}) {
     const cached = loadPayMethodsCache();
     if (Array.isArray(cached) && cached.length) {
       CASH_CODPAGOS = buildCashCodpagosFromFormapagos(cached);
+      window.__CASH_CODPAGOS__ = Array.from(CASH_CODPAGOS);
       return cached;
     }
 
@@ -8526,6 +8723,7 @@ async function fetchFormasPagoActivas(opts = {}) {
       { codpago: "CONT", descripcion: "Al contado", imprimir: true },
     ];
     CASH_CODPAGOS = buildCashCodpagosFromFormapagos(fallback);
+    window.__CASH_CODPAGOS__ = Array.from(CASH_CODPAGOS);
     return fallback;
   }
 }
@@ -8690,6 +8888,8 @@ const cashOpenOkBtn = document.getElementById("cashOpenOkBtn");
 
 if (cashOpenCancelBtn) {
   cashOpenCancelBtn.onclick = () => {
+    closeWithParkedPreConfirmed = false;
+
     // ✅ Si cancela apertura, permitir que vuelva a mostrarse luego
     if (cashDialogMode === "open") {
       cashOpenDialogShown = false; // <-- CLAVE anti-limbo
@@ -8732,18 +8932,44 @@ if (cashOpenOkBtn) {
       const parkedCount = Array.isArray(parkedTickets)
         ? parkedTickets.length
         : 0;
+
+      // Releer valor efectivo para evitar cierres bloqueados por estado stale.
+      await loadAllowCloseWithParkedToggle();
+
+      let closeQuestion =
+        "¿Seguro que quieres cerrar la caja?\n\nEsta acción registrará el cierre y no se puede deshacer.";
+
       if (parkedCount > 0) {
-        await confirmModal(
-          "No puedes cerrar la caja",
-          `Tienes ${parkedCount} ticket(s) aparcado(s).\n\nRecupéralos (o elimínalos) antes de cerrar la caja.`,
-        );
-        openParkedModal();
-        return;
+        if (!allowCloseWithParkedTickets) {
+          await confirmModal(
+            "No puedes cerrar la caja",
+            `Tienes ${parkedCount} ticket(s) aparcado(s).\n\nRecupéralos (o elimínalos) antes de cerrar la caja.`,
+          );
+          openParkedModal();
+          return;
+        }
+
+        if (!closeWithParkedPreConfirmed) {
+          const okWithParked = await confirmModal(
+            "Tickets aparcados",
+            `Tienes ${parkedCount} ticket(s) aparcado(s).\n\nSe conservarán para recuperarlos después.\n\n¿Cerrar caja de todos modos?`,
+            {
+              middleButtonText: "Revisar aparcados",
+              middleButtonResult: "parked",
+            },
+          );
+
+          if (okWithParked === "parked") {
+            openParkedModal();
+            return;
+          }
+          if (!okWithParked) return;
+        }
+
+        closeWithParkedPreConfirmed = false;
       }
 
-      const ok = await confirmCashCloseModal(
-        "¿Seguro que quieres cerrar la caja?\n\nEsta acción registrará el cierre y no se puede deshacer.",
-      );
+      const ok = await confirmCashCloseModal(closeQuestion);
       if (!ok) return;
 
       // LOG: abrió ventana cerrar caja
@@ -9144,15 +9370,39 @@ async function handleCashHeaderAction(opts = {}) {
 
     const parkedCount = Array.isArray(parkedTickets) ? parkedTickets.length : 0;
 
+    // Releer valor efectivo por si el toggle cambió en opciones recientemente.
+    await loadAllowCloseWithParkedToggle();
+
     if (parkedCount > 0) {
-      await confirmModal(
+      if (!allowCloseWithParkedTickets) {
+        await confirmModal(
+          "Tickets aparcados",
+          `Tienes ${parkedCount} ticket${parkedCount === 1 ? "" : "s"} aparcado${
+            parkedCount === 1 ? "" : "s"
+          }.\n\nAntes de cerrar la caja, recupera o elimina los tickets aparcados.`,
+        );
+        openParkedModal();
+        return false;
+      }
+
+      const okWithParked = await confirmModal(
         "Tickets aparcados",
         `Tienes ${parkedCount} ticket${parkedCount === 1 ? "" : "s"} aparcado${
           parkedCount === 1 ? "" : "s"
-        }.\n\nAntes de cerrar la caja, recupera o elimina los tickets aparcados.`,
+        }.\n\nSe conservarán para recuperarlos después.\n\n¿Cerrar caja de todos modos?`,
+        {
+          middleButtonText: "Revisar aparcados",
+          middleButtonResult: "parked",
+        },
       );
-      openParkedModal();
-      return false;
+
+      if (okWithParked === "parked") {
+        openParkedModal();
+        return false;
+      }
+      if (!okWithParked) return false;
+
+      closeWithParkedPreConfirmed = true;
     }
 
     openCashOpenDialog("close");
@@ -10438,6 +10688,12 @@ function refreshOptionsUI() {
   const stockEditToggle = document.getElementById("productStockEditToggle");
   if (stockEditToggle) stockEditToggle.checked = !!enableProductStockEdition;
 
+  const allowCloseParkedToggle = document.getElementById(
+    "allowCloseWithParkedToggle",
+  );
+  if (allowCloseParkedToggle)
+    allowCloseParkedToggle.checked = !!allowCloseWithParkedTickets;
+
   const t = document.getElementById("priceEditModeToggle");
   if (t) {
     t.disabled = !isAdminUser();
@@ -10580,6 +10836,11 @@ function bindAutostartToggleOnce() {
 }
 
 async function openOptions() {
+  if (!cashSession?.open) {
+    toast("Debes abrir la caja para acceder a opciones.", "info", "Opciones");
+    return;
+  }
+
   try {
     await ensureLoginAutoOrPrompt?.();
   } catch {}
@@ -10599,6 +10860,9 @@ async function openOptions() {
 
   bindProductStockEditionToggleOnce();
   await loadProductStockEditionToggle();
+
+  bindAllowCloseWithParkedToggleOnce();
+  await loadAllowCloseWithParkedToggle();
 
   bindAutostartToggleOnce();
   await loadAutostartToggle();
@@ -11440,12 +11704,63 @@ async function renderPayments(doc, ticket, totalToShow) {
   }
 
   const wrap = doc.getElementById("payments");
+  const cashBlockTitle = doc.getElementById("cashBlockTitle");
+  const cashBlockSep = doc.getElementById("cashBlockSep");
   const cashRow = doc.getElementById("cashRow");
   const cashGiven = doc.getElementById("cashGiven");
+  const cashLabel = doc.getElementById("cashLabel");
   const changeRow = doc.getElementById("changeRow");
   const changeCash = doc.getElementById("changeCash");
+  const changeLabel = doc.getElementById("changeLabel");
 
-  const cashMeta = ticket?.cashMeta || null;
+  const rawNumero2 = String(ticket?.numero2 || ticket?._raw?.numero2 || "")
+    .trim()
+    .toUpperCase();
+
+  const isRefundTicket =
+    rawNumero2.startsWith("REFUND|") ||
+    Number(ticket?.idfacturarect || ticket?._raw?.idfacturarect || 0) > 0 ||
+    Number(totalToShow || 0) < 0 ||
+    pagos.some((p) => Number(p?.importe || 0) < 0);
+
+  const inferredCashPaid = pagos
+    .filter((p) =>
+      isCashPago({
+        codpago: p?.codpago,
+        descripcion: p?.descripcion,
+      }),
+    )
+    .reduce((s, p) => s + (Number(p?.importe || 0) || 0), 0);
+
+  const apiCashTendered = Number(
+    ticket?.tpv_efectivo ?? ticket?._raw?.tpv_efectivo,
+  );
+  const apiChange = Number(ticket?.tpv_cambio ?? ticket?._raw?.tpv_cambio);
+
+  const hasApiCashInfo =
+    isFinite(apiCashTendered) ||
+    (isFinite(apiChange) && Math.abs(apiChange || 0) > 0.009);
+
+  const cashMeta =
+    (hasApiCashInfo
+      ? {
+          hasCash: Math.abs(Number(apiCashTendered || 0)) > 0.009,
+          total: Number(totalToShow || 0) || 0,
+          cashPaid: Number(apiCashTendered || 0),
+          cashTendered: Number(apiCashTendered || 0),
+          change: Number(apiChange || 0),
+        }
+      : null) ||
+    ticket?.cashMeta ||
+    (Math.abs(inferredCashPaid) > 0.009
+      ? {
+          hasCash: true,
+          total: Number(totalToShow || 0) || 0,
+          cashPaid: inferredCashPaid,
+          cashTendered: inferredCashPaid,
+          change: 0,
+        }
+      : null);
 
   if (!wrap) {
     const paymentMethodEl = doc.getElementById("paymentMethod");
@@ -11483,22 +11798,52 @@ async function renderPayments(doc, ticket, totalToShow) {
     wrap.appendChild(row);
   });
 
-  // Entregado / Cambio (solo si hubo efectivo real)
-  if (cashMeta && cashMeta.hasCash && Number(cashMeta.cashTendered || 0) > 0) {
+  // Entregado / Cambio o Devolución (también en reimpresión histórica)
+  if (
+    cashMeta &&
+    cashMeta.hasCash &&
+    Math.abs(Number(cashMeta.cashTendered || 0)) > 0.009
+  ) {
+    const cashTenderedAbs = Math.abs(Number(cashMeta.cashTendered || 0));
+    const cashPaidAbs = Math.abs(Number(cashMeta.cashPaid || 0));
+    const safeCashValue =
+      cashTenderedAbs > 0.009 ? cashTenderedAbs : cashPaidAbs;
+    const changeAbs = Math.abs(Number(cashMeta.change || 0));
+    const shouldShowTenderedRow = isRefundTicket || changeAbs > 0.009;
+    const shouldShowChangeRow = !isRefundTicket && changeAbs > 0.009;
+    const shouldShowCashBlock = shouldShowTenderedRow || shouldShowChangeRow;
+
+    if (cashBlockTitle) {
+      cashBlockTitle.style.display = shouldShowCashBlock ? "block" : "none";
+    }
+
+    if (cashBlockSep) {
+      cashBlockSep.style.display = shouldShowCashBlock ? "block" : "none";
+    }
+
     if (cashRow && cashGiven) {
-      cashRow.style.display = "flex";
-      cashGiven.textContent = eurTicket(cashMeta.cashTendered);
+      if (!shouldShowTenderedRow) {
+        cashRow.style.display = "none";
+      } else {
+        cashRow.style.display = "flex";
+        cashGiven.textContent = eurTicket(safeCashValue);
+        if (cashLabel)
+          cashLabel.textContent = isRefundTicket ? "Devolución" : "Entregado";
+      }
     }
 
     if (changeRow && changeCash) {
-      if (Number(cashMeta.change || 0) > 0) {
+      if (shouldShowChangeRow) {
         changeRow.style.display = "flex";
-        changeCash.textContent = eurTicket(cashMeta.change);
+        changeCash.textContent = eurTicket(changeAbs);
+        if (changeLabel) changeLabel.textContent = "Cambio";
       } else {
         changeRow.style.display = "none";
       }
     }
   } else {
+    if (cashBlockTitle) cashBlockTitle.style.display = "none";
+    if (cashBlockSep) cashBlockSep.style.display = "none";
     if (cashRow) cashRow.style.display = "none";
     if (changeRow) changeRow.style.display = "none";
   }
@@ -12571,7 +12916,10 @@ function saveParkedTicketsCache(list = parkedTickets) {
   try {
     localStorage.setItem(PARKED_TICKETS_CACHE_KEY, JSON.stringify(safe));
   } catch (e) {
-    console.warn("No se pudo guardar cache local de aparcados:", e?.message || e);
+    console.warn(
+      "No se pudo guardar cache local de aparcados:",
+      e?.message || e,
+    );
   }
 }
 
@@ -12622,7 +12970,10 @@ function loadParkedSyncQueue() {
 function saveParkedSyncQueue(queue) {
   try {
     const safe = Array.isArray(queue) ? queue : [];
-    localStorage.setItem(PARKED_SYNC_QUEUE_KEY, JSON.stringify(safe.slice(-2000)));
+    localStorage.setItem(
+      PARKED_SYNC_QUEUE_KEY,
+      JSON.stringify(safe.slice(-2000)),
+    );
   } catch (e) {
     console.warn("No se pudo guardar cola de aparcados:", e?.message || e);
   }
@@ -12704,8 +13055,12 @@ function syncParkedTicketsFromRemote(list) {
   const paidHistory = cachedAll
     .filter((t) => !!t.paid)
     .sort((a, b) => {
-      const ta = new Date(a?.paidAt || a?.updatedAt || a?.createdAt || 0).getTime();
-      const tb = new Date(b?.paidAt || b?.updatedAt || b?.createdAt || 0).getTime();
+      const ta = new Date(
+        a?.paidAt || a?.updatedAt || a?.createdAt || 0,
+      ).getTime();
+      const tb = new Date(
+        b?.paidAt || b?.updatedAt || b?.createdAt || 0,
+      ).getTime();
       return tb - ta;
     })
     .slice(0, 500);
@@ -12738,7 +13093,10 @@ function syncParkedTicketsFromRemote(list) {
   refreshParkButtonUI?.();
   refreshParkedEditingBanner?.();
 
-  if (parkedTicketsOverlay && !parkedTicketsOverlay.classList.contains("hidden")) {
+  if (
+    parkedTicketsOverlay &&
+    !parkedTicketsOverlay.classList.contains("hidden")
+  ) {
     renderParkedTicketsModal?.();
   }
 }
@@ -12775,9 +13133,7 @@ async function apiListParkedReservations() {
 
   const syncApiKey = getTpvSyncApiKey();
   if (!syncApiKey) {
-    throw new Error(
-      "Falta TPV_CONFIG.tpvApiKey para listar reservas remotas.",
-    );
+    throw new Error("Falta TPV_CONFIG.tpvApiKey para listar reservas remotas.");
   }
 
   const url = `${TPV_SYNC_API_URL}?action=list-parked-reservations&slug=${encodeURIComponent(slug)}`;
@@ -12902,9 +13258,7 @@ async function apiDeleteParkedReservation(ticket) {
 
   if (!slug || !cajaId || !ticket?.id) return false;
   if (!syncApiKey) {
-    throw new Error(
-      "Falta TPV_CONFIG.tpvApiKey para borrar reservas remotas.",
-    );
+    throw new Error("Falta TPV_CONFIG.tpvApiKey para borrar reservas remotas.");
   }
 
   const payload = {
@@ -13269,7 +13623,9 @@ async function onPayButtonClick() {
         idfactura: null,
         codigo:
           lastTicket?.numero ||
-          `OFF-${String(sendResult.localId || "").slice(0, 6).toUpperCase()}`,
+          `OFF-${String(sendResult.localId || "")
+            .slice(0, 6)
+            .toUpperCase()}`,
       });
 
       cart = [];
@@ -13520,26 +13876,24 @@ function moneyToNumber(v) {
 // ===== Setting: Abrir cajón siempre =====
 
 function isCashPago(p) {
-  const code = String(p?.codpago || "")
-    .trim()
-    .toUpperCase();
-  const desc = String(p?.descripcion || "")
-    .trim()
-    .toLowerCase();
+  const code = normalizeCashText(p?.codpago || "");
 
   const set = Array.isArray(window.__CASH_CODPAGOS__)
-    ? window.__CASH_CODPAGOS__
+    ? window.__CASH_CODPAGOS__.map((x) => normalizeCashText(x))
     : [];
 
   // 1) si el API ya marcó cuáles son cash, usamos eso
   if (set.length && set.includes(code)) return true;
 
-  // 2) fallback por descripción (por si no cargó formapagos aún)
-  return (
-    desc.includes("contado") ||
-    desc.includes("efectivo") ||
-    desc.includes("cash")
-  );
+  if (CASH_CODPAGOS && CASH_CODPAGOS instanceof Set && CASH_CODPAGOS.size) {
+    if (CASH_CODPAGOS.has(code)) return true;
+  }
+
+  // 2) fallback por código/descripcion (por si no cargó formapagos aún)
+  return looksLikeCashMethod({
+    codpago: p?.codpago,
+    descripcion: p?.descripcion,
+  });
 }
 
 // payResult = lo que te devuelve crearFacturaCliente (o el endpoint que uses)
@@ -13609,6 +13963,8 @@ async function apiUpdateCajaAfterSale({ totalVenta, pagos }) {
 const clearBtn = document.getElementById("clearCartBtn");
 if (clearBtn) {
   clearBtn.onclick = () => {
+    if (!cashSession?.open) return;
+
     cart = [];
     renderCart();
     currentParkedTicketIndex = null;
@@ -13644,22 +14000,53 @@ if (printTicketBtn) {
 // ===== EFECTIVO desde /formapagos =====
 let CASH_CODPAGOS = new Set();
 
+const CASH_DESC_HINTS = [
+  "contado",
+  "efectivo",
+  "cash",
+  "metalico",
+  "metalic",
+  "billete",
+  "moneda",
+];
+
+const CASH_CODE_HINTS = ["CONT", "EFEC", "CASH", "METAL", "MET", "EFE"];
+
+function normalizeCashText(s) {
+  return String(s || "")
+    .trim()
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function looksLikeCashMethod({ codpago, descripcion }) {
+  const code = normalizeCashText(codpago);
+  const descNorm = normalizeCashText(descripcion).toLowerCase();
+
+  if (!code && !descNorm) return false;
+
+  if (CASH_CODE_HINTS.some((k) => code === k || code.startsWith(k))) {
+    return true;
+  }
+
+  return CASH_DESC_HINTS.some((k) => descNorm.includes(k));
+}
+
 function buildCashCodpagosFromFormapagos(list) {
   const s = new Set();
 
   (list || []).forEach((fp) => {
-    const cod = String(fp.codpago || "").trim();
-    const desc = String(fp.descripcion || "")
-      .trim()
-      .toLowerCase();
+    const cod = normalizeCashText(fp.codpago);
 
-    // regla automática por descripción
     if (
-      desc.includes("contado") ||
-      desc.includes("efectivo") ||
-      desc.includes("cash")
+      cod &&
+      looksLikeCashMethod({
+        codpago: cod,
+        descripcion: fp.descripcion,
+      })
     ) {
-      if (cod) s.add(cod);
+      s.add(cod);
     }
   });
 
@@ -14385,6 +14772,11 @@ function closeParkObsModal() {
 }
 
 parkBtn?.addEventListener("click", () => {
+  if (!cashSession?.open) {
+    toast("Abre la caja para aparcar tickets.", "warn", "Aparcar");
+    return;
+  }
+
   // 1) No permitir aparcar si el carrito está vacío
   if (!Array.isArray(cart) || cart.length === 0) {
     toast("No puedes aparcar un ticket vacío.", "warn", "Aparcar");
@@ -14431,6 +14823,11 @@ parkObsKeyboardBtn?.addEventListener("click", () => {
 const parkedListBtn = document.getElementById("parkedListBtn");
 if (parkedListBtn) {
   parkedListBtn.onclick = () => {
+    if (!cashSession?.open) {
+      toast("Abre la caja para ver aparcados.", "info", "Aparcados");
+      return;
+    }
+
     openParkedModal();
   };
 }
@@ -14519,6 +14916,11 @@ function setCajaGroupOpen(cajaId, open) {
 }
 
 async function openTicketsModal() {
+  if (!cashSession?.open) {
+    toast("Abre la caja para ver tickets.", "info", "Tickets");
+    return;
+  }
+
   if (!ticketsOverlay) {
     toast(
       "Falta el HTML del modal de tickets (#ticketsOverlay).",
@@ -15395,14 +15797,14 @@ async function bootstrapApp() {
     const methods = await fetchFormasPagoActivas({
       forceOnlineIfPossible: true,
     });
-    console.log("Formas de pago precargadas:", methods?.length || 0);
+    debugLog("Formas de pago precargadas:", methods?.length || 0);
   } catch (e) {
     console.warn("No se pudieron precargar formapagos:", e?.message || e);
   }
 
   try {
     const list = await refreshTicketsCacheFromServer(); // usa tu función (limit 300)
-    console.log("Tickets precargados:", list?.length || 0);
+    debugLog("Tickets precargados:", list?.length || 0);
   } catch (e) {
     console.warn("No se pudieron precargar tickets:", e?.message || e);
   }
@@ -15453,6 +15855,8 @@ function logCompanyCfg(where = "") {
 }
 
 function warnIfDemoBaseUrl(where = "") {
+  window.__tpvDemoWarnedKeys = window.__tpvDemoWarnedKeys || new Set();
+
   try {
     const base = (
       window.RECIPOK_API?.baseUrl ||
@@ -15461,7 +15865,11 @@ function warnIfDemoBaseUrl(where = "") {
     ).trim();
 
     if (/\/demo\/api\/\d+/i.test(base)) {
-      console.warn(`[WARN] baseUrl apunta a DEMO ${where}:`, base);
+      const key = `${base}|${String(where || "")}`;
+      if (!window.__tpvDemoWarnedKeys.has(key)) {
+        window.__tpvDemoWarnedKeys.add(key);
+        console.warn(`[WARN] baseUrl apunta a DEMO ${where}:`, base);
+      }
     }
   } catch {}
 }
@@ -15673,7 +16081,7 @@ async function resumePendingCompanyActivation(opts = {}) {
 }
 
 async function bootstrapCompany() {
-  console.log("bootstrapCompany() ejecutándose...");
+  debugLog("bootstrapCompany() ejecutándose...");
 
   await hydrateLegacyCompanyFromCfg();
   await repairCompanyPersistenceIfNeeded();
@@ -16133,7 +16541,9 @@ async function fetchApiResourceWithParams(resource, params = {}) {
 }
 
 function getCurrentWarehouseCode() {
-  return String(currentTerminal?.codalmacen || getLoginWarehouse() || "").trim();
+  return String(
+    currentTerminal?.codalmacen || getLoginWarehouse() || "",
+  ).trim();
 }
 
 async function fetchStockRowForProduct(product) {
@@ -17598,9 +18008,22 @@ async function imprimirFacturaHistorica(facturaRow) {
       total: Number(facturaRow?.total || 0),
       pagos: Array.isArray(facturaRow?.pagos) ? facturaRow.pagos : [],
       cambio: Number(facturaRow?.cambio || 0),
+      codserie: String(
+        facturaRow?.codserie || facturaRow?._raw?.codserie || "S",
+      ),
+      numero2: String(facturaRow?.numero2 || facturaRow?._raw?.numero2 || ""),
+      idfacturarect: Number(
+        facturaRow?.idfacturarect || facturaRow?._raw?.idfacturarect || 0,
+      ),
       _offline: true,
       _localId: facturaRow?._localId || null,
     };
+
+    ticket.cashMeta = buildCashTicketMeta({
+      pagos: ticket.pagos,
+      total: ticket.total,
+      cambio: ticket.cambio,
+    });
 
     const ticketReady = preparePrintableTicket(ticket);
     await printTicket(ticketReady);
@@ -17647,6 +18070,8 @@ async function imprimirFacturaHistorica(facturaRow) {
   const ticket = {
     ...ticketBase,
     idfactura: id,
+    codserie: String(raw.codserie || facturaRow?.codserie || "S"),
+    numero2: String(raw.numero2 || facturaRow?.numero2 || ""),
     idfacturarect: Number(raw.idfacturarect || facturaRow?.idfacturarect || 0),
 
     // ✅ IMPORTANTE: estas son las que usará tu diseño
@@ -17655,6 +18080,12 @@ async function imprimirFacturaHistorica(facturaRow) {
     _raw: raw,
     pagos,
   };
+
+  ticket.cashMeta = buildCashTicketMeta({
+    pagos,
+    total: Number(ticket.total || facturaRow?.total || 0),
+    cambio: Number(facturaRow?.cambio || raw?.tpv_cambio || 0),
+  });
 
   const ticketReady = preparePrintableTicket(ticket);
   await printTicket(ticketReady);
@@ -19449,7 +19880,8 @@ function saveOfflineTicketForTicketsModal(t) {
     const lineas = Array.isArray(t?.lineas) ? t.lineas : [];
     const totalFromLines = lineas.reduce((acc, ln) => {
       const qty = Number(ln?.qty ?? ln?.cantidad ?? 1) || 1;
-      const unit = Number(ln?.grossPrice ?? ln?.price ?? ln?.pvpunitario ?? 0) || 0;
+      const unit =
+        Number(ln?.grossPrice ?? ln?.price ?? ln?.pvpunitario ?? 0) || 0;
       return acc + qty * unit;
     }, 0);
 

@@ -572,6 +572,12 @@ body {
   font-size: 13px;
 }
 
+.cart-header-box:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 /* --- 2.2 Fila terminal/agente --- */
 
 .cart-terminal-row {
@@ -790,6 +796,11 @@ body {
   opacity: 0.5;
   cursor: default;
   box-shadow: none;
+}
+
+.cart-btn:disabled .cart-badge {
+  background: #d1d5db;
+  color: #6b7280;
 }
 
 .cart-btn-pay {

@@ -218,12 +218,17 @@
       <!-- Totales / Pagos (se rellena por JS) -->
       <div id="payments"></div>
 
+      <div class="small bold muted" id="cashBlockTitle" style="display: none">
+        Movimiento efectivo
+      </div>
+      <div class="sep" id="cashBlockSep" style="display: none"></div>
+
       <div class="row small muted" id="cashRow" style="display: none">
-        <div>Entregado</div>
+        <div id="cashLabel">Entregado</div>
         <div class="right" id="cashGiven">0,00</div>
       </div>
       <div class="row small muted" id="changeRow" style="display: none">
-        <div>Cambio</div>
+        <div id="changeLabel">Cambio</div>
         <div class="right" id="changeCash">0,00</div>
       </div>
 

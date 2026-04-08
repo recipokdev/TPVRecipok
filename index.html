@@ -800,6 +800,7 @@
         <div id="msgText" style="margin: 10px 0; font-size: 14px"></div>
         <div class="dialog-actions">
           <button id="msgCancelBtn">Cancelar</button>
+          <button id="msgMidBtn" class="hidden">Revisar</button>
           <button id="msgOkBtn">Aceptar</button>
         </div>
       </div>
@@ -1713,6 +1714,19 @@
                 </div>
                 <label class="switch">
                   <input type="checkbox" id="productStockEditToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Permitir cerrar con aparcados</div>
+                  <div class="opt-row-sub">
+                    Si hay tickets aparcados, permite cerrar caja mostrando una
+                    confirmación. Los tickets aparcados se conservan.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="allowCloseWithParkedToggle" />
                   <span class="slider"></span>
                 </label>
               </div>
