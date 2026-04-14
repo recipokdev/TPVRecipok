@@ -221,6 +221,148 @@ const cartClientInput = document.querySelector(".cart-client-input");
 // ===== Funciones auxiliares =====
 
 // ===============================
+// Log final cerrar caja Helpers
+// ===============================
+
+function cleanCajaLogValue(value) {
+  return String(value || "")
+    .replace(/\r\n/g, " ")
+    .replace(/\n/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function formatParkedAuditAmount(value) {
+  const n = Number(value);
+  return (Number.isFinite(n) ? n : 0).toFixed(2).replace(".", ",") + " €";
+}
+
+async function appendCajaAutoLogLinesForId(idcaja, lines) {
+  if (!idcaja) return;
+
+  const safeLines = (Array.isArray(lines) ? lines : [lines])
+    .map((line) => cleanCajaLogValue(line))
+    .filter(Boolean);
+
+  if (!safeLines.length) return;
+
+  return enqueueCajaObsWrite(idcaja, async () => {
+    const remoteCaja = await apiReadCajaById(idcaja);
+    const rawObs = remoteCaja?.observaciones ?? "";
+    const { userText, autoLines } = splitCajaObservaciones(rawObs);
+
+    autoLines.push(...safeLines);
+    const merged = buildCajaObservaciones(userText, autoLines);
+
+    await updateTpvcajaObservaciones(idcaja, merged);
+  });
+}
+
+function getCajaLogCtx() {
+  return {
+    agentName: currentAgent?.name || currentAgent?.nick || "—",
+    tpvName: currentTerminal?.name || "—",
+  };
+}
+
+function getParkedTicketDisplayName(ticket) {
+  return (
+    cleanCajaLogValue(
+      ticket?.label ||
+        ticket?.name ||
+        ticket?.obs ||
+        ticket?.clientName ||
+        "Sin nombre",
+    ) || "Sin nombre"
+  );
+}
+
+function buildParkedManualDeleteLogLine(ticket) {
+  const isPaid = !!ticket?.paid;
+
+  const extra = [
+    `Aparcado #${ticket?.id ?? "—"}`,
+    shouldShowParkedName(ticket)
+      ? `Nombre: ${getParkedTicketDisplayName(ticket)}`
+      : "",
+    isPaid && ticket?.paidTicketCode
+      ? `Factura: ${cleanCajaLogValue(ticket.paidTicketCode)}`
+      : "",
+    `Total: ${formatParkedAuditAmount(ticket?.total)}`,
+  ]
+    .filter(Boolean)
+    .join(" | ");
+
+  return buildCajaLogLineWith(
+    getCajaLogCtx(),
+    isPaid ? "BORRÓ APARCADO YA COBRADO" : "BORRÓ APARCADO SIN COBRAR",
+    extra,
+  );
+}
+
+function buildParkedBulkClearHeaderLine(count) {
+  return buildCajaLogLineWith(
+    getCajaLogCtx(),
+    "VACIÓ HISTORIAL APARCADOS COBRADOS",
+    `Cantidad: ${count}`,
+  );
+}
+
+function buildParkedBulkClearItemLine(ticket, index) {
+  return [
+    `[VACIADO ${Number(index) + 1}]`,
+    `Aparcado #${ticket?.id ?? "—"}`,
+    shouldShowParkedName(ticket)
+      ? `Nombre: ${getParkedTicketDisplayName(ticket)}`
+      : "",
+    ticket?.paidTicketCode
+      ? `Factura: ${cleanCajaLogValue(ticket.paidTicketCode)}`
+      : "",
+    `Total: ${formatParkedAuditAmount(ticket?.total)}`,
+  ]
+    .filter(Boolean)
+    .join(" | ");
+}
+
+function shouldShowParkedName(ticket) {
+  const id = ticket?.id ?? "";
+  const name = getParkedTicketDisplayName(ticket).toLowerCase();
+
+  const autoNames = [
+    `ticket #${id}`.toLowerCase(),
+    `aparcado #${id}`.toLowerCase(),
+  ];
+
+  return !autoNames.includes(name);
+}
+
+function buildCajaAutoLogText(lines) {
+  const items = Array.isArray(lines)
+    ? lines.map((x) => String(x || "").trim()).filter(Boolean)
+    : [];
+
+  if (!items.length) return "";
+
+  const isBulkItem = (line) => /^\[VACIADO(?:\s+\d+)?\]/.test(line);
+  const isBulkHeader = (line) =>
+    line.includes("VACIÓ HISTORIAL APARCADOS COBRADOS");
+
+  let out = items[0];
+
+  for (let i = 1; i < items.length; i++) {
+    const prev = items[i - 1];
+    const curr = items[i];
+
+    const sameBulkBlock =
+      isBulkItem(curr) && (isBulkHeader(prev) || isBulkItem(prev));
+
+    out += sameBulkBlock ? `\n${curr}` : `\n\n${curr}`;
+  }
+
+  return out;
+}
+
+// ===============================
 // Aparcar o Reservar en Plesk, obtener datos dinamicamente desde plesk
 // ===============================
 
@@ -5110,11 +5252,13 @@ function syncParkedToolbarUI() {
   syncParkedSearchClearBtn();
 }
 
-function clearPaidParkedHistory() {
-  parkedTickets = (Array.isArray(parkedTickets) ? parkedTickets : []).filter(
-    (t) => !t?.paid,
-  );
+async function clearPaidParkedHistory() {
+  const source = Array.isArray(parkedTickets) ? parkedTickets : [];
+  const removedPaid = source.filter((t) => !!t?.paid);
 
+  if (!removedPaid.length) return;
+
+  parkedTickets = source.filter((t) => !t?.paid);
   saveParkedTicketsCache(parkedTickets);
 
   if (
@@ -5129,6 +5273,23 @@ function clearPaidParkedHistory() {
   refreshParkButtonUI?.();
   refreshParkedEditingBanner?.();
   renderParkedTicketsModal?.();
+
+  try {
+    const idcaja = getCajaIdSafe();
+    if (idcaja) {
+      const lines = [
+        buildParkedBulkClearHeaderLine(removedPaid.length),
+        ...removedPaid.map((t, i) => buildParkedBulkClearItemLine(t, i)),
+      ];
+
+      await appendCajaAutoLogLinesForId(idcaja, lines);
+    }
+  } catch (e) {
+    console.warn(
+      "No se pudo registrar el vaciado de tickets completados en la caja:",
+      e?.message || e,
+    );
+  }
 }
 
 function ensureParkedToolbar() {
@@ -5260,7 +5421,7 @@ function ensureParkedToolbar() {
     );
     if (!ok) return;
 
-    clearPaidParkedHistory();
+    await clearPaidParkedHistory();
     toast("Historial de cobrados limpiado.", "ok", "Aparcados");
   });
 
@@ -5476,6 +5637,21 @@ function renderParkedTicketsModal() {
 
         parkedTickets.splice(realIndex, 1);
         saveParkedTicketsCache();
+
+        try {
+          const idcaja = getCajaIdSafe();
+          if (idcaja) {
+            await appendCajaAutoLogLineForId(
+              idcaja,
+              buildParkedManualDeleteLogLine(t),
+            );
+          }
+        } catch (e) {
+          console.warn(
+            "No se pudo registrar el borrado del ticket aparcado en la caja:",
+            e?.message || e,
+          );
+        }
 
         if (currentParkedTicketIndex === realIndex) {
           currentParkedTicketIndex = null;
@@ -8203,7 +8379,7 @@ function buildCashClosePrintData(remoteCaja) {
   const obs = String(document.getElementById("cashObs")?.value || "").trim();
   const rawCajaObs = String(remoteCaja?.observaciones || "");
   const { autoLines } = splitCajaObservaciones(rawCajaObs);
-  const autoLogText = Array.isArray(autoLines) ? autoLines.join("\n\n") : "";
+  const autoLogText = buildCajaAutoLogText(autoLines);
 
   return {
     fecha,
