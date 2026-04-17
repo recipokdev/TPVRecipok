@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TPV Local Recipok - Modo Mesas</title>
+    <link rel="stylesheet" href="mesas.css" />
+  </head>
+  <body>
+    <header class="mesas-header">
+      <div class="mesas-header-left">
+        <div class="brand">TPV Mesas</div>
+        <nav class="mesas-tabs">
+          <button type="button" class="mesas-tab is-active" data-view="mapa">
+            Mapa de Salas
+          </button>
+          <button type="button" class="mesas-tab" data-view="transacciones">
+            Transacciones
+          </button>
+          <button type="button" class="mesas-tab" data-view="diseno">
+            Disenar Salas
+          </button>
+        </nav>
+      </div>
+
+      <div class="mesas-header-right">
+        <button
+          type="button"
+          id="switchToNormalBtn"
+          class="switch-mode-btn"
+          title="Volver al TPV normal"
+        >
+          TPV Normal
+        </button>
+        <div class="clock-wrap">
+          <div id="mesasClock" class="clock">--:--</div>
+          <div id="mesasDate" class="date">--/--/----</div>
+        </div>
+      </div>
+    </header>
+
+    <main class="mesas-main">
+      <section id="view-mapa" class="mesas-view is-active">
+        <div class="map-topbar">
+          <div class="map-controls-row">
+            <label for="roomSelect">Sala</label>
+            <select id="roomSelect"></select>
+            <button type="button" id="addRoomBtn" class="btn-soft">+ Sala</button>
+            <button type="button" id="renameRoomBtn" class="btn-soft">
+              Renombrar
+            </button>
+            <button type="button" id="deleteRoomBtn" class="btn-soft danger">
+              Borrar sala
+            </button>
+            <button type="button" id="addTableBtn" class="btn-soft">+ Mesa</button>
+          </div>
+
+          <div class="state-legend">
+            <span><i class="dot libre"></i> Libre</span>
+            <span><i class="dot ocupada"></i> Ocupada</span>
+            <span><i class="dot cuenta"></i> Pide cuenta</span>
+          </div>
+        </div>
+
+        <div id="mapEmptyState" class="empty-state hidden">
+          <p>No hay salas creadas.</p>
+          <button type="button" id="createFirstRoomBtn" class="btn-link">
+            Crear primera sala
+          </button>
+        </div>
+
+        <div id="mesaCards" class="mesa-cards"></div>
+      </section>
+
+      <section id="view-transacciones" class="mesas-view">
+        <aside class="trans-left">
+          <button type="button" id="backToMapBtn" class="btn-link">
+            Volver al mapa
+          </button>
+
+          <div class="selected-table-box">
+            <div class="label">Mesa seleccionada</div>
+            <div id="selectedTableTitle" class="table-title">-</div>
+            <div id="selectedTableState" class="table-sub">Sin seleccionar</div>
+          </div>
+
+          <div>
+            <div class="label">Otras mesas</div>
+            <div id="otherTablesList" class="other-tables-list"></div>
+          </div>
+        </aside>
+
+        <section class="trans-center">
+          <div class="search-wrap">
+            <input
+              id="productSearchMesas"
+              type="text"
+              placeholder="Buscar producto..."
+            />
+            <button type="button" id="clearSearchMesas" class="icon-btn" title="Limpiar">
+              X
+            </button>
+          </div>
+          <div id="categoryBar" class="category-bar"></div>
+          <div id="productsGridMesas" class="products-grid"></div>
+        </section>
+
+        <aside class="trans-right">
+          <div class="ticket-header">
+            <div>
+              <div id="ticketMesaTitle" class="ticket-title">Mesa -</div>
+              <div id="ticketMeta" class="ticket-sub">Sin pedido</div>
+            </div>
+            <button type="button" id="clearCartBtnMesas" class="icon-btn" title="Vaciar">X</button>
+          </div>
+
+          <div id="ticketLinesMesas" class="ticket-lines"></div>
+
+          <div class="ticket-footer">
+            <div class="total-row">
+              <span>Total</span>
+              <strong id="ticketTotalMesas">0,00 EUR</strong>
+            </div>
+            <div class="ticket-actions">
+              <button type="button" id="parkBtnMesas" class="btn park">Aparcar</button>
+              <button type="button" id="chargeBtnMesas" class="btn charge">Cobrar</button>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section id="view-diseno" class="mesas-view">
+        <div class="diseno-wrap">
+          <div class="diseno-col">
+            <h3>Elementos</h3>
+            <div class="label">Herramienta</div>
+            <button type="button" class="chip tool-btn is-active" data-tool="select">
+              Seleccionar / mover
+            </button>
+            <button type="button" class="chip tool-btn" data-tool="mesa-redonda">
+              Mesa Redonda
+            </button>
+            <button type="button" class="chip tool-btn" data-tool="mesa-cuadrada">
+              Mesa Cuadrada
+            </button>
+            <button type="button" class="chip tool-btn" data-tool="mesa-rectangular">
+              Mesa Rectangular
+            </button>
+            <button type="button" class="chip tool-btn" data-tool="barra">Barra</button>
+            <button type="button" class="chip tool-btn" data-tool="entrada">
+              Entrada
+            </button>
+            <button type="button" class="chip tool-btn" data-tool="muro">Muro</button>
+
+            <div class="diseno-actions">
+              <button type="button" id="saveDesignBtn" class="btn-link">Guardar sala</button>
+              <button type="button" id="clearDesignBtn" class="btn-soft danger">
+                Limpiar sala
+              </button>
+            </div>
+          </div>
+
+          <div class="diseno-canvas-wrap">
+            <div class="diseno-topbar">
+              <h3>Plano de sala</h3>
+              <div class="room-select-wrap">
+                <label for="designRoomSelect">Sala</label>
+                <select id="designRoomSelect"></select>
+              </div>
+            </div>
+
+            <div id="designCanvas" class="diseno-canvas">
+              <span id="designHintText">Selecciona una herramienta y haz clic en el plano.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="config.js"></script>
+    <script src="mesas.js"></script>
+  </body>
+</html>

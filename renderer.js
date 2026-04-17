@@ -28,6 +28,15 @@ window.TPV_CONFIG = window.TPV_CONFIG || {
   resolverUrl: "", // ej: https://tu-dominio.com/clients.json
 };
 
+try {
+  const mode = localStorage.getItem("tpv_app_mode");
+  const path = String(window.location.pathname || "").toLowerCase();
+  const isIndexLike = path.endsWith("/index.html") || path.endsWith("\\index.html") || path.endsWith("index.html") || path === "/";
+  if (mode === "mesas" && isIndexLike) {
+    window.location.replace("mesas.html");
+  }
+} catch {}
+
 // Estas son las que usará la app realmente (las podremos sobrescribir con la API)
 let categories = []; // familias (incluye raíz + hijas)
 let products = [];
@@ -360,6 +369,124 @@ function buildCajaAutoLogText(lines) {
   }
 
   return out;
+}
+
+function buildClearCartLogLine(cartLines) {
+  const lines = Array.isArray(cartLines) ? cartLines : [];
+
+  const getQty = (it) => Number(it?.qty ?? it?.cantidad ?? 1) || 1;
+  const getPrice = (it) => {
+    const n = Number(it?.grossPrice ?? it?.price ?? 0);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const getName = (it) =>
+    cleanCajaLogValue(
+      it?.name ||
+        it?.nombre ||
+        it?.descripcion ||
+        it?.productName ||
+        "Producto",
+    );
+
+  const totalLineas = lines.length;
+  const totalUnidades = lines.reduce((sum, it) => sum + getQty(it), 0);
+  const totalImporte = lines.reduce(
+    (sum, it) => sum + getQty(it) * getPrice(it),
+    0,
+  );
+
+  const preview = lines
+    .slice(0, 4)
+    .map((it) => `${getQty(it)}x ${getName(it)}`)
+    .join(", ");
+
+  const extraPreview = lines.length > 4 ? `, +${lines.length - 4} más` : "";
+
+  const extra = [
+    `Líneas: ${totalLineas}`,
+    `Uds: ${totalUnidades}`,
+    `Total: ${formatParkedAuditAmount(totalImporte)}`,
+    preview ? `Items: ${preview}${extraPreview}` : "",
+  ]
+    .filter(Boolean)
+    .join(" | ");
+
+  return buildCajaLogLineWith(getCajaLogCtx(), "VACIÓ CARRITO", extra);
+}
+
+function buildClearCartConfirmHtml(cartLines) {
+  const lines = Array.isArray(cartLines) ? cartLines : [];
+
+  const getQty = (it) => Number(it?.qty ?? it?.cantidad ?? 1) || 1;
+  const getPrice = (it) => {
+    const n = Number(it?.grossPrice ?? it?.price ?? 0);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const getName = (it) =>
+    cleanCajaLogValue(
+      it?.name ||
+        it?.nombre ||
+        it?.descripcion ||
+        it?.productName ||
+        "Producto",
+    );
+
+  const totalLineas = lines.length;
+  const totalUnidades = lines.reduce((sum, it) => sum + getQty(it), 0);
+  const totalImporte = lines.reduce(
+    (sum, it) => sum + getQty(it) * getPrice(it),
+    0,
+  );
+
+  const rowsHtml = lines
+    .map((it) => {
+      const qty = getQty(it);
+      const unitPrice = getPrice(it);
+      const lineTotal = qty * unitPrice;
+      const name = escapeHtmlForModal(getName(it));
+
+      return `
+        <tr>
+          <td class="name">${name}</td>
+          <td class="num">${qty}</td>
+          <td class="num">${escapeHtmlForModal(formatParkedAuditAmount(unitPrice))}</td>
+          <td class="num">${escapeHtmlForModal(formatParkedAuditAmount(lineTotal))}</td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  return `
+    <div class="clear-cart-confirm">
+      <div class="clear-cart-lead">
+        Se eliminarán todos los productos del carrito.
+      </div>
+
+      <div class="clear-cart-table-wrap">
+        <table class="clear-cart-table">
+          <thead>
+            <tr>
+              <th>Producto</th>
+              <th class="num">Uds.</th>
+              <th class="num">Precio</th>
+              <th class="num">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="clear-cart-summary">
+        <span>Líneas: ${totalLineas}</span>
+        <span>Unidades: ${totalUnidades}</span>
+        <span>Total: ${escapeHtmlForModal(formatParkedAuditAmount(totalImporte))}</span>
+      </div>
+
+      <div class="clear-cart-question">¿Continuar?</div>
+    </div>
+  `;
 }
 
 // ===============================
@@ -5046,6 +5173,7 @@ async function parkCurrentCart(name = "", obs = "") {
     existing.name = ticketName || existing.name || `Ticket #${existing.id}`;
     existing.obs = observation;
     existing.updatedAt = new Date();
+
     saveParkedTicketsCache();
 
     try {
@@ -5954,6 +6082,14 @@ function renderAgentButtonsOverlay(terminalId) {
   }
 }
 
+function switchToMesasMode() {
+  try {
+    localStorage.setItem("tpv_app_mode", "mesas");
+  } catch {}
+
+  window.location.href = "mesas.html";
+}
+
 function renderMainAgentBar() {
   if (!mainAgentBar) return;
 
@@ -5988,6 +6124,18 @@ function renderMainAgentBar() {
     return refreshBtn;
   };
 
+  const createTablesBtn = () => {
+    const tablesBtn = document.createElement("button");
+    tablesBtn.type = "button";
+    tablesBtn.className = "agent-btn agent-tables-btn";
+    tablesBtn.textContent = "🍽";
+    tablesBtn.title = "Cambiar a modo Mesas";
+    tablesBtn.onclick = () => {
+      switchToMesasMode();
+    };
+    return tablesBtn;
+  };
+
   const createDrawerBtn = () => {
     const drawerBtn = document.createElement("button");
     drawerBtn.type = "button";
@@ -6004,6 +6152,7 @@ function renderMainAgentBar() {
 
   // Si no hay terminal, mostrar solo acciones
   if (!currentTerminal) {
+    agentActions.appendChild(createTablesBtn());
     agentActions.appendChild(createRefreshBtn());
     agentActions.appendChild(createDrawerBtn());
 
@@ -6063,6 +6212,7 @@ function renderMainAgentBar() {
   }
 
   // Botones fijos a la derecha
+  agentActions.appendChild(createTablesBtn());
   agentActions.appendChild(createRefreshBtn());
   agentActions.appendChild(createDrawerBtn());
 
@@ -14138,8 +14288,38 @@ async function apiUpdateCajaAfterSale({ totalVenta, pagos }) {
 // ===== Botón "Eliminar todo" =====
 const clearBtn = document.getElementById("clearCartBtn");
 if (clearBtn) {
-  clearBtn.onclick = () => {
+  clearBtn.onclick = async () => {
     if (!cashSession?.open) return;
+
+    const cartSnapshot = Array.isArray(cart) ? [...cart] : [];
+    if (!cartSnapshot.length) return;
+
+    const ok = await confirmModal(
+      "Vaciar carrito",
+      buildClearCartConfirmHtml(cartSnapshot),
+      {
+        isHtml: true,
+        textClassName: "clear-cart-modal-content",
+        dialogClassName: "clear-cart-dialog",
+      },
+    );
+
+    if (!ok) return;
+
+    try {
+      const idcaja = getCajaIdSafe();
+      if (idcaja) {
+        await appendCajaAutoLogLineForId(
+          idcaja,
+          buildClearCartLogLine(cartSnapshot),
+        );
+      }
+    } catch (e) {
+      console.warn(
+        "No se pudo registrar el vaciado del carrito en la caja:",
+        e?.message || e,
+      );
+    }
 
     cart = [];
     renderCart();

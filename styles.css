@@ -128,6 +128,26 @@ body {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
 }
 
+.agent-main-bar .agent-tables-btn {
+  background: #ffffff;
+  color: #198cff;
+  font-size: 22px;
+  border-radius: 6px;
+  padding: 10px 20px;
+  border: 1px solid #e5e7eb;
+  min-width: 72px;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.agent-main-bar .agent-tables-btn.is-active {
+  background: #198cff;
+  color: #fff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
 /* Quitar esto porque ya no sirve con la nueva estructura */
 /* .agent-main-bar .agent-refresh-btn {
   margin-left: auto;
@@ -4107,3 +4127,81 @@ body.modal-locked .cart-card {
   font-size: 12px;
   color: #6b7280;
 }
+
+/* =============================================================
+   Modal Vaciar Carrito (estilo TPV)
+   ============================================================= */
+
+.simple-dialog.clear-cart-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-width: 760px;
+}
+
+#msgText.clear-cart-modal-content {
+  max-height: 380px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.clear-cart-confirm {
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.clear-cart-lead {
+  margin-bottom: 12px;
+}
+
+.clear-cart-table-wrap {
+  border: 1px solid #dcdfe4;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.clear-cart-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.clear-cart-table th,
+.clear-cart-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #eceff3;
+  vertical-align: top;
+}
+
+.clear-cart-table th {
+  text-align: left;
+  font-weight: 700;
+  background: #f7f8fa;
+}
+
+.clear-cart-table td.num,
+.clear-cart-table th.num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.clear-cart-table td.name {
+  word-break: break-word;
+}
+
+.clear-cart-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #eceff3;
+  font-weight: 600;
+}
+
+.clear-cart-question {
+  margin-top: 14px;
+}
+
+/* =============================================================
+   
+   ============================================================= */
