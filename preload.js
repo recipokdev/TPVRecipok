@@ -90,6 +90,8 @@ contextBridge.exposeInMainWorld("TPV_CUSTOMER", {
 contextBridge.exposeInMainWorld("TPV_CUSTOMER_CTRL", {
   getEnabled: () => ipcRenderer.invoke("customer:getEnabled"),
   setEnabled: (val) => ipcRenderer.invoke("customer:setEnabled", !!val),
+  getTheme: () => ipcRenderer.invoke("customer:getTheme"),
+  setTheme: (mode) => ipcRenderer.invoke("customer:setTheme", mode),
 });
 
 contextBridge.exposeInMainWorld("TPV_SCALE", {

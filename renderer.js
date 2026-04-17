@@ -1771,30 +1771,39 @@ function refreshAgentGuardUI() {
 // ===============================
 // Click en nombre del terminal (cambio rápido SOLO terminal)
 // ===============================
-function setTerminalNameClickable(isClickable) {
+function setTerminalNameClickable(isClickable, isLoading = false) {
   if (!terminalNameEl) return;
 
-  if (isClickable) {
+  const enabled = isClickable && !isLoading;
+
+  if (enabled) {
     terminalNameEl.style.cursor = "pointer";
     terminalNameEl.style.textDecoration = "underline";
     terminalNameEl.title = "Cambiar terminal";
   } else {
     terminalNameEl.style.cursor = "";
     terminalNameEl.style.textDecoration = "";
-    terminalNameEl.title = "";
+    terminalNameEl.title = isLoading
+      ? "Disponible cuando finalice la carga"
+      : "";
   }
 }
 
 // Estado inicial (por si terminals ya está cargado)
-setTerminalNameClickable(Array.isArray(terminals) && terminals.length > 1);
+setTerminalNameClickable(
+  Array.isArray(terminals) && terminals.length > 1,
+  true,
+);
 
 if (terminalNameEl) {
   terminalNameEl.addEventListener("click", async () => {
+    if (TPV_LOADING) return;
+
     // Refrescar datos antes de decidir
     await refreshTerminalsAndAgents();
 
     const canSwitch = Array.isArray(terminals) && terminals.length > 1;
-    setTerminalNameClickable(canSwitch);
+    setTerminalNameClickable(canSwitch, false);
 
     // Si hay 0/1 terminal: no hacemos nada (y ni siquiera parece botón)
     if (!canSwitch) return;
@@ -2009,19 +2018,31 @@ function renderSelectedCustomerInCartHeader(c) {
 
 function bindCartCustomerUiEvents() {
   const input = document.getElementById("cartCustomerInput");
+  const btnList = document.getElementById("cartCustomerListBtn");
   const btnOpen = document.getElementById("cartCustomerOpen");
   const btnClear = document.getElementById("cartCustomerClear");
 
-  const open = () => window.CUSTOMER_SELECTOR?.open?.();
+  const openList = () => {
+    if (TPV_LOADING) return;
+    window.CUSTOMER_SELECTOR?.open?.();
+  };
+  const openCreate = () => {
+    if (TPV_LOADING) return;
+    window.CUSTOMER_SELECTOR?.openCreate?.();
+  };
 
-  if (input) input.addEventListener("click", open);
-  if (btnOpen) btnOpen.addEventListener("click", open);
+  if (input) input.addEventListener("click", openList);
+  if (btnList) btnList.addEventListener("click", openList);
+  if (btnOpen) btnOpen.addEventListener("click", openCreate);
 
   if (btnClear) {
     btnClear.addEventListener("click", () => {
+      if (TPV_LOADING) return;
       window.CUSTOMER_SELECTOR?.resetToDefault?.();
     });
   }
+
+  syncCustomerControlsLoadingState();
 }
 
 let __customerSelectorInited = false;
@@ -2614,6 +2635,181 @@ function renderCashIdChip() {
 }
 
 let BOOT_IN_FLIGHT = false;
+let TPV_LOADING = true;
+const TPV_THEME_KEY = "tpv_theme_mode";
+let TPV_THEME_MODE = "light";
+let TPV_CUSTOMER_THEME_MODE = "dark";
+
+function syncCustomerControlsLoadingState() {
+  const input = document.getElementById("cartCustomerInput");
+  const btnList = document.getElementById("cartCustomerListBtn");
+  const btnOpen = document.getElementById("cartCustomerOpen");
+  const btnClear = document.getElementById("cartCustomerClear");
+  const row = document.querySelector(".cart-client-row");
+
+  const title = TPV_LOADING
+    ? "Clientes disponibles cuando finalice la carga"
+    : "";
+
+  if (input) {
+    input.disabled = TPV_LOADING;
+    input.readOnly = TPV_LOADING;
+    input.title = title;
+  }
+  if (btnList) {
+    btnList.disabled = TPV_LOADING;
+    btnList.title = title;
+  }
+  if (btnOpen) {
+    btnOpen.disabled = TPV_LOADING;
+    btnOpen.title = title;
+  }
+  if (btnClear) {
+    btnClear.disabled = TPV_LOADING;
+    btnClear.title = title;
+  }
+  if (row) {
+    row.classList.toggle("is-loading", TPV_LOADING);
+  }
+}
+
+function syncHeaderIdentityLoadingState() {
+  const targets = [terminalNameEl, agentNameEl, userNameEl];
+  const loadingTitle = "Disponible cuando finalice la carga";
+
+  targets.forEach((el) => {
+    if (!el) return;
+    el.classList.toggle("tpv-loading-lock", TPV_LOADING);
+    el.setAttribute("aria-disabled", TPV_LOADING ? "true" : "false");
+
+    if (TPV_LOADING) {
+      el.title = loadingTitle;
+      return;
+    }
+
+    if (el === terminalNameEl) {
+      setTerminalNameClickable(
+        Array.isArray(terminals) && terminals.length > 1,
+        TPV_LOADING,
+      );
+      return;
+    }
+
+    if (el === userNameEl) {
+      el.title = "Cerrar sesión";
+      return;
+    }
+
+    el.title = "";
+  });
+}
+
+function setTpvLoadingState(isLoading) {
+  TPV_LOADING = !!isLoading;
+  if (cashHeaderBtn) {
+    cashHeaderBtn.disabled = TPV_LOADING;
+    if (TPV_LOADING) {
+      cashHeaderBtn.title = "Cargando TPV...";
+    } else if (cashHeaderBtn.title === "Cargando TPV...") {
+      cashHeaderBtn.title = "";
+    }
+  }
+  syncCustomerControlsLoadingState();
+  syncHeaderIdentityLoadingState();
+  updateCashButtonLabel?.();
+}
+
+function updateThemeButtonsUI() {
+  const p1Dark = TPV_THEME_MODE === "dark";
+  const p2Dark = TPV_CUSTOMER_THEME_MODE === "dark";
+
+  document.querySelectorAll(".agent-theme-btn-main").forEach((btn) => {
+    btn.classList.toggle("mode-dark", p1Dark);
+    btn.classList.toggle("mode-light", !p1Dark);
+    btn.innerHTML = p1Dark
+      ? '<span class="theme-mini-label">P1</span><span class="theme-icon theme-icon-moon" aria-hidden="true">🌙</span>'
+      : '<span class="theme-mini-label">P1</span><span class="theme-icon theme-icon-sun" aria-hidden="true">☀️</span>';
+    btn.title = p1Dark
+      ? "Pantalla 1 en modo noche (pulsa para pasar a dia)"
+      : "Pantalla 1 en modo dia (pulsa para pasar a noche)";
+    btn.setAttribute("aria-label", btn.title);
+  });
+
+  document.querySelectorAll(".agent-theme-btn-customer").forEach((btn) => {
+    btn.classList.toggle("mode-dark", p2Dark);
+    btn.classList.toggle("mode-light", !p2Dark);
+    btn.innerHTML = p2Dark
+      ? '<span class="theme-mini-label">P2</span><span class="theme-icon theme-icon-moon" aria-hidden="true">🌙</span>'
+      : '<span class="theme-mini-label">P2</span><span class="theme-icon theme-icon-sun" aria-hidden="true">☀️</span>';
+    btn.title = p2Dark
+      ? "Pantalla 2 en modo noche (pulsa para pasar a dia)"
+      : "Pantalla 2 en modo dia (pulsa para pasar a noche)";
+    btn.setAttribute("aria-label", btn.title);
+  });
+}
+
+function applyThemeMode(mode, { persist = true } = {}) {
+  TPV_THEME_MODE = mode === "dark" ? "dark" : "light";
+  document.body.classList.toggle("theme-dark", TPV_THEME_MODE === "dark");
+  updateThemeButtonsUI();
+
+  if (persist) {
+    try {
+      localStorage.setItem(TPV_THEME_KEY, TPV_THEME_MODE);
+    } catch {}
+  }
+}
+
+function toggleThemeMode() {
+  applyThemeMode(TPV_THEME_MODE === "dark" ? "light" : "dark");
+}
+
+async function setCustomerDisplayThemeMode(mode) {
+  const wanted = mode === "light" ? "light" : "dark";
+  try {
+    const r = await window.TPV_CUSTOMER_CTRL?.setTheme?.(wanted);
+    if (!r?.ok) return false;
+    TPV_CUSTOMER_THEME_MODE = r.mode || wanted;
+    updateThemeButtonsUI();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function toggleCustomerDisplayThemeMode() {
+  const wanted = TPV_CUSTOMER_THEME_MODE === "dark" ? "light" : "dark";
+  const ok = await setCustomerDisplayThemeMode(wanted);
+  if (!ok) {
+    toast(
+      "No se pudo cambiar el tema de la pantalla cliente.",
+      "err",
+      "Pantalla cliente",
+    );
+  }
+}
+
+async function initCustomerDisplayThemeMode() {
+  try {
+    const r = await window.TPV_CUSTOMER_CTRL?.getTheme?.();
+    TPV_CUSTOMER_THEME_MODE = r?.ok
+      ? r.mode === "light"
+        ? "light"
+        : "dark"
+      : "dark";
+  } catch {
+    TPV_CUSTOMER_THEME_MODE = "dark";
+  }
+  updateThemeButtonsUI();
+}
+
+function initThemeMode() {
+  let saved = "light";
+  try {
+    saved = String(localStorage.getItem(TPV_THEME_KEY) || "light").trim();
+  } catch {}
+  applyThemeMode(saved, { persist: false });
+}
 
 function applyAdminOnlyUI() {
   const isAdmin = !!window.TPV_STATE?.isAdmin;
@@ -2632,6 +2828,7 @@ function applyAdminOnlyUI() {
 async function runBootFlow() {
   if (BOOT_IN_FLIGHT) return false;
   BOOT_IN_FLIGHT = true;
+  setTpvLoadingState(true);
 
   try {
     // 0) Hidratar y reparar persistencia ANTES de decidir si hay empresa
@@ -2668,6 +2865,7 @@ async function runBootFlow() {
     return true;
   } finally {
     BOOT_IN_FLIGHT = false;
+    setTpvLoadingState(false);
   }
 }
 
@@ -2764,6 +2962,11 @@ function refreshLoggedUserUI() {
 
 function updateCashButtonLabel() {
   if (!cashHeaderLabel) return;
+
+  if (TPV_LOADING) {
+    cashHeaderLabel.textContent = "Cargando...";
+    return;
+  }
 
   if (TPV_STATE.locked) {
     cashHeaderLabel.textContent = "Bloqueado";
@@ -3820,8 +4023,7 @@ async function openLoginModal() {
     const createGroup = (title, list) => {
       if (list.length === 0) return;
       const t = document.createElement("div");
-      t.style =
-        "width:100%; font-size:11px; color:#888; text-transform:uppercase; margin-top:8px; border-bottom:1px solid #eee";
+      t.className = "user-group-title";
       t.textContent = title;
       usersBar.appendChild(t);
 
@@ -4255,6 +4457,7 @@ function toast(message, type = "info", title = "") {
 
 // ===== Teclado numérico =====
 const numPadOverlay = document.getElementById("numPadOverlay");
+const numPadEl = numPadOverlay?.querySelector(".num-pad");
 const numPadDisplay = document.getElementById("numPadDisplay");
 const numPadProductName = document.getElementById("numPadProductName");
 let numPadCurrentValue = "";
@@ -4265,6 +4468,8 @@ let numPadMode = "qty"; // "qty" | "price"
 let numPadOriginalUnitGross = null;
 let numPadTargetItemId = null;
 let numPadDefaultValue = "0";
+let numPadLiveValue = null;
+let numPadInitialValue = 0;
 
 // Función común para cerrar overlays de teclados al hacer clic fuera
 function handleOverlayOutsideClick(e, padSelector, closeFn) {
@@ -4275,6 +4480,450 @@ function handleOverlayOutsideClick(e, padSelector, closeFn) {
   }
   return false;
 }
+
+const KEYBOARD_LAYOUT_STORAGE_KEY = "tpv_keyboard_layout_v1";
+
+function loadKeyboardLayoutState() {
+  try {
+    const raw = localStorage.getItem(KEYBOARD_LAYOUT_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    if (!parsed || typeof parsed !== "object") return { byAgent: {} };
+
+    if (parsed.byAgent && typeof parsed.byAgent === "object") {
+      return parsed;
+    }
+
+    // Migración desde formato legacy { qwerty: {...}, numpad: {...} }
+    const legacyLayouts = {};
+    Object.entries(parsed).forEach(([k, v]) => {
+      if (!v || typeof v !== "object") return;
+      if (
+        Object.prototype.hasOwnProperty.call(v, "left") ||
+        Object.prototype.hasOwnProperty.call(v, "top") ||
+        Object.prototype.hasOwnProperty.call(v, "width")
+      ) {
+        legacyLayouts[k] = v;
+      }
+    });
+
+    return {
+      byAgent: Object.keys(legacyLayouts).length
+        ? { _default: legacyLayouts }
+        : {},
+    };
+  } catch {
+    return { byAgent: {} };
+  }
+}
+
+const keyboardLayoutState = loadKeyboardLayoutState();
+
+function saveKeyboardLayoutState() {
+  try {
+    localStorage.setItem(
+      KEYBOARD_LAYOUT_STORAGE_KEY,
+      JSON.stringify(keyboardLayoutState),
+    );
+  } catch {}
+}
+
+function getKeyboardAgentScopeKey() {
+  const code = String(currentAgent?.codagente || currentAgent?.id || "").trim();
+  return code || "_default";
+}
+
+function createKeyboardWindowManager({
+  id,
+  overlay,
+  pad,
+  title,
+  baseWidth,
+  baseHeight = 420,
+  resetWidth,
+  resetHeight,
+  minWidth = 420,
+  maxWidth = 1300,
+  minHeight = 260,
+  maxHeight = 1000,
+  allowFreeHeight = true,
+  defaultAnchor = "bottom",
+}) {
+  if (!overlay || !pad) return null;
+
+  if (!pad.querySelector(".kb-window-bar")) {
+    const bar = document.createElement("div");
+    bar.className = "kb-window-bar";
+    bar.innerHTML = `
+      <div class="kb-drag-handle" title="Mover teclado">${title}</div>
+      <div class="kb-window-actions">
+        <button type="button" class="kb-window-btn" data-kb-action="lock" title="Fijar o desbloquear posición">Fijar</button>
+        <button type="button" class="kb-window-btn" data-kb-action="reset-pos" title="Centrar posición del teclado">Centrar</button>
+        <button type="button" class="kb-window-btn" data-kb-action="reset-size" title="Restaurar tamaño original">Tamaño</button>
+      </div>
+    `;
+
+    const resizeHandle = document.createElement("div");
+    resizeHandle.className = "kb-resize-handle";
+    resizeHandle.title = "Cambiar tamaño";
+
+    pad.prepend(bar);
+    pad.appendChild(resizeHandle);
+  }
+
+  const dragHandle = pad.querySelector(".kb-drag-handle");
+  const resizeHandle = pad.querySelector(".kb-resize-handle");
+  const lockBtn = pad.querySelector('[data-kb-action="lock"]');
+  const resetPosBtn = pad.querySelector('[data-kb-action="reset-pos"]');
+  const resetSizeBtn = pad.querySelector('[data-kb-action="reset-size"]');
+
+  let mode = null;
+  let pointerId = null;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let startLeft = 0;
+  let startTop = 0;
+  let startWidth = 0;
+  let startHeight = 0;
+  let movedSincePointerDown = false;
+  let suppressCloseUntil = 0;
+
+  function getSavedState() {
+    const agentKey = getKeyboardAgentScopeKey();
+    const byAgent = keyboardLayoutState.byAgent || {};
+    return byAgent[agentKey]?.[id] || byAgent._default?.[id] || null;
+  }
+
+  function setSavedState(next) {
+    const agentKey = getKeyboardAgentScopeKey();
+    if (
+      !keyboardLayoutState.byAgent ||
+      typeof keyboardLayoutState.byAgent !== "object"
+    ) {
+      keyboardLayoutState.byAgent = {};
+    }
+    if (!keyboardLayoutState.byAgent[agentKey]) {
+      keyboardLayoutState.byAgent[agentKey] = {};
+    }
+    keyboardLayoutState.byAgent[agentKey][id] = next;
+    saveKeyboardLayoutState();
+  }
+
+  function getNaturalHeight(width, scale) {
+    const prevWidth = pad.style.width;
+    const prevHeight = pad.style.height;
+    const prevScale = pad.style.getPropertyValue("--kb-scale");
+
+    pad.style.width = `${Math.round(width)}px`;
+    pad.style.setProperty("--kb-scale", String(scale || 1));
+    pad.style.height = "auto";
+
+    const natural = Math.ceil(pad.scrollHeight + 2);
+
+    pad.style.width = prevWidth;
+    pad.style.height = prevHeight;
+    if (prevScale) pad.style.setProperty("--kb-scale", prevScale);
+    else pad.style.removeProperty("--kb-scale");
+
+    return natural;
+  }
+
+  function clampState(state) {
+    const rect = pad.getBoundingClientRect();
+    const maxAllowedWidth = Math.min(
+      maxWidth,
+      Math.max(minWidth, window.innerWidth - 16),
+    );
+
+    const requestedScale = Math.max(
+      0.8,
+      Math.min(1.35, Number(state.scale) || 1),
+    );
+    const width = Math.max(
+      minWidth,
+      Math.min(maxAllowedWidth, Number(state.width) || rect.width || baseWidth),
+    );
+
+    const naturalMinHeight = getNaturalHeight(width, requestedScale);
+    const effectiveMinHeight = Math.max(minHeight, naturalMinHeight);
+    const maxAllowedHeight = Math.min(
+      maxHeight,
+      Math.max(effectiveMinHeight, window.innerHeight - 16),
+    );
+
+    const autoHeight = !allowFreeHeight || state.autoHeight !== false;
+    const height = Math.max(
+      effectiveMinHeight,
+      Math.min(
+        maxAllowedHeight,
+        Number(state.height) || rect.height || baseHeight,
+      ),
+    );
+
+    const maxLeft = Math.max(8, window.innerWidth - width - 8);
+    const visualHeight = autoHeight ? naturalMinHeight : height;
+    const maxTop = Math.max(8, window.innerHeight - visualHeight - 8);
+
+    const left = Math.max(8, Math.min(maxLeft, Number(state.left) || 8));
+    const top = Math.max(8, Math.min(maxTop, Number(state.top) || 8));
+    const locked = !!state.locked;
+
+    return {
+      left,
+      top,
+      width,
+      height,
+      scale: requestedScale,
+      locked,
+      autoHeight,
+      naturalMinHeight,
+    };
+  }
+
+  function updateLockUi(locked) {
+    pad.classList.toggle("kb-locked", !!locked);
+    if (lockBtn) lockBtn.textContent = locked ? "Fijado" : "Fijar";
+    if (dragHandle) dragHandle.style.cursor = locked ? "default" : "grab";
+    if (resizeHandle) resizeHandle.style.display = locked ? "none" : "block";
+  }
+
+  function applyState(rawState, { persist = false } = {}) {
+    const state = clampState(rawState || {});
+    pad.style.position = "fixed";
+    pad.style.left = `${state.left}px`;
+    pad.style.top = `${state.top}px`;
+    pad.style.width = `${state.width}px`;
+    pad.style.height = state.autoHeight
+      ? "auto"
+      : `${Math.max(state.height, state.naturalMinHeight)}px`;
+    pad.style.setProperty("--kb-scale", String(state.scale));
+    pad.classList.add("kb-floating");
+    updateLockUi(state.locked);
+
+    if (persist) setSavedState(state);
+    return state;
+  }
+
+  function applyDefaultState({ persist = false } = {}) {
+    const width = Math.max(
+      minWidth,
+      Math.min(baseWidth, window.innerWidth - 16),
+    );
+    const height = Math.max(
+      minHeight,
+      Math.min(baseHeight, window.innerHeight - 16),
+    );
+    const left = Math.max(8, Math.round((window.innerWidth - width) / 2));
+    const top =
+      defaultAnchor === "bottom"
+        ? Math.max(8, window.innerHeight - height - 12)
+        : Math.max(8, Math.round((window.innerHeight - height) / 2));
+
+    return applyState(
+      { left, top, width, height, scale: 1, locked: false },
+      { persist },
+    );
+  }
+
+  function resetPositionOnly() {
+    const current = getSavedState() || applyDefaultState({ persist: false });
+    const visualHeight = current.autoHeight
+      ? getNaturalHeight(current.width || baseWidth, current.scale || 1)
+      : current.height || baseHeight;
+    const left = Math.max(
+      8,
+      Math.round((window.innerWidth - (current.width || baseWidth)) / 2),
+    );
+    const top =
+      defaultAnchor === "bottom"
+        ? Math.max(8, window.innerHeight - visualHeight - 12)
+        : Math.max(8, Math.round((window.innerHeight - visualHeight) / 2));
+
+    applyState({ ...current, left, top }, { persist: true });
+  }
+
+  function resetSizeOnly() {
+    const current = getSavedState() || applyDefaultState({ persist: false });
+    const targetWidth = Number(resetWidth) > 0 ? Number(resetWidth) : baseWidth;
+    const targetHeight =
+      Number(resetHeight) > 0 ? Number(resetHeight) : baseHeight;
+    applyState(
+      {
+        ...current,
+        width: targetWidth,
+        height: targetHeight,
+        scale: 1,
+        autoHeight: true,
+      },
+      { persist: true },
+    );
+  }
+
+  function onOpen() {
+    const saved = getSavedState();
+    if (saved) applyState(saved, { persist: false });
+    else applyDefaultState({ persist: true });
+  }
+
+  function onPointerMove(e) {
+    if (!mode || e.pointerId !== pointerId) return;
+    movedSincePointerDown = true;
+
+    if (mode === "drag") {
+      const dx = e.clientX - dragStartX;
+      const dy = e.clientY - dragStartY;
+      applyState(
+        {
+          left: startLeft + dx,
+          top: startTop + dy,
+          width: startWidth,
+          height: startHeight,
+          scale: Number(getSavedState()?.scale || 1),
+          locked: !!getSavedState()?.locked,
+        },
+        { persist: true },
+      );
+      return;
+    }
+
+    if (mode === "resize") {
+      const dx = e.clientX - dragStartX;
+      const dy = e.clientY - dragStartY;
+      const nextWidth = startWidth + dx;
+      const nextHeight = startHeight + dy;
+
+      // En qwerty mantenemos altura automática para evitar huecos en blanco.
+      if (!allowFreeHeight) {
+        const nextScale = Math.max(0.8, Math.min(1.35, nextWidth / baseWidth));
+        applyState(
+          {
+            left: startLeft,
+            top: startTop,
+            width: nextWidth,
+            scale: nextScale,
+            locked: !!getSavedState()?.locked,
+            autoHeight: true,
+          },
+          { persist: true },
+        );
+        return;
+      }
+
+      const nextScale = Math.max(
+        0.8,
+        Math.min(
+          1.35,
+          Math.min(nextWidth / baseWidth, nextHeight / baseHeight),
+        ),
+      );
+      applyState(
+        {
+          left: startLeft,
+          top: startTop,
+          width: nextWidth,
+          height: nextHeight,
+          scale: nextScale,
+          locked: !!getSavedState()?.locked,
+          autoHeight: false,
+        },
+        { persist: true },
+      );
+    }
+  }
+
+  function onPointerUp(e) {
+    if (e.pointerId !== pointerId) return;
+    if (movedSincePointerDown) suppressCloseUntil = Date.now() + 260;
+    mode = null;
+    pointerId = null;
+    movedSincePointerDown = false;
+    overlay.releasePointerCapture?.(e.pointerId);
+  }
+
+  dragHandle?.addEventListener("pointerdown", (e) => {
+    if (getSavedState()?.locked) return;
+    e.preventDefault();
+    const rect = pad.getBoundingClientRect();
+    const saved = getSavedState() || {};
+
+    mode = "drag";
+    pointerId = e.pointerId;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    startLeft = Number(saved.left ?? rect.left);
+    startTop = Number(saved.top ?? rect.top);
+    startWidth = Number(saved.width ?? rect.width);
+    startHeight = Number(saved.height ?? rect.height);
+    movedSincePointerDown = false;
+    suppressCloseUntil = Date.now() + 220;
+    overlay.setPointerCapture?.(pointerId);
+  });
+
+  resizeHandle?.addEventListener("pointerdown", (e) => {
+    if (getSavedState()?.locked) return;
+    e.preventDefault();
+    const rect = pad.getBoundingClientRect();
+    const saved = getSavedState() || {};
+
+    mode = "resize";
+    pointerId = e.pointerId;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    startLeft = Number(saved.left ?? rect.left);
+    startTop = Number(saved.top ?? rect.top);
+    startWidth = Number(saved.width ?? rect.width);
+    startHeight = Number(saved.height ?? rect.height);
+    movedSincePointerDown = false;
+    suppressCloseUntil = Date.now() + 220;
+    overlay.setPointerCapture?.(pointerId);
+  });
+
+  overlay.addEventListener("pointermove", onPointerMove);
+  overlay.addEventListener("pointerup", onPointerUp);
+  overlay.addEventListener("pointercancel", onPointerUp);
+
+  lockBtn?.addEventListener("click", () => {
+    const current = getSavedState() || applyDefaultState({ persist: false });
+    applyState({ ...current, locked: !current.locked }, { persist: true });
+  });
+
+  resetPosBtn?.addEventListener("click", () => {
+    resetPositionOnly();
+  });
+
+  resetSizeBtn?.addEventListener("click", () => {
+    if (getSavedState()?.locked) return;
+    resetSizeOnly();
+  });
+
+  window.addEventListener("resize", () => {
+    if (!overlay || overlay.classList.contains("hidden")) return;
+    const saved = getSavedState();
+    if (!saved) return;
+    applyState(saved, { persist: true });
+  });
+
+  return {
+    onOpen,
+    shouldIgnoreOutsideClick: () => Date.now() < suppressCloseUntil || !!mode,
+  };
+}
+
+const numPadWindowManager = createKeyboardWindowManager({
+  id: "numpad",
+  overlay: numPadOverlay,
+  pad: numPadEl,
+  title: "Teclado numerico",
+  baseWidth: 720,
+  baseHeight: 500,
+  resetWidth: 460,
+  resetHeight: 340,
+  minWidth: 420,
+  maxWidth: 1080,
+  minHeight: 320,
+  maxHeight: 900,
+  allowFreeHeight: true,
+  defaultAnchor: "center",
+});
 
 function formatPrice2(v) {
   const n = Number(String(v).replace(",", "."));
@@ -4303,6 +4952,71 @@ function updateNumPadDisplay() {
   // qty/cash (como lo tenías)
   numPadDisplay.textContent =
     numPadCurrentValue === "" ? "0" : String(numPadCurrentValue);
+
+  applyNumPadPreview();
+}
+
+function evaluateNumPadCurrentValue({ silent = true } = {}) {
+  const raw = String(numPadCurrentValue || "").trim();
+  if (!raw) {
+    if (numPadMode === "price") {
+      const item = cart.find((c) => c._lineId === numPadTargetItemId);
+      const fallback = item
+        ? getUnitGross(item)
+        : Number(numPadOriginalUnitGross) || 0;
+      return Math.round(fallback * 100) / 100;
+    }
+    return 0;
+  }
+
+  const cleaned = raw.replace(/\s+/g, "");
+  if (!/^[0-9+\-*/().]+$/.test(cleaned)) {
+    if (!silent) toast("Expresión no válida", "warn", "Teclado");
+    return null;
+  }
+
+  let value;
+  try {
+    value = Function(`"use strict"; return (${cleaned});`)();
+  } catch {
+    if (!silent) toast("Expresión no válida", "warn", "Teclado");
+    return null;
+  }
+
+  value = Number(value);
+  if (!isFinite(value)) return null;
+
+  if (numPadMode === "price") {
+    if (value <= 0) value = 0;
+    return Math.round(value * 100) / 100;
+  }
+
+  if (numPadMode === "cash") {
+    if (value < 0) value = 0;
+    return Math.round(value * 100) / 100;
+  }
+
+  if (numPadMode === "stock") {
+    return Math.round(value * 1000) / 1000;
+  }
+
+  // qty
+  if (value <= 0) value = 0;
+  value = Math.round(value * 1000) / 1000;
+  if (value > 0 && value < 0.001) value = 0.001;
+  return value;
+}
+
+function applyNumPadPreview() {
+  // El flujo de stock usa promesas para esperar OK; preview lo rompería.
+  if (numPadMode === "stock") return;
+  if (typeof numPadOnConfirm !== "function") return;
+
+  const nextValue = evaluateNumPadCurrentValue({ silent: true });
+  if (nextValue == null || nextValue === numPadLiveValue) return;
+
+  numPadLiveValue = nextValue;
+  numPadOnConfirm(nextValue);
 }
 
 function openNumPad(
@@ -4321,6 +5035,8 @@ function openNumPad(
   numPadDefaultValue = numPadCurrentValue === "" ? "0" : numPadCurrentValue; // ✅
   numPadOverwriteNextDigit = true;
   numPadOnConfirm = onConfirm;
+  numPadLiveValue = null;
+  numPadInitialValue = evaluateNumPadCurrentValue({ silent: true }) ?? 0;
 
   if (numPadProductName) {
     numPadProductName.textContent = productName ? ` - ${productName}` : "";
@@ -4332,10 +5048,27 @@ function openNumPad(
 
   updateNumPadDisplay();
   if (numPadOverlay) numPadOverlay.classList.remove("hidden");
+  numPadWindowManager?.onOpen?.();
   numPadVisible = true;
 }
 
-function closeNumPad() {
+function closeNumPad(reason = "cancel") {
+  // Con preview en vivo:
+  // - En caja (cash), cancelar/click-fuera limpia (0) como pidió el usuario.
+  // - En qty/price, cancelar revierte al valor inicial para no dejar cambios sin OK.
+  // - En stock no aplicamos preview y se mantiene el comportamiento original.
+  if (
+    reason !== "confirm" &&
+    numPadMode !== "stock" &&
+    typeof numPadOnConfirm === "function"
+  ) {
+    if (numPadMode === "cash") {
+      numPadOnConfirm(0);
+    } else {
+      numPadOnConfirm(numPadInitialValue);
+    }
+  }
+
   if (numPadOverlay) {
     numPadOverlay.classList.add("hidden");
   }
@@ -4344,6 +5077,8 @@ function closeNumPad() {
   }
   numPadVisible = false;
   numPadOnConfirm = null;
+  numPadLiveValue = null;
+  numPadInitialValue = 0;
 }
 
 function numPadAddDigit(digit) {
@@ -4442,95 +5177,32 @@ function numPadRestoreDefault() {
 }
 
 function numPadConfirm() {
-  const raw = String(numPadCurrentValue || "").trim();
-
-  // Si no toca nada y le da OK -> mantener lo que había
-  if (!raw) {
-    if (typeof numPadOnConfirm === "function") {
-      // en qty: 1; en price: usar original/actual
-      if (numPadMode === "price") {
-        const item = cart.find((c) => c._lineId === numPadTargetItemId);
-        const current = item
-          ? getUnitGross(item)
-          : numPadOriginalUnitGross || 0;
-        numPadOnConfirm(current);
-      } else {
-        numPadOnConfirm(1);
-      }
-    }
-    closeNumPad();
-    return;
-  }
-
-  // Eval simple de expresiones (si ya lo tienes, reutiliza tu versión)
-  const cleaned = raw.replace(/\s+/g, "");
-  if (!/^[0-9+\-*/().]+$/.test(cleaned)) {
-    toast("Expresión no válida", "warn", "Teclado");
-    return;
-  }
-
-  let value;
-  try {
-    // eslint-disable-next-line no-new-func
-    value = Function(`"use strict"; return (${cleaned});`)();
-  } catch (e) {
-    toast("Expresión no válida", "warn", "Teclado");
-    return;
-  }
-
-  if (numPadMode === "price") {
-    value = Number(value);
-    if (!isFinite(value) || value <= 0) value = 0;
-    if (typeof numPadOnConfirm === "function") numPadOnConfirm(value);
-    closeNumPad();
-    return;
-  }
-
-  // ✅ permitir decimales en movimientos de caja
-  if (numPadMode === "cash") {
-    value = Number(value);
-    if (!isFinite(value) || value < 0) value = 0;
-
-    // redondeamos a 2 decimales máximo (0.015 -> 0.02)
-    value = Math.round(value * 100) / 100;
-
-    if (typeof numPadOnConfirm === "function") {
-      numPadOnConfirm(value);
-    }
-    closeNumPad();
-    return;
-  }
-
-  if (numPadMode === "stock") {
-    value = Number(value);
-    if (!isFinite(value)) value = 0;
-
-    value = Math.round(value * 1000) / 1000;
-
-    if (typeof numPadOnConfirm === "function") {
-      numPadOnConfirm(value);
-    }
-    closeNumPad();
-    return;
-  }
-
-  // qty (✅ permitir decimales)
-  value = Number(value);
-  if (!isFinite(value) || value <= 0) value = 0;
-
-  // límite y redondeo razonable para evitar basura (ajusta si quieres)
-  // Ej: 0.435 -> 0.435 (3 decimales)
-  value = Math.round(value * 1000) / 1000;
-  if (value > 0 && value < 0.001) value = 0.001;
+  const value = evaluateNumPadCurrentValue({ silent: false });
+  if (value == null) return;
 
   if (typeof numPadOnConfirm === "function") numPadOnConfirm(value);
-  closeNumPad();
+  closeNumPad("confirm");
   return;
 }
 
 if (numPadOverlay) {
+  numPadOverlay.addEventListener("mousedown", (e) => {
+    if (
+      e.target.closest("[data-key]") ||
+      e.target.closest(".kb-window-btn") ||
+      e.target.closest(".kb-drag-handle") ||
+      e.target.closest(".kb-resize-handle")
+    ) {
+      e.preventDefault();
+    }
+  });
+
   numPadOverlay.addEventListener("click", (e) => {
-    if (handleOverlayOutsideClick(e, ".num-pad", closeNumPad)) return;
+    if (numPadWindowManager?.shouldIgnoreOutsideClick?.()) return;
+
+    if (handleOverlayOutsideClick(e, ".num-pad", () => closeNumPad("cancel"))) {
+      return;
+    }
 
     const btn = e.target.closest("[data-key]");
     if (!btn) return;
@@ -4549,7 +5221,7 @@ if (numPadOverlay) {
     } else if (key === "clear") {
       numPadClearAll();
     } else if (key === "cancel") {
-      closeNumPad();
+      closeNumPad("cancel");
     } else if (key === "ok") {
       numPadConfirm();
     } else if (key === "resetPrice") {
@@ -4582,7 +5254,7 @@ window.addEventListener("keydown", (e) => {
       numPadConfirm();
     } else if (e.key === "Escape") {
       e.preventDefault();
-      closeNumPad();
+      closeNumPad("cancel");
     }
     return;
   }
@@ -4592,13 +5264,115 @@ window.addEventListener("keydown", (e) => {
 
 // ===== Teclado QWERTY =====
 const qwertyOverlay = document.getElementById("qwertyOverlay");
+const qwertyPadEl = qwertyOverlay?.querySelector(".qwerty-pad");
 const qwertyDisplay = document.getElementById("qwertyDisplay");
 let qwertyCurrentValue = "";
 let qwertyVisible = false;
+let qwertyCaps = false;
+let qwertyCaretStart = 0;
+let qwertyCaretEnd = 0;
+let qwertyCommitted = false;
+let qwertyOriginalValue = "";
+
+const qwertyWindowManager = createKeyboardWindowManager({
+  id: "qwerty",
+  overlay: qwertyOverlay,
+  pad: qwertyPadEl,
+  title: "Teclado qwerty",
+  baseWidth: 860,
+  baseHeight: 500,
+  minWidth: 420,
+  maxWidth: 1320,
+  minHeight: 300,
+  maxHeight: 940,
+  allowFreeHeight: false,
+  defaultAnchor: "center",
+});
+
+function clampQwertyCaret(pos, len) {
+  const n = Number(pos);
+  if (!Number.isFinite(n)) return len;
+  return Math.max(0, Math.min(len, n));
+}
+
+function getQwertyInsertKey(rawKey) {
+  const key = String(rawKey || "");
+  if (!key) return "";
+  if (key.length !== 1) return key;
+  if (!/[a-zñ]/i.test(key)) return key;
+  return qwertyCaps ? key.toUpperCase() : key.toLowerCase();
+}
+
+function syncQwertyDisplaySelection() {
+  if (!qwertyDisplay) return;
+  const len = String(qwertyCurrentValue || "").length;
+  qwertyCaretStart = clampQwertyCaret(qwertyDisplay.selectionStart, len);
+  qwertyCaretEnd = clampQwertyCaret(qwertyDisplay.selectionEnd, len);
+}
+
+function setQwertySelection(start, end = start) {
+  const len = String(qwertyCurrentValue || "").length;
+  qwertyCaretStart = clampQwertyCaret(start, len);
+  qwertyCaretEnd = clampQwertyCaret(end, len);
+  if (!qwertyDisplay) return;
+  qwertyDisplay.setSelectionRange(qwertyCaretStart, qwertyCaretEnd);
+}
+
+function applyQwertyPreview() {
+  if (!qwertyTargetInput) return;
+  qwertyTargetInput.value = qwertyCurrentValue;
+
+  if (qwertyTargetInput === searchInput) {
+    searchTerm = qwertyCurrentValue;
+    renderProducts();
+  }
+
+  qwertyTargetInput.dispatchEvent(new Event("input", { bubbles: true }));
+}
 
 function updateQwertyDisplay() {
   if (!qwertyDisplay) return;
-  qwertyDisplay.textContent = qwertyCurrentValue || "";
+  qwertyDisplay.value = qwertyCurrentValue || "";
+  setQwertySelection(qwertyCaretStart, qwertyCaretEnd);
+}
+
+function refreshQwertyKeysCase() {
+  if (!qwertyOverlay) return;
+
+  qwertyOverlay.querySelectorAll(".q-key").forEach((btn) => {
+    const raw = String(btn.getAttribute("data-key") || "");
+    const isLetter = raw.length === 1 && /[a-zñ]/i.test(raw);
+    if (!isLetter) return;
+    btn.textContent = qwertyCaps ? raw.toUpperCase() : raw.toLowerCase();
+  });
+
+  const capsBtn = qwertyOverlay.querySelector('.q-btn[data-key="caps"]');
+  if (capsBtn) {
+    capsBtn.classList.toggle("active", qwertyCaps);
+    capsBtn.textContent = qwertyCaps ? "Minus" : "Mayus";
+  }
+}
+
+function initQwertyKeysStyling() {
+  if (!qwertyOverlay) return;
+  qwertyOverlay.querySelectorAll(".q-key").forEach((btn) => {
+    const key = String(btn.getAttribute("data-key") || "");
+    btn.classList.remove("key-letter", "key-number", "key-special");
+
+    if (/^[0-9]$/.test(key)) {
+      btn.classList.add("key-number");
+      return;
+    }
+
+    if (key.length === 1 && /[a-zñ]/i.test(key)) {
+      btn.classList.add("key-letter");
+      return;
+    }
+
+    btn.classList.add("key-special");
+  });
+
+  refreshQwertyKeysCase();
 }
 
 let qwertyTargetInput = null;
@@ -4606,6 +5380,7 @@ let qwertyTargetInput = null;
 // default: text
 function openQwertyForInput(inputEl, mode = "text") {
   qwertyMode = mode;
+  qwertyCommitted = false;
 
   const emailRow = document.getElementById("qwertyEmailRow");
   if (emailRow) {
@@ -4613,54 +5388,115 @@ function openQwertyForInput(inputEl, mode = "text") {
   }
 
   qwertyTargetInput = inputEl || null;
-  qwertyCurrentValue = inputEl?.value ? inputEl.value : "";
+  qwertyOriginalValue = inputEl?.value ? String(inputEl.value) : "";
+  qwertyCurrentValue = qwertyOriginalValue;
+  qwertyCaps = false;
+  qwertyCaretStart = qwertyCurrentValue.length;
+  qwertyCaretEnd = qwertyCurrentValue.length;
+  refreshQwertyKeysCase();
   updateQwertyDisplay();
+  applyQwertyPreview();
 
   const qwertyOverlay = document.getElementById("qwertyOverlay");
   if (qwertyOverlay) qwertyOverlay.classList.remove("hidden");
+  qwertyWindowManager?.onOpen?.();
   qwertyVisible = true;
+
+  if (qwertyDisplay) {
+    qwertyDisplay.focus();
+    setQwertySelection(qwertyCurrentValue.length);
+  }
 }
 
-function closeQwerty() {
+function closeQwerty(reason = "cancel") {
   const emailRow = document.getElementById("qwertyEmailRow");
   if (emailRow) emailRow.classList.add("hidden");
+
+  const shouldCommit = reason === "confirm" || qwertyCommitted;
+
+  if (qwertyTargetInput) {
+    if (shouldCommit) {
+      qwertyTargetInput.value = qwertyCurrentValue;
+    } else {
+      qwertyTargetInput.value = "";
+      qwertyCurrentValue = "";
+      qwertyCaretStart = 0;
+      qwertyCaretEnd = 0;
+    }
+
+    if (qwertyTargetInput === searchInput) {
+      searchTerm = qwertyTargetInput.value || "";
+      renderProducts();
+    }
+
+    qwertyTargetInput.dispatchEvent(new Event("input", { bubbles: true }));
+  }
 
   const qwertyOverlay = document.getElementById("qwertyOverlay");
   if (qwertyOverlay) qwertyOverlay.classList.add("hidden");
 
   qwertyVisible = false;
   qwertyMode = "text";
+  qwertyTargetInput = null;
+  qwertyOriginalValue = "";
 }
 
 function qwertyAddChar(ch) {
-  qwertyCurrentValue += ch;
+  if (qwertyDisplay && document.activeElement === qwertyDisplay) {
+    syncQwertyDisplaySelection();
+  }
+
+  const insertion = getQwertyInsertKey(ch);
+  const start = Math.min(qwertyCaretStart, qwertyCaretEnd);
+  const end = Math.max(qwertyCaretStart, qwertyCaretEnd);
+  const before = qwertyCurrentValue.slice(0, start);
+  const after = qwertyCurrentValue.slice(end);
+  qwertyCurrentValue = `${before}${insertion}${after}`;
+  const nextCaret = start + insertion.length;
+  setQwertySelection(nextCaret, nextCaret);
   updateQwertyDisplay();
+  applyQwertyPreview();
 }
 
 function qwertyBackspace() {
-  if (qwertyCurrentValue.length > 0) {
-    qwertyCurrentValue = qwertyCurrentValue.slice(0, -1);
-    updateQwertyDisplay();
+  if (qwertyDisplay && document.activeElement === qwertyDisplay) {
+    syncQwertyDisplaySelection();
   }
+
+  const start = Math.min(qwertyCaretStart, qwertyCaretEnd);
+  const end = Math.max(qwertyCaretStart, qwertyCaretEnd);
+  if (start === 0 && end === 0) return;
+
+  if (start !== end) {
+    qwertyCurrentValue =
+      qwertyCurrentValue.slice(0, start) + qwertyCurrentValue.slice(end);
+    setQwertySelection(start, start);
+  } else {
+    qwertyCurrentValue =
+      qwertyCurrentValue.slice(0, start - 1) + qwertyCurrentValue.slice(end);
+    setQwertySelection(start - 1, start - 1);
+  }
+
+  updateQwertyDisplay();
+  applyQwertyPreview();
 }
 
 function qwertyClearAll() {
   qwertyCurrentValue = "";
+  setQwertySelection(0, 0);
   updateQwertyDisplay();
+  applyQwertyPreview();
 }
 
 function qwertyConfirm() {
-  if (qwertyTargetInput) {
-    qwertyTargetInput.value = qwertyCurrentValue;
-    // si es el buscador, actualizamos la búsqueda
-    if (qwertyTargetInput === searchInput) {
-      searchTerm = qwertyCurrentValue;
-      renderProducts();
-    }
-    qwertyTargetInput.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-  closeQwerty();
+  qwertyCommitted = true;
+  closeQwerty("confirm");
 }
+
+window.TPV_QWERTY = {
+  openForInput: (inputEl, mode = "text") => openQwertyForInput(inputEl, mode),
+  close: () => closeQwerty(),
+};
 
 if (searchKeyboardBtn) {
   searchKeyboardBtn.onclick = () => {
@@ -4669,19 +5505,65 @@ if (searchKeyboardBtn) {
 }
 
 if (qwertyOverlay) {
+  initQwertyKeysStyling();
+
+  // Evita que el foco salte a los botones del teclado al pulsarlos con mouse/touch.
+  qwertyOverlay.addEventListener("mousedown", (e) => {
+    if (
+      e.target.closest("[data-key]") ||
+      e.target.closest(".kb-window-btn") ||
+      e.target.closest(".kb-drag-handle") ||
+      e.target.closest(".kb-resize-handle")
+    ) {
+      e.preventDefault();
+    }
+  });
+
+  if (qwertyDisplay) {
+    qwertyDisplay.addEventListener("click", () => {
+      syncQwertyDisplaySelection();
+    });
+
+    qwertyDisplay.addEventListener("keyup", () => {
+      syncQwertyDisplaySelection();
+    });
+
+    qwertyDisplay.addEventListener("select", () => {
+      syncQwertyDisplaySelection();
+    });
+
+    qwertyDisplay.addEventListener("input", () => {
+      qwertyCurrentValue = qwertyDisplay.value || "";
+      syncQwertyDisplaySelection();
+      applyQwertyPreview();
+    });
+  }
+
   qwertyOverlay.addEventListener("click", (e) => {
-    if (handleOverlayOutsideClick(e, ".qwerty-pad", closeQwerty)) {
+    if (qwertyWindowManager?.shouldIgnoreOutsideClick?.()) return;
+
+    if (
+      handleOverlayOutsideClick(e, ".qwerty-pad", () => closeQwerty("cancel"))
+    ) {
       return;
     }
 
     const keyBtn = e.target.closest("[data-key]");
     if (!keyBtn) return;
 
+    if (qwertyDisplay && document.activeElement !== qwertyDisplay) {
+      qwertyDisplay.focus();
+      setQwertySelection(qwertyCaretStart, qwertyCaretEnd);
+    }
+
     const key = keyBtn.getAttribute("data-key");
     if (key === ".com") {
       qwertyAddChar(".com");
     } else if (key === "gmail.com") {
       qwertyAddChar("gmail.com");
+    } else if (key === "caps") {
+      qwertyCaps = !qwertyCaps;
+      refreshQwertyKeysCase();
     } else if (key === "@") {
       qwertyAddChar("@");
     } else if (key === ".") {
@@ -4699,7 +5581,7 @@ if (qwertyOverlay) {
     } else if (key === "clear") {
       qwertyClearAll();
     } else if (key === "cancel") {
-      closeQwerty();
+      closeQwerty("cancel");
     } else if (key === "ok") {
       qwertyConfirm();
     }
@@ -4720,7 +5602,7 @@ window.addEventListener("keydown", (e) => {
     qwertyConfirm();
   } else if (e.key === "Escape") {
     e.preventDefault();
-    closeQwerty();
+    closeQwerty("cancel");
   }
 });
 
@@ -5568,7 +6450,7 @@ function renderParkedTicketsModal() {
       : `<span class="ticket-badge ticket-badge-partial">PENDIENTE</span>`;
 
     const paidSub = t.paid
-      ? `<div class="pt-items" style="color:#15803d;">Cobrado${
+      ? `<div class="pt-items pt-items-paid">Cobrado${
           t.paidTicketCode ? ` · ${escapeHtml(t.paidTicketCode)}` : ""
         }</div>`
       : "";
@@ -5988,6 +6870,30 @@ function renderMainAgentBar() {
     return refreshBtn;
   };
 
+  const createThemeStack = () => {
+    const stack = document.createElement("div");
+    stack.className = "agent-theme-stack";
+
+    const mainBtn = document.createElement("button");
+    mainBtn.type = "button";
+    mainBtn.className = "agent-btn agent-theme-mini agent-theme-btn-main";
+    mainBtn.onclick = () => {
+      toggleThemeMode();
+    };
+
+    const customerBtn = document.createElement("button");
+    customerBtn.type = "button";
+    customerBtn.className =
+      "agent-btn agent-theme-mini agent-theme-btn-customer";
+    customerBtn.onclick = () => {
+      toggleCustomerDisplayThemeMode();
+    };
+
+    stack.appendChild(mainBtn);
+    stack.appendChild(customerBtn);
+    return stack;
+  };
+
   const createDrawerBtn = () => {
     const drawerBtn = document.createElement("button");
     drawerBtn.type = "button";
@@ -6005,6 +6911,7 @@ function renderMainAgentBar() {
   // Si no hay terminal, mostrar solo acciones
   if (!currentTerminal) {
     agentActions.appendChild(createRefreshBtn());
+    agentActions.appendChild(createThemeStack());
     agentActions.appendChild(createDrawerBtn());
 
     if (agentNameEl) agentNameEl.textContent = "---";
@@ -6064,11 +6971,14 @@ function renderMainAgentBar() {
 
   // Botones fijos a la derecha
   agentActions.appendChild(createRefreshBtn());
+  agentActions.appendChild(createThemeStack());
   agentActions.appendChild(createDrawerBtn());
 
   if (agentNameEl) {
     agentNameEl.textContent = currentAgent ? currentAgent.name : "---";
   }
+
+  updateThemeButtonsUI();
 }
 
 // Overlay para elegir TPV / agente
@@ -7146,7 +8056,7 @@ function renderAgentSalesSummary() {
             <div class="cash-agent-head">
               <div>
                 <div class="cash-agent-name">${escapeHtml(ag.agentName || ag.agentCode || "—")}</div>
-                <div style="font-size:12px; opacity:.9; margin-top:4px; font-weight:700;">
+                <div class="cash-agent-stats">
                   Tickets: ${Number(ag.count || 0)} · Pagos: ${Number(ag.paymentUses || 0)}
                 </div>
               </div>
@@ -8667,7 +9577,10 @@ async function confirmCashOpening() {
 
   if (terminalNameEl && currentTerminal)
     terminalNameEl.textContent = currentTerminal.name || "---";
-  setTerminalNameClickable(Array.isArray(terminals) && terminals.length > 1);
+  setTerminalNameClickable(
+    Array.isArray(terminals) && terminals.length > 1,
+    TPV_LOADING,
+  );
   if (agentNameEl)
     agentNameEl.textContent = currentAgent ? currentAgent.name : "---";
 
@@ -9636,6 +10549,7 @@ async function handleCashHeaderAction(opts = {}) {
 
 if (cashHeaderBtn) {
   cashHeaderBtn.onclick = async () => {
+    if (TPV_LOADING) return;
     await handleCashHeaderAction({ auto: false });
   };
 }
@@ -9643,6 +10557,8 @@ if (cashHeaderBtn) {
 // Click en nombre de agente: cambio rápido (agente y, si hay >1, también terminal)
 if (agentNameEl) {
   agentNameEl.addEventListener("click", async () => {
+    if (TPV_LOADING) return;
+
     await refreshTerminalsAndAgents();
 
     const tpvs = Array.isArray(terminals) ? terminals : [];
@@ -9666,6 +10582,7 @@ if (agentNameEl) {
 
 if (userNameEl) {
   userNameEl.addEventListener("click", async () => {
+    if (TPV_LOADING) return;
     await doLogoutFlow();
   });
 }
@@ -10276,6 +11193,7 @@ window.cargarPantallaTPV = async function (idcaja, idtpv, caja) {
       terminalNameEl.textContent = currentTerminal.name || "---";
       setTerminalNameClickable(
         Array.isArray(terminals) && terminals.length > 1,
+        TPV_LOADING,
       );
     }
     if (agentNameEl) {
@@ -19287,6 +20205,9 @@ function showMessageModal(title, text) {
 
 // ===== Inicialización =====
 window.addEventListener("DOMContentLoaded", async () => {
+  initThemeMode();
+  await initCustomerDisplayThemeMode();
+  setTpvLoadingState(true);
   renderCart();
   updateCashButtonLabel();
   updateParkedCountBadge();
