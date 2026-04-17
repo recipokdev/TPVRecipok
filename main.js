@@ -1543,6 +1543,11 @@ function isCustomerDisplayEnabled() {
   return cfg.customerDisplay === true; // default OFF
 }
 
+function getCustomerDisplayThemeMode() {
+  const cfg = readCfg();
+  return cfg.customerDisplayTheme === "light" ? "light" : "dark";
+}
+
 ipcMain.handle("cfg:get", (_e, key) => readCfg()[key]);
 ipcMain.handle("cfg:set", (_e, key, value) => writeCfg({ [key]: value }));
 
@@ -1782,6 +1787,11 @@ async function ensureCustomerWindow() {
     });
 
     customerWin.webContents.on("did-finish-load", () => {
+      const themeMode = getCustomerDisplayThemeMode();
+      try {
+        customerWin?.webContents?.send("customer:theme", themeMode);
+      } catch {}
+
       if (lastCustomerState && customerWin && !customerWin.isDestroyed()) {
         customerWin.webContents.send("customer:state", lastCustomerState);
       }
@@ -1876,4 +1886,21 @@ ipcMain.handle("customer:setEnabled", async (_e, enabled) => {
   }
 
   return { ok: true, enabled: val };
+});
+
+ipcMain.handle("customer:getTheme", async () => {
+  return { ok: true, mode: getCustomerDisplayThemeMode() };
+});
+
+ipcMain.handle("customer:setTheme", async (_e, mode) => {
+  const val = mode === "light" ? "light" : "dark";
+  writeCfg({ customerDisplayTheme: val });
+
+  if (customerWin && !customerWin.isDestroyed()) {
+    try {
+      customerWin.webContents.send("customer:theme", val);
+    } catch {}
+  }
+
+  return { ok: true, mode: val };
 });

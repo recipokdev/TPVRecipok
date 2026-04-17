@@ -6,6 +6,14 @@ function eur(n) {
   );
 }
 
+function applyThemeMode(mode) {
+  const light = mode === "light";
+  document.body.classList.toggle("theme-light", light);
+  document.body.classList.toggle("theme-dark", !light);
+}
+
+applyThemeMode("dark");
+
 /* ===== Reloj ===== */
 (function startClock() {
   const el = document.getElementById("clock");
@@ -393,5 +401,13 @@ window.TPV_CUSTOMER_IPC?.onState?.((state) => {
     render(state);
   } catch (e) {
     console.error("[CUSTOMER render error]", e);
+  }
+});
+
+window.TPV_CUSTOMER_IPC?.onTheme?.((mode) => {
+  try {
+    applyThemeMode(mode);
+  } catch (e) {
+    console.error("[CUSTOMER theme error]", e);
   }
 });

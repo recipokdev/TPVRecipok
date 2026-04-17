@@ -103,7 +103,14 @@
 
       <!-- Cliente actual -->
       <div class="cart-client-row">
-        <div class="cart-client-icon">👤</div>
+        <button
+          id="cartCustomerListBtn"
+          type="button"
+          class="cart-client-icon"
+          title="Seleccionar cliente"
+        >
+          👤
+        </button>
 
         <input
           id="cartCustomerInput"
@@ -128,7 +135,7 @@
           id="cartCustomerOpen"
           type="button"
           class="cart-client-btn"
-          title="Cambiar cliente"
+          title="Crear cliente"
         >
           ➕
         </button>
@@ -222,7 +229,16 @@
     <!-- Teclado QWERTY -->
     <div id="qwertyOverlay" class="qwerty-overlay hidden">
       <div class="qwerty-pad">
-        <div id="qwertyDisplay" class="qwerty-display"></div>
+        <input
+          id="qwertyDisplay"
+          class="qwerty-display"
+          type="text"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
+          inputmode="none"
+        />
 
         <div class="qwerty-rows">
           <div
@@ -285,6 +301,7 @@
         </div>
 
         <div class="qwerty-actions">
+          <button class="q-btn q-caps" data-key="caps">Mayus</button>
           <button class="q-btn q-back" data-key="back">←</button>
           <button class="q-btn q-clear" data-key="clear">Borrar todo</button>
           <button class="q-btn" data-key="space">Espacio</button>

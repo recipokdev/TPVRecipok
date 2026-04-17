@@ -71,6 +71,35 @@ body {
   overflow: hidden;
 }
 
+body.theme-light {
+  --bg: #f3f6fb;
+  --panel: rgba(255, 255, 255, 0.96);
+  --panel2: rgba(255, 255, 255, 0.95);
+  --txt: #0f172a;
+  --muted: rgba(30, 41, 59, 0.78);
+  --line: rgba(15, 23, 42, 0.1);
+  --shadow: rgba(15, 23, 42, 0.15);
+
+  background:
+    radial-gradient(
+      1200px 600px at 30% 0%,
+      rgba(43, 108, 255, 0.1),
+      transparent 60%
+    ),
+    radial-gradient(
+      1000px 500px at 80% 20%,
+      rgba(245, 158, 11, 0.06),
+      transparent 55%
+    ),
+    linear-gradient(180deg, #f7fafc 0%, #eef2f7 100%);
+}
+
+body.theme-light .row {
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  border-color: rgba(15, 23, 42, 0.1);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1);
+}
+
 .wrap {
   height: 100vh;
   display: flex;
@@ -431,7 +460,6 @@ body {
 .item.pack-child .ltotal {
   opacity: 0.35; /* aunque esté vacío, por si cambia */
 }
-
 
 .thanks-overlay {
   position: fixed;
