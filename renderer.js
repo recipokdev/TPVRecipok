@@ -44,6 +44,11 @@ let activeFamilyParentId = null; // id de familia padre (para subfamilias)
 let activeSubfamilyId = null; // id de subfamilia activa (hija)
 let cart = [];
 let searchTerm = "";
+const RUNTIME_CART_SNAPSHOT_KEY = "tpv_runtime_cart_snapshot_v1";
+const RUNTIME_CART_SNAPSHOT_CFG_KEY = "runtime.cartSnapshot";
+const LOGIN_LAST_USER_KEY = "tpv_last_user";
+let CART_SNAPSHOT_ARMED = false;
+let CART_SNAPSHOT_CFG_WRITE_TIMER = null;
 
 let lastTicket = null; // guardará el último ticket/factura creada para poder imprimirla
 
@@ -1739,15 +1744,25 @@ function updatePayButtonEnabledState() {
   const btn = document.getElementById("payBtn");
   if (!btn) return;
 
+  btn.textContent = isPayingNow ? "Cobrando..." : "Cobrar";
+
+  if (isPayingNow) {
+    btn.disabled = true;
+    btn.title = "Hay un cobro en curso. Espera a que termine.";
+    return;
+  }
+
   const hasCart = !!(cart && cart.length);
   const hasCaja = !!cashSession?.open;
   const hasTpv = !!currentTerminal?.id;
   const hasAgent = hasAssignedAgent();
+  const hasLogin = hasActiveLoginSession();
 
-  const disabled = !hasCaja || !hasTpv || !hasCart || !hasAgent;
+  const disabled = !hasLogin || !hasCaja || !hasTpv || !hasCart || !hasAgent;
   btn.disabled = disabled;
 
-  if (!hasCaja) btn.title = "Abre la caja para poder cobrar";
+  if (!hasLogin) btn.title = "Inicia sesión para operar el TPV";
+  else if (!hasCaja) btn.title = "Abre la caja para poder cobrar";
   else if (!hasTpv) btn.title = "Selecciona un terminal";
   else if (!hasAgent) btn.title = "Falta agente asignado";
   else if (!hasCart) btn.title = "Añade productos antes de cobrar";
@@ -1759,13 +1774,55 @@ function renderAgentMissingBadge() {
   if (!b) return;
 
   const cashOpen = !!cashSession?.open;
-  const showBadge = cashOpen && !hasAssignedAgent();
+  const showBadge = cashOpen && hasActiveLoginSession() && !hasAssignedAgent();
   b.style.display = showBadge ? "inline" : "none";
 }
 
+function ensureActiveAgentIfPossible() {
+  if (!hasActiveLoginSession()) return;
+
+  const terminalId = currentTerminal?.id;
+  if (!terminalId) return;
+
+  const list = getAgentsForTerminalId(terminalId) || [];
+  if (!list.length) return;
+
+  const stillValid =
+    currentAgent &&
+    list.some(
+      (a) =>
+        String(a?.codagente || "") === String(currentAgent?.codagente || ""),
+    );
+
+  if (stillValid) return;
+
+  currentAgent = list[0];
+  if (agentNameEl) agentNameEl.textContent = currentAgent?.name || "---";
+
+  try {
+    window.TPV_CFG?.set?.(
+      "auth.codagente",
+      String(currentAgent?.codagente || ""),
+    );
+  } catch {}
+}
+
 function refreshAgentGuardUI() {
+  ensureActiveAgentIfPossible?.();
   renderAgentMissingBadge?.();
   updatePayButtonEnabledState?.();
+}
+
+const agentMissingBadgeEl = document.getElementById("agentMissingBadge");
+if (agentMissingBadgeEl) {
+  agentMissingBadgeEl.style.cursor = "pointer";
+  agentMissingBadgeEl.title = "Seleccionar agente";
+  agentMissingBadgeEl.addEventListener("click", async () => {
+    if (TPV_LOADING) return;
+    if (!hasActiveLoginSession()) return;
+    await refreshTerminalsAndAgents();
+    showTerminalOverlay("agentSwitch");
+  });
 }
 
 // ===============================
@@ -2487,6 +2544,12 @@ function customerTickThanksExpiry() {
   if (customerMode === "THANKS" && Date.now() > (customerThanksUntil || 0)) {
     customerMode = "CART"; // ✅ ocultar notice
     customerThanksUntil = 0;
+
+    // Si no hay carrito nuevo, limpiamos el snapshot vendido para que no reaparezca.
+    if ((cart?.length || 0) === 0) {
+      customerDisplayOverride = null;
+    }
+
     pushCustomerState();
   }
 }
@@ -2547,8 +2610,17 @@ function pushCustomerState() {
     let itemsToShow = cartItemsVisible;
     let totalToShow = cartTotal;
 
+    // Durante PAYING mostramos siempre el snapshot congelado de la venta en curso,
+    // aunque el cajero esté montando otro carrito.
+    if (customerMode === "PAYING" && customerDisplayOverride?.items?.length) {
+      itemsToShow = Array.isArray(customerDisplayOverride.items)
+        ? customerDisplayOverride.items
+        : [];
+      totalToShow = Number(customerDisplayOverride.total || 0);
+    }
+
     // Si carrito vacío pero existe override, mostramos override (pero filtrado)
-    if (
+    else if (
       cartItemsInternal.length === 0 &&
       customerDisplayOverride?.items?.length
     ) {
@@ -2696,7 +2768,7 @@ function syncHeaderIdentityLoadingState() {
     }
 
     if (el === userNameEl) {
-      el.title = "Cerrar sesión";
+      el.title = hasActiveLoginSession() ? "Cerrar sesión" : "Iniciar sesión";
       return;
     }
 
@@ -2852,6 +2924,17 @@ async function runBootFlow() {
     // 3) Datos
     await loadDataFromApi();
 
+    const restoredCart = await restoreRuntimeCartSnapshot();
+    if (restoredCart) {
+      renderCart();
+      toast(
+        "Carrito recuperado tras cierre inesperado.",
+        "info",
+        "Recuperación",
+      );
+    }
+    CART_SNAPSHOT_ARMED = true;
+
     // Aplicar visibilidad/admin una vez tras completar carga inicial.
     applyAdminOnlyUI?.();
     refreshOptionsUI?.();
@@ -2958,6 +3041,7 @@ function refreshLoggedUserUI() {
     String(localStorage.getItem("tpv_login_user") || "").trim();
 
   userNameEl.textContent = u ? u : "---";
+  updateSessionLockUi?.();
 }
 
 function updateCashButtonLabel() {
@@ -2984,13 +3068,16 @@ function updateCashButtonLabel() {
 
 function syncCashClosedUiState() {
   const cashOpen = !!cashSession?.open;
+  const hasLogin = hasActiveLoginSession();
 
   const cashMove = document.getElementById("cashMoveBtn");
   if (cashMove) {
-    cashMove.disabled = !cashOpen;
-    cashMove.title = cashOpen
-      ? "Movimientos de caja"
-      : "Disponible solo con la caja abierta";
+    cashMove.disabled = !cashOpen || !hasLogin;
+    cashMove.title = !hasLogin
+      ? "Inicia sesión para usar movimientos"
+      : cashOpen
+        ? "Movimientos de caja"
+        : "Disponible solo con la caja abierta";
   }
 
   const options = document.getElementById("optionsBtn");
@@ -3531,6 +3618,15 @@ async function createChildrenFromSelection({
 }
 
 async function addToCart(product, quantity = 1) {
+  if (!hasActiveLoginSession()) {
+    const okLogin = await openLoginModal();
+    if (!okLogin || !hasActiveLoginSession()) {
+      applyLoggedOutUiState({ lock: true });
+      return;
+    }
+    unlockAppUI();
+  }
+
   const prodId = Number(product.baseProductId || product.id || 0);
 
   // Primera versión:
@@ -3694,6 +3790,25 @@ function updateCartItemQuantity(lineId, newQty) {
   renderCart();
 }
 
+function previewCartItemQuantity(lineId, newQty) {
+  const item = cart.find((c) => c._lineId === lineId);
+  if (!item || isPackChildLine(item)) return;
+
+  let q = Number(newQty);
+  if (!isFinite(q)) q = 0;
+  q = Math.max(0, Math.round(q * 1000) / 1000);
+
+  if (isPackParentLine(item)) {
+    item.qty = q;
+    syncSelectedPackChildrenQty(item);
+    renderCart();
+    return;
+  }
+
+  item.qty = q;
+  renderCart();
+}
+
 function getOriginalUnitGross(item) {
   // Usa el mismo criterio que ya estabas usando en el click del botón precio
   return (
@@ -3789,6 +3904,150 @@ function buildPackIncludesText(parentLine) {
   }
 }
 
+function normalizeCartLineFromSnapshot(raw) {
+  if (!raw || typeof raw !== "object") return null;
+
+  const qty = Number(raw.qty || 0);
+  if (!Number.isFinite(qty) || qty <= 0) return null;
+
+  const line = { ...raw };
+  line._lineId = String(raw._lineId || makeLineId());
+  line.qty = qty;
+
+  const numFields = [
+    "id",
+    "baseProductId",
+    "price",
+    "taxRate",
+    "grossPrice",
+    "originalNetPrice",
+    "originalGrossPrice",
+    "grossPriceOverride",
+  ];
+
+  numFields.forEach((f) => {
+    if (line[f] == null || line[f] === "") return;
+    const n = Number(line[f]);
+    line[f] = Number.isFinite(n) ? n : line[f];
+  });
+
+  return line;
+}
+
+function buildRuntimeCartSnapshotPayload() {
+  const safeCart = Array.isArray(cart)
+    ? cart
+        .map((line) => {
+          if (!line || typeof line !== "object") return null;
+          const rest = { ...line };
+          delete rest.__livePreviewQty;
+          return rest;
+        })
+        .filter(Boolean)
+    : [];
+
+  return {
+    v: 1,
+    ts: Date.now(),
+    items: safeCart,
+  };
+}
+
+function scheduleRuntimeCartSnapshotCfgWrite(
+  payload,
+  { immediate = false } = {},
+) {
+  try {
+    if (!window.TPV_CFG?.set) return;
+
+    if (CART_SNAPSHOT_CFG_WRITE_TIMER) {
+      clearTimeout(CART_SNAPSHOT_CFG_WRITE_TIMER);
+      CART_SNAPSHOT_CFG_WRITE_TIMER = null;
+    }
+
+    const writeNow = async () => {
+      try {
+        await window.TPV_CFG.set(RUNTIME_CART_SNAPSHOT_CFG_KEY, payload);
+      } catch (e) {
+        console.warn(
+          "No se pudo guardar snapshot de carrito en TPV_CFG:",
+          e?.message || e,
+        );
+      }
+    };
+
+    if (immediate) {
+      writeNow();
+      return;
+    }
+
+    CART_SNAPSHOT_CFG_WRITE_TIMER = setTimeout(() => {
+      CART_SNAPSHOT_CFG_WRITE_TIMER = null;
+      writeNow();
+    }, 220);
+  } catch (e) {
+    console.warn(
+      "No se pudo programar persistencia de snapshot:",
+      e?.message || e,
+    );
+  }
+}
+
+function persistRuntimeCartSnapshot({ force = false } = {}) {
+  try {
+    if (!force && !CART_SNAPSHOT_ARMED) return;
+
+    const payload = buildRuntimeCartSnapshotPayload();
+
+    localStorage.setItem(RUNTIME_CART_SNAPSHOT_KEY, JSON.stringify(payload));
+
+    scheduleRuntimeCartSnapshotCfgWrite(payload, { immediate: !!force });
+  } catch (e) {
+    console.warn("No se pudo guardar snapshot de carrito:", e?.message || e);
+  }
+}
+
+async function restoreRuntimeCartSnapshot() {
+  try {
+    if (Array.isArray(cart) && cart.length > 0) return false;
+
+    let parsed = null;
+
+    try {
+      const cfgRaw = await window.TPV_CFG?.get?.(RUNTIME_CART_SNAPSHOT_CFG_KEY);
+      if (cfgRaw && typeof cfgRaw === "object") {
+        parsed = cfgRaw;
+      } else if (typeof cfgRaw === "string" && cfgRaw.trim()) {
+        parsed = JSON.parse(cfgRaw);
+      }
+    } catch {}
+
+    if (!parsed) {
+      const raw = localStorage.getItem(RUNTIME_CART_SNAPSHOT_KEY);
+      if (raw) {
+        parsed = JSON.parse(raw);
+      }
+    }
+
+    if (!parsed) return false;
+
+    const items = Array.isArray(parsed?.items) ? parsed.items : [];
+    const restored = items.map(normalizeCartLineFromSnapshot).filter(Boolean);
+
+    if (!restored.length) return false;
+
+    cart = restored;
+
+    // Si restauramos desde localStorage, replicamos a TPV_CFG para siguientes arranques.
+    scheduleRuntimeCartSnapshotCfgWrite(parsed, { immediate: true });
+
+    return true;
+  } catch (e) {
+    console.warn("No se pudo restaurar snapshot de carrito:", e?.message || e);
+    return false;
+  }
+}
+
 function renderCart() {
   const container = document.getElementById("cartLines");
   if (!container) return;
@@ -3872,7 +4131,13 @@ function renderCart() {
   });
 
   // ✅ si empieza un nuevo carrito, dejamos de mostrar el último cobrado
-  if ((cart?.length || 0) > 0 && customerDisplayOverride) {
+  // (excepto durante un cobro en curso)
+  if ((cart?.length || 0) > 0 && customerMode === "THANKS" && !isPayingNow) {
+    customerMode = "CART";
+    customerThanksUntil = 0;
+  }
+
+  if ((cart?.length || 0) > 0 && customerDisplayOverride && !isPayingNow) {
     customerDisplayOverride = null;
   }
 
@@ -3883,6 +4148,8 @@ function renderCart() {
     currentParkedTicketIndex = null;
   }
 
+  persistRuntimeCartSnapshot();
+
   refreshParkButtonUI();
   refreshParkedEditingBanner();
 }
@@ -3891,6 +4158,12 @@ const LOGIN_TOKEN_KEY = "tpv_login_token";
 const LOGIN_USER_KEY = "tpv_login_user";
 
 let LOGIN_ACTIVE = false;
+let LOGIN_MODAL_PROMISE = null;
+let LOGIN_MODAL_DRAFT = {
+  user: "",
+  pin: "",
+  isAdmin: false,
+};
 
 function lockAppUI() {
   document.body.classList.add("modal-locked");
@@ -3911,11 +4184,106 @@ function getLoginWarehouse() {
   return localStorage.getItem("tpv_login_codalmacen") || "";
 }
 
+function hasActiveLoginSession() {
+  const user = String(getLoginUser() || "").trim();
+  const token = String(getLoginToken() || "").trim();
+  return !!(user && token);
+}
+
+async function getRememberedLoginUser() {
+  const fromDraft = String(LOGIN_MODAL_DRAFT?.user || "").trim();
+  if (fromDraft) return fromDraft;
+
+  const fromSession = String(getLoginUser?.() || "").trim();
+  if (fromSession) return fromSession;
+
+  const fromLast = String(
+    localStorage.getItem(LOGIN_LAST_USER_KEY) || "",
+  ).trim();
+  if (fromLast) return fromLast;
+
+  try {
+    const fromCfg = String(
+      (await window.TPV_CFG?.get?.("tpv.lastUser")) || "",
+    ).trim();
+    if (fromCfg) return fromCfg;
+  } catch {}
+
+  return "";
+}
+
+function updateSessionLockUi() {
+  const locked = !hasActiveLoginSession() && !LOGIN_ACTIVE;
+  document.body.classList.toggle("session-locked", locked);
+
+  if (mainAgentBar) {
+    mainAgentBar.classList.toggle("session-agentbar-hidden", locked);
+  }
+
+  if (agentNameEl) {
+    agentNameEl.classList.toggle("session-agent-disabled", locked);
+    agentNameEl.setAttribute("aria-disabled", locked ? "true" : "false");
+    if (locked) {
+      agentNameEl.title = "Inicia sesión para seleccionar agente";
+    } else if (agentNameEl.title === "Inicia sesión para seleccionar agente") {
+      agentNameEl.title = "";
+    }
+  }
+
+  let hint = document.getElementById("sessionLockHint");
+  const productsArea = document.querySelector(".products-area");
+  if (!hint && productsArea) {
+    hint = document.createElement("div");
+    hint.id = "sessionLockHint";
+    hint.className = "session-lock-hint hidden";
+    hint.innerHTML =
+      '<div class="session-lock-hint-card"><div class="session-lock-hint-title">No hay usuario activo</div><button type="button" id="sessionLockHintBtn">Iniciar sesión</button></div>';
+    productsArea.appendChild(hint);
+
+    const btn = hint.querySelector("#sessionLockHintBtn");
+    btn?.addEventListener("click", async () => {
+      if (TPV_LOADING) return;
+      const ok = await openLoginModal();
+      if (ok && hasActiveLoginSession()) {
+        updateSessionLockUi();
+      }
+    });
+  }
+
+  if (hint) {
+    hint.classList.toggle("hidden", !locked);
+  }
+
+  const optionsBtn = document.getElementById("optionsBtn");
+  if (optionsBtn && locked) {
+    optionsBtn.disabled = false;
+    optionsBtn.title = "Opciones";
+  }
+}
+
+function applyLoggedOutUiState({ lock = true } = {}) {
+  document.body.classList.toggle("session-locked", !!lock);
+  unlockAppUI();
+
+  currentAgent = null;
+  setAdminFlag?.(false, "logout");
+  refreshOptionsUI?.();
+
+  if (agentNameEl) agentNameEl.textContent = "---";
+  refreshLoggedUserUI?.();
+  renderMainAgentBar?.();
+  refreshAgentGuardUI?.();
+  updateSessionLockUi();
+}
+
 function setLoginSession({ token, user, codagente, codalmacen }) {
   localStorage.setItem("tpv_login_token", token || "");
   localStorage.setItem("tpv_login_user", user || "");
   localStorage.setItem("tpv_login_codagente", codagente || "");
   localStorage.setItem("tpv_login_codalmacen", codalmacen || "");
+  if (String(user || "").trim()) {
+    localStorage.setItem(LOGIN_LAST_USER_KEY, String(user).trim());
+  }
 }
 function clearLoginSession() {
   localStorage.removeItem("tpv_login_token");
@@ -3946,6 +4314,7 @@ async function openLoginModal() {
   const usersBar = document.getElementById("loginUsersBar");
   const passInp = document.getElementById("loginPass");
   const errEl = document.getElementById("loginError");
+  const statusEl = document.getElementById("loginStatus");
   const okBtn = document.getElementById("loginOkBtn");
   const exitBtn = document.getElementById("loginExitBtn");
   const pinPad = document.getElementById("loginPinPad");
@@ -3954,13 +4323,85 @@ async function openLoginModal() {
 
   if (!overlay || !usersBar || !passInp || !okBtn || !exitBtn) return false;
 
-  let selectedUser = "";
-  let isAdminSelected = false;
+  if (LOGIN_MODAL_PROMISE) return LOGIN_MODAL_PROMISE;
+
+  const rememberedUser = await getRememberedLoginUser();
+  let selectedUser = String(
+    LOGIN_MODAL_DRAFT.user || rememberedUser || "",
+  ).trim();
+  let isAdminSelected = !!LOGIN_MODAL_DRAFT.isAdmin;
+  let usersLoaded = false;
+  let loginBusy = false;
+
+  function saveLoginDraft() {
+    LOGIN_MODAL_DRAFT = {
+      user: String(selectedUser || "").trim(),
+      pin: String(passInp.value || ""),
+      isAdmin: !!isAdminSelected,
+    };
+  }
+
+  function setLoginStatus(msg = "") {
+    if (!statusEl) return;
+    statusEl.textContent = msg;
+  }
+
+  function setPinVisibility(show) {
+    const isVisible = !!show;
+    if (pinSection) pinSection.style.display = isVisible ? "block" : "none";
+    if (pinTitle) pinTitle.style.display = isVisible ? "block" : "none";
+    passInp.style.display = isVisible ? "block" : "none";
+  }
+
+  function updateLoginSubmitState() {
+    const hasUser = !!String(selectedUser || "").trim();
+    const pinTxt = String(passInp.value || "").trim();
+    const hasPin = !!pinTxt;
+    const hasValidAdminPin = /^\d{4}$/.test(pinTxt);
+    const needsPin = !!isAdminSelected;
+
+    const canSubmit =
+      usersLoaded && hasUser && (!needsPin || hasValidAdminPin) && !loginBusy;
+
+    okBtn.disabled = !canSubmit;
+
+    if (!usersLoaded) {
+      setLoginStatus("Cargando TPV, espere por favor...");
+      return;
+    }
+
+    if (!hasUser) {
+      setLoginStatus("Aun no se ha seleccionado ningun usuario.");
+      return;
+    }
+
+    if (needsPin && !hasPin) {
+      setLoginStatus("Usuario administrador seleccionado. Introduce el PIN.");
+      return;
+    }
+
+    if (needsPin && !hasValidAdminPin) {
+      setLoginStatus("El PIN de administrador debe tener 4 digitos.");
+      return;
+    }
+
+    if (TPV_STATE?.offline) {
+      setLoginStatus("TPV cargado en modo offline. Ya puedes entrar.");
+      return;
+    }
+
+    setLoginStatus("");
+  }
+
+  passInp.oninput = () => {
+    errEl.textContent = "";
+    saveLoginDraft();
+    updateLoginSubmitState();
+  };
 
   // --- 1) REPARACIÓN DE BOTONES NUMÉRICOS (PINPAD) ---
-  if (pinPad && !pinPad.dataset.bound) {
-    pinPad.dataset.bound = "1";
-    pinPad.addEventListener("click", (e) => {
+  if (pinPad) {
+    pinPad.onclick = (e) => {
       const btn = e.target.closest("button[data-k]");
       if (!btn) return;
       const k = btn.getAttribute("data-k");
@@ -3972,8 +4413,11 @@ async function openLoginModal() {
       } else if (/^\d$/.test(k) && passInp.value.length < 4) {
         passInp.value += k;
       }
+      errEl.textContent = "";
+      saveLoginDraft();
+      updateLoginSubmitState();
       passInp.focus();
-    });
+    };
   }
 
   // --- 2) OBTENER USUARIOS ---
@@ -4016,6 +4460,7 @@ async function openLoginModal() {
   // --- 3) PINTAR BOTONES POR GRUPOS ---
   function renderUserButtons(userList) {
     usersBar.innerHTML = "";
+    let matchedSelectedUser = false;
 
     const admins = userList.filter((u) => u.admin === true);
     const staff = userList.filter((u) => u.admin !== true);
@@ -4053,31 +4498,40 @@ async function openLoginModal() {
           btn.classList.add("selected");
           errEl.textContent = "";
 
-          if (u.admin) {
-            // Admin: Mostrar PIN
-            pinSection.style.display = "block";
-            pinTitle.style.display = "block";
-            passInp.style.display = "block";
-            passInp.value = "";
-            passInp.focus();
-          } else {
-            // Empleado: Login directo con PIN 0000
-            pinSection.style.display = "none";
-            pinTitle.style.display = "none";
-            passInp.style.display = "none";
-            passInp.value = "0000";
-            await doLogin();
-          }
+          // PIN solo para admin. No limpiamos passInp para conservar lo tecleado.
+          setPinVisibility(!!u.admin);
+          saveLoginDraft();
+          if (u.admin) passInp.focus();
+          updateLoginSubmitState();
         };
+
+        if (selectedUser && String(u.nick) === selectedUser) {
+          btn.classList.add("selected");
+          isAdminSelected = !!u.admin;
+          matchedSelectedUser = true;
+        }
+
         usersBar.appendChild(btn);
       });
     };
 
     createGroup("Administradores", admins);
     createGroup("Personal TPV", staff);
+
+    if (matchedSelectedUser) {
+      setPinVisibility(!!isAdminSelected);
+    } else {
+      selectedUser = "";
+      isAdminSelected = false;
+      setPinVisibility(false);
+    }
+
+    saveLoginDraft();
   }
   // --- 4) LÓGICA DE LOGIN ---
   const doLogin = async () => {
+    if (!usersLoaded || loginBusy) return false;
+
     const u = (selectedUser || "").trim();
     const p = (passInp.value || "").trim();
 
@@ -4085,8 +4539,9 @@ async function openLoginModal() {
       errEl.textContent = "Selecciona un usuario.";
       return false;
     }
-    if (isAdminSelected && !p) {
-      errEl.textContent = "Introduce el PIN.";
+    if (isAdminSelected && !/^\d{4}$/.test(p)) {
+      errEl.textContent = "El PIN debe tener 4 digitos.";
+      updateLoginSubmitState();
       return false;
     }
 
@@ -4116,6 +4571,8 @@ async function openLoginModal() {
     body.append("pass", isAdminSelected ? p : "0000");
 
     errEl.textContent = "";
+    loginBusy = true;
+    updateLoginSubmitState();
 
     try {
       const res = await fetch(url, {
@@ -4128,6 +4585,8 @@ async function openLoginModal() {
 
       if (!data || !data.ok) {
         errEl.textContent = data?.message || "PIN incorrecto";
+        loginBusy = false;
+        updateLoginSubmitState();
         return false;
       }
 
@@ -4136,6 +4595,8 @@ async function openLoginModal() {
 
       if (!loggedUser || !token) {
         errEl.textContent = "Respuesta inválida del servidor (sin token).";
+        loginBusy = false;
+        updateLoginSubmitState();
         return false;
       }
 
@@ -4154,7 +4615,7 @@ async function openLoginModal() {
 
       // Persistir usuario activo TPV (para recuperación tras corte)
       try {
-        localStorage.setItem("tpv_last_user", loggedUser);
+        localStorage.setItem(LOGIN_LAST_USER_KEY, loggedUser);
       } catch {}
 
       try {
@@ -4205,58 +4666,109 @@ async function openLoginModal() {
       // ✅ 5) UI final
       overlay.classList.add("hidden");
       unlockAppUI();
+      CART_SNAPSHOT_ARMED = true;
+      updateSessionLockUi();
+
+      if (data.codagente) {
+        const wanted = String(data.codagente || "").trim();
+        const listNow = currentTerminal
+          ? getAgentsForTerminalId(currentTerminal.id)
+          : [];
+        const picked = (Array.isArray(listNow) ? listNow : []).find(
+          (a) => String(a?.codagente || "").trim() === wanted,
+        );
+        if (picked) currentAgent = picked;
+      }
+
       refreshLoggedUserUI?.();
+      refreshAgentGuardUI?.();
+
+      LOGIN_MODAL_DRAFT = {
+        user: loggedUser,
+        pin: "",
+        isAdmin: !!isAdminSelected,
+      };
 
       LOGIN_ACTIVE = false;
 
       // ✅ No tocar cashOpenDialogShown aquí
 
-      // Siempre refrescar cabecera/terminal/agente
-      await ensureTerminalAgentDefaults();
-      renderCashIdChip();
+      // Si estamos en el boot inicial, runBootFlow continuará con la
+      // resolución completa (terminal/agente + recuperación de caja).
+      // Evita carreras de "Apertura de caja" prematura.
+      if (!BOOT_IN_FLIGHT) {
+        // Siempre refrescar cabecera/terminal/agente
+        await ensureTerminalAgentDefaults();
+        renderCashIdChip();
 
-      // ✅ Si hay caja abierta, no hace falta forzar loadDataFromApi aquí
-      // (solo si realmente necesitas refrescar catálogo por cambio de empresa, etc.)
-      if (cashSession?.open) {
-        // opcional: si de verdad lo necesitas:
-        // await loadDataFromApi({ refresh: true });
-        renderMainUI?.(); // esto pintará porque cashSession.open = true
-      } else {
-        renderMainUI?.(); // vaciará por tu gating (open=false)
+        // ✅ Si hay caja abierta, no hace falta forzar loadDataFromApi aquí
+        // (solo si realmente necesitas refrescar catálogo por cambio de empresa, etc.)
+        if (cashSession?.open) {
+          // opcional: si de verdad lo necesitas:
+          // await loadDataFromApi({ refresh: true });
+          renderMainUI?.(); // esto pintará porque cashSession.open = true
+        } else {
+          renderMainUI?.(); // vaciará por tu gating (open=false)
+        }
       }
 
       return true;
     } catch (e) {
       errEl.textContent = "Error de conexión";
+      loginBusy = false;
+      updateLoginSubmitState();
       return false;
     }
   };
 
   // --- ESTADO INICIAL ---
   errEl.textContent = "";
-  passInp.value = "";
+  passInp.value = String(LOGIN_MODAL_DRAFT.pin || "");
+  setPinVisibility(!!isAdminSelected);
+  usersLoaded = false;
+  loginBusy = false;
+  saveLoginDraft();
+  updateLoginSubmitState();
   overlay.classList.remove("hidden");
   lockAppUI();
   LOGIN_ACTIVE = true;
+  updateSessionLockUi();
 
   try {
     const users = await fetchFsUsers();
     renderUserButtons(users);
+    usersLoaded = true;
   } catch (e) {
     renderUserButtons([{ nick: "admin", admin: true }]);
+    usersLoaded = true;
   }
 
-  return await new Promise((resolve) => {
+  updateLoginSubmitState();
+
+  const modalPromise = new Promise((resolve) => {
     okBtn.onclick = async () => {
       if (await doLogin()) resolve(true);
     };
     exitBtn.onclick = () => {
+      saveLoginDraft();
       overlay.classList.add("hidden");
-      unlockAppUI();
       LOGIN_ACTIVE = false;
+
+      if (hasActiveLoginSession()) {
+        unlockAppUI();
+      } else {
+        applyLoggedOutUiState({ lock: true });
+      }
+
       resolve(false);
     };
   });
+
+  LOGIN_MODAL_PROMISE = modalPromise.finally(() => {
+    LOGIN_MODAL_PROMISE = null;
+  });
+
+  return await LOGIN_MODAL_PROMISE;
 }
 
 async function readIsAdminFromPersistence() {
@@ -4969,7 +5481,7 @@ function evaluateNumPadCurrentValue({ silent = true } = {}) {
     return 0;
   }
 
-  const cleaned = raw.replace(/\s+/g, "");
+  const cleaned = raw.replace(/\s+/g, "").replace(/,/g, ".");
   if (!/^[0-9+\-*/().]+$/.test(cleaned)) {
     if (!silent) toast("Expresión no válida", "warn", "Teclado");
     return null;
@@ -5016,7 +5528,7 @@ function applyNumPadPreview() {
   if (nextValue == null || nextValue === numPadLiveValue) return;
 
   numPadLiveValue = nextValue;
-  numPadOnConfirm(nextValue);
+  numPadOnConfirm(nextValue, { phase: "preview", mode: numPadMode });
 }
 
 function openNumPad(
@@ -5063,9 +5575,13 @@ function closeNumPad(reason = "cancel") {
     typeof numPadOnConfirm === "function"
   ) {
     if (numPadMode === "cash") {
-      numPadOnConfirm(0);
+      numPadOnConfirm(0, { phase: "cancel", mode: numPadMode, reason });
     } else {
-      numPadOnConfirm(numPadInitialValue);
+      numPadOnConfirm(numPadInitialValue, {
+        phase: "cancel",
+        mode: numPadMode,
+        reason,
+      });
     }
   }
 
@@ -5180,7 +5696,9 @@ function numPadConfirm() {
   const value = evaluateNumPadCurrentValue({ silent: false });
   if (value == null) return;
 
-  if (typeof numPadOnConfirm === "function") numPadOnConfirm(value);
+  if (typeof numPadOnConfirm === "function") {
+    numPadOnConfirm(value, { phase: "confirm", mode: numPadMode });
+  }
   closeNumPad("confirm");
   return;
 }
@@ -5243,9 +5761,9 @@ if (numPadOverlay) {
 
 window.addEventListener("keydown", (e) => {
   if (numPadVisible) {
-    if (/^[0-9+\-*/().]$/.test(e.key)) {
+    if (/^[0-9+\-*/().,]$/.test(e.key)) {
       e.preventDefault();
-      numPadAppend(e.key);
+      numPadAppend(e.key === "," ? "." : e.key);
     } else if (e.key === "Backspace") {
       e.preventDefault();
       numPadBackspace();
@@ -5694,14 +6212,15 @@ if (cartLinesContainer) {
       if (action === "edit") {
         openNumPad(
           String(item.qty ?? 1),
-          (newQty) => {
+          (newQty, meta = {}) => {
             const q = Number(String(newQty).replace(",", "."));
             if (!isFinite(q)) return;
 
             const qq = roundQty(q);
+            const isConfirm = meta.phase === "confirm";
 
             if (isPackParentLine(item)) {
-              if (qq <= 0) removePackCascade(item._lineId);
+              if (isConfirm && qq <= 0) removePackCascade(item._lineId);
               else {
                 item.qty = qq;
                 syncSelectedPackChildrenQty(item);
@@ -5710,7 +6229,8 @@ if (cartLinesContainer) {
               return;
             }
 
-            updateCartItemQuantity(lineId, qq);
+            if (isConfirm) updateCartItemQuantity(lineId, qq);
+            else previewCartItemQuantity(lineId, qq);
           },
           item.name,
           "qty",
@@ -5862,6 +6382,40 @@ function getCartTotal(items) {
 
     return sum + unit * (item.qty || 1);
   }, 0);
+}
+
+function buildLineIdSetFromSnapshot(items) {
+  const ids = new Set();
+  (Array.isArray(items) ? items : []).forEach((it) => {
+    const id = String(it?._lineId || "").trim();
+    if (id) ids.add(id);
+  });
+  return ids;
+}
+
+function removeCartLinesByIdSet(lineIds) {
+  if (!(lineIds instanceof Set) || lineIds.size === 0) return;
+  cart = (Array.isArray(cart) ? cart : []).filter((it) => {
+    const id = String(it?._lineId || "").trim();
+    return !lineIds.has(id);
+  });
+}
+
+function restoreCartSnapshotWithoutDuplicates(snapshot) {
+  const current = Array.isArray(cart) ? cart : [];
+  const existing = new Set(
+    current.map((it) => String(it?._lineId || "").trim()).filter((id) => !!id),
+  );
+
+  const toRestore = (Array.isArray(snapshot) ? snapshot : [])
+    .filter((it) => {
+      const id = String(it?._lineId || "").trim();
+      return id && !existing.has(id);
+    })
+    .map((it) => ({ ...it }));
+
+  if (!toRestore.length) return;
+  cart = [...toRestore, ...current];
 }
 
 function registerPaymentUsage(code, amount, label) {
@@ -6320,10 +6874,17 @@ function refreshParkButtonUI() {
     parkedTickets[currentParkedTicketIndex] &&
     !parkedTickets[currentParkedTicketIndex].paid;
 
+  const hasCartLines = Array.isArray(cart) && cart.length > 0;
+  parkBtn.disabled = !hasCartLines;
+
   parkBtn.textContent = hasLoadedParkedTicket ? "Actualizar" : "Aparcar";
-  parkBtn.title = hasLoadedParkedTicket
-    ? "Actualizar ticket aparcado"
-    : "Aparcar ticket";
+  if (!hasCartLines) {
+    parkBtn.title = "Añade productos al carrito para aparcar";
+  } else {
+    parkBtn.title = hasLoadedParkedTicket
+      ? "Actualizar ticket aparcado"
+      : "Aparcar ticket";
+  }
 }
 
 function refreshParkedEditingBanner() {
@@ -6839,6 +7400,15 @@ function renderAgentButtonsOverlay(terminalId) {
 function renderMainAgentBar() {
   if (!mainAgentBar) return;
 
+  if (!hasActiveLoginSession()) {
+    mainAgentBar.innerHTML = "";
+    mainAgentBar.classList.add("session-agentbar-hidden");
+    if (agentNameEl) agentNameEl.textContent = "---";
+    return;
+  }
+
+  mainAgentBar.classList.remove("session-agentbar-hidden");
+
   mainAgentBar.innerHTML = "";
 
   // Estructura principal:
@@ -6985,6 +7555,7 @@ function renderMainAgentBar() {
 function showTerminalOverlay(mode = "session") {
   if (LOGIN_ACTIVE) return;
   if (!terminalOverlay) return;
+  if (mode === "agentSwitch" && !hasActiveLoginSession()) return;
 
   terminalOverlayMode = mode;
   terminalErrorEl.textContent = "";
@@ -7055,21 +7626,44 @@ function showTerminalOverlay(mode = "session") {
       }
     }
 
-    const applyTerminalToAgentUI = (terminalId) => {
+    const applyTerminalToAgentUI = (
+      terminalId,
+      { resetSelection = true } = {},
+    ) => {
       terminalErrorEl.textContent = "";
-
-      // ✅ al cambiar TPV, limpiamos agente
-      currentAgent = null;
-      if (agentNameEl) agentNameEl.textContent = "---";
 
       const list = getAgentsForTerminalId(terminalId);
 
       if (!list || list.length === 0) {
+        currentAgent = null;
+        if (agentNameEl) agentNameEl.textContent = "---";
         if (agentSelectWrapper) agentSelectWrapper.style.display = "none";
         if (agentButtonsOverlay) agentButtonsOverlay.innerHTML = "";
         terminalErrorEl.textContent =
           "Este terminal no tiene agentes asignados.";
         return;
+      }
+
+      if (resetSelection) {
+        currentAgent = null;
+        if (agentNameEl) agentNameEl.textContent = "---";
+      } else if (
+        currentAgent &&
+        !list.some(
+          (a) => String(a.codagente) === String(currentAgent?.codagente),
+        )
+      ) {
+        currentAgent = null;
+      }
+
+      if (!currentAgent) {
+        currentAgent = list[0] || null;
+        try {
+          window.TPV_CFG?.set?.(
+            "auth.codagente",
+            String(currentAgent?.codagente || ""),
+          );
+        } catch {}
       }
 
       if (agentSelectWrapper) agentSelectWrapper.style.display = "block";
@@ -7094,7 +7688,7 @@ function showTerminalOverlay(mode = "session") {
           await window.TPV_CFG?.set?.("auth.codagente", "");
         } catch {}
 
-        applyTerminalToAgentUI(tid);
+        applyTerminalToAgentUI(tid, { resetSelection: true });
       };
     } else if (terminalSelect) {
       // por seguridad: en modo agentSwitch con 1 TPV, no necesitamos onchange
@@ -7102,7 +7696,9 @@ function showTerminalOverlay(mode = "session") {
     }
 
     // UI inicial con TPV actual
-    applyTerminalToAgentUI(String(currentTerminal.id));
+    applyTerminalToAgentUI(String(currentTerminal.id), {
+      resetSelection: false,
+    });
 
     // Copy según UI visible
     updateTerminalOverlayCopy({
@@ -8956,6 +9552,9 @@ function closeCashOpenDialog() {
   if (!cashOpenOverlay) return;
 
   closeWithParkedPreConfirmed = false;
+  if (cashDialogMode === "open" && !cashSession?.open) {
+    cashOpenDialogShown = false;
+  }
   cashOpenOverlay.classList.add("hidden");
   unlockAppUI?.();
   syncCashClosedUiState?.();
@@ -9070,6 +9669,11 @@ function setupCashObsQwertyDelegated() {
 }
 
 function openCashOpenDialog(mode = "open") {
+  if (BOOT_IN_FLIGHT || cashRecoverInFlight) {
+    setStatusText("Esperando recuperación de sesión...");
+    return;
+  }
+
   if (
     TPV_STATE?.offline ||
     TPV_STATE?.apiRecovering ||
@@ -9318,6 +9922,11 @@ function buildCashClosePrintData(remoteCaja) {
 }
 
 function openCashMoveDialog() {
+  if (!hasActiveLoginSession()) {
+    toast("Inicia sesión para registrar movimientos.", "warn", "Caja");
+    return;
+  }
+
   if (!cashSession.open) {
     toast("Primero debes abrir la caja.", "warn", "Caja");
     return;
@@ -10338,7 +10947,16 @@ async function ensureTerminalAgentDefaults({ refresh = false } = {}) {
   }
 
   // 1) terminal: CFG -> LS -> primero
-  if (!currentTerminal) {
+  // Si estamos en "demo" pero ya hay terminales reales cargados,
+  // volvemos a resolver para no quedarnos pegados al fallback.
+  const hasRealTerminalLoaded =
+    Array.isArray(terminals) &&
+    terminals.some((t) => String(t?.id || "") !== "demo");
+  const shouldResolveTerminal =
+    !currentTerminal ||
+    (String(currentTerminal?.id || "") === "demo" && hasRealTerminalLoaded);
+
+  if (shouldResolveTerminal) {
     let savedIdtpv = "";
     try {
       savedIdtpv = String(
@@ -10558,6 +11176,7 @@ if (cashHeaderBtn) {
 if (agentNameEl) {
   agentNameEl.addEventListener("click", async () => {
     if (TPV_LOADING) return;
+    if (!hasActiveLoginSession()) return;
 
     await refreshTerminalsAndAgents();
 
@@ -11935,9 +12554,38 @@ async function openOptions() {
     return;
   }
 
-  try {
-    await ensureLoginAutoOrPrompt?.();
-  } catch {}
+  const setOptionsReadOnlyMode = (readonly) => {
+    optionsOverlay?.classList.toggle("options-readonly", !!readonly);
+
+    const acc = document.getElementById("optionsAccordion");
+    if (acc) {
+      acc.querySelectorAll(".opt-sec").forEach((sec) => {
+        sec.dataset.open = "0";
+      });
+    }
+
+    let note = document.getElementById("optionsReadonlyNote");
+    const dialog = optionsOverlay?.querySelector(".opt-dialog");
+    if (!note && dialog) {
+      note = document.createElement("div");
+      note.id = "optionsReadonlyNote";
+      note.className = "options-readonly-note hidden";
+      note.textContent = "Inicia sesión para desbloquear las opciones del TPV.";
+      const head = dialog.querySelector(".opt-head");
+      if (head && head.nextSibling) dialog.insertBefore(note, head.nextSibling);
+      else dialog.appendChild(note);
+    }
+
+    if (note) note.classList.toggle("hidden", !readonly);
+  };
+
+  if (!hasActiveLoginSession()) {
+    setOptionsReadOnlyMode(true);
+    optionsOverlay?.classList.remove("hidden");
+    return;
+  }
+
+  setOptionsReadOnlyMode(false);
 
   await loadPriceEditModeFromCfg?.();
 
@@ -14503,9 +15151,14 @@ async function refreshProductsStockOnly() {
 }
 
 async function onPayButtonClick() {
+  let cartSnapshot = [];
+  let saleLineIds = new Set();
+  let saleCommitted = false;
+
   try {
     if (isPayingNow) return;
     isPayingNow = true;
+    refreshAgentGuardUI?.();
 
     if (!cashSession || !cashSession.open) {
       toast("Abre la caja para poder cobrar.", "warn", "Cobrar");
@@ -14594,7 +15247,8 @@ async function onPayButtonClick() {
       ) / 100;
 
     // 2) Snapshot carrito (ANTES de enviar)
-    const cartSnapshot = Array.isArray(cart) ? cart.map((i) => ({ ...i })) : [];
+    cartSnapshot = Array.isArray(cart) ? cart.map((i) => ({ ...i })) : [];
+    saleLineIds = buildLineIdSetFromSnapshot(cartSnapshot);
 
     const parkedIndexToClose =
       currentParkedTicketIndex !== null
@@ -14646,11 +15300,21 @@ async function onPayButtonClick() {
       "Ventas"
     ).toString();
 
+    const payingItemsSnapshot = buildCustomerItemsFromCart(cartSnapshot);
+    customerDisplayOverride = {
+      items: payingItemsSnapshot,
+      total: totalCart,
+    };
+
+    removeCartLinesByIdSet(saleLineIds);
+    renderCart();
+
     // 4) Enviar o encolar
     const sendResult = await sendOrQueueFactura(ticketPayload);
 
     // ========= OFFLINE =========
     if (!sendResult.ok && sendResult.queued) {
+      saleCommitted = true;
       registerPaymentsForCurrentSession(pagosFinal);
       registerPayMethodUsageForTicket(pagosFinal);
 
@@ -14704,14 +15368,20 @@ async function onPayButtonClick() {
           ?.setAttribute("disabled", "0");
       } catch {}
 
-      customerSetMode("THANKS", {
-        ttlMs: 12000,
-        total: Number(payResult?.total ?? totalCart ?? 0),
-        ticket: lastTicket?.numero || "OFFLINE",
-        paymentMethod: ticketPayload.paymentMethod || "",
-        agent: ticketPayload._payNick || "",
-        items: buildCustomerItemsFromCart(cartSnapshot),
-      });
+      const hasNextCartAfterPay = (Array.isArray(cart) ? cart.length : 0) > 0;
+      if (hasNextCartAfterPay) {
+        customerDisplayOverride = null;
+        customerSetMode("CART");
+      } else {
+        customerSetMode("THANKS", {
+          ttlMs: 12000,
+          total: Number(payResult?.total ?? totalCart ?? 0),
+          ticket: lastTicket?.numero || "OFFLINE",
+          paymentMethod: ticketPayload.paymentMethod || "",
+          agent: ticketPayload._payNick || "",
+          items: buildCustomerItemsFromCart(cartSnapshot),
+        });
+      }
 
       await markParkedTicketAsPaidByIndex(parkedIndexToClose, {
         idfactura: null,
@@ -14722,7 +15392,7 @@ async function onPayButtonClick() {
             .toUpperCase()}`,
       });
 
-      cart = [];
+      removeCartLinesByIdSet(saleLineIds);
       renderCart();
       setStatusText("Venta guardada en cola (offline)");
       toast("Sin internet: venta guardada en cola ✅", "ok", "Cobrar");
@@ -14730,6 +15400,7 @@ async function onPayButtonClick() {
     }
 
     // ========= ONLINE =========
+    saleCommitted = true;
     const apiResponse = sendResult.remote;
     const facturaResp =
       apiResponse.doc || apiResponse.factura || apiResponse.data || apiResponse;
@@ -14891,21 +15562,27 @@ async function onPayButtonClick() {
     const printBtn = document.getElementById("printTicketBtn");
     if (printBtn) printBtn.disabled = false;
 
-    customerSetMode("THANKS", {
-      ttlMs: 12000,
-      total: facturaTotalFS,
-      ticket: lastTicket?.numero || facturaResp?.codigo || "",
-      paymentMethod: ticketPayload.paymentMethod || "",
-      agent: ticketPayload._payNick || "",
-      items: buildCustomerItemsFromCart(cartSnapshot),
-    });
+    const hasNextCartAfterPay = (Array.isArray(cart) ? cart.length : 0) > 0;
+    if (hasNextCartAfterPay) {
+      customerDisplayOverride = null;
+      customerSetMode("CART");
+    } else {
+      customerSetMode("THANKS", {
+        ttlMs: 12000,
+        total: facturaTotalFS,
+        ticket: lastTicket?.numero || facturaResp?.codigo || "",
+        paymentMethod: ticketPayload.paymentMethod || "",
+        agent: ticketPayload._payNick || "",
+        items: buildCustomerItemsFromCart(cartSnapshot),
+      });
+    }
 
     await markParkedTicketAsPaidByIndex(parkedIndexToClose, {
       idfactura: facturaResp?.idfactura || null,
       codigo: lastTicket?.numero || facturaResp?.codigo || null,
     });
 
-    cart = [];
+    removeCartLinesByIdSet(saleLineIds);
     renderCart();
     refreshParkButtonUI();
     refreshParkedEditingBanner();
@@ -14933,6 +15610,12 @@ async function onPayButtonClick() {
     }
   } catch (err) {
     console.error("Error al cobrar:", err);
+
+    if (!saleCommitted && cartSnapshot.length) {
+      restoreCartSnapshotWithoutDuplicates(cartSnapshot);
+      renderCart();
+    }
+
     customerSetMode("CART");
     let msg = err.message || "Error desconocido";
 
@@ -14945,6 +15628,7 @@ async function onPayButtonClick() {
     setStatusText("Error al cobrar");
   } finally {
     isPayingNow = false;
+    refreshAgentGuardUI?.();
   }
 }
 
@@ -20093,11 +20777,28 @@ async function createRefundInFacturaScriptsPackAware(
 }
 
 async function doLogoutFlow() {
+  if (!hasActiveLoginSession()) {
+    const okLoginDirect = await openLoginModal();
+    if (!okLoginDirect || !hasActiveLoginSession()) {
+      applyLoggedOutUiState({ lock: true });
+    } else {
+      unlockAppUI();
+    }
+    return;
+  }
+
   const ok = await confirmModal(
     "Cambiar usuario",
     "Se cerrará la sesión actual para poder elegir otro usuario.",
   );
   if (!ok) return;
+
+  const currentUser = String(getLoginUser() || "").trim();
+  LOGIN_MODAL_DRAFT = {
+    user: currentUser || LOGIN_MODAL_DRAFT.user || "",
+    pin: "",
+    isAdmin: false,
+  };
 
   // 1) Borrar sesión runtime
   try {
@@ -20129,13 +20830,21 @@ async function doLogoutFlow() {
   refreshLoggedUserUI?.();
   renderMainAgentBar?.();
   updateCashButtonLabel?.();
+  refreshAgentGuardUI?.();
   toast?.("Sesión cerrada", "info", "Usuario");
 
   cashOpenDialogShown = false;
 
+  applyLoggedOutUiState({ lock: true });
+
   // 5) Abrir login inmediatamente (no dependas de “Abrir caja”)
   const ok2 = await openLoginModal();
-  if (!ok2) return;
+  if (!ok2 || !hasActiveLoginSession()) {
+    applyLoggedOutUiState({ lock: true });
+    return;
+  }
+
+  unlockAppUI();
 
   // 6) Tras login, refresca datos y fija defaults
   try {
@@ -20209,6 +20918,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   await initCustomerDisplayThemeMode();
   setTpvLoadingState(true);
   renderCart();
+  updateSessionLockUi();
   updateCashButtonLabel();
   updateParkedCountBadge();
   refreshOptionsUI();
@@ -20216,6 +20926,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   startOnlineMonitor();
 
   await bootstrapApp(); // y listo
+});
+
+window.addEventListener("beforeunload", () => {
+  persistRuntimeCartSnapshot({ force: true });
 });
 
 async function refreshTicketsCacheFromServer() {

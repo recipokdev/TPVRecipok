@@ -25,6 +25,12 @@
 
       <main class="list">
         <div class="listInner" id="items"></div>
+        <div id="stateOverlay" class="state-overlay hidden" aria-live="polite">
+          <div class="state-card">
+            <div class="state-title" id="stateTitle">CAJA CERRADA</div>
+            <div class="state-sub" id="stateSub">---</div>
+          </div>
+        </div>
       </main>
 
       <footer class="bottom">
@@ -39,6 +45,7 @@
       <div class="thanks-card">
         <div class="thanks-title">Pago realizado</div>
         <div class="thanks-sub">Gracias por su compra. Hasta pronto.</div>
+        <div class="thanks-timer" aria-live="polite"></div>
       </div>
     </div>
 

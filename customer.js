@@ -34,6 +34,7 @@ applyThemeMode("dark");
 /* ===== Estado / timers ===== */
 let thanksClearTimer = null;
 let thanksOverlayTimer = null;
+let thanksCountdownTimer = null;
 let autoScrollTimer = null;
 let autoScrollDir = 1;
 let noticeTimer = null;
@@ -45,6 +46,13 @@ let lastThanksKey = null;
 /* Cuando se limpia una venta, bloqueamos repintar ese mismo carrito */
 let lockedEmpty = false;
 let lockedCartKey = null;
+let lockedStateTs = 0;
+let latestMode = "";
+let latestCartKey = "";
+let latestSubLine = "---";
+let latestStateTs = 0;
+
+const THANKS_SECONDS = 8;
 
 function buildCartKey(state) {
   const items = Array.isArray(state?.items) ? state.items : [];
@@ -69,8 +77,10 @@ function buildCartKey(state) {
 function clearThanksTimers() {
   if (thanksClearTimer) clearTimeout(thanksClearTimer);
   if (thanksOverlayTimer) clearTimeout(thanksOverlayTimer);
+  if (thanksCountdownTimer) clearInterval(thanksCountdownTimer);
   thanksClearTimer = null;
   thanksOverlayTimer = null;
+  thanksCountdownTimer = null;
 }
 
 function setThanksOverlay(show, title = "", sub = "") {
@@ -79,21 +89,23 @@ function setThanksOverlay(show, title = "", sub = "") {
 
   const titleEl = box.querySelector(".thanks-title");
   const subEl = box.querySelector(".thanks-sub");
+  const timerEl = box.querySelector(".thanks-timer");
 
   if (titleEl) titleEl.textContent = title || "";
   if (subEl) subEl.textContent = sub || "";
+  if (timerEl && !show) timerEl.textContent = "";
 
   box.classList.toggle("hidden", !show);
 }
 
-function clearCustomerScreen() {
+function clearCustomerScreen(subLine = latestSubLine) {
   const itemsEl = document.getElementById("items");
   const totalEl = document.getElementById("total");
   const subEl = document.getElementById("subLine");
 
   if (itemsEl) itemsEl.innerHTML = "";
   if (totalEl) totalEl.textContent = eur(0);
-  if (subEl) subEl.textContent = "---";
+  if (subEl) subEl.textContent = subLine || "---";
 
   stopAutoScroll();
   setNotice(false);
@@ -101,11 +113,14 @@ function clearCustomerScreen() {
 }
 
 /* ===== Notice ===== */
-function setNotice(show, title = "", sub = "", ttlMs = 0) {
+function setNotice(show, title = "", sub = "", ttlMs = 0, variant = "") {
   const box = document.getElementById("notice");
   const tEl = document.getElementById("noticeTitle");
   const sEl = document.getElementById("noticeSub");
   if (!box || !tEl || !sEl) return;
+
+  box.classList.remove("notice-paying");
+  if (variant === "paying") box.classList.add("notice-paying");
 
   if (!show) {
     box.classList.add("hidden");
@@ -128,6 +143,17 @@ function setNotice(show, title = "", sub = "", ttlMs = 0) {
       noticeTimer = null;
     }, ttlMs);
   }
+}
+
+function setStateOverlay(show, title = "", sub = "") {
+  const box = document.getElementById("stateOverlay");
+  const tEl = document.getElementById("stateTitle");
+  const sEl = document.getElementById("stateSub");
+  if (!box || !tEl || !sEl) return;
+
+  tEl.textContent = title || "";
+  sEl.textContent = sub || "";
+  box.classList.toggle("hidden", !show);
 }
 
 /* ===== Layout ===== */
@@ -299,6 +325,7 @@ function renderItems(items) {
 /* ===== THANKS ===== */
 function handleThanksState(state) {
   const cartKey = buildCartKey(state);
+  const thanksStateTs = Number(state?.ts || 0) || Date.now();
 
   if (lastThanksKey === cartKey) return;
   lastThanksKey = cartKey;
@@ -312,17 +339,53 @@ function handleThanksState(state) {
     "Gracias por su compra. Hasta pronto.",
   );
 
+  const timerEl = document.querySelector("#thanksOverlay .thanks-timer");
+  let secondsLeft = THANKS_SECONDS;
+  if (timerEl) timerEl.textContent = `${secondsLeft}`;
+
+  thanksCountdownTimer = setInterval(() => {
+    secondsLeft -= 1;
+    if (secondsLeft <= 0) {
+      if (timerEl) timerEl.textContent = "";
+      if (thanksCountdownTimer) clearInterval(thanksCountdownTimer);
+      thanksCountdownTimer = null;
+      return;
+    }
+    if (timerEl) timerEl.textContent = `${secondsLeft}`;
+  }, 1000);
+
   thanksOverlayTimer = setTimeout(() => {
+    // Si ya cambió el carrito o entró un nuevo cobro, no tocar overlays antiguos.
+    if (
+      latestCartKey !== cartKey ||
+      latestMode === "PAYING" ||
+      latestStateTs > thanksStateTs
+    ) {
+      thanksOverlayTimer = null;
+      return;
+    }
+
     setThanksOverlay(false);
     thanksOverlayTimer = null;
-  }, 15000);
+  }, THANKS_SECONDS * 1000);
 
   thanksClearTimer = setTimeout(() => {
-    clearCustomerScreen();
+    // Solo limpiamos si sigue siendo la misma venta (cliente se fue sin siguiente carrito).
+    if (
+      latestCartKey !== cartKey ||
+      latestMode === "PAYING" ||
+      latestStateTs > thanksStateTs
+    ) {
+      thanksClearTimer = null;
+      return;
+    }
+
+    clearCustomerScreen(state?.subLine || latestSubLine);
     lockedEmpty = true;
     lockedCartKey = cartKey;
+    lockedStateTs = thanksStateTs;
     thanksClearTimer = null;
-  }, 15000);
+  }, THANKS_SECONDS * 1000);
 }
 
 /* ===== Render principal ===== */
@@ -340,15 +403,23 @@ function render(state) {
   const total = Number(state?.total || 0);
   const mode = String(state?.mode || "").toUpperCase();
   const cartKey = buildCartKey(state);
+  const stateTs = Number(state?.ts || 0);
+
+  latestMode = mode;
+  latestCartKey = cartKey;
+  latestSubLine = state?.subLine || latestSubLine || "---";
+  latestStateTs = stateTs > 0 ? stateTs : latestStateTs;
 
   if (!cashOpen || mode === "CLOSED") {
     clearThanksTimers();
     lockedEmpty = false;
     lockedCartKey = null;
+    lockedStateTs = 0;
     lastThanksKey = null;
 
     setThanksOverlay(false);
-    setNotice(true, "CAJA CERRADA", state?.subLine || "");
+    setNotice(false);
+    setStateOverlay(true, "CAJA CERRADA", state?.subLine || "");
     itemsEl.innerHTML = "";
     totalEl.textContent = eur(0);
     subEl.textContent = state?.subLine || "---";
@@ -356,21 +427,23 @@ function render(state) {
     return;
   }
 
+  setStateOverlay(false);
+
   /* Si ya limpiamos el último carrito y sigue llegando exactamente el mismo estado,
      mantenemos la pantalla vacía hasta que haya actividad nueva. */
   if (lockedEmpty) {
-    const hasNewCart =
+    const hasNewActivity =
       cartKey !== lockedCartKey ||
-      items.length === 0 ||
-      total <= 0 ||
-      mode === "PAYING";
+      mode === "PAYING" ||
+      (stateTs > 0 && stateTs !== lockedStateTs);
 
-    if (!hasNewCart) {
+    if (!hasNewActivity) {
       return;
     }
 
     lockedEmpty = false;
     lockedCartKey = null;
+    lockedStateTs = 0;
     lastThanksKey = null;
   }
 
@@ -378,9 +451,8 @@ function render(state) {
   totalEl.textContent = eur(total);
 
   if (mode === "PAYING") {
-    clearThanksTimers();
     setThanksOverlay(false);
-    setNotice(true, "COBRANDO…", "Espere por favor");
+    setNotice(true, "COBRANDO…", "Espere por favor", 0, "paying");
   } else if (mode === "THANKS") {
     setNotice(false);
   } else {
