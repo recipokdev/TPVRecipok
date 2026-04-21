@@ -37,6 +37,7 @@ let taxRatesByCode = {};
 
 // Para saber si ya hemos pintado la UI principal
 let mainUiRendered = false;
+let LAST_FULL_LOAD_AT = 0;
 
 // Filtro actual
 let selectedCategory = null; // id de familia simple
@@ -6932,7 +6933,9 @@ function openParkedModal() {
 
   if (!parkedTicketsOverlay) return;
 
-  if (!parkedTickets || parkedTickets.length === 0) {
+  const pending = getScopedPendingParkedTickets(parkedTickets);
+
+  if (!pending.length) {
     toast("No hay tickets aparcados.", "info", "Aparcados");
     return;
   }
@@ -6943,13 +6946,9 @@ function openParkedModal() {
 
   logFeatureInfo("APARCADOS", "modal-abierto", {
     requestId,
-    total: Array.isArray(parkedTickets) ? parkedTickets.length : 0,
-    pendientes: (Array.isArray(parkedTickets) ? parkedTickets : []).filter(
-      (t) => !t?.paid,
-    ).length,
-    cobrados: (Array.isArray(parkedTickets) ? parkedTickets : []).filter(
-      (t) => !!t?.paid,
-    ).length,
+    total: pending.length,
+    pendientes: pending.length,
+    cobrados: 0,
   });
 }
 
@@ -6968,7 +6967,7 @@ function renderParkedTicketsModal() {
     .trim()
     .toLowerCase();
 
-  const source = Array.isArray(parkedTickets) ? parkedTickets : [];
+  const source = getScopedPendingParkedTickets(parkedTickets);
 
   const filtered = source.filter((t) => {
     return parkedTicketPassesFilter(t) && parkedTicketMatchesSearch(t, term);
@@ -8819,6 +8818,7 @@ async function maybeOpenCashOrRecover() {
           // ✅ recuperable
           cashSession.remoteCajaId = Number(remoteCaja.idcaja || storedId);
           cashSession.open = true;
+          pushCustomerState();
           loadCashLedgerIntoSession(cashSession.remoteCajaId);
 
           await ensureTerminalAgentDefaults();
@@ -8891,6 +8891,7 @@ async function maybeOpenCashOrRecover() {
 
           cashSession.remoteCajaId = Number(pick.idcaja);
           cashSession.open = true;
+          pushCustomerState();
           localStorage.setItem("tpv_remoteCajaId", String(pick.idcaja));
           loadCashLedgerIntoSession(cashSession.remoteCajaId);
 
@@ -10215,6 +10216,7 @@ async function confirmCashOpening() {
 
   cashSession.open = true;
   cashSession.openedAt = new Date().toISOString();
+  pushCustomerState();
 
   try {
     await apiOpenCashInFS();
@@ -10714,9 +10716,7 @@ if (cashOpenOkBtn) {
         return;
       }
 
-      const parkedCount = Array.isArray(parkedTickets)
-        ? parkedTickets.length
-        : 0;
+      const parkedCount = getScopedPendingParkedTickets(parkedTickets).length;
 
       // Releer valor efectivo para evitar cierres bloqueados por estado stale.
       await loadAllowCloseWithParkedToggle();
@@ -11162,7 +11162,7 @@ async function handleCashHeaderAction(opts = {}) {
       return true;
     }
 
-    const parkedCount = Array.isArray(parkedTickets) ? parkedTickets.length : 0;
+    const parkedCount = getScopedPendingParkedTickets(parkedTickets).length;
 
     // Releer valor efectivo por si el toggle cambió en opciones recientemente.
     await loadAllowCloseWithParkedToggle();
@@ -11745,6 +11745,7 @@ async function loadDataFromApi(opts = {}) {
     });
 
     // Aquí sí: ya está todo cargado correctamente
+    LAST_FULL_LOAD_AT = Date.now();
     exitApiRetryMode();
     setStatusText("Online Recipok");
 
@@ -14719,6 +14720,16 @@ function getCurrentSlugForReservations() {
   return m ? String(m[1]).trim() : "";
 }
 
+function getParkedScopedStorageKey(baseKey) {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const scope = slug || "default";
+  return `${baseKey}::${scope}`;
+}
+
+function getScopedPendingParkedTickets(list = parkedTickets) {
+  return (Array.isArray(list) ? list : []).filter((t) => !t?.paid);
+}
+
 function getProductBaseId(product) {
   return (
     Number(product?.baseProductId || product?.id || product?.idproducto || 0) ||
@@ -14797,7 +14808,7 @@ function normalizeRemoteParkedTicket(raw) {
 }
 
 function saveParkedTicketsCache(list = parkedTickets) {
-  const safe = (Array.isArray(list) ? list : []).map((t) => ({
+  const safe = getScopedPendingParkedTickets(list).map((t) => ({
     ...t,
     createdAt: t?.createdAt
       ? new Date(t.createdAt).toISOString()
@@ -14807,7 +14818,10 @@ function saveParkedTicketsCache(list = parkedTickets) {
   }));
 
   try {
-    localStorage.setItem(PARKED_TICKETS_CACHE_KEY, JSON.stringify(safe));
+    localStorage.setItem(
+      getParkedScopedStorageKey(PARKED_TICKETS_CACHE_KEY),
+      JSON.stringify(safe),
+    );
   } catch (e) {
     console.warn(
       "No se pudo guardar cache local de aparcados:",
@@ -14818,11 +14832,16 @@ function saveParkedTicketsCache(list = parkedTickets) {
 
 function loadParkedTicketsCache() {
   try {
-    const raw = localStorage.getItem(PARKED_TICKETS_CACHE_KEY);
+    const raw = localStorage.getItem(
+      getParkedScopedStorageKey(PARKED_TICKETS_CACHE_KEY),
+    );
     const arr = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(arr)) return [];
 
-    return arr.map((it) => normalizeRemoteParkedTicket(it)).filter(Boolean);
+    return arr
+      .map((it) => normalizeRemoteParkedTicket(it))
+      .filter(Boolean)
+      .filter((t) => !t?.paid);
   } catch (e) {
     console.warn("No se pudo leer cache local de aparcados:", e?.message || e);
     return [];
@@ -14852,7 +14871,9 @@ function isParkedSyncTransientError(err) {
 
 function loadParkedSyncQueue() {
   try {
-    const raw = localStorage.getItem(PARKED_SYNC_QUEUE_KEY);
+    const raw = localStorage.getItem(
+      getParkedScopedStorageKey(PARKED_SYNC_QUEUE_KEY),
+    );
     const arr = raw ? JSON.parse(raw) : [];
     return Array.isArray(arr) ? arr : [];
   } catch {
@@ -14864,7 +14885,7 @@ function saveParkedSyncQueue(queue) {
   try {
     const safe = Array.isArray(queue) ? queue : [];
     localStorage.setItem(
-      PARKED_SYNC_QUEUE_KEY,
+      getParkedScopedStorageKey(PARKED_SYNC_QUEUE_KEY),
       JSON.stringify(safe.slice(-2000)),
     );
   } catch (e) {
@@ -14944,26 +14965,7 @@ function syncParkedTicketsFromRemote(list) {
     .filter(Boolean)
     .filter((t) => !t.paid);
 
-  const cachedAll = loadParkedTicketsCache();
-  const paidHistory = cachedAll
-    .filter((t) => !!t.paid)
-    .sort((a, b) => {
-      const ta = new Date(
-        a?.paidAt || a?.updatedAt || a?.createdAt || 0,
-      ).getTime();
-      const tb = new Date(
-        b?.paidAt || b?.updatedAt || b?.createdAt || 0,
-      ).getTime();
-      return tb - ta;
-    })
-    .slice(0, 500);
-
-  const pendingKeys = new Set(next.map((t) => getParkedTicketSyncKey(t)));
-  const safePaidHistory = paidHistory.filter(
-    (t) => !pendingKeys.has(getParkedTicketSyncKey(t)),
-  );
-
-  parkedTickets = next.concat(safePaidHistory);
+  parkedTickets = next;
 
   const maxId = parkedTickets.reduce((m, t) => {
     const n = Number(t?.id || 0);
@@ -18925,6 +18927,7 @@ function syncSelectedPackChildrenQty(parentLine) {
 const PACKS_STATE = {
   ready: false,
   apiUnsupported: false,
+  unsupportedFailCount: 0,
   packsByOfferProductId: new Map(), // key: idproducto oferta (idproduct en productpacks)
   linesByPackId: new Map(), // key: idpack -> [lines]
   productByRefCache: new Map(), // key: referencia -> producto FS (o null)
@@ -18975,18 +18978,51 @@ async function warmupPacksData(opts = {}) {
       fetchApiResource("productpacklines"),
     ]);
 
-    const is404 = (err) =>
-      /HTTP\s*404/i.test(String(err?.message || err || ""));
+    const errText = (err) => String(err?.message || err || "").toLowerCase();
+    const is404Like = (err) => {
+      const txt = errText(err);
+      return (
+        txt.includes("http 404") ||
+        txt.includes("404") ||
+        txt.includes("not found") ||
+        txt.includes("no encontrado")
+      );
+    };
+    const isTransient = (err) => {
+      const txt = errText(err);
+      return (
+        txt.includes("offline") ||
+        txt.includes("network") ||
+        txt.includes("failed to fetch") ||
+        txt.includes("timeout") ||
+        txt.includes("abort") ||
+        txt.includes("429")
+      );
+    };
 
-    if (
-      (packsRes.status === "rejected" && is404(packsRes.reason)) ||
-      (linesRes.status === "rejected" && is404(linesRes.reason))
-    ) {
+    const packsErr = packsRes.status === "rejected" ? packsRes.reason : null;
+    const linesErr = linesRes.status === "rejected" ? linesRes.reason : null;
+
+    if ((packsErr && is404Like(packsErr)) || (linesErr && is404Like(linesErr))) {
       PACKS_STATE.apiUnsupported = true;
       console.info(
-        "[PACKS] Endpoints no disponibles (404). Se deshabilita precarga de packs.",
+        "[PACKS] Endpoints no disponibles (404/not-found). Se deshabilita precarga de packs.",
       );
       return false;
+    }
+
+    if (packsErr || linesErr) {
+      const transient = (packsErr && isTransient(packsErr)) || (linesErr && isTransient(linesErr));
+      if (!transient) {
+        PACKS_STATE.unsupportedFailCount += 1;
+        if (PACKS_STATE.unsupportedFailCount >= 2) {
+          PACKS_STATE.apiUnsupported = true;
+          console.info(
+            "[PACKS] Endpoints no soportados en este cliente. Se deshabilita precarga.",
+          );
+          return false;
+        }
+      }
     }
 
     // Si falla cualquiera, mantenemos la caché anterior
@@ -19003,6 +19039,8 @@ async function warmupPacksData(opts = {}) {
     console.warn("Error cargando packs:", e?.message || e);
     return false;
   }
+
+  PACKS_STATE.unsupportedFailCount = 0;
 
   // Construimos mapas temporales y solo si todo fue bien sustituimos el estado
   const nextPacksByOfferProductId = new Map();
@@ -21578,7 +21616,10 @@ async function startOnlineMonitor() {
       } catch {}
 
       try {
-        await loadDataFromApi({ refresh: true, silentRetry: true });
+        const loadedRecently = Date.now() - Number(LAST_FULL_LOAD_AT || 0) < 15000;
+        if (!BOOT_IN_FLIGHT && !loadedRecently) {
+          await loadDataFromApi({ refresh: true, silentRetry: true });
+        }
       } catch (e) {
         console.warn(
           "No se pudo refrescar datos completos al volver online:",
