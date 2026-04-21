@@ -229,6 +229,7 @@ const cashHeaderLabel = document.getElementById("cashHeaderLabel");
 
 const cashDirectTotalWrap = document.getElementById("cashDirectTotalWrap");
 const cashDirectTotalEl = document.getElementById("cashDirectTotal");
+const cashDirectTotalClearBtn = document.getElementById("cashDirectTotalClearBtn");
 const cashDirectTotalKeyboardBtn = document.getElementById(
   "cashDirectTotalKeyboardBtn",
 );
@@ -675,6 +676,7 @@ function clearCashBreakdownInputsSilently() {
   const inputs = cashOpenOverlay.querySelectorAll(".cash-hidden-input");
   inputs.forEach((inp) => {
     inp.value = "0";
+    syncCashStepperClearButton(inp);
   });
 
   cashOpenOverlay.querySelectorAll(".cash-qty").forEach((s) => {
@@ -715,6 +717,7 @@ function applyCashDirectTotal(rawValue) {
   if (cashDirectTotalEl) {
     cashDirectTotalEl.value = formatCashDirectAmount(total);
   }
+  syncCashDirectClearButtonVisibility();
 
   // 4) Refrescar total principal
   if (cashOpenTotalEl) {
@@ -727,21 +730,101 @@ function applyCashDirectTotal(rawValue) {
   }
 }
 
+function snapshotCashBreakdownState() {
+  const items = [];
+  if (cashOpenOverlay) {
+    const inputs = cashOpenOverlay.querySelectorAll(".cash-hidden-input");
+    inputs.forEach((inp) => {
+      const denom = String(inp.dataset.denom || "");
+      const qty = Math.max(0, parseInt(inp.value || "0", 10) || 0);
+      if (!denom) return;
+      items.push({ denom, qty });
+    });
+  }
+
+  const total =
+    cashDialogMode === "open"
+      ? Number(cashSession?.openingTotal || 0)
+      : Number(cashSession?.closingTotal || 0);
+
+  return {
+    mode: cashDialogMode,
+    total,
+    items,
+  };
+}
+
+function restoreCashBreakdownState(snapshot) {
+  if (!snapshot) return;
+
+  if (cashOpenOverlay) {
+    const byDenom = new Map(
+      (Array.isArray(snapshot.items) ? snapshot.items : []).map((it) => [
+        String(it?.denom || ""),
+        Math.max(0, parseInt(it?.qty || "0", 10) || 0),
+      ]),
+    );
+
+    const inputs = cashOpenOverlay.querySelectorAll(".cash-hidden-input");
+    inputs.forEach((inp) => {
+      const denom = String(inp.dataset.denom || "");
+      const qty = byDenom.get(denom) || 0;
+      inp.value = String(qty);
+    });
+  }
+
+  const hasBreakdown = (Array.isArray(snapshot.items) ? snapshot.items : []).some(
+    (it) => Number(it?.qty || 0) > 0,
+  );
+
+  if (hasBreakdown) {
+    updateCashOpenTotal();
+  } else {
+    applyCashDirectTotal(Number(snapshot.total || 0));
+  }
+}
+
+function openCashDirectTotalNumPad() {
+  const initialValue = cashDirectTotalEl?.value || "0";
+  const snapshot = snapshotCashBreakdownState();
+
+  openNumPad(
+    initialValue,
+    (value, meta = {}) => {
+      const phase = String(meta?.phase || "");
+
+      // Evita live-change en "Importe directo": solo aplicar en OK.
+      if (phase === "preview") return;
+
+      // Al cancelar, restauramos exactamente lo que había antes de abrir teclado.
+      if (phase === "cancel") {
+        restoreCashBreakdownState(snapshot);
+        return;
+      }
+
+      const safeValue =
+        Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+      applyCashDirectTotal(safeValue);
+    },
+    "Importe directo",
+    "cash",
+  );
+}
+
+function syncCashDirectClearButtonVisibility() {
+  if (!cashDirectTotalClearBtn || !cashDirectTotalEl) return;
+
+  const total = parseCashDirectAmount(cashDirectTotalEl.value);
+  const visible = Number(total || 0) > 0;
+  cashDirectTotalClearBtn.classList.toggle("hidden", !visible);
+}
+
 function bindCashDirectTotalInput() {
   if (cashDirectTotalKeyboardBtn && !cashDirectTotalKeyboardBtn.dataset.bound) {
     cashDirectTotalKeyboardBtn.dataset.bound = "1";
 
     cashDirectTotalKeyboardBtn.onclick = () => {
-      openNumPad(
-        cashDirectTotalEl?.value || "0",
-        (value) => {
-          const safeValue =
-            Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
-          applyCashDirectTotal(safeValue);
-        },
-        "Importe directo",
-        "cash",
-      );
+      openCashDirectTotalNumPad();
     };
   }
 
@@ -749,18 +832,25 @@ function bindCashDirectTotalInput() {
     cashDirectTotalEl.dataset.bound = "1";
 
     cashDirectTotalEl.onclick = () => {
-      openNumPad(
-        cashDirectTotalEl?.value || "0",
-        (value) => {
-          const safeValue =
-            Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
-          applyCashDirectTotal(safeValue);
-        },
-        "Importe directo",
-        "cash",
-      );
+      openCashDirectTotalNumPad();
     };
   }
+
+  if (cashDirectTotalClearBtn && !cashDirectTotalClearBtn.dataset.bound) {
+    cashDirectTotalClearBtn.dataset.bound = "1";
+
+    cashDirectTotalClearBtn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+    });
+
+    cashDirectTotalClearBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      applyCashDirectTotal(0);
+    });
+  }
+
+  syncCashDirectClearButtonVisibility();
 }
 
 // ===============================
@@ -1666,7 +1756,19 @@ function getTerminalModeFromMap(modeMap, terminalId) {
   if (!key) return "all";
 
   const raw = modeMap && typeof modeMap === "object" ? modeMap[key] : undefined;
-  return raw === "filtered" ? "filtered" : "all";
+
+  // Primera vez (sin config guardada): mostrar todos activado por defecto.
+  if (typeof raw === "undefined" || raw === null || raw === "") return "all";
+
+  // Valores actuales
+  if (raw === "filtered" || raw === "all") return raw;
+
+  // Compatibilidad con formatos legacy (booleanos / numéricos / strings).
+  const normalized = String(raw).trim().toLowerCase();
+  if (normalized === "false" || normalized === "0") return "filtered";
+  if (normalized === "true" || normalized === "1") return "all";
+
+  return "all";
 }
 
 function getTerminalModeSync(terminalId) {
@@ -1728,7 +1830,7 @@ function updatePayButtonEnabledState() {
     return;
   }
 
-  const hasCart = !!(cart && cart.length);
+  const hasCart = hasVisibleCartLines();
   const hasCaja = !!cashSession?.open;
   const hasTpv = !!currentTerminal?.id;
   const hasAgent = hasAssignedAgent();
@@ -3067,15 +3169,23 @@ function syncCashClosedUiState() {
   const bottomActionIds = [
     "clearCartBtn",
     "ticketsListBtn",
-    "parkBtn",
     "parkedListBtn",
-    "payBtn",
   ];
 
   bottomActionIds.forEach((id) => {
     const btn = document.getElementById(id);
     if (btn) btn.disabled = !cashOpen;
   });
+
+  if (!cashOpen) {
+    if (parkBtn) parkBtn.disabled = true;
+    const payBtnEl = document.getElementById("payBtn");
+    if (payBtnEl) payBtnEl.disabled = true;
+  } else {
+    // No pisar la lógica real de estado (carrito/agent/login).
+    refreshAgentGuardUI?.();
+    refreshParkButtonUI?.();
+  }
 
   const badge = document.getElementById("parkedCountBadge");
   if (!badge) return;
@@ -4032,9 +4142,7 @@ function renderCart() {
   let total = 0;
 
   // ✅ UI: solo pintamos líneas NO-hijas
-  const uiLines = (Array.isArray(cart) ? cart : []).filter((line) => {
-    return !isPackChildLine(line);
-  });
+  const uiLines = getVisibleCartLines(cart);
 
   uiLines.forEach((item) => {
     const unitPrice = getUnitGross(item);
@@ -5437,6 +5545,126 @@ const numPadWindowManager = createKeyboardWindowManager({
   defaultAnchor: "center",
 });
 
+function normalizeNumericExpression(rawValue, { cashLenient = false } = {}) {
+  let s = String(rawValue || "").trim();
+  if (!s) return "";
+
+  s = s
+    .replace(/\s+/g, "")
+    .replace(/[−–]/g, "-")
+    .replace(/[×xX]/g, "*")
+    .replace(/[÷]/g, "/")
+    .replace(/,/g, ".");
+
+  // En importes, permitir miles con punto cuando no hay operadores.
+  if (cashLenient && !/[+\-*/()]/.test(s.slice(1))) {
+    const sign = s.startsWith("-") ? "-" : "";
+    const unsigned = sign ? s.slice(1) : s;
+    const parts = unsigned.split(".");
+    if (parts.length > 2) {
+      s = `${sign}${parts.slice(0, -1).join("")}.${parts[parts.length - 1]}`;
+    }
+  }
+
+  return s;
+}
+
+function evaluateNumericExpression(rawValue, { cashLenient = false } = {}) {
+  const src = normalizeNumericExpression(rawValue, { cashLenient });
+  if (!src) return 0;
+  if (/[^0-9+\-*/().]/.test(src)) return null;
+
+  let i = 0;
+
+  function parseExpression() {
+    let value = parseTerm();
+    if (value == null) return null;
+
+    while (i < src.length) {
+      const op = src[i];
+      if (op !== "+" && op !== "-") break;
+      i += 1;
+      const right = parseTerm();
+      if (right == null) return null;
+      value = op === "+" ? value + right : value - right;
+    }
+
+    return value;
+  }
+
+  function parseTerm() {
+    let value = parseFactor();
+    if (value == null) return null;
+
+    while (i < src.length) {
+      const op = src[i];
+      if (op !== "*" && op !== "/") break;
+      i += 1;
+      const right = parseFactor();
+      if (right == null) return null;
+      if (op === "*") {
+        value *= right;
+      } else {
+        if (right === 0) return null;
+        value /= right;
+      }
+    }
+
+    return value;
+  }
+
+  function parseFactor() {
+    if (i >= src.length) return null;
+
+    const ch = src[i];
+
+    if (ch === "+" || ch === "-") {
+      i += 1;
+      const next = parseFactor();
+      if (next == null) return null;
+      return ch === "-" ? -next : next;
+    }
+
+    if (ch === "(") {
+      i += 1;
+      const inner = parseExpression();
+      if (inner == null) return null;
+      if (src[i] !== ")") return null;
+      i += 1;
+      return inner;
+    }
+
+    const start = i;
+    let seenDot = false;
+    while (i < src.length) {
+      const c = src[i];
+      if (c >= "0" && c <= "9") {
+        i += 1;
+        continue;
+      }
+      if (c === "." && !seenDot) {
+        seenDot = true;
+        i += 1;
+        continue;
+      }
+      break;
+    }
+
+    if (i === start) return null;
+
+    const token = src.slice(start, i);
+    if (token === ".") return null;
+
+    const n = Number(token);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  const result = parseExpression();
+  if (result == null) return null;
+  if (i !== src.length) return null;
+  return Number.isFinite(result) ? result : null;
+}
+
 function formatPrice2(v) {
   const n = Number(String(v).replace(",", "."));
   if (!isFinite(n)) return "0.00";
@@ -5481,42 +5709,36 @@ function evaluateNumPadCurrentValue({ silent = true } = {}) {
     return 0;
   }
 
-  const cleaned = raw.replace(/\s+/g, "").replace(/,/g, ".");
-  if (!/^[0-9+\-*/().]+$/.test(cleaned)) {
+  const value = evaluateNumericExpression(raw, {
+    cashLenient: numPadMode === "cash",
+  });
+  if (value == null) {
     if (!silent) toast("Expresión no válida", "warn", "Teclado");
     return null;
   }
 
-  let value;
-  try {
-    value = Function(`"use strict"; return (${cleaned});`)();
-  } catch {
-    if (!silent) toast("Expresión no válida", "warn", "Teclado");
-    return null;
-  }
-
-  value = Number(value);
-  if (!isFinite(value)) return null;
+  let nextValue = Number(value);
+  if (!isFinite(nextValue)) return null;
 
   if (numPadMode === "price") {
-    if (value <= 0) value = 0;
-    return Math.round(value * 100) / 100;
+    if (nextValue <= 0) nextValue = 0;
+    return Math.round(nextValue * 100) / 100;
   }
 
   if (numPadMode === "cash") {
-    if (value < 0) value = 0;
-    return Math.round(value * 100) / 100;
+    if (nextValue < 0) nextValue = 0;
+    return Math.round(nextValue * 100) / 100;
   }
 
   if (numPadMode === "stock") {
-    return Math.round(value * 1000) / 1000;
+    return Math.round(nextValue * 1000) / 1000;
   }
 
   // qty
-  if (value <= 0) value = 0;
-  value = Math.round(value * 1000) / 1000;
-  if (value > 0 && value < 0.001) value = 0.001;
-  return value;
+  if (nextValue <= 0) nextValue = 0;
+  nextValue = Math.round(nextValue * 1000) / 1000;
+  if (nextValue > 0 && nextValue < 0.001) nextValue = 0.001;
+  return nextValue;
 }
 
 function applyNumPadPreview() {
@@ -6881,7 +7103,7 @@ function refreshParkButtonUI() {
     parkedTickets[currentParkedTicketIndex] &&
     !parkedTickets[currentParkedTicketIndex].paid;
 
-  const hasCartLines = Array.isArray(cart) && cart.length > 0;
+  const hasCartLines = hasVisibleCartLines();
   parkBtn.disabled = !hasCartLines;
 
   parkBtn.textContent = hasLoadedParkedTicket ? "Actualizar" : "Aparcar";
@@ -10103,7 +10325,7 @@ if (cashOpenOverlay && !cashOpenOverlay.dataset.cashBound) {
         (newQty) =>
           setCashQtyByDenom(denom, Math.max(0, parseInt(newQty, 10) || 0)),
         `Cantidad de ${denom} €`,
-        "cash", // o un modo nuevo "int"
+        "qty",
       );
       return;
     }
@@ -10163,6 +10385,7 @@ function updateCashOpenTotal() {
   if (cashDirectTotalEl) {
     cashDirectTotalEl.value = formatCashDirectAmount(total);
   }
+  syncCashDirectClearButtonVisibility();
 }
 
 function ensureCashSessionCounters() {
@@ -13149,14 +13372,20 @@ async function createTicketInFacturaScripts(ticketPayload) {
 
 function buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot) {
   const factura =
-    apiResponse.doc || apiResponse.factura || apiResponse.data || apiResponse;
+    apiResponse?.doc ||
+    apiResponse?.factura ||
+    apiResponse?.data ||
+    apiResponse ||
+    {};
+
+  const safePayload = ticketPayload || {};
 
   const paymentMethod =
     factura.formapago ||
     factura.metodopago ||
     factura.codpago ||
     factura.codpago_desc ||
-    ticketPayload.paymentMethod ||
+    safePayload.paymentMethod ||
     "Efectivo";
 
   const codigo = factura.codigo || factura.codigoFactura || null;
@@ -13186,8 +13415,8 @@ function buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot) {
   return {
     numero,
     paymentMethod,
-    fecha: factura.fecha || ticketPayload.fecha,
-    hora: factura.hora || ticketPayload.hora,
+    fecha: factura.fecha || safePayload.fecha,
+    hora: factura.hora || safePayload.hora,
     total: totalFromFactura !== null ? totalFromFactura : totalFromCart,
 
     // ✅ mejor guardar el estado real en el ticket (por si luego cierras caja)
@@ -15320,7 +15549,7 @@ async function onPayButtonClick() {
       return;
     }
 
-    if (!cart || cart.length === 0) {
+    if (!hasVisibleCartLines()) {
       toast("Añade productos antes de cobrar.", "warn", "Cobrar");
       return;
     }
@@ -15577,9 +15806,23 @@ async function onPayButtonClick() {
 
     // ========= ONLINE =========
     saleCommitted = true;
-    const apiResponse = sendResult.remote;
+    const apiResponse = sendResult?.remote || null;
     const facturaResp =
-      apiResponse.doc || apiResponse.factura || apiResponse.data || apiResponse;
+      apiResponse?.doc ||
+      apiResponse?.factura ||
+      apiResponse?.data ||
+      apiResponse;
+
+    if (!facturaResp || typeof facturaResp !== "object") {
+      const remoteType = apiResponse == null ? "null" : typeof apiResponse;
+      const remoteKeys =
+        apiResponse && typeof apiResponse === "object"
+          ? Object.keys(apiResponse).slice(0, 8).join(",")
+          : "";
+      throw new Error(
+        `E_COBRO_RESP_INVALIDA: respuesta de venta inválida (sin doc/factura/data). tipo=${remoteType}${remoteKeys ? ` keys=${remoteKeys}` : ""}`,
+      );
+    }
 
     const idfactura = facturaResp?.idfactura || null;
 
@@ -15815,14 +16058,23 @@ async function onPayButtonClick() {
     }
 
     customerSetMode("CART");
-    let msg = err.message || "Error desconocido";
+    let msg = String(err?.message || err || "Error desconocido").trim();
+    let errCode = "E_COBRO";
 
     if (msg.toLowerCase().includes("stock")) {
+      errCode = "E_COBRO_STOCK";
       msg =
         "No se puede cobrar porque uno o varios productos no tienen stock disponible.";
+    } else if (msg.includes("E_COBRO_RESP_INVALIDA")) {
+      errCode = "E_COBRO_RESP_INVALIDA";
+      msg = msg.replace(/^E_COBRO_RESP_INVALIDA:\s*/i, "");
+    } else if (msg.toLowerCase().includes("429")) {
+      errCode = "E_COBRO_RATE_LIMIT";
+    } else if (msg.toLowerCase().includes("timeout")) {
+      errCode = "E_COBRO_TIMEOUT";
     }
 
-    toast(msg, "err", "Cobrar");
+    toast(`[${errCode}] ${msg}`, "err", "Cobrar");
     setStatusText("Error al cobrar");
   } finally {
     isPayingNow = false;
@@ -16754,7 +17006,7 @@ parkBtn?.addEventListener("click", () => {
   }
 
   // 1) No permitir aparcar si el carrito está vacío
-  if (!Array.isArray(cart) || cart.length === 0) {
+  if (!hasVisibleCartLines()) {
     toast("No puedes aparcar un ticket vacío.", "warn", "Aparcar");
     return;
   }
@@ -18798,6 +19050,15 @@ function isPackParentLine(line) {
 
 function isPackChildLine(line) {
   return !!line?.meta?.includedInPack && !!line?.meta?.parentPackLineId;
+}
+
+function getVisibleCartLines(cartArr = cart) {
+  const src = Array.isArray(cartArr) ? cartArr : [];
+  return src.filter((line) => !isPackChildLine(line));
+}
+
+function hasVisibleCartLines(cartArr = cart) {
+  return getVisibleCartLines(cartArr).length > 0;
 }
 
 function getPackChildren(parentLineId) {
@@ -21337,33 +21598,27 @@ window.addEventListener("keydown", async (e) => {
    ============================================================= */
 
 function cashParseToInt(value) {
-  // Permite expresiones tipo "2*4", "10+5", "20/2" etc.
-  // Seguridad: solo números y operadores básicos.
-  const raw = String(value ?? "")
-    .trim()
-    .replace(",", ".");
-  if (!raw) return 0;
-
-  // Solo deja: dígitos, espacios, + - * / ( ) y punto
-  if (!/^[0-9+\-*/().\s]+$/.test(raw)) return 0;
-
-  try {
-    // Eval controlado (con filtro anterior). Resultado numérico.
-    const result = Function(`"use strict"; return (${raw});`)();
-    const n = Number(result);
-    if (!Number.isFinite(n)) return 0;
-    return Math.max(0, Math.round(n)); // cantidades enteras >= 0
-  } catch (e) {
-    return 0;
-  }
+  const n = evaluateNumericExpression(String(value ?? ""));
+  if (n == null) return 0;
+  return Math.max(0, Math.round(Number(n) || 0));
 }
 
 function cashSetInputValue(input, newVal) {
   const n = Math.max(0, parseInt(newVal, 10) || 0);
   input.value = String(n);
+  syncCashStepperClearButton(input);
   // Si ya tienes un listener que recalcula totales al 'input', lo disparo:
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function syncCashStepperClearButton(input) {
+  const wrap = input?.closest?.(".cash-stepper-input-wrap");
+  const btn = wrap?.querySelector?.(".cash-stepper-clear-btn");
+  if (!btn) return;
+
+  const qty = Math.max(0, parseInt(input?.value || "0", 10) || 0);
+  btn.classList.toggle("hidden", qty <= 0);
 }
 
 function cashWrapInputsWithSteppers() {
@@ -21394,11 +21649,22 @@ function cashWrapInputsWithSteppers() {
     btnPlus.className = "cash-stepper-btn plus";
     btnPlus.textContent = "+";
 
+    const inputWrap = document.createElement("div");
+    inputWrap.className = "cash-stepper-input-wrap";
+
+    const clearBtn = document.createElement("button");
+    clearBtn.type = "button";
+    clearBtn.className = "cash-stepper-clear-btn hidden";
+    clearBtn.textContent = "×";
+    clearBtn.title = "Poner a 0";
+
     // Insertamos wrapper en el DOM (mantenemos el orden)
     const parent = input.parentElement;
     parent.insertBefore(wrap, input);
     wrap.appendChild(btnMinus);
-    wrap.appendChild(input);
+    wrap.appendChild(inputWrap);
+    inputWrap.appendChild(input);
+    inputWrap.appendChild(clearBtn);
     wrap.appendChild(btnPlus);
 
     // Botones +/- suman/restan 1
@@ -21425,6 +21691,19 @@ function cashWrapInputsWithSteppers() {
     input.addEventListener("click", () => {
       cashOpenNumPadForInput(input);
     });
+
+    clearBtn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+    });
+
+    clearBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      cashSetInputValue(input, 0);
+      input.blur();
+    });
+
+    syncCashStepperClearButton(input);
   });
 }
 
@@ -21456,7 +21735,7 @@ function cashOpenNumPadForInput(input) {
         input.blur(); // importante para que vuelva a disparar focus la próxima vez
       },
       "Caja", // productName (puede ser "")
-      "cash", // mode (qty para cantidades)
+      "qty",
       null,
       null,
     );

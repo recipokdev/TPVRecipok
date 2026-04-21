@@ -1642,7 +1642,8 @@ textarea:focus {
   border: 1px solid #d8d8d8;
   background: #fffbd2;
   outline: none;
-  width: auto;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .cash-cell-page input.cash-hidden-input:focus {
@@ -3049,16 +3050,41 @@ textarea:focus {
 /* Contenedor: botón - | input | botón + */
 .cash-stepper {
   display: grid;
-  grid-template-columns: 44px 1fr 44px;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
   gap: 8px;
   align-items: center;
+}
+
+.cash-stepper-input-wrap {
+  position: relative;
+  min-width: 0;
 }
 
 /* Input más corto y cómodo */
 .cash-stepper .cash-hidden-input {
   width: 100%;
+  padding-right: 32px;
+  box-sizing: border-box;
   min-width: 90px; /* ⬅️ ajusta si quieres aún más corto */
   text-align: left;
+}
+
+.cash-stepper-clear-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid rgba(185, 28, 28, 0.25);
+  background: #fde2e2;
+  color: #b91c1c;
+  font-weight: 800;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
 }
 
 /* Botones táctiles grandes */
@@ -4449,15 +4475,41 @@ textarea:focus {
   align-items: center;
 }
 
+.cash-direct-total-input-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
 .cash-direct-total-input {
   flex: 1;
   min-width: 0;
-  padding: 10px 12px;
+  width: 100%;
+  padding: 10px 38px 10px 12px;
+  box-sizing: border-box;
   border-radius: 8px;
   border: 1px solid #d1d5db;
   font-size: 16px;
   outline: none;
   background: #fffef2;
+}
+
+.cash-direct-clear-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: 1px solid rgba(185, 28, 28, 0.25);
+  background: #fde2e2;
+  color: #b91c1c;
+  font-weight: 800;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
 }
 
 .cash-direct-total-input:focus {
@@ -5125,6 +5177,13 @@ body.theme-dark .cash-direct-total-wrap {
 
 body.theme-dark .cash-total-chip {
   box-shadow: 0 2px 6px rgba(2, 6, 23, 0.4);
+}
+
+body.theme-dark .cash-direct-clear-btn,
+body.theme-dark .cash-stepper-clear-btn {
+  background: #3f1d1d;
+  border-color: rgba(248, 113, 113, 0.45);
+  color: #fca5a5;
 }
 
 body.theme-dark .cash-direct-total-help {
