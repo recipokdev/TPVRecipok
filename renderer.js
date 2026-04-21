@@ -229,7 +229,9 @@ const cashHeaderLabel = document.getElementById("cashHeaderLabel");
 
 const cashDirectTotalWrap = document.getElementById("cashDirectTotalWrap");
 const cashDirectTotalEl = document.getElementById("cashDirectTotal");
-const cashDirectTotalClearBtn = document.getElementById("cashDirectTotalClearBtn");
+const cashDirectTotalClearBtn = document.getElementById(
+  "cashDirectTotalClearBtn",
+);
 const cashDirectTotalKeyboardBtn = document.getElementById(
   "cashDirectTotalKeyboardBtn",
 );
@@ -308,7 +310,11 @@ function buildParkedManualDeleteLogLine(ticket) {
     .filter(Boolean)
     .join(" | ");
 
-  return buildCajaLogLineWith(getCajaLogCtx(), "BORRÓ APARCADO SIN COBRAR", extra);
+  return buildCajaLogLineWith(
+    getCajaLogCtx(),
+    "BORRÓ APARCADO SIN COBRAR",
+    extra,
+  );
 }
 
 function shouldShowParkedName(ticket) {
@@ -773,9 +779,9 @@ function restoreCashBreakdownState(snapshot) {
     });
   }
 
-  const hasBreakdown = (Array.isArray(snapshot.items) ? snapshot.items : []).some(
-    (it) => Number(it?.qty || 0) > 0,
-  );
+  const hasBreakdown = (
+    Array.isArray(snapshot.items) ? snapshot.items : []
+  ).some((it) => Number(it?.qty || 0) > 0);
 
   if (hasBreakdown) {
     updateCashOpenTotal();
@@ -2335,8 +2341,8 @@ async function updateTpvTerminalForm(idtpv, patch) {
   const body = toFormUrlEncoded(patch || {});
   if (!body) throw new Error("Patch vacío");
 
-  const res = await fetch(url, {
-    method: "PUT",
+  let res = await fetch(url, {
+    method: "PATCH",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
@@ -2344,6 +2350,19 @@ async function updateTpvTerminalForm(idtpv, patch) {
     },
     body,
   });
+
+  // Compatibilidad: algunas instalaciones no aceptan PATCH en este recurso.
+  if (res.status === 404 || res.status === 405) {
+    res = await fetch(url, {
+      method: "PUT",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        Token: cfg.apiKey,
+      },
+      body,
+    });
+  }
 
   if (res.status === 429) throw new Error("API 429 (demasiadas peticiones)");
 
@@ -3166,11 +3185,7 @@ function syncCashClosedUiState() {
       : "Disponible solo con la caja abierta";
   }
 
-  const bottomActionIds = [
-    "clearCartBtn",
-    "ticketsListBtn",
-    "parkedListBtn",
-  ];
+  const bottomActionIds = ["clearCartBtn", "ticketsListBtn", "parkedListBtn"];
 
   bottomActionIds.forEach((id) => {
     const btn = document.getElementById(id);
@@ -7155,9 +7170,11 @@ function openParkedModal() {
 
   if (!parkedTicketsOverlay) return;
 
+  const allParked = getScopedAllParkedTickets(parkedTickets);
   const pending = getScopedPendingParkedTickets(parkedTickets);
+  const paid = allParked.filter((t) => !!t?.paid);
 
-  if (!pending.length) {
+  if (!allParked.length) {
     toast("No hay tickets aparcados.", "info", "Aparcados");
     return;
   }
@@ -7168,9 +7185,9 @@ function openParkedModal() {
 
   logFeatureInfo("APARCADOS", "modal-abierto", {
     requestId,
-    total: pending.length,
+    total: allParked.length,
     pendientes: pending.length,
-    cobrados: 0,
+    cobrados: paid.length,
   });
 }
 
@@ -7189,7 +7206,7 @@ function renderParkedTicketsModal() {
     .trim()
     .toLowerCase();
 
-  const source = getScopedPendingParkedTickets(parkedTickets);
+  const source = getScopedAllParkedTickets(parkedTickets);
 
   const filtered = source.filter((t) => {
     return parkedTicketPassesFilter(t) && parkedTicketMatchesSearch(t, term);
@@ -9069,11 +9086,7 @@ async function maybeOpenCashOrRecover() {
           );
         }
 
-        console.warn(
-          "[TPV] No se pudo validar caja guardada:",
-          storedId,
-          e,
-        );
+        console.warn("[TPV] No se pudo validar caja guardada:", storedId, e);
       }
 
       // limpiar solo si realmente quedó invalidada (no por falta de conectividad)
@@ -12040,11 +12053,14 @@ async function loadDataFromApi(opts = {}) {
       updateCashButtonLabel();
       renderMainUI(true);
       hideReconnectIfAvailable();
-      enterApiRetryMode("Sin conexión con Recipok. Trabajando con caché local.", {
-        lock: false,
-        scheduleRetry: false,
-        showOverlay: false,
-      });
+      enterApiRetryMode(
+        "Sin conexión con Recipok. Trabajando con caché local.",
+        {
+          lock: false,
+          scheduleRetry: false,
+          showOverlay: false,
+        },
+      );
 
       if (!opts.silentRetry) {
         toast("Sin conexión: usando datos guardados en local.", "warn");
@@ -13166,10 +13182,16 @@ async function pushGroupLinesToFS(enabled) {
   try {
     if (!currentTerminal?.id) return;
 
-    // En FacturaScripts normalmente vale true/false (o 1/0). Enviamos 1/0 para asegurar.
-    await apiWrite(`tpvterminales/${currentTerminal.id}`, "PUT", {
-      grouplines: enabled ? 1 : 0,
-    });
+    // Evita reemplazo completo del terminal en servidores donde PUT es destructivo.
+    try {
+      await apiWrite(`tpvterminales/${currentTerminal.id}`, "PATCH", {
+        grouplines: enabled ? 1 : 0,
+      });
+    } catch {
+      await apiWrite(`tpvterminales/${currentTerminal.id}`, "PUT", {
+        grouplines: enabled ? 1 : 0,
+      });
+    }
 
     console.log("✅ pushGroupLinesToFS ->", enabled);
   } catch (e) {
@@ -13317,45 +13339,92 @@ async function createTicketInFacturaScripts(ticketPayload) {
 
   console.log(">>> Enviando a crearFacturaCliente:", bodyParams.toString());
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Token: cfg.apiKey,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: bodyParams.toString(),
-  });
+  const doPost = async (params) => {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Token: cfg.apiKey,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: params.toString(),
+    });
 
-  if (res.status === 429) {
-    const text = await res.text().catch(() => "");
-    console.error("Error 429 crearFacturaCliente:", text);
+    const rawText = await res.text().catch(() => "");
+    let data = null;
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      data = null;
+    }
+
+    return { res, data, rawText };
+  };
+
+  let submit = await doPost(bodyParams);
+
+  const isTotals422 =
+    submit.res.status === 422 &&
+    String(submit.data?.message || "")
+      .trim()
+      .toLowerCase() === "error-calculating-totals";
+
+  if (isTotals422) {
+    const hasProductBoundLine = (
+      Array.isArray(ticketPayload.lineas) ? ticketPayload.lineas : []
+    ).some((l) => l?.idproducto != null || String(l?.referencia || "").trim());
+
+    if (hasProductBoundLine) {
+      const cleanLines = (
+        Array.isArray(ticketPayload.lineas) ? ticketPayload.lineas : []
+      ).map((l) => {
+        const next = { ...l };
+        delete next.idproducto;
+        delete next.referencia;
+        return next;
+      });
+
+      const retryParams = new URLSearchParams(bodyParams.toString());
+      retryParams.set("lineas", JSON.stringify(cleanLines));
+
+      console.warn(
+        "[crearFacturaCliente] 422 error-calculating-totals. Reintentando sin idproducto/referencia...",
+      );
+      console.log(
+        ">>> Enviando a crearFacturaCliente [retry-lineas-sin-idproducto-referencia]:",
+        retryParams.toString(),
+      );
+
+      submit = await doPost(retryParams);
+    }
+  }
+
+  if (submit.res.status === 429) {
+    console.error(
+      "Error 429 crearFacturaCliente:",
+      submit.rawText || submit.data,
+    );
     throw new Error(
       "La API ha devuelto 429 (demasiadas peticiones). " +
         "Es un bloqueo temporal por seguridad; espera unos minutos antes de seguir usando el TPV.",
     );
   }
 
-  if (!res.ok) {
-    let msg = `Error HTTP ${res.status}`;
-    try {
-      const errData = await res.json();
-      console.error("Respuesta de error crearFacturaCliente:", errData);
-      if (errData.message) msg += `: ${errData.message}`;
-      if (errData.errors)
-        msg += " | Detalles: " + JSON.stringify(errData.errors);
-    } catch (e) {
-      const text = await res.text().catch(() => "");
-      if (text) msg += `: ${text}`;
+  if (!submit.res.ok) {
+    let msg = `Error HTTP ${submit.res.status}`;
+    if (submit.data && typeof submit.data === "object") {
+      console.error("Respuesta de error crearFacturaCliente:", submit.data);
+      if (submit.data.message) msg += `: ${submit.data.message}`;
+      if (submit.data.errors)
+        msg += " | Detalles: " + JSON.stringify(submit.data.errors);
+    } else if (submit.rawText) {
+      msg += `: ${submit.rawText}`;
     }
     throw new Error(msg);
   }
 
-  let data = null;
-  try {
-    data = await res.json();
-  } catch (e) {
-    console.error("No se pudo parsear JSON de crearFacturaCliente:", e);
+  const data = submit.data;
+  if (!data || typeof data !== "object") {
     throw new Error(
       "Respuesta no válida de FacturaScripts al crear la factura.",
     );
@@ -14957,6 +15026,10 @@ function getParkedScopedStorageKey(baseKey) {
 
 function getScopedPendingParkedTickets(list = parkedTickets) {
   return (Array.isArray(list) ? list : []).filter((t) => !t?.paid);
+}
+
+function getScopedAllParkedTickets(list = parkedTickets) {
+  return Array.isArray(list) ? list : [];
 }
 
 function getProductBaseId(product) {
@@ -19264,7 +19337,10 @@ async function warmupPacksData(opts = {}) {
     const packsErr = packsRes.status === "rejected" ? packsRes.reason : null;
     const linesErr = linesRes.status === "rejected" ? linesRes.reason : null;
 
-    if ((packsErr && is404Like(packsErr)) || (linesErr && is404Like(linesErr))) {
+    if (
+      (packsErr && is404Like(packsErr)) ||
+      (linesErr && is404Like(linesErr))
+    ) {
       PACKS_STATE.apiUnsupported = true;
       console.info(
         "[PACKS] Endpoints no disponibles (404/not-found). Se deshabilita precarga de packs.",
@@ -19273,7 +19349,9 @@ async function warmupPacksData(opts = {}) {
     }
 
     if (packsErr || linesErr) {
-      const transient = (packsErr && isTransient(packsErr)) || (linesErr && isTransient(linesErr));
+      const transient =
+        (packsErr && isTransient(packsErr)) ||
+        (linesErr && isTransient(linesErr));
       if (!transient) {
         PACKS_STATE.unsupportedFailCount += 1;
         if (PACKS_STATE.unsupportedFailCount >= 2) {
@@ -21895,7 +21973,8 @@ async function startOnlineMonitor() {
       } catch {}
 
       try {
-        const loadedRecently = Date.now() - Number(LAST_FULL_LOAD_AT || 0) < 15000;
+        const loadedRecently =
+          Date.now() - Number(LAST_FULL_LOAD_AT || 0) < 15000;
         if (!BOOT_IN_FLIGHT && !loadedRecently) {
           await loadDataFromApi({ refresh: true, silentRetry: true });
         }
