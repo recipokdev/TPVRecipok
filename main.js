@@ -68,10 +68,12 @@ if (!gotTheLock) {
   app.on("second-instance", async () => {
     if (appIsInstallingUpdate) return;
 
-    if (mainWin) {
+    if (mainWin && !mainWin.isDestroyed()) {
       if (mainWin.isMinimized()) mainWin.restore();
       mainWin.show();
       mainWin.focus();
+    } else {
+      createWindow();
     }
     // ✅ CLAVE: aunque ya exista instancia, chequear updates
     triggerUpdateCheckIfSafe("second-instance");
@@ -1090,6 +1092,11 @@ scaleManager.setOnStateChange((payload) => {
 });
 
 app.whenReady().then(async () => {
+  if (!gotTheLock) {
+    app.quit();
+    return;
+  }
+
   bootstrapCurrentUserFromCfg();
   cleanOldAutoStartIfWrong();
   configureAutoStart();

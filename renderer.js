@@ -131,6 +131,38 @@ let customerLastSale = null;
 const TPV_DEBUG_LOGS = false;
 const BROKEN_PRODUCT_IMAGE_URLS = new Set();
 
+function logFeatureInfo(feature, action, details = {}) {
+  const requestId = String(details?.requestId || "").trim();
+  const prefix = requestId ? `[${requestId}] ` : "";
+  console.info(`[TPV][${feature}] ${prefix}${action}`, details);
+}
+
+function logFeatureWarn(feature, action, details = {}) {
+  const requestId = String(details?.requestId || "").trim();
+  const prefix = requestId ? `[${requestId}] ` : "";
+  console.warn(`[TPV][${feature}] ${prefix}${action}`, details);
+}
+
+function logFeatureError(feature, action, error, details = {}) {
+  const requestId = String(details?.requestId || "").trim();
+  const prefix = requestId ? `[${requestId}] ` : "";
+  const msg = error?.message || String(error || "");
+  console.error(`[TPV][${feature}] ${prefix}${action}: ${msg}`, {
+    ...details,
+    message: msg,
+  });
+}
+
+function createRequestId(prefix = "REQ") {
+  const p = String(prefix || "REQ")
+    .trim()
+    .toUpperCase()
+    .slice(0, 6);
+  const t = Date.now().toString(36);
+  const r = Math.random().toString(36).slice(2, 8);
+  return `${p}-${t}-${r}`;
+}
+
 function debugLog(...args) {
   if (!TPV_DEBUG_LOGS) return;
   console.log(...args);
@@ -251,27 +283,6 @@ function formatParkedAuditAmount(value) {
   return (Number.isFinite(n) ? n : 0).toFixed(2).replace(".", ",") + " €";
 }
 
-async function appendCajaAutoLogLinesForId(idcaja, lines) {
-  if (!idcaja) return;
-
-  const safeLines = (Array.isArray(lines) ? lines : [lines])
-    .map((line) => cleanCajaLogValue(line))
-    .filter(Boolean);
-
-  if (!safeLines.length) return;
-
-  return enqueueCajaObsWrite(idcaja, async () => {
-    const remoteCaja = await apiReadCajaById(idcaja);
-    const rawObs = remoteCaja?.observaciones ?? "";
-    const { userText, autoLines } = splitCajaObservaciones(rawObs);
-
-    autoLines.push(...safeLines);
-    const merged = buildCajaObservaciones(userText, autoLines);
-
-    await updateTpvcajaObservaciones(idcaja, merged);
-  });
-}
-
 function getCajaLogCtx() {
   return {
     agentName: currentAgent?.name || currentAgent?.nick || "—",
@@ -292,50 +303,19 @@ function getParkedTicketDisplayName(ticket) {
 }
 
 function buildParkedManualDeleteLogLine(ticket) {
-  const isPaid = !!ticket?.paid;
+  if (!ticket || ticket?.paid) return "";
 
   const extra = [
     `Aparcado #${ticket?.id ?? "—"}`,
     shouldShowParkedName(ticket)
       ? `Nombre: ${getParkedTicketDisplayName(ticket)}`
       : "",
-    isPaid && ticket?.paidTicketCode
-      ? `Factura: ${cleanCajaLogValue(ticket.paidTicketCode)}`
-      : "",
     `Total: ${formatParkedAuditAmount(ticket?.total)}`,
   ]
     .filter(Boolean)
     .join(" | ");
 
-  return buildCajaLogLineWith(
-    getCajaLogCtx(),
-    isPaid ? "BORRÓ APARCADO YA COBRADO" : "BORRÓ APARCADO SIN COBRAR",
-    extra,
-  );
-}
-
-function buildParkedBulkClearHeaderLine(count) {
-  return buildCajaLogLineWith(
-    getCajaLogCtx(),
-    "VACIÓ HISTORIAL APARCADOS COBRADOS",
-    `Cantidad: ${count}`,
-  );
-}
-
-function buildParkedBulkClearItemLine(ticket, index) {
-  return [
-    `[VACIADO ${Number(index) + 1}]`,
-    `Aparcado #${ticket?.id ?? "—"}`,
-    shouldShowParkedName(ticket)
-      ? `Nombre: ${getParkedTicketDisplayName(ticket)}`
-      : "",
-    ticket?.paidTicketCode
-      ? `Factura: ${cleanCajaLogValue(ticket.paidTicketCode)}`
-      : "",
-    `Total: ${formatParkedAuditAmount(ticket?.total)}`,
-  ]
-    .filter(Boolean)
-    .join(" | ");
+  return buildCajaLogLineWith(getCajaLogCtx(), "BORRÓ APARCADO SIN COBRAR", extra);
 }
 
 function shouldShowParkedName(ticket) {
@@ -357,23 +337,7 @@ function buildCajaAutoLogText(lines) {
 
   if (!items.length) return "";
 
-  const isBulkItem = (line) => /^\[VACIADO(?:\s+\d+)?\]/.test(line);
-  const isBulkHeader = (line) =>
-    line.includes("VACIÓ HISTORIAL APARCADOS COBRADOS");
-
-  let out = items[0];
-
-  for (let i = 1; i < items.length; i++) {
-    const prev = items[i - 1];
-    const curr = items[i];
-
-    const sameBulkBlock =
-      isBulkItem(curr) && (isBulkHeader(prev) || isBulkItem(prev));
-
-    out += sameBulkBlock ? `\n${curr}` : `\n\n${curr}`;
-  }
-
-  return out;
+  return items.join("\n\n");
 }
 
 function buildClearCartLogLine(cartLines) {
@@ -503,6 +467,12 @@ let REMOTE_RESERVED_BY_PRODUCT = new Map();
 
 const PARKED_TICKETS_CACHE_KEY = "tpv_parked_tickets_cache_v1";
 const PARKED_SYNC_QUEUE_KEY = "tpv_parked_sync_queue_v1";
+const TPV_USERS_CACHE_KEY = "tpv_cachedUsers_v1";
+const TPV_USERS_CACHE_TS_KEY = "tpv_cachedUsers_ts_v1";
+const TERMINAL_AGENT_CACHE_KEY = "tpv_cachedTerminalAgent_v1";
+const TERMINAL_AGENT_CACHE_TS_KEY = "tpv_cachedTerminalAgent_ts_v1";
+const BOOT_SNAPSHOT_CACHE_KEY = "tpv_boot_snapshot_v1";
+const BOOT_SNAPSHOT_CACHE_TS_KEY = "tpv_boot_snapshot_ts_v1";
 
 let __parkedSyncDrainInFlight = false;
 
@@ -762,18 +732,21 @@ function hasRealDataLoaded() {
 
 function enterApiRetryMode(
   message = "Sin conexión con Recipok. Reintentando...",
+  opts = {},
 ) {
+  const { lock = false, scheduleRetry = false, showOverlay = true } = opts;
+
   setStatusText(message);
 
   TPV_STATE.offline = true;
-  TPV_STATE.locked = true;
+  TPV_STATE.locked = !!lock;
   TPV_STATE.apiRecovering = true;
   updateCashButtonLabel();
 
   apiConnectionWasLost = true;
 
   // ✅ Si ya hay caja abierta, no molestamos con overlay modal
-  if (!cashSession?.open) {
+  if (showOverlay && !cashSession?.open) {
     showReconnectIfAvailable(message);
   }
 
@@ -781,7 +754,9 @@ function enterApiRetryMode(
     renderMainUI(true);
   }
 
-  scheduleApiRetry();
+  if (scheduleRetry) {
+    scheduleApiRetry();
+  }
 }
 
 function exitApiRetryMode() {
@@ -4573,14 +4548,18 @@ async function openLoginModal() {
       const res = await fetch(url, { cache: "no-store" });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data || data.ok !== true || !Array.isArray(data.users))
-        return [];
+        return loadTpvUsersCache();
 
-      return data.users
+      const users = data.users
         .filter((u) => u && u.nick) // ya viene filtrado desde PHP
         .sort((a, b) => String(a.nick).localeCompare(String(b.nick), "es"));
+
+      if (users.length) saveTpvUsersCache(users);
+
+      return users;
     } catch (e) {
       console.error("❌ Error fetch tpv_users.php:", e);
-      return [];
+      return loadTpvUsersCache();
     }
   };
 
@@ -4692,6 +4671,119 @@ async function openLoginModal() {
       return false;
     }
 
+    const finalizeLoginSuccess = async ({
+      loggedUser,
+      token,
+      codagente = "",
+      codalmacen = "",
+      isAdmin = false,
+    }) => {
+      const safeUser = String(loggedUser || u || "").trim();
+      const safeToken = String(token || "").trim();
+
+      if (!safeUser || !safeToken) {
+        errEl.textContent = "Respuesta inválida del servidor (sin token).";
+        loginBusy = false;
+        updateLoginSubmitState();
+        return false;
+      }
+
+      try {
+        localStorage.setItem("tpv_login_user", safeUser);
+        localStorage.setItem("tpv_login_token", safeToken);
+      } catch {}
+
+      setLoginSession({
+        token: safeToken,
+        user: safeUser,
+        codagente: codagente || "",
+        codalmacen: codalmacen || "",
+      });
+
+      try {
+        localStorage.setItem(LOGIN_LAST_USER_KEY, safeUser);
+      } catch {}
+
+      try {
+        if (window.TPV_CFG) await window.TPV_CFG.set("tpv.lastUser", safeUser);
+      } catch {}
+
+      setAdminFlag(!!isAdmin, "login");
+      await loadPriceEditModeFromCfg?.();
+
+      if (window.TPV_CFG) {
+        await window.TPV_CFG.set("auth.username", safeUser);
+        await window.TPV_CFG.set("auth.token", safeToken);
+        await window.TPV_CFG.set("auth.isAdmin", !!isAdmin);
+
+        if (codagente) {
+          await window.TPV_CFG.set("auth.codagente", String(codagente));
+        }
+        if (codalmacen) {
+          await window.TPV_CFG.set("auth.codalmacen", String(codalmacen));
+        }
+      }
+
+      try {
+        await window.TPV_AUTH?.setCurrentUser?.(safeUser, !!isAdmin);
+      } catch {}
+
+      try {
+        const idcaja = getCajaIdSafe?.();
+        if (idcaja && !TPV_STATE?.offline) {
+          await apiWrite(`tpvcajas/${idcaja}`, "PATCH", {
+            idcaja: String(idcaja),
+            nick: String(safeUser || "").trim(),
+          });
+        }
+      } catch (e) {
+        console.warn(
+          "[LOGIN] No pude actualizar nick en caja:",
+          e?.message || e,
+        );
+      }
+
+      overlay.classList.add("hidden");
+      unlockAppUI();
+      CART_SNAPSHOT_ARMED = true;
+      updateSessionLockUi();
+
+      if (codagente) {
+        const wanted = String(codagente || "").trim();
+        const listNow = currentTerminal
+          ? getAgentsForTerminalId(currentTerminal.id)
+          : [];
+        const picked = (Array.isArray(listNow) ? listNow : []).find(
+          (a) => String(a?.codagente || "").trim() === wanted,
+        );
+        if (picked) currentAgent = picked;
+      }
+
+      refreshLoggedUserUI?.();
+      refreshAgentGuardUI?.();
+
+      LOGIN_MODAL_DRAFT = {
+        user: safeUser,
+        pin: "",
+        isAdmin: !!isAdmin,
+      };
+
+      LOGIN_ACTIVE = false;
+
+      if (!BOOT_IN_FLIGHT) {
+        await ensureTerminalAgentDefaults();
+        renderCashIdChip();
+
+        if (cashSession?.open) {
+          renderMainUI?.();
+        } else {
+          renderMainUI?.();
+        }
+      }
+
+      return true;
+    };
+
     const body = new URLSearchParams();
     body.append("companyEmail", companyEmail);
     body.append("user", u);
@@ -4700,6 +4792,29 @@ async function openLoginModal() {
     errEl.textContent = "";
     loginBusy = true;
     updateLoginSubmitState();
+
+    if (TPV_STATE?.offline) {
+      const cachedUsers = loadTpvUsersCache();
+      const localUser = (Array.isArray(cachedUsers) ? cachedUsers : []).find(
+        (row) => String(row?.nick || "").trim() === u,
+      );
+
+      if (!localUser) {
+        errEl.textContent =
+          "Sin internet y usuario no disponible en caché local.";
+        loginBusy = false;
+        updateLoginSubmitState();
+        return false;
+      }
+
+      return await finalizeLoginSuccess({
+        loggedUser: u,
+        token: `offline:${Date.now()}:${u}`,
+        codagente: String(localUser?.codagente || "").trim(),
+        codalmacen: String(localUser?.codalmacen || "").trim(),
+        isAdmin: !!isAdminSelected,
+      });
+    }
 
     try {
       const res = await fetch(url, {
@@ -4717,129 +4832,13 @@ async function openLoginModal() {
         return false;
       }
 
-      const loggedUser = (data.user || u || "").trim();
-      const token = (data.token || "").trim();
-
-      if (!loggedUser || !token) {
-        errEl.textContent = "Respuesta inválida del servidor (sin token).";
-        loginBusy = false;
-        updateLoginSubmitState();
-        return false;
-      }
-
-      try {
-        localStorage.setItem("tpv_login_user", loggedUser);
-        localStorage.setItem("tpv_login_token", token);
-      } catch {}
-
-      // ✅ 1) Sesión runtime
-      setLoginSession({
-        token,
-        user: loggedUser,
+      return await finalizeLoginSuccess({
+        loggedUser: (data.user || u || "").trim(),
+        token: (data.token || "").trim(),
         codagente: data.codagente || "",
         codalmacen: data.codalmacen || "",
-      });
-
-      // Persistir usuario activo TPV (para recuperación tras corte)
-      try {
-        localStorage.setItem(LOGIN_LAST_USER_KEY, loggedUser);
-      } catch {}
-
-      try {
-        if (window.TPV_CFG)
-          await window.TPV_CFG.set("tpv.lastUser", loggedUser);
-      } catch {}
-
-      // ✅ 2) Estado admin runtime + UI
-      setAdminFlag(!!isAdminSelected, "login");
-      await loadPriceEditModeFromCfg?.();
-
-      // ✅ 3) Persistencia “no pedir nunca más”
-      if (window.TPV_CFG) {
-        await window.TPV_CFG.set("auth.username", loggedUser);
-        await window.TPV_CFG.set("auth.token", token);
-        await window.TPV_CFG.set("auth.isAdmin", !!isAdminSelected);
-
-        if (data.codagente) {
-          await window.TPV_CFG.set("auth.codagente", String(data.codagente));
-        }
-        if (data.codalmacen) {
-          await window.TPV_CFG.set("auth.codalmacen", String(data.codalmacen));
-        }
-      }
-
-      // ✅ 4) Gating admin en main
-      try {
-        await window.TPV_AUTH?.setCurrentUser?.(loggedUser, !!isAdminSelected);
-      } catch {}
-
-      // ✅ cambio de usuario “en caliente”
-
-      try {
-        const idcaja = getCajaIdSafe?.();
-        if (idcaja) {
-          await apiWrite(`tpvcajas/${idcaja}`, "PATCH", {
-            idcaja: String(idcaja),
-            nick: String(loggedUser || "").trim(),
-          });
-        }
-      } catch (e) {
-        console.warn(
-          "[LOGIN] No pude actualizar nick en caja:",
-          e?.message || e,
-        );
-      }
-
-      // ✅ 5) UI final
-      overlay.classList.add("hidden");
-      unlockAppUI();
-      CART_SNAPSHOT_ARMED = true;
-      updateSessionLockUi();
-
-      if (data.codagente) {
-        const wanted = String(data.codagente || "").trim();
-        const listNow = currentTerminal
-          ? getAgentsForTerminalId(currentTerminal.id)
-          : [];
-        const picked = (Array.isArray(listNow) ? listNow : []).find(
-          (a) => String(a?.codagente || "").trim() === wanted,
-        );
-        if (picked) currentAgent = picked;
-      }
-
-      refreshLoggedUserUI?.();
-      refreshAgentGuardUI?.();
-
-      LOGIN_MODAL_DRAFT = {
-        user: loggedUser,
-        pin: "",
         isAdmin: !!isAdminSelected,
-      };
-
-      LOGIN_ACTIVE = false;
-
-      // ✅ No tocar cashOpenDialogShown aquí
-
-      // Si estamos en el boot inicial, runBootFlow continuará con la
-      // resolución completa (terminal/agente + recuperación de caja).
-      // Evita carreras de "Apertura de caja" prematura.
-      if (!BOOT_IN_FLIGHT) {
-        // Siempre refrescar cabecera/terminal/agente
-        await ensureTerminalAgentDefaults();
-        renderCashIdChip();
-
-        // ✅ Si hay caja abierta, no hace falta forzar loadDataFromApi aquí
-        // (solo si realmente necesitas refrescar catálogo por cambio de empresa, etc.)
-        if (cashSession?.open) {
-          // opcional: si de verdad lo necesitas:
-          // await loadDataFromApi({ refresh: true });
-          renderMainUI?.(); // esto pintará porque cashSession.open = true
-        } else {
-          renderMainUI?.(); // vaciará por tu gating (open=false)
-        }
-      }
-
-      return true;
+      });
     } catch (e) {
       errEl.textContent = "Error de conexión";
       loginBusy = false;
@@ -6577,14 +6576,26 @@ function registerPaymentsForCurrentSession(pagos) {
 }
 
 async function parkCurrentCart(name = "", obs = "") {
+  const requestId = createRequestId("PARK");
+
+  logFeatureInfo("APARCAR", "inicio", {
+    requestId,
+    cartLines: Array.isArray(cart) ? cart.length : 0,
+    editing: currentParkedTicketIndex !== null,
+  });
+
   if (!cart || cart.length === 0) {
+    logFeatureWarn("APARCAR", "cancelado-carrito-vacio", { requestId });
     toast("No hay productos para aparcar.", "warn", "Aparcar");
     return;
   }
 
   const snapshot = cart.map((item) => ({ ...item }));
   const canContinue = await confirmIfCartExceedsVisibleStock(snapshot);
-  if (!canContinue) return;
+  if (!canContinue) {
+    logFeatureWarn("APARCAR", "cancelado-stock", { requestId });
+    return;
+  }
   const total = getCartTotal(snapshot);
 
   const clientName = cartClientInput
@@ -6644,6 +6655,12 @@ async function parkCurrentCart(name = "", obs = "") {
 
     toast("Ticket aparcado actualizado ✅", "ok", "Aparcados");
     setStatusText("Ticket aparcado actualizado.");
+    logFeatureInfo("APARCAR", "actualizado", {
+      requestId,
+      id: existing?.id || null,
+      total: Number(total || 0),
+      lineas: snapshot.length,
+    });
     return;
   }
 
@@ -6708,6 +6725,12 @@ async function parkCurrentCart(name = "", obs = "") {
 
   toast("Ticket aparcado ✅", "ok", "Aparcados");
   setStatusText("Ticket aparcado.");
+  logFeatureInfo("APARCAR", "creado", {
+    requestId,
+    id: localTicket?.id || null,
+    total: Number(total || 0),
+    lineas: snapshot.length,
+  });
 }
 
 function apiDeletePresupuesto(idpresupuesto) {
@@ -6837,23 +6860,6 @@ async function clearPaidParkedHistory() {
   refreshParkButtonUI?.();
   refreshParkedEditingBanner?.();
   renderParkedTicketsModal?.();
-
-  try {
-    const idcaja = getCajaIdSafe();
-    if (idcaja) {
-      const lines = [
-        buildParkedBulkClearHeaderLine(removedPaid.length),
-        ...removedPaid.map((t, i) => buildParkedBulkClearItemLine(t, i)),
-      ];
-
-      await appendCajaAutoLogLinesForId(idcaja, lines);
-    }
-  } catch (e) {
-    console.warn(
-      "No se pudo registrar el vaciado de tickets completados en la caja:",
-      e?.message || e,
-    );
-  }
 }
 
 function ensureParkedToolbar() {
@@ -7050,6 +7056,8 @@ function refreshParkedEditingBanner() {
 }
 
 function openParkedModal() {
+  const requestId = createRequestId("PRKMOD");
+
   if (!parkedTicketsOverlay) return;
 
   if (!parkedTickets || parkedTickets.length === 0) {
@@ -7060,6 +7068,17 @@ function openParkedModal() {
   ensureParkedToolbar();
   renderParkedTicketsModal();
   parkedTicketsOverlay.classList.remove("hidden");
+
+  logFeatureInfo("APARCADOS", "modal-abierto", {
+    requestId,
+    total: Array.isArray(parkedTickets) ? parkedTickets.length : 0,
+    pendientes: (Array.isArray(parkedTickets) ? parkedTickets : []).filter(
+      (t) => !t?.paid,
+    ).length,
+    cobrados: (Array.isArray(parkedTickets) ? parkedTickets : []).filter(
+      (t) => !!t?.paid,
+    ).length,
+  });
 }
 
 function closeParkedModal() {
@@ -8929,7 +8948,7 @@ async function maybeOpenCashOrRecover() {
     const storedIdRaw = localStorage.getItem("tpv_remoteCajaId");
     const storedId = Number(storedIdRaw || 0) || 0;
 
-    console.log("[TPV] maybeOpenCashOrRecover()", {
+    debugLog("[TPV] maybeOpenCashOrRecover()", {
       open: cashSession.open,
       storedId,
       sessionId: cashSession?.remoteCajaId || null,
@@ -8941,6 +8960,8 @@ async function maybeOpenCashOrRecover() {
 
     // 1) Si hay ID guardado, VALIDAR en FS si sigue abierta
     if (storedId) {
+      let shouldClearStoredId = true;
+
       try {
         const remoteCaja = await apiReadCajaById(storedId);
 
@@ -8968,18 +8989,30 @@ async function maybeOpenCashOrRecover() {
           storedId,
         );
       } catch (e) {
+        if (isConnectivityLikeError(e)) {
+          shouldClearStoredId = false;
+          console.warn(
+            "[TPV] No se pudo validar caja guardada por conectividad. Se mantiene ID para reintento:",
+            storedId,
+          );
+        }
+
         console.warn(
-          "[TPV] No se pudo validar caja guardada. Limpiando:",
+          "[TPV] No se pudo validar caja guardada:",
           storedId,
           e,
         );
       }
 
-      // limpiar SIEMPRE si no validó como abierta
-      cashSession.remoteCajaId = null;
-      cashSession.open = false;
-      pushCustomerState();
-      localStorage.removeItem("tpv_remoteCajaId");
+      // limpiar solo si realmente quedó invalidada (no por falta de conectividad)
+      if (shouldClearStoredId) {
+        cashSession.remoteCajaId = null;
+        cashSession.open = false;
+        pushCustomerState();
+        localStorage.removeItem("tpv_remoteCajaId");
+      } else {
+        cashSession.remoteCajaId = storedId;
+      }
     }
 
     // 2) Si NO hay caja guardada válida, buscar ABIERTAS en FS para este TPV
@@ -9044,10 +9077,18 @@ async function maybeOpenCashOrRecover() {
 
     if (!cashOpenDialogShown) {
       cashOpenDialogShown = true;
-      console.log("[TPV] No hay caja abierta → mostrar modal apertura");
+      debugLog("[TPV] No hay caja abierta → mostrar modal apertura");
       await ensureTerminalAgentDefaults();
       refreshAgentGuardUI?.();
-      openCashOpenDialog("open");
+      // Abrimos en el siguiente tick para que cashRecoverInFlight
+      // ya esté liberado en el finally y no bloquee el modal.
+      setTimeout(() => {
+        if (cashSession?.open) {
+          cashOpenDialogShown = false;
+          return;
+        }
+        openCashOpenDialog("open");
+      }, 0);
     }
   } finally {
     cashRecoverInFlight = false;
@@ -10309,6 +10350,16 @@ function registerPayMethodUsageForTicket(pagos) {
 }
 
 async function confirmCashOpening() {
+  const requestId = createRequestId("CASHOP");
+
+  logFeatureInfo("CAJA", "apertura-inicio", {
+    requestId,
+    terminalId: currentTerminal?.id || null,
+    terminal: currentTerminal?.name || "---",
+    agent: currentAgent?.name || currentAgent?.nick || "---",
+    openingTotal: Number(cashSession?.openingTotal || 0),
+  });
+
   ensureCashSessionCounters();
   resetCashRuntimeForNewCaja();
 
@@ -10324,6 +10375,10 @@ async function confirmCashOpening() {
       loadCashLedgerIntoSession(idcaja);
     }
   } catch (e) {
+    logFeatureWarn("CAJA", "apertura-fs-no-disponible", {
+      requestId,
+      error: e?.message || e,
+    });
     console.warn("No se pudo abrir caja en FacturaScripts:", e?.message || e);
     toast(
       "Caja abierta, pero no se pudo registrar en FacturaScripts.",
@@ -10351,9 +10406,26 @@ async function confirmCashOpening() {
   await refreshStockAndReservationsOnly().catch(() => {});
   startProductsStockAutoRefresh?.();
   startParkedReservationsAutoRefresh?.();
+
+  logFeatureInfo("CAJA", "apertura-ok", {
+    requestId,
+    cajaId: getCajaIdSafe(),
+    terminalId: currentTerminal?.id || null,
+    terminal: currentTerminal?.name || "---",
+    agent: currentAgent?.name || currentAgent?.nick || "---",
+  });
 }
 
 async function confirmCashClosing() {
+  const requestId = createRequestId("CASHCL");
+
+  logFeatureInfo("CAJA", "cierre-inicio", {
+    requestId,
+    cajaId: getCajaIdSafe(),
+    totalVentas: Number(cashSession?.totalSales || 0),
+    numTickets: Number(cashSession?.numtickets || 0),
+  });
+
   try {
     if (cashOpenOkBtn) cashOpenOkBtn.disabled = true;
   } catch {}
@@ -10386,11 +10458,20 @@ async function confirmCashClosing() {
 
     if (!check) closedOk = true;
   } catch (e) {
+    logFeatureWarn("CAJA", "cierre-fs-no-disponible", {
+      requestId,
+      cajaId: idcaja || null,
+      error: e?.message || e,
+    });
     console.warn("No se pudo cerrar caja en FacturaScripts:", e?.message || e);
     toast("No se pudo registrar el cierre en FacturaScripts.", "warn", "Caja");
   }
 
   if (!closedOk) {
+    logFeatureWarn("CAJA", "cierre-no-confirmado", {
+      requestId,
+      cajaId: idcaja || null,
+    });
     toast("No se pudo cerrar la caja. Reintenta.", "warn", "Caja");
     try {
       if (cashOpenOkBtn) cashOpenOkBtn.disabled = false;
@@ -10441,6 +10522,12 @@ async function confirmCashClosing() {
   if (printBtn) printBtn.disabled = true;
 
   lastTicket = null;
+
+  logFeatureInfo("CAJA", "cierre-ok", {
+    requestId,
+    cajaId: idcaja || null,
+    terminalId: currentTerminal?.id || null,
+  });
 
   renderCashIdChip();
 
@@ -11416,6 +11503,16 @@ async function loadDataFromApi(opts = {}) {
 
       clearApiRetryTimer();
 
+      if (restoreBootSnapshotIntoRuntime("config-sin-api")) {
+        setStatusText("Offline (cache local)");
+        TPV_STATE.offline = true;
+        TPV_STATE.locked = false;
+        updateCashButtonLabel();
+        renderMainUI();
+        toast("Modo offline con datos guardados.", "info", "Offline");
+        return;
+      }
+
       if (DEMO_FALLBACK_ENABLED) {
         categories = demoCategories.map((c) => ({ ...c, parentId: null }));
         products = [...demoProducts];
@@ -11783,6 +11880,20 @@ async function loadDataFromApi(opts = {}) {
 
     agents = Object.values(allAgentsMap);
 
+    saveTerminalAgentCache({ terminals, agentsByTerminal, agents });
+    saveBootSnapshot({
+      categories,
+      products,
+      terminals,
+      agentsByTerminal,
+      agents,
+      agentNameByCode,
+      taxRatesByCode,
+      companyInfo,
+      productImagesMap: PRODUCT_IMAGES_MAP,
+      source: "online-loadDataFromApi",
+    });
+
     // Aquí sí: ya está todo cargado correctamente
     exitApiRetryMode();
     setStatusText("Online Recipok");
@@ -11847,7 +11958,31 @@ async function loadDataFromApi(opts = {}) {
   } catch (err) {
     console.error("Error llamando a la API de Recipok:", err);
 
-    enterApiRetryMode("Sin conexión con Recipok. Reintentando...");
+    const restored = restoreBootSnapshotIntoRuntime("loadDataFromApi-error");
+    if (restored) {
+      setStatusText("Offline (cache local)");
+      TPV_STATE.offline = true;
+      TPV_STATE.locked = false;
+      updateCashButtonLabel();
+      renderMainUI(true);
+      hideReconnectIfAvailable();
+      enterApiRetryMode("Sin conexión con Recipok. Trabajando con caché local.", {
+        lock: false,
+        scheduleRetry: false,
+        showOverlay: false,
+      });
+
+      if (!opts.silentRetry) {
+        toast("Sin conexión: usando datos guardados en local.", "warn");
+      }
+      return;
+    }
+
+    enterApiRetryMode("Sin conexión con Recipok. Reintentando...", {
+      lock: false,
+      scheduleRetry: false,
+      showOverlay: true,
+    });
 
     if (!opts.silentRetry) {
       toast("Se ha perdido la conexión con Recipok. Reintentando...", "warn");
@@ -12121,6 +12256,7 @@ async function refreshTerminalsAndAgents() {
     }
 
     agents = Object.values(allAgentsMap);
+    saveTerminalAgentCache({ terminals, agentsByTerminal, agents });
 
     // Reajustar currentTerminal / currentAgent si ya había algo seleccionado
     if (currentTerminal) {
@@ -12160,6 +12296,21 @@ async function refreshTerminalsAndAgents() {
     // ✅
     refreshAgentGuardUI?.();
   } catch (e) {
+    const fallback = loadTerminalAgentCache();
+    if (
+      fallback &&
+      Array.isArray(fallback.terminals) &&
+      fallback.terminals.length
+    ) {
+      terminals = fallback.terminals;
+      agentsByTerminal = fallback.agentsByTerminal || {};
+      agents = Array.isArray(fallback.agents) ? fallback.agents : [];
+      await restoreTerminalAgentFromCfg();
+      refreshAgentGuardUI?.();
+      console.warn("TPVs/agentes cargados desde caché local (offline).");
+      return;
+    }
+
     console.warn("No se pudieron refrescar TPVs/agentes:", e);
   }
 }
@@ -15301,6 +15452,8 @@ async function refreshProductsStockOnly() {
 }
 
 async function onPayButtonClick() {
+  const requestId = createRequestId("PAY");
+
   let cartSnapshot = [];
   let saleLineIds = new Set();
   let saleCommitted = false;
@@ -15326,6 +15479,14 @@ async function onPayButtonClick() {
     }
 
     const totalCart = round2(getCartTotal(cart));
+    logFeatureInfo("COBRO", "inicio", {
+      requestId,
+      cartLines: Array.isArray(cart) ? cart.length : 0,
+      total: Number(totalCart || 0),
+      cajaId: getCajaIdSafe(),
+      terminalId: currentTerminal?.id || null,
+      agent: currentAgent?.name || currentAgent?.nick || "---",
+    });
 
     // ✅ FAILSAFE: agente obligatorio (antes de abrir el modal)
     const okAgent = await requireAssignedAgentOrBlock({ showModal: true });
@@ -15350,6 +15511,10 @@ async function onPayButtonClick() {
     // 1) Modal cobro
     const payResult = await openPayModal(totalCart);
     if (!payResult) {
+      logFeatureInfo("COBRO", "cancelado-usuario", {
+        requestId,
+        total: Number(totalCart || 0),
+      });
       customerSetMode("CART");
       setStatusText("Cobro cancelado");
       return;
@@ -15546,6 +15711,15 @@ async function onPayButtonClick() {
       renderCart();
       setStatusText("Venta guardada en cola (offline)");
       toast("Sin internet: venta guardada en cola ✅", "ok", "Cobrar");
+      logFeatureWarn("COBRO", "offline-cola", {
+        requestId,
+        total: Number(payResult?.total ?? totalCart ?? 0),
+        localId: sendResult.localId || null,
+        pagos: pagosFinal.map((p) => ({
+          codpago: p.codpago,
+          importe: Number(p.importe || 0),
+        })),
+      });
       return;
     }
 
@@ -15758,7 +15932,29 @@ async function onPayButtonClick() {
         );
       }
     }
+
+    logFeatureInfo("COBRO", "ok", {
+      requestId,
+      ticket:
+        lastTicket?.numero ||
+        facturaResp?.codigo ||
+        facturaResp?.idfactura ||
+        null,
+      idfactura: facturaResp?.idfactura || null,
+      total: Number(facturaTotalFS || 0),
+      pagos: pagosFinal.map((p) => ({
+        codpago: p.codpago,
+        importe: Number(p.importe || 0),
+      })),
+    });
   } catch (err) {
+    logFeatureError("COBRO", "error", err, {
+      requestId,
+      cartLines: cartSnapshot.length,
+      saleCommitted,
+      cajaId: getCajaIdSafe(),
+      terminalId: currentTerminal?.id || null,
+    });
     console.error("Error al cobrar:", err);
 
     if (!saleCommitted && cartSnapshot.length) {
@@ -16874,6 +17070,8 @@ function setCajaGroupOpen(cajaId, open) {
 }
 
 async function openTicketsModal() {
+  const requestId = createRequestId("TKMOD");
+
   if (!cashSession?.open) {
     toast("Abre la caja para ver tickets.", "info", "Tickets");
     return;
@@ -16889,11 +17087,16 @@ async function openTicketsModal() {
   }
 
   ticketsOverlay.classList.remove("hidden");
+  logFeatureInfo("TICKETS", "modal-abierto", {
+    requestId,
+    cajaId: getCajaIdSafe(),
+    tab: ticketsViewState.tab,
+  });
   syncTicketsToolbarUI();
   syncTicketsSearchClearBtn();
   syncTicketsExtraActionsUI();
   await renderQueuedTicketsIfAny();
-  await loadAndRenderTickets();
+  await loadAndRenderTickets(requestId);
 }
 
 function closeTicketsModal() {
@@ -16901,7 +17104,9 @@ function closeTicketsModal() {
   ticketsOverlay.classList.add("hidden");
 }
 
-async function loadAndRenderTickets() {
+async function loadAndRenderTickets(requestId = null) {
+  const reqId = requestId || createRequestId("TKLOAD");
+
   if (!ticketsList) return;
   if (ticketsLoading) return;
   ticketsLoading = true;
@@ -16921,6 +17126,10 @@ async function loadAndRenderTickets() {
 
       ticketsUiCache = merged;
       renderTicketsList(merged);
+      logFeatureInfo("TICKETS", "carga-ok-online", {
+        requestId: reqId,
+        total: merged.length,
+      });
       return;
     }
 
@@ -16933,7 +17142,15 @@ async function loadAndRenderTickets() {
     linkTicketsRefundRelations(merged);
     ticketsUiCache = merged;
     renderTicketsList(merged);
+    logFeatureInfo("TICKETS", "carga-ok-offline", {
+      requestId: reqId,
+      total: merged.length,
+    });
   } catch (e) {
+    logFeatureError("TICKETS", "carga-error", e, {
+      requestId: reqId,
+      offline: !!TPV_STATE?.offline,
+    });
     console.error(e);
 
     // ✅ fallback final: usa cache + offline local (aunque cache esté vacío)
@@ -17941,7 +18158,19 @@ function hideReconnectOverlay() {
 
 function showReconnectIfAvailable(
   message = "No hay conexión con Recipok. Espera por favor, reconectando...",
+  opts = {},
 ) {
+  const { forceOverlay = false } = opts;
+
+  if (!forceOverlay) {
+    const hasOfflineData = hasRealDataLoaded() || !!loadBootSnapshot?.();
+    if (hasOfflineData) {
+      hideReconnectIfAvailable();
+      setStatusText("Sin internet (modo offline). Reintentando conexión...");
+      return;
+    }
+  }
+
   try {
     if (typeof showReconnectOverlay === "function") {
       showReconnectOverlay(message);
@@ -18875,6 +19104,7 @@ function syncSelectedPackChildrenQty(parentLine) {
 
 const PACKS_STATE = {
   ready: false,
+  apiUnsupported: false,
   packsByOfferProductId: new Map(), // key: idproducto oferta (idproduct en productpacks)
   linesByPackId: new Map(), // key: idpack -> [lines]
   productByRefCache: new Map(), // key: referencia -> producto FS (o null)
@@ -18906,6 +19136,11 @@ async function fetchProductoByReferencia(ref) {
 async function warmupPacksData(opts = {}) {
   const force = opts.force === true;
 
+  // Si la API no soporta endpoints de packs (404), evitamos reintentos ruidosos.
+  if (PACKS_STATE.apiUnsupported) {
+    return false;
+  }
+
   // Si estamos offline y no se ha forzado, no tocamos nada
   if (TPV_STATE?.offline && !force) {
     return false;
@@ -18919,6 +19154,20 @@ async function warmupPacksData(opts = {}) {
       fetchApiResource("productpacks"),
       fetchApiResource("productpacklines"),
     ]);
+
+    const is404 = (err) =>
+      /HTTP\s*404/i.test(String(err?.message || err || ""));
+
+    if (
+      (packsRes.status === "rejected" && is404(packsRes.reason)) ||
+      (linesRes.status === "rejected" && is404(linesRes.reason))
+    ) {
+      PACKS_STATE.apiUnsupported = true;
+      console.info(
+        "[PACKS] Endpoints no disponibles (404). Se deshabilita precarga de packs.",
+      );
+      return false;
+    }
 
     // Si falla cualquiera, mantenemos la caché anterior
     if (packsRes.status !== "fulfilled" || linesRes.status !== "fulfilled") {
@@ -21420,6 +21669,10 @@ async function openDrawerNow({ source = "MAIN" } = {}) {
 
 async function checkFSOnline() {
   try {
+    if (navigator.onLine === false) {
+      return false;
+    }
+
     const cfg = window.RECIPOK_API || {};
 
     // ✅ Si aún no hay empresa/config resuelta, distinguimos este caso
@@ -21488,8 +21741,10 @@ async function startOnlineMonitor() {
     updateOnlineBadge(!!ok);
 
     if (ok) {
+      TPV_STATE.locked = false;
       TPV_STATE.apiRecovering = false;
       hideReconnectIfAvailable();
+      updateCashButtonLabel();
     }
 
     const becameOnline =
@@ -21499,9 +21754,17 @@ async function startOnlineMonitor() {
 
     if (becameOnline) {
       try {
-        TPV_STATE.apiRecovering = false;
-        hideReconnectIfAvailable();
+        exitApiRetryMode();
       } catch {}
+
+      try {
+        await loadDataFromApi({ refresh: true, silentRetry: true });
+      } catch (e) {
+        console.warn(
+          "No se pudo refrescar datos completos al volver online:",
+          e?.message || e,
+        );
+      }
 
       try {
         await maybeRefreshTerminalDefaultCustomer("online", {
@@ -21853,6 +22116,171 @@ const TICKETS_CACHE_TS_KEY = "tpv_cachedTickets_ts_v1";
 
 // ===== OFFLINE tickets visibles en modal =====
 const OFFLINE_TICKETS_KEY = "tpv_offlineTickets_v1";
+
+function saveTpvUsersCache(users) {
+  try {
+    const safe = (Array.isArray(users) ? users : [])
+      .filter((u) => u && String(u.nick || "").trim())
+      .map((u) => ({
+        ...u,
+        nick: String(u.nick || "").trim(),
+        admin: !!u.admin,
+        codagente: String(u.codagente || "").trim(),
+        codalmacen: String(u.codalmacen || "").trim(),
+      }));
+
+    localStorage.setItem(TPV_USERS_CACHE_KEY, JSON.stringify(safe));
+    localStorage.setItem(TPV_USERS_CACHE_TS_KEY, String(Date.now()));
+  } catch (e) {
+    console.warn("No se pudo guardar cache de usuarios TPV:", e?.message || e);
+  }
+}
+
+function loadTpvUsersCache() {
+  try {
+    const raw = localStorage.getItem(TPV_USERS_CACHE_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr)
+      ? arr.filter((u) => u && String(u.nick || "").trim())
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveTerminalAgentCache(data = {}) {
+  try {
+    const safe = {
+      terminals: Array.isArray(data.terminals) ? data.terminals : [],
+      agentsByTerminal:
+        data.agentsByTerminal && typeof data.agentsByTerminal === "object"
+          ? data.agentsByTerminal
+          : {},
+      agents: Array.isArray(data.agents) ? data.agents : [],
+    };
+
+    localStorage.setItem(TERMINAL_AGENT_CACHE_KEY, JSON.stringify(safe));
+    localStorage.setItem(TERMINAL_AGENT_CACHE_TS_KEY, String(Date.now()));
+  } catch (e) {
+    console.warn(
+      "No se pudo guardar cache de terminales/agentes:",
+      e?.message || e,
+    );
+  }
+}
+
+function loadTerminalAgentCache() {
+  try {
+    const raw = localStorage.getItem(TERMINAL_AGENT_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== "object") return null;
+
+    return {
+      terminals: Array.isArray(parsed.terminals) ? parsed.terminals : [],
+      agentsByTerminal:
+        parsed.agentsByTerminal && typeof parsed.agentsByTerminal === "object"
+          ? parsed.agentsByTerminal
+          : {},
+      agents: Array.isArray(parsed.agents) ? parsed.agents : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveBootSnapshot(payload = {}) {
+  try {
+    const safe = {
+      version: 1,
+      ts: Date.now(),
+      categories: Array.isArray(payload.categories) ? payload.categories : [],
+      products: Array.isArray(payload.products) ? payload.products : [],
+      terminals: Array.isArray(payload.terminals) ? payload.terminals : [],
+      agentsByTerminal:
+        payload.agentsByTerminal && typeof payload.agentsByTerminal === "object"
+          ? payload.agentsByTerminal
+          : {},
+      agents: Array.isArray(payload.agents) ? payload.agents : [],
+      agentNameByCode:
+        payload.agentNameByCode && typeof payload.agentNameByCode === "object"
+          ? payload.agentNameByCode
+          : {},
+      taxRatesByCode:
+        payload.taxRatesByCode && typeof payload.taxRatesByCode === "object"
+          ? payload.taxRatesByCode
+          : {},
+      companyInfo:
+        payload.companyInfo && typeof payload.companyInfo === "object"
+          ? payload.companyInfo
+          : null,
+      productImagesMap:
+        payload.productImagesMap && typeof payload.productImagesMap === "object"
+          ? payload.productImagesMap
+          : {},
+      source: String(payload.source || "online").trim(),
+    };
+
+    localStorage.setItem(BOOT_SNAPSHOT_CACHE_KEY, JSON.stringify(safe));
+    localStorage.setItem(BOOT_SNAPSHOT_CACHE_TS_KEY, String(Date.now()));
+  } catch (e) {
+    console.warn("No se pudo guardar snapshot de arranque:", e?.message || e);
+  }
+}
+
+function loadBootSnapshot() {
+  try {
+    const raw = localStorage.getItem(BOOT_SNAPSHOT_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function restoreBootSnapshotIntoRuntime(reason = "") {
+  const snap = loadBootSnapshot();
+  if (!snap) return false;
+
+  const hasCatalog = Array.isArray(snap.products) && snap.products.length > 0;
+  if (!hasCatalog) return false;
+
+  categories = Array.isArray(snap.categories) ? snap.categories : [];
+  products = Array.isArray(snap.products) ? snap.products : [];
+  terminals = Array.isArray(snap.terminals) ? snap.terminals : [];
+  agentsByTerminal =
+    snap.agentsByTerminal && typeof snap.agentsByTerminal === "object"
+      ? snap.agentsByTerminal
+      : {};
+  agents = Array.isArray(snap.agents) ? snap.agents : [];
+  agentNameByCode =
+    snap.agentNameByCode && typeof snap.agentNameByCode === "object"
+      ? snap.agentNameByCode
+      : {};
+  taxRatesByCode =
+    snap.taxRatesByCode && typeof snap.taxRatesByCode === "object"
+      ? snap.taxRatesByCode
+      : {};
+  companyInfo =
+    snap.companyInfo && typeof snap.companyInfo === "object"
+      ? snap.companyInfo
+      : null;
+  PRODUCT_IMAGES_MAP =
+    snap.productImagesMap && typeof snap.productImagesMap === "object"
+      ? snap.productImagesMap
+      : {};
+
+  saveTerminalAgentCache({ terminals, agentsByTerminal, agents });
+
+  logFeatureWarn("BOOT", "snapshot-restaurado", {
+    reason,
+    products: products.length,
+    categories: categories.length,
+    terminals: terminals.length,
+  });
+
+  return true;
+}
 
 function loadOfflineTicketsForTicketsModal() {
   try {
