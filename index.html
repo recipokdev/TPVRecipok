@@ -2,6 +2,10 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss: ws:; media-src 'self' data: blob:; object-src 'none'; base-uri 'self'"
+    />
     <title>TPV Local Recipok</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -2189,15 +2193,7 @@
     <script src="renderer.js"></script>
     <script src="./js/tpv/scale/scale-ui.js"></script>
     <script src="./js/tpv/scale/scale-cart.js"></script>
-    <script>
-      window.addEventListener("keydown", (e) => {
-        const key = (e.key || "").toLowerCase();
-        if (e.ctrlKey && e.altKey && key === "q") {
-          e.preventDefault();
-          window.TPV_SYS?.quit?.();
-        }
-      });
-    </script>
+    <script src="./js/tpv/quit-shortcut.js"></script>
     <link
       rel="stylesheet"
       href="js/tpv/ui/customer_selector/customer_selector.css"
