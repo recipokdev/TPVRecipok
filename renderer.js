@@ -354,6 +354,10 @@ const TERMINAL_AGENT_CACHE_KEY = "tpv_cachedTerminalAgent_v1";
 const TERMINAL_AGENT_CACHE_TS_KEY = "tpv_cachedTerminalAgent_ts_v1";
 const BOOT_SNAPSHOT_CACHE_KEY = "tpv_boot_snapshot_v1";
 const BOOT_SNAPSHOT_CACHE_TS_KEY = "tpv_boot_snapshot_ts_v1";
+const API_RESOURCES_CACHE_KEY = "tpv_api_resources_cache_v1";
+const API_RESOURCES_CACHE_TS_KEY = "tpv_api_resources_ts_v1";
+const API_MISSING_RESOURCES_CACHE_KEY = "tpv_api_missing_resources_cache_v1";
+const API_MISSING_RESOURCES_CACHE_TS_KEY = "tpv_api_missing_resources_ts_v1";
 
 let __parkedSyncDrainInFlight = false;
 
@@ -2352,7 +2356,27 @@ async function updateTpvTerminalForm(idtpv, patch) {
   });
 
   // Compatibilidad: algunas instalaciones no aceptan PATCH en este recurso.
+  // En fallback evitamos PUT parcial destructivo: primero leemos el documento
+  // actual y hacemos PUT con merge completo.
   if (res.status === 404 || res.status === 405) {
+    let mergedBody = body;
+    try {
+      const currentRaw = await apiRead(`tpvterminales/${idtpv}`);
+      const current =
+        currentRaw?.doc && typeof currentRaw.doc === "object"
+          ? currentRaw.doc
+          : currentRaw?.data && typeof currentRaw.data === "object"
+            ? currentRaw.data
+            : currentRaw && typeof currentRaw === "object"
+              ? currentRaw
+              : {};
+
+      const merged = { ...current, ...(patch || {}) };
+      mergedBody = toFormUrlEncoded(merged);
+    } catch {
+      // Si no podemos leer el actual, mantenemos fallback con patch mínimo.
+    }
+
     res = await fetch(url, {
       method: "PUT",
       headers: {
@@ -2360,7 +2384,7 @@ async function updateTpvTerminalForm(idtpv, patch) {
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
         Token: cfg.apiKey,
       },
-      body,
+      body: mergedBody,
     });
   }
 
@@ -4314,6 +4338,7 @@ async function getRememberedLoginUser() {
 function updateSessionLockUi() {
   const locked = !hasActiveLoginSession() && !LOGIN_ACTIVE;
   document.body.classList.toggle("session-locked", locked);
+  const companyReady = hasCompanyResolved();
 
   if (mainAgentBar) {
     mainAgentBar.classList.toggle("session-agentbar-hidden", locked);
@@ -4342,11 +4367,39 @@ function updateSessionLockUi() {
     const btn = hint.querySelector("#sessionLockHintBtn");
     btn?.addEventListener("click", async () => {
       if (TPV_LOADING) return;
+
+      if (!hasCompanyResolved()) {
+        const okSetup = await forceReconnectFlow?.();
+        if (okSetup && hasCompanyResolved()) {
+          const okLoginAfterSetup = await openLoginModal();
+          if (okLoginAfterSetup && hasActiveLoginSession()) {
+            updateSessionLockUi();
+          }
+        } else {
+          updateSessionLockUi();
+        }
+        return;
+      }
+
       const ok = await openLoginModal();
       if (ok && hasActiveLoginSession()) {
         updateSessionLockUi();
       }
     });
+  }
+
+  if (hint) {
+    const titleEl = hint.querySelector(".session-lock-hint-title");
+    const btnEl = hint.querySelector("#sessionLockHintBtn");
+    if (titleEl && btnEl) {
+      if (companyReady) {
+        titleEl.textContent = "No hay usuario activo";
+        btnEl.textContent = "Iniciar sesión";
+      } else {
+        titleEl.textContent = "Falta activar la empresa";
+        btnEl.textContent = "Escribir email";
+      }
+    }
   }
 
   if (hint) {
@@ -4707,6 +4760,7 @@ async function openLoginModal() {
 
       setAdminFlag(!!isAdmin, "login");
       await loadPriceEditModeFromCfg?.();
+      await warmupPacksData({ force: true }).catch(() => {});
 
       if (window.TPV_CFG) {
         await window.TPV_CFG.set("auth.username", safeUser);
@@ -4780,6 +4834,24 @@ async function openLoginModal() {
 
       return true;
     };
+
+    // Evita reautenticar contra tpv_login.php si ya hay sesión activa del mismo usuario.
+    // Algunos backends aplican efectos colaterales al re-login (p. ej. estado de acceso web).
+    const activeUserNow = String(getLoginUser?.() || "").trim();
+    const activeTokenNow = String(getLoginToken?.() || "").trim();
+    if (activeUserNow && activeTokenNow && activeUserNow === u) {
+      return await finalizeLoginSuccess({
+        loggedUser: activeUserNow,
+        token: activeTokenNow,
+        codagente: String(
+          localStorage.getItem("tpv_login_codagente") || "",
+        ).trim(),
+        codalmacen: String(
+          localStorage.getItem("tpv_login_codalmacen") || "",
+        ).trim(),
+        isAdmin: !!isAdminSelected,
+      });
+    }
 
     const body = new URLSearchParams();
     body.append("companyEmail", companyEmail);
@@ -4928,6 +5000,7 @@ async function ensureLoginAutoOrPrompt() {
 
     // 🔥 importante: cargar el modo edición desde cfg en autologin
     await loadPriceEditModeFromCfg?.();
+    await warmupPacksData({ force: true }).catch(() => {});
 
     renderProducts?.();
     refreshLoggedUserUI?.();
@@ -4950,6 +5023,7 @@ async function ensureLoginAutoOrPrompt() {
 
     setAdminFlag(!!savedIsAdmin, "autologin(cfg)");
     await loadPriceEditModeFromCfg?.();
+    await warmupPacksData({ force: true }).catch(() => {});
     refreshLoggedUserUI?.();
     return true;
   }
@@ -10631,6 +10705,15 @@ async function fetchApiResource(resource, opts = {}) {
     throw new Error("Config API no definida");
   }
 
+  const availability = await canCallApiResource(resource, {
+    force: opts.forceResources,
+  });
+  if (availability.known && !availability.ok) {
+    throw new Error(
+      `Recurso no disponible en API: ${availability.missing?.[0] || resource}`,
+    );
+  }
+
   const timeoutMs = Number(opts.timeoutMs || 10000);
   const url = `${cfg.baseUrl}/${resource}?limit=0`;
 
@@ -10665,6 +10748,15 @@ async function fetchApiResource(resource, opts = {}) {
     );
   }
 
+  if (!res.ok) {
+    if (res.status === 404) {
+      markApiResourceMissing(resource);
+    }
+    throw new Error(
+      `HTTP ${res.status} en ${resource}: ${res.statusText || ""}`,
+    );
+  }
+
   let data;
   try {
     data = await res.json();
@@ -10677,17 +10769,233 @@ async function fetchApiResource(resource, opts = {}) {
     throw new Error(data.message || `Error API en ${resource}`);
   }
 
-  if (!res.ok) {
-    throw new Error(
-      `HTTP ${res.status} en ${resource}: ${res.statusText || ""}`,
-    );
-  }
-
   if (!Array.isArray(data)) {
     console.warn(`Formato inesperado para ${resource}:`, data);
   }
 
   return data;
+}
+
+let apiResourcesCacheSet = null;
+let apiResourcesCacheBaseUrl = "";
+let apiMissingResourcesSet = new Set();
+let apiMissingResourcesBaseUrl = "";
+
+const API_FEATURE_REQUIREMENTS = {
+  packs: ["productpacks", "productpacklines"],
+};
+
+function loadApiResourcesCacheForBase(baseUrl) {
+  try {
+    const raw = localStorage.getItem(API_RESOURCES_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    const list = Array.isArray(parsed?.resources) ? parsed.resources : [];
+    const cachedBase = String(parsed?.baseUrl || "").trim();
+
+    if (!cachedBase || cachedBase !== String(baseUrl || "").trim()) {
+      return null;
+    }
+
+    const set = new Set(
+      list.map((x) => String(x || "").trim()).filter(Boolean),
+    );
+    if (!set.size) return null;
+
+    return set;
+  } catch {
+    return null;
+  }
+}
+
+function loadApiMissingResourcesCacheForBase(baseUrl) {
+  try {
+    const raw = localStorage.getItem(API_MISSING_RESOURCES_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    const list = Array.isArray(parsed?.resources) ? parsed.resources : [];
+    const cachedBase = String(parsed?.baseUrl || "").trim();
+
+    if (!cachedBase || cachedBase !== String(baseUrl || "").trim()) {
+      return new Set();
+    }
+
+    return new Set(list.map((x) => String(x || "").trim()).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveApiMissingResourcesCacheForBase(baseUrl, missingSet) {
+  try {
+    const resources = Array.from(missingSet || [])
+      .map((x) => String(x || "").trim())
+      .filter(Boolean);
+
+    const safe = {
+      baseUrl: String(baseUrl || "").trim(),
+      resources,
+    };
+
+    localStorage.setItem(API_MISSING_RESOURCES_CACHE_KEY, JSON.stringify(safe));
+    localStorage.setItem(
+      API_MISSING_RESOURCES_CACHE_TS_KEY,
+      String(Date.now()),
+    );
+  } catch {}
+}
+
+function saveApiResourcesCacheForBase(baseUrl, resourcesSet) {
+  try {
+    const resources = Array.from(resourcesSet || []).map((x) =>
+      String(x || "").trim(),
+    );
+    const safe = {
+      baseUrl: String(baseUrl || "").trim(),
+      resources: resources.filter(Boolean),
+    };
+    localStorage.setItem(API_RESOURCES_CACHE_KEY, JSON.stringify(safe));
+    localStorage.setItem(API_RESOURCES_CACHE_TS_KEY, String(Date.now()));
+  } catch {}
+}
+
+async function getApiResourcesSet(opts = {}) {
+  const force = opts.force === true;
+
+  const cfg = window.RECIPOK_API || {};
+  const baseUrl = String(cfg.baseUrl || "").replace(/\/+$/, "");
+  const apiKey = String(cfg.apiKey || "").trim();
+  if (!baseUrl || !apiKey) return null;
+
+  if (apiResourcesCacheBaseUrl !== baseUrl) {
+    apiResourcesCacheBaseUrl = baseUrl;
+    apiResourcesCacheSet = null;
+  }
+
+  if (apiMissingResourcesBaseUrl !== baseUrl) {
+    apiMissingResourcesBaseUrl = baseUrl;
+    apiMissingResourcesSet = loadApiMissingResourcesCacheForBase(baseUrl);
+  }
+
+  if (!force && apiResourcesCacheSet && apiResourcesCacheSet.size) {
+    return apiResourcesCacheSet;
+  }
+
+  if (!force && (!apiResourcesCacheSet || !apiResourcesCacheSet.size)) {
+    const fromStorage = loadApiResourcesCacheForBase(baseUrl);
+    if (fromStorage && fromStorage.size) {
+      apiResourcesCacheSet = fromStorage;
+      return apiResourcesCacheSet;
+    }
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    const res = await fetch(`${baseUrl}/`, {
+      method: "GET",
+      headers: { Accept: "application/json", Token: apiKey },
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    if (!res.ok) return apiResourcesCacheSet;
+
+    const data = await res.json().catch(() => null);
+    const list = Array.isArray(data?.resources) ? data.resources : [];
+    const set = new Set(
+      list.map((x) => String(x || "").trim()).filter(Boolean),
+    );
+
+    if (set.size) {
+      apiResourcesCacheSet = set;
+      saveApiResourcesCacheForBase(baseUrl, set);
+
+      let missingChanged = false;
+      for (const resourceName of Array.from(apiMissingResourcesSet)) {
+        if (set.has(resourceName)) {
+          apiMissingResourcesSet.delete(resourceName);
+          missingChanged = true;
+        }
+      }
+      if (missingChanged) {
+        saveApiMissingResourcesCacheForBase(baseUrl, apiMissingResourcesSet);
+      }
+    }
+
+    return apiResourcesCacheSet;
+  } catch {
+    return apiResourcesCacheSet;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function normalizeApiResourceName(name) {
+  const raw = String(name || "").trim();
+  if (!raw) return "";
+  return raw.split("/").filter(Boolean)[0] || "";
+}
+
+function markApiResourceMissing(resourceName) {
+  const normalized = normalizeApiResourceName(resourceName);
+  if (!normalized) return;
+  if (apiMissingResourcesSet.has(normalized)) return;
+  apiMissingResourcesSet.add(normalized);
+  saveApiMissingResourcesCacheForBase(
+    apiMissingResourcesBaseUrl,
+    apiMissingResourcesSet,
+  );
+}
+
+async function apiHasResources(requiredResources = [], opts = {}) {
+  const required = Array.from(
+    new Set(
+      (Array.isArray(requiredResources) ? requiredResources : [])
+        .map(normalizeApiResourceName)
+        .filter(Boolean),
+    ),
+  );
+
+  if (!required.length) {
+    return { known: false, ok: true, missing: [] };
+  }
+
+  const resourcesSet = await getApiResourcesSet(opts);
+  if (!resourcesSet || !resourcesSet.size) {
+    // Fail-open: si no pudimos descubrir recursos, no bloqueamos features.
+    return { known: false, ok: true, missing: [] };
+  }
+
+  const missing = required.filter((r) => !resourcesSet.has(r));
+  return { known: true, ok: missing.length === 0, missing };
+}
+
+async function isApiFeatureAvailable(featureKey, opts = {}) {
+  const key = String(featureKey || "").trim();
+  const required = API_FEATURE_REQUIREMENTS[key] || [];
+  return await apiHasResources(required, opts);
+}
+
+async function canCallApiResource(resourceName, opts = {}) {
+  const normalized = normalizeApiResourceName(resourceName);
+  if (!normalized) return { known: false, ok: true, missing: [] };
+
+  await getApiResourcesSet(opts);
+
+  if (apiMissingResourcesSet?.has?.(normalized)) {
+    return { known: true, ok: false, missing: [normalized] };
+  }
+
+  if (!apiResourcesCacheSet || !apiResourcesCacheSet.size) {
+    return { known: false, ok: true, missing: [] };
+  }
+
+  if (!apiResourcesCacheSet.has(normalized)) {
+    markApiResourceMissing(normalized);
+    return { known: true, ok: false, missing: [normalized] };
+  }
+
+  return { known: true, ok: true, missing: [] };
 }
 
 async function fetchFormasPagoActivas(opts = {}) {
@@ -10928,14 +11236,10 @@ if (cashOpenCancelBtn) {
 
     hideCashOpenDialog();
 
-    // Si estábamos abriendo caja y aún no hay caja abierta,
-    // dejamos TPV y agente visualmente como "---"
-    if (cashDialogMode === "open" && !cashSession.open) {
-      currentTerminal = null;
-      currentAgent = null;
-      if (terminalNameEl) terminalNameEl.textContent = "---";
-      if (agentNameEl) agentNameEl.textContent = "---";
-    }
+    // Mantener terminal/agente seleccionados al cancelar apertura.
+    if (terminalNameEl)
+      terminalNameEl.textContent = currentTerminal?.name || "---";
+    if (agentNameEl) agentNameEl.textContent = currentAgent?.name || "---";
   };
 }
 
@@ -11347,145 +11651,166 @@ async function ensureTerminalAgentDefaults({ refresh = false } = {}) {
 
 // Botón abrir/cerrar caja (header "Caja")
 
+let __cashHeaderActionInFlight = false;
+
 async function handleCashHeaderAction(opts = {}) {
   const { auto = false } = opts;
 
-  // 0) Bloqueado
-  if (TPV_STATE.locked) {
-    showMessageModal(
-      "Acceso bloqueado",
-      "Tu cuenta de TPV está desactivada. Contacta con soporte.",
-    );
+  if (__cashHeaderActionInFlight) {
+    if (!auto) {
+      toast("Procesando caja...", "info", "Caja");
+    }
     return false;
   }
 
-  // 1) Si NO hay empresa resuelta
-  if (!hasCompanyResolved()) {
-    await forceReconnectFlow();
-    if (!hasCompanyResolved()) return false;
-  }
+  __cashHeaderActionInFlight = true;
+  if (cashHeaderBtn) cashHeaderBtn.disabled = true;
 
-  // 1.5) Si seguimos offline
-  if (TPV_STATE.offline) {
-    try {
-      await loadDataFromApi({ refresh: true });
-    } catch {}
-
-    if (TPV_STATE.offline) {
-      if (!auto) {
-        toast(
-          "Sin conexión. Reintenta cuando tengas internet.",
-          "warn",
-          "Caja",
-        );
-      }
+  try {
+    // 0) Bloqueado
+    if (TPV_STATE.locked) {
+      showMessageModal(
+        "Acceso bloqueado",
+        "Tu cuenta de TPV está desactivada. Contacta con soporte.",
+      );
       return false;
     }
-  }
 
-  // 2) Datos base
-  await ensureDataLoaded();
-
-  // 3) Login
-  if (!getLoginUser?.() && !localStorage.getItem("tpv_login_user")) {
-    const ok = await ensureLoginAutoOrPrompt();
-    if (!ok) return false;
-  }
-
-  // 4) Si caja abierta => si es automático, recuperar/salir sin abrir cierre
-  if (cashSession.open) {
-    if (auto) {
-      return true;
+    // 1) Si NO hay empresa resuelta
+    if (!hasCompanyResolved()) {
+      await forceReconnectFlow();
+      if (!hasCompanyResolved()) return false;
     }
 
-    const parkedCount = getScopedPendingParkedTickets(parkedTickets).length;
+    // 1.5) Si seguimos offline
+    if (TPV_STATE.offline) {
+      try {
+        await loadDataFromApi({ refresh: true });
+      } catch {}
 
-    // Releer valor efectivo por si el toggle cambió en opciones recientemente.
-    await loadAllowCloseWithParkedToggle();
+      if (TPV_STATE.offline) {
+        if (!auto) {
+          toast(
+            "Sin conexión. Reintenta cuando tengas internet.",
+            "warn",
+            "Caja",
+          );
+        }
+        return false;
+      }
+    }
 
-    if (parkedCount > 0) {
-      if (!allowCloseWithParkedTickets) {
-        await confirmModal(
+    // 2) Datos base
+    await ensureDataLoaded();
+
+    // 3) Login
+    if (!getLoginUser?.() && !localStorage.getItem("tpv_login_user")) {
+      const ok = await ensureLoginAutoOrPrompt();
+      if (!ok) return false;
+    }
+
+    // 4) Si caja abierta => si es automático, recuperar/salir sin abrir cierre
+    if (cashSession.open) {
+      if (auto) {
+        return true;
+      }
+
+      const parkedCount = getScopedPendingParkedTickets(parkedTickets).length;
+
+      // Releer valor efectivo por si el toggle cambió en opciones recientemente.
+      await loadAllowCloseWithParkedToggle();
+
+      if (parkedCount > 0) {
+        if (!allowCloseWithParkedTickets) {
+          await confirmModal(
+            "Tickets aparcados",
+            `Tienes ${parkedCount} ticket${parkedCount === 1 ? "" : "s"} aparcado${
+              parkedCount === 1 ? "" : "s"
+            }.\n\nAntes de cerrar la caja, recupera o elimina los tickets aparcados.`,
+          );
+          openParkedModal();
+          return false;
+        }
+
+        const okWithParked = await confirmModal(
           "Tickets aparcados",
           `Tienes ${parkedCount} ticket${parkedCount === 1 ? "" : "s"} aparcado${
             parkedCount === 1 ? "" : "s"
-          }.\n\nAntes de cerrar la caja, recupera o elimina los tickets aparcados.`,
+          }.\n\nSe conservarán para recuperarlos después.\n\n¿Cerrar caja de todos modos?`,
+          {
+            middleButtonText: "Revisar aparcados",
+            middleButtonResult: "parked",
+          },
         );
-        openParkedModal();
-        return false;
+
+        if (okWithParked === "parked") {
+          openParkedModal();
+          return false;
+        }
+        if (!okWithParked) return false;
+
+        closeWithParkedPreConfirmed = true;
       }
 
-      const okWithParked = await confirmModal(
-        "Tickets aparcados",
-        `Tienes ${parkedCount} ticket${parkedCount === 1 ? "" : "s"} aparcado${
-          parkedCount === 1 ? "" : "s"
-        }.\n\nSe conservarán para recuperarlos después.\n\n¿Cerrar caja de todos modos?`,
-        {
-          middleButtonText: "Revisar aparcados",
-          middleButtonResult: "parked",
-        },
-      );
-
-      if (okWithParked === "parked") {
-        openParkedModal();
-        return false;
-      }
-      if (!okWithParked) return false;
-
-      closeWithParkedPreConfirmed = true;
+      openCashOpenDialog("close");
+      return true;
     }
 
-    openCashOpenDialog("close");
-    return true;
-  }
+    // 5) Refrescar terminales/agentes
+    await refreshTerminalsAndAgents();
 
-  // 5) Refrescar terminales/agentes
-  await refreshTerminalsAndAgents();
+    if (!Array.isArray(terminals) || terminals.length === 0) {
+      if (!currentTerminal) {
+        setCurrentTerminal({ id: "demo", name: "TPV demo" });
+      }
 
-  if (!Array.isArray(terminals) || terminals.length === 0) {
+      cashResetUIForOpening();
+      cashWrapInputsWithSteppers();
+
+      cashOpenDialogShown = false;
+      await maybeOpenCashOrRecover();
+      return true;
+    }
+
+    await ensureTerminalAgentDefaults();
+
     if (!currentTerminal) {
-      setCurrentTerminal({ id: "demo", name: "TPV demo" });
+      if (!auto) {
+        showTerminalOverlay("session");
+      }
+      return false;
     }
 
-    cashResetUIForOpening();
-    cashWrapInputsWithSteppers();
+    const list = getAgentsForTerminalId(currentTerminal.id) || [];
+    if (!currentAgent && list.length > 0) {
+      currentAgent = list[0];
+      try {
+        localStorage.setItem(
+          "tpv_agent",
+          String(
+            currentAgent.codagente ||
+              currentAgent.id ||
+              currentAgent.nick ||
+              "",
+          ),
+        );
+      } catch {}
+
+      if (agentNameEl) {
+        agentNameEl.textContent =
+          currentAgent.name || currentAgent.nick || "---";
+      }
+
+      renderMainAgentBar?.();
+    }
 
     cashOpenDialogShown = false;
     await maybeOpenCashOrRecover();
     return true;
+  } finally {
+    __cashHeaderActionInFlight = false;
+    if (cashHeaderBtn) cashHeaderBtn.disabled = !!TPV_LOADING;
   }
-
-  await ensureTerminalAgentDefaults();
-
-  if (!currentTerminal) {
-    if (!auto) {
-      showTerminalOverlay("session");
-    }
-    return false;
-  }
-
-  const list = getAgentsForTerminalId(currentTerminal.id) || [];
-  if (!currentAgent && list.length > 0) {
-    currentAgent = list[0];
-    try {
-      localStorage.setItem(
-        "tpv_agent",
-        String(
-          currentAgent.codagente || currentAgent.id || currentAgent.nick || "",
-        ),
-      );
-    } catch {}
-
-    if (agentNameEl) {
-      agentNameEl.textContent = currentAgent.name || currentAgent.nick || "---";
-    }
-
-    renderMainAgentBar?.();
-  }
-
-  cashOpenDialogShown = false;
-  await maybeOpenCashOrRecover();
-  return true;
 }
 
 if (cashHeaderBtn) {
@@ -11907,8 +12232,8 @@ async function loadDataFromApi(opts = {}) {
       products = [];
     }
 
-    // Packs: se fuerza porque la carga principal ya salió bien
-    await warmupPacksData({ force: true }).catch(() => {});
+    // Packs: carga normal (no forzada) para evitar reintentos agresivos.
+    await warmupPacksData().catch(() => {});
 
     // ===== Terminales -> terminals =====
     terminals = Array.isArray(tpvTerminales)
@@ -12117,6 +12442,8 @@ async function refreshAllData() {
   try {
     setStatusText("Actualizando...");
     await loadDataFromApi({ refresh: true });
+    await warmupPacksData({ force: true }).catch(() => {});
+    await refreshTerminalsAndAgents();
 
     if (typeof renderMainAgentBar === "function") renderMainAgentBar();
     if (typeof renderCart === "function") renderCart();
@@ -13182,16 +13509,9 @@ async function pushGroupLinesToFS(enabled) {
   try {
     if (!currentTerminal?.id) return;
 
-    // Evita reemplazo completo del terminal en servidores donde PUT es destructivo.
-    try {
-      await apiWrite(`tpvterminales/${currentTerminal.id}`, "PATCH", {
-        grouplines: enabled ? 1 : 0,
-      });
-    } catch {
-      await apiWrite(`tpvterminales/${currentTerminal.id}`, "PUT", {
-        grouplines: enabled ? 1 : 0,
-      });
-    }
+    await updateTpvTerminalForm(currentTerminal.id, {
+      grouplines: enabled ? 1 : 0,
+    });
 
     console.log("✅ pushGroupLinesToFS ->", enabled);
   } catch (e) {
@@ -18848,6 +19168,13 @@ async function fetchApiResourceWithParams(resource, params = {}) {
   if (!cfg || !cfg.baseUrl || !cfg.apiKey)
     throw new Error("Config API no definida");
 
+  const availability = await canCallApiResource(resource, {});
+  if (availability.known && !availability.ok) {
+    throw new Error(
+      `Recurso no disponible en API: ${availability.missing?.[0] || resource}`,
+    );
+  }
+
   const base = cfg.baseUrl.replace(/\/+$/, "");
   const sp = new URLSearchParams();
 
@@ -18867,7 +19194,12 @@ async function fetchApiResourceWithParams(resource, params = {}) {
     throw new Error("API 429 (demasiadas peticiones). Espera unos minutos.");
   const data = await res.json().catch(() => null);
 
-  if (!res.ok) throw new Error(`HTTP ${res.status} en ${resource}`);
+  if (!res.ok) {
+    if (res.status === 404) {
+      markApiResourceMissing(resource);
+    }
+    throw new Error(`HTTP ${res.status} en ${resource}`);
+  }
   if (data && data.status === "error")
     throw new Error(data.message || `Error API en ${resource}`);
 
@@ -19293,15 +19625,33 @@ async function fetchProductoByReferencia(ref) {
 async function warmupPacksData(opts = {}) {
   const force = opts.force === true;
 
-  // Si la API no soporta endpoints de packs (404), evitamos reintentos ruidosos.
-  if (PACKS_STATE.apiUnsupported) {
-    return false;
-  }
+  // Si ya hay datos de packs y no se fuerza, evita peticiones innecesarias.
+  if (PACKS_STATE.ready && !force) return true;
+
+  // Si los endpoints están marcados como no soportados, solo reintenta al forzar.
+  if (PACKS_STATE.apiUnsupported && !force) return false;
 
   // Si estamos offline y no se ha forzado, no tocamos nada
   if (TPV_STATE?.offline && !force) {
     return false;
   }
+
+  // Validación genérica por recursos requeridos de la feature "packs".
+  try {
+    const availability = await isApiFeatureAvailable("packs", { force });
+    if (availability.known && !availability.ok) {
+      PACKS_STATE.apiUnsupported = true;
+      console.info(
+        `[PACKS] Recursos no declarados en /api/3/: ${availability.missing.join(", ")}. Se deshabilita precarga de packs.`,
+      );
+      return false;
+    }
+
+    // Si reaparecieron en recursos, limpiamos estado previo de no soportado.
+    if (availability.known && availability.ok && PACKS_STATE.apiUnsupported) {
+      PACKS_STATE.apiUnsupported = false;
+    }
+  } catch {}
 
   let packs = [];
   let lines = [];
@@ -19380,6 +19730,7 @@ async function warmupPacksData(opts = {}) {
   }
 
   PACKS_STATE.unsupportedFailCount = 0;
+  PACKS_STATE.apiUnsupported = false;
 
   // Construimos mapas temporales y solo si todo fue bien sustituimos el estado
   const nextPacksByOfferProductId = new Map();
@@ -21609,6 +21960,12 @@ window.addEventListener("keydown", async (e) => {
     } catch {}
     try {
       localStorage.removeItem("tpv_cached_tickets");
+    } catch {}
+    try {
+      localStorage.removeItem(API_RESOURCES_CACHE_KEY);
+      localStorage.removeItem(API_RESOURCES_CACHE_TS_KEY);
+      localStorage.removeItem(API_MISSING_RESOURCES_CACHE_KEY);
+      localStorage.removeItem(API_MISSING_RESOURCES_CACHE_TS_KEY);
     } catch {}
 
     // opcional: cualquier cache que uses
