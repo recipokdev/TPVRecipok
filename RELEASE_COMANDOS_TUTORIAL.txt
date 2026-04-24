@@ -1,6 +1,36 @@
 Version 3.2 - Tutorial Comandos Release/Test/Publish
 ------------------------------------------------------
 
+- FLUJO UNIFICADO EN 3 COMANDOS (STABLE/BETA)
+- Comando 1 (test completo + publicar patch): npm run ops:1 -- --channel stable
+- Comando 2 (incidente: bloquear + rollback/tag delete): npm run ops:2 -- --channel stable
+- Comando 3 (fix: test completo + publicar fix + desbloquear): npm run ops:3 -- --channel stable
+- Para beta usa el mismo comando cambiando canal:
+- npm run ops:1 -- --channel beta
+- npm run ops:2 -- --channel beta
+- npm run ops:3 -- --channel beta
+
+- COMANDOS BETA (COPIAR/PEGAR)
+- 1) Subir beta de prueba: npm run beta:patch
+- 2) Si sale mal (bloquear + rollback): npm run beta:incident
+- 3) Subir beta arreglada + limpiar bloqueos: npm run beta:fix
+- 4) Ver estado policy beta: npm run policy:show:beta
+
+- COMANDOS STABLE (COPIAR/PEGAR)
+- 1) Subir stable: npm run stable:patch
+- 2) Si sale mal (bloquear + rollback): npm run stable:incident
+- 3) Subir stable arreglada + limpiar bloqueos: npm run stable:fix
+- 4) Ver estado policy stable: npm run policy:show:stable
+
+- E2E (PRUEBA REAL DE UI)
+- Ejecutar E2E basico (transaccional por defecto): npm run test:e2e
+- Ejecutar E2E demo simplificado (online + writes + background): npm run test:e2e:demo
+- Ejecutar E2E demo + probes de resiliencia: npm run test:e2e:demo:resilience
+- Ejecutar todo (quick + smoke + e2e): npm run test:full
+- E2E contra slug demo real (PowerShell): $env:TPV_E2E_API_KEY="TU_TOKEN_DEMO"; $env:TPV_E2E_REQUIRE_ONLINE="1"; npm run test:e2e
+- E2E solo lectura (sin escrituras): $env:TPV_E2E_API_KEY="TU_TOKEN_DEMO"; $env:TPV_E2E_REQUIRE_ONLINE="1"; $env:TPV_E2E_ALLOW_WRITES="0"; npm run test:e2e
+- Nota E2E: por defecto no ejecuta probes de resiliencia para reducir carga de peticiones; activarlos con TPV_E2E_RUN_RESILIENCE=1.
+
 - CHULETA RAPIDA (20 segundos)
 - Stable patch (0.0.x): npm run release:patch
 - Stable minor (0.x.0): npm run release:minor
@@ -28,6 +58,21 @@ Version 3.2 - Tutorial Comandos Release/Test/Publish
 - Doctor beta (comprobacion): npm run policy:doctor:beta
 - Bootstrap stable (instala/prepara gh): npm run policy:bootstrap:stable
 - Bootstrap beta (instala/prepara gh): npm run policy:bootstrap:beta
+
+- ATAJOS BETA (menos comandos):
+- Subir beta patch: npm run beta:patch
+- Subir beta patch sin prompts: npm run beta:patch:auto
+- Marcar beta mala (auto): npm run beta:incident
+- Limpiar bloqueos beta (auto): npm run beta:recover
+- Publicar beta arreglada + limpiar bloqueos: npm run beta:fix
+
+- ATAJOS STABLE (menos comandos):
+- Subir stable patch: npm run stable:patch
+- Subir stable patch sin prompts (ejecuta npm run test = quick+smoke): npm run stable:patch:auto
+- Subir stable patch sin prompts con E2E demo previo: npm run stable:patch:auto:all
+- Marcar stable mala (auto): npm run stable:incident
+- Limpiar bloqueos stable (auto): npm run stable:recover
+- Publicar stable arreglada + limpiar bloqueos: npm run stable:fix
 
 - Regla mental:
 - release:* = estable (origin)

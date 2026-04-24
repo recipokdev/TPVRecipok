@@ -20,6 +20,9 @@ let lastCustomerState = null;
 let allowCustomerClose = false;
 let lastSecondInstanceUpdateCheckAt = 0;
 const scaleManager = new ScaleManager();
+const IS_E2E_BACKGROUND =
+  String(process.env.TPV_E2E || "") === "1" &&
+  String(process.env.TPV_E2E_BACKGROUND || "") === "1";
 
 const DEFAULT_UPDATE_POLICY_URLS = {
   stable:
@@ -75,6 +78,19 @@ function getChannelSafe() {
 }
 
 (function isolateUserDataPerChannel() {
+  const isE2E = String(process.env.TPV_E2E || "") === "1";
+  if (isE2E) {
+    const forcedPath = String(process.env.TPV_E2E_USER_DATA || "").trim();
+    if (forcedPath) {
+      app.setPath("userData", forcedPath);
+      return;
+    }
+
+    const oldPath = app.getPath("userData");
+    app.setPath("userData", oldPath + "-e2e");
+    return;
+  }
+
   const ch = getChannelSafe();
   if (ch !== "beta") return;
   const oldPath = app.getPath("userData");
@@ -89,9 +105,11 @@ if (!gotTheLock) {
     if (appIsInstallingUpdate) return;
 
     if (mainWin && !mainWin.isDestroyed()) {
-      if (mainWin.isMinimized()) mainWin.restore();
-      mainWin.show();
-      mainWin.focus();
+      if (!IS_E2E_BACKGROUND) {
+        if (mainWin.isMinimized()) mainWin.restore();
+        mainWin.show();
+        mainWin.focus();
+      }
     } else {
       createWindow();
     }
@@ -169,6 +187,7 @@ async function renderTicketPdf(html) {
 }
 
 function isKioskMode() {
+  if (IS_E2E_BACKGROUND) return false;
   try {
     const cfg = readCfg();
     return cfg.kioskMode !== false; // default true
@@ -229,6 +248,7 @@ function applyKioskMode(win, enabled) {
 function createWindow() {
   if (appIsInstallingUpdate) return;
   const isDev = !app.isPackaged;
+  const e2eBackground = IS_E2E_BACKGROUND;
   const kioskMode = isKioskMode();
 
   mainWin = new BrowserWindow({
@@ -240,9 +260,15 @@ function createWindow() {
       contextIsolation: true,
       preload: path.join(__dirname, "preload.js"),
       sandbox: false,
-      devTools: isDev,
+      devTools: isDev && !e2eBackground,
     },
   });
+
+  if (e2eBackground) {
+    try {
+      mainWin.setSkipTaskbar(false);
+    } catch (_) {}
+  }
 
   mainWin.setTitle(getWindowTitle());
 
@@ -295,12 +321,32 @@ function createWindow() {
   loadUI(mainWin);
 
   if (!app.isPackaged) {
-    mainWin.webContents.openDevTools({ mode: "right" }); // o "detach"
+    if (e2eBackground) {
+      mainWin.webContents.openDevTools({ mode: "detach", activate: false });
+    } else {
+      mainWin.webContents.openDevTools({ mode: "right" }); // o "detach"
+    }
   }
 
   mainWin.once("ready-to-show", () => {
     if (appIsInstallingUpdate) return;
     if (!mainWin || mainWin.isDestroyed()) return;
+
+    if (e2eBackground) {
+      try {
+        if (typeof mainWin.showInactive === "function") {
+          mainWin.showInactive();
+        } else {
+          mainWin.show();
+        }
+      } catch (_) {}
+
+      try {
+        mainWin.minimize();
+      } catch (_) {}
+
+      return;
+    }
 
     mainWin.show();
     // si NO es kiosk, maximiza al arrancar
@@ -889,6 +935,10 @@ async function waitForInternetAndApiGate() {
 let appIsInstallingUpdate = false;
 
 async function runAutoUpdateGate() {
+  if (IS_E2E_BACKGROUND) {
+    return { updatedOrReady: true };
+  }
+
   if (process.platform === "linux" && !process.env.APPIMAGE) {
     return { updatedOrReady: true };
   }
@@ -1927,6 +1977,7 @@ function pickCustomerDisplay() {
 }
 
 async function ensureCustomerWindow() {
+  if (IS_E2E_BACKGROUND) return null;
   if (!isCustomerDisplayEnabled()) return null;
   if (customerWin && !customerWin.isDestroyed()) return customerWin;
   if (customerCreating) return null;

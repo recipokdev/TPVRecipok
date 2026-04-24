@@ -2,13 +2,67 @@
 const { contextBridge, ipcRenderer } = require("electron");
 const { initTPVBootstrap } = require("./js/tpv/bootstrap.js");
 
+const TPV_E2E_MODE = String(process.env.TPV_E2E || "") === "1";
+const TPV_MODE = String(process.env.TPV_MODE || "").trim().toLowerCase();
+const tpvE2EPrintJobs = [];
+
+function pushE2EPrintJob(job) {
+  tpvE2EPrintJobs.push({
+    at: Date.now(),
+    ...job,
+  });
+}
+
+function safeRawPreview(bytes) {
+  try {
+    if (Array.isArray(bytes)) return Buffer.from(bytes).toString("utf8");
+    if (Buffer.isBuffer(bytes)) return bytes.toString("utf8");
+    return String(bytes || "");
+  } catch {
+    return "";
+  }
+}
+
 contextBridge.exposeInMainWorld("TPV_PRINT", {
-  listPrinters: () => ipcRenderer.invoke("printers:list"),
-  printTicket: ({ html, deviceName }) =>
-    ipcRenderer.invoke("ticket:print", { html, deviceName }),
-  printRaw: ({ bytes, deviceName }) =>
-    ipcRenderer.invoke("ticket:printRaw", { bytes, deviceName }),
+  listPrinters: () => {
+    if (TPV_E2E_MODE) {
+      return [{ name: "E2E Mock Printer", isDefault: true }];
+    }
+    return ipcRenderer.invoke("printers:list");
+  },
+  printTicket: ({ html, deviceName }) => {
+    if (TPV_E2E_MODE) {
+      pushE2EPrintJob({
+        type: "ticket",
+        deviceName: deviceName || "E2E Mock Printer",
+        payload: { html: String(html || "") },
+      });
+      return Promise.resolve({ ok: true, mocked: true, e2e: true });
+    }
+    return ipcRenderer.invoke("ticket:print", { html, deviceName });
+  },
+  printRaw: ({ bytes, deviceName }) => {
+    if (TPV_E2E_MODE) {
+      pushE2EPrintJob({
+        type: "raw",
+        deviceName: deviceName || "E2E Mock Printer",
+        payload: {
+          bytesLength: Array.isArray(bytes)
+            ? bytes.length
+            : Buffer.isBuffer(bytes)
+              ? bytes.length
+              : 0,
+          previewText: safeRawPreview(bytes),
+        },
+      });
+      return Promise.resolve({ ok: true, mocked: true, e2e: true });
+    }
+    return ipcRenderer.invoke("ticket:printRaw", { bytes, deviceName });
+  },
   openCashDrawer: async (deviceName) => {
+    if (TPV_E2E_MODE) {
+      return { ok: true, mocked: true, e2e: true, deviceName };
+    }
     return await ipcRenderer.invoke("tpv:openCashDrawer", { deviceName });
   },
 });
@@ -52,6 +106,21 @@ contextBridge.exposeInMainWorld("TPV_SETUP", {
 
 contextBridge.exposeInMainWorld("TPV_ENV", {
   platform: process.platform, // "linux" / "win32"
+  e2e: TPV_E2E_MODE,
+  mode: TPV_MODE,
+  e2eApiBaseUrl: String(process.env.TPV_E2E_BASE_URL || "").trim(),
+  e2eApiKey: String(process.env.TPV_E2E_API_KEY || "").trim(),
+  e2eRequireOnline: String(process.env.TPV_E2E_REQUIRE_ONLINE || "") === "1",
+  e2eAllowWrites: String(process.env.TPV_E2E_ALLOW_WRITES || "") === "1",
+});
+
+contextBridge.exposeInMainWorld("TPV_TEST", {
+  isE2E: TPV_E2E_MODE,
+  getPrintJobs: () => tpvE2EPrintJobs.slice(),
+  clearPrintJobs: () => {
+    tpvE2EPrintJobs.length = 0;
+    return { ok: true };
+  },
 });
 
 contextBridge.exposeInMainWorld("TPV_CFG", {

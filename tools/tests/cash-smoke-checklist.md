@@ -31,6 +31,23 @@ Use this checklist before every publish.
 - Confirm close and verify header returns to "Abrir caja".
 - Verify remote box id is cleared.
 
+## Cart and Payment Actions
+
+- Add products to cart and verify "Cobrar" button is enabled only when cart has items.
+- Complete a payment and verify ticket is generated and cart resets.
+- With empty cart, verify payment action is blocked.
+
+## Tickets Modal
+
+- Click "Tickets" button and verify tickets modal opens.
+- Verify at least one recent ticket can be opened/printed from modal when available.
+
+## Parked Tickets
+
+- With non-empty cart, click "Aparcar" and verify ticket is parked and cart is cleared.
+- With empty cart, verify "Aparcar" is blocked and does not create parked ticket.
+- Open "Aparcados" and verify parked ticket can be recovered into cart.
+
 ## Refresh
 
 - Change TPV-agent mapping in backend.
@@ -47,4 +64,5 @@ Use this checklist before every publish.
 
 - No blocked UI state after cancel/open/close actions.
 - No duplicated open/close actions from rapid clicks.
+- Payment, tickets modal and parked flows behave as expected.
 - No publish if `npm run test` fails.

@@ -104,6 +104,13 @@ mustContain(checklist, "Cash Smoke Checklist", "Cash checklist title present");
 mustContain(checklist, "Open cash", "Cash open steps documented");
 mustContain(checklist, "Close cash", "Cash close steps documented");
 mustContain(checklist, "Refresh", "Refresh behavior steps documented");
+mustContain(
+  checklist,
+  "Cart and Payment Actions",
+  "Payment flow checklist documented",
+);
+mustContain(checklist, "Tickets Modal", "Tickets modal checklist documented");
+mustContain(checklist, "Parked Tickets", "Parked flow checklist documented");
 
 if (process.exitCode) {
   console.error("\nSmoke tests failed.");
