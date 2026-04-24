@@ -1,1 +1,4 @@
-{ "channel": "beta" }
+{
+  "channel": "beta",
+  "updatePolicyUrl": "https://raw.githubusercontent.com/recipokdev/TPVRecipok/main/build/update-policy.beta.json"
+}

@@ -1,1 +1,4 @@
-{ "channel": "stable" }
+{
+  "channel": "stable",
+  "updatePolicyUrl": "https://raw.githubusercontent.com/recipokdev/TPVRecipok/main/build/update-policy.stable.json"
+}

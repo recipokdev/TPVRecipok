@@ -1,4 +1,29 @@
-// ===== Datos de ejemplo (fallback offline) =====
+// ============================================================
+// MAPA ESTRUCTURAL renderer.js (pre-modularizacion)
+// 01) Demo/fallback + bootstrap config global
+// 02) Estado runtime y sesion TPV
+// 03) Modo E2E / guardas de escritura remota
+// 04) Logging tecnico y utilidades de request tracing
+// 05) Guardas de cierre y estado UI protegido
+// 06) Referencias DOM base y overlays principales
+// 07) Carga de datos API + cache + reintentos/red
+// 08) Flujo carrito/aparcados/cobro/impresion
+// 09) Dialogos de opciones, terminales, familias, periféricos
+// 10) Inicializacion DOMContentLoaded y bootstrap general
+// ============================================================
+
+// SUBZONAS (2a pasada de zonificacion)
+// Z07.1 Recursos API y disponibilidad
+// Z07.2 Carga principal de catalogo/terminales
+// Z07.3 Caches locales de soporte operativo
+// Z08.1 Flujo de venta (carrito, cobro, aparcados)
+// Z08.2 Cola offline (enqueue + sync)
+// Z08.3 Caja (movimientos, logs, estado)
+// Z09.1 Opciones del TPV
+// Z09.2 Modales y teclados
+// Z09.3 Edicion avanzada (precio, devoluciones)
+
+// ===== [01] Datos de ejemplo (fallback offline) =====
 const demoCategories = [
   { id: "bebidas", name: "Bebidas", color: "#007bff" },
   { id: "bolleria", name: "Bollería", color: "#e67e22" },
@@ -16,7 +41,7 @@ const demoProducts = [
   { id: 7, name: "Varios 1", price: 2.0, category: "varios" },
   { id: 8, name: "Varios 2", price: 2.5, category: "varios" },
 ];
-// ===== Bootstrap de config global (evita modo demo por undefined) =====
+// ===== [01] Bootstrap de config global (evita modo demo por undefined) =====
 window.RECIPOK_API = window.RECIPOK_API || {
   baseUrl: "", // ej: https://plus.recipok.com/SLUG/api/3
   apiKey: "", // token
@@ -28,15 +53,7 @@ window.TPV_CONFIG = window.TPV_CONFIG || {
   resolverUrl: "", // ej: https://tu-dominio.com/clients.json
 };
 
-try {
-  const mode = localStorage.getItem("tpv_app_mode");
-  const path = String(window.location.pathname || "").toLowerCase();
-  const isIndexLike = path.endsWith("/index.html") || path.endsWith("\\index.html") || path.endsWith("index.html") || path === "/";
-  if (mode === "mesas" && isIndexLike) {
-    window.location.replace("mesas.html");
-  }
-} catch {}
-
+// ===== [02] Estado runtime principal =====
 // Estas son las que usará la app realmente (las podremos sobrescribir con la API)
 let categories = []; // familias (incluye raíz + hijas)
 let products = [];
@@ -46,6 +63,7 @@ let taxRatesByCode = {};
 
 // Para saber si ya hemos pintado la UI principal
 let mainUiRendered = false;
+let LAST_FULL_LOAD_AT = 0;
 
 // Filtro actual
 let selectedCategory = null; // id de familia simple
@@ -71,7 +89,7 @@ let parkedCounter = 0;
 // Índice del ticket aparcado actualmente cargado en el carrito
 let currentParkedTicketIndex = null;
 
-// ===== TPVs, agentes y caja =====
+// ===== [02] Estado operativo: TPVs, agentes y caja =====
 let terminals = [];
 let currentTerminal = null; // { id, name }
 
@@ -128,8 +146,46 @@ let customerMode = "CART";
 let customerThanksUntil = 0;
 let customerLastSale = null;
 
+// ===== [03] Soporte E2E y protección de escrituras remotas =====
+const TPV_E2E_MODE =
+  String(window.TPV_ENV?.mode || "").toLowerCase() === "demo" ||
+  !!window.TPV_ENV?.e2e;
+const TPV_E2E_ALLOW_WRITES = !!window.TPV_ENV?.e2eAllowWrites;
+
+function installE2ERemoteWriteGuard(baseUrl) {
+  if (!TPV_E2E_MODE || TPV_E2E_ALLOW_WRITES) return;
+  if (typeof window.__TPV_E2E_FETCH_GUARD_INSTALLED__ !== "undefined") return;
+
+  const targetBase = String(baseUrl || "").trim().replace(/\/+$/, "");
+  if (!targetBase) return;
+
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = async (input, init = {}) => {
+    const method = String(init?.method || "GET").toUpperCase();
+    const url =
+      typeof input === "string"
+        ? input
+        : input && typeof input.url === "string"
+          ? input.url
+          : "";
+
+    const isWrite = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
+    const isTarget = !!url && (url.startsWith(targetBase) || url.includes("/demo/api/"));
+
+    if (isWrite && isTarget) {
+      throw new Error(`[E2E_WRITE_BLOCKED] ${method} ${url}`);
+    }
+
+    return originalFetch(input, init);
+  };
+
+  window.__TPV_E2E_FETCH_GUARD_INSTALLED__ = true;
+}
+
 const TPV_DEBUG_LOGS = false;
 const BROKEN_PRODUCT_IMAGE_URLS = new Set();
+
+// ===== [04] Logging tecnico =====
 
 function logFeatureInfo(feature, action, details = {}) {
   const requestId = String(details?.requestId || "").trim();
@@ -176,8 +232,16 @@ function debugTrace(...args) {
 // ✅ lo que se verá mientras el carrito real esté vacío tras el cobro
 let customerDisplayOverride = null;
 
-// Estado para bloquear cierres
+// ===== [05] Guardas de cierre y protecciones de estado =====
 window.__TPV_GUARDS__ = () => {
+  if (TPV_E2E_MODE) {
+    return {
+      cashOpen: false,
+      parkedCount: 0,
+      allowCloseWithParked: true,
+    };
+  }
+
   const cashOpen = !!(cashSession && cashSession.open);
   const parkedCount = cashOpen
     ? Array.isArray(parkedTickets)
@@ -205,7 +269,7 @@ window.__TPV_GUARDS__ = () => {
   };
 };
 
-// ===== Referencias basicas =====
+// ===== [06] Referencias DOM base =====
 const searchInput = document.getElementById("searchInput");
 const searchClearBtn = document.getElementById("searchClearBtn");
 const searchKeyboardBtn = document.getElementById("searchKeyboardBtn");
@@ -237,11 +301,14 @@ const cashHeaderLabel = document.getElementById("cashHeaderLabel");
 
 const cashDirectTotalWrap = document.getElementById("cashDirectTotalWrap");
 const cashDirectTotalEl = document.getElementById("cashDirectTotal");
+const cashDirectTotalClearBtn = document.getElementById(
+  "cashDirectTotalClearBtn",
+);
 const cashDirectTotalKeyboardBtn = document.getElementById(
   "cashDirectTotalKeyboardBtn",
 );
 
-// ===== Movimientos de caja =====
+// ===== [08] Caja: movimientos manuales (entrada/salida) =====
 const cashMoveOverlay = document.getElementById("cashMoveOverlay");
 const cashMoveBtn = document.getElementById("cashMoveBtn");
 const cashMoveAmountEl = document.getElementById("cashMoveAmount");
@@ -264,11 +331,7 @@ const sumTotalSalesEl = document.getElementById("sumTotalSales");
 // Cliente actual (input del carrito)
 const cartClientInput = document.querySelector(".cart-client-input");
 
-// ===== Funciones auxiliares =====
-
-// ===============================
-// Log final cerrar caja Helpers
-// ===============================
+// ===== [04] Funciones auxiliares y logging de auditoria =====
 
 function cleanCajaLogValue(value) {
   return String(value || "")
@@ -315,7 +378,11 @@ function buildParkedManualDeleteLogLine(ticket) {
     .filter(Boolean)
     .join(" | ");
 
-  return buildCajaLogLineWith(getCajaLogCtx(), "BORRÓ APARCADO SIN COBRAR", extra);
+  return buildCajaLogLineWith(
+    getCajaLogCtx(),
+    "BORRÓ APARCADO SIN COBRAR",
+    extra,
+  );
 }
 
 function shouldShowParkedName(ticket) {
@@ -340,127 +407,7 @@ function buildCajaAutoLogText(lines) {
   return items.join("\n\n");
 }
 
-function buildClearCartLogLine(cartLines) {
-  const lines = Array.isArray(cartLines) ? cartLines : [];
-
-  const getQty = (it) => Number(it?.qty ?? it?.cantidad ?? 1) || 1;
-  const getPrice = (it) => {
-    const n = Number(it?.grossPrice ?? it?.price ?? 0);
-    return Number.isFinite(n) ? n : 0;
-  };
-  const getName = (it) =>
-    cleanCajaLogValue(
-      it?.name ||
-        it?.nombre ||
-        it?.descripcion ||
-        it?.productName ||
-        "Producto",
-    );
-
-  const totalLineas = lines.length;
-  const totalUnidades = lines.reduce((sum, it) => sum + getQty(it), 0);
-  const totalImporte = lines.reduce(
-    (sum, it) => sum + getQty(it) * getPrice(it),
-    0,
-  );
-
-  const preview = lines
-    .slice(0, 4)
-    .map((it) => `${getQty(it)}x ${getName(it)}`)
-    .join(", ");
-
-  const extraPreview = lines.length > 4 ? `, +${lines.length - 4} más` : "";
-
-  const extra = [
-    `Líneas: ${totalLineas}`,
-    `Uds: ${totalUnidades}`,
-    `Total: ${formatParkedAuditAmount(totalImporte)}`,
-    preview ? `Items: ${preview}${extraPreview}` : "",
-  ]
-    .filter(Boolean)
-    .join(" | ");
-
-  return buildCajaLogLineWith(getCajaLogCtx(), "VACIÓ CARRITO", extra);
-}
-
-function buildClearCartConfirmHtml(cartLines) {
-  const lines = Array.isArray(cartLines) ? cartLines : [];
-
-  const getQty = (it) => Number(it?.qty ?? it?.cantidad ?? 1) || 1;
-  const getPrice = (it) => {
-    const n = Number(it?.grossPrice ?? it?.price ?? 0);
-    return Number.isFinite(n) ? n : 0;
-  };
-  const getName = (it) =>
-    cleanCajaLogValue(
-      it?.name ||
-        it?.nombre ||
-        it?.descripcion ||
-        it?.productName ||
-        "Producto",
-    );
-
-  const totalLineas = lines.length;
-  const totalUnidades = lines.reduce((sum, it) => sum + getQty(it), 0);
-  const totalImporte = lines.reduce(
-    (sum, it) => sum + getQty(it) * getPrice(it),
-    0,
-  );
-
-  const rowsHtml = lines
-    .map((it) => {
-      const qty = getQty(it);
-      const unitPrice = getPrice(it);
-      const lineTotal = qty * unitPrice;
-      const name = escapeHtmlForModal(getName(it));
-
-      return `
-        <tr>
-          <td class="name">${name}</td>
-          <td class="num">${qty}</td>
-          <td class="num">${escapeHtmlForModal(formatParkedAuditAmount(unitPrice))}</td>
-          <td class="num">${escapeHtmlForModal(formatParkedAuditAmount(lineTotal))}</td>
-        </tr>
-      `;
-    })
-    .join("");
-
-  return `
-    <div class="clear-cart-confirm">
-      <div class="clear-cart-lead">
-        Se eliminarán todos los productos del carrito.
-      </div>
-
-      <div class="clear-cart-table-wrap">
-        <table class="clear-cart-table">
-          <thead>
-            <tr>
-              <th>Producto</th>
-              <th class="num">Uds.</th>
-              <th class="num">Precio</th>
-              <th class="num">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rowsHtml}
-          </tbody>
-        </table>
-      </div>
-
-      <div class="clear-cart-summary">
-        <span>Líneas: ${totalLineas}</span>
-        <span>Unidades: ${totalUnidades}</span>
-        <span>Total: ${escapeHtmlForModal(formatParkedAuditAmount(totalImporte))}</span>
-      </div>
-
-      <div class="clear-cart-question">¿Continuar?</div>
-    </div>
-  `;
-}
-
-// ===============================
-// Aparcar o Reservar en Plesk, obtener datos dinamicamente desde plesk
-// ===============================
+// ===== [08] Aparcados/reservas remotas + sincronizacion =====
 
 let REMOTE_PARKED_RESERVATIONS = [];
 let REMOTE_RESERVED_BY_PRODUCT = new Map();
@@ -473,6 +420,10 @@ const TERMINAL_AGENT_CACHE_KEY = "tpv_cachedTerminalAgent_v1";
 const TERMINAL_AGENT_CACHE_TS_KEY = "tpv_cachedTerminalAgent_ts_v1";
 const BOOT_SNAPSHOT_CACHE_KEY = "tpv_boot_snapshot_v1";
 const BOOT_SNAPSHOT_CACHE_TS_KEY = "tpv_boot_snapshot_ts_v1";
+const API_RESOURCES_CACHE_KEY = "tpv_api_resources_cache_v1";
+const API_RESOURCES_CACHE_TS_KEY = "tpv_api_resources_ts_v1";
+const API_MISSING_RESOURCES_CACHE_KEY = "tpv_api_missing_resources_cache_v1";
+const API_MISSING_RESOURCES_CACHE_TS_KEY = "tpv_api_missing_resources_ts_v1";
 
 let __parkedSyncDrainInFlight = false;
 
@@ -621,9 +572,7 @@ async function confirmIfCartExceedsVisibleStock(cartSnapshot) {
   return true;
 }
 
-// ===============================
-// Actualizar datos cada cierto tiempo automaticamente
-// ===============================
+// ===== [07] Refrescos automaticos de datos (stock, etc.) =====
 
 let __stockRefreshTimer = null;
 let __stockRefreshInFlight = false;
@@ -663,52 +612,86 @@ function stopProductsStockAutoRefresh() {
   }
 }
 
-// ===============================
-// Comprobar configuracion guardada
-// ===============================
+// ===== [07] Configuracion persistida y validaciones base =====
 
-function isFilled(value) {
-  return value !== null && value !== undefined && String(value).trim() !== "";
-}
-
-async function getStoredCompanyConfig() {
-  const [
-    companyEmailNew,
-    companyBaseUrlNew,
-    companyApiKeyNew,
-    companyEmailOld,
-    companyBaseUrlOld,
-    companyApiKeyOld,
-  ] = await Promise.all([
-    window.TPV_CFG.get("company.email"),
-    window.TPV_CFG.get("company.baseUrl"),
-    window.TPV_CFG.get("company.apiKey"),
-    window.TPV_CFG.get("companyEmail"),
-    window.TPV_CFG.get("baseUrl"),
-    window.TPV_CFG.get("apiKey"),
-  ]);
-
-  const email = String(companyEmailNew || companyEmailOld || "").trim();
-  const baseUrl = String(companyBaseUrlNew || companyBaseUrlOld || "").trim();
-  const apiKey = String(companyApiKeyNew || companyApiKeyOld || "").trim();
-
-  return {
-    email,
-    baseUrl,
-    apiKey,
-    hasEmail: isFilled(email),
-    isComplete: isFilled(email) && isFilled(baseUrl) && isFilled(apiKey),
-  };
-}
-
-// ===============================
-// Retry de conexión / sin demo automático
-// ===============================
+// ===== [07] Estrategia de reintentos/red + cooldown 429 =====
 const DEMO_FALLBACK_ENABLED = false;
 const API_RETRY_MS = 5000;
+const API_429_COOLDOWN_MS = 30000;
 
 let apiRetryTimer = null;
 let apiConnectionWasLost = false;
+let api429BlockedUntil = 0;
+let api429LastWarnAt = 0;
+
+function getApi429RemainingMs() {
+  return Math.max(0, api429BlockedUntil - Date.now());
+}
+
+function isApi429CooldownActive() {
+  return getApi429RemainingMs() > 0;
+}
+
+function parseRetryAfterMs(retryAfterHeader) {
+  const raw = String(retryAfterHeader || "").trim();
+  if (!raw) return 0;
+
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return Math.max(0, Math.round(seconds * 1000));
+  }
+
+  const at = Date.parse(raw);
+  if (Number.isFinite(at)) {
+    return Math.max(0, at - Date.now());
+  }
+
+  return 0;
+}
+
+function buildApi429Error() {
+  const seconds = Math.max(1, Math.ceil(getApi429RemainingMs() / 1000));
+  return new Error(
+    `API 429 (demasiadas peticiones). Reintentando automaticamente en ${seconds}s.`,
+  );
+}
+
+function triggerApi429Cooldown(source = "api", retryAfterHeader = "") {
+  const cooldownMs = Math.max(
+    API_429_COOLDOWN_MS,
+    parseRetryAfterMs(retryAfterHeader),
+  );
+  const nextUntil = Date.now() + cooldownMs;
+  if (nextUntil > api429BlockedUntil) {
+    api429BlockedUntil = nextUntil;
+  }
+
+  enterApiRetryMode("API con bloqueo temporal (429). Esperando para reintentar...", {
+    lock: false,
+    scheduleRetry: false,
+    showOverlay: false,
+  });
+
+  const now = Date.now();
+  if (now - api429LastWarnAt > 10000) {
+    api429LastWarnAt = now;
+    const seconds = Math.max(1, Math.ceil(getApi429RemainingMs() / 1000));
+    console.warn(`[API429] Cooldown activo ${seconds}s (${source})`);
+  }
+}
+
+function throwIfApi429Cooldown(source = "api") {
+  if (!isApi429CooldownActive()) return;
+
+  const now = Date.now();
+  if (now - api429LastWarnAt > 10000) {
+    api429LastWarnAt = now;
+    const seconds = Math.max(1, Math.ceil(getApi429RemainingMs() / 1000));
+    console.warn(`[API429] Saltando llamada durante cooldown ${seconds}s (${source})`);
+  }
+
+  throw buildApi429Error();
+}
 
 function clearApiRetryTimer() {
   if (apiRetryTimer) {
@@ -773,11 +756,11 @@ function exitApiRetryMode() {
     toast("Conexión con Recipok restablecida.", "success");
     apiConnectionWasLost = false;
   }
+
+  api429BlockedUntil = 0;
 }
 
-// ===============================
-// Input directo al abrir o cerrar caja
-// ===============================
+// ===== [08] Flujo de caja: input directo apertura/cierre =====
 
 function parseCashDirectAmount(value) {
   const raw = String(value || "")
@@ -801,6 +784,7 @@ function clearCashBreakdownInputsSilently() {
   const inputs = cashOpenOverlay.querySelectorAll(".cash-hidden-input");
   inputs.forEach((inp) => {
     inp.value = "0";
+    syncCashStepperClearButton(inp);
   });
 
   cashOpenOverlay.querySelectorAll(".cash-qty").forEach((s) => {
@@ -841,6 +825,7 @@ function applyCashDirectTotal(rawValue) {
   if (cashDirectTotalEl) {
     cashDirectTotalEl.value = formatCashDirectAmount(total);
   }
+  syncCashDirectClearButtonVisibility();
 
   // 4) Refrescar total principal
   if (cashOpenTotalEl) {
@@ -853,21 +838,101 @@ function applyCashDirectTotal(rawValue) {
   }
 }
 
+function snapshotCashBreakdownState() {
+  const items = [];
+  if (cashOpenOverlay) {
+    const inputs = cashOpenOverlay.querySelectorAll(".cash-hidden-input");
+    inputs.forEach((inp) => {
+      const denom = String(inp.dataset.denom || "");
+      const qty = Math.max(0, parseInt(inp.value || "0", 10) || 0);
+      if (!denom) return;
+      items.push({ denom, qty });
+    });
+  }
+
+  const total =
+    cashDialogMode === "open"
+      ? Number(cashSession?.openingTotal || 0)
+      : Number(cashSession?.closingTotal || 0);
+
+  return {
+    mode: cashDialogMode,
+    total,
+    items,
+  };
+}
+
+function restoreCashBreakdownState(snapshot) {
+  if (!snapshot) return;
+
+  if (cashOpenOverlay) {
+    const byDenom = new Map(
+      (Array.isArray(snapshot.items) ? snapshot.items : []).map((it) => [
+        String(it?.denom || ""),
+        Math.max(0, parseInt(it?.qty || "0", 10) || 0),
+      ]),
+    );
+
+    const inputs = cashOpenOverlay.querySelectorAll(".cash-hidden-input");
+    inputs.forEach((inp) => {
+      const denom = String(inp.dataset.denom || "");
+      const qty = byDenom.get(denom) || 0;
+      inp.value = String(qty);
+    });
+  }
+
+  const hasBreakdown = (
+    Array.isArray(snapshot.items) ? snapshot.items : []
+  ).some((it) => Number(it?.qty || 0) > 0);
+
+  if (hasBreakdown) {
+    updateCashOpenTotal();
+  } else {
+    applyCashDirectTotal(Number(snapshot.total || 0));
+  }
+}
+
+function openCashDirectTotalNumPad() {
+  const initialValue = cashDirectTotalEl?.value || "0";
+  const snapshot = snapshotCashBreakdownState();
+
+  openNumPad(
+    initialValue,
+    (value, meta = {}) => {
+      const phase = String(meta?.phase || "");
+
+      // Evita live-change en "Importe directo": solo aplicar en OK.
+      if (phase === "preview") return;
+
+      // Al cancelar, restauramos exactamente lo que había antes de abrir teclado.
+      if (phase === "cancel") {
+        restoreCashBreakdownState(snapshot);
+        return;
+      }
+
+      const safeValue =
+        Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+      applyCashDirectTotal(safeValue);
+    },
+    "Importe directo",
+    "cash",
+  );
+}
+
+function syncCashDirectClearButtonVisibility() {
+  if (!cashDirectTotalClearBtn || !cashDirectTotalEl) return;
+
+  const total = parseCashDirectAmount(cashDirectTotalEl.value);
+  const visible = Number(total || 0) > 0;
+  cashDirectTotalClearBtn.classList.toggle("hidden", !visible);
+}
+
 function bindCashDirectTotalInput() {
   if (cashDirectTotalKeyboardBtn && !cashDirectTotalKeyboardBtn.dataset.bound) {
     cashDirectTotalKeyboardBtn.dataset.bound = "1";
 
     cashDirectTotalKeyboardBtn.onclick = () => {
-      openNumPad(
-        cashDirectTotalEl?.value || "0",
-        (value) => {
-          const safeValue =
-            Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
-          applyCashDirectTotal(safeValue);
-        },
-        "Importe directo",
-        "cash",
-      );
+      openCashDirectTotalNumPad();
     };
   }
 
@@ -875,23 +940,28 @@ function bindCashDirectTotalInput() {
     cashDirectTotalEl.dataset.bound = "1";
 
     cashDirectTotalEl.onclick = () => {
-      openNumPad(
-        cashDirectTotalEl?.value || "0",
-        (value) => {
-          const safeValue =
-            Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
-          applyCashDirectTotal(safeValue);
-        },
-        "Importe directo",
-        "cash",
-      );
+      openCashDirectTotalNumPad();
     };
   }
+
+  if (cashDirectTotalClearBtn && !cashDirectTotalClearBtn.dataset.bound) {
+    cashDirectTotalClearBtn.dataset.bound = "1";
+
+    cashDirectTotalClearBtn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+    });
+
+    cashDirectTotalClearBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      applyCashDirectTotal(0);
+    });
+  }
+
+  syncCashDirectClearButtonVisibility();
 }
 
-// ===============================
-// ledger storage (guardar metodos de pago en local)
-// ===============================
+// ===== [08] Caja: ledger local de metodos de pago =====
 
 function getCashLedgerStorageKey(cajaId) {
   const id = Number(cajaId || 0) || 0;
@@ -1008,61 +1078,7 @@ function appendPaymentsToCashLedger({
   cashSession.paymentLedger = next;
 }
 
-function buildPaymentsByMethodFromLedger(cajaId) {
-  const id = Number(cajaId || 0) || 0;
-  const ledger = loadCashLedger(id);
-  const map = {};
-
-  for (const row of ledger) {
-    const code =
-      String(row?.method || "")
-        .trim()
-        .toUpperCase() || "—";
-
-    const amount = Number(row?.amount || 0);
-    const isRefund = amount < 0;
-
-    if (!map[code]) {
-      map[code] = {
-        code,
-        label: String(row?.label || code).trim() || code,
-
-        total: 0,
-        count: 0,
-
-        salesTotal: 0,
-        refundTotal: 0,
-        salesCount: 0,
-        refundCount: 0,
-        editCount: 0,
-      };
-    }
-
-    const m = map[code];
-
-    if (row?.label && String(row.label).trim()) {
-      m.label = String(row.label).trim();
-    }
-
-    m.total += amount;
-
-    if (isRefund) {
-      m.refundTotal += Math.abs(amount);
-      m.refundCount += 1;
-    } else {
-      m.salesTotal += amount;
-      m.salesCount += 1;
-    }
-
-    m.count = m.salesCount + m.refundCount + m.editCount;
-  }
-
-  return map;
-}
-
-// ===============================
-// Opciones de Color a las familias(grupos)
-// ===============================
+// ===== [09] Opciones: colores de familias/grupos =====
 
 const FAMILY_COLORS_CFG_KEY = "ui.familyColors";
 
@@ -1138,9 +1154,7 @@ function normalizeHexColor(hex) {
   return "#ffffff";
 }
 
-// ===============================
-// Opciones de pantalla del cliente en opciones
-// ===============================
+// ===== [09] Opciones: pantalla de cliente =====
 async function loadCustomerDisplayToggle() {
   const el = document.getElementById("customerDisplayToggle");
   if (!el || !window.TPV_CUSTOMER_CTRL?.getEnabled) return;
@@ -1358,9 +1372,7 @@ function bindCustomerDisplayToggleOnce() {
   });
 }
 
-// ===============================
-// Opciones de Terminal, elegir grupos ocultos para cada terminal
-// ===============================
+// ===== [09] Opciones: visibilidad de familias por terminal =====
 
 const TERMINAL_FAMILY_HIDDEN_CFG_KEY = "ui.terminalFamilyHidden";
 
@@ -1792,7 +1804,19 @@ function getTerminalModeFromMap(modeMap, terminalId) {
   if (!key) return "all";
 
   const raw = modeMap && typeof modeMap === "object" ? modeMap[key] : undefined;
-  return raw === "filtered" ? "filtered" : "all";
+
+  // Primera vez (sin config guardada): mostrar todos activado por defecto.
+  if (typeof raw === "undefined" || raw === null || raw === "") return "all";
+
+  // Valores actuales
+  if (raw === "filtered" || raw === "all") return raw;
+
+  // Compatibilidad con formatos legacy (booleanos / numéricos / strings).
+  const normalized = String(raw).trim().toLowerCase();
+  if (normalized === "false" || normalized === "0") return "filtered";
+  if (normalized === "true" || normalized === "1") return "all";
+
+  return "all";
 }
 
 function getTerminalModeSync(terminalId) {
@@ -1810,9 +1834,7 @@ function renderTerminalFamiliesModeUi() {
   toggle.checked = mode === "all";
 }
 
-// ===============================
-// Failsafe, agente tiene que estar siempre asignado.
-// ===============================
+// ===== [08] Guardas operativas: agente obligatorio para cobrar =====
 function hasAssignedAgent() {
   return !!(currentAgent && String(currentAgent.codagente || "").trim());
 }
@@ -1854,7 +1876,7 @@ function updatePayButtonEnabledState() {
     return;
   }
 
-  const hasCart = !!(cart && cart.length);
+  const hasCart = hasVisibleCartLines();
   const hasCaja = !!cashSession?.open;
   const hasTpv = !!currentTerminal?.id;
   const hasAgent = hasAssignedAgent();
@@ -1927,9 +1949,7 @@ if (agentMissingBadgeEl) {
   });
 }
 
-// ===============================
-// Click en nombre del terminal (cambio rápido SOLO terminal)
-// ===============================
+// ===== [08] UX operativa: cambio rapido de terminal =====
 function setTerminalNameClickable(isClickable, isLoading = false) {
   if (!terminalNameEl) return;
 
@@ -1937,11 +1957,11 @@ function setTerminalNameClickable(isClickable, isLoading = false) {
 
   if (enabled) {
     terminalNameEl.style.cursor = "pointer";
-    terminalNameEl.style.textDecoration = "underline";
+    terminalNameEl.style.textDecoration = "none";
     terminalNameEl.title = "Cambiar terminal";
   } else {
     terminalNameEl.style.cursor = "";
-    terminalNameEl.style.textDecoration = "";
+    terminalNameEl.style.textDecoration = "none";
     terminalNameEl.title = isLoading
       ? "Disponible cuando finalice la carga"
       : "";
@@ -2359,8 +2379,8 @@ async function updateTpvTerminalForm(idtpv, patch) {
   const body = toFormUrlEncoded(patch || {});
   if (!body) throw new Error("Patch vacío");
 
-  const res = await fetch(url, {
-    method: "PUT",
+  let res = await fetch(url, {
+    method: "PATCH",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
@@ -2368,6 +2388,39 @@ async function updateTpvTerminalForm(idtpv, patch) {
     },
     body,
   });
+
+  // Compatibilidad: algunas instalaciones no aceptan PATCH en este recurso.
+  // En fallback evitamos PUT parcial destructivo: primero leemos el documento
+  // actual y hacemos PUT con merge completo.
+  if (res.status === 404 || res.status === 405) {
+    let mergedBody = body;
+    try {
+      const currentRaw = await apiRead(`tpvterminales/${idtpv}`);
+      const current =
+        currentRaw?.doc && typeof currentRaw.doc === "object"
+          ? currentRaw.doc
+          : currentRaw?.data && typeof currentRaw.data === "object"
+            ? currentRaw.data
+            : currentRaw && typeof currentRaw === "object"
+              ? currentRaw
+              : {};
+
+      const merged = { ...current, ...(patch || {}) };
+      mergedBody = toFormUrlEncoded(merged);
+    } catch {
+      // Si no podemos leer el actual, mantenemos fallback con patch mínimo.
+    }
+
+    res = await fetch(url, {
+      method: "PUT",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        Token: cfg.apiKey,
+      },
+      body: mergedBody,
+    });
+  }
 
   if (res.status === 429) throw new Error("API 429 (demasiadas peticiones)");
 
@@ -2582,13 +2635,6 @@ async function maybeRefreshTerminalDefaultCustomer(
 /* Fin Cambiar Clientes */
 /*----------------------*/
 
-function _normTxt(s) {
-  return String(s || "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function isPackChildForPrint(l) {
   // 1) si viene meta desde carrito
   if (l?.meta?.includedInPack) return true;
@@ -2599,15 +2645,6 @@ function isPackChildForPrint(l) {
   // 3) fallback por texto (por si viene de FS reconstruido)
   const d = String(l?.descripcion || l?.desc || "").trim();
   return d.startsWith("↳") || d.startsWith("└") || d.startsWith("↓");
-}
-
-function isPackParentForPrint(l) {
-  if (l?.meta?.isPackOffer) return true;
-  if (l?.__isPackParent) return true;
-
-  // fallback por texto (si en algún momento lo marcas)
-  const d = String(l?.descripcion || "").toLowerCase();
-  return d.includes("pack") && d.includes("oferta");
 }
 
 function customerSetMode(mode, opts = {}) {
@@ -2801,7 +2838,7 @@ function renderCashIdChip() {
 
   if (open && id) {
     el.style.display = "";
-    el.textContent = ` | Caja: ${id}`;
+    el.textContent = `Caja ${id}`;
   } else {
     el.style.display = "none";
     el.textContent = "";
@@ -3064,15 +3101,6 @@ async function renderAppVersion() {
   } catch {}
 }
 
-function getFsApi() {
-  const api = window.fsApi;
-  if (!api)
-    throw new Error(
-      "fsApi no inicializada (window.fsApi vacío). ¿se ejecutó bootstrap?",
-    );
-  return api;
-}
-
 function isFalseFlag(v) {
   return v === false || v === 0 || v === "0" || v === "false";
 }
@@ -3190,18 +3218,22 @@ function syncCashClosedUiState() {
       : "Disponible solo con la caja abierta";
   }
 
-  const bottomActionIds = [
-    "clearCartBtn",
-    "ticketsListBtn",
-    "parkBtn",
-    "parkedListBtn",
-    "payBtn",
-  ];
+  const bottomActionIds = ["clearCartBtn", "ticketsListBtn", "parkedListBtn"];
 
   bottomActionIds.forEach((id) => {
     const btn = document.getElementById(id);
     if (btn) btn.disabled = !cashOpen;
   });
+
+  if (!cashOpen) {
+    if (parkBtn) parkBtn.disabled = true;
+    const payBtnEl = document.getElementById("payBtn");
+    if (payBtnEl) payBtnEl.disabled = true;
+  } else {
+    // No pisar la lógica real de estado (carrito/agent/login).
+    refreshAgentGuardUI?.();
+    refreshParkButtonUI?.();
+  }
 
   const badge = document.getElementById("parkedCountBadge");
   if (!badge) return;
@@ -3217,7 +3249,7 @@ function syncCashClosedUiState() {
   badge.textContent = String(pendingCount);
 }
 
-// ===== Categorías (familias) =====
+// ===== [08] UI venta: categorias/familias =====
 function renderCategories() {
   debugTrace("[TRACE] renderCategories()");
 
@@ -3365,7 +3397,7 @@ function renderCategories() {
   });
 }
 
-// ===== Productos =====
+// ===== [08] UI venta: rejilla de productos =====
 function formatProductStock(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return "—";
@@ -3624,7 +3656,7 @@ function eur2(n) {
   );
 }
 
-// ===== Buscador =====
+// ===== [08] UI venta: buscador =====
 if (searchInput) {
   searchInput.addEventListener("input", () => {
     searchTerm = searchInput.value || "";
@@ -3640,7 +3672,7 @@ if (searchClearBtn) {
   };
 }
 
-// ===== Carrito =====
+// ===== [08] UI venta: carrito =====
 function makeLineId() {
   return "L" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
@@ -4158,9 +4190,7 @@ function renderCart() {
   let total = 0;
 
   // ✅ UI: solo pintamos líneas NO-hijas
-  const uiLines = (Array.isArray(cart) ? cart : []).filter((line) => {
-    return !isPackChildLine(line);
-  });
+  const uiLines = getVisibleCartLines(cart);
 
   uiLines.forEach((item) => {
     const unitPrice = getUnitGross(item);
@@ -4317,6 +4347,7 @@ async function getRememberedLoginUser() {
 function updateSessionLockUi() {
   const locked = !hasActiveLoginSession() && !LOGIN_ACTIVE;
   document.body.classList.toggle("session-locked", locked);
+  const companyReady = hasCompanyResolved();
 
   if (mainAgentBar) {
     mainAgentBar.classList.toggle("session-agentbar-hidden", locked);
@@ -4345,11 +4376,39 @@ function updateSessionLockUi() {
     const btn = hint.querySelector("#sessionLockHintBtn");
     btn?.addEventListener("click", async () => {
       if (TPV_LOADING) return;
+
+      if (!hasCompanyResolved()) {
+        const okSetup = await forceReconnectFlow?.();
+        if (okSetup && hasCompanyResolved()) {
+          const okLoginAfterSetup = await openLoginModal();
+          if (okLoginAfterSetup && hasActiveLoginSession()) {
+            updateSessionLockUi();
+          }
+        } else {
+          updateSessionLockUi();
+        }
+        return;
+      }
+
       const ok = await openLoginModal();
       if (ok && hasActiveLoginSession()) {
         updateSessionLockUi();
       }
     });
+  }
+
+  if (hint) {
+    const titleEl = hint.querySelector(".session-lock-hint-title");
+    const btnEl = hint.querySelector("#sessionLockHintBtn");
+    if (titleEl && btnEl) {
+      if (companyReady) {
+        titleEl.textContent = "No hay usuario activo";
+        btnEl.textContent = "Iniciar sesión";
+      } else {
+        titleEl.textContent = "Falta activar la empresa";
+        btnEl.textContent = "Escribir email";
+      }
+    }
   }
 
   if (hint) {
@@ -4710,6 +4769,7 @@ async function openLoginModal() {
 
       setAdminFlag(!!isAdmin, "login");
       await loadPriceEditModeFromCfg?.();
+      await warmupPacksData({ force: true }).catch(() => {});
 
       if (window.TPV_CFG) {
         await window.TPV_CFG.set("auth.username", safeUser);
@@ -4783,6 +4843,24 @@ async function openLoginModal() {
 
       return true;
     };
+
+    // Evita reautenticar contra tpv_login.php si ya hay sesión activa del mismo usuario.
+    // Algunos backends aplican efectos colaterales al re-login (p. ej. estado de acceso web).
+    const activeUserNow = String(getLoginUser?.() || "").trim();
+    const activeTokenNow = String(getLoginToken?.() || "").trim();
+    if (activeUserNow && activeTokenNow && activeUserNow === u) {
+      return await finalizeLoginSuccess({
+        loggedUser: activeUserNow,
+        token: activeTokenNow,
+        codagente: String(
+          localStorage.getItem("tpv_login_codagente") || "",
+        ).trim(),
+        codalmacen: String(
+          localStorage.getItem("tpv_login_codalmacen") || "",
+        ).trim(),
+        isAdmin: !!isAdminSelected,
+      });
+    }
 
     const body = new URLSearchParams();
     body.append("companyEmail", companyEmail);
@@ -4931,6 +5009,7 @@ async function ensureLoginAutoOrPrompt() {
 
     // 🔥 importante: cargar el modo edición desde cfg en autologin
     await loadPriceEditModeFromCfg?.();
+    await warmupPacksData({ force: true }).catch(() => {});
 
     renderProducts?.();
     refreshLoggedUserUI?.();
@@ -4953,6 +5032,7 @@ async function ensureLoginAutoOrPrompt() {
 
     setAdminFlag(!!savedIsAdmin, "autologin(cfg)");
     await loadPriceEditModeFromCfg?.();
+    await warmupPacksData({ force: true }).catch(() => {});
     refreshLoggedUserUI?.();
     return true;
   }
@@ -4962,7 +5042,7 @@ async function ensureLoginAutoOrPrompt() {
   return !!ok;
 }
 
-// ===== Modal genérico de confirmación (usa msgOverlay) =====
+// ===== [09] Modales UI: confirmacion generica (msgOverlay) =====
 function escapeHtmlForModal(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -5068,7 +5148,7 @@ window.TPV_UI?.onGuard?.(async ({ title, text }) => {
   await confirmModal(title || "Aviso", text || "");
 });
 
-// ===== Toasts (notificaciones breves) =====
+// ===== [09] Feedback UI: toasts =====
 
 function toast(message, type = "info", title = "") {
   const container = document.getElementById("toastContainer");
@@ -5093,7 +5173,7 @@ function toast(message, type = "info", title = "") {
   }, ttl);
 }
 
-// ===== Teclado numérico =====
+// ===== [09] Entrada UI: teclado numerico =====
 const numPadOverlay = document.getElementById("numPadOverlay");
 const numPadEl = numPadOverlay?.querySelector(".num-pad");
 const numPadDisplay = document.getElementById("numPadDisplay");
@@ -5563,6 +5643,126 @@ const numPadWindowManager = createKeyboardWindowManager({
   defaultAnchor: "center",
 });
 
+function normalizeNumericExpression(rawValue, { cashLenient = false } = {}) {
+  let s = String(rawValue || "").trim();
+  if (!s) return "";
+
+  s = s
+    .replace(/\s+/g, "")
+    .replace(/[−–]/g, "-")
+    .replace(/[×xX]/g, "*")
+    .replace(/[÷]/g, "/")
+    .replace(/,/g, ".");
+
+  // En importes, permitir miles con punto cuando no hay operadores.
+  if (cashLenient && !/[+\-*/()]/.test(s.slice(1))) {
+    const sign = s.startsWith("-") ? "-" : "";
+    const unsigned = sign ? s.slice(1) : s;
+    const parts = unsigned.split(".");
+    if (parts.length > 2) {
+      s = `${sign}${parts.slice(0, -1).join("")}.${parts[parts.length - 1]}`;
+    }
+  }
+
+  return s;
+}
+
+function evaluateNumericExpression(rawValue, { cashLenient = false } = {}) {
+  const src = normalizeNumericExpression(rawValue, { cashLenient });
+  if (!src) return 0;
+  if (/[^0-9+\-*/().]/.test(src)) return null;
+
+  let i = 0;
+
+  function parseExpression() {
+    let value = parseTerm();
+    if (value == null) return null;
+
+    while (i < src.length) {
+      const op = src[i];
+      if (op !== "+" && op !== "-") break;
+      i += 1;
+      const right = parseTerm();
+      if (right == null) return null;
+      value = op === "+" ? value + right : value - right;
+    }
+
+    return value;
+  }
+
+  function parseTerm() {
+    let value = parseFactor();
+    if (value == null) return null;
+
+    while (i < src.length) {
+      const op = src[i];
+      if (op !== "*" && op !== "/") break;
+      i += 1;
+      const right = parseFactor();
+      if (right == null) return null;
+      if (op === "*") {
+        value *= right;
+      } else {
+        if (right === 0) return null;
+        value /= right;
+      }
+    }
+
+    return value;
+  }
+
+  function parseFactor() {
+    if (i >= src.length) return null;
+
+    const ch = src[i];
+
+    if (ch === "+" || ch === "-") {
+      i += 1;
+      const next = parseFactor();
+      if (next == null) return null;
+      return ch === "-" ? -next : next;
+    }
+
+    if (ch === "(") {
+      i += 1;
+      const inner = parseExpression();
+      if (inner == null) return null;
+      if (src[i] !== ")") return null;
+      i += 1;
+      return inner;
+    }
+
+    const start = i;
+    let seenDot = false;
+    while (i < src.length) {
+      const c = src[i];
+      if (c >= "0" && c <= "9") {
+        i += 1;
+        continue;
+      }
+      if (c === "." && !seenDot) {
+        seenDot = true;
+        i += 1;
+        continue;
+      }
+      break;
+    }
+
+    if (i === start) return null;
+
+    const token = src.slice(start, i);
+    if (token === ".") return null;
+
+    const n = Number(token);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  const result = parseExpression();
+  if (result == null) return null;
+  if (i !== src.length) return null;
+  return Number.isFinite(result) ? result : null;
+}
+
 function formatPrice2(v) {
   const n = Number(String(v).replace(",", "."));
   if (!isFinite(n)) return "0.00";
@@ -5607,42 +5807,36 @@ function evaluateNumPadCurrentValue({ silent = true } = {}) {
     return 0;
   }
 
-  const cleaned = raw.replace(/\s+/g, "").replace(/,/g, ".");
-  if (!/^[0-9+\-*/().]+$/.test(cleaned)) {
+  const value = evaluateNumericExpression(raw, {
+    cashLenient: numPadMode === "cash",
+  });
+  if (value == null) {
     if (!silent) toast("Expresión no válida", "warn", "Teclado");
     return null;
   }
 
-  let value;
-  try {
-    value = Function(`"use strict"; return (${cleaned});`)();
-  } catch {
-    if (!silent) toast("Expresión no válida", "warn", "Teclado");
-    return null;
-  }
-
-  value = Number(value);
-  if (!isFinite(value)) return null;
+  let nextValue = Number(value);
+  if (!isFinite(nextValue)) return null;
 
   if (numPadMode === "price") {
-    if (value <= 0) value = 0;
-    return Math.round(value * 100) / 100;
+    if (nextValue <= 0) nextValue = 0;
+    return Math.round(nextValue * 100) / 100;
   }
 
   if (numPadMode === "cash") {
-    if (value < 0) value = 0;
-    return Math.round(value * 100) / 100;
+    if (nextValue < 0) nextValue = 0;
+    return Math.round(nextValue * 100) / 100;
   }
 
   if (numPadMode === "stock") {
-    return Math.round(value * 1000) / 1000;
+    return Math.round(nextValue * 1000) / 1000;
   }
 
   // qty
-  if (value <= 0) value = 0;
-  value = Math.round(value * 1000) / 1000;
-  if (value > 0 && value < 0.001) value = 0.001;
-  return value;
+  if (nextValue <= 0) nextValue = 0;
+  nextValue = Math.round(nextValue * 1000) / 1000;
+  if (nextValue > 0 && nextValue < 0.001) nextValue = 0.001;
+  return nextValue;
 }
 
 function applyNumPadPreview() {
@@ -5906,7 +6100,7 @@ window.addEventListener("keydown", (e) => {
   // Teclado QWERTY se gestiona más abajo
 });
 
-// ===== Teclado QWERTY =====
+// ===== [09] Entrada UI: teclado QWERTY =====
 const qwertyOverlay = document.getElementById("qwertyOverlay");
 const qwertyPadEl = qwertyOverlay?.querySelector(".qwerty-pad");
 const qwertyDisplay = document.getElementById("qwertyDisplay");
@@ -6250,7 +6444,7 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-// ===== Wiring QWERTY para inputs del TPV =====
+// ===== [09] Entrada UI: wiring QWERTY en inputs TPV =====
 function wireQwertyInputs() {
   // Cobrar -> Observaciones
   if (payObs) {
@@ -6285,7 +6479,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupTerminalFamiliesUi();
 });
 
-// ===== Eventos del carrito =====
+// ===== [08] UI venta: eventos del carrito =====
 const cartLinesContainer = document.getElementById("cartLines");
 
 if (cartLinesContainer) {
@@ -6429,7 +6623,7 @@ if (cartLinesContainer) {
   });
 }
 
-// ===== Estado (texto + punto de estado abajo) =====
+// ===== [06] UI base: indicador de estado =====
 function setStatusText(text) {
   const statusBar = document.getElementById("statusBar");
   if (!statusBar) return;
@@ -6492,14 +6686,6 @@ function updateParkedCountBadge() {
   ).filter((t) => !t.paid).length;
 
   badge.textContent = String(pendingCount);
-}
-
-function isPriceOverridden(item) {
-  // Si guardas el override en grossPriceOverride, con esto basta
-  const ov = item?.grossPriceOverride;
-
-  // true si existe (incluye 0), false si no existe
-  return ov !== null && ov !== undefined;
 }
 
 function getCartTotal(items) {
@@ -6620,7 +6806,6 @@ async function parkCurrentCart(name = "", obs = "") {
     existing.name = ticketName || existing.name || `Ticket #${existing.id}`;
     existing.obs = observation;
     existing.updatedAt = new Date();
-
     saveParkedTicketsCache();
 
     try {
@@ -6683,13 +6868,21 @@ async function parkCurrentCart(name = "", obs = "") {
     fs: null,
   };
 
-  const remote = await apiCreatePresupuestoFromCart(observation);
-  if (remote && (remote.doc || remote.data)) {
-    const doc = remote.doc || remote.data;
-    localTicket.fs = {
-      idpresupuesto: doc.idpresupuesto ?? doc.id ?? null,
-      codigo: doc.codigo ?? null,
-    };
+  try {
+    const remote = await apiCreatePresupuestoFromCart(observation);
+    if (remote && (remote.doc || remote.data)) {
+      const doc = remote.doc || remote.data;
+      localTicket.fs = {
+        idpresupuesto: doc.idpresupuesto ?? doc.id ?? null,
+        codigo: doc.codigo ?? null,
+      };
+    }
+  } catch (e) {
+    // Si FS falla, mantenemos el aparcado local/remoto de reservas para no perder operativa.
+    console.warn(
+      "No se pudo crear presupuesto en FS al aparcar:",
+      e?.message || e,
+    );
   }
 
   parkedTickets.push(localTicket);
@@ -6742,7 +6935,7 @@ function apiDeletePresupuesto(idpresupuesto) {
   });
 }
 
-// ===== Modal de tickets aparcados =====
+// ===== [08] UI venta: modal de tickets aparcados =====
 const parkedTicketsOverlay = document.getElementById("parkedTicketsOverlay");
 const parkedTicketsList = document.getElementById("parkedTicketsList");
 const parkedCloseBtn = document.getElementById("parkedCloseBtn");
@@ -7008,7 +7201,7 @@ function refreshParkButtonUI() {
     parkedTickets[currentParkedTicketIndex] &&
     !parkedTickets[currentParkedTicketIndex].paid;
 
-  const hasCartLines = Array.isArray(cart) && cart.length > 0;
+  const hasCartLines = hasVisibleCartLines();
   parkBtn.disabled = !hasCartLines;
 
   parkBtn.textContent = hasLoadedParkedTicket ? "Actualizar" : "Aparcar";
@@ -7060,7 +7253,11 @@ function openParkedModal() {
 
   if (!parkedTicketsOverlay) return;
 
-  if (!parkedTickets || parkedTickets.length === 0) {
+  const allParked = getScopedAllParkedTickets(parkedTickets);
+  const pending = getScopedPendingParkedTickets(parkedTickets);
+  const paid = allParked.filter((t) => !!t?.paid);
+
+  if (!allParked.length) {
     toast("No hay tickets aparcados.", "info", "Aparcados");
     return;
   }
@@ -7071,13 +7268,9 @@ function openParkedModal() {
 
   logFeatureInfo("APARCADOS", "modal-abierto", {
     requestId,
-    total: Array.isArray(parkedTickets) ? parkedTickets.length : 0,
-    pendientes: (Array.isArray(parkedTickets) ? parkedTickets : []).filter(
-      (t) => !t?.paid,
-    ).length,
-    cobrados: (Array.isArray(parkedTickets) ? parkedTickets : []).filter(
-      (t) => !!t?.paid,
-    ).length,
+    total: allParked.length,
+    pendientes: pending.length,
+    cobrados: paid.length,
   });
 }
 
@@ -7096,7 +7289,7 @@ function renderParkedTicketsModal() {
     .trim()
     .toLowerCase();
 
-  const source = Array.isArray(parkedTickets) ? parkedTickets : [];
+  const source = getScopedAllParkedTickets(parkedTickets);
 
   const filtered = source.filter((t) => {
     return parkedTicketPassesFilter(t) && parkedTicketMatchesSearch(t, term);
@@ -7445,7 +7638,7 @@ function restoreParkedCartByIndex(index) {
   refreshParkedEditingBanner();
 }
 
-// ===== Gestión de terminales / agentes / caja =====
+// ===== [08] Operativa: gestion de terminales/agentes/caja =====
 function fillTerminalSelect() {
   if (!terminalSelect) return;
 
@@ -7544,14 +7737,6 @@ function renderAgentButtonsOverlay(terminalId) {
   }
 }
 
-function switchToMesasMode() {
-  try {
-    localStorage.setItem("tpv_app_mode", "mesas");
-  } catch {}
-
-  window.location.href = "mesas.html";
-}
-
 function renderMainAgentBar() {
   if (!mainAgentBar) return;
 
@@ -7595,18 +7780,6 @@ function renderMainAgentBar() {
     return refreshBtn;
   };
 
-  const createTablesBtn = () => {
-    const tablesBtn = document.createElement("button");
-    tablesBtn.type = "button";
-    tablesBtn.className = "agent-btn agent-tables-btn";
-    tablesBtn.textContent = "🍽";
-    tablesBtn.title = "Cambiar a modo Mesas";
-    tablesBtn.onclick = () => {
-      switchToMesasMode();
-    };
-    return tablesBtn;
-  };
-
   const createThemeStack = () => {
     const stack = document.createElement("div");
     stack.className = "agent-theme-stack";
@@ -7647,7 +7820,6 @@ function renderMainAgentBar() {
 
   // Si no hay terminal, mostrar solo acciones
   if (!currentTerminal) {
-    agentActions.appendChild(createTablesBtn());
     agentActions.appendChild(createRefreshBtn());
     agentActions.appendChild(createThemeStack());
     agentActions.appendChild(createDrawerBtn());
@@ -7708,7 +7880,6 @@ function renderMainAgentBar() {
   }
 
   // Botones fijos a la derecha
-  agentActions.appendChild(createTablesBtn());
   agentActions.appendChild(createRefreshBtn());
   agentActions.appendChild(createThemeStack());
   agentActions.appendChild(createDrawerBtn());
@@ -8050,9 +8221,7 @@ function applyRemoteCajaToSession(remoteCaja) {
       totalSales.toFixed(2).replace(".", ",") + " €";
 }
 
-// ===============================
-// Observaciones + log (robusto)
-// ===============================
+// ===== [08] Caja: observaciones y log robusto =====
 const CASH_OBS_SEPARATOR = "----- REGISTRO TPV (AUTOMÁTICO) -----";
 
 // Cola por caja para serializar updates y evitar deadlocks/concurrencia
@@ -8969,6 +9138,7 @@ async function maybeOpenCashOrRecover() {
           // ✅ recuperable
           cashSession.remoteCajaId = Number(remoteCaja.idcaja || storedId);
           cashSession.open = true;
+          pushCustomerState();
           loadCashLedgerIntoSession(cashSession.remoteCajaId);
 
           await ensureTerminalAgentDefaults();
@@ -8997,11 +9167,7 @@ async function maybeOpenCashOrRecover() {
           );
         }
 
-        console.warn(
-          "[TPV] No se pudo validar caja guardada:",
-          storedId,
-          e,
-        );
+        console.warn("[TPV] No se pudo validar caja guardada:", storedId, e);
       }
 
       // limpiar solo si realmente quedó invalidada (no por falta de conectividad)
@@ -9041,6 +9207,7 @@ async function maybeOpenCashOrRecover() {
 
           cashSession.remoteCajaId = Number(pick.idcaja);
           cashSession.open = true;
+          pushCustomerState();
           localStorage.setItem("tpv_remoteCajaId", String(pick.idcaja));
           loadCashLedgerIntoSession(cashSession.remoteCajaId);
 
@@ -9136,15 +9303,6 @@ function normalizePayCode(code) {
 
 function roundMoney2(n) {
   return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
-}
-
-function sumImportes(list) {
-  return roundMoney2(
-    (Array.isArray(list) ? list : []).reduce(
-      (s, x) => s + Number(x?.importe || 0),
-      0,
-    ),
-  );
 }
 
 function groupRecibosByCodpago(recibos) {
@@ -10252,7 +10410,7 @@ if (cashOpenOverlay && !cashOpenOverlay.dataset.cashBound) {
         (newQty) =>
           setCashQtyByDenom(denom, Math.max(0, parseInt(newQty, 10) || 0)),
         `Cantidad de ${denom} €`,
-        "cash", // o un modo nuevo "int"
+        "qty",
       );
       return;
     }
@@ -10312,6 +10470,7 @@ function updateCashOpenTotal() {
   if (cashDirectTotalEl) {
     cashDirectTotalEl.value = formatCashDirectAmount(total);
   }
+  syncCashDirectClearButtonVisibility();
 }
 
 function ensureCashSessionCounters() {
@@ -10365,6 +10524,7 @@ async function confirmCashOpening() {
 
   cashSession.open = true;
   cashSession.openedAt = new Date().toISOString();
+  pushCustomerState();
 
   try {
     await apiOpenCashInFS();
@@ -10536,11 +10696,22 @@ async function confirmCashClosing() {
   } catch {}
 }
 
-// ===== Llamadas a API Recipok / FacturaScripts =====
+// ===== [07] API: llamadas Recipok/FacturaScripts =====
 async function fetchApiResource(resource, opts = {}) {
   const cfg = window.RECIPOK_API;
   if (!cfg || !cfg.baseUrl || !cfg.apiKey) {
     throw new Error("Config API no definida");
+  }
+
+  throwIfApi429Cooldown(`fetchApiResource:${resource}`);
+
+  const availability = await canCallApiResource(resource, {
+    force: opts.forceResources,
+  });
+  if (availability.known && !availability.ok) {
+    throw new Error(
+      `Recurso no disponible en API: ${availability.missing?.[0] || resource}`,
+    );
   }
 
   const timeoutMs = Number(opts.timeoutMs || 10000);
@@ -10572,8 +10743,19 @@ async function fetchApiResource(resource, opts = {}) {
   }
 
   if (res.status === 429) {
+    triggerApi429Cooldown(
+      `fetchApiResource:${resource}`,
+      res.headers?.get?.("Retry-After") || "",
+    );
+    throw buildApi429Error();
+  }
+
+  if (!res.ok) {
+    if (res.status === 404) {
+      markApiResourceMissing(resource);
+    }
     throw new Error(
-      "La API ha devuelto 429 (demasiadas peticiones). Bloqueo temporal.",
+      `HTTP ${res.status} en ${resource}: ${res.statusText || ""}`,
     );
   }
 
@@ -10589,17 +10771,245 @@ async function fetchApiResource(resource, opts = {}) {
     throw new Error(data.message || `Error API en ${resource}`);
   }
 
-  if (!res.ok) {
-    throw new Error(
-      `HTTP ${res.status} en ${resource}: ${res.statusText || ""}`,
-    );
-  }
-
   if (!Array.isArray(data)) {
     console.warn(`Formato inesperado para ${resource}:`, data);
   }
 
   return data;
+}
+
+let apiResourcesCacheSet = null;
+let apiResourcesCacheBaseUrl = "";
+let apiMissingResourcesSet = new Set();
+let apiMissingResourcesBaseUrl = "";
+
+const API_FEATURE_REQUIREMENTS = {
+  packs: ["productpacks", "productpacklines"],
+};
+
+function loadApiResourcesCacheForBase(baseUrl) {
+  try {
+    const raw = localStorage.getItem(API_RESOURCES_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    const list = Array.isArray(parsed?.resources) ? parsed.resources : [];
+    const cachedBase = String(parsed?.baseUrl || "").trim();
+
+    if (!cachedBase || cachedBase !== String(baseUrl || "").trim()) {
+      return null;
+    }
+
+    const set = new Set(
+      list.map((x) => String(x || "").trim()).filter(Boolean),
+    );
+    if (!set.size) return null;
+
+    return set;
+  } catch {
+    return null;
+  }
+}
+
+function loadApiMissingResourcesCacheForBase(baseUrl) {
+  try {
+    const raw = localStorage.getItem(API_MISSING_RESOURCES_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    const list = Array.isArray(parsed?.resources) ? parsed.resources : [];
+    const cachedBase = String(parsed?.baseUrl || "").trim();
+
+    if (!cachedBase || cachedBase !== String(baseUrl || "").trim()) {
+      return new Set();
+    }
+
+    return new Set(list.map((x) => String(x || "").trim()).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveApiMissingResourcesCacheForBase(baseUrl, missingSet) {
+  try {
+    const resources = Array.from(missingSet || [])
+      .map((x) => String(x || "").trim())
+      .filter(Boolean);
+
+    const safe = {
+      baseUrl: String(baseUrl || "").trim(),
+      resources,
+    };
+
+    localStorage.setItem(API_MISSING_RESOURCES_CACHE_KEY, JSON.stringify(safe));
+    localStorage.setItem(
+      API_MISSING_RESOURCES_CACHE_TS_KEY,
+      String(Date.now()),
+    );
+  } catch {}
+}
+
+function saveApiResourcesCacheForBase(baseUrl, resourcesSet) {
+  try {
+    const resources = Array.from(resourcesSet || []).map((x) =>
+      String(x || "").trim(),
+    );
+    const safe = {
+      baseUrl: String(baseUrl || "").trim(),
+      resources: resources.filter(Boolean),
+    };
+    localStorage.setItem(API_RESOURCES_CACHE_KEY, JSON.stringify(safe));
+    localStorage.setItem(API_RESOURCES_CACHE_TS_KEY, String(Date.now()));
+  } catch {}
+}
+
+async function getApiResourcesSet(opts = {}) {
+  const force = opts.force === true;
+
+  const cfg = window.RECIPOK_API || {};
+  const baseUrl = String(cfg.baseUrl || "").replace(/\/+$/, "");
+  const apiKey = String(cfg.apiKey || "").trim();
+  if (!baseUrl || !apiKey) return null;
+
+  if (!force && isApi429CooldownActive()) {
+    return apiResourcesCacheSet;
+  }
+
+  if (apiResourcesCacheBaseUrl !== baseUrl) {
+    apiResourcesCacheBaseUrl = baseUrl;
+    apiResourcesCacheSet = null;
+  }
+
+  if (apiMissingResourcesBaseUrl !== baseUrl) {
+    apiMissingResourcesBaseUrl = baseUrl;
+    apiMissingResourcesSet = loadApiMissingResourcesCacheForBase(baseUrl);
+  }
+
+  if (!force && apiResourcesCacheSet && apiResourcesCacheSet.size) {
+    return apiResourcesCacheSet;
+  }
+
+  if (!force && (!apiResourcesCacheSet || !apiResourcesCacheSet.size)) {
+    const fromStorage = loadApiResourcesCacheForBase(baseUrl);
+    if (fromStorage && fromStorage.size) {
+      apiResourcesCacheSet = fromStorage;
+      return apiResourcesCacheSet;
+    }
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    const res = await fetch(`${baseUrl}/`, {
+      method: "GET",
+      headers: { Accept: "application/json", Token: apiKey },
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    if (res.status === 429) {
+      triggerApi429Cooldown(
+        "getApiResourcesSet",
+        res.headers?.get?.("Retry-After") || "",
+      );
+      return apiResourcesCacheSet;
+    }
+
+    if (!res.ok) return apiResourcesCacheSet;
+
+    const data = await res.json().catch(() => null);
+    const list = Array.isArray(data?.resources) ? data.resources : [];
+    const set = new Set(
+      list.map((x) => String(x || "").trim()).filter(Boolean),
+    );
+
+    if (set.size) {
+      apiResourcesCacheSet = set;
+      saveApiResourcesCacheForBase(baseUrl, set);
+
+      let missingChanged = false;
+      for (const resourceName of Array.from(apiMissingResourcesSet)) {
+        if (set.has(resourceName)) {
+          apiMissingResourcesSet.delete(resourceName);
+          missingChanged = true;
+        }
+      }
+      if (missingChanged) {
+        saveApiMissingResourcesCacheForBase(baseUrl, apiMissingResourcesSet);
+      }
+    }
+
+    return apiResourcesCacheSet;
+  } catch {
+    return apiResourcesCacheSet;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function normalizeApiResourceName(name) {
+  const raw = String(name || "").trim();
+  if (!raw) return "";
+  return raw.split("/").filter(Boolean)[0] || "";
+}
+
+function markApiResourceMissing(resourceName) {
+  const normalized = normalizeApiResourceName(resourceName);
+  if (!normalized) return;
+  if (apiMissingResourcesSet.has(normalized)) return;
+  apiMissingResourcesSet.add(normalized);
+  saveApiMissingResourcesCacheForBase(
+    apiMissingResourcesBaseUrl,
+    apiMissingResourcesSet,
+  );
+}
+
+async function apiHasResources(requiredResources = [], opts = {}) {
+  const required = Array.from(
+    new Set(
+      (Array.isArray(requiredResources) ? requiredResources : [])
+        .map(normalizeApiResourceName)
+        .filter(Boolean),
+    ),
+  );
+
+  if (!required.length) {
+    return { known: false, ok: true, missing: [] };
+  }
+
+  const resourcesSet = await getApiResourcesSet(opts);
+  if (!resourcesSet || !resourcesSet.size) {
+    // Fail-open: si no pudimos descubrir recursos, no bloqueamos features.
+    return { known: false, ok: true, missing: [] };
+  }
+
+  const missing = required.filter((r) => !resourcesSet.has(r));
+  return { known: true, ok: missing.length === 0, missing };
+}
+
+async function isApiFeatureAvailable(featureKey, opts = {}) {
+  const key = String(featureKey || "").trim();
+  const required = API_FEATURE_REQUIREMENTS[key] || [];
+  return await apiHasResources(required, opts);
+}
+
+async function canCallApiResource(resourceName, opts = {}) {
+  const normalized = normalizeApiResourceName(resourceName);
+  if (!normalized) return { known: false, ok: true, missing: [] };
+
+  await getApiResourcesSet(opts);
+
+  if (apiMissingResourcesSet?.has?.(normalized)) {
+    return { known: true, ok: false, missing: [normalized] };
+  }
+
+  if (!apiResourcesCacheSet || !apiResourcesCacheSet.size) {
+    return { known: false, ok: true, missing: [] };
+  }
+
+  if (!apiResourcesCacheSet.has(normalized)) {
+    markApiResourceMissing(normalized);
+    return { known: true, ok: false, missing: [normalized] };
+  }
+
+  return { known: true, ok: true, missing: [] };
 }
 
 async function fetchFormasPagoActivas(opts = {}) {
@@ -10840,14 +11250,10 @@ if (cashOpenCancelBtn) {
 
     hideCashOpenDialog();
 
-    // Si estábamos abriendo caja y aún no hay caja abierta,
-    // dejamos TPV y agente visualmente como "---"
-    if (cashDialogMode === "open" && !cashSession.open) {
-      currentTerminal = null;
-      currentAgent = null;
-      if (terminalNameEl) terminalNameEl.textContent = "---";
-      if (agentNameEl) agentNameEl.textContent = "---";
-    }
+    // Mantener terminal/agente seleccionados al cancelar apertura.
+    if (terminalNameEl)
+      terminalNameEl.textContent = currentTerminal?.name || "---";
+    if (agentNameEl) agentNameEl.textContent = currentAgent?.name || "---";
   };
 }
 
@@ -10864,9 +11270,7 @@ if (cashOpenOkBtn) {
         return;
       }
 
-      const parkedCount = Array.isArray(parkedTickets)
-        ? parkedTickets.length
-        : 0;
+      const parkedCount = getScopedPendingParkedTickets(parkedTickets).length;
 
       // Releer valor efectivo para evitar cierres bloqueados por estado stale.
       await loadAllowCloseWithParkedToggle();
@@ -10934,7 +11338,7 @@ if (cashOpenOkBtn) {
   };
 }
 
-// ===== Caja (logs) en FacturaScripts =====
+// ===== [08] Caja: logs remotos en FacturaScripts =====
 
 // 1) Request genérico (form-urlencoded) para POST/PUT/DELETE
 async function apiWrite(resource, method = "POST", fields = {}) {
@@ -11261,145 +11665,166 @@ async function ensureTerminalAgentDefaults({ refresh = false } = {}) {
 
 // Botón abrir/cerrar caja (header "Caja")
 
+let __cashHeaderActionInFlight = false;
+
 async function handleCashHeaderAction(opts = {}) {
   const { auto = false } = opts;
 
-  // 0) Bloqueado
-  if (TPV_STATE.locked) {
-    showMessageModal(
-      "Acceso bloqueado",
-      "Tu cuenta de TPV está desactivada. Contacta con soporte.",
-    );
+  if (__cashHeaderActionInFlight) {
+    if (!auto) {
+      toast("Procesando caja...", "info", "Caja");
+    }
     return false;
   }
 
-  // 1) Si NO hay empresa resuelta
-  if (!hasCompanyResolved()) {
-    await forceReconnectFlow();
-    if (!hasCompanyResolved()) return false;
-  }
+  __cashHeaderActionInFlight = true;
+  if (cashHeaderBtn) cashHeaderBtn.disabled = true;
 
-  // 1.5) Si seguimos offline
-  if (TPV_STATE.offline) {
-    try {
-      await loadDataFromApi({ refresh: true });
-    } catch {}
-
-    if (TPV_STATE.offline) {
-      if (!auto) {
-        toast(
-          "Sin conexión. Reintenta cuando tengas internet.",
-          "warn",
-          "Caja",
-        );
-      }
+  try {
+    // 0) Bloqueado
+    if (TPV_STATE.locked) {
+      showMessageModal(
+        "Acceso bloqueado",
+        "Tu cuenta de TPV está desactivada. Contacta con soporte.",
+      );
       return false;
     }
-  }
 
-  // 2) Datos base
-  await ensureDataLoaded();
-
-  // 3) Login
-  if (!getLoginUser?.() && !localStorage.getItem("tpv_login_user")) {
-    const ok = await ensureLoginAutoOrPrompt();
-    if (!ok) return false;
-  }
-
-  // 4) Si caja abierta => si es automático, recuperar/salir sin abrir cierre
-  if (cashSession.open) {
-    if (auto) {
-      return true;
+    // 1) Si NO hay empresa resuelta
+    if (!hasCompanyResolved()) {
+      await forceReconnectFlow();
+      if (!hasCompanyResolved()) return false;
     }
 
-    const parkedCount = Array.isArray(parkedTickets) ? parkedTickets.length : 0;
+    // 1.5) Si seguimos offline
+    if (TPV_STATE.offline) {
+      try {
+        await loadDataFromApi({ refresh: true });
+      } catch {}
 
-    // Releer valor efectivo por si el toggle cambió en opciones recientemente.
-    await loadAllowCloseWithParkedToggle();
+      if (TPV_STATE.offline) {
+        if (!auto) {
+          toast(
+            "Sin conexión. Reintenta cuando tengas internet.",
+            "warn",
+            "Caja",
+          );
+        }
+        return false;
+      }
+    }
 
-    if (parkedCount > 0) {
-      if (!allowCloseWithParkedTickets) {
-        await confirmModal(
+    // 2) Datos base
+    await ensureDataLoaded();
+
+    // 3) Login
+    if (!getLoginUser?.() && !localStorage.getItem("tpv_login_user")) {
+      const ok = await ensureLoginAutoOrPrompt();
+      if (!ok) return false;
+    }
+
+    // 4) Si caja abierta => si es automático, recuperar/salir sin abrir cierre
+    if (cashSession.open) {
+      if (auto) {
+        return true;
+      }
+
+      const parkedCount = getScopedPendingParkedTickets(parkedTickets).length;
+
+      // Releer valor efectivo por si el toggle cambió en opciones recientemente.
+      await loadAllowCloseWithParkedToggle();
+
+      if (parkedCount > 0) {
+        if (!allowCloseWithParkedTickets) {
+          await confirmModal(
+            "Tickets aparcados",
+            `Tienes ${parkedCount} ticket${parkedCount === 1 ? "" : "s"} aparcado${
+              parkedCount === 1 ? "" : "s"
+            }.\n\nAntes de cerrar la caja, recupera o elimina los tickets aparcados.`,
+          );
+          openParkedModal();
+          return false;
+        }
+
+        const okWithParked = await confirmModal(
           "Tickets aparcados",
           `Tienes ${parkedCount} ticket${parkedCount === 1 ? "" : "s"} aparcado${
             parkedCount === 1 ? "" : "s"
-          }.\n\nAntes de cerrar la caja, recupera o elimina los tickets aparcados.`,
+          }.\n\nSe conservarán para recuperarlos después.\n\n¿Cerrar caja de todos modos?`,
+          {
+            middleButtonText: "Revisar aparcados",
+            middleButtonResult: "parked",
+          },
         );
-        openParkedModal();
-        return false;
+
+        if (okWithParked === "parked") {
+          openParkedModal();
+          return false;
+        }
+        if (!okWithParked) return false;
+
+        closeWithParkedPreConfirmed = true;
       }
 
-      const okWithParked = await confirmModal(
-        "Tickets aparcados",
-        `Tienes ${parkedCount} ticket${parkedCount === 1 ? "" : "s"} aparcado${
-          parkedCount === 1 ? "" : "s"
-        }.\n\nSe conservarán para recuperarlos después.\n\n¿Cerrar caja de todos modos?`,
-        {
-          middleButtonText: "Revisar aparcados",
-          middleButtonResult: "parked",
-        },
-      );
-
-      if (okWithParked === "parked") {
-        openParkedModal();
-        return false;
-      }
-      if (!okWithParked) return false;
-
-      closeWithParkedPreConfirmed = true;
+      openCashOpenDialog("close");
+      return true;
     }
 
-    openCashOpenDialog("close");
-    return true;
-  }
+    // 5) Refrescar terminales/agentes
+    await refreshTerminalsAndAgents();
 
-  // 5) Refrescar terminales/agentes
-  await refreshTerminalsAndAgents();
+    if (!Array.isArray(terminals) || terminals.length === 0) {
+      if (!currentTerminal) {
+        setCurrentTerminal({ id: "demo", name: "TPV demo" });
+      }
 
-  if (!Array.isArray(terminals) || terminals.length === 0) {
+      cashResetUIForOpening();
+      cashWrapInputsWithSteppers();
+
+      cashOpenDialogShown = false;
+      await maybeOpenCashOrRecover();
+      return true;
+    }
+
+    await ensureTerminalAgentDefaults();
+
     if (!currentTerminal) {
-      setCurrentTerminal({ id: "demo", name: "TPV demo" });
+      if (!auto) {
+        showTerminalOverlay("session");
+      }
+      return false;
     }
 
-    cashResetUIForOpening();
-    cashWrapInputsWithSteppers();
+    const list = getAgentsForTerminalId(currentTerminal.id) || [];
+    if (!currentAgent && list.length > 0) {
+      currentAgent = list[0];
+      try {
+        localStorage.setItem(
+          "tpv_agent",
+          String(
+            currentAgent.codagente ||
+              currentAgent.id ||
+              currentAgent.nick ||
+              "",
+          ),
+        );
+      } catch {}
+
+      if (agentNameEl) {
+        agentNameEl.textContent =
+          currentAgent.name || currentAgent.nick || "---";
+      }
+
+      renderMainAgentBar?.();
+    }
 
     cashOpenDialogShown = false;
     await maybeOpenCashOrRecover();
     return true;
+  } finally {
+    __cashHeaderActionInFlight = false;
+    if (cashHeaderBtn) cashHeaderBtn.disabled = !!TPV_LOADING;
   }
-
-  await ensureTerminalAgentDefaults();
-
-  if (!currentTerminal) {
-    if (!auto) {
-      showTerminalOverlay("session");
-    }
-    return false;
-  }
-
-  const list = getAgentsForTerminalId(currentTerminal.id) || [];
-  if (!currentAgent && list.length > 0) {
-    currentAgent = list[0];
-    try {
-      localStorage.setItem(
-        "tpv_agent",
-        String(
-          currentAgent.codagente || currentAgent.id || currentAgent.nick || "",
-        ),
-      );
-    } catch {}
-
-    if (agentNameEl) {
-      agentNameEl.textContent = currentAgent.name || currentAgent.nick || "---";
-    }
-
-    renderMainAgentBar?.();
-  }
-
-  cashOpenDialogShown = false;
-  await maybeOpenCashOrRecover();
-  return true;
 }
 
 if (cashHeaderBtn) {
@@ -11490,7 +11915,7 @@ function fireSessionReady() {
   );
 }
 
-// ===== Carga de datos desde la API de Recipok =====
+// ===== [07] API: carga principal de datos Recipok =====
 async function loadDataFromApi(opts = {}) {
   console.log("loadDataFromApi() ejecutándose con:", window.RECIPOK_API);
 
@@ -11821,8 +12246,8 @@ async function loadDataFromApi(opts = {}) {
       products = [];
     }
 
-    // Packs: se fuerza porque la carga principal ya salió bien
-    await warmupPacksData({ force: true }).catch(() => {});
+    // Packs: carga normal (no forzada) para evitar reintentos agresivos.
+    await warmupPacksData().catch(() => {});
 
     // ===== Terminales -> terminals =====
     terminals = Array.isArray(tpvTerminales)
@@ -11895,6 +12320,7 @@ async function loadDataFromApi(opts = {}) {
     });
 
     // Aquí sí: ya está todo cargado correctamente
+    LAST_FULL_LOAD_AT = Date.now();
     exitApiRetryMode();
     setStatusText("Online Recipok");
 
@@ -11966,11 +12392,14 @@ async function loadDataFromApi(opts = {}) {
       updateCashButtonLabel();
       renderMainUI(true);
       hideReconnectIfAvailable();
-      enterApiRetryMode("Sin conexión con Recipok. Trabajando con caché local.", {
-        lock: false,
-        scheduleRetry: false,
-        showOverlay: false,
-      });
+      enterApiRetryMode(
+        "Sin conexión con Recipok. Trabajando con caché local.",
+        {
+          lock: false,
+          scheduleRetry: false,
+          showOverlay: false,
+        },
+      );
 
       if (!opts.silentRetry) {
         toast("Sin conexión: usando datos guardados en local.", "warn");
@@ -12027,6 +12456,8 @@ async function refreshAllData() {
   try {
     setStatusText("Actualizando...");
     await loadDataFromApi({ refresh: true });
+    await warmupPacksData({ force: true }).catch(() => {});
+    await refreshTerminalsAndAgents();
 
     if (typeof renderMainAgentBar === "function") renderMainAgentBar();
     if (typeof renderCart === "function") renderCart();
@@ -12047,9 +12478,7 @@ async function refreshAllData() {
 
 refreshLoggedUserUI();
 
-// ====================================================
-// TPV Bootstrap bridge (recuperar caja ya abierta)
-// ====================================================
+// ===== [10] Bootstrap bridge: recuperar caja ya abierta =====
 window.cargarPantallaTPV = async function (idcaja, idtpv, caja) {
   console.log(
     "[TPV] Caja asignada desde bootstrap:",
@@ -12315,7 +12744,7 @@ async function refreshTerminalsAndAgents() {
   }
 }
 
-// ===== Cobro / creación de ticket en FacturaScripts =====
+// ===== [08] Cobro: creacion de ticket en FacturaScripts =====
 function buildTicketPayloadFromCart() {
   if (!cart || cart.length === 0) {
     throw new Error("El carrito está vacío.");
@@ -12432,7 +12861,7 @@ async function updateFacturaCliente(idfactura, fields) {
   return data;
 }
 
-// ===== Modal confirmación cierre de caja =====
+// ===== [09] Modal: confirmacion de cierre de caja =====
 const cashCloseConfirmOverlay = document.getElementById(
   "cashCloseConfirmOverlay",
 );
@@ -12482,7 +12911,7 @@ async function confirmCashCloseModal(message) {
   });
 }
 
-// ===== Modal Post-cobro =====
+// ===== [09] Modal: post-cobro =====
 const postPayOverlay = document.getElementById("postPayOverlay");
 const postPayCloseX = document.getElementById("postPayCloseX");
 const postPayDocEl = document.getElementById("postPayDoc");
@@ -12594,7 +13023,7 @@ function openPostPayModal({ docCode, total, cambio }) {
   __postPayTimer = setTimeout(() => closePostPayModal(), secs * 1000);
 }
 
-// ===== Opciones (⚙️) =====
+// ===== [09] Opciones (panel principal) =====
 const OPTIONS_AUTOPRINT_KEY = "tpv_autoPrint";
 const OPTIONS_GROUPLINES_KEY = "tpv_groupLines";
 
@@ -12611,7 +13040,7 @@ const optionsChangePrinterBtn = document.getElementById(
 const currentPrinterNameEl = document.getElementById("currentPrinterName");
 const autoPrintToggle = document.getElementById("autoPrintToggle");
 const groupLinesToggle = document.getElementById("groupLinesToggle");
-// ===== Abrir cajón siempre (toggle) =====
+// ===== [09] Opciones: abrir cajon siempre (toggle) =====
 const OPEN_DRAWER_ALWAYS_KEY = "tpv_openDrawerAlways";
 const openDrawerAlwaysToggle = document.getElementById(
   "openDrawerAlwaysToggle",
@@ -12624,7 +13053,7 @@ function setOpenDrawerAlwaysEnabled(v) {
   localStorage.setItem(OPEN_DRAWER_ALWAYS_KEY, v ? "1" : "0");
 }
 
-// ===== Impresora (Opciones) =====
+// ===== [09] Opciones: impresora =====
 const PRINTER_REAL_KEY = "tpv_printerRealName"; // POS-80 (lo que ve el usuario)
 const PRINTER_QUEUE_KEY = "tpv_printerQueueName"; // RECIPOK_POS (Linux)
 
@@ -12638,10 +13067,6 @@ function getSavedPrinterReal() {
 function savePrinterReal(name) {
   localStorage.setItem(PRINTER_REAL_KEY, name || "");
 }
-
-function getSavedPrinterQueue() {
-  return localStorage.getItem(PRINTER_QUEUE_KEY) || "";
-}
 function savePrinterQueue(name) {
   localStorage.setItem(PRINTER_QUEUE_KEY, name || "");
 }
@@ -12652,6 +13077,10 @@ function getSavedPrinterNameForUI() {
 }
 
 async function ensurePrinterSelectedForPrint() {
+  if (TPV_E2E_MODE) {
+    return "E2E Mock Printer";
+  }
+
   if (!isLinux()) {
     // Windows imprime a la real
     let real = getSavedPrinterReal();
@@ -12939,7 +13368,7 @@ optionsOverlay?.addEventListener("click", (e) => {
   if (e.target === optionsOverlay) closeOptions();
 });
 
-// ===== Cambiar impresora =====
+// ===== [09] Opciones impresora: cambiar dispositivo =====
 optionsChangePrinterBtn?.addEventListener("click", async () => {
   try {
     closeOptions?.();
@@ -12978,7 +13407,7 @@ optionsChangePrinterBtn?.addEventListener("click", async () => {
   }
 });
 
-// ===== Probar impresora =====
+// ===== [09] Opciones impresora: prueba de impresion =====
 document
   .getElementById("optionsTestPrinterBtn")
   ?.addEventListener("click", async () => {
@@ -13092,8 +13521,7 @@ async function pushGroupLinesToFS(enabled) {
   try {
     if (!currentTerminal?.id) return;
 
-    // En FacturaScripts normalmente vale true/false (o 1/0). Enviamos 1/0 para asegurar.
-    await apiWrite(`tpvterminales/${currentTerminal.id}`, "PUT", {
+    await updateTpvTerminalForm(currentTerminal.id, {
       grouplines: enabled ? 1 : 0,
     });
 
@@ -13243,45 +13671,92 @@ async function createTicketInFacturaScripts(ticketPayload) {
 
   console.log(">>> Enviando a crearFacturaCliente:", bodyParams.toString());
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Token: cfg.apiKey,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: bodyParams.toString(),
-  });
+  const doPost = async (params) => {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Token: cfg.apiKey,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: params.toString(),
+    });
 
-  if (res.status === 429) {
-    const text = await res.text().catch(() => "");
-    console.error("Error 429 crearFacturaCliente:", text);
+    const rawText = await res.text().catch(() => "");
+    let data = null;
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      data = null;
+    }
+
+    return { res, data, rawText };
+  };
+
+  let submit = await doPost(bodyParams);
+
+  const isTotals422 =
+    submit.res.status === 422 &&
+    String(submit.data?.message || "")
+      .trim()
+      .toLowerCase() === "error-calculating-totals";
+
+  if (isTotals422) {
+    const hasProductBoundLine = (
+      Array.isArray(ticketPayload.lineas) ? ticketPayload.lineas : []
+    ).some((l) => l?.idproducto != null || String(l?.referencia || "").trim());
+
+    if (hasProductBoundLine) {
+      const cleanLines = (
+        Array.isArray(ticketPayload.lineas) ? ticketPayload.lineas : []
+      ).map((l) => {
+        const next = { ...l };
+        delete next.idproducto;
+        delete next.referencia;
+        return next;
+      });
+
+      const retryParams = new URLSearchParams(bodyParams.toString());
+      retryParams.set("lineas", JSON.stringify(cleanLines));
+
+      console.warn(
+        "[crearFacturaCliente] 422 error-calculating-totals. Reintentando sin idproducto/referencia...",
+      );
+      console.log(
+        ">>> Enviando a crearFacturaCliente [retry-lineas-sin-idproducto-referencia]:",
+        retryParams.toString(),
+      );
+
+      submit = await doPost(retryParams);
+    }
+  }
+
+  if (submit.res.status === 429) {
+    console.error(
+      "Error 429 crearFacturaCliente:",
+      submit.rawText || submit.data,
+    );
     throw new Error(
       "La API ha devuelto 429 (demasiadas peticiones). " +
         "Es un bloqueo temporal por seguridad; espera unos minutos antes de seguir usando el TPV.",
     );
   }
 
-  if (!res.ok) {
-    let msg = `Error HTTP ${res.status}`;
-    try {
-      const errData = await res.json();
-      console.error("Respuesta de error crearFacturaCliente:", errData);
-      if (errData.message) msg += `: ${errData.message}`;
-      if (errData.errors)
-        msg += " | Detalles: " + JSON.stringify(errData.errors);
-    } catch (e) {
-      const text = await res.text().catch(() => "");
-      if (text) msg += `: ${text}`;
+  if (!submit.res.ok) {
+    let msg = `Error HTTP ${submit.res.status}`;
+    if (submit.data && typeof submit.data === "object") {
+      console.error("Respuesta de error crearFacturaCliente:", submit.data);
+      if (submit.data.message) msg += `: ${submit.data.message}`;
+      if (submit.data.errors)
+        msg += " | Detalles: " + JSON.stringify(submit.data.errors);
+    } else if (submit.rawText) {
+      msg += `: ${submit.rawText}`;
     }
     throw new Error(msg);
   }
 
-  let data = null;
-  try {
-    data = await res.json();
-  } catch (e) {
-    console.error("No se pudo parsear JSON de crearFacturaCliente:", e);
+  const data = submit.data;
+  if (!data || typeof data !== "object") {
     throw new Error(
       "Respuesta no válida de FacturaScripts al crear la factura.",
     );
@@ -13298,14 +13773,20 @@ async function createTicketInFacturaScripts(ticketPayload) {
 
 function buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot) {
   const factura =
-    apiResponse.doc || apiResponse.factura || apiResponse.data || apiResponse;
+    apiResponse?.doc ||
+    apiResponse?.factura ||
+    apiResponse?.data ||
+    apiResponse ||
+    {};
+
+  const safePayload = ticketPayload || {};
 
   const paymentMethod =
     factura.formapago ||
     factura.metodopago ||
     factura.codpago ||
     factura.codpago_desc ||
-    ticketPayload.paymentMethod ||
+    safePayload.paymentMethod ||
     "Efectivo";
 
   const codigo = factura.codigo || factura.codigoFactura || null;
@@ -13335,8 +13816,8 @@ function buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot) {
   return {
     numero,
     paymentMethod,
-    fecha: factura.fecha || ticketPayload.fecha,
-    hora: factura.hora || ticketPayload.hora,
+    fecha: factura.fecha || safePayload.fecha,
+    hora: factura.hora || safePayload.hora,
     total: totalFromFactura !== null ? totalFromFactura : totalFromCart,
 
     // ✅ mejor guardar el estado real en el ticket (por si luego cierras caja)
@@ -13424,13 +13905,6 @@ function normalizeRefundDesc(desc) {
     .replace(/\s+/g, " ");
 }
 
-function keyForRefundMatch(desc, pvpunitario, codimpuesto) {
-  const d = normalizeRefundDesc(desc);
-  const p = Math.round(Math.abs(Number(pvpunitario || 0)) * 100) / 100;
-  const c = String(codimpuesto || "").trim();
-  return `${d}|${p}|${c}`;
-}
-
 // Cache simple de formas de pago (codpago -> descripcion)
 let __formasPagoMapCache = null;
 async function getFormasPagoMap() {
@@ -13483,28 +13957,6 @@ function getUnitGrossForPrint(l) {
   }
 
   return 0;
-}
-
-function isPriceModifiedForPrint(l) {
-  // Solo consideramos MOD cuando el carrito trae override
-  if (!l || l.grossPriceOverride == null) return false;
-
-  const ov = Number(l.grossPriceOverride);
-  if (!isFinite(ov)) return false;
-
-  const og = Number(
-    l.originalGrossPrice ?? l.grossPrice ?? l.price ?? l.__forceUnitGross,
-  );
-
-  // Si no hay original, igual marcamos MOD (pero idealmente siempre lo hay en carrito)
-  if (!isFinite(og)) return true;
-
-  return Math.abs(ov - og) > 0.0001;
-}
-
-function getOriginalUnitGrossForPrint(l) {
-  const og = Number(l?.originalGrossPrice ?? l?.grossPrice ?? l?.price);
-  return isFinite(og) ? og : 0;
 }
 
 function calcTotalsAndTaxMap(lineas, totalsOnlyPositive) {
@@ -14244,6 +14696,26 @@ async function printTicket(ticket) {
       totalsOnlyPositive,
     );
 
+    if (TPV_E2E_MODE) {
+      try {
+        window.__TPV_E2E_LAST_PRINT_MODEL__ = {
+          ticket: {
+            numero: ticket?.numero || "",
+            clientName: ticket?.clientName || "",
+          },
+          lineas: Array.isArray(lineas)
+            ? lineas.map((l) => ({
+                descripcion: String(l?.descripcion || ""),
+                cantidad: Number(l?.cantidad || 0),
+                pvpunitario: Number(l?.pvpunitario || 0),
+                pvptotal: Number(l?.pvptotal || 0),
+              }))
+            : [],
+          totalToShow: Number(totalToShow || 0),
+        };
+      } catch {}
+    }
+
     // 4) Linux: RAW ESC/POS
     if (isLinux) {
       if (!window.TPV_PRINT?.printRaw) {
@@ -14736,14 +15208,19 @@ function appendRow(container, left, right) {
 
 function isProbablyNetworkError(err) {
   const msg = String(err?.message || err || "");
+  const low = msg.toLowerCase();
   return (
     msg.includes("Failed to fetch") ||
     msg.includes("NetworkError") ||
-    msg.includes("network") ||
-    msg.includes("timeout") ||
+    low.includes("network") ||
+    low.includes("timeout") ||
     msg.includes("ETIMEDOUT") ||
     msg.includes("ECONN") ||
-    msg.includes("ENOTFOUND")
+    msg.includes("ENOTFOUND") ||
+    msg.includes("ERR_FAILED") ||
+    msg.includes("ERR_INTERNET_DISCONNECTED") ||
+    msg.includes("ERR_CONNECTION") ||
+    msg.includes("ERR_UNSAFE_PORT")
   );
 }
 
@@ -14869,6 +15346,20 @@ function getCurrentSlugForReservations() {
   return m ? String(m[1]).trim() : "";
 }
 
+function getParkedScopedStorageKey(baseKey) {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const scope = slug || "default";
+  return `${baseKey}::${scope}`;
+}
+
+function getScopedPendingParkedTickets(list = parkedTickets) {
+  return (Array.isArray(list) ? list : []).filter((t) => !t?.paid);
+}
+
+function getScopedAllParkedTickets(list = parkedTickets) {
+  return Array.isArray(list) ? list : [];
+}
+
 function getProductBaseId(product) {
   return (
     Number(product?.baseProductId || product?.id || product?.idproducto || 0) ||
@@ -14947,7 +15438,7 @@ function normalizeRemoteParkedTicket(raw) {
 }
 
 function saveParkedTicketsCache(list = parkedTickets) {
-  const safe = (Array.isArray(list) ? list : []).map((t) => ({
+  const safe = getScopedPendingParkedTickets(list).map((t) => ({
     ...t,
     createdAt: t?.createdAt
       ? new Date(t.createdAt).toISOString()
@@ -14957,7 +15448,10 @@ function saveParkedTicketsCache(list = parkedTickets) {
   }));
 
   try {
-    localStorage.setItem(PARKED_TICKETS_CACHE_KEY, JSON.stringify(safe));
+    localStorage.setItem(
+      getParkedScopedStorageKey(PARKED_TICKETS_CACHE_KEY),
+      JSON.stringify(safe),
+    );
   } catch (e) {
     console.warn(
       "No se pudo guardar cache local de aparcados:",
@@ -14968,11 +15462,16 @@ function saveParkedTicketsCache(list = parkedTickets) {
 
 function loadParkedTicketsCache() {
   try {
-    const raw = localStorage.getItem(PARKED_TICKETS_CACHE_KEY);
+    const raw = localStorage.getItem(
+      getParkedScopedStorageKey(PARKED_TICKETS_CACHE_KEY),
+    );
     const arr = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(arr)) return [];
 
-    return arr.map((it) => normalizeRemoteParkedTicket(it)).filter(Boolean);
+    return arr
+      .map((it) => normalizeRemoteParkedTicket(it))
+      .filter(Boolean)
+      .filter((t) => !t?.paid);
   } catch (e) {
     console.warn("No se pudo leer cache local de aparcados:", e?.message || e);
     return [];
@@ -15002,7 +15501,9 @@ function isParkedSyncTransientError(err) {
 
 function loadParkedSyncQueue() {
   try {
-    const raw = localStorage.getItem(PARKED_SYNC_QUEUE_KEY);
+    const raw = localStorage.getItem(
+      getParkedScopedStorageKey(PARKED_SYNC_QUEUE_KEY),
+    );
     const arr = raw ? JSON.parse(raw) : [];
     return Array.isArray(arr) ? arr : [];
   } catch {
@@ -15014,7 +15515,7 @@ function saveParkedSyncQueue(queue) {
   try {
     const safe = Array.isArray(queue) ? queue : [];
     localStorage.setItem(
-      PARKED_SYNC_QUEUE_KEY,
+      getParkedScopedStorageKey(PARKED_SYNC_QUEUE_KEY),
       JSON.stringify(safe.slice(-2000)),
     );
   } catch (e) {
@@ -15094,26 +15595,7 @@ function syncParkedTicketsFromRemote(list) {
     .filter(Boolean)
     .filter((t) => !t.paid);
 
-  const cachedAll = loadParkedTicketsCache();
-  const paidHistory = cachedAll
-    .filter((t) => !!t.paid)
-    .sort((a, b) => {
-      const ta = new Date(
-        a?.paidAt || a?.updatedAt || a?.createdAt || 0,
-      ).getTime();
-      const tb = new Date(
-        b?.paidAt || b?.updatedAt || b?.createdAt || 0,
-      ).getTime();
-      return tb - ta;
-    })
-    .slice(0, 500);
-
-  const pendingKeys = new Set(next.map((t) => getParkedTicketSyncKey(t)));
-  const safePaidHistory = paidHistory.filter(
-    (t) => !pendingKeys.has(getParkedTicketSyncKey(t)),
-  );
-
-  parkedTickets = next.concat(safePaidHistory);
+  parkedTickets = next;
 
   const maxId = parkedTickets.reduce((m, t) => {
     const n = Number(t?.id || 0);
@@ -15468,7 +15950,7 @@ async function onPayButtonClick() {
       return;
     }
 
-    if (!cart || cart.length === 0) {
+    if (!hasVisibleCartLines()) {
       toast("Añade productos antes de cobrar.", "warn", "Cobrar");
       return;
     }
@@ -15725,9 +16207,23 @@ async function onPayButtonClick() {
 
     // ========= ONLINE =========
     saleCommitted = true;
-    const apiResponse = sendResult.remote;
+    const apiResponse = sendResult?.remote || null;
     const facturaResp =
-      apiResponse.doc || apiResponse.factura || apiResponse.data || apiResponse;
+      apiResponse?.doc ||
+      apiResponse?.factura ||
+      apiResponse?.data ||
+      apiResponse;
+
+    if (!facturaResp || typeof facturaResp !== "object") {
+      const remoteType = apiResponse == null ? "null" : typeof apiResponse;
+      const remoteKeys =
+        apiResponse && typeof apiResponse === "object"
+          ? Object.keys(apiResponse).slice(0, 8).join(",")
+          : "";
+      throw new Error(
+        `E_COBRO_RESP_INVALIDA: respuesta de venta inválida (sin doc/factura/data). tipo=${remoteType}${remoteKeys ? ` keys=${remoteKeys}` : ""}`,
+      );
+    }
 
     const idfactura = facturaResp?.idfactura || null;
 
@@ -15963,14 +16459,23 @@ async function onPayButtonClick() {
     }
 
     customerSetMode("CART");
-    let msg = err.message || "Error desconocido";
+    let msg = String(err?.message || err || "Error desconocido").trim();
+    let errCode = "E_COBRO";
 
     if (msg.toLowerCase().includes("stock")) {
+      errCode = "E_COBRO_STOCK";
       msg =
         "No se puede cobrar porque uno o varios productos no tienen stock disponible.";
+    } else if (msg.includes("E_COBRO_RESP_INVALIDA")) {
+      errCode = "E_COBRO_RESP_INVALIDA";
+      msg = msg.replace(/^E_COBRO_RESP_INVALIDA:\s*/i, "");
+    } else if (msg.toLowerCase().includes("429")) {
+      errCode = "E_COBRO_RATE_LIMIT";
+    } else if (msg.toLowerCase().includes("timeout")) {
+      errCode = "E_COBRO_TIMEOUT";
     }
 
-    toast(msg, "err", "Cobrar");
+    toast(`[${errCode}] ${msg}`, "err", "Cobrar");
     setStatusText("Error al cobrar");
   } finally {
     isPayingNow = false;
@@ -15997,7 +16502,7 @@ function moneyToNumber(v) {
   return isNaN(n) ? 0 : n;
 }
 
-// ===== Setting: Abrir cajón siempre =====
+// ===== [09] Ajuste: abrir cajon siempre =====
 
 function isCashPago(p) {
   const code = normalizeCashText(p?.codpago || "");
@@ -16083,41 +16588,11 @@ async function apiUpdateCajaAfterSale({ totalVenta, pagos }) {
   await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
 }
 
-// ===== Botón "Eliminar todo" =====
+// ===== [08] UI venta: boton eliminar todo =====
 const clearBtn = document.getElementById("clearCartBtn");
 if (clearBtn) {
-  clearBtn.onclick = async () => {
+  clearBtn.onclick = () => {
     if (!cashSession?.open) return;
-
-    const cartSnapshot = Array.isArray(cart) ? [...cart] : [];
-    if (!cartSnapshot.length) return;
-
-    const ok = await confirmModal(
-      "Vaciar carrito",
-      buildClearCartConfirmHtml(cartSnapshot),
-      {
-        isHtml: true,
-        textClassName: "clear-cart-modal-content",
-        dialogClassName: "clear-cart-dialog",
-      },
-    );
-
-    if (!ok) return;
-
-    try {
-      const idcaja = getCajaIdSafe();
-      if (idcaja) {
-        await appendCajaAutoLogLineForId(
-          idcaja,
-          buildClearCartLogLine(cartSnapshot),
-        );
-      }
-    } catch (e) {
-      console.warn(
-        "No se pudo registrar el vaciado del carrito en la caja:",
-        e?.message || e,
-      );
-    }
 
     cart = [];
     renderCart();
@@ -16127,7 +16602,7 @@ if (clearBtn) {
   };
 }
 
-// ===== Botón "Cobrar" =====
+// ===== [08] UI venta: boton cobrar =====
 const payBtn = document.getElementById("payBtn");
 if (payBtn) {
   payBtn.onclick = () => {
@@ -16151,7 +16626,7 @@ if (printTicketBtn) {
   };
 }
 
-// ===== EFECTIVO desde /formapagos =====
+// ===== [07] API pago: resolver forma de pago EFECTIVO =====
 let CASH_CODPAGOS = new Set();
 
 const CASH_DESC_HINTS = [
@@ -16219,13 +16694,7 @@ function buildCashCodpagosFromFormapagos(list) {
   return s;
 }
 
-function parseMoney(n) {
-  if (typeof n === "string") n = n.replace(",", ".");
-  const x = Number(n);
-  return isNaN(x) ? 0 : x;
-}
-
-// ===== Modal Cobrar (UI tipo FacturaScripts) =====
+// ===== [09] Modal cobrar (UI tipo FacturaScripts) =====
 const payOverlay = document.getElementById("payOverlay");
 const payMethodsList = document.getElementById("payMethodsList");
 const payTotalBig = document.getElementById("payTotalBig");
@@ -16309,9 +16778,6 @@ function centsToEuro2es(c) {
 function euro2(n) {
   return (Number(n) || 0).toFixed(2);
 }
-function euro2es(n) {
-  return euro2(n).replace(".", ",") + " €";
-}
 
 function sumPagosCents() {
   let sum = 0;
@@ -16323,10 +16789,6 @@ function sumPagosCents() {
 
 function remainingToPayCents() {
   return Math.max(0, (payModalState.totalCents || 0) - sumPagosCents());
-}
-
-function calcChangeCents() {
-  return Math.max(0, sumPagosCents() - (payModalState.totalCents || 0));
 }
 
 function clampNonCashValue(codEdited) {
@@ -16600,7 +17062,7 @@ function shouldOpenDrawerForPayResult(payResult) {
   return payResultHasCash(payResult);
 }
 
-// ===== Pay keypad binding (UNA SOLA VEZ, robusto para táctil) =====
+// ===== [09] Modal cobrar: binding keypad (una sola vez) =====
 let PAY_KEYPAD_BOUND = false;
 
 function bindPayKeypadOnce() {
@@ -16689,7 +17151,7 @@ function bindPayKeypadOnce() {
   );
 }
 
-// ===== Modal Cobrar =====
+// ===== [09] Modal cobrar: flujo principal =====
 async function openPayModal(total) {
   if (!payOverlay) throw new Error("Falta #payOverlay en index.html");
 
@@ -16932,7 +17394,7 @@ parkBtn?.addEventListener("click", () => {
   }
 
   // 1) No permitir aparcar si el carrito está vacío
-  if (!Array.isArray(cart) || cart.length === 0) {
+  if (!hasVisibleCartLines()) {
     toast("No puedes aparcar un ticket vacío.", "warn", "Aparcar");
     return;
   }
@@ -17859,6 +18321,8 @@ async function resolveCompanyByEmail(email) {
 }
 
 async function validateBaseUrlOrThrow(baseUrl, apiKey) {
+  throwIfApi429Cooldown("validateBaseUrlOrThrow");
+
   const url = `${baseUrl.replace(/\/+$/, "")}/productos?limit=1`;
 
   const controller = new AbortController();
@@ -17870,6 +18334,14 @@ async function validateBaseUrlOrThrow(baseUrl, apiKey) {
       cache: "no-store",
       signal: controller.signal,
     });
+
+    if (res.status === 429) {
+      triggerApi429Cooldown(
+        "validateBaseUrlOrThrow",
+        res.headers?.get?.("Retry-After") || "",
+      );
+      throw buildApi429Error();
+    }
 
     if (!res.ok) {
       throw new Error(`Ping falló: HTTP ${res.status}`);
@@ -18701,6 +19173,15 @@ async function fetchApiResourceWithParams(resource, params = {}) {
   if (!cfg || !cfg.baseUrl || !cfg.apiKey)
     throw new Error("Config API no definida");
 
+  throwIfApi429Cooldown(`fetchApiResourceWithParams:${resource}`);
+
+  const availability = await canCallApiResource(resource, {});
+  if (availability.known && !availability.ok) {
+    throw new Error(
+      `Recurso no disponible en API: ${availability.missing?.[0] || resource}`,
+    );
+  }
+
   const base = cfg.baseUrl.replace(/\/+$/, "");
   const sp = new URLSearchParams();
 
@@ -18716,11 +19197,21 @@ async function fetchApiResourceWithParams(resource, params = {}) {
     cache: "no-store",
   });
 
-  if (res.status === 429)
-    throw new Error("API 429 (demasiadas peticiones). Espera unos minutos.");
+  if (res.status === 429) {
+    triggerApi429Cooldown(
+      `fetchApiResourceWithParams:${resource}`,
+      res.headers?.get?.("Retry-After") || "",
+    );
+    throw buildApi429Error();
+  }
   const data = await res.json().catch(() => null);
 
-  if (!res.ok) throw new Error(`HTTP ${res.status} en ${resource}`);
+  if (!res.ok) {
+    if (res.status === 404) {
+      markApiResourceMissing(resource);
+    }
+    throw new Error(`HTTP ${res.status} en ${resource}`);
+  }
   if (data && data.status === "error")
     throw new Error(data.message || `Error API en ${resource}`);
 
@@ -18851,9 +19342,7 @@ async function openProductStockEditFlow(product) {
   }
 }
 
-// ==========================
-// PACKS / OFERTAS (Facturascripts plugin)
-// ==========================
+// ===== [08] Venta avanzada: packs/ofertas (plugin FacturaScripts) =====
 
 function normTxt(s) {
   return String(s || "")
@@ -18947,35 +19436,21 @@ function looksLikePackChildByRef(fsLine, childRefSet) {
   return false;
 }
 
-/**
- * ✅ Filtra líneas para devolución:
- * - Si no hay PACKS_STATE listo -> no filtra.
- * - Si el ticket no parece contener ofertas -> no filtra.
- * - Si hay ofertas -> oculta líneas 0,00 que coinciden con references del pack.
- */
-function filterRefundLinesForUI(fsLines) {
-  const lines = Array.isArray(fsLines) ? fsLines : [];
-
-  if (!PACKS_STATE?.ready) return lines;
-
-  const hasOffer = ticketHasOfferByName(lines);
-  if (!hasOffer) return lines;
-
-  const childRefSet = buildPackChildRefSet();
-
-  return lines.filter((l) => {
-    if (!isZeroUnitFsLine(l)) return true; // líneas normales
-    // si vale 0, solo la ocultamos si parece hijo de pack
-    return !looksLikePackChildByRef(l, childRefSet);
-  });
-}
-
 function isPackParentLine(line) {
   return !!line?.meta?.isPackOffer && !!line?.meta?.packId;
 }
 
 function isPackChildLine(line) {
   return !!line?.meta?.includedInPack && !!line?.meta?.parentPackLineId;
+}
+
+function getVisibleCartLines(cartArr = cart) {
+  const src = Array.isArray(cartArr) ? cartArr : [];
+  return src.filter((line) => !isPackChildLine(line));
+}
+
+function hasVisibleCartLines(cartArr = cart) {
+  return getVisibleCartLines(cartArr).length > 0;
 }
 
 function getPackChildren(parentLineId) {
@@ -19105,6 +19580,7 @@ function syncSelectedPackChildrenQty(parentLine) {
 const PACKS_STATE = {
   ready: false,
   apiUnsupported: false,
+  unsupportedFailCount: 0,
   packsByOfferProductId: new Map(), // key: idproducto oferta (idproduct en productpacks)
   linesByPackId: new Map(), // key: idpack -> [lines]
   productByRefCache: new Map(), // key: referencia -> producto FS (o null)
@@ -19136,15 +19612,33 @@ async function fetchProductoByReferencia(ref) {
 async function warmupPacksData(opts = {}) {
   const force = opts.force === true;
 
-  // Si la API no soporta endpoints de packs (404), evitamos reintentos ruidosos.
-  if (PACKS_STATE.apiUnsupported) {
-    return false;
-  }
+  // Si ya hay datos de packs y no se fuerza, evita peticiones innecesarias.
+  if (PACKS_STATE.ready && !force) return true;
+
+  // Si los endpoints están marcados como no soportados, solo reintenta al forzar.
+  if (PACKS_STATE.apiUnsupported && !force) return false;
 
   // Si estamos offline y no se ha forzado, no tocamos nada
   if (TPV_STATE?.offline && !force) {
     return false;
   }
+
+  // Validación genérica por recursos requeridos de la feature "packs".
+  try {
+    const availability = await isApiFeatureAvailable("packs", { force });
+    if (availability.known && !availability.ok) {
+      PACKS_STATE.apiUnsupported = true;
+      console.info(
+        `[PACKS] Recursos no declarados en /api/3/: ${availability.missing.join(", ")}. Se deshabilita precarga de packs.`,
+      );
+      return false;
+    }
+
+    // Si reaparecieron en recursos, limpiamos estado previo de no soportado.
+    if (availability.known && availability.ok && PACKS_STATE.apiUnsupported) {
+      PACKS_STATE.apiUnsupported = false;
+    }
+  } catch {}
 
   let packs = [];
   let lines = [];
@@ -19155,18 +19649,56 @@ async function warmupPacksData(opts = {}) {
       fetchApiResource("productpacklines"),
     ]);
 
-    const is404 = (err) =>
-      /HTTP\s*404/i.test(String(err?.message || err || ""));
+    const errText = (err) => String(err?.message || err || "").toLowerCase();
+    const is404Like = (err) => {
+      const txt = errText(err);
+      return (
+        txt.includes("http 404") ||
+        txt.includes("404") ||
+        txt.includes("not found") ||
+        txt.includes("no encontrado")
+      );
+    };
+    const isTransient = (err) => {
+      const txt = errText(err);
+      return (
+        txt.includes("offline") ||
+        txt.includes("network") ||
+        txt.includes("failed to fetch") ||
+        txt.includes("timeout") ||
+        txt.includes("abort") ||
+        txt.includes("429")
+      );
+    };
+
+    const packsErr = packsRes.status === "rejected" ? packsRes.reason : null;
+    const linesErr = linesRes.status === "rejected" ? linesRes.reason : null;
 
     if (
-      (packsRes.status === "rejected" && is404(packsRes.reason)) ||
-      (linesRes.status === "rejected" && is404(linesRes.reason))
+      (packsErr && is404Like(packsErr)) ||
+      (linesErr && is404Like(linesErr))
     ) {
       PACKS_STATE.apiUnsupported = true;
       console.info(
-        "[PACKS] Endpoints no disponibles (404). Se deshabilita precarga de packs.",
+        "[PACKS] Endpoints no disponibles (404/not-found). Se deshabilita precarga de packs.",
       );
       return false;
+    }
+
+    if (packsErr || linesErr) {
+      const transient =
+        (packsErr && isTransient(packsErr)) ||
+        (linesErr && isTransient(linesErr));
+      if (!transient) {
+        PACKS_STATE.unsupportedFailCount += 1;
+        if (PACKS_STATE.unsupportedFailCount >= 2) {
+          PACKS_STATE.apiUnsupported = true;
+          console.info(
+            "[PACKS] Endpoints no soportados en este cliente. Se deshabilita precarga.",
+          );
+          return false;
+        }
+      }
     }
 
     // Si falla cualquiera, mantenemos la caché anterior
@@ -19183,6 +19715,9 @@ async function warmupPacksData(opts = {}) {
     console.warn("Error cargando packs:", e?.message || e);
     return false;
   }
+
+  PACKS_STATE.unsupportedFailCount = 0;
+  PACKS_STATE.apiUnsupported = false;
 
   // Construimos mapas temporales y solo si todo fue bien sustituimos el estado
   const nextPacksByOfferProductId = new Map();
@@ -19559,22 +20094,15 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
   });
 }
 
-// =============================================================
-// IMÁGENES DE PRODUCTOS (attachedfiles + attachedfilerelations)
-// =============================================================
-// =============================================================
-// IMÁGENES DE PRODUCTOS
+// ===== [07] API media: imagenes de productos =====
 // Prioridad:
-//   1) productoimagenes  -> relación directa producto -> imagen
+//   1) productoimagenes  -> relacion directa producto -> imagen
 //   2) fallback antiguo  -> attachedfiles + attachedfilerelations
-// =============================================================
 
 // Mapa global: { [idproducto]: { idfile, url, filename, mimetype, orden } }
 let PRODUCT_IMAGES_MAP = {};
 
-// -------------------------------------------------------------
-// Fallback antiguo: attachedfiles
-// -------------------------------------------------------------
+// ===== [07] API media fallback: attachedfiles =====
 async function fetchAttachedImageFiles() {
   const data = await fetchApiResourceWithParams("attachedfiles", {
     limit: 0,
@@ -19590,9 +20118,7 @@ async function fetchAttachedImageFiles() {
   });
 }
 
-// -------------------------------------------------------------
-// Fallback antiguo: relaciones solo de Producto
-// -------------------------------------------------------------
+// ===== [07] API media fallback: relaciones de Producto =====
 async function fetchProductFileRelations() {
   const data = await fetchApiResourceWithParams("attachedfilerelations", {
     "filter[model]": "Producto",
@@ -19846,56 +20372,6 @@ function linkTicketsRefundRelations(list) {
   }
 
   return tickets;
-}
-
-function hideRefundedOriginals(rows) {
-  const list = Array.isArray(rows) ? rows : [];
-
-  // Índice de devoluciones por id original
-  const refundIdx = buildRefundIndex(list);
-
-  // Creamos salida: rectificativas siempre + originales sólo si queda pendiente
-  const out = [];
-
-  for (const r of list) {
-    const raw = r._raw || {};
-    const id = Number(r.idfactura || raw.idfactura || 0);
-    const idOriginal = Number(r.idfacturarect || raw.idfacturarect || 0);
-    const isRectificativa = idOriginal > 0;
-
-    if (isRectificativa) {
-      // La rectificativa SIEMPRE se muestra (en rojo ya la pintas)
-      out.push(r);
-      continue;
-    }
-
-    // Es original: calcular cuánto queda pendiente
-    const originalTotal = Number(r.total ?? raw.total ?? 0);
-    const ref = refundIdx.get(id);
-
-    if (!ref) {
-      // No tiene devoluciones -> se muestra normal
-      out.push(r);
-      continue;
-    }
-
-    const pending = round2(originalTotal - ref.refundedAbsTotal);
-
-    // Si pendiente <= 0 => devolución total -> ocultar original
-    if (pending <= 0.001) {
-      continue;
-    }
-
-    // Si pendiente > 0 => devolución parcial -> mostramos original pero con total pendiente
-    out.push({
-      ...r,
-      total: pending,
-      _pendingTotal: pending,
-      _hasPartialRefund: true,
-    });
-  }
-
-  return out;
 }
 
 // Devuelve un Map: idOriginal -> { refundedAbsTotal, rects: [] }
@@ -20505,25 +20981,6 @@ function formatRefundOriginalPayments(recibos) {
     );
 }
 
-function renderRefundPaymentInfo(recibos) {
-  const wrap = document.getElementById("refundPaymentInfoInlineWrap");
-  const box = document.getElementById("refundPaymentInfoInline");
-  if (!wrap || !box) return;
-
-  const rows = formatRefundOriginalPayments(recibos);
-
-  if (!rows.length) {
-    wrap.style.display = "none";
-    box.textContent = "";
-    return;
-  }
-
-  wrap.style.display = "block";
-  box.textContent = rows
-    .map((r) => `${r.label}: ${eurES(r.amount)}`)
-    .join("   ·   ");
-}
-
 function renderRefundLines() {
   const wrap = document.getElementById("refundLines");
   if (!wrap) return;
@@ -20687,37 +21144,6 @@ function bindRefundLineClicks() {
     refundState.qtyByLineId[id] = curr;
     renderRefundLines();
   };
-}
-
-function getLineDisplayNameForLog(line) {
-  const clean = (v) =>
-    String(v || "")
-      .replace(/^DEV\s*-\s*/i, "")
-      .trim();
-
-  const normalizeCompare = (v) => clean(v).toUpperCase().replace(/\s+/g, " ");
-
-  const ref = clean(line?.referencia);
-  const desc = clean(line?.descripcion);
-  const nombre = clean(line?.nombre);
-
-  const isValid = (s) => !!s && s !== "-" && s !== "—";
-
-  const refOk = isValid(ref);
-  const descOk = isValid(desc);
-  const nombreOk = isValid(nombre);
-
-  // Si referencia y descripción son iguales, mostrar solo una
-  if (refOk && descOk && normalizeCompare(ref) === normalizeCompare(desc)) {
-    return ref;
-  }
-
-  if (refOk && descOk) return `${ref} - ${desc}`;
-  if (refOk) return ref;
-  if (descOk) return desc;
-  if (nombreOk) return nombre;
-
-  return "Producto";
 }
 
 function refundSelectAll() {
@@ -21341,7 +21767,140 @@ function showMessageModal(title, text) {
   };
 }
 
-// ===== Inicialización =====
+async function bootstrapE2EMode() {
+  try {
+    document.body.dataset.e2eMode = "1";
+    document.body.dataset.e2eSource = "booting";
+  } catch {}
+  window.__TPV_E2E_BOOT_SOURCE__ = "booting";
+  window.__TPV_E2E_BOOT_ERROR__ = "";
+
+  try {
+    localStorage.clear();
+  } catch {}
+
+  const e2eBaseUrl =
+    String(window.TPV_ENV?.e2eApiBaseUrl || "").trim() ||
+    "https://plus.recipok.com/demo/api/3";
+  const e2eApiKey = String(window.TPV_ENV?.e2eApiKey || "").trim();
+  const requireOnline = !!window.TPV_ENV?.e2eRequireOnline;
+
+  window.RECIPOK_API = {
+    baseUrl: e2eBaseUrl,
+    apiKey: e2eApiKey,
+    defaultCodClienteTPV: "1",
+  };
+
+  TPV_STATE.locked = false;
+  TPV_STATE.offline = false;
+  TPV_STATE.isAdmin = true;
+
+  installE2ERemoteWriteGuard(e2eBaseUrl);
+
+  terminals = [{ id: 9999, name: "TPV DEMO E2E" }];
+  currentTerminal = terminals[0];
+
+  agents = [{ id: 9999, codagente: "E2E", name: "Agente Demo E2E" }];
+  agentsByTerminal = { [String(currentTerminal.id)]: agents };
+  currentAgent = agents[0];
+
+  localStorage.setItem(LOGIN_USER_KEY, "e2e-demo");
+  localStorage.setItem(LOGIN_TOKEN_KEY, "e2e-token");
+  localStorage.setItem("tpv_login_codagente", "E2E");
+  localStorage.setItem("tpv_login_codalmacen", "1");
+  localStorage.setItem("tpv_login_isAdmin", "1");
+  localStorage.setItem("tpv_printerRealName", "E2E Mock Printer");
+  localStorage.setItem("tpv_autoPrint", "1");
+
+  let bootSource = "local-fallback";
+  let lastBootstrapError = "";
+
+  const attempts = requireOnline ? 3 : 1;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      await loadDataFromApi({ refresh: true, silentRetry: true });
+
+      const onlineReady =
+        !TPV_STATE.offline &&
+        Array.isArray(products) &&
+        products.length > 0 &&
+        Array.isArray(categories) &&
+        categories.length > 0;
+
+      if (onlineReady) {
+        bootSource = "remote-demo";
+        break;
+      }
+    } catch (e) {
+      lastBootstrapError = String(e?.message || e || "").trim();
+      console.warn("[E2E] Remote demo bootstrap failed:", e?.message || e);
+    }
+
+    if (i < attempts - 1) {
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+  }
+
+  if (bootSource !== "remote-demo") {
+    categories = [...demoCategories];
+    products = [...demoProducts];
+
+    if (requireOnline) {
+      const reason =
+        e2eApiKey
+          ? `No se pudo conectar al slug demo remoto con la API key indicada.${lastBootstrapError ? ` Detalle: ${lastBootstrapError}` : ""}`
+          : "Falta TPV_E2E_API_KEY para conectar al slug demo remoto.";
+
+      window.__TPV_E2E_BOOT_ERROR__ = reason;
+      throw new Error(reason);
+    }
+  }
+
+  if (!currentTerminal) {
+    terminals = [{ id: 9999, name: "TPV DEMO E2E" }];
+    currentTerminal = terminals[0];
+  }
+
+  if (!currentAgent) {
+    agents = [{ id: 9999, codagente: "E2E", name: "Agente Demo E2E" }];
+    agentsByTerminal = { [String(currentTerminal.id)]: agents };
+    currentAgent = agents[0];
+  }
+
+  cart = [];
+  parkedTickets = [];
+  cashSession.open = true;
+  cashSession.openedAt = new Date().toISOString();
+  cashSession.remoteCajaId = 9999;
+  cashSession.openingTotal = 0;
+  cashSession.closingTotal = 0;
+  cashSession.totalSales = 0;
+  cashSession.cashSalesTotal = 0;
+  cashSession.cashMovementsTotal = 0;
+  cashSession.paymentsByMethod = {};
+  cashSession.paymentLedger = [];
+
+  try {
+    document.body.dataset.e2eMode = "1";
+    document.body.dataset.e2eSource = bootSource;
+  } catch {}
+
+  window.__TPV_E2E_BOOT_SOURCE__ = bootSource;
+
+  renderMainUI();
+  renderMainAgentBar?.();
+  renderCart();
+  updateSessionLockUi();
+  updateCashButtonLabel();
+  updateParkedCountBadge();
+  refreshOptionsUI();
+  renderCashIdChip();
+  refreshAgentGuardUI?.();
+  refreshParkButtonUI?.();
+  pushCustomerState?.();
+}
+
+// ===== [10] Inicializacion principal (bootstrap UI y modo E2E) =====
 window.addEventListener("DOMContentLoaded", async () => {
   initThemeMode();
   await initCustomerDisplayThemeMode();
@@ -21351,6 +21910,25 @@ window.addEventListener("DOMContentLoaded", async () => {
   updateCashButtonLabel();
   updateParkedCountBadge();
   refreshOptionsUI();
+
+  if (TPV_E2E_MODE) {
+    try {
+      await bootstrapE2EMode();
+    } catch (e) {
+      window.__TPV_E2E_BOOT_ERROR__ = e?.message || "No se pudo iniciar E2E remoto.";
+      window.__TPV_E2E_BOOT_SOURCE__ = "boot-error";
+      try {
+        document.body.dataset.e2eMode = "1";
+        document.body.dataset.e2eSource = "boot-error";
+      } catch {}
+      showMessageModal(
+        "E2E remoto no disponible",
+        e?.message || "No se pudo iniciar E2E remoto.",
+      );
+    }
+    setTpvLoadingState(false);
+    return;
+  }
 
   startOnlineMonitor();
 
@@ -21374,7 +21952,7 @@ async function refreshTicketsCacheFromServer() {
   }
 }
 
-// ===== Atajo de teclado para reset de fábrica (Ctrl+Shift+R) =====
+// ===== [06] Atajos globales: reset de fabrica (Ctrl+Shift+R) =====
 window.addEventListener("keydown", async (e) => {
   if (!(e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "r")) return;
 
@@ -21412,6 +21990,12 @@ window.addEventListener("keydown", async (e) => {
     } catch {}
     try {
       localStorage.removeItem("tpv_cached_tickets");
+    } catch {}
+    try {
+      localStorage.removeItem(API_RESOURCES_CACHE_KEY);
+      localStorage.removeItem(API_RESOURCES_CACHE_TS_KEY);
+      localStorage.removeItem(API_MISSING_RESOURCES_CACHE_KEY);
+      localStorage.removeItem(API_MISSING_RESOURCES_CACHE_TS_KEY);
     } catch {}
 
     // opcional: cualquier cache que uses
@@ -21474,38 +22058,30 @@ window.addEventListener("keydown", async (e) => {
   window.location.reload();
 });
 
-/* =============================================================
-   CAJA - Stepper + teclado numérico/calculadora
-   ============================================================= */
+// ===== [08][Z08.3] Caja UI: stepper + teclado numerico/calculadora =====
 
 function cashParseToInt(value) {
-  // Permite expresiones tipo "2*4", "10+5", "20/2" etc.
-  // Seguridad: solo números y operadores básicos.
-  const raw = String(value ?? "")
-    .trim()
-    .replace(",", ".");
-  if (!raw) return 0;
-
-  // Solo deja: dígitos, espacios, + - * / ( ) y punto
-  if (!/^[0-9+\-*/().\s]+$/.test(raw)) return 0;
-
-  try {
-    // Eval controlado (con filtro anterior). Resultado numérico.
-    const result = Function(`"use strict"; return (${raw});`)();
-    const n = Number(result);
-    if (!Number.isFinite(n)) return 0;
-    return Math.max(0, Math.round(n)); // cantidades enteras >= 0
-  } catch (e) {
-    return 0;
-  }
+  const n = evaluateNumericExpression(String(value ?? ""));
+  if (n == null) return 0;
+  return Math.max(0, Math.round(Number(n) || 0));
 }
 
 function cashSetInputValue(input, newVal) {
   const n = Math.max(0, parseInt(newVal, 10) || 0);
   input.value = String(n);
+  syncCashStepperClearButton(input);
   // Si ya tienes un listener que recalcula totales al 'input', lo disparo:
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function syncCashStepperClearButton(input) {
+  const wrap = input?.closest?.(".cash-stepper-input-wrap");
+  const btn = wrap?.querySelector?.(".cash-stepper-clear-btn");
+  if (!btn) return;
+
+  const qty = Math.max(0, parseInt(input?.value || "0", 10) || 0);
+  btn.classList.toggle("hidden", qty <= 0);
 }
 
 function cashWrapInputsWithSteppers() {
@@ -21536,11 +22112,22 @@ function cashWrapInputsWithSteppers() {
     btnPlus.className = "cash-stepper-btn plus";
     btnPlus.textContent = "+";
 
+    const inputWrap = document.createElement("div");
+    inputWrap.className = "cash-stepper-input-wrap";
+
+    const clearBtn = document.createElement("button");
+    clearBtn.type = "button";
+    clearBtn.className = "cash-stepper-clear-btn hidden";
+    clearBtn.textContent = "×";
+    clearBtn.title = "Poner a 0";
+
     // Insertamos wrapper en el DOM (mantenemos el orden)
     const parent = input.parentElement;
     parent.insertBefore(wrap, input);
     wrap.appendChild(btnMinus);
-    wrap.appendChild(input);
+    wrap.appendChild(inputWrap);
+    inputWrap.appendChild(input);
+    inputWrap.appendChild(clearBtn);
     wrap.appendChild(btnPlus);
 
     // Botones +/- suman/restan 1
@@ -21567,6 +22154,19 @@ function cashWrapInputsWithSteppers() {
     input.addEventListener("click", () => {
       cashOpenNumPadForInput(input);
     });
+
+    clearBtn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+    });
+
+    clearBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      cashSetInputValue(input, 0);
+      input.blur();
+    });
+
+    syncCashStepperClearButton(input);
   });
 }
 
@@ -21598,7 +22198,7 @@ function cashOpenNumPadForInput(input) {
         input.blur(); // importante para que vuelva a disparar focus la próxima vez
       },
       "Caja", // productName (puede ser "")
-      "cash", // mode (qty para cantidades)
+      "qty",
       null,
       null,
     );
@@ -21673,6 +22273,10 @@ async function checkFSOnline() {
       return false;
     }
 
+    if (isApi429CooldownActive()) {
+      return false;
+    }
+
     const cfg = window.RECIPOK_API || {};
 
     // ✅ Si aún no hay empresa/config resuelta, distinguimos este caso
@@ -21693,6 +22297,14 @@ async function checkFSOnline() {
         cache: "no-store",
         signal: controller.signal,
       });
+
+      if (r.status === 429) {
+        triggerApi429Cooldown(
+          "checkFSOnline",
+          r.headers?.get?.("Retry-After") || "",
+        );
+        return false;
+      }
 
       return r.ok;
     } finally {
@@ -21758,7 +22370,11 @@ async function startOnlineMonitor() {
       } catch {}
 
       try {
-        await loadDataFromApi({ refresh: true, silentRetry: true });
+        const loadedRecently =
+          Date.now() - Number(LAST_FULL_LOAD_AT || 0) < 15000;
+        if (!BOOT_IN_FLIGHT && !loadedRecently) {
+          await loadDataFromApi({ refresh: true, silentRetry: true });
+        }
       } catch (e) {
         console.warn(
           "No se pudo refrescar datos completos al volver online:",
@@ -21826,9 +22442,7 @@ async function startOnlineMonitor() {
   setInterval(tick, 5000);
 }
 
-/* =============================================================
-   Envío/encolado de facturas
-   ============================================================= */
+// ===== [08][Z08.2] Cola offline: envio y encolado de facturas =====
 async function sendOrQueueFactura(payload) {
   try {
     const r = await createTicketInFacturaScripts(payload);
@@ -21886,9 +22500,7 @@ async function sendOrQueueFactura(payload) {
   }
 }
 
-/* =============================================================
-   Sincronización de la cola
-   ============================================================= */
+// ===== [08][Z08.2] Cola offline: sincronizacion =====
 async function syncQueueNow() {
   if (window.__SYNCING__) return;
   window.__SYNCING__ = true;
@@ -22114,7 +22726,7 @@ const PAY_METHODS_CACHE_TS_KEY = "tpv_cachedPayMethods_ts_v1";
 const TICKETS_CACHE_KEY = "tpv_cachedTickets_v1";
 const TICKETS_CACHE_TS_KEY = "tpv_cachedTickets_ts_v1";
 
-// ===== OFFLINE tickets visibles en modal =====
+// ===== [08] Venta offline: tickets visibles en modal =====
 const OFFLINE_TICKETS_KEY = "tpv_offlineTickets_v1";
 
 function saveTpvUsersCache(users) {
@@ -22760,6 +23372,8 @@ async function apiRead(resource) {
   const cfg = window.RECIPOK_API || {};
   if (!cfg.baseUrl || !cfg.apiKey) throw new Error("Config API no definida");
 
+  throwIfApi429Cooldown(`apiRead:${resource}`);
+
   const base = cfg.baseUrl.replace(/\/+$/, "");
   const url = `${base}/${String(resource).replace(/^\/+/, "")}`;
 
@@ -22777,6 +23391,14 @@ async function apiRead(resource) {
     data = text ? JSON.parse(text) : null;
   } catch (e) {
     console.error("Respuesta no JSON en", resource, ":", text);
+  }
+
+  if (res.status === 429) {
+    triggerApi429Cooldown(
+      `apiRead:${resource}`,
+      res.headers?.get?.("Retry-After") || "",
+    );
+    throw buildApi429Error();
   }
 
   if (!res.ok || (data && data.status === "error")) {
@@ -22959,9 +23581,7 @@ async function repairCompanyPersistenceIfNeeded() {
   } catch {}
 }
 
-/*----------------------*/
-/* editar precio (ADMIN) */
-/*----------------------*/
+// ===== [09][Z09.3] Edicion de precio (solo ADMIN) =====
 
 window.TPV_STATE = window.TPV_STATE || {};
 window.TPV_STATE.priceEditMode = false;
@@ -23033,7 +23653,7 @@ function bindPriceEditToggleOnce() {
   });
 }
 
-/* ===== Modal editar precio ===== */
+// ===== [09][Z09.3] Modal editar precio =====
 
 const priceEditState = { product: null };
 
@@ -23216,6 +23836,4 @@ async function logPermanentPriceChange({ product, oldGross, newGross }) {
   }
 }
 
-/*----------------------*/
-/* fin editar precio     */
-/*----------------------*/
+// ===== [09][Z09.3] Fin edicion de precio =====

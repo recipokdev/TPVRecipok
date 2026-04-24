@@ -81,28 +81,34 @@
 
       <!-- Info terminal / agente -->
       <div class="cart-terminal-row">
-        <span>
-          Terminal: <strong id="terminalName">---</strong>
-          &nbsp;|&nbsp; Agente:
-          <span id="agentName" class="agent-name">---</span>
-          &nbsp;|&nbsp; Usuario:
-          <span id="userName" class="agent-name user-name" title="Cerrar sesión"
+        <span class="terminal-meta-item">
+          <span class="terminal-meta-label">Terminal</span>
+          <strong id="terminalName" class="terminal-meta-value terminal-meta-value-btn"
+            >---</strong
+          >
+        </span>
+
+        <span class="terminal-meta-item">
+          <span class="terminal-meta-label">Agente</span>
+          <span id="agentName" class="agent-name terminal-meta-value">---</span>
+        </span>
+
+        <span class="terminal-meta-item">
+          <span class="terminal-meta-label">Usuario</span>
+          <span
+            id="userName"
+            class="agent-name user-name terminal-meta-value"
+            title="Cerrar sesión"
             >---</span
           >
-
-          <span id="cashInfo" style="margin-left: 6px; opacity: 0.85"></span>
-          <span
-            id="agentMissingBadge"
-            style="
-              margin-left: 8px;
-              font-weight: 800;
-              color: #b45309;
-              display: none;
-            "
-          >
-            ⚠️ Falta agente
-          </span>
         </span>
+
+        <span
+          id="cashInfo"
+          class="terminal-meta-item terminal-meta-value terminal-meta-cash"
+        ></span>
+
+        <span id="agentMissingBadge" class="terminal-meta-alert">⚠️ Falta agente</span>
       </div>
 
       <!-- Cliente actual -->
@@ -141,7 +147,7 @@
           class="cart-client-btn"
           title="Crear cliente"
         >
-          ➕
+          +
         </button>
       </div>
 
@@ -586,14 +592,25 @@
           <label for="cashDirectTotal">Importe directo</label>
 
           <div class="cash-direct-total-row">
-            <input
-              id="cashDirectTotal"
-              type="text"
-              inputmode="none"
-              placeholder="Ej: 100,00"
-              class="cash-direct-total-input"
-              readonly
-            />
+            <div class="cash-direct-total-input-wrap">
+              <input
+                id="cashDirectTotal"
+                type="text"
+                inputmode="none"
+                placeholder="Ej: 100,00"
+                class="cash-direct-total-input"
+                readonly
+              />
+              <button
+                type="button"
+                id="cashDirectTotalClearBtn"
+                class="cash-direct-clear-btn hidden"
+                title="Limpiar importes"
+                aria-label="Limpiar importes"
+              >
+                ×
+              </button>
+            </div>
 
             <button
               type="button"

@@ -1,0 +1,298 @@
+Version 3.2 - Tutorial Comandos Release/Test/Publish
+------------------------------------------------------
+
+- FLUJO UNIFICADO EN 3 COMANDOS (STABLE/BETA)
+- Comando 1 (test completo + publicar patch): npm run ops:1 -- --channel stable
+- Comando 2 (incidente: bloquear + rollback/tag delete): npm run ops:2 -- --channel stable
+- Comando 3 (fix: test completo + publicar fix + desbloquear): npm run ops:3 -- --channel stable
+- Para beta usa el mismo comando cambiando canal:
+- npm run ops:1 -- --channel beta
+- npm run ops:2 -- --channel beta
+- npm run ops:3 -- --channel beta
+
+- COMANDOS BETA (COPIAR/PEGAR)
+- 1) Subir beta de prueba: npm run beta:patch
+- 2) Si sale mal (bloquear + rollback): npm run beta:incident
+- 3) Subir beta arreglada + limpiar bloqueos: npm run beta:fix
+- 4) Ver estado policy beta: npm run policy:show:beta
+
+- COMANDOS STABLE (COPIAR/PEGAR)
+- 1) Subir stable: npm run stable:patch
+- 2) Si sale mal (bloquear + rollback): npm run stable:incident
+- 3) Subir stable arreglada + limpiar bloqueos: npm run stable:fix
+- 4) Ver estado policy stable: npm run policy:show:stable
+
+- E2E (PRUEBA REAL DE UI)
+- Ejecutar E2E basico (transaccional por defecto): npm run test:e2e
+- Ejecutar E2E demo simplificado (online + writes + background): npm run test:e2e:demo
+- Ejecutar E2E demo + probes de resiliencia: npm run test:e2e:demo:resilience
+- Ejecutar todo (quick + smoke + e2e): npm run test:full
+- E2E contra slug demo real (PowerShell): $env:TPV_E2E_API_KEY="TU_TOKEN_DEMO"; $env:TPV_E2E_REQUIRE_ONLINE="1"; npm run test:e2e
+- E2E solo lectura (sin escrituras): $env:TPV_E2E_API_KEY="TU_TOKEN_DEMO"; $env:TPV_E2E_REQUIRE_ONLINE="1"; $env:TPV_E2E_ALLOW_WRITES="0"; npm run test:e2e
+- Nota E2E: por defecto no ejecuta probes de resiliencia para reducir carga de peticiones; activarlos con TPV_E2E_RUN_RESILIENCE=1.
+
+- CHULETA RAPIDA (20 segundos)
+- Stable patch (0.0.x): npm run release:patch
+- Stable minor (0.x.0): npm run release:minor
+- Stable major (x.0.0): npm run release:major
+- Beta patch (0.0.x-beta.x): npm run release:beta:patch
+- Beta minor (0.x.0-beta.x): npm run release:beta:minor
+- Beta major (x.0.0-beta.x): npm run release:beta:major
+- Beta N+1 (0.0.0-beta.x): npm run release:beta:prerelease
+- Beta -> Stable (0.0.x-beta.0 -> 0.0.x): npm run release:promote
+- Publish stable: npm run publish:win / npm run publish:linux
+- Publish beta: npm run publish:win:beta / npm run publish:linux:beta
+- Test rapido: npm run test:quick
+- Test completo: npm run test
+- Incidente stable (bloquear + rollback): npm run policy:incident:stable -- --version X.Y.Z
+- Incidente beta (bloquear + rollback): npm run policy:incident:beta -- --version X.Y.Z
+- Recuperar stable: npm run policy:recover:stable -- --version X.Y.Z
+- Recuperar beta: npm run policy:recover:beta -- --version X.Y.Z
+- Runbook stable (imprime pasos): npm run policy:runbook:stable
+- Runbook beta (imprime pasos): npm run policy:runbook:beta
+- Incidente AUTO stable: npm run policy:incident:auto:stable
+- Incidente AUTO beta: npm run policy:incident:auto:beta
+- Recover AUTO stable: npm run policy:recover:auto:stable
+- Recover AUTO beta: npm run policy:recover:auto:beta
+- Doctor stable (comprobacion): npm run policy:doctor:stable
+- Doctor beta (comprobacion): npm run policy:doctor:beta
+- Bootstrap stable (instala/prepara gh): npm run policy:bootstrap:stable
+- Bootstrap beta (instala/prepara gh): npm run policy:bootstrap:beta
+
+- ATAJOS BETA (menos comandos):
+- Subir beta patch: npm run beta:patch
+- Subir beta patch sin prompts: npm run beta:patch:auto
+- Marcar beta mala (auto): npm run beta:incident
+- Limpiar bloqueos beta (auto): npm run beta:recover
+- Publicar beta arreglada + limpiar bloqueos: npm run beta:fix
+
+- ATAJOS STABLE (menos comandos):
+- Subir stable patch: npm run stable:patch
+- Subir stable patch sin prompts (ejecuta npm run test = quick+smoke): npm run stable:patch:auto
+- Subir stable patch sin prompts con E2E demo previo: npm run stable:patch:auto:all
+- Marcar stable mala (auto): npm run stable:incident
+- Limpiar bloqueos stable (auto): npm run stable:recover
+- Publicar stable arreglada + limpiar bloqueos: npm run stable:fix
+
+- Regla mental:
+- release:* = estable (origin)
+- release:beta:* = beta (beta-repo)
+- publish* = config estable
+- publish*:beta = config beta
+- policy:incident:* = bloquea version objetivo y habilita downgrade solo en clientes afectados
+- policy:incident:auto:* = bloquea + commit/push policy + borra release/tag en GitHub
+- policy:recover:auto:* = limpia policy + commit/push
+- policy:doctor:* = verifica que automatizacion total este lista (gh auth, repo, policy, git)
+- policy:bootstrap:* = prepara entorno (gh instalado + auth) y lanza doctor
+
+- Confirmaciones de seguridad (y/n):
+- release, policy manual y policy auto muestran resumen y piden confirmacion.
+- Puedes saltar confirmacion con --yes (para CI o ejecuciones no interactivas).
+
+- Ejemplos ultra cortos:
+- 0.1.87 -> release:patch -> 0.1.88
+- 0.1.87 -> release:beta:patch -> 0.1.88-beta.1
+- 0.1.88-beta.1 -> release:beta:patch -> 0.1.88-beta.2
+- 0.1.88-beta.4 -> release:promote -> 0.1.88
+- 0.1.88 rota -> policy:incident:stable -- --version 0.1.88
+
+------------------------------------------------------
+Detalle tecnico completo
+------------------------------------------------------
+
+- Este documento resume todos los comandos actuales.
+- Formato pensado para bloc de notas.
+- Incluye flujo normal, flujo beta y promocion beta -> normal.
+
+------------------------------------------------------
+Comandos de release normal (estable)
+------------------------------------------------------
+
+- Patch (0.0.x)
+- Comando: npm run release:patch
+- Desde estable: sube solo el tercer numero.
+- Ejemplo: 0.1.87 -> 0.1.88
+- Si la version actual es beta (ej: 0.1.88-beta.3), patch normal la promociona a estable:
+- Ejemplo: 0.1.88-beta.3 -> 0.1.88
+
+- Minor (0.x.0)
+- Comando: npm run release:minor
+- Sube el segundo numero y pone el tercero a 0.
+- Ejemplo: 0.1.87 -> 0.2.0
+
+- Major (x.0.0)
+- Comando: npm run release:major
+- Sube el primer numero y pone los demas a 0.
+- Ejemplo: 0.1.87 -> 1.0.0
+
+- Promocion beta -> estable (misma base)
+- Comando: npm run release:promote
+- Quita el sufijo beta manteniendo la misma base.
+- Ejemplo: 0.1.88-beta.4 -> 0.1.88
+- Si ya estas en estable, no cambia la version.
+
+- Version manual (control total)
+- Comando: npm run release -- 0.1.88
+- Usa exactamente esa version.
+
+------------------------------------------------------
+Comandos de release beta
+------------------------------------------------------
+
+- Beta manual (version exacta)
+- Comando: npm run release:beta -- 0.1.75-beta.1
+- Usa exactamente esa version beta.
+
+- Beta patch automatico
+- Comando: npm run release:beta:patch
+- Si vienes de estable: sube patch base y pone beta.1
+- Ejemplo: 0.1.87 -> 0.1.88-beta.1
+- Si ya estas en beta de la misma base: sube solo beta.N
+- Ejemplo: 0.1.88-beta.1 -> 0.1.88-beta.2
+
+- Beta minor automatico
+- Comando: npm run release:beta:minor
+- Sube minor base y pone beta.1
+- Ejemplo: 0.1.87 -> 0.2.0-beta.1
+
+- Beta major automatico
+- Comando: npm run release:beta:major
+- Sube major base y pone beta.1
+- Ejemplo: 0.1.87 -> 1.0.0-beta.1
+
+- Beta prerelease automatico (misma base)
+- Comando: npm run release:beta:prerelease
+- Sube solo beta.N dentro de la misma base.
+- Ejemplo: 0.1.88-beta.1 -> 0.1.88-beta.2
+
+------------------------------------------------------
+Que hace cualquier comando release
+------------------------------------------------------
+
+- Actualiza version en package.json.
+- Ejecuta npm run test (quick + smoke).
+- Ejecuta flujo git completo:
+- git add .
+- git commit -m "Release <version>" o estilo convencional en comandos beta.
+- git push <remote> <branch>
+- git tag v<version>
+- git push <remote> v<version>
+
+------------------------------------------------------
+Remote y rama: estable vs beta
+------------------------------------------------------
+
+- Release normal (estable): usa origin por defecto.
+- Release beta: usa beta-repo y branch main (segun scripts beta).
+- El script tambien tiene deteccion automatica por version final:
+- Si la version final termina en -beta..., el remoto por defecto es beta-repo.
+- Si la version final es estable, el remoto por defecto es origin.
+- Si pasas --remote manualmente, ese valor manda.
+
+------------------------------------------------------
+Comandos de test
+------------------------------------------------------
+
+- npm run test:quick
+- Chequeo sintactico de archivos criticos.
+
+- npm run test:smoke
+- Smoke estructural de flujos clave + presencia de checklist.
+
+- npm run test
+- Ejecuta quick + smoke.
+
+------------------------------------------------------
+Comandos de publish (con gate de test)
+------------------------------------------------------
+
+- Publish estable (repo/config estable):
+- npm run publish
+- npm run publish:win
+- npm run publish:linux
+
+- Publish beta (repo/config beta):
+- npm run publish:beta
+- npm run publish:win:beta
+- npm run publish:linux:beta
+
+- Todos pasan por npm run test antes de publicar.
+- Publish estable usa configuracion electron-builder.stable.json.
+- Publish beta usa configuracion electron-builder.beta.json.
+
+------------------------------------------------------
+Kill-switch y rollback de updates (incidentes)
+------------------------------------------------------
+
+- Objetivo:
+- Si publicas una version mala (ej: 0.1.88), evitar nuevas instalaciones.
+- Permitir que clientes ya afectados (en 0.1.88) puedan volver a una version anterior, solo cuando tu lo autorices.
+
+- Comandos nuevos de politica:
+- Ver politica stable: npm run policy:show:stable
+- Ver politica beta: npm run policy:show:beta
+- Marcar incidente stable: npm run policy:incident:stable -- --version 0.1.88
+- Marcar incidente beta: npm run policy:incident:beta -- --version 0.1.88-beta.3
+- Recuperar (quitar bloqueo): npm run policy:recover:stable -- --version 0.1.88
+- Recuperar (quitar bloqueo): npm run policy:recover:beta -- --version 0.1.88-beta.3
+- Imprimir guia de pasos: npm run policy:runbook:stable / npm run policy:runbook:beta
+- Incidente AUTO: npm run policy:incident:auto:stable / npm run policy:incident:auto:beta
+- Recover AUTO: npm run policy:recover:auto:stable / npm run policy:recover:auto:beta
+- Doctor previo: npm run policy:doctor:stable / npm run policy:doctor:beta
+
+- Nota de automatizacion total:
+- policy:incident:auto:* usa por defecto la version de package.json si no pasas --version.
+- Tambien acepta varias versiones malas en una sola ejecucion:
+- npm run policy:incident:auto:beta -- --version 0.1.89 --version 0.1.88
+- O con lista:
+- npm run policy:incident:auto:beta -- --versions 0.1.89,0.1.88
+- Esto cubre el caso de dos releases malas seguidas y deja como fallback la ultima sana disponible.
+
+- Que hace policy:incident:
+- Mete la version en blockUpdateToVersions (no se instala en clientes nuevos).
+- Mete la version en allowDowngradeFromVersions (solo esos clientes pueden bajar de version).
+
+- Procedimiento recomendado para caso real (stable):
+- 1) Detectas que 0.1.88 falla.
+- 2) Ejecutas: npm run policy:incident:stable -- --version 0.1.88
+- 3) Commit y push de build/update-policy.stable.json al repo (main).
+- 4) En GitHub Releases, despublica o elimina la release/tag v0.1.88 para que la "latest" vuelva a 0.1.87.
+- 5) Clientes en 0.1.87 no suben a 0.1.88 (bloqueada).
+- 6) Clientes en 0.1.88 podran bajar a 0.1.87 porque su version esta autorizada para downgrade.
+- 7) Corriges bug y publicas NUEVA version (recomendado: 0.1.89).
+- 8) Quitas incidente: npm run policy:recover:stable -- --version 0.1.88
+- 9) Commit y push de politica limpia.
+
+- Importante sobre reusar 0.1.88 vs sacar 0.1.89:
+- Recomendado: NO reusar la misma version ya publicada.
+- Mejor sacar 0.1.89 para evitar caches, metadatos viejos y confusiones de soporte.
+- Que "salte" numeracion tras incidente es normal y mas seguro en produccion.
+
+- Dónde se guarda la politica:
+- build/update-policy.stable.json
+- build/update-policy.beta.json
+
+- Dónde se configura su URL:
+- build/channel-stable.json
+- build/channel-beta.json
+
+------------------------------------------------------
+Flujos recomendados rapidos
+------------------------------------------------------
+
+- Sacar beta incremental sobre misma base:
+- npm run release:beta:prerelease
+
+- Empezar nuevo ciclo beta desde estable:
+- npm run release:beta:patch
+
+- Pasar una beta validada a estable sin cambiar base:
+- npm run release:promote
+
+- Publicar binarios estables:
+- npm run publish:win
+- npm run publish:linux
+
+- Publicar binarios beta:
+- npm run publish:win:beta
+- npm run publish:linux:beta

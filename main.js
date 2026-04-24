@@ -20,6 +20,15 @@ let lastCustomerState = null;
 let allowCustomerClose = false;
 let lastSecondInstanceUpdateCheckAt = 0;
 const scaleManager = new ScaleManager();
+const IS_E2E_BACKGROUND =
+  String(process.env.TPV_E2E || "") === "1" &&
+  String(process.env.TPV_E2E_BACKGROUND || "") === "1";
+
+const DEFAULT_UPDATE_POLICY_URLS = {
+  stable:
+    "https://raw.githubusercontent.com/recipokdev/TPVRecipok/main/build/update-policy.stable.json",
+  beta: "https://raw.githubusercontent.com/recipokdev/TPVRecipok/main/build/update-policy.beta.json",
+};
 
 async function triggerUpdateCheckIfSafe(reason = "manual") {
   // 1 check/min para evitar martillazos
@@ -46,6 +55,20 @@ function readChannel() {
   }
 }
 
+function readChannelConfig() {
+  try {
+    const p = app.isPackaged
+      ? path.join(process.resourcesPath, "channel.json")
+      : path.join(__dirname, "build", "channel-stable.json");
+    const data = JSON.parse(fs.readFileSync(p, "utf8"));
+    const channel = data.channel === "beta" ? "beta" : "stable";
+    const updatePolicyUrl = String(data.updatePolicyUrl || "").trim();
+    return { channel, updatePolicyUrl };
+  } catch {
+    return { channel: "stable", updatePolicyUrl: "" };
+  }
+}
+
 function getChannelSafe() {
   try {
     return readChannel();
@@ -55,6 +78,19 @@ function getChannelSafe() {
 }
 
 (function isolateUserDataPerChannel() {
+  const isE2E = String(process.env.TPV_E2E || "") === "1";
+  if (isE2E) {
+    const forcedPath = String(process.env.TPV_E2E_USER_DATA || "").trim();
+    if (forcedPath) {
+      app.setPath("userData", forcedPath);
+      return;
+    }
+
+    const oldPath = app.getPath("userData");
+    app.setPath("userData", oldPath + "-e2e");
+    return;
+  }
+
   const ch = getChannelSafe();
   if (ch !== "beta") return;
   const oldPath = app.getPath("userData");
@@ -69,9 +105,11 @@ if (!gotTheLock) {
     if (appIsInstallingUpdate) return;
 
     if (mainWin && !mainWin.isDestroyed()) {
-      if (mainWin.isMinimized()) mainWin.restore();
-      mainWin.show();
-      mainWin.focus();
+      if (!IS_E2E_BACKGROUND) {
+        if (mainWin.isMinimized()) mainWin.restore();
+        mainWin.show();
+        mainWin.focus();
+      }
     } else {
       createWindow();
     }
@@ -149,6 +187,7 @@ async function renderTicketPdf(html) {
 }
 
 function isKioskMode() {
+  if (IS_E2E_BACKGROUND) return false;
   try {
     const cfg = readCfg();
     return cfg.kioskMode !== false; // default true
@@ -209,6 +248,7 @@ function applyKioskMode(win, enabled) {
 function createWindow() {
   if (appIsInstallingUpdate) return;
   const isDev = !app.isPackaged;
+  const e2eBackground = IS_E2E_BACKGROUND;
   const kioskMode = isKioskMode();
 
   mainWin = new BrowserWindow({
@@ -220,9 +260,15 @@ function createWindow() {
       contextIsolation: true,
       preload: path.join(__dirname, "preload.js"),
       sandbox: false,
-      devTools: isDev,
+      devTools: isDev && !e2eBackground,
     },
   });
+
+  if (e2eBackground) {
+    try {
+      mainWin.setSkipTaskbar(false);
+    } catch (_) {}
+  }
 
   mainWin.setTitle(getWindowTitle());
 
@@ -275,12 +321,32 @@ function createWindow() {
   loadUI(mainWin);
 
   if (!app.isPackaged) {
-    mainWin.webContents.openDevTools({ mode: "right" }); // o "detach"
+    if (e2eBackground) {
+      mainWin.webContents.openDevTools({ mode: "detach", activate: false });
+    } else {
+      mainWin.webContents.openDevTools({ mode: "right" }); // o "detach"
+    }
   }
 
   mainWin.once("ready-to-show", () => {
     if (appIsInstallingUpdate) return;
     if (!mainWin || mainWin.isDestroyed()) return;
+
+    if (e2eBackground) {
+      try {
+        if (typeof mainWin.showInactive === "function") {
+          mainWin.showInactive();
+        } else {
+          mainWin.show();
+        }
+      } catch (_) {}
+
+      try {
+        mainWin.minimize();
+      } catch (_) {}
+
+      return;
+    }
 
     mainWin.show();
     // si NO es kiosk, maximiza al arrancar
@@ -320,8 +386,14 @@ async function runUpdateCheckOncePreCash() {
     // listeners locales SOLO para este intento
     autoUpdater.removeAllListeners();
 
-    autoUpdater.autoDownload = true;
+    const channel = readChannel();
+    const policy = await loadUpdatePolicy(channel);
+    const currentVersion = app.getVersion();
+
+    autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
+    autoUpdater.allowPrerelease = channel === "beta";
+    autoUpdater.allowDowngrade = shouldAllowDowngrade(policy, currentVersion);
 
     return await new Promise((resolve) => {
       let finished = false;
@@ -346,8 +418,29 @@ async function runUpdateCheckOncePreCash() {
         done({ ok: true, updated: false });
       });
 
-      autoUpdater.once("update-available", () => {
-        // seguirá con descarga automática
+      autoUpdater.once("update-available", (info) => {
+        const targetVersion = String(info?.version || "").trim();
+        if (isTargetVersionBlocked(policy, targetVersion)) {
+          logUpdater(
+            `[POLICY] blocked update pre-cash: ${currentVersion} -> ${targetVersion}`,
+          );
+          return done({
+            ok: true,
+            updated: false,
+            blockedByPolicy: true,
+            targetVersion,
+          });
+        }
+
+        try {
+          autoUpdater.downloadUpdate();
+        } catch (err) {
+          done({
+            ok: false,
+            reason: "download-throw",
+            error: err?.message || String(err),
+          });
+        }
       });
 
       autoUpdater.once("update-downloaded", async () => {
@@ -618,6 +711,116 @@ function httpsGetOk(url, { headers = {}, timeoutMs = 7000 } = {}) {
   });
 }
 
+function httpsGetJson(url, { headers = {}, timeoutMs = 7000 } = {}) {
+  return new Promise((resolve) => {
+    try {
+      const u = new URL(url);
+
+      const req = https.request(
+        {
+          method: "GET",
+          hostname: u.hostname,
+          path: u.pathname + (u.search || ""),
+          headers,
+          timeout: timeoutMs,
+        },
+        (res) => {
+          const chunks = [];
+          res.on("data", (d) => chunks.push(d));
+          res.on("end", () => {
+            const body = Buffer.concat(chunks).toString("utf8");
+            const status = res.statusCode || 0;
+            if (status < 200 || status >= 300) {
+              return resolve({ ok: false, status, error: "http-status" });
+            }
+            try {
+              const json = JSON.parse(body || "{}");
+              resolve({ ok: true, status, json });
+            } catch {
+              resolve({ ok: false, status, error: "invalid-json" });
+            }
+          });
+        },
+      );
+
+      req.on("timeout", () => {
+        req.destroy();
+        resolve({ ok: false, status: 0, error: "timeout" });
+      });
+      req.on("error", (e) =>
+        resolve({ ok: false, status: 0, error: e?.message || String(e) }),
+      );
+      req.end();
+    } catch (e) {
+      resolve({ ok: false, status: 0, error: e?.message || String(e) });
+    }
+  });
+}
+
+function normalizeUpdatePolicy(raw, channel) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const blocked = Array.isArray(src.blockUpdateToVersions)
+    ? src.blockUpdateToVersions
+    : [];
+  const downgradeFrom = Array.isArray(src.allowDowngradeFromVersions)
+    ? src.allowDowngradeFromVersions
+    : [];
+
+  const normalizeVersionList = (list) => [
+    ...new Set(list.map((v) => String(v || "").trim()).filter(Boolean)),
+  ];
+
+  return {
+    channel,
+    blockUpdateToVersions: normalizeVersionList(blocked),
+    allowDowngrade: src.allowDowngrade === true,
+    allowDowngradeFromVersions: normalizeVersionList(downgradeFrom),
+  };
+}
+
+async function loadUpdatePolicy(channel) {
+  const channelCfg = readChannelConfig();
+  const policyUrl =
+    String(channelCfg.updatePolicyUrl || "").trim() ||
+    DEFAULT_UPDATE_POLICY_URLS[channel] ||
+    "";
+
+  if (!policyUrl) {
+    return normalizeUpdatePolicy({}, channel);
+  }
+
+  const headers = {
+    Accept: "application/json",
+    "Cache-Control": "no-cache",
+    Pragma: "no-cache",
+  };
+
+  const res = await httpsGetJson(policyUrl, { headers, timeoutMs: 7000 });
+  if (!res.ok) {
+    logUpdater(
+      `[POLICY] fallback local defaults: channel=${channel} url=${policyUrl} error=${res.error || res.status}`,
+    );
+    return normalizeUpdatePolicy({}, channel);
+  }
+
+  return normalizeUpdatePolicy(res.json, channel);
+}
+
+function shouldAllowDowngrade(policy, currentVersion) {
+  if (!policy) return false;
+  if (policy.allowDowngrade) return true;
+  const current = String(currentVersion || "").trim();
+  if (!current) return false;
+  return policy.allowDowngradeFromVersions.includes(current);
+}
+
+function isTargetVersionBlocked(policy, targetVersion) {
+  if (!policy) return false;
+  const target = String(targetVersion || "").trim();
+  if (!target) return false;
+  return policy.blockUpdateToVersions.includes(target);
+}
+
 function getCompanyFromCfgForMain() {
   const cfg = readCfg();
   const baseUrl = String(cfg["company.baseUrl"] || "").trim();
@@ -732,6 +935,10 @@ async function waitForInternetAndApiGate() {
 let appIsInstallingUpdate = false;
 
 async function runAutoUpdateGate() {
+  if (IS_E2E_BACKGROUND) {
+    return { updatedOrReady: true };
+  }
+
   if (process.platform === "linux" && !process.env.APPIMAGE) {
     return { updatedOrReady: true };
   }
@@ -746,12 +953,11 @@ async function runAutoUpdateGate() {
   splashSet("Buscando actualizaciones...", 20);
 
   autoUpdater.removeAllListeners();
-  autoUpdater.autoDownload = true;
+  autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
 
   const channel = readChannel();
   autoUpdater.allowPrerelease = channel === "beta";
-  autoUpdater.allowDowngrade = false;
 
   try {
     delete autoUpdater.channel;
@@ -765,6 +971,10 @@ async function runAutoUpdateGate() {
   while (true) {
     attempt++;
     splashSet(`Buscando actualizaciones... (intento ${attempt})`, 25);
+
+    const policy = await loadUpdatePolicy(channel);
+    const currentVersion = app.getVersion();
+    autoUpdater.allowDowngrade = shouldAllowDowngrade(policy, currentVersion);
 
     const result = await new Promise((resolve) => {
       let finished = false;
@@ -790,8 +1000,31 @@ async function runAutoUpdateGate() {
         done({ ok: true, updatedOrReady: true, updated: false });
       });
 
-      autoUpdater.once("update-available", () => {
+      autoUpdater.once("update-available", (info) => {
+        const targetVersion = String(info?.version || "").trim();
+        if (isTargetVersionBlocked(policy, targetVersion)) {
+          splashSet(
+            `Version ${targetVersion} bloqueada por seguridad. Abriendo TPV...`,
+            30,
+          );
+          logUpdater(
+            `[POLICY] blocked update startup: ${currentVersion} -> ${targetVersion}`,
+          );
+          return done({
+            ok: true,
+            updatedOrReady: true,
+            updated: false,
+            blockedByPolicy: true,
+            targetVersion,
+          });
+        }
+
         splashSet("Actualización encontrada. Descargando…", 30);
+        try {
+          autoUpdater.downloadUpdate();
+        } catch {
+          done({ ok: false, reason: "download-throw" });
+        }
       });
 
       autoUpdater.on("download-progress", onProgress);
@@ -1744,6 +1977,7 @@ function pickCustomerDisplay() {
 }
 
 async function ensureCustomerWindow() {
+  if (IS_E2E_BACKGROUND) return null;
   if (!isCustomerDisplayEnabled()) return null;
   if (customerWin && !customerWin.isDestroyed()) return customerWin;
   if (customerCreating) return null;

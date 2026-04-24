@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "channel": "stable",
+  "blockUpdateToVersions": [],
+  "allowDowngrade": false,
+  "allowDowngradeFromVersions": [],
+  "updatedAt": "2026-04-23T00:00:00Z",
+  "notes": "Stable update policy. Block bad target versions and allow controlled rollback only for affected clients."
+}
