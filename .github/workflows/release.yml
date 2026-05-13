@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-2022, ubuntu-latest]
 
     runs-on: ${{ matrix.os }}
 
@@ -45,13 +45,13 @@ jobs:
           chmod +x build/linux/debian/postrm || true
 
       - name: Build & Publish (Windows - Stable)
-        if: matrix.os == 'windows-latest' && !contains(github.ref_name, '-beta.')
+        if: matrix.os == 'windows-2022' && !contains(github.ref_name, '-beta.')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run publish:win
 
       - name: Build & Publish (Windows - Beta)
-        if: matrix.os == 'windows-latest' && contains(github.ref_name, '-beta.')
+        if: matrix.os == 'windows-2022' && contains(github.ref_name, '-beta.')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run publish:win:beta
