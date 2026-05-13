@@ -54,6 +54,34 @@ Use this checklist before every publish.
 - Press refresh button in main agent bar.
 - Verify terminal/agent data is refreshed in UI.
 
+## Offline End-To-End Checklist
+
+- Start app online once and let data load (products, families, methods, terminals, agents).
+- Disconnect internet.
+- Open cash and verify warning "apertura en cola/offline" may appear but flow continues.
+- Add products and verify all these actions work in cart:
+  - change quantity
+  - edit line price (admin mode)
+  - remove lines
+- Open pay modal and verify method list appears from cache.
+- Complete payment offline and verify ticket is queued without blocking UI.
+- Change agent and, if available, terminal from overlay while offline.
+- Open options and verify selected toggles persist after close/reopen:
+  - stock visibility toggle
+  - stock edition toggle
+  - allow close with parked tickets toggle
+  - terminal families visibility/mode
+- Verify category/folder navigation works and products can be filtered by family/subfamily.
+- Verify product tiles show name, price and image (or safe no-image fallback).
+- Close app unexpectedly (kill process) with a non-empty cart and reopen:
+  - cart snapshot should recover
+  - parked tickets should still be recoverable
+- Close session and log in again offline using cached users.
+- Reconnect internet and wait queue sync:
+  - queued cash open (if any) syncs first
+  - queued sales sync
+  - queued caja totals/close sync
+
 ## API Resource Discovery
 
 - With packs plugin disabled, no repeated 404 spam should appear for packs endpoints.

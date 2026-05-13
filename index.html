@@ -8,11 +8,131 @@
     />
     <title>TPV Local Recipok</title>
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="tutoriales/tutoriales.css" />
   </head>
   <body>
     <div class="products-area">
       <!-- Barra de agentes (principal) -->
       <div id="mainAgentBar" class="agent-main-bar"></div>
+
+      <div id="mesasInlineTabsRow" class="mesas-inline-tabs hidden">
+        <button
+          type="button"
+          id="mesasInlineTabTransacciones"
+          class="mesas-inline-tab is-active"
+        >
+          Transacciones
+        </button>
+        <button type="button" id="mesasInlineTabMapa" class="mesas-inline-tab">
+          Mapa de Salas
+        </button>
+        <button
+          type="button"
+          id="mesasInlineTabDiseno"
+          class="mesas-inline-tab"
+          data-admin-only
+        >
+          Diseñar Salas
+        </button>
+        <div id="mesasContextRow" class="mesas-context-row hidden">
+          <span class="mesas-context-label">Sala</span>
+          <select id="mesasContextRoomSelect"></select>
+          <span class="mesas-context-label">Mesa</span>
+          <select id="mesasContextTableSelect"></select>
+        </div>
+        <button
+          type="button"
+          id="mesasInlineCloseBtn"
+          class="mesas-inline-tab-close"
+          title="Salir de modo mesas"
+        >
+          ✕
+        </button>
+
+        <div
+          id="mesasContextQuickSwitch"
+          class="mesas-context-quick-switch hidden"
+          aria-label="Cambio rapido de mesas"
+        ></div>
+      </div>
+
+      <aside id="mesasTransSidebar" class="mesas-trans-sidebar">
+        <section class="mts-section">
+          <h3 class="mts-title">Mesa Seleccionada</h3>
+          <div class="mts-selected-card">
+            <div id="mesasTransSelectedTable" class="mts-selected-table">-</div>
+            <div id="mesasTransSelectedRoom" class="mts-selected-room">-</div>
+            <div class="mts-selected-meta">
+              <span id="mesasTransSelectedStatus" class="mts-chip">-</span>
+              <span id="mesasTransSelectedTotal" class="mts-chip">0,00 €</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="mts-section">
+          <h3 class="mts-title">Otras Mesas</h3>
+          <div id="mesasTransOtherTables" class="mts-other-list"></div>
+        </section>
+
+        <section class="mts-section">
+          <h3 class="mts-title">Acciones Rapidas</h3>
+          <div class="mts-actions">
+            <button
+              type="button"
+              id="mesasTransActionTickets"
+              class="mts-action-btn"
+            >
+              Tickets
+            </button>
+            <div id="mesasTransReservaBox" class="mts-reserva-box hidden">
+              <div class="mts-reserva-head">
+                <button
+                  type="button"
+                  id="mesasTransReservaToggleBtn"
+                  class="mts-action-btn mts-reserva-toggle"
+                  aria-expanded="false"
+                >
+                  Reserva ▼
+                </button>
+                <label
+                  class="mts-reserva-side-toggle"
+                  for="mesasTransReservaEnabled"
+                  title="Marcar mesa como reservada"
+                >
+                  <input type="checkbox" id="mesasTransReservaEnabled" />
+                  <span class="mts-reserva-side-slider"></span>
+                </label>
+              </div>
+              <div id="mesasTransReservaPanel" class="mts-reserva-panel hidden">
+                <input
+                  id="mesasTransReservaName"
+                  class="mts-reserva-input"
+                  type="text"
+                  placeholder="Nombre reserva"
+                  autocomplete="off"
+                />
+                <input
+                  id="mesasTransReservaTime"
+                  class="mts-reserva-input"
+                  type="time"
+                  placeholder="Hora (ej. 21:30)"
+                  min="08:00"
+                  max="23:30"
+                  step="900"
+                  autocomplete="off"
+                />
+              </div>
+            </div>
+            <button
+              type="button"
+              id="mesasTransActionPersonas"
+              class="mts-action-btn"
+            >
+              Personas: <strong id="mesasTransActionPersonasValue">0</strong>
+            </button>
+          </div>
+        </section>
+      </aside>
 
       <!-- Barra de búsqueda -->
       <div class="search-bar">
@@ -32,20 +152,57 @@
       </div>
 
       <!-- Productos -->
+      <div id="mesasInlinePanelWrap" class="mesas-inline-panel hidden">
+        <iframe
+          id="mesasInlinePanelFrame"
+          class="mesas-inline-panel-frame"
+          title="Panel de mesas"
+          src="about:blank"
+        ></iframe>
+      </div>
+
       <div class="products-grid" id="productsGrid"></div>
-      <div id="statusBar" style="display: flex; align-items: center; gap: 6px">
-        <span
-          id="statusDot"
-          style="
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: #22c55e; /* verde por defecto */
-            display: inline-block;
-          "
-        ></span>
-        <strong>Online Recipok</strong>
-        <span id="appVersion" style="opacity: 0.65"></span>
+      <div id="statusBar" class="status-bar">
+        <div class="status-online-group">
+          <span id="statusDot" class="status-dot"></span>
+          <strong>Online Recipok</strong>
+          <span id="appVersion" class="app-version"></span>
+        </div>
+        <div id="mesasTransTerminalBar" class="mesas-trans-terminal">
+          <div class="mesas-trans-meta-item">
+            <span class="mesas-trans-terminal-label">Terminal</span>
+            <button
+              type="button"
+              id="mesasTransTerminalName"
+              class="mesas-trans-terminal-name"
+              title="Cambiar terminal"
+            >
+              ---
+            </button>
+          </div>
+          <div class="mesas-trans-meta-item">
+            <span class="mesas-trans-terminal-label">Agente</span>
+            <button
+              type="button"
+              id="mesasTransAgentName"
+              class="mesas-trans-terminal-name mesas-trans-terminal-name-static"
+              title="Cambiar agente"
+            >
+              ---
+            </button>
+          </div>
+          <div class="mesas-trans-meta-item">
+            <span class="mesas-trans-terminal-label">Usuario</span>
+            <button
+              type="button"
+              id="mesasTransUserName"
+              class="mesas-trans-terminal-name mesas-trans-terminal-name-static"
+              title="Cerrar sesión"
+            >
+              ---
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -83,7 +240,9 @@
       <div class="cart-terminal-row">
         <span class="terminal-meta-item">
           <span class="terminal-meta-label">Terminal</span>
-          <strong id="terminalName" class="terminal-meta-value terminal-meta-value-btn"
+          <strong
+            id="terminalName"
+            class="terminal-meta-value terminal-meta-value-btn"
             >---</strong
           >
         </span>
@@ -103,12 +262,9 @@
           >
         </span>
 
-        <span
-          id="cashInfo"
-          class="terminal-meta-item terminal-meta-value terminal-meta-cash"
-        ></span>
-
-        <span id="agentMissingBadge" class="terminal-meta-alert">⚠️ Falta agente</span>
+        <span id="agentMissingBadge" class="terminal-meta-alert"
+          >⚠️ Falta agente</span
+        >
       </div>
 
       <!-- Cliente actual -->
@@ -153,8 +309,74 @@
 
       <!-- LÍNEAS DEL CARRITO -->
       <div id="parkedEditingBanner" class="parked-editing-banner hidden">
-        <div class="peb-title" id="parkedEditingTitle"></div>
+        <div id="parkedEditingMesaMeta" class="peb-mesa-meta"></div>
+        <div class="peb-head-row">
+          <div class="peb-title-wrap">
+            <button
+              type="button"
+              id="parkedSplitPrevBtn"
+              class="peb-nav-btn"
+              title="Parte anterior"
+              aria-label="Parte anterior"
+            >
+              ←
+            </button>
+            <div class="peb-title" id="parkedEditingTitle"></div>
+            <button
+              type="button"
+              id="parkedSplitNextBtn"
+              class="peb-nav-btn"
+              title="Parte siguiente"
+              aria-label="Parte siguiente"
+            >
+              →
+            </button>
+          </div>
+          <div class="peb-actions">
+            <button
+              type="button"
+              id="parkedSplitBtn"
+              class="peb-edit-btn"
+              title="Dividir este ticket en varias partes"
+            >
+              Dividir
+            </button>
+            <button
+              type="button"
+              id="parkedComandaBtn"
+              class="peb-edit-btn"
+              title="Imprimir comanda de cocina"
+            >
+              Comanda
+            </button>
+            <button
+              type="button"
+              id="parkedEditingMetaBtn"
+              class="peb-edit-btn"
+              title="Editar nombre, observacion y avisos"
+            >
+              Editar
+            </button>
+            <button
+              type="button"
+              id="parkedUndoBtn"
+              class="peb-edit-btn peb-icon-btn hidden"
+              title="Deshacer último cambio"
+            >
+              ↶
+            </button>
+            <button
+              type="button"
+              id="parkedRedoBtn"
+              class="peb-edit-btn peb-icon-btn hidden"
+              title="Rehacer último cambio"
+            >
+              ↷
+            </button>
+          </div>
+        </div>
         <div class="peb-obs" id="parkedEditingObs"></div>
+        <div class="peb-flags" id="parkedEditingFlags"></div>
       </div>
       <div class="cart-lines-wrapper">
         <div id="cartLines"></div>
@@ -167,7 +389,7 @@
       </div>
 
       <!-- BOTONERA INFERIOR (nuevo layout) -->
-      <div class="cart-action-grid">
+      <div id="cartActionGrid" class="cart-action-grid">
         <!-- Izquierda -->
         <button id="clearCartBtn" class="cart-btn cart-btn-delete">
           Vaciar
@@ -179,12 +401,16 @@
         <!-- Centro (el “hueco” donde antes estaba imprimir) -->
         <button id="parkBtn" class="cart-btn cart-btn-park">Aparcar</button>
         <button id="parkedListBtn" class="cart-btn cart-btn-parked">
-          Aparcados <span id="parkedCountBadge" class="cart-badge">0</span>
+          <span class="cart-btn-label">Pedidos</span>
+          <span id="parkedCountBadge" class="cart-badge">0</span>
         </button>
 
         <!-- Derecha: Cobrar ocupa 2 filas -->
         <button id="payBtn" class="cart-btn cart-btn-pay cart-btn-pay-tall">
           Cobrar
+        </button>
+        <button id="preprintTicketBtn" class="cart-btn cart-btn-preprint">
+          PreImpr
         </button>
       </div>
     </aside>
@@ -239,16 +465,28 @@
     <!-- Teclado QWERTY -->
     <div id="qwertyOverlay" class="qwerty-overlay hidden">
       <div class="qwerty-pad">
-        <input
-          id="qwertyDisplay"
-          class="qwerty-display"
-          type="text"
-          autocomplete="off"
-          autocorrect="off"
-          autocapitalize="off"
-          spellcheck="false"
-          inputmode="none"
-        />
+        <div class="qwerty-display-wrap">
+          <input
+            id="qwertyDisplay"
+            class="qwerty-display"
+            type="text"
+            autocomplete="off"
+            autocorrect="off"
+            autocapitalize="off"
+            spellcheck="false"
+            inputmode="none"
+          />
+          <button
+            type="button"
+            id="qwertyInlineClearBtn"
+            class="qwerty-inline-clear"
+            data-key="clear-inline"
+            aria-label="Borrar todo"
+            title="Borrar todo"
+          >
+            X
+          </button>
+        </div>
 
         <div class="qwerty-rows">
           <div
@@ -380,7 +618,7 @@
     <div id="parkedTicketsOverlay" class="simple-overlay hidden">
       <div class="parked-modal">
         <header class="parked-modal-header">
-          <h2>Tickets aparcados</h2>
+          <h2 id="parkedModalTitle">Tickets aparcados</h2>
           <button type="button" id="parkedCloseBtn" class="parked-close-btn">
             ✕
           </button>
@@ -1214,6 +1452,209 @@
       </div>
     </div>
 
+    <!-- Overlay: Dividir ticket (Mesas) -->
+    <div id="splitTicketOverlay" class="simple-overlay hidden">
+      <div class="pay-modal" style="max-width: 920px">
+        <header class="pay-header">
+          <h2 style="margin: 0">Dividir ticket</h2>
+          <button type="button" id="splitTicketCloseX" class="pay-x">✕</button>
+        </header>
+
+        <div style="padding: 12px 14px; font-size: 14px">
+          <div
+            style="
+              display: flex;
+              justify-content: space-between;
+              gap: 12px;
+              flex-wrap: wrap;
+            "
+          >
+            <div>
+              Ticket origen: <strong id="splitTicketSourceName">—</strong>
+            </div>
+            <div>
+              Total ticket: <strong id="splitTicketSourceTotal">—</strong>
+            </div>
+            <div>
+              Estado división:
+              <strong id="splitTicketTargetTotal">0,00 €</strong>
+            </div>
+          </div>
+
+          <div
+            style="
+              margin-top: 12px;
+              border-top: 1px solid #ddd;
+              padding-top: 10px;
+            "
+          >
+            <div class="split-ticket-toolbar">
+              <strong>Dividir por artículos (recomendado)</strong>
+              <div class="split-ticket-parts-group">
+                <button
+                  type="button"
+                  id="splitTicketMergeQuickBtn"
+                  class="split-merge-quick-btn hidden"
+                  title="Poner Partes en 1 para juntar"
+                >
+                  Juntar
+                </button>
+                <label for="splitTicketPartsInput">Partes</label>
+                <button
+                  type="button"
+                  id="splitTicketPartsMinusBtn"
+                  class="split-qty-btn split-parts-btn split-qty-minus"
+                  aria-label="Reducir partes"
+                  title="Reducir partes"
+                >
+                  -
+                </button>
+                <input
+                  id="splitTicketPartsInput"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value="2"
+                  class="split-ticket-parts-input"
+                />
+                <button
+                  type="button"
+                  id="splitTicketPartsPlusBtn"
+                  class="split-qty-btn split-parts-btn split-qty-plus"
+                  aria-label="Aumentar partes"
+                  title="Aumentar partes"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            <div
+              style="
+                margin-top: 8px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+              "
+            >
+              <label for="splitTicketModeSelect">Modo</label>
+              <select id="splitTicketModeSelect" style="min-width: 220px">
+                <option value="items">Por artículos (asignación manual)</option>
+                <option value="equal">Igualitario (opcional)</option>
+              </select>
+            </div>
+
+            <div id="splitTicketLines" class="split-ticket-lines"></div>
+
+            <div
+              style="
+                margin-top: 12px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 10px;
+                flex-wrap: wrap;
+              "
+            >
+              <div>
+                Mesa/Sala: <strong id="splitTicketRemainingTotal">—</strong>
+              </div>
+              <div style="display: flex; gap: 10px">
+                <button id="splitTicketCancelBtn" class="pay-btn" type="button">
+                  Cancelar
+                </button>
+                <button
+                  id="splitTicketConfirmBtn"
+                  class="pay-btn pay-btn-green"
+                  type="button"
+                >
+                  Generar división
+                </button>
+              </div>
+            </div>
+
+            <div
+              id="splitTicketError"
+              class="dialog-error"
+              style="margin-top: 10px"
+            ></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Overlay: Comanda (Mesas) -->
+    <div id="comandaOverlay" class="simple-overlay hidden">
+      <div class="pay-modal" style="max-width: 920px">
+        <header class="pay-header">
+          <h2 style="margin: 0">Comanda cocina</h2>
+          <button type="button" id="comandaCloseX" class="pay-x">✕</button>
+        </header>
+
+        <div style="padding: 12px 14px; font-size: 14px">
+          <div
+            style="
+              display: flex;
+              justify-content: space-between;
+              gap: 12px;
+              flex-wrap: wrap;
+            "
+          >
+            <div>Mesa: <strong id="comandaMesaLabel">—</strong></div>
+            <div>Agente: <strong id="comandaAgentLabel">—</strong></div>
+            <div>Productos: <strong id="comandaCountLabel">0</strong></div>
+          </div>
+
+          <div
+            style="
+              margin-top: 12px;
+              border-top: 1px solid #ddd;
+              padding-top: 10px;
+            "
+          >
+            <strong>Líneas a imprimir</strong>
+            <div id="comandaLines" class="split-ticket-lines"></div>
+
+            <label class="pay-label" style="margin-top: 10px"
+              >Observaciones</label
+            >
+            <textarea
+              id="comandaObs"
+              class="pay-textarea"
+              rows="3"
+              placeholder="Observaciones para cocina"
+            ></textarea>
+
+            <div
+              style="
+                margin-top: 12px;
+                display: flex;
+                justify-content: flex-end;
+                gap: 10px;
+              "
+            >
+              <button id="comandaCancelBtn" class="pay-btn" type="button">
+                Cancelar
+              </button>
+              <button
+                id="comandaPrintBtn"
+                class="pay-btn pay-btn-green"
+                type="button"
+              >
+                Imprimir comanda
+              </button>
+            </div>
+
+            <div
+              id="comandaError"
+              class="dialog-error"
+              style="margin-top: 10px"
+            ></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Overlay: Cambiar método de pago (recibos) -->
     <div id="payEditOverlay" class="simple-overlay hidden">
       <div class="pay-modal" style="max-width: 920px">
@@ -1367,6 +1808,27 @@
       <div class="simple-dialog opt-dialog">
         <div class="opt-head">
           <h2 class="opt-title">Opciones</h2>
+          <button
+            type="button"
+            id="optionsTutorialBtn"
+            class="small-btn opt-tutorial-btn"
+            title="Tutoriales"
+            aria-label="Tutoriales"
+          >
+            ❓ Tutoriales
+          </button>
+          <div id="optionsThemeButtons" class="opt-theme-buttons">
+            <button
+              type="button"
+              id="optionsThemeMainBtn"
+              class="agent-btn agent-theme-mini agent-theme-btn-main opt-theme-btn"
+            ></button>
+            <button
+              type="button"
+              id="optionsThemeCustomerBtn"
+              class="agent-btn agent-theme-mini agent-theme-btn-customer opt-theme-btn"
+            ></button>
+          </div>
           <button type="button" id="optionsCloseX" class="small-btn">✕</button>
         </div>
 
@@ -1458,6 +1920,78 @@
                   <input type="checkbox" id="autoPrintToggle" />
                   <span class="slider"></span>
                 </label>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Impresora de comandas:
+                    <strong id="currentComandaPrinterName">—</strong>
+                  </div>
+                  <div class="opt-row-sub">
+                    Esta impresora se usa solo para comandas de cocina.
+                  </div>
+                </div>
+
+                <div class="opt-row-actions">
+                  <button
+                    type="button"
+                    id="optionsChangeComandaPrinterBtn"
+                    class="small-btn"
+                  >
+                    Cambiar
+                  </button>
+                  <button
+                    type="button"
+                    id="optionsTestComandaPrinterBtn"
+                    class="small-btn"
+                    style="display: none; opacity: 0.9"
+                  >
+                    Probar
+                  </button>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Enviar comanda automáticamente al guardar
+                  </div>
+                  <div class="opt-row-sub">
+                    Si está activado, al guardar pedido en Mesas se envía
+                    comanda a cocina.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="autoComandaOnSaveToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="opt-row opt-row-stack" data-admin-only>
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Familias para comandas (Mesas)
+                  </div>
+                  <div class="opt-row-sub">
+                    Solo estas familias se incluirán al imprimir comandas de
+                    cocina.
+                  </div>
+                </div>
+                <div class="opt-inline-fields">
+                  <select
+                    id="mesasComandaFamilySelect"
+                    class="opt-select"
+                  ></select>
+                  <button
+                    type="button"
+                    id="mesasComandaFamilyAddBtn"
+                    class="small-btn"
+                  >
+                    Añadir
+                  </button>
+                </div>
+                <div id="mesasComandaFamilyList" class="opt-chip-list"></div>
               </div>
             </div>
           </section>
@@ -1768,6 +2302,32 @@
                   <span class="slider"></span>
                 </label>
               </div>
+
+              <div class="opt-row opt-row-stack">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Familias por comensales (Mesas)
+                  </div>
+                  <div class="opt-row-sub">
+                    Los productos de estas familias usarán automáticamente el
+                    número de comensales de la mesa como cantidad al añadirse.
+                  </div>
+                </div>
+                <div class="opt-inline-fields">
+                  <select
+                    id="mesasDinersFamilySelect"
+                    class="opt-select"
+                  ></select>
+                  <button
+                    type="button"
+                    id="mesasDinersFamilyAddBtn"
+                    class="small-btn"
+                  >
+                    Añadir
+                  </button>
+                </div>
+                <div id="mesasDinersFamilyList" class="opt-chip-list"></div>
+              </div>
             </div>
           </section>
 
@@ -1870,6 +2430,9 @@
         </div>
       </div>
     </div>
+
+    <div id="tutorialesMount"></div>
+
     <!-- Overlay: Login -->
     <div id="loginOverlay" class="simple-overlay hidden">
       <div class="simple-dialog" style="width: 520px; max-width: 94vw">
@@ -1954,9 +2517,11 @@
     <!-- Overlay: Aparcar ticket -->
     <div id="parkObsOverlay" class="simple-overlay hidden">
       <div class="simple-dialog" style="width: 560px; max-width: 94vw">
-        <h2 style="margin-top: 0">Aparcar ticket</h2>
+        <h2 id="parkObsTitle" style="margin-top: 0">Aparcar ticket</h2>
+        <div id="parkObsTargetInfo" class="park-obs-target-info hidden"></div>
 
         <label
+          id="parkNameLabel"
           style="
             font-size: 13px;
             font-weight: 600;
@@ -1964,7 +2529,7 @@
             margin: 8px 0 6px;
           "
         >
-          Nombre del ticket
+          Nombre del pedido/ticket
         </label>
 
         <input
@@ -2007,6 +2572,20 @@
           "
           autocomplete="off"
         />
+
+        <div id="parkDocTypeWrap" class="park-doc-type-wrap">
+          <label class="park-doc-type-toggle" for="parkDocTypePedido">
+            <input id="parkDocTypePedido" type="checkbox" />
+            <span
+              >Guardar como pedido TPV (entrega pendiente, no inmediato)</span
+            >
+          </label>
+        </div>
+
+        <div id="parkQuickFlagsWrap" class="park-quick-flags hidden">
+          <div class="park-quick-flags-title">Avisos rapidos de mesa</div>
+          <div id="parkQuickFlagsList" class="park-quick-flags-list"></div>
+        </div>
 
         <div
           style="
@@ -2206,8 +2785,10 @@
     <div id="toastContainer" class="toast-container"></div>
 
     <script src="config.js"></script>
+    <script src="mesas/mesas-bridge.js"></script>
 
     <script src="renderer.js"></script>
+    <script src="tutoriales/tutoriales.js"></script>
     <script src="./js/tpv/scale/scale-ui.js"></script>
     <script src="./js/tpv/scale/scale-cart.js"></script>
     <script src="./js/tpv/quit-shortcut.js"></script>

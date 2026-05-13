@@ -1,0 +1,18 @@
+#!/bin/sh
+
+if [ "$TPV_SKIP_PREPUSH" = "1" ]; then
+  echo "[pre-push] TPV pre-push checks skipped (TPV_SKIP_PREPUSH=1)"
+  exit 0
+fi
+
+echo "[pre-push] Running TPV pre-push checks..."
+npm run test:prepush
+status=$?
+
+if [ $status -ne 0 ]; then
+  echo "[pre-push] Blocked: checks failed."
+  exit $status
+fi
+
+echo "[pre-push] OK"
+exit 0

@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TPV Local Recipok - Modo Mesas</title>
+    <link rel="stylesheet" href="mesas.css" />
+  </head>
+  <body>
+    <header class="mesas-header">
+      <div class="mesas-header-left">
+        <div class="brand">TPV Mesas</div>
+        <nav class="mesas-tabs">
+          <button type="button" class="mesas-tab is-active" data-view="mapa">
+            Mapa de Salas
+          </button>
+          <button type="button" class="mesas-tab" data-view="transacciones">
+            Transacciones
+          </button>
+          <button type="button" class="mesas-tab" data-view="diseno">
+            Diseñar Salas
+          </button>
+        </nav>
+      </div>
+
+      <div class="mesas-header-right">
+        <button
+          type="button"
+          id="switchToNormalBtn"
+          class="switch-mode-btn"
+          title="Volver al TPV normal"
+        >
+          TPV Normal
+        </button>
+        <div class="clock-wrap">
+          <div id="mesasClock" class="clock">--:--</div>
+          <div id="mesasDate" class="date">--/--/----</div>
+        </div>
+      </div>
+    </header>
+
+    <main class="mesas-main">
+      <section id="view-mapa" class="mesas-view is-active">
+        <div class="map-topbar">
+          <div class="map-controls-row">
+            <label for="roomSelect">Sala</label>
+            <select id="roomSelect"></select>
+          </div>
+
+          <div class="state-legend">
+            <span><i class="dot libre"></i> Libre</span>
+            <span><i class="dot ocupada"></i> Ocupada</span>
+            <span><i class="dot reservada"></i> Reservada</span>
+            <span><i class="dot cuenta"></i> Pide cuenta</span>
+            <span><i class="dot cobradas"></i> Recoger</span>
+          </div>
+        </div>
+
+        <div id="mapEmptyState" class="empty-state hidden">
+          <p>No hay salas creadas. Crealas desde Disenar Salas.</p>
+          <button type="button" id="createFirstRoomBtn" class="btn-link">
+            Ir a Disenar Salas
+          </button>
+        </div>
+
+        <div id="mesaCards" class="mesa-cards"></div>
+      </section>
+
+      <section id="view-transacciones" class="mesas-view">
+        <aside class="trans-left">
+          <div class="trans-left-actions">
+            <button type="button" id="backToMapBtn" class="btn-link">
+              Volver al mapa
+            </button>
+            <button type="button" id="quickReturnBtn" class="btn-link hidden">
+              Volver
+            </button>
+          </div>
+
+          <div class="selected-table-box">
+            <div class="label">Mesa seleccionada</div>
+            <div id="selectedTableTitle" class="table-title">-</div>
+            <div id="selectedTableState" class="table-sub">Sin seleccionar</div>
+          </div>
+
+          <div class="mesa-menu-panel">
+            <div class="label">Menu de mesas</div>
+            <div id="otherTablesList" class="other-tables-list"></div>
+          </div>
+        </aside>
+
+        <section class="trans-center">
+          <div class="search-wrap">
+            <input
+              id="productSearchMesas"
+              type="text"
+              placeholder="Buscar producto..."
+            />
+            <button
+              type="button"
+              id="clearSearchMesas"
+              class="icon-btn"
+              title="Limpiar"
+            >
+              Limpiar
+            </button>
+          </div>
+          <div id="categoryBar" class="category-bar"></div>
+          <div id="productsGridMesas" class="products-grid"></div>
+        </section>
+
+        <aside class="trans-right">
+          <div class="ticket-header">
+            <div>
+              <div id="ticketMesaTitle" class="ticket-title">Mesa -</div>
+              <div id="ticketMeta" class="ticket-sub">Sin pedido</div>
+            </div>
+            <button
+              type="button"
+              id="clearCartBtnMesas"
+              class="icon-btn"
+              title="Vaciar"
+            >
+              Vaciar
+            </button>
+          </div>
+
+          <div class="ticket-kpis">
+            <div class="ticket-kpi">
+              <span>Lineas</span>
+              <strong id="ticketSummaryLines">0</strong>
+            </div>
+            <div class="ticket-kpi">
+              <span>Unidades</span>
+              <strong id="ticketSummaryUnits">0</strong>
+            </div>
+            <div class="ticket-kpi">
+              <span>Actualizado</span>
+              <strong id="ticketSummaryUpdated">--:--</strong>
+            </div>
+          </div>
+
+          <div id="ticketLinesMesas" class="ticket-lines"></div>
+
+          <div class="ticket-footer">
+            <div class="total-row">
+              <span>Total</span>
+              <strong id="ticketTotalMesas">0,00 EUR</strong>
+            </div>
+            <div class="ticket-actions">
+              <button type="button" id="parkBtnMesas" class="btn park">
+                Aparcar
+              </button>
+              <button type="button" id="chargeBtnMesas" class="btn charge">
+                Cobrar
+              </button>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section id="view-diseno" class="mesas-view">
+        <div class="diseno-wrap">
+          <div class="diseno-col">
+            <h3>Elementos</h3>
+            <div class="label">Herramienta</div>
+            <div class="tool-group-label">Mesas</div>
+            <button
+              type="button"
+              class="chip tool-btn is-active"
+              data-tool="mesa-redonda"
+            >
+              <span class="tool-icon" aria-hidden="true"></span>
+              <span class="tool-copy">
+                <strong>Mesa Redonda</strong>
+                <small>4 comensales</small>
+              </span>
+            </button>
+            <button
+              type="button"
+              class="chip tool-btn"
+              data-tool="mesa-cuadrada"
+            >
+              <span class="tool-icon" aria-hidden="true"></span>
+              <span class="tool-copy">
+                <strong>Mesa Cuadrada</strong>
+                <small>2-4 comensales</small>
+              </span>
+            </button>
+            <button
+              type="button"
+              class="chip tool-btn"
+              data-tool="mesa-rectangular"
+            >
+              <span class="tool-icon" aria-hidden="true"></span>
+              <span class="tool-copy">
+                <strong>Mesa Rectangular</strong>
+                <small>6-8 comensales</small>
+              </span>
+            </button>
+
+            <div class="tool-group-label">Estructura</div>
+            <button type="button" class="chip tool-btn" data-tool="barra">
+              <span class="tool-icon" aria-hidden="true"></span>
+              <span class="tool-copy">
+                <strong>Barra</strong>
+                <small>Zona de bar</small>
+              </span>
+            </button>
+            <button type="button" class="chip tool-btn" data-tool="entrada">
+              <span class="tool-icon" aria-hidden="true"></span>
+              <span class="tool-copy">
+                <strong>Entrada</strong>
+                <small>Puerta de acceso</small>
+              </span>
+            </button>
+            <button type="button" class="chip tool-btn" data-tool="muro">
+              <span class="tool-icon" aria-hidden="true"></span>
+              <span class="tool-copy">
+                <strong>Muro/Pared</strong>
+                <small>Division</small>
+              </span>
+            </button>
+
+            <div class="diseno-actions">
+              <button type="button" id="saveDesignBtn" class="btn-link">
+                Guardar sala
+              </button>
+              <button type="button" id="clearDesignBtn" class="btn-soft danger">
+                Limpiar sala
+              </button>
+            </div>
+          </div>
+
+          <div class="diseno-canvas-wrap">
+            <div class="diseno-topbar">
+              <h3>Plano de sala</h3>
+              <div class="diseno-topbar-right">
+                <div class="room-select-wrap">
+                  <label for="designRoomSelect">Sala</label>
+                  <select id="designRoomSelect"></select>
+                </div>
+                <div class="diseno-room-actions">
+                  <button type="button" id="designAddRoomBtn" class="btn-soft">
+                    + Sala
+                  </button>
+                  <button
+                    type="button"
+                    id="designRenameRoomBtn"
+                    class="btn-soft"
+                  >
+                    Renombrar
+                  </button>
+                  <button
+                    type="button"
+                    id="designDeleteRoomBtn"
+                    class="btn-soft danger"
+                  >
+                    Borrar sala
+                  </button>
+                </div>
+                <div class="diseno-history-actions">
+                  <button
+                    type="button"
+                    id="designSnapToggleBtn"
+                    class="btn-soft"
+                    title="Alternar entre movimiento libre y ajuste a grid"
+                  >
+                    Modo libre
+                  </button>
+                  <button
+                    type="button"
+                    id="designUndoBtn"
+                    class="btn-soft"
+                    title="Deshacer cambio"
+                  >
+                    Deshacer
+                  </button>
+                  <button
+                    type="button"
+                    id="designRedoBtn"
+                    class="btn-soft"
+                    title="Rehacer cambio"
+                  >
+                    Rehacer
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div id="designCanvas" class="diseno-canvas">
+              <span id="designHintText"
+                >Selecciona una herramienta y haz clic en el plano.</span
+              >
+            </div>
+
+            <div
+              id="designSelectionPanel"
+              class="design-selection-panel design-selection-panel-inline hidden"
+            >
+              <div class="design-selection-head">
+                <div class="label">Seleccionado</div>
+                <div id="designSelectionTitle" class="design-selection-title">
+                  -
+                </div>
+                <div id="designSelectionMeta" class="design-selection-meta">
+                  -
+                </div>
+              </div>
+              <div
+                id="designSelectionActions"
+                class="design-selection-actions"
+              ></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="../config.js"></script>
+    <script src="mesas-bridge.js"></script>
+    <script src="mesas.js"></script>
+  </body>
+</html>

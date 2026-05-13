@@ -76,6 +76,167 @@ const RUNTIME_CART_SNAPSHOT_CFG_KEY = "runtime.cartSnapshot";
 const LOGIN_LAST_USER_KEY = "tpv_last_user";
 let CART_SNAPSHOT_ARMED = false;
 let CART_SNAPSHOT_CFG_WRITE_TIMER = null;
+const CART_HISTORY_MAX_STEPS = 40;
+const CART_HISTORY_BY_SCOPE = new Map();
+let CART_HISTORY_RESTORING = false;
+
+function getCurrentCartModeScope() {
+  return MESAS_INLINE_ACTIVE ? "mesas" : "tpv";
+}
+
+function getRuntimeCartSnapshotStorageKey(mode = getCurrentCartModeScope()) {
+  const scope = String(mode || "tpv")
+    .trim()
+    .toLowerCase();
+  return `${RUNTIME_CART_SNAPSHOT_KEY}::${scope === "mesas" ? "mesas" : "tpv"}`;
+}
+
+function getRuntimeCartSnapshotCfgKey(mode = getCurrentCartModeScope()) {
+  const scope = String(mode || "tpv")
+    .trim()
+    .toLowerCase();
+  return `${RUNTIME_CART_SNAPSHOT_CFG_KEY}.${scope === "mesas" ? "mesas" : "tpv"}`;
+}
+
+function getCurrentCartHistoryScopeKey() {
+  if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+    const state = loadMesasTablesStateForInline();
+    const uid = String(state?.selectedTableId || "").trim();
+    return uid ? `mesas::${uid}` : "mesas::__none__";
+  }
+  return "tpv";
+}
+
+function cloneCartForHistory(source = cart) {
+  try {
+    return JSON.parse(JSON.stringify(Array.isArray(source) ? source : []));
+  } catch {
+    return [];
+  }
+}
+
+function getOrCreateCartHistoryBucket(
+  scopeKey = getCurrentCartHistoryScopeKey(),
+) {
+  const key = String(scopeKey || "tpv");
+  if (!CART_HISTORY_BY_SCOPE.has(key)) {
+    CART_HISTORY_BY_SCOPE.set(key, {
+      undo: [],
+      redo: [],
+    });
+  }
+  return CART_HISTORY_BY_SCOPE.get(key);
+}
+
+function pushCartHistoryStep(reason = "change") {
+  if (CART_HISTORY_RESTORING) return;
+
+  const scopeKey = getCurrentCartHistoryScopeKey();
+  const bucket = getOrCreateCartHistoryBucket(scopeKey);
+  const snapshot = cloneCartForHistory(cart);
+  const hash = JSON.stringify(snapshot);
+  const last = bucket.undo[bucket.undo.length - 1];
+  if (last && last.hash === hash) return;
+
+  bucket.undo.push({
+    at: Date.now(),
+    reason: String(reason || "change"),
+    hash,
+    snapshot,
+  });
+
+  if (bucket.undo.length > CART_HISTORY_MAX_STEPS) {
+    bucket.undo.shift();
+  }
+
+  bucket.redo = [];
+}
+
+function refreshCartUndoRedoUi() {
+  const undoBtn = document.getElementById("parkedUndoBtn");
+  const redoBtn = document.getElementById("parkedRedoBtn");
+  if (!undoBtn || !redoBtn) return;
+
+  const loaded = getCurrentLoadedParkedTicket();
+  const visible = isMesasTransaccionesMode() && !!loaded && !loaded?.paid;
+  undoBtn.classList.toggle("hidden", !visible);
+  redoBtn.classList.toggle("hidden", !visible);
+
+  if (!visible) {
+    undoBtn.disabled = true;
+    redoBtn.disabled = true;
+    return;
+  }
+
+  const bucket = getOrCreateCartHistoryBucket(getCurrentCartHistoryScopeKey());
+  const canUndo = bucket.undo.length > 0;
+  const canRedo = bucket.redo.length > 0;
+
+  undoBtn.classList.toggle("hidden", !canUndo);
+  redoBtn.classList.toggle("hidden", !canRedo);
+  undoBtn.disabled = !canUndo;
+  redoBtn.disabled = !canRedo;
+}
+
+function applyCartHistorySnapshot(snapshot) {
+  cart = cloneCartForHistory(snapshot);
+  if (isMesasTransaccionesMode()) {
+    const state = loadMesasTablesStateForInline();
+    const uid = String(state?.selectedTableId || "").trim();
+    if (uid) {
+      saveDraftCartForMesaUid(uid, cart, { keepEmpty: true });
+    }
+  }
+  renderCart();
+}
+
+function undoCartHistoryStep() {
+  const bucket = getOrCreateCartHistoryBucket(getCurrentCartHistoryScopeKey());
+  if (!bucket.undo.length) return;
+
+  const currentSnapshot = cloneCartForHistory(cart);
+  const currentHash = JSON.stringify(currentSnapshot);
+  bucket.redo.push({
+    at: Date.now(),
+    reason: "redo-base",
+    hash: currentHash,
+    snapshot: currentSnapshot,
+  });
+  if (bucket.redo.length > CART_HISTORY_MAX_STEPS) bucket.redo.shift();
+
+  const prev = bucket.undo.pop();
+  CART_HISTORY_RESTORING = true;
+  try {
+    applyCartHistorySnapshot(prev?.snapshot || []);
+  } finally {
+    CART_HISTORY_RESTORING = false;
+    refreshCartUndoRedoUi();
+  }
+}
+
+function redoCartHistoryStep() {
+  const bucket = getOrCreateCartHistoryBucket(getCurrentCartHistoryScopeKey());
+  if (!bucket.redo.length) return;
+
+  const currentSnapshot = cloneCartForHistory(cart);
+  const currentHash = JSON.stringify(currentSnapshot);
+  bucket.undo.push({
+    at: Date.now(),
+    reason: "undo-base",
+    hash: currentHash,
+    snapshot: currentSnapshot,
+  });
+  if (bucket.undo.length > CART_HISTORY_MAX_STEPS) bucket.undo.shift();
+
+  const next = bucket.redo.pop();
+  CART_HISTORY_RESTORING = true;
+  try {
+    applyCartHistorySnapshot(next?.snapshot || []);
+  } finally {
+    CART_HISTORY_RESTORING = false;
+    refreshCartUndoRedoUi();
+  }
+}
 
 let lastTicket = null; // guardará el último ticket/factura creada para poder imprimirla
 
@@ -84,6 +245,9 @@ let parkedTickets = []; // cada item: { id, createdAt, items, total, clientName,
 const parkedViewState = {
   search: "",
   filter: "pending", // "all" | "pending" | "paid"
+  docType: "all", // "all" | "ticket" | "pedido"
+  scope: "global", // "global" | <roomId>
+  tableUid: null, // null | <roomId::tableId>
 };
 let parkedCounter = 0;
 // Índice del ticket aparcado actualmente cargado en el carrito
@@ -156,7 +320,9 @@ function installE2ERemoteWriteGuard(baseUrl) {
   if (!TPV_E2E_MODE || TPV_E2E_ALLOW_WRITES) return;
   if (typeof window.__TPV_E2E_FETCH_GUARD_INSTALLED__ !== "undefined") return;
 
-  const targetBase = String(baseUrl || "").trim().replace(/\/+$/, "");
+  const targetBase = String(baseUrl || "")
+    .trim()
+    .replace(/\/+$/, "");
   if (!targetBase) return;
 
   const originalFetch = window.fetch.bind(window);
@@ -170,7 +336,8 @@ function installE2ERemoteWriteGuard(baseUrl) {
           : "";
 
     const isWrite = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
-    const isTarget = !!url && (url.startsWith(targetBase) || url.includes("/demo/api/"));
+    const isTarget =
+      !!url && (url.startsWith(targetBase) || url.includes("/demo/api/"));
 
     if (isWrite && isTarget) {
       throw new Error(`[E2E_WRITE_BLOCKED] ${method} ${url}`);
@@ -188,6 +355,7 @@ const BROKEN_PRODUCT_IMAGE_URLS = new Set();
 // ===== [04] Logging tecnico =====
 
 function logFeatureInfo(feature, action, details = {}) {
+  if (!TPV_DEBUG_LOGS) return;
   const requestId = String(details?.requestId || "").trim();
   const prefix = requestId ? `[${requestId}] ` : "";
   console.info(`[TPV][${feature}] ${prefix}${action}`, details);
@@ -276,6 +444,11 @@ const searchKeyboardBtn = document.getElementById("searchKeyboardBtn");
 
 // Terminal / caja
 const terminalNameEl = document.getElementById("terminalName");
+const mesasTransTerminalNameEl = document.getElementById(
+  "mesasTransTerminalName",
+);
+const mesasTransAgentNameEl = document.getElementById("mesasTransAgentName");
+const mesasTransUserNameEl = document.getElementById("mesasTransUserName");
 const agentNameEl = document.getElementById("agentName");
 const userNameEl = document.getElementById("userName");
 
@@ -356,8 +529,8 @@ function getCajaLogCtx() {
 function getParkedTicketDisplayName(ticket) {
   return (
     cleanCajaLogValue(
-      ticket?.label ||
-        ticket?.name ||
+      ticket?.name ||
+        ticket?.label ||
         ticket?.obs ||
         ticket?.clientName ||
         "Sin nombre",
@@ -414,12 +587,17 @@ let REMOTE_RESERVED_BY_PRODUCT = new Map();
 
 const PARKED_TICKETS_CACHE_KEY = "tpv_parked_tickets_cache_v1";
 const PARKED_SYNC_QUEUE_KEY = "tpv_parked_sync_queue_v1";
+const PARKED_MODE_REGISTRY_KEY = "tpv_parked_mode_registry_v1";
+const PARKED_GLOBAL_COUNTER_KEY = "tpv_parked_global_counter_v1";
+const PARKED_MODE_TPV = "tpv";
+const PARKED_MODE_MESAS = "mesas";
 const TPV_USERS_CACHE_KEY = "tpv_cachedUsers_v1";
 const TPV_USERS_CACHE_TS_KEY = "tpv_cachedUsers_ts_v1";
 const TERMINAL_AGENT_CACHE_KEY = "tpv_cachedTerminalAgent_v1";
 const TERMINAL_AGENT_CACHE_TS_KEY = "tpv_cachedTerminalAgent_ts_v1";
 const BOOT_SNAPSHOT_CACHE_KEY = "tpv_boot_snapshot_v1";
 const BOOT_SNAPSHOT_CACHE_TS_KEY = "tpv_boot_snapshot_ts_v1";
+const SHARED_CATALOG_CACHE_KEY = "tpv_shared_catalog_v1";
 const API_RESOURCES_CACHE_KEY = "tpv_api_resources_cache_v1";
 const API_RESOURCES_CACHE_TS_KEY = "tpv_api_resources_ts_v1";
 const API_MISSING_RESOURCES_CACHE_KEY = "tpv_api_missing_resources_cache_v1";
@@ -429,6 +607,7 @@ let __parkedSyncDrainInFlight = false;
 
 let __parkedReservationsRefreshTimer = null;
 let __parkedReservationsRefreshInFlight = false;
+const PARKED_LOCAL_PREFER_MS = 120000;
 
 // Ajusta esta URL a tu API TPV real
 const TPV_SYNC_API_URL =
@@ -450,13 +629,34 @@ function getTpvSyncApiKey() {
 }
 
 async function confirmIfCartExceedsVisibleStock(cartSnapshot) {
+  const {
+    actionVerb = "aparcar",
+    modalTitle = "Stock insuficiente para aparcar",
+    baselineItems = null,
+  } = arguments[1] || {};
+
+  const baselineByProduct = new Map();
+  (Array.isArray(baselineItems) ? baselineItems : []).forEach((it) => {
+    const idProd = getProductBaseId(it);
+    if (!idProd) return;
+    const qty = Number(getCartItemReservedQty(it) || 0);
+    baselineByProduct.set(
+      idProd,
+      Number(baselineByProduct.get(idProd) || 0) + qty,
+    );
+  });
+
   const requestedByProduct = new Map();
 
   (Array.isArray(cartSnapshot) ? cartSnapshot : []).forEach((it) => {
     const idProd = getProductBaseId(it);
     if (!idProd) return;
 
-    const qty = getCartItemReservedQty(it);
+    const qtyRaw = Number(getCartItemReservedQty(it) || 0);
+    const qtyBase = Number(baselineByProduct.get(idProd) || 0);
+    const qty = Math.max(0, qtyRaw - qtyBase);
+    if (qty <= 0) return;
+
     const name = String(
       it?.name || it?.descripcion || it?.referencia || `Producto ${idProd}`,
     ).trim();
@@ -546,7 +746,7 @@ async function confirmIfCartExceedsVisibleStock(cartSnapshot) {
           `<div class="stock-warning-item">`,
           `  <div class="stock-warning-name">${idx + 1}. ${title}</div>`,
           desc ? `  <div class="stock-warning-desc">${desc}</div>` : "",
-          `  <div class="stock-warning-row">Cantidad a aparcar: <strong>${qty}</strong></div>`,
+          `  <div class="stock-warning-row">Cantidad a ${escapeHtmlForModal(actionVerb)}: <strong>${qty}</strong></div>`,
           `  <div class="stock-warning-row">Stock actual: <strong>${stock}</strong></div>`,
           `</div>`,
         ].join("\n");
@@ -555,13 +755,13 @@ async function confirmIfCartExceedsVisibleStock(cartSnapshot) {
 
     const html = [
       `<div class="stock-warning-wrap">`,
-      `  <div class="stock-warning-intro">Hay productos con stock insuficiente para aparcar:</div>`,
+      `  <div class="stock-warning-intro">Hay productos con stock insuficiente para ${escapeHtmlForModal(actionVerb)}:</div>`,
       `  <div class="stock-warning-list">${blocksHtml}</div>`,
       `  <div class="stock-warning-outro">¿Continuar de todos modos?</div>`,
       `</div>`,
     ].join("\n");
 
-    const ok = await confirmModal("Stock insuficiente para aparcar", html, {
+    const ok = await confirmModal(modalTitle, html, {
       isHtml: true,
       textClassName: "stock-warning-content",
       dialogClassName: "stock-warning-dialog",
@@ -666,11 +866,14 @@ function triggerApi429Cooldown(source = "api", retryAfterHeader = "") {
     api429BlockedUntil = nextUntil;
   }
 
-  enterApiRetryMode("API con bloqueo temporal (429). Esperando para reintentar...", {
-    lock: false,
-    scheduleRetry: false,
-    showOverlay: false,
-  });
+  enterApiRetryMode(
+    "API con bloqueo temporal (429). Esperando para reintentar...",
+    {
+      lock: false,
+      scheduleRetry: false,
+      showOverlay: false,
+    },
+  );
 
   const now = Date.now();
   if (now - api429LastWarnAt > 10000) {
@@ -687,7 +890,9 @@ function throwIfApi429Cooldown(source = "api") {
   if (now - api429LastWarnAt > 10000) {
     api429LastWarnAt = now;
     const seconds = Math.max(1, Math.ceil(getApi429RemainingMs() / 1000));
-    console.warn(`[API429] Saltando llamada durante cooldown ${seconds}s (${source})`);
+    console.warn(
+      `[API429] Saltando llamada durante cooldown ${seconds}s (${source})`,
+    );
   }
 
   throw buildApi429Error();
@@ -1174,9 +1379,15 @@ const OPTIONS_SHOW_PRODUCT_STOCK_KEY = "ui.showProductStockBadge";
 const OPTIONS_ENABLE_STOCK_EDIT_KEY = "ui.enableStockEdition";
 const OPTIONS_ALLOW_CLOSE_WITH_PARKED_KEY = "ui.allowCloseWithParkedTickets";
 const LS_ALLOW_CLOSE_WITH_PARKED_KEY = "tpv_allowCloseWithParkedTickets";
+const OPTIONS_MESAS_DINERS_FAMILY_RULES_KEY = "ui.mesasDinersFamilyRules";
+const LS_MESAS_DINERS_FAMILY_RULES_KEY = "tpv_mesasDinersFamilyRules";
+const OPTIONS_MESAS_COMANDA_FAMILY_RULES_KEY = "ui.mesasComandaFamilyRules";
+const LS_MESAS_COMANDA_FAMILY_RULES_KEY = "tpv_mesasComandaFamilyRules";
 let showProductStockBadge = false;
 let enableProductStockEdition = false;
 let allowCloseWithParkedTickets = false;
+let mesasDinersFamilyRules = [];
+let mesasComandaFamilyRules = [];
 
 function parseBoolLike(value, fallback = false) {
   if (typeof value === "boolean") return value;
@@ -1297,6 +1508,410 @@ async function saveAllowCloseWithParkedToggle(enabled) {
   } catch (e) {
     console.warn("No se pudo guardar toggle de cierre con aparcados:", e);
   }
+}
+
+function normalizeCategoryRuleIds(value) {
+  const src = Array.isArray(value) ? value : [];
+  return Array.from(
+    new Set(src.map((id) => String(id || "").trim()).filter(Boolean)),
+  );
+}
+
+function normalizeMesasDinersFamilyRules(value) {
+  return normalizeCategoryRuleIds(value);
+}
+
+function normalizeMesasComandaFamilyRules(value) {
+  return normalizeCategoryRuleIds(value);
+}
+
+function getCategoryLabelWithParent(catId) {
+  const id = String(catId || "").trim();
+  if (!id) return "";
+
+  const cat = (Array.isArray(categories) ? categories : []).find(
+    (c) => String(c?.id || "") === id,
+  );
+  if (!cat) return id;
+
+  const name = String(cat?.name || cat?.id || id).trim();
+  const parentId = String(cat?.parentId || "").trim();
+  if (!parentId) return name;
+
+  const parent = (Array.isArray(categories) ? categories : []).find(
+    (c) => String(c?.id || "") === parentId,
+  );
+  const parentName = String(parent?.name || parent?.id || "").trim();
+  return parentName ? `${parentName} > ${name}` : name;
+}
+
+function renderMesasDinersFamilyRuleControls() {
+  const selectEl = document.getElementById("mesasDinersFamilySelect");
+  const addBtn = document.getElementById("mesasDinersFamilyAddBtn");
+  const listEl = document.getElementById("mesasDinersFamilyList");
+  if (!selectEl || !addBtn || !listEl) return;
+
+  const allCats = Array.isArray(categories)
+    ? [...categories].sort((a, b) =>
+        String(a?.name || "").localeCompare(String(b?.name || ""), "es"),
+      )
+    : [];
+
+  const currentValue = String(selectEl.value || "").trim();
+  selectEl.innerHTML = "";
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = allCats.length
+    ? "Selecciona familia o grupo"
+    : "Sin familias disponibles";
+  selectEl.appendChild(placeholder);
+
+  allCats.forEach((cat) => {
+    const id = String(cat?.id || "").trim();
+    if (!id) return;
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = getCategoryLabelWithParent(id);
+    selectEl.appendChild(opt);
+  });
+
+  if (
+    currentValue &&
+    allCats.some((cat) => String(cat?.id || "") === currentValue)
+  ) {
+    selectEl.value = currentValue;
+  } else {
+    selectEl.value = "";
+  }
+
+  listEl.innerHTML = "";
+  if (!mesasDinersFamilyRules.length) {
+    const empty = document.createElement("div");
+    empty.className = "opt-chip-list-empty";
+    empty.textContent = "Sin familias configuradas.";
+    listEl.appendChild(empty);
+  } else {
+    mesasDinersFamilyRules.forEach((id) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "opt-chip-item";
+      chip.dataset.catId = id;
+      chip.textContent = `${getCategoryLabelWithParent(id)} ×`;
+      chip.title = "Quitar familia";
+      listEl.appendChild(chip);
+    });
+  }
+
+  addBtn.disabled = !String(selectEl.value || "").trim();
+}
+
+function renderMesasComandaFamilyRuleControls() {
+  const selectEl = document.getElementById("mesasComandaFamilySelect");
+  const addBtn = document.getElementById("mesasComandaFamilyAddBtn");
+  const listEl = document.getElementById("mesasComandaFamilyList");
+  if (!selectEl || !addBtn || !listEl) return;
+
+  const allCats = Array.isArray(categories)
+    ? [...categories].sort((a, b) =>
+        String(a?.name || "").localeCompare(String(b?.name || ""), "es"),
+      )
+    : [];
+
+  const currentValue = String(selectEl.value || "").trim();
+  selectEl.innerHTML = "";
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = allCats.length
+    ? "Selecciona familia o grupo"
+    : "Sin familias disponibles";
+  selectEl.appendChild(placeholder);
+
+  allCats.forEach((cat) => {
+    const id = String(cat?.id || "").trim();
+    if (!id) return;
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = getCategoryLabelWithParent(id);
+    selectEl.appendChild(opt);
+  });
+
+  if (
+    currentValue &&
+    allCats.some((cat) => String(cat?.id || "") === currentValue)
+  ) {
+    selectEl.value = currentValue;
+  } else {
+    selectEl.value = "";
+  }
+
+  listEl.innerHTML = "";
+  if (!mesasComandaFamilyRules.length) {
+    const empty = document.createElement("div");
+    empty.className = "opt-chip-list-empty";
+    empty.textContent = "Sin familias configuradas.";
+    listEl.appendChild(empty);
+  } else {
+    mesasComandaFamilyRules.forEach((id) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "opt-chip-item";
+      chip.dataset.catId = id;
+      chip.textContent = `${getCategoryLabelWithParent(id)} ×`;
+      chip.title = "Quitar familia";
+      listEl.appendChild(chip);
+    });
+  }
+
+  addBtn.disabled = !String(selectEl.value || "").trim();
+}
+
+async function saveMesasDinersFamilyRules(nextRules) {
+  const normalized = normalizeMesasDinersFamilyRules(nextRules);
+  mesasDinersFamilyRules = normalized;
+
+  try {
+    localStorage.setItem(
+      LS_MESAS_DINERS_FAMILY_RULES_KEY,
+      JSON.stringify(normalized),
+    );
+  } catch {}
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_MESAS_DINERS_FAMILY_RULES_KEY,
+      normalized,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar reglas de comensales por familia:", e);
+  }
+
+  renderMesasDinersFamilyRuleControls();
+}
+
+async function loadMesasDinersFamilyRules() {
+  let rules = [];
+  let hasCfgValue = false;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(
+      OPTIONS_MESAS_DINERS_FAMILY_RULES_KEY,
+    );
+    if (cfgVal !== undefined && cfgVal !== null && cfgVal !== "") {
+      hasCfgValue = true;
+      if (Array.isArray(cfgVal)) {
+        rules = cfgVal;
+      } else if (typeof cfgVal === "string") {
+        rules = JSON.parse(cfgVal);
+      }
+    }
+  } catch {}
+
+  if (!hasCfgValue) {
+    try {
+      const lsVal = localStorage.getItem(LS_MESAS_DINERS_FAMILY_RULES_KEY);
+      if (lsVal) rules = JSON.parse(lsVal);
+    } catch {}
+  }
+
+  mesasDinersFamilyRules = normalizeMesasDinersFamilyRules(rules);
+  renderMesasDinersFamilyRuleControls();
+}
+
+async function saveMesasComandaFamilyRules(nextRules) {
+  const normalized = normalizeMesasComandaFamilyRules(nextRules);
+  mesasComandaFamilyRules = normalized;
+
+  try {
+    localStorage.setItem(
+      LS_MESAS_COMANDA_FAMILY_RULES_KEY,
+      JSON.stringify(normalized),
+    );
+  } catch {}
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_MESAS_COMANDA_FAMILY_RULES_KEY,
+      normalized,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar reglas de comanda por familia:", e);
+  }
+
+  renderMesasComandaFamilyRuleControls();
+  refreshPreprintButtonUI?.();
+}
+
+async function loadMesasComandaFamilyRules() {
+  let rules = [];
+  let hasCfgValue = false;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(
+      OPTIONS_MESAS_COMANDA_FAMILY_RULES_KEY,
+    );
+    if (cfgVal !== undefined && cfgVal !== null && cfgVal !== "") {
+      hasCfgValue = true;
+      if (Array.isArray(cfgVal)) {
+        rules = cfgVal;
+      } else if (typeof cfgVal === "string") {
+        rules = JSON.parse(cfgVal);
+      }
+    }
+  } catch {}
+
+  if (!hasCfgValue) {
+    try {
+      const lsVal = localStorage.getItem(LS_MESAS_COMANDA_FAMILY_RULES_KEY);
+      if (lsVal) rules = JSON.parse(lsVal);
+    } catch {}
+  }
+
+  mesasComandaFamilyRules = normalizeMesasComandaFamilyRules(rules);
+  renderMesasComandaFamilyRuleControls();
+  refreshPreprintButtonUI?.();
+}
+
+function getSelectedMesaDinersCount() {
+  if (!MESAS_INLINE_ACTIVE || MESAS_INLINE_VIEW !== "transacciones") return 0;
+
+  const state = loadMesasTablesStateForInline();
+  const uid = String(state?.selectedTableId || "").trim();
+  if (!uid) return 0;
+
+  const diners = Number(state?.tableMeta?.[uid]?.diners ?? 0);
+  if (!Number.isFinite(diners)) return 0;
+  return Math.max(0, Math.round(diners));
+}
+
+function productMatchesCategoryRules(product, rules) {
+  const normalizedRules = normalizeCategoryRuleIds(rules);
+  if (!normalizedRules.length) return false;
+
+  const categoryId = String(product?.category || "").trim();
+  if (!categoryId) return false;
+
+  const selected = new Set(normalizedRules.map(String));
+  if (selected.has(categoryId)) return true;
+
+  const byId = new Map(
+    (Array.isArray(categories) ? categories : []).map((c) => [
+      String(c?.id || ""),
+      c,
+    ]),
+  );
+
+  const visited = new Set();
+  let current = categoryId;
+  while (current && !visited.has(current)) {
+    visited.add(current);
+    if (selected.has(current)) return true;
+    const node = byId.get(current);
+    current = String(node?.parentId || "").trim();
+  }
+
+  return false;
+}
+
+function productMatchesDinersFamilyRules(product) {
+  return productMatchesCategoryRules(product, mesasDinersFamilyRules);
+}
+
+function resolveMesaDinersQuantityForProduct(product, requestedQty) {
+  const qty = Number(requestedQty || 0);
+  if (!(qty > 0)) return qty;
+
+  if (!MESAS_INLINE_ACTIVE || MESAS_INLINE_VIEW !== "transacciones") return qty;
+  if (!productMatchesDinersFamilyRules(product)) return qty;
+
+  // Evita multiplicar cantidades decimales (ej. báscula por peso).
+  if (Math.abs(qty - Math.round(qty)) > 0.0001) return qty;
+
+  const diners = getSelectedMesaDinersCount();
+  if (!(diners > 0)) return qty;
+
+  return Math.max(1, diners) * Math.max(1, Math.round(qty));
+}
+
+let mesasDinersFamilyRulesBound = false;
+function bindMesasDinersFamilyRuleControlsOnce() {
+  if (mesasDinersFamilyRulesBound) return;
+  mesasDinersFamilyRulesBound = true;
+
+  const selectEl = document.getElementById("mesasDinersFamilySelect");
+  const addBtn = document.getElementById("mesasDinersFamilyAddBtn");
+  const listEl = document.getElementById("mesasDinersFamilyList");
+  if (!selectEl || !addBtn || !listEl) return;
+
+  selectEl.addEventListener("change", () => {
+    addBtn.disabled = !String(selectEl.value || "").trim();
+  });
+
+  addBtn.addEventListener("click", async () => {
+    const id = String(selectEl.value || "").trim();
+    if (!id) return;
+    if (mesasDinersFamilyRules.includes(id)) {
+      toast("Esa familia ya está en la lista.", "info", "Comensales");
+      return;
+    }
+
+    await saveMesasDinersFamilyRules([...mesasDinersFamilyRules, id]);
+    selectEl.value = "";
+    addBtn.disabled = true;
+    toast("Familia añadida a reglas de comensales.", "ok", "Comensales");
+  });
+
+  listEl.addEventListener("click", async (event) => {
+    const chip = event?.target?.closest?.("[data-cat-id]");
+    if (!chip) return;
+    const id = String(chip.dataset.catId || "").trim();
+    if (!id) return;
+
+    await saveMesasDinersFamilyRules(
+      mesasDinersFamilyRules.filter((x) => String(x) !== id),
+    );
+  });
+}
+
+let mesasComandaFamilyRulesBound = false;
+function bindMesasComandaFamilyRuleControlsOnce() {
+  if (mesasComandaFamilyRulesBound) return;
+  mesasComandaFamilyRulesBound = true;
+
+  const selectEl = document.getElementById("mesasComandaFamilySelect");
+  const addBtn = document.getElementById("mesasComandaFamilyAddBtn");
+  const listEl = document.getElementById("mesasComandaFamilyList");
+  if (!selectEl || !addBtn || !listEl) return;
+
+  selectEl.addEventListener("change", () => {
+    addBtn.disabled = !String(selectEl.value || "").trim();
+  });
+
+  addBtn.addEventListener("click", async () => {
+    const id = String(selectEl.value || "").trim();
+    if (!id) return;
+    if (mesasComandaFamilyRules.includes(id)) {
+      toast("Esa familia ya está en la lista.", "info", "Comandas");
+      return;
+    }
+
+    await saveMesasComandaFamilyRules([...mesasComandaFamilyRules, id]);
+    selectEl.value = "";
+    addBtn.disabled = true;
+    toast("Familia añadida a reglas de comanda.", "ok", "Comandas");
+  });
+
+  listEl.addEventListener("click", async (event) => {
+    const chip = event?.target?.closest?.("[data-cat-id]");
+    if (!chip) return;
+    const id = String(chip.dataset.catId || "").trim();
+    if (!id) return;
+
+    await saveMesasComandaFamilyRules(
+      mesasComandaFamilyRules.filter((x) => String(x) !== id),
+    );
+  });
 }
 
 let productStockToggleBound = false;
@@ -1891,6 +2506,8 @@ function updatePayButtonEnabledState() {
   else if (!hasAgent) btn.title = "Falta agente asignado";
   else if (!hasCart) btn.title = "Añade productos antes de cobrar";
   else btn.title = "";
+
+  refreshPreprintButtonUI();
 }
 
 function renderAgentMissingBadge() {
@@ -1959,12 +2576,50 @@ function setTerminalNameClickable(isClickable, isLoading = false) {
     terminalNameEl.style.cursor = "pointer";
     terminalNameEl.style.textDecoration = "none";
     terminalNameEl.title = "Cambiar terminal";
+    if (mesasTransTerminalNameEl) {
+      mesasTransTerminalNameEl.style.cursor = "pointer";
+      mesasTransTerminalNameEl.title = "Cambiar terminal";
+    }
   } else {
     terminalNameEl.style.cursor = "";
     terminalNameEl.style.textDecoration = "none";
     terminalNameEl.title = isLoading
       ? "Disponible cuando finalice la carga"
       : "";
+    if (mesasTransTerminalNameEl) {
+      mesasTransTerminalNameEl.style.cursor = "default";
+      mesasTransTerminalNameEl.title = terminalNameEl.title;
+    }
+  }
+}
+
+function syncMesasTransTerminalName() {
+  if (mesasTransTerminalNameEl && terminalNameEl) {
+    mesasTransTerminalNameEl.textContent =
+      String(terminalNameEl.textContent || "").trim() || "---";
+    mesasTransTerminalNameEl.title = terminalNameEl.title || "Cambiar terminal";
+    mesasTransTerminalNameEl.classList.toggle(
+      "tpv-loading-lock",
+      terminalNameEl.classList.contains("tpv-loading-lock"),
+    );
+  }
+  if (mesasTransAgentNameEl && agentNameEl) {
+    mesasTransAgentNameEl.textContent =
+      String(agentNameEl.textContent || "").trim() || "---";
+    mesasTransAgentNameEl.title = agentNameEl.title || "Cambiar agente";
+    mesasTransAgentNameEl.classList.toggle(
+      "tpv-loading-lock",
+      agentNameEl.classList.contains("tpv-loading-lock"),
+    );
+  }
+  if (mesasTransUserNameEl && userNameEl) {
+    mesasTransUserNameEl.textContent =
+      String(userNameEl.textContent || "").trim() || "---";
+    mesasTransUserNameEl.title = userNameEl.title || "Cerrar sesión";
+    mesasTransUserNameEl.classList.toggle(
+      "tpv-loading-lock",
+      userNameEl.classList.contains("tpv-loading-lock"),
+    );
   }
 }
 
@@ -1990,6 +2645,60 @@ if (terminalNameEl) {
     // Abrimos overlay en modo "solo cambiar terminal"
     showTerminalOverlay("terminalSwitch");
   });
+}
+
+if (mesasTransTerminalNameEl && terminalNameEl) {
+  mesasTransTerminalNameEl.addEventListener("click", () => {
+    terminalNameEl.click();
+  });
+
+  const terminalMirrorObserver = new MutationObserver(() => {
+    syncMesasTransTerminalName();
+  });
+
+  terminalMirrorObserver.observe(terminalNameEl, {
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
+
+  syncMesasTransTerminalName();
+}
+
+if (mesasTransAgentNameEl && agentNameEl) {
+  mesasTransAgentNameEl.addEventListener("click", () => {
+    agentNameEl.click();
+  });
+
+  const agentMirrorObserver = new MutationObserver(() => {
+    syncMesasTransTerminalName();
+  });
+
+  agentMirrorObserver.observe(agentNameEl, {
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
+
+  syncMesasTransTerminalName();
+}
+
+if (mesasTransUserNameEl && userNameEl) {
+  mesasTransUserNameEl.addEventListener("click", () => {
+    userNameEl.click();
+  });
+
+  const userMirrorObserver = new MutationObserver(() => {
+    syncMesasTransTerminalName();
+  });
+
+  userMirrorObserver.observe(userNameEl, {
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
+
+  syncMesasTransTerminalName();
 }
 
 /*----------------------*/
@@ -2847,9 +3556,1997 @@ function renderCashIdChip() {
 
 let BOOT_IN_FLIGHT = false;
 let TPV_LOADING = true;
+const APP_MODE_KEY = "tpv_app_mode";
+const APP_MODE_CFG_KEY = "app.mode";
 const TPV_THEME_KEY = "tpv_theme_mode";
+const MESAS_INLINE_PANEL_BASE_SRC = "mesas/mesas.html?embed=1";
+const MESAS_TABLES_STATE_KEY = "tpv_tables_state_v3";
+const MESAS_TABLES_LEGACY_STATE_KEY = "tpv_tables_state_v2";
+const MESAS_LAYOUT_CACHE_KEY = "tpv_mesas_layout_cache_v1";
+const MESAS_LAYOUT_SYNC_QUEUE_KEY = "tpv_mesas_layout_sync_queue_v1";
+const MESAS_LAYOUT_REMOTE_POLL_MS = 8000;
 let TPV_THEME_MODE = "light";
 let TPV_CUSTOMER_THEME_MODE = "dark";
+let MESAS_INLINE_ACTIVE = false;
+let MESAS_INLINE_VIEW = "transacciones";
+let MESAS_INLINE_EVENTS_BOUND = false;
+let MESAS_CONTEXT_SELECTED_UID = "";
+let MESAS_RETURN_TO_VIEW_AFTER_PARK = "";
+let MESAS_TRANS_TABLE_MOVE_SOURCE_UID = "";
+let MESAS_TRANS_RESERVA_PANEL_OPEN = false;
+let MESAS_LINKED_TICKET_ENSURE_GUARD = false;
+let MESAS_AUTO_SAVE_TIMER = null;
+let MESAS_AUTO_SAVE_IN_FLIGHT = false;
+let MESAS_AUTO_SAVE_RERUN = false;
+let MESAS_LAYOUT_SYNC_TIMER = null;
+let MESAS_LAYOUT_SYNC_IN_FLIGHT = false;
+let MESAS_LAYOUT_REMOTE_POLL_TIMER = null;
+let MESAS_LAYOUT_REMOTE_FETCH_IN_FLIGHT = false;
+let MESAS_LAYOUT_SYNC_DRAIN_IN_FLIGHT = false;
+let MESAS_MODULE_ENABLED = false;
+
+async function persistAppMode(mode) {
+  const next =
+    String(mode || "tpv").toLowerCase() === "mesas" ? "mesas" : "tpv";
+
+  try {
+    localStorage.setItem(APP_MODE_KEY, next);
+  } catch {}
+
+  try {
+    await window.TPV_CFG?.set?.(APP_MODE_CFG_KEY, next);
+  } catch {}
+
+  return next;
+}
+
+async function switchToMesasMode() {
+  if (TPV_LOADING) return;
+  if (!MESAS_MODULE_ENABLED) {
+    toast(
+      "El modulo de Mesas no esta activo para este cliente.",
+      "warn",
+      "Modo mesas",
+    );
+    return;
+  }
+  bindMesasInlineEventsOnce();
+  refreshMesasLayoutFromRemote().catch(() => {});
+  await setMesasInlineModeEnabled(true);
+  setMesasInlineView("transacciones", { persist: false });
+}
+
+function getMesasInlineElements() {
+  return {
+    tabsRow: document.getElementById("mesasInlineTabsRow"),
+    tabTransacciones: document.getElementById("mesasInlineTabTransacciones"),
+    tabMapa: document.getElementById("mesasInlineTabMapa"),
+    tabDiseno: document.getElementById("mesasInlineTabDiseno"),
+    closeBtn: document.getElementById("mesasInlineCloseBtn"),
+    panelWrap: document.getElementById("mesasInlinePanelWrap"),
+    panelFrame: document.getElementById("mesasInlinePanelFrame"),
+    mesasContextRow: document.getElementById("mesasContextRow"),
+    mesasContextRoomSelect: document.getElementById("mesasContextRoomSelect"),
+    mesasContextTableSelect: document.getElementById("mesasContextTableSelect"),
+    mesasContextQuickSwitch: document.getElementById("mesasContextQuickSwitch"),
+    searchBar: document.querySelector(".search-bar"),
+    categoriesWrap: document.querySelector(".categories-wrapper"),
+    productsGrid: document.getElementById("productsGrid"),
+    statusBar: document.getElementById("statusBar"),
+  };
+}
+
+function getMesasLayoutScopedStorageKey() {
+  const slug =
+    String(getCurrentSlugForReservations() || "").trim() || "default";
+  return `${MESAS_LAYOUT_CACHE_KEY}::${slug}`;
+}
+
+function readMesasTablesStateRawLocal() {
+  return (
+    window.MESAS_BRIDGE?.getTablesStateRaw?.() ||
+    localStorage.getItem(MESAS_TABLES_STATE_KEY) ||
+    localStorage.getItem(MESAS_TABLES_LEGACY_STATE_KEY) ||
+    localStorage.getItem(getMesasLayoutScopedStorageKey()) ||
+    ""
+  );
+}
+
+function writeMesasTablesStateRawLocal(raw) {
+  const safeRaw = String(raw || "");
+
+  if (window.MESAS_BRIDGE?.setTablesStateRaw) {
+    window.MESAS_BRIDGE.setTablesStateRaw(safeRaw);
+  } else {
+    localStorage.setItem(MESAS_TABLES_STATE_KEY, safeRaw);
+  }
+
+  localStorage.setItem(getMesasLayoutScopedStorageKey(), safeRaw);
+}
+
+async function apiGetMesasLayoutRemote() {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) return null;
+
+  const url = `${TPV_SYNC_API_URL}?action=get-mesas-layout&slug=${encodeURIComponent(slug)}`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      "X-TPV-API-KEY": syncApiKey,
+    },
+    cache: "no-store",
+  });
+
+  if (!res.ok) return null;
+
+  const data = await res.json().catch(() => null);
+  const layout = data?.data?.layout ?? data?.layout ?? data?.data ?? null;
+  if (!layout || typeof layout !== "object") return null;
+  return layout;
+}
+
+async function apiSaveMesasLayoutRemote(nextState) {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("missing-mesas-remote-config");
+  }
+
+  const payload = {
+    slug,
+    layout: nextState && typeof nextState === "object" ? nextState : {},
+    updatedAt: new Date().toISOString(),
+  };
+
+  const url = `${TPV_SYNC_API_URL}?action=save-mesas-layout`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-TPV-API-KEY": syncApiKey,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    throw new Error(`mesas-layout-save-http-${res.status}`);
+  }
+
+  return true;
+}
+
+async function apiGetClientFeaturesRemote() {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) return null;
+
+  const url = `${TPV_SYNC_API_URL}?action=get-client-features&slug=${encodeURIComponent(slug)}`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      "X-TPV-API-KEY": syncApiKey,
+    },
+    cache: "no-store",
+  });
+
+  if (!res.ok) return null;
+
+  const data = await res.json().catch(() => null);
+  const features =
+    data?.data && typeof data.data === "object" ? data.data : null;
+  return features;
+}
+
+async function loadMesasModuleAvailability() {
+  try {
+    const features = await apiGetClientFeaturesRemote();
+    if (!features || typeof features !== "object") {
+      MESAS_MODULE_ENABLED = false;
+      return false;
+    }
+
+    MESAS_MODULE_ENABLED =
+      features.mesasEnabled === true ||
+      features.mesasEnabled === 1 ||
+      String(features.mesasEnabled || "").trim() === "1";
+  } catch (e) {
+    MESAS_MODULE_ENABLED = false;
+    console.warn(
+      "No se pudieron cargar las features del cliente para Mesas:",
+      e?.message || e,
+    );
+  }
+
+  return MESAS_MODULE_ENABLED;
+}
+
+function getMesasLayoutSyncQueueStorageKey() {
+  const slug =
+    String(getCurrentSlugForReservations() || "").trim() || "default";
+  return `${MESAS_LAYOUT_SYNC_QUEUE_KEY}::${slug}`;
+}
+
+function loadMesasLayoutSyncQueue() {
+  try {
+    const raw = localStorage.getItem(getMesasLayoutSyncQueueStorageKey());
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveMesasLayoutSyncQueue(queue) {
+  try {
+    const safe = Array.isArray(queue) ? queue : [];
+    localStorage.setItem(
+      getMesasLayoutSyncQueueStorageKey(),
+      JSON.stringify(safe.slice(-200)),
+    );
+  } catch (e) {
+    console.warn(
+      "No se pudo guardar cola de layout de Mesas:",
+      e?.message || e,
+    );
+  }
+}
+
+function enqueueMesasLayoutSync(nextState, opts = {}) {
+  const slug =
+    String(getCurrentSlugForReservations() || "").trim() || "default";
+  const layout = nextState && typeof nextState === "object" ? nextState : {};
+  const updatedAt = String(opts?.updatedAt || new Date().toISOString());
+
+  const queue = loadMesasLayoutSyncQueue();
+  const entry = {
+    key: `${slug}|layout`,
+    slug,
+    layout,
+    queuedAt: new Date().toISOString(),
+    updatedAt,
+  };
+
+  const idx = queue.findIndex((it) => String(it?.key || "") === entry.key);
+  if (idx >= 0) queue[idx] = entry;
+  else queue.push(entry);
+
+  saveMesasLayoutSyncQueue(queue);
+}
+
+async function processMesasLayoutSyncQueue() {
+  if (MESAS_LAYOUT_SYNC_DRAIN_IN_FLIGHT) return false;
+  if (TPV_STATE?.offline) return false;
+
+  const queue = loadMesasLayoutSyncQueue();
+  if (!queue.length) return true;
+
+  MESAS_LAYOUT_SYNC_DRAIN_IN_FLIGHT = true;
+  try {
+    const remaining = [];
+    for (const entry of queue) {
+      try {
+        await apiSaveMesasLayoutRemote(entry?.layout || {});
+      } catch (e) {
+        remaining.push(entry);
+        if (!isParkedSyncTransientError(e)) {
+          console.warn(
+            "Error persistente drenando cola de Mesas:",
+            e?.message || e,
+          );
+        }
+      }
+    }
+
+    saveMesasLayoutSyncQueue(remaining);
+    return remaining.length === 0;
+  } finally {
+    MESAS_LAYOUT_SYNC_DRAIN_IN_FLIGHT = false;
+  }
+}
+
+function applyMesasLayoutFromRemoteForInline(remoteLayout) {
+  if (!remoteLayout || typeof remoteLayout !== "object") return false;
+
+  // Si tenemos cambios locales pendientes de sincronizar, evitamos pisarlos
+  // con una lectura remota potencialmente atrasada.
+  if (
+    MESAS_LAYOUT_SYNC_TIMER ||
+    MESAS_LAYOUT_SYNC_IN_FLIGHT ||
+    loadMesasLayoutSyncQueue().length > 0
+  ) {
+    return false;
+  }
+
+  const localState = loadMesasTablesStateForInline() || {};
+  const merged = {
+    ...remoteLayout,
+    tableTicketMap:
+      remoteLayout?.tableTicketMap &&
+      typeof remoteLayout.tableTicketMap === "object"
+        ? { ...remoteLayout.tableTicketMap }
+        : {},
+    draftCartByTable:
+      remoteLayout?.draftCartByTable &&
+      typeof remoteLayout.draftCartByTable === "object"
+        ? { ...remoteLayout.draftCartByTable }
+        : {},
+    tableStates:
+      remoteLayout?.tableStates && typeof remoteLayout.tableStates === "object"
+        ? { ...remoteLayout.tableStates }
+        : {},
+  };
+
+  const selectedUid = String(localState?.selectedTableId || "").trim();
+  if (!merged.selectedTableId && selectedUid) {
+    merged.selectedTableId = selectedUid;
+  }
+  if (!merged.activeRoomId && localState?.activeRoomId) {
+    merged.activeRoomId = String(localState.activeRoomId);
+  }
+
+  if (selectedUid) {
+    const localLinked = localState?.tableTicketMap?.[selectedUid];
+    if (localLinked && !merged.tableTicketMap[selectedUid]) {
+      merged.tableTicketMap[selectedUid] = localLinked;
+    }
+
+    const localDraft = Array.isArray(
+      localState?.draftCartByTable?.[selectedUid],
+    )
+      ? localState.draftCartByTable[selectedUid]
+      : [];
+    const remoteDraft = Array.isArray(merged?.draftCartByTable?.[selectedUid])
+      ? merged.draftCartByTable[selectedUid]
+      : [];
+    if (localDraft.length && !remoteDraft.length) {
+      merged.draftCartByTable[selectedUid] = localDraft.map((it) => ({
+        ...it,
+      }));
+    }
+
+    const localManualState = String(
+      localState?.tableStates?.[selectedUid] || "",
+    ).trim();
+    if (localManualState && !merged.tableStates[selectedUid]) {
+      merged.tableStates[selectedUid] = localManualState;
+    }
+  }
+
+  const remoteRaw = JSON.stringify(merged);
+  const currentRaw = String(readMesasTablesStateRawLocal() || "").trim();
+  if (currentRaw === remoteRaw) {
+    return false;
+  }
+
+  writeMesasTablesStateRawLocal(remoteRaw);
+
+  if (MESAS_INLINE_ACTIVE) {
+    renderMesasTransContextBar?.();
+    if (MESAS_INLINE_VIEW === "transacciones") {
+      syncTpvCartWithSelectedMesa?.();
+    }
+    updateParkedCountBadge?.();
+  }
+
+  return true;
+}
+
+function scheduleMesasLayoutRemoteSync(nextState) {
+  if (MESAS_LAYOUT_SYNC_TIMER) {
+    clearTimeout(MESAS_LAYOUT_SYNC_TIMER);
+    MESAS_LAYOUT_SYNC_TIMER = null;
+  }
+
+  const safeState = nextState && typeof nextState === "object" ? nextState : {};
+  MESAS_LAYOUT_SYNC_TIMER = setTimeout(async () => {
+    MESAS_LAYOUT_SYNC_TIMER = null;
+    if (MESAS_LAYOUT_SYNC_IN_FLIGHT) return;
+
+    MESAS_LAYOUT_SYNC_IN_FLIGHT = true;
+    try {
+      await apiSaveMesasLayoutRemote(safeState);
+    } catch (e) {
+      enqueueMesasLayoutSync(safeState);
+      console.warn("No se pudo sincronizar layout de mesas:", e?.message || e);
+    } finally {
+      MESAS_LAYOUT_SYNC_IN_FLIGHT = false;
+    }
+  }, 350);
+}
+
+async function refreshMesasLayoutFromRemote() {
+  if (MESAS_LAYOUT_REMOTE_FETCH_IN_FLIGHT) return false;
+
+  try {
+    await processMesasLayoutSyncQueue();
+    MESAS_LAYOUT_REMOTE_FETCH_IN_FLIGHT = true;
+    const remote = await apiGetMesasLayoutRemote();
+    return applyMesasLayoutFromRemoteForInline(remote);
+  } catch (e) {
+    console.warn(
+      "No se pudo cargar layout de mesas desde remoto:",
+      e?.message || e,
+    );
+    return false;
+  } finally {
+    MESAS_LAYOUT_REMOTE_FETCH_IN_FLIGHT = false;
+  }
+}
+
+function startMesasLayoutRemotePolling() {
+  if (MESAS_LAYOUT_REMOTE_POLL_TIMER) return;
+
+  MESAS_LAYOUT_REMOTE_POLL_TIMER = setInterval(() => {
+    if (!MESAS_INLINE_ACTIVE) return;
+    if (document.hidden) return;
+    refreshMesasLayoutFromRemote().catch(() => {});
+  }, MESAS_LAYOUT_REMOTE_POLL_MS);
+}
+
+function stopMesasLayoutRemotePolling() {
+  if (!MESAS_LAYOUT_REMOTE_POLL_TIMER) return;
+  clearInterval(MESAS_LAYOUT_REMOTE_POLL_TIMER);
+  MESAS_LAYOUT_REMOTE_POLL_TIMER = null;
+}
+
+function loadMesasTablesStateForInline() {
+  try {
+    const raw = readMesasTablesStateRawLocal();
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveMesasTablesStateForInline(nextState) {
+  try {
+    const raw = JSON.stringify(nextState || {});
+    writeMesasTablesStateRawLocal(raw);
+    scheduleMesasLayoutRemoteSync(nextState || {});
+    notifyMesasInlineStateChanged();
+  } catch {}
+}
+
+function notifyMesasInlineStateChanged() {
+  try {
+    const { panelFrame } = getMesasInlineElements();
+    if (!panelFrame?.contentWindow) return;
+    panelFrame.contentWindow.postMessage(
+      {
+        type: "tpv:mesas-state-changed",
+      },
+      "*",
+    );
+  } catch {}
+}
+
+function getSelectedMesaUidForInline() {
+  const state = loadMesasTablesStateForInline();
+  return String(state?.selectedTableId || "").trim();
+}
+
+function saveDraftCartForMesaUid(uid, draftItems, opts = {}) {
+  const mesaUid = String(uid || "").trim();
+  if (!mesaUid) return;
+
+  const { keepEmpty = false } = opts || {};
+
+  const state = loadMesasTablesStateForInline();
+  if (!state || typeof state !== "object") return;
+
+  if (!state.draftCartByTable || typeof state.draftCartByTable !== "object") {
+    state.draftCartByTable = {};
+  }
+
+  const safeItems = Array.isArray(draftItems) ? draftItems : [];
+  if (!safeItems.length && !keepEmpty) {
+    delete state.draftCartByTable[mesaUid];
+  } else {
+    state.draftCartByTable[mesaUid] = safeItems.map((it) => ({ ...it }));
+  }
+
+  saveMesasTablesStateForInline(state);
+}
+
+function saveCurrentCartAsMesaDraft() {
+  if (!MESAS_INLINE_ACTIVE || MESAS_INLINE_VIEW !== "transacciones") return;
+  const uid = getSelectedMesaUidForInline();
+  if (!uid) return;
+
+  saveDraftCartForMesaUid(uid, Array.isArray(cart) ? cart : []);
+}
+
+function clearCurrentMesaDraft() {
+  const uid = getSelectedMesaUidForInline();
+  if (!uid) return;
+  saveDraftCartForMesaUid(uid, []);
+}
+
+function getMesasRoomAndTableByUid(state, uid) {
+  const [roomId = "", tableId = ""] = String(uid || "").split("::");
+  const room = Array.isArray(state?.roomList)
+    ? state.roomList.find((r) => String(r?.id || "") === roomId)
+    : null;
+  const table = Array.isArray(room?.tables)
+    ? room.tables.find((t) => String(t?.id || "") === tableId)
+    : null;
+  if (!room || !table) return null;
+  return { room, table, uid: `${roomId}::${tableId}` };
+}
+
+function getSelectedMesaScopeContext() {
+  if (!MESAS_INLINE_ACTIVE) return null;
+
+  const state = loadMesasTablesStateForInline();
+  const uid = String(
+    state?.selectedTableId || MESAS_CONTEXT_SELECTED_UID || "",
+  ).trim();
+  if (!uid) return null;
+
+  const [roomId = "", tableId = ""] = uid.split("::");
+  const linked = getMesasRoomAndTableByUid(state, uid);
+
+  return {
+    uid,
+    roomId: String(roomId || ""),
+    tableId: String(tableId || ""),
+    roomName: linked
+      ? String(linked.room?.name || linked.room?.id || roomId || "")
+      : "",
+    tableName: linked
+      ? String(linked.table?.name || linked.table?.id || tableId || "")
+      : "",
+  };
+}
+
+function applyMesaScopeToTicket(
+  ticket,
+  scopeCtx = getSelectedMesaScopeContext(),
+) {
+  if (!ticket || typeof ticket !== "object") return ticket;
+  if (!scopeCtx || !scopeCtx.uid) return ticket;
+
+  ticket.mesaUid = scopeCtx.uid;
+  ticket.mesaRoomId = scopeCtx.roomId || null;
+  ticket.mesaRoomName = scopeCtx.roomName || null;
+  ticket.mesaTableId = scopeCtx.tableId || null;
+  ticket.mesaTableName = scopeCtx.tableName || null;
+
+  return ticket;
+}
+
+function syncTpvCartWithSelectedMesa(opts = {}) {
+  if (!MESAS_INLINE_ACTIVE || MESAS_INLINE_VIEW !== "transacciones") return;
+  if (TPV_TUTORIAL_BLANK_MODE) {
+    cart = [];
+    currentParkedTicketIndex = null;
+    renderCart();
+    refreshParkButtonUI?.();
+    refreshParkedEditingBanner?.();
+    return;
+  }
+
+  const { preferLinkedTicketOnEmptyDraft = false } = opts || {};
+
+  const state = loadMesasTablesStateForInline();
+  const uid = String(state?.selectedTableId || "").trim();
+  if (!uid) return;
+
+  let ticketId = state?.tableTicketMap?.[uid];
+
+  // Si falta el mapeo de mesa, lo intentamos reconstruir por metadata del ticket.
+  if (!ticketId) {
+    const inferredIdx = (
+      Array.isArray(parkedTickets) ? parkedTickets : []
+    ).findIndex((t) => !t?.paid && resolveTicketMesaUid(t, state) === uid);
+
+    if (inferredIdx >= 0) {
+      if (!state.tableTicketMap || typeof state.tableTicketMap !== "object") {
+        state.tableTicketMap = {};
+      }
+      ticketId = parkedTickets[inferredIdx]?.id;
+      state.tableTicketMap[uid] = ticketId;
+      saveMesasTablesStateForInline(state);
+      renderMesasTransContextBar();
+    }
+  }
+
+  const draftByTable =
+    state?.draftCartByTable && typeof state.draftCartByTable === "object"
+      ? state.draftCartByTable
+      : {};
+  const hasDraftForUid = Object.prototype.hasOwnProperty.call(
+    draftByTable,
+    uid,
+  );
+
+  if (!ticketId) {
+    const draftItems = Array.isArray(draftByTable?.[uid])
+      ? draftByTable[uid]
+      : [];
+
+    cart = hasDraftForUid ? draftItems.map((it) => ({ ...it })) : [];
+    currentParkedTicketIndex = null;
+    renderCart();
+    refreshParkButtonUI?.();
+    refreshParkedEditingBanner?.();
+    return;
+  }
+
+  const idx = (Array.isArray(parkedTickets) ? parkedTickets : []).findIndex(
+    (t) => String(t?.id || "") === String(ticketId) && !t?.paid,
+  );
+
+  if (idx >= 0) {
+    const draftItems = Array.isArray(draftByTable?.[uid])
+      ? draftByTable[uid]
+      : [];
+
+    if (
+      preferLinkedTicketOnEmptyDraft &&
+      hasDraftForUid &&
+      !draftItems.length
+    ) {
+      // Al arrancar, priorizamos recuperar el ticket real frente a un draft vacío antiguo.
+      delete draftByTable[uid];
+      state.draftCartByTable = draftByTable;
+      saveMesasTablesStateForInline(state);
+      renderMesasTransContextBar();
+      restoreParkedCartByIndex(idx);
+      return;
+    }
+
+    if (hasDraftForUid) {
+      cart = draftItems.map((it) => ({ ...it }));
+      currentParkedTicketIndex = idx;
+      renderCart();
+      refreshParkButtonUI?.();
+      refreshParkedEditingBanner?.();
+      return;
+    }
+
+    restoreParkedCartByIndex(idx);
+    return;
+  }
+
+  cart = [];
+  currentParkedTicketIndex = null;
+  renderCart();
+  refreshParkButtonUI?.();
+  refreshParkedEditingBanner?.();
+}
+
+function normalizeTicketLinesForCompare(lines) {
+  const src = Array.isArray(lines) ? lines : [];
+
+  return src.map((it) => ({
+    id: String(it?.id ?? it?.idproducto ?? it?.baseProductId ?? "").trim(),
+    name: String(it?.name || it?.nombre || it?.descripcion || "").trim(),
+    qty: Number(it?.qty ?? it?.cantidad ?? 1) || 1,
+    price: Number(it?.price ?? it?.grossPrice ?? 0) || 0,
+    taxRate: Number(it?.taxRate ?? 0) || 0,
+    codimpuesto: String(it?.codimpuesto || "").trim(),
+  }));
+}
+
+function hasUnsavedChangesForLoadedParkedTicket(ticket) {
+  if (!ticket || ticket?.paid) return false;
+
+  const current = JSON.stringify(normalizeTicketLinesForCompare(cart));
+  const saved = JSON.stringify(normalizeTicketLinesForCompare(ticket?.items));
+  return current !== saved;
+}
+
+function ensureMesaLinkedTicketLoaded() {
+  if (!MESAS_INLINE_ACTIVE || MESAS_INLINE_VIEW !== "transacciones")
+    return false;
+
+  const state = loadMesasTablesStateForInline();
+  const uid = String(state?.selectedTableId || "").trim();
+  if (!uid) return false;
+
+  const linkedTicketId = state?.tableTicketMap?.[uid];
+  if (!linkedTicketId) return false;
+
+  const linkedIndex = (
+    Array.isArray(parkedTickets) ? parkedTickets : []
+  ).findIndex(
+    (t) => String(t?.id || "") === String(linkedTicketId) && !t?.paid,
+  );
+  if (linkedIndex < 0) return false;
+
+  const draftByTable =
+    state?.draftCartByTable && typeof state.draftCartByTable === "object"
+      ? state.draftCartByTable
+      : {};
+  const hasDraftForUid = Object.prototype.hasOwnProperty.call(
+    draftByTable,
+    uid,
+  );
+  if (hasDraftForUid) return false;
+
+  const linkedTicket = parkedTickets[linkedIndex];
+  const current = JSON.stringify(normalizeTicketLinesForCompare(cart));
+  const saved = JSON.stringify(
+    normalizeTicketLinesForCompare(linkedTicket?.items),
+  );
+  const isSameCart = current === saved;
+  const isSameIndex = Number(currentParkedTicketIndex) === Number(linkedIndex);
+
+  // Si hay cambios locales sobre el ticket cargado, respetarlos como borrador.
+  if (!isSameCart && isSameIndex) {
+    saveDraftCartForMesaUid(uid, Array.isArray(cart) ? cart : [], {
+      keepEmpty: true,
+    });
+    return false;
+  }
+
+  if (isSameCart && isSameIndex) return false;
+
+  syncTpvCartWithSelectedMesa();
+  return true;
+}
+
+async function restoreLoadedParkedTicket() {
+  const labels = getParkingLabels();
+  const loadedTicket = getCurrentLoadedParkedTicket();
+  if (!loadedTicket) {
+    toast(
+      `No hay ${labels.item} activo para restaurar.`,
+      "info",
+      labels.featureTitle,
+    );
+    return;
+  }
+
+  const isDirty = hasUnsavedChangesForLoadedParkedTicket(loadedTicket);
+  if (isDirty) {
+    cart = (Array.isArray(loadedTicket.items) ? loadedTicket.items : []).map(
+      (it) => hydrateParkedItemForCart(it),
+    );
+    renderCart();
+
+    const mesasState = loadMesasTablesStateForInline();
+    const selectedUid = String(mesasState?.selectedTableId || "").trim();
+    if (selectedUid) saveDraftCartForMesaUid(selectedUid, []);
+
+    refreshParkButtonUI();
+    refreshParkedEditingBanner();
+    toast(
+      `${labels.itemCap} restaurado a la ultima version guardada.`,
+      "ok",
+      labels.featureTitle,
+    );
+    return;
+  }
+
+  toast(
+    "No hay cambios pendientes en productos para restaurar.",
+    "info",
+    labels.featureTitle,
+  );
+}
+
+function getMesasPendingTicketByUid(state, uid) {
+  const linkedTicketId = state?.tableTicketMap?.[uid];
+  if (linkedTicketId) {
+    const linkedTicket = (
+      Array.isArray(parkedTickets) ? parkedTickets : []
+    ).find(
+      (t) => String(t?.id || "") === String(linkedTicketId || "") && !t?.paid,
+    );
+
+    if (linkedTicket) return linkedTicket;
+  }
+
+  const inferredTicket = (
+    Array.isArray(parkedTickets) ? parkedTickets : []
+  ).find((t) => !t?.paid && resolveTicketMesaUid(t, state) === uid);
+
+  return inferredTicket || null;
+}
+
+function getMesasParkedOrderMapForRoom(state, roomId) {
+  const room = Array.isArray(state?.roomList)
+    ? state.roomList.find((r) => String(r?.id || "") === String(roomId || ""))
+    : null;
+  const tables = Array.isArray(room?.tables) ? room.tables : [];
+
+  const ordered = tables
+    .map((tb) => {
+      const uid = `${String(roomId || "")}::${String(tb?.id || "")}`;
+      const ticket = getMesasPendingTicketByUid(state, uid);
+      if (!ticket) return null;
+      return {
+        uid,
+        createdAt: new Date(
+          ticket?.createdAt || ticket?.updatedAt || Date.now(),
+        ).getTime(),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.createdAt - b.createdAt);
+
+  const orderMap = new Map();
+  ordered.forEach((entry, idx) => {
+    orderMap.set(entry.uid, idx + 1);
+  });
+
+  return orderMap;
+}
+
+function getMesaQuickStatusMeta(state, uid) {
+  const linkedTicket = getMesasPendingTicketByUid(state, uid);
+  const manualState = String(state?.tableStates?.[uid] || "")
+    .trim()
+    .toLowerCase();
+  const serviceStage = String(state?.tableMeta?.[uid]?.serviceStage || "")
+    .trim()
+    .toLowerCase();
+
+  if (linkedTicket) {
+    if (manualState === "cuenta" && serviceStage === "cobro-realizado") {
+      return {
+        kind: "cobrada",
+        text: "Cuenta cobrada",
+      };
+    }
+    if (manualState === "cuenta") {
+      return {
+        kind: "cuenta",
+        text: "Pide cuenta",
+      };
+    }
+    return {
+      kind: "ocupada",
+      text: "Ocupada",
+    };
+  }
+
+  if (manualState === "libre") {
+    return {
+      kind: "libre",
+      text: "Libre",
+    };
+  }
+  if (manualState === "ocupada") {
+    return {
+      kind: "ocupada",
+      text: "Ocupada",
+    };
+  }
+  if (manualState === "cuenta") {
+    if (serviceStage === "cobro-realizado") {
+      return {
+        kind: "cobrada",
+        text: "Cuenta cobrada",
+      };
+    }
+    return {
+      kind: "cuenta",
+      text: "Pide cuenta",
+    };
+  }
+  if (manualState === "reservada") {
+    return {
+      kind: "reservada",
+      text: "Reservada",
+    };
+  }
+
+  return {
+    kind: "libre",
+    text: "Libre",
+  };
+}
+
+function getMesasTicketTotal(ticket) {
+  const directTotal = Number(ticket?.total || 0);
+  if (Number.isFinite(directTotal) && directTotal > 0) return directTotal;
+  return getCartTotal(Array.isArray(ticket?.items) ? ticket.items : []);
+}
+
+function setSelectedMesaDinersCount(nextDiners) {
+  const mesasState = loadMesasTablesStateForInline();
+  if (!mesasState || typeof mesasState !== "object") return false;
+
+  const uid = String(mesasState?.selectedTableId || "").trim();
+  if (!uid) return false;
+
+  const diners = Math.max(0, Math.round(Number(nextDiners) || 0));
+
+  if (!mesasState.tableMeta || typeof mesasState.tableMeta !== "object") {
+    mesasState.tableMeta = {};
+  }
+
+  const prevMeta =
+    mesasState.tableMeta[uid] && typeof mesasState.tableMeta[uid] === "object"
+      ? mesasState.tableMeta[uid]
+      : {};
+
+  mesasState.tableMeta[uid] = {
+    ...prevMeta,
+    diners,
+  };
+
+  saveMesasTablesStateForInline(mesasState);
+  return true;
+}
+
+function saveSelectedMesaReservationMeta({
+  reservationName = "",
+  reservationTime = "",
+} = {}) {
+  const mesasState = loadMesasTablesStateForInline();
+  const uid = String(mesasState?.selectedTableId || "").trim();
+  if (!uid) return false;
+
+  if (!mesasState.tableMeta || typeof mesasState.tableMeta !== "object") {
+    mesasState.tableMeta = {};
+  }
+
+  const prevMeta =
+    mesasState.tableMeta[uid] && typeof mesasState.tableMeta[uid] === "object"
+      ? { ...mesasState.tableMeta[uid] }
+      : {};
+
+  mesasState.tableMeta[uid] = {
+    ...prevMeta,
+    reservationName: String(reservationName || "").trim(),
+    reservationTime: String(reservationTime || "").trim(),
+  };
+
+  saveMesasTablesStateForInline(mesasState);
+  return true;
+}
+
+function setSelectedMesaReservationEnabled(enabled, { silent = false } = {}) {
+  const mesasState = loadMesasTablesStateForInline();
+  const uid = String(mesasState?.selectedTableId || "").trim();
+  if (!uid) {
+    if (!silent) toast("Selecciona una mesa primero.", "warn", "Reserva");
+    return false;
+  }
+
+  if (!mesasState.tableStates || typeof mesasState.tableStates !== "object") {
+    mesasState.tableStates = {};
+  }
+  if (!mesasState.tableMeta || typeof mesasState.tableMeta !== "object") {
+    mesasState.tableMeta = {};
+  }
+
+  const prevMeta =
+    mesasState.tableMeta[uid] && typeof mesasState.tableMeta[uid] === "object"
+      ? { ...mesasState.tableMeta[uid] }
+      : {};
+
+  if (enabled) {
+    mesasState.tableStates[uid] = "reservada";
+    mesasState.tableMeta[uid] = {
+      ...prevMeta,
+      reservationName: String(prevMeta?.reservationName || "").trim(),
+      reservationTime: String(prevMeta?.reservationTime || "").trim(),
+    };
+  } else {
+    mesasState.tableStates[uid] = "libre";
+    delete prevMeta.reservationName;
+    delete prevMeta.reservationTime;
+    mesasState.tableMeta[uid] = prevMeta;
+  }
+
+  saveMesasTablesStateForInline(mesasState);
+  refreshMesasTransSidebar();
+  refreshParkedEditingBanner?.();
+  return true;
+}
+
+function toggleSelectedMesaReservation(explicitValue = null) {
+  const mesasState = loadMesasTablesStateForInline();
+  const uid = String(mesasState?.selectedTableId || "").trim();
+  if (!uid) {
+    toast("Selecciona una mesa primero.", "warn", "Reserva");
+    return false;
+  }
+
+  const currentStatus = getMesaQuickStatusMeta(mesasState, uid);
+  const nextEnabled =
+    typeof explicitValue === "boolean"
+      ? explicitValue
+      : currentStatus.kind !== "reservada";
+  return setSelectedMesaReservationEnabled(nextEnabled);
+}
+
+function moveMesaPendingTicket(sourceUid, targetUid) {
+  const fromUid = String(sourceUid || "").trim();
+  const toUid = String(targetUid || "").trim();
+  if (!fromUid || !toUid || fromUid === toUid) return false;
+
+  const mesasState = loadMesasTablesStateForInline();
+  if (!mesasState || typeof mesasState !== "object") return false;
+
+  if (
+    !mesasState.tableTicketMap ||
+    typeof mesasState.tableTicketMap !== "object"
+  ) {
+    mesasState.tableTicketMap = {};
+  }
+  if (
+    !mesasState.draftCartByTable ||
+    typeof mesasState.draftCartByTable !== "object"
+  ) {
+    mesasState.draftCartByTable = {};
+  }
+  if (!mesasState.tableStates || typeof mesasState.tableStates !== "object") {
+    mesasState.tableStates = {};
+  }
+  if (!mesasState.tableMeta || typeof mesasState.tableMeta !== "object") {
+    mesasState.tableMeta = {};
+  }
+
+  const sourceTicket = getMesasPendingTicketByUid(mesasState, fromUid);
+  if (!sourceTicket) {
+    toast("No hay pedido pendiente en la mesa seleccionada.", "warn", "Mesas");
+    return false;
+  }
+
+  const targetTicket = getMesasPendingTicketByUid(mesasState, toUid);
+  if (targetTicket) {
+    toast("La mesa de destino ya tiene pedido activo.", "warn", "Mesas");
+    return false;
+  }
+
+  const sourceTicketId = String(sourceTicket?.id || "").trim();
+  if (!sourceTicketId) return false;
+
+  mesasState.tableTicketMap[toUid] = sourceTicketId;
+  delete mesasState.tableTicketMap[fromUid];
+
+  const sourceDraft = Array.isArray(mesasState?.draftCartByTable?.[fromUid])
+    ? mesasState.draftCartByTable[fromUid]
+    : null;
+  if (sourceDraft) {
+    mesasState.draftCartByTable[toUid] = sourceDraft.map((it) => ({ ...it }));
+    delete mesasState.draftCartByTable[fromUid];
+  }
+
+  const sourceMeta =
+    mesasState.tableMeta[fromUid] &&
+    typeof mesasState.tableMeta[fromUid] === "object"
+      ? mesasState.tableMeta[fromUid]
+      : {};
+  mesasState.tableMeta[toUid] = {
+    ...sourceMeta,
+  };
+  mesasState.tableMeta[fromUid] = {
+    ...(mesasState.tableMeta[fromUid] || {}),
+    serviceStage: "",
+  };
+
+  const sourceState = String(mesasState?.tableStates?.[fromUid] || "")
+    .trim()
+    .toLowerCase();
+  mesasState.tableStates[toUid] = sourceState || "ocupada";
+  mesasState.tableStates[fromUid] = "libre";
+
+  const targetScope = getMesasRoomAndTableByUid(mesasState, toUid);
+  applyMesaScopeToTicket(sourceTicket, {
+    uid: toUid,
+    roomId: String(targetScope?.room?.id || ""),
+    tableId: String(targetScope?.table?.id || ""),
+    roomName: String(
+      targetScope?.room?.name || targetScope?.room?.id || "",
+    ).trim(),
+    tableName: String(
+      targetScope?.table?.name || targetScope?.table?.id || "",
+    ).trim(),
+  });
+
+  mesasState.selectedTableId = toUid;
+  saveMesasTablesStateForInline(mesasState);
+  syncTpvCartWithSelectedMesa({ preferLinkedTicketOnEmptyDraft: true });
+
+  return true;
+}
+
+function refreshMesasTransSidebar() {
+  const side = document.getElementById("mesasTransSidebar");
+  const selectedTableEl = document.getElementById("mesasTransSelectedTable");
+  const selectedRoomEl = document.getElementById("mesasTransSelectedRoom");
+  const selectedStatusEl = document.getElementById("mesasTransSelectedStatus");
+  const selectedTotalEl = document.getElementById("mesasTransSelectedTotal");
+  const otherTablesEl = document.getElementById("mesasTransOtherTables");
+  const dinersBtnValEl = document.getElementById(
+    "mesasTransActionPersonasValue",
+  );
+  const reservaBoxEl = document.getElementById("mesasTransReservaBox");
+  const reservaToggleBtnEl = document.getElementById(
+    "mesasTransReservaToggleBtn",
+  );
+  const reservaPanelEl = document.getElementById("mesasTransReservaPanel");
+  const reservaEnabledEl = document.getElementById("mesasTransReservaEnabled");
+  const reservaNameEl = document.getElementById("mesasTransReservaName");
+  const reservaTimeEl = document.getElementById("mesasTransReservaTime");
+
+  if (
+    !side ||
+    !selectedTableEl ||
+    !selectedRoomEl ||
+    !selectedStatusEl ||
+    !selectedTotalEl ||
+    !otherTablesEl
+  ) {
+    return;
+  }
+
+  const active = MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones";
+  side.classList.toggle("hidden", !active);
+  if (!active) return;
+
+  const state = loadMesasTablesStateForInline();
+  const uid = String(state?.selectedTableId || "").trim();
+  const linked = getMesasRoomAndTableByUid(state, uid);
+
+  const tableName = String(
+    linked?.table?.name || linked?.table?.id || "Sin mesa",
+  ).trim();
+  const roomName = String(
+    linked?.room?.name || linked?.room?.id || "Sin sala",
+  ).trim();
+
+  const selectedTicket = uid ? getMesasPendingTicketByUid(state, uid) : null;
+  const selectedStatusMeta = uid
+    ? getMesaQuickStatusMeta(state, uid)
+    : { kind: "libre", text: "Libre" };
+  const selectedTotal = selectedTicket
+    ? getMesasTicketTotal(selectedTicket)
+    : 0;
+  const selectedDiners = Number(state?.tableMeta?.[uid]?.diners ?? 0) || 0;
+
+  selectedTableEl.textContent = tableName || "Sin mesa";
+  selectedRoomEl.textContent = roomName || "Sin sala";
+  selectedStatusEl.textContent = selectedStatusMeta.text;
+  selectedStatusEl.className = `mts-chip is-${selectedStatusMeta.kind}`;
+  selectedTotalEl.textContent = selectedTotal > 0 ? eur(selectedTotal) : eur(0);
+
+  if (dinersBtnValEl) {
+    dinersBtnValEl.textContent = String(
+      Math.max(0, Math.round(selectedDiners)),
+    );
+  }
+
+  const reservationName = String(
+    state?.tableMeta?.[uid]?.reservationName || "",
+  ).trim();
+  const reservationTime = String(
+    state?.tableMeta?.[uid]?.reservationTime || "",
+  ).trim();
+  const canUseReserva =
+    !!uid && ["libre", "reservada"].includes(selectedStatusMeta.kind);
+
+  if (reservaBoxEl) {
+    reservaBoxEl.classList.toggle("hidden", !canUseReserva);
+    reservaBoxEl.classList.toggle(
+      "is-reserved",
+      selectedStatusMeta.kind === "reservada",
+    );
+  }
+  if (!canUseReserva) {
+    MESAS_TRANS_RESERVA_PANEL_OPEN = false;
+  }
+
+  if (reservaToggleBtnEl) {
+    const expanded = canUseReserva && !!MESAS_TRANS_RESERVA_PANEL_OPEN;
+    reservaToggleBtnEl.classList.toggle(
+      "is-active",
+      selectedStatusMeta.kind === "reservada" || expanded,
+    );
+    reservaToggleBtnEl.setAttribute(
+      "aria-expanded",
+      expanded ? "true" : "false",
+    );
+    reservaToggleBtnEl.textContent = expanded ? "Reserva ▲" : "Reserva ▼";
+  }
+  if (reservaPanelEl) {
+    reservaPanelEl.classList.toggle(
+      "hidden",
+      !(canUseReserva && MESAS_TRANS_RESERVA_PANEL_OPEN),
+    );
+  }
+  if (reservaEnabledEl) {
+    reservaEnabledEl.checked = selectedStatusMeta.kind === "reservada";
+    reservaEnabledEl.disabled = !uid;
+  }
+  if (reservaNameEl) {
+    reservaNameEl.value = reservationName;
+    reservaNameEl.disabled = !uid;
+  }
+  if (reservaTimeEl) {
+    reservaTimeEl.value = reservationTime;
+    reservaTimeEl.disabled = !uid;
+  }
+
+  otherTablesEl.innerHTML = "";
+
+  const activeRoomId = String(linked?.room?.id || state?.activeRoomId || "");
+  const activeRoom = Array.isArray(state?.roomList)
+    ? state.roomList.find((r) => String(r?.id || "") === activeRoomId)
+    : null;
+  const roomTables = Array.isArray(activeRoom?.tables) ? activeRoom.tables : [];
+  const parkedOrderByUid = getMesasParkedOrderMapForRoom(state, activeRoomId);
+
+  const otherRows = roomTables
+    .map((tb) => {
+      const tableId = String(tb?.id || "");
+      const tableUid = `${activeRoomId}::${tableId}`;
+      return {
+        tb,
+        tableUid,
+        parkedOrder: parkedOrderByUid.get(tableUid),
+      };
+    })
+    .filter((entry) => entry.tableUid !== uid)
+    .sort((a, b) => {
+      const aHasOrder = Number.isFinite(a.parkedOrder);
+      const bHasOrder = Number.isFinite(b.parkedOrder);
+
+      if (aHasOrder && bHasOrder) {
+        return a.parkedOrder - b.parkedOrder;
+      }
+      if (aHasOrder) return -1;
+      if (bHasOrder) return 1;
+
+      const aName = String(a?.tb?.name || a?.tb?.id || "");
+      const bName = String(b?.tb?.name || b?.tb?.id || "");
+      return aName.localeCompare(bName, "es", {
+        numeric: true,
+        sensitivity: "base",
+      });
+    });
+
+  if (!otherRows.length) {
+    const emptyEl = document.createElement("div");
+    emptyEl.className = "mts-chip";
+    emptyEl.textContent = "No hay mas mesas en esta sala.";
+    otherTablesEl.appendChild(emptyEl);
+    return;
+  }
+
+  otherRows.forEach(({ tb, tableUid, parkedOrder }) => {
+    const tableId = String(tb?.id || "");
+    const meta = getMesaQuickStatusMeta(state, tableUid);
+    const ticket = getMesasPendingTicketByUid(state, tableUid);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `mts-table-btn is-${meta.kind}`;
+    btn.dataset.uid = tableUid;
+
+    const left = document.createElement("span");
+    left.className = "mts-table-left";
+
+    const dot = document.createElement("span");
+    dot.className = "mts-state-dot";
+
+    const name = document.createElement("span");
+    name.className = "mts-table-name";
+    name.textContent = String(tb?.name || tableId || "Mesa");
+
+    const hasOrder = Number.isFinite(parkedOrder);
+    if (hasOrder) {
+      const order = document.createElement("span");
+      order.className = "mts-order";
+      order.textContent = String(parkedOrder);
+      order.title = `Orden de pedido #${parkedOrder}`;
+      left.appendChild(order);
+    }
+
+    left.appendChild(dot);
+    left.appendChild(name);
+
+    const right = document.createElement("span");
+    right.className = "mts-table-right";
+    right.textContent = ticket ? eur(getMesasTicketTotal(ticket)) : meta.text;
+
+    btn.appendChild(left);
+    btn.appendChild(right);
+    otherTablesEl.appendChild(btn);
+  });
+}
+
+function renderMesasTransContextBar() {
+  const {
+    mesasContextRow,
+    mesasContextRoomSelect,
+    mesasContextTableSelect,
+    mesasContextQuickSwitch,
+  } = getMesasInlineElements();
+
+  const showRow = MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones";
+  if (mesasContextRow) mesasContextRow.classList.toggle("hidden", !showRow);
+  if (!MESAS_INLINE_ACTIVE) {
+    if (mesasContextQuickSwitch)
+      mesasContextQuickSwitch.classList.add("hidden");
+    refreshMesasTransSidebar();
+    return;
+  }
+  if (!mesasContextRoomSelect || !mesasContextTableSelect) return;
+
+  const state = loadMesasTablesStateForInline();
+  const roomList = Array.isArray(state?.roomList) ? state.roomList : [];
+
+  mesasContextRoomSelect.innerHTML = "";
+  mesasContextTableSelect.innerHTML = "";
+  if (mesasContextQuickSwitch) mesasContextQuickSwitch.innerHTML = "";
+
+  if (!roomList.length) {
+    mesasContextRoomSelect.disabled = true;
+    mesasContextTableSelect.disabled = true;
+    if (mesasContextQuickSwitch)
+      mesasContextQuickSwitch.classList.add("hidden");
+    refreshMesasTransSidebar();
+    return;
+  }
+
+  let activeRoomId = String(state?.activeRoomId || "");
+  if (!roomList.some((r) => String(r?.id || "") === activeRoomId)) {
+    activeRoomId = String(roomList[0]?.id || "");
+  }
+
+  roomList.forEach((room) => {
+    const opt = document.createElement("option");
+    opt.value = String(room?.id || "");
+    opt.textContent = String(room?.name || room?.id || "Sala");
+    if (opt.value === activeRoomId) opt.selected = true;
+    mesasContextRoomSelect.appendChild(opt);
+  });
+
+  const activeRoom = roomList.find((r) => String(r?.id || "") === activeRoomId);
+  const tables = Array.isArray(activeRoom?.tables) ? activeRoom.tables : [];
+  mesasContextTableSelect.disabled = !tables.length;
+
+  let selectedUid = String(
+    state?.selectedTableId || MESAS_CONTEXT_SELECTED_UID || "",
+  );
+  const selectedInRoom = getMesasRoomAndTableByUid(state, selectedUid);
+  if (!selectedInRoom || String(selectedInRoom.room.id) !== activeRoomId) {
+    const firstTableId = String(tables[0]?.id || "");
+    selectedUid = firstTableId ? `${activeRoomId}::${firstTableId}` : "";
+  }
+  MESAS_CONTEXT_SELECTED_UID = selectedUid;
+
+  tables.forEach((table) => {
+    const tableId = String(table?.id || "");
+    const uid = `${activeRoomId}::${tableId}`;
+    const opt = document.createElement("option");
+    opt.value = uid;
+    opt.textContent = String(table?.name || tableId || "Mesa");
+    if (uid === selectedUid) opt.selected = true;
+    mesasContextTableSelect.appendChild(opt);
+  });
+
+  if (mesasContextQuickSwitch) {
+    mesasContextQuickSwitch.classList.toggle("hidden", !tables.length);
+
+    const parkedOrderByUid = getMesasParkedOrderMapForRoom(state, activeRoomId);
+    tables.forEach((table) => {
+      const uid = `${activeRoomId}::${String(table?.id || "")}`;
+      const mesaName = String(table?.name || table?.id || "Mesa");
+      const statusMeta = getMesaQuickStatusMeta(state, uid);
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `mesas-quick-btn is-${statusMeta.kind}${
+        uid === selectedUid ? " is-active" : ""
+      }`;
+      btn.dataset.uid = uid;
+      btn.title = `${mesaName} · ${statusMeta.text}`;
+
+      const dot = document.createElement("span");
+      dot.className = "mq-dot";
+      dot.setAttribute("aria-hidden", "true");
+
+      const label = document.createElement("span");
+      label.className = "mq-name";
+      label.textContent = mesaName;
+
+      btn.appendChild(dot);
+      btn.appendChild(label);
+
+      const parkedOrder = parkedOrderByUid.get(uid);
+      if (statusMeta.kind === "ocupada" && Number.isFinite(parkedOrder)) {
+        const order = document.createElement("span");
+        order.className = "mq-order";
+        order.textContent = String(parkedOrder);
+        order.title = `Orden de aparcado #${parkedOrder}`;
+        btn.appendChild(order);
+      }
+
+      mesasContextQuickSwitch.appendChild(btn);
+    });
+  }
+
+  mesasContextRoomSelect.disabled = false;
+  refreshMesasTransSidebar();
+}
+
+function updateMesasSelectionFromContext(
+  { roomId, tableUid },
+  { preferLinkedTicketOnEmptyDraft = false, preserveReturnView = false } = {},
+) {
+  if (!preserveReturnView) {
+    MESAS_RETURN_TO_VIEW_AFTER_PARK = "";
+  }
+  saveCurrentCartAsMesaDraft();
+
+  const state = loadMesasTablesStateForInline();
+  if (!state || !Array.isArray(state.roomList)) return;
+
+  if (roomId) {
+    state.activeRoomId = String(roomId);
+  }
+
+  if (tableUid) {
+    state.selectedTableId = String(tableUid);
+    const [uidRoomId = ""] = String(tableUid).split("::");
+    if (uidRoomId) state.activeRoomId = uidRoomId;
+  } else {
+    const room = state.roomList.find(
+      (r) => String(r?.id || "") === String(state.activeRoomId || ""),
+    );
+    const firstTableId = Array.isArray(room?.tables)
+      ? String(room.tables[0]?.id || "")
+      : "";
+    state.selectedTableId = firstTableId
+      ? `${String(state.activeRoomId)}::${firstTableId}`
+      : "";
+  }
+
+  saveMesasTablesStateForInline(state);
+  renderMesasTransContextBar();
+  syncTpvCartWithSelectedMesa({ preferLinkedTicketOnEmptyDraft });
+  updateParkedCountBadge?.();
+}
+
+function linkMesaSelectionWithTicketId(ticketId) {
+  if (!MESAS_INLINE_ACTIVE || MESAS_INLINE_VIEW !== "transacciones") return;
+  if (!ticketId) return;
+
+  const state = loadMesasTablesStateForInline();
+  const uid = String(state?.selectedTableId || "").trim();
+  if (!state || !uid) return;
+
+  if (!state.tableTicketMap || typeof state.tableTicketMap !== "object") {
+    state.tableTicketMap = {};
+  }
+
+  if (!state.draftCartByTable || typeof state.draftCartByTable !== "object") {
+    state.draftCartByTable = {};
+  }
+
+  const prevLinkedTicketId = state.tableTicketMap[uid];
+  if (prevLinkedTicketId) {
+    const prevTicket = Array.isArray(parkedTickets)
+      ? parkedTickets.find(
+          (t) => String(t?.id || "") === String(prevLinkedTicketId),
+        )
+      : null;
+    if (prevTicket) applyMesaScopeToTicket(prevTicket);
+  }
+
+  state.tableTicketMap[uid] = ticketId;
+
+  const liveTicket = Array.isArray(parkedTickets)
+    ? parkedTickets.find((t) => String(t?.id || "") === String(ticketId))
+    : null;
+  if (liveTicket) applyMesaScopeToTicket(liveTicket);
+
+  delete state.draftCartByTable[uid];
+  saveMesasTablesStateForInline(state);
+  renderMesasTransContextBar();
+}
+
+function unlinkMesaTicketByTicketId(ticketId, ticketRef = null) {
+  if (!ticketId && !ticketRef) return;
+
+  const state = loadMesasTablesStateForInline();
+  if (!state || typeof state !== "object") {
+    return;
+  }
+
+  if (!state.tableTicketMap || typeof state.tableTicketMap !== "object") {
+    state.tableTicketMap = {};
+  }
+  if (!state.draftCartByTable || typeof state.draftCartByTable !== "object") {
+    state.draftCartByTable = {};
+  }
+  if (!state.tableStates || typeof state.tableStates !== "object") {
+    state.tableStates = {};
+  }
+  if (!state.tableMeta || typeof state.tableMeta !== "object") {
+    state.tableMeta = {};
+  }
+
+  const releasedUids = new Set();
+  Object.keys(state.tableTicketMap).forEach((uid) => {
+    if (ticketId && String(state.tableTicketMap[uid]) === String(ticketId)) {
+      delete state.tableTicketMap[uid];
+      releasedUids.add(String(uid || "").trim());
+    }
+  });
+
+  // Compat con tickets antiguos/desincronizados: si no encontramos mapeo por id,
+  // intentamos liberar la mesa por metadata del propio ticket.
+  if (!releasedUids.size && ticketRef) {
+    const fallbackUid = String(
+      resolveTicketMesaUid(ticketRef, state) || "",
+    ).trim();
+    if (fallbackUid) {
+      delete state.tableTicketMap[fallbackUid];
+      releasedUids.add(fallbackUid);
+    }
+  }
+
+  if (!releasedUids.size) return;
+
+  releasedUids.forEach((uid) => {
+    if (!uid) return;
+    delete state.draftCartByTable[uid];
+    state.tableStates[uid] = "libre";
+
+    const prevMeta =
+      state.tableMeta[uid] && typeof state.tableMeta[uid] === "object"
+        ? { ...state.tableMeta[uid] }
+        : {};
+    delete prevMeta.serviceStage;
+    state.tableMeta[uid] = prevMeta;
+  });
+
+  saveMesasTablesStateForInline(state);
+  renderMesasTransContextBar();
+  if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+    syncTpvCartWithSelectedMesa();
+  }
+}
+
+function refreshMesasInlineTabsUI() {
+  const { tabTransacciones, tabMapa, tabDiseno } = getMesasInlineElements();
+  if (tabTransacciones) {
+    tabTransacciones.classList.toggle(
+      "is-active",
+      MESAS_INLINE_VIEW === "transacciones",
+    );
+  }
+  if (tabMapa)
+    tabMapa.classList.toggle("is-active", MESAS_INLINE_VIEW === "mapa");
+  if (tabDiseno) {
+    tabDiseno.classList.toggle("is-active", MESAS_INLINE_VIEW === "diseno");
+  }
+}
+
+function applyMesasInlineActionLabels() {
+  const parkedListBtn = document.getElementById("parkedListBtn");
+  if (!parkedListBtn) return;
+
+  if (MESAS_INLINE_ACTIVE) {
+    parkedListBtn.title = "Pedidos";
+    parkedListBtn.innerHTML =
+      '<span class="cart-btn-label">Pedidos</span><span id="parkedCountBadge" class="cart-badge">0</span>';
+  } else {
+    parkedListBtn.title = "Aparcados";
+    parkedListBtn.innerHTML =
+      '<span class="cart-btn-label">Aparcados</span><span id="parkedCountBadge" class="cart-badge">0</span>';
+  }
+
+  updateParkedCountBadge?.();
+  syncParkingOverlayLabels?.();
+}
+
+function setMesasInlineView(view, { persist = true } = {}) {
+  const next = ["mapa", "transacciones", "diseno"].includes(view)
+    ? view
+    : "transacciones";
+
+  if (next === "diseno" && !isAdminUser()) {
+    toast("Solo administradores.", "warn", "Mesas");
+    return;
+  }
+
+  MESAS_INLINE_VIEW = next;
+
+  const {
+    panelWrap,
+    panelFrame,
+    searchBar,
+    categoriesWrap,
+    productsGrid,
+    statusBar,
+  } = getMesasInlineElements();
+
+  const isDesignerOrMapView =
+    MESAS_INLINE_ACTIVE && (next === "mapa" || next === "diseno");
+  const isNativeTransView = MESAS_INLINE_ACTIVE && next === "transacciones";
+
+  document.body.classList.toggle("mesas-inline-full-mode", isDesignerOrMapView);
+  document.body.classList.toggle("mesas-inline-trans-mode", isNativeTransView);
+  if (!isNativeTransView) {
+    document.body.classList.remove("mesas-inline-trans-mode");
+  }
+
+  if (searchBar) searchBar.classList.toggle("hidden", isDesignerOrMapView);
+  if (categoriesWrap)
+    categoriesWrap.classList.toggle("hidden", isDesignerOrMapView);
+  if (productsGrid)
+    productsGrid.classList.toggle("hidden", isDesignerOrMapView);
+  if (statusBar) statusBar.classList.toggle("hidden", isDesignerOrMapView);
+  if (panelWrap) panelWrap.classList.toggle("hidden", !isDesignerOrMapView);
+
+  if (isDesignerOrMapView && panelFrame) {
+    const wanted = `${MESAS_INLINE_PANEL_BASE_SRC}&view=${next}`;
+    if (panelFrame.getAttribute("src") !== wanted) {
+      panelFrame.setAttribute("src", wanted);
+    }
+  }
+
+  refreshMesasInlineTabsUI();
+  renderMesasTransContextBar();
+  refreshMesasTransSidebar();
+
+  if (isNativeTransView) {
+    syncTpvCartWithSelectedMesa();
+  }
+
+  if (persist && MESAS_INLINE_ACTIVE) {
+    persistAppMode("mesas").catch(() => {});
+  }
+}
+
+async function setMesasInlineModeEnabled(enabled, { persist = true } = {}) {
+  // Guarda el carrito del modo saliente antes de cambiar el contexto.
+  persistRuntimeCartSnapshot({ force: true });
+
+  const next = !!enabled;
+  MESAS_INLINE_ACTIVE = next;
+
+  const { tabsRow, mesasContextRow } = getMesasInlineElements();
+  if (tabsRow) tabsRow.classList.toggle("hidden", !next);
+  if (mesasContextRow && !next) mesasContextRow.classList.add("hidden");
+
+  if (!next) {
+    if (MESAS_AUTO_SAVE_TIMER) {
+      clearTimeout(MESAS_AUTO_SAVE_TIMER);
+      MESAS_AUTO_SAVE_TIMER = null;
+    }
+    MESAS_AUTO_SAVE_RERUN = false;
+    stopMesasLayoutRemotePolling();
+    setMesasInlineView("transacciones", { persist: false });
+    document.body.classList.remove("mesas-inline-trans-mode");
+    if (persist) await persistAppMode("tpv");
+
+    const restoredTpvCart = await restoreRuntimeCartSnapshot({
+      force: true,
+      mode: "tpv",
+    });
+
+    currentParkedTicketIndex = null;
+    if (!restoredTpvCart) {
+      cart = [];
+    }
+
+    renderCart();
+    refreshParkButtonUI?.();
+    refreshParkedEditingBanner?.();
+  } else {
+    startMesasLayoutRemotePolling();
+    refreshMesasLayoutFromRemote().catch(() => {});
+    setMesasInlineView(MESAS_INLINE_VIEW, { persist: false });
+    if (persist) await persistAppMode("mesas");
+  }
+
+  reloadParkedTicketsForCurrentMode();
+  if (cashSession?.open && !TPV_STATE?.offline) {
+    refreshRemoteParkedReservationsOnly().catch(() => {});
+  }
+
+  applyMesasInlineActionLabels();
+
+  renderMainAgentBar?.();
+}
+
+async function closeInlineMesasMode({ persist = true } = {}) {
+  if (persist) {
+    await setMesasInlineModeEnabled(false, { persist: true });
+    return;
+  }
+  await setMesasInlineModeEnabled(false, { persist: false });
+}
+
+function bindMesasInlineEventsOnce() {
+  if (MESAS_INLINE_EVENTS_BOUND) return;
+  MESAS_INLINE_EVENTS_BOUND = true;
+
+  const { tabTransacciones, tabMapa, tabDiseno, closeBtn, panelFrame } =
+    getMesasInlineElements();
+  const {
+    mesasContextRoomSelect,
+    mesasContextTableSelect,
+    mesasContextQuickSwitch,
+  } = getMesasInlineElements();
+
+  if (tabTransacciones) {
+    tabTransacciones.addEventListener("click", () => {
+      setMesasInlineView("transacciones");
+    });
+  }
+
+  if (tabMapa) {
+    tabMapa.addEventListener("click", () => {
+      setMesasInlineView("mapa");
+    });
+  }
+
+  if (tabDiseno) {
+    tabDiseno.addEventListener("click", () => {
+      setMesasInlineView("diseno");
+    });
+  }
+
+  if (closeBtn) {
+    closeBtn.addEventListener("click", () => {
+      closeInlineMesasMode().catch(() => {});
+    });
+  }
+
+  if (mesasContextRoomSelect) {
+    mesasContextRoomSelect.addEventListener("change", () => {
+      updateMesasSelectionFromContext({
+        roomId: mesasContextRoomSelect.value,
+        tableUid: "",
+      });
+    });
+  }
+
+  if (mesasContextTableSelect) {
+    mesasContextTableSelect.addEventListener("change", () => {
+      updateMesasSelectionFromContext({
+        tableUid: mesasContextTableSelect.value,
+      });
+    });
+  }
+
+  if (mesasContextQuickSwitch) {
+    mesasContextQuickSwitch.addEventListener("click", (event) => {
+      const btn = event?.target?.closest?.("button[data-uid]");
+      if (!btn) return;
+
+      const uid = String(btn.dataset.uid || "").trim();
+      if (!uid) return;
+
+      updateMesasSelectionFromContext({
+        tableUid: uid,
+      });
+    });
+  }
+
+  const mesasTransActionTickets = document.getElementById(
+    "mesasTransActionTickets",
+  );
+  if (mesasTransActionTickets) {
+    mesasTransActionTickets.addEventListener("click", () => {
+      if (!(MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones")) {
+        openParkedModal();
+        return;
+      }
+
+      const mesasState = loadMesasTablesStateForInline();
+      const uid = String(mesasState?.selectedTableId || "").trim();
+      if (!uid) {
+        toast("Selecciona una mesa primero.", "warn", "Pedidos");
+        return;
+      }
+
+      const linked = getMesasRoomAndTableByUid(mesasState, uid);
+      const tableName = String(
+        linked?.table?.name || linked?.table?.id || "Mesa",
+      ).trim();
+      openParkedModal({
+        tableUid: uid,
+        title: `Pedidos de ${tableName}`,
+      });
+    });
+  }
+
+  const mesasTransReservaToggleBtn = document.getElementById(
+    "mesasTransReservaToggleBtn",
+  );
+  const mesasTransReservaEnabled = document.getElementById(
+    "mesasTransReservaEnabled",
+  );
+  const mesasTransReservaName = document.getElementById(
+    "mesasTransReservaName",
+  );
+  const mesasTransReservaTime = document.getElementById(
+    "mesasTransReservaTime",
+  );
+
+  if (mesasTransReservaToggleBtn) {
+    mesasTransReservaToggleBtn.addEventListener("click", () => {
+      MESAS_TRANS_RESERVA_PANEL_OPEN = !MESAS_TRANS_RESERVA_PANEL_OPEN;
+      refreshMesasTransSidebar();
+    });
+  }
+
+  if (mesasTransReservaEnabled) {
+    mesasTransReservaEnabled.addEventListener("change", () => {
+      toggleSelectedMesaReservation(!!mesasTransReservaEnabled.checked);
+      refreshMesasTransSidebar();
+    });
+  }
+
+  const onReservaMetaCommit = () => {
+    const nextName = String(mesasTransReservaName?.value || "").trim();
+    const nextTime = String(mesasTransReservaTime?.value || "").trim();
+    const saved = saveSelectedMesaReservationMeta({
+      reservationName: nextName,
+      reservationTime: nextTime,
+    });
+    if (!saved) return;
+
+    const state = loadMesasTablesStateForInline();
+    const uid = String(state?.selectedTableId || "").trim();
+    const statusMeta = uid
+      ? getMesaQuickStatusMeta(state, uid)
+      : { kind: "libre" };
+    if (statusMeta.kind === "reservada") {
+      refreshParkedEditingBanner?.();
+    }
+  };
+
+  mesasTransReservaName?.addEventListener("change", onReservaMetaCommit);
+  mesasTransReservaName?.addEventListener("blur", onReservaMetaCommit);
+  mesasTransReservaName?.addEventListener("click", () => {
+    if (typeof openQwertyForInput !== "function") return;
+    openQwertyForInput(mesasTransReservaName, "text");
+  });
+  mesasTransReservaTime?.addEventListener("change", onReservaMetaCommit);
+  mesasTransReservaTime?.addEventListener("blur", onReservaMetaCommit);
+
+  const mesasTransActionPersonas = document.getElementById(
+    "mesasTransActionPersonas",
+  );
+  if (mesasTransActionPersonas) {
+    mesasTransActionPersonas.addEventListener("click", () => {
+      if (!(MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones")) {
+        return;
+      }
+
+      const mesasState = loadMesasTablesStateForInline();
+      const uid = String(mesasState?.selectedTableId || "").trim();
+      if (!uid) {
+        toast("Selecciona una mesa primero.", "warn", "Comensales");
+        return;
+      }
+
+      const currentDiners = Math.max(
+        0,
+        Math.round(Number(mesasState?.tableMeta?.[uid]?.diners ?? 0) || 0),
+      );
+
+      openNumPad(
+        String(currentDiners),
+        (nextValue, meta = {}) => {
+          if (meta.phase !== "confirm") return;
+          const parsed = Number(String(nextValue).replace(",", "."));
+          if (!Number.isFinite(parsed)) return;
+
+          setSelectedMesaDinersCount(parsed);
+          refreshMesasTransSidebar();
+          refreshParkedEditingBanner?.();
+        },
+        "Comensales",
+        "qty",
+      );
+    });
+  }
+
+  const mesasTransOtherTables = document.getElementById(
+    "mesasTransOtherTables",
+  );
+  if (mesasTransOtherTables) {
+    mesasTransOtherTables.addEventListener("click", (event) => {
+      const btn = event?.target?.closest?.("button[data-uid]");
+      if (!btn) return;
+
+      const uid = String(btn.dataset.uid || "").trim();
+      if (!uid) return;
+
+      if (MESAS_TRANS_TABLE_MOVE_SOURCE_UID) {
+        const moved = moveMesaPendingTicket(
+          MESAS_TRANS_TABLE_MOVE_SOURCE_UID,
+          uid,
+        );
+        if (moved) {
+          MESAS_TRANS_TABLE_MOVE_SOURCE_UID = "";
+          renderMesasTransContextBar();
+          renderCart();
+          toast("Mesa cambiada correctamente.", "ok", "Mesas");
+        }
+        return;
+      }
+
+      updateMesasSelectionFromContext({
+        tableUid: uid,
+      });
+    });
+  }
+
+  window.addEventListener("message", (event) => {
+    const data = event?.data;
+    if (!data || !data.type) return;
+
+    if (data.type === "tpv:mesas-open-table") {
+      const uid = String(data?.uid || "").trim();
+      if (!uid) return;
+
+      const sourceView = String(data?.sourceView || "")
+        .trim()
+        .toLowerCase();
+      const preferredAction = String(data?.preferredAction || "")
+        .trim()
+        .toLowerCase();
+
+      MESAS_CONTEXT_SELECTED_UID = uid;
+      MESAS_RETURN_TO_VIEW_AFTER_PARK =
+        sourceView === "mapa" || sourceView === "diseno" ? sourceView : "";
+
+      setMesasInlineView("transacciones", { persist: false });
+      updateMesasSelectionFromContext(
+        { tableUid: uid },
+        { preferLinkedTicketOnEmptyDraft: true, preserveReturnView: true },
+      );
+
+      if (preferredAction === "charge") {
+        const payBtn = document.getElementById("payBtn");
+        payBtn?.click?.();
+      }
+      return;
+    }
+
+    if (data.type === "tpv:mesas-state-changed") {
+      renderMesasTransContextBar();
+      return;
+    }
+
+    if (data.type !== "tpv:mesas-exit") return;
+
+    if (
+      panelFrame &&
+      event.source &&
+      panelFrame.contentWindow !== event.source
+    ) {
+      return;
+    }
+
+    closeInlineMesasMode().catch(() => {});
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    if (!MESAS_INLINE_ACTIVE) return;
+    refreshMesasLayoutFromRemote().catch(() => {});
+  });
+
+  window.addEventListener("focus", () => {
+    if (!MESAS_INLINE_ACTIVE) return;
+    refreshMesasLayoutFromRemote().catch(() => {});
+  });
+}
 
 function syncCustomerControlsLoadingState() {
   const input = document.getElementById("cartCustomerInput");
@@ -3034,6 +5731,10 @@ function applyAdminOnlyUI() {
   els.forEach((el) => {
     el.style.display = isAdmin ? "" : "none";
   });
+
+  if (!isAdmin && MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "diseno") {
+    setMesasInlineView("transacciones", { persist: false });
+  }
 }
 
 async function runBootFlow() {
@@ -3051,6 +5752,13 @@ async function runBootFlow() {
     const resolved = await bootstrapCompany();
     if (!resolved) return false; // cancelado o bloqueado
 
+    // Cargar features del cliente (incluye flag de modulo Mesas por slug).
+    await loadMesasModuleAvailability();
+    if (!MESAS_MODULE_ENABLED && MESAS_INLINE_ACTIVE) {
+      await setMesasInlineModeEnabled(false, { persist: false });
+    }
+    renderMainAgentBar?.();
+
     // 2) Login
     const okLogin = await ensureLoginAutoOrPrompt();
     if (!okLogin) return false;
@@ -3059,18 +5767,28 @@ async function runBootFlow() {
     await loadProductStockToggle?.();
     await loadProductStockEditionToggle?.();
     await loadAllowCloseWithParkedToggle?.();
+    await loadMesasDinersFamilyRules?.();
+    await loadMesasComandaFamilyRules?.();
 
     // 3) Datos
     await loadDataFromApi();
 
-    const restoredCart = await restoreRuntimeCartSnapshot();
-    if (restoredCart) {
+    // En modo Mesas (transacciones), no mostrar snapshot previo al arrancar.
+    // El carrito debe hidratarse desde la mesa seleccionada/ticket vinculado.
+    if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+      cart = [];
+      currentParkedTicketIndex = null;
       renderCart();
-      toast(
-        "Carrito recuperado tras cierre inesperado.",
-        "info",
-        "Recuperación",
-      );
+    } else {
+      const restoredCart = await restoreRuntimeCartSnapshot();
+      if (restoredCart) {
+        renderCart();
+        toast(
+          "Carrito recuperado tras cierre inesperado.",
+          "info",
+          "Recuperación",
+        );
+      }
     }
     CART_SNAPSHOT_ARMED = true;
 
@@ -3083,6 +5801,10 @@ async function runBootFlow() {
 
     // 5) Caja (recupera o abre modal)
     maybeOpenCashOrRecover();
+
+    if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+      syncTpvCartWithSelectedMesa({ preferLinkedTicketOnEmptyDraft: true });
+    }
 
     return true;
   } finally {
@@ -3192,7 +5914,14 @@ function updateCashButtonLabel() {
     return;
   }
 
-  cashHeaderLabel.textContent = cashSession.open ? "Cerrar caja" : "Abrir caja";
+  if (cashSession.open) {
+    const cajaId = Number(cashSession?.remoteCajaId || 0) || 0;
+    cashHeaderLabel.textContent = cajaId
+      ? `Cerrar caja | ${cajaId}`
+      : "Cerrar caja";
+  } else {
+    cashHeaderLabel.textContent = "Abrir caja";
+  }
   syncCashClosedUiState();
 }
 
@@ -3761,14 +6490,24 @@ async function addToCart(product, quantity = 1) {
     unlockAppUI();
   }
 
+  const editLockReason = getMesasCartEditLockReason();
+  if (editLockReason) {
+    toast(editLockReason, "warn", "Mesa bloqueada");
+    return;
+  }
+
   const prodId = Number(product.baseProductId || product.id || 0);
+  const requestedQty = Number(quantity || 0) || 1;
 
   // Primera versión:
   // NO aplicamos báscula a packs/ofertas para no romper esa lógica.
   if (isOfferPackProductById(prodId)) {
+    const packQty = resolveMesaDinersQuantityForProduct(product, requestedQty);
+
     const pack = PACKS_STATE.packsByOfferProductId.get(prodId);
     if (!pack) {
-      cart.push(buildCartLine(product, quantity));
+      pushCartHistoryStep("add-product");
+      cart.push(buildCartLine(product, packQty));
       renderCart();
       return;
     }
@@ -3823,8 +6562,9 @@ async function addToCart(product, quantity = 1) {
       });
 
       if (existingParent) {
+        pushCartHistoryStep("qty-change");
         existingParent.qty = round2(
-          (Number(existingParent.qty) || 0) + Number(quantity || 0),
+          (Number(existingParent.qty) || 0) + Number(packQty || 0),
         );
 
         // Recalcular hijos con la selección guardada
@@ -3835,7 +6575,7 @@ async function addToCart(product, quantity = 1) {
     }
 
     // Crear grupo nuevo
-    const parentLine = buildCartLine(product, quantity);
+    const parentLine = buildCartLine(product, packQty);
     parentLine.meta = {
       isPackOffer: true,
       packId: pack.id,
@@ -3843,13 +6583,14 @@ async function addToCart(product, quantity = 1) {
       packSelectionKey: selectionKey, // para comparar rápido
     };
 
+    pushCartHistoryStep("add-product");
     cart.push(parentLine);
 
     await createChildrenFromSelection({
       parentLine,
       product,
       selection,
-      parentQty: Number(quantity || 0),
+      parentQty: Number(packQty || 0),
     });
 
     renderCart();
@@ -3861,7 +6602,7 @@ async function addToCart(product, quantity = 1) {
     const scaleResult =
       await window.TPV_SCALE_CART.resolveScaleQuantityIfNeeded(
         product,
-        quantity,
+        requestedQty,
       );
 
     if (!scaleResult?.ok) {
@@ -3869,23 +6610,36 @@ async function addToCart(product, quantity = 1) {
     }
 
     quantity = scaleResult.qty;
+  } else {
+    quantity = requestedQty;
   }
+
+  const finalQty = resolveMesaDinersQuantityForProduct(product, quantity);
+  if (!(finalQty > 0)) return;
 
   // NORMAL (tu comportamiento)
   if (isGroupLinesEnabled()) {
-    cart.push(buildCartLine(product, quantity));
+    pushCartHistoryStep("add-product");
+    cart.push(buildCartLine(product, finalQty));
     renderCart();
     return;
   }
 
   const existing = cart.find((c) => c.id === product.id);
-  if (existing) existing.qty += quantity;
-  else cart.push(buildCartLine(product, quantity));
+  pushCartHistoryStep(existing ? "qty-change" : "add-product");
+  if (existing) existing.qty += finalQty;
+  else cart.push(buildCartLine(product, finalQty));
 
   renderCart();
 }
 
 function updateCartItemQuantity(lineId, newQty) {
+  const editLockReason = getMesasCartEditLockReason();
+  if (editLockReason) {
+    toast(editLockReason, "warn", "Mesa bloqueada");
+    return;
+  }
+
   const item = cart.find((c) => c._lineId === lineId);
   if (!item) return;
 
@@ -3902,6 +6656,7 @@ function updateCartItemQuantity(lineId, newQty) {
 
   // ✅ Si es parent pack: cascada / sync
   if (isPackParentLine(item)) {
+    pushCartHistoryStep(q <= 0 ? "remove-line" : "qty-change");
     if (q <= 0) {
       removePackCascade(item._lineId);
       renderCart();
@@ -3915,6 +6670,7 @@ function updateCartItemQuantity(lineId, newQty) {
   }
 
   // ✅ Normal
+  pushCartHistoryStep(q <= 0 ? "remove-line" : "qty-change");
   if (q <= 0) {
     cart = cart.filter((c) => c._lineId !== lineId);
   } else {
@@ -3925,6 +6681,8 @@ function updateCartItemQuantity(lineId, newQty) {
 }
 
 function previewCartItemQuantity(lineId, newQty) {
+  if (getMesasCartEditLockReason()) return;
+
   const item = cart.find((c) => c._lineId === lineId);
   if (!item || isPackChildLine(item)) return;
 
@@ -3948,6 +6706,25 @@ function getOriginalUnitGross(item) {
   return (
     Number(item.originalGrossPrice ?? item.grossPrice ?? item.price ?? 0) || 0
   );
+}
+
+function getMesasCartEditLockReason() {
+  if (!MESAS_INLINE_ACTIVE || MESAS_INLINE_VIEW !== "transacciones") {
+    return "";
+  }
+
+  const state = loadMesasTablesStateForInline();
+  const uid = String(state?.selectedTableId || "").trim();
+  if (!uid) return "";
+
+  const stage = String(state?.tableMeta?.[uid]?.serviceStage || "")
+    .trim()
+    .toLowerCase();
+  if (stage === "cobro-realizado") {
+    return "Esta mesa ya está cobrada y lista para limpieza. No se puede modificar.";
+  }
+
+  return "";
 }
 
 function isPriceModified(item) {
@@ -4083,13 +6860,14 @@ function buildRuntimeCartSnapshotPayload() {
   return {
     v: 1,
     ts: Date.now(),
+    mode: getCurrentCartModeScope(),
     items: safeCart,
   };
 }
 
 function scheduleRuntimeCartSnapshotCfgWrite(
   payload,
-  { immediate = false } = {},
+  { immediate = false, mode = getCurrentCartModeScope() } = {},
 ) {
   try {
     if (!window.TPV_CFG?.set) return;
@@ -4101,7 +6879,7 @@ function scheduleRuntimeCartSnapshotCfgWrite(
 
     const writeNow = async () => {
       try {
-        await window.TPV_CFG.set(RUNTIME_CART_SNAPSHOT_CFG_KEY, payload);
+        await window.TPV_CFG.set(getRuntimeCartSnapshotCfgKey(mode), payload);
       } catch (e) {
         console.warn(
           "No se pudo guardar snapshot de carrito en TPV_CFG:",
@@ -4131,24 +6909,40 @@ function persistRuntimeCartSnapshot({ force = false } = {}) {
   try {
     if (!force && !CART_SNAPSHOT_ARMED) return;
 
+    const mode = getCurrentCartModeScope();
     const payload = buildRuntimeCartSnapshotPayload();
 
-    localStorage.setItem(RUNTIME_CART_SNAPSHOT_KEY, JSON.stringify(payload));
+    localStorage.setItem(
+      getRuntimeCartSnapshotStorageKey(mode),
+      JSON.stringify(payload),
+    );
 
-    scheduleRuntimeCartSnapshotCfgWrite(payload, { immediate: !!force });
+    scheduleRuntimeCartSnapshotCfgWrite(payload, {
+      immediate: !!force,
+      mode,
+    });
   } catch (e) {
     console.warn("No se pudo guardar snapshot de carrito:", e?.message || e);
   }
 }
 
-async function restoreRuntimeCartSnapshot() {
+async function restoreRuntimeCartSnapshot({ force = false, mode } = {}) {
   try {
-    if (Array.isArray(cart) && cart.length > 0) return false;
+    if (!force && Array.isArray(cart) && cart.length > 0) return false;
+
+    const scopeMode =
+      String(mode || getCurrentCartModeScope())
+        .trim()
+        .toLowerCase() === "mesas"
+        ? "mesas"
+        : "tpv";
 
     let parsed = null;
 
     try {
-      const cfgRaw = await window.TPV_CFG?.get?.(RUNTIME_CART_SNAPSHOT_CFG_KEY);
+      const cfgRaw = await window.TPV_CFG?.get?.(
+        getRuntimeCartSnapshotCfgKey(scopeMode),
+      );
       if (cfgRaw && typeof cfgRaw === "object") {
         parsed = cfgRaw;
       } else if (typeof cfgRaw === "string" && cfgRaw.trim()) {
@@ -4157,9 +6951,19 @@ async function restoreRuntimeCartSnapshot() {
     } catch {}
 
     if (!parsed) {
-      const raw = localStorage.getItem(RUNTIME_CART_SNAPSHOT_KEY);
+      const raw = localStorage.getItem(
+        getRuntimeCartSnapshotStorageKey(scopeMode),
+      );
       if (raw) {
         parsed = JSON.parse(raw);
+      }
+    }
+
+    // Compat: snapshot antiguo sin modo (solo TPV)
+    if (!parsed && scopeMode === "tpv") {
+      const rawLegacy = localStorage.getItem(RUNTIME_CART_SNAPSHOT_KEY);
+      if (rawLegacy) {
+        parsed = JSON.parse(rawLegacy);
       }
     }
 
@@ -4173,7 +6977,10 @@ async function restoreRuntimeCartSnapshot() {
     cart = restored;
 
     // Si restauramos desde localStorage, replicamos a TPV_CFG para siguientes arranques.
-    scheduleRuntimeCartSnapshotCfgWrite(parsed, { immediate: true });
+    scheduleRuntimeCartSnapshotCfgWrite(parsed, {
+      immediate: true,
+      mode: scopeMode,
+    });
 
     return true;
   } catch (e) {
@@ -4277,13 +7084,50 @@ function renderCart() {
   refreshAgentGuardUI?.();
 
   if (!uiLines.length && currentParkedTicketIndex !== null) {
-    currentParkedTicketIndex = null;
+    let shouldClearCurrentParkedIndex = true;
+
+    if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+      const mesasState = loadMesasTablesStateForInline();
+      const selectedUid = String(mesasState?.selectedTableId || "").trim();
+      const linkedTicketId = selectedUid
+        ? mesasState?.tableTicketMap?.[selectedUid]
+        : null;
+      const currentTicket = Array.isArray(parkedTickets)
+        ? parkedTickets[currentParkedTicketIndex]
+        : null;
+
+      if (
+        linkedTicketId &&
+        String(currentTicket?.id || "") === String(linkedTicketId)
+      ) {
+        shouldClearCurrentParkedIndex = false;
+      }
+    }
+
+    if (shouldClearCurrentParkedIndex) {
+      currentParkedTicketIndex = null;
+    }
+  }
+
+  if (!MESAS_LINKED_TICKET_ENSURE_GUARD) {
+    MESAS_LINKED_TICKET_ENSURE_GUARD = true;
+    try {
+      if (ensureMesaLinkedTicketLoaded()) {
+        return;
+      }
+    } finally {
+      MESAS_LINKED_TICKET_ENSURE_GUARD = false;
+    }
   }
 
   persistRuntimeCartSnapshot();
+  scheduleMesasAutoSave();
 
   refreshParkButtonUI();
+  refreshPreprintButtonUI();
   refreshParkedEditingBanner();
+  refreshMesasTransSidebar();
+  refreshCartUndoRedoUi();
 }
 
 const LOGIN_TOKEN_KEY = "tpv_login_token";
@@ -4791,10 +7635,22 @@ async function openLoginModal() {
       try {
         const idcaja = getCajaIdSafe?.();
         if (idcaja && !TPV_STATE?.offline) {
-          await apiWrite(`tpvcajas/${idcaja}`, "PATCH", {
+          const nickPayload = {
             idcaja: String(idcaja),
             nick: String(safeUser || "").trim(),
-          });
+          };
+
+          try {
+            await apiWrite(`tpvcajas/${idcaja}`, "PATCH", nickPayload);
+          } catch (e) {
+            if (isNetworkError(e) || isProbablyNetworkError(e)) {
+              await enqueueTpvcajaNickSync(idcaja, nickPayload, {
+                source: "login",
+              });
+            } else {
+              throw e;
+            }
+          }
         }
       } catch (e) {
         console.warn(
@@ -6104,13 +8960,17 @@ window.addEventListener("keydown", (e) => {
 const qwertyOverlay = document.getElementById("qwertyOverlay");
 const qwertyPadEl = qwertyOverlay?.querySelector(".qwerty-pad");
 const qwertyDisplay = document.getElementById("qwertyDisplay");
+const qwertyInlineClearBtn = document.getElementById("qwertyInlineClearBtn");
 let qwertyCurrentValue = "";
 let qwertyVisible = false;
-let qwertyCaps = false;
+let qwertyCapsMode = "off";
+let qwertyCapsLastTapTs = 0;
 let qwertyCaretStart = 0;
 let qwertyCaretEnd = 0;
 let qwertyCommitted = false;
 let qwertyOriginalValue = "";
+let qwertyRestoreValue = "";
+let qwertyCanRestore = false;
 
 const qwertyWindowManager = createKeyboardWindowManager({
   id: "qwerty",
@@ -6138,7 +8998,38 @@ function getQwertyInsertKey(rawKey) {
   if (!key) return "";
   if (key.length !== 1) return key;
   if (!/[a-zñ]/i.test(key)) return key;
-  return qwertyCaps ? key.toUpperCase() : key.toLowerCase();
+  return qwertyCapsMode === "off" ? key.toLowerCase() : key.toUpperCase();
+}
+
+function updateQwertyInlineClearButton() {
+  if (!qwertyInlineClearBtn) return;
+  if (qwertyCanRestore) {
+    qwertyInlineClearBtn.textContent = "↺";
+    qwertyInlineClearBtn.title = "Restaurar";
+    qwertyInlineClearBtn.setAttribute("aria-label", "Restaurar");
+    qwertyInlineClearBtn.classList.add("is-undo");
+    return;
+  }
+
+  qwertyInlineClearBtn.textContent = "X";
+  qwertyInlineClearBtn.title = "Borrar todo";
+  qwertyInlineClearBtn.setAttribute("aria-label", "Borrar todo");
+  qwertyInlineClearBtn.classList.remove("is-undo");
+}
+
+function resetQwertyRestoreState() {
+  qwertyRestoreValue = "";
+  qwertyCanRestore = false;
+  updateQwertyInlineClearButton();
+}
+
+function consumeQwertySingleCapsIfNeeded(insertedText) {
+  if (!insertedText || qwertyCapsMode !== "once") return;
+  const hasLetter = /[a-zñ]/i.test(String(insertedText));
+  if (!hasLetter) return;
+  qwertyCapsMode = "off";
+  qwertyCapsLastTapTs = 0;
+  refreshQwertyKeysCase();
 }
 
 function syncQwertyDisplaySelection() {
@@ -6176,18 +9067,20 @@ function updateQwertyDisplay() {
 
 function refreshQwertyKeysCase() {
   if (!qwertyOverlay) return;
+  const shouldUppercase = qwertyCapsMode !== "off";
 
   qwertyOverlay.querySelectorAll(".q-key").forEach((btn) => {
     const raw = String(btn.getAttribute("data-key") || "");
     const isLetter = raw.length === 1 && /[a-zñ]/i.test(raw);
     if (!isLetter) return;
-    btn.textContent = qwertyCaps ? raw.toUpperCase() : raw.toLowerCase();
+    btn.textContent = shouldUppercase ? raw.toUpperCase() : raw.toLowerCase();
   });
 
   const capsBtn = qwertyOverlay.querySelector('.q-btn[data-key="caps"]');
   if (capsBtn) {
-    capsBtn.classList.toggle("active", qwertyCaps);
-    capsBtn.textContent = qwertyCaps ? "Minus" : "Mayus";
+    capsBtn.classList.toggle("active", qwertyCapsMode === "once");
+    capsBtn.classList.toggle("locked", qwertyCapsMode === "lock");
+    capsBtn.textContent = "Mayus";
   }
 }
 
@@ -6228,9 +9121,11 @@ function openQwertyForInput(inputEl, mode = "text") {
   qwertyTargetInput = inputEl || null;
   qwertyOriginalValue = inputEl?.value ? String(inputEl.value) : "";
   qwertyCurrentValue = qwertyOriginalValue;
-  qwertyCaps = false;
-  qwertyCaretStart = qwertyCurrentValue.length;
+  qwertyCapsMode = "off";
+  qwertyCapsLastTapTs = 0;
+  qwertyCaretStart = 0;
   qwertyCaretEnd = qwertyCurrentValue.length;
+  resetQwertyRestoreState();
   refreshQwertyKeysCase();
   updateQwertyDisplay();
   applyQwertyPreview();
@@ -6242,7 +9137,8 @@ function openQwertyForInput(inputEl, mode = "text") {
 
   if (qwertyDisplay) {
     qwertyDisplay.focus();
-    setQwertySelection(qwertyCurrentValue.length);
+    const end = qwertyCurrentValue.length;
+    setQwertySelection(end, end);
   }
 }
 
@@ -6256,10 +9152,11 @@ function closeQwerty(reason = "cancel") {
     if (shouldCommit) {
       qwertyTargetInput.value = qwertyCurrentValue;
     } else {
-      qwertyTargetInput.value = "";
-      qwertyCurrentValue = "";
-      qwertyCaretStart = 0;
-      qwertyCaretEnd = 0;
+      qwertyTargetInput.value = qwertyOriginalValue;
+      qwertyCurrentValue = qwertyOriginalValue;
+      const end = qwertyCurrentValue.length;
+      qwertyCaretStart = end;
+      qwertyCaretEnd = end;
     }
 
     if (qwertyTargetInput === searchInput) {
@@ -6268,6 +9165,9 @@ function closeQwerty(reason = "cancel") {
     }
 
     qwertyTargetInput.dispatchEvent(new Event("input", { bubbles: true }));
+    if (shouldCommit) {
+      qwertyTargetInput.dispatchEvent(new Event("change", { bubbles: true }));
+    }
   }
 
   const qwertyOverlay = document.getElementById("qwertyOverlay");
@@ -6277,6 +9177,9 @@ function closeQwerty(reason = "cancel") {
   qwertyMode = "text";
   qwertyTargetInput = null;
   qwertyOriginalValue = "";
+  qwertyCapsMode = "off";
+  qwertyCapsLastTapTs = 0;
+  resetQwertyRestoreState();
 }
 
 function qwertyAddChar(ch) {
@@ -6292,6 +9195,8 @@ function qwertyAddChar(ch) {
   qwertyCurrentValue = `${before}${insertion}${after}`;
   const nextCaret = start + insertion.length;
   setQwertySelection(nextCaret, nextCaret);
+  resetQwertyRestoreState();
+  consumeQwertySingleCapsIfNeeded(insertion);
   updateQwertyDisplay();
   applyQwertyPreview();
 }
@@ -6315,15 +9220,36 @@ function qwertyBackspace() {
     setQwertySelection(start - 1, start - 1);
   }
 
+  resetQwertyRestoreState();
   updateQwertyDisplay();
   applyQwertyPreview();
 }
 
 function qwertyClearAll() {
+  const current = String(qwertyCurrentValue || "");
+  if (!qwertyCanRestore && current) {
+    qwertyRestoreValue = current;
+    qwertyCanRestore = true;
+    updateQwertyInlineClearButton();
+  }
   qwertyCurrentValue = "";
   setQwertySelection(0, 0);
   updateQwertyDisplay();
   applyQwertyPreview();
+}
+
+function qwertyToggleClearOrRestore() {
+  if (qwertyCanRestore) {
+    qwertyCurrentValue = String(qwertyRestoreValue || "");
+    const caret = qwertyCurrentValue.length;
+    setQwertySelection(caret, caret);
+    resetQwertyRestoreState();
+    updateQwertyDisplay();
+    applyQwertyPreview();
+    return;
+  }
+
+  qwertyClearAll();
 }
 
 function qwertyConfirm() {
@@ -6373,6 +9299,7 @@ if (qwertyOverlay) {
     qwertyDisplay.addEventListener("input", () => {
       qwertyCurrentValue = qwertyDisplay.value || "";
       syncQwertyDisplaySelection();
+      resetQwertyRestoreState();
       applyQwertyPreview();
     });
   }
@@ -6400,7 +9327,21 @@ if (qwertyOverlay) {
     } else if (key === "gmail.com") {
       qwertyAddChar("gmail.com");
     } else if (key === "caps") {
-      qwertyCaps = !qwertyCaps;
+      const now = Date.now();
+      if (qwertyCapsMode === "off") {
+        qwertyCapsMode = "once";
+        qwertyCapsLastTapTs = now;
+      } else if (qwertyCapsMode === "once") {
+        if (now - qwertyCapsLastTapTs <= 360) {
+          qwertyCapsMode = "lock";
+        } else {
+          qwertyCapsMode = "off";
+        }
+        qwertyCapsLastTapTs = now;
+      } else {
+        qwertyCapsMode = "off";
+        qwertyCapsLastTapTs = 0;
+      }
       refreshQwertyKeysCase();
     } else if (key === "@") {
       qwertyAddChar("@");
@@ -6418,6 +9359,8 @@ if (qwertyOverlay) {
       qwertyBackspace();
     } else if (key === "clear") {
       qwertyClearAll();
+    } else if (key === "clear-inline") {
+      qwertyToggleClearOrRestore();
     } else if (key === "cancel") {
       closeQwerty("cancel");
     } else if (key === "ok") {
@@ -6446,24 +9389,29 @@ window.addEventListener("keydown", (e) => {
 
 // ===== [09] Entrada UI: wiring QWERTY en inputs TPV =====
 function wireQwertyInputs() {
+  const payObsEl = document.getElementById("payObs");
+  const payNumberEl = document.getElementById("payNumber");
+  const ticketsKeyboardBtnEl = document.getElementById("ticketsKeyboardBtn");
+  const ticketsSearchEl = document.getElementById("ticketsSearch");
+
   // Cobrar -> Observaciones
-  if (payObs) {
-    const open = () => openQwertyForInput(payObs, "text");
-    payObs.addEventListener("focus", open);
-    payObs.addEventListener("click", open);
+  if (payObsEl) {
+    const open = () => openQwertyForInput(payObsEl, "text");
+    payObsEl.addEventListener("focus", open);
+    payObsEl.addEventListener("click", open);
   }
 
   // Cobrar -> Número (si también quieres teclado ahí)
-  if (payNumber) {
-    const open = () => openQwertyForInput(payNumber, "text");
-    payNumber.addEventListener("focus", open);
-    payNumber.addEventListener("click", open);
+  if (payNumberEl) {
+    const open = () => openQwertyForInput(payNumberEl, "text");
+    payNumberEl.addEventListener("focus", open);
+    payNumberEl.addEventListener("click", open);
   }
 
   // Tickets -> botón teclado
-  if (ticketsKeyboardBtn && ticketsSearch) {
-    ticketsKeyboardBtn.onclick = () =>
-      openQwertyForInput(ticketsSearch, "text");
+  if (ticketsKeyboardBtnEl && ticketsSearchEl) {
+    ticketsKeyboardBtnEl.onclick = () =>
+      openQwertyForInput(ticketsSearchEl, "text");
   }
 }
 
@@ -6568,6 +9516,12 @@ if (cartLinesContainer) {
     if (priceBtn) {
       if (!item) return;
 
+      const editLockReason = getMesasCartEditLockReason();
+      if (editLockReason) {
+        toast(editLockReason, "warn", "Mesa bloqueada");
+        return;
+      }
+
       const currentUnit = getUnitGross(item);
       const originalUnit =
         item.originalGrossPrice ?? item.grossPrice ?? item.price ?? 0;
@@ -6579,6 +9533,7 @@ if (cartLinesContainer) {
           if (!isFinite(v) || v < 0) return;
 
           const rounded = Math.round(v * 100) / 100;
+          pushCartHistoryStep("price-change");
           setUnitGrossOverrideSmart(item, rounded);
           renderCart();
         },
@@ -6607,13 +9562,17 @@ if (cartLinesContainer) {
       const qty = Number(item?.qty || 1) || 1;
 
       try {
-        const ctx = getLogCtx();
-        if (ctx.idcaja) {
-          const extra = `Producto:${name} | Cantidad:${qty}`;
-          appendCajaAutoLogLineForId(
-            ctx.idcaja,
-            buildCajaLogLineWith(ctx, "QUITÓ PRODUCTO", extra),
-          ).catch(() => {});
+        const loadedTicket = getCurrentLoadedParkedTicket();
+        const skipSplitIncident = shouldSkipSplitIncidentLog(loadedTicket);
+        if (!skipSplitIncident) {
+          const ctx = getLogCtx();
+          if (ctx.idcaja) {
+            const extra = `Producto:${name} | Cantidad:${qty}`;
+            appendCajaAutoLogLineForId(
+              ctx.idcaja,
+              buildCajaLogLineWith(ctx, "QUITÓ PRODUCTO", extra),
+            ).catch(() => {});
+          }
         }
       } catch {}
 
@@ -6681,9 +9640,7 @@ function updateParkedCountBadge() {
     return;
   }
 
-  const pendingCount = (
-    Array.isArray(parkedTickets) ? parkedTickets : []
-  ).filter((t) => !t.paid).length;
+  const pendingCount = getScopedPendingParkedTickets(parkedTickets).length;
 
   badge.textContent = String(pendingCount);
 }
@@ -6761,8 +9718,20 @@ function registerPaymentsForCurrentSession(pagos) {
   });
 }
 
-async function parkCurrentCart(name = "", obs = "") {
+async function parkCurrentCart(name = "", obs = "", opts = {}) {
+  const labels = getParkingLabels();
   const requestId = createRequestId("PARK");
+  const mesaScope = getSelectedMesaScopeContext();
+  const keepActiveMesasTicket =
+    MESAS_INLINE_ACTIVE &&
+    MESAS_INLINE_VIEW === "transacciones" &&
+    !!mesaScope?.uid;
+  const mesaAlerts = normalizeMesaTicketAlerts(opts?.mesaAlerts);
+  const requestedDocType = normalizeParkedDocType(opts?.docType || "ticket");
+  const openListAfterSave = opts?.openListAfterSave === true;
+  const silentAutoSave = opts?.silentAutoSave === true;
+  const skipAutoPrint = opts?.skipAutoPrint === true;
+  const skipStockConfirm = opts?.skipStockConfirm === true;
 
   logFeatureInfo("APARCAR", "inicio", {
     requestId,
@@ -6770,19 +9739,91 @@ async function parkCurrentCart(name = "", obs = "") {
     editing: currentParkedTicketIndex !== null,
   });
 
-  if (!cart || cart.length === 0) {
-    logFeatureWarn("APARCAR", "cancelado-carrito-vacio", { requestId });
-    toast("No hay productos para aparcar.", "warn", "Aparcar");
-    return;
+  const snapshot = cart.map((item) => ({ ...item }));
+  const hasSnapshotLines = snapshot.length > 0;
+  if (!hasSnapshotLines) {
+    const loadedTicket = getCurrentLoadedParkedTicket();
+    if (!loadedTicket) {
+      logFeatureWarn("APARCAR", "cancelado-carrito-vacio", { requestId });
+      toast("No hay productos para guardar.", "warn", labels.actionTitle);
+      return;
+    }
   }
 
-  const snapshot = cart.map((item) => ({ ...item }));
-  const canContinue = await confirmIfCartExceedsVisibleStock(snapshot);
-  if (!canContinue) {
-    logFeatureWarn("APARCAR", "cancelado-stock", { requestId });
-    return;
+  let editingIndex =
+    currentParkedTicketIndex !== null ? Number(currentParkedTicketIndex) : null;
+
+  if (
+    editingIndex === null &&
+    MESAS_INLINE_ACTIVE &&
+    MESAS_INLINE_VIEW === "transacciones"
+  ) {
+    const mesasState = loadMesasTablesStateForInline();
+    const selectedUid = String(mesasState?.selectedTableId || "").trim();
+    const linkedTicketId = selectedUid
+      ? mesasState?.tableTicketMap?.[selectedUid]
+      : null;
+
+    if (linkedTicketId) {
+      const linkedIdx = (
+        Array.isArray(parkedTickets) ? parkedTickets : []
+      ).findIndex(
+        (t) => String(t?.id || "") === String(linkedTicketId) && !t?.paid,
+      );
+      if (linkedIdx >= 0) editingIndex = linkedIdx;
+    }
+
+    if (editingIndex === null && selectedUid) {
+      const scopedIdx = (
+        Array.isArray(parkedTickets) ? parkedTickets : []
+      ).findIndex(
+        (t) => !t?.paid && resolveTicketMesaUid(t, mesasState) === selectedUid,
+      );
+
+      if (scopedIdx >= 0) {
+        editingIndex = scopedIdx;
+        if (
+          !mesasState.tableTicketMap ||
+          typeof mesasState.tableTicketMap !== "object"
+        ) {
+          mesasState.tableTicketMap = {};
+        }
+        mesasState.tableTicketMap[selectedUid] = parkedTickets[scopedIdx]?.id;
+        saveMesasTablesStateForInline(mesasState);
+      }
+    }
   }
-  const total = getCartTotal(snapshot);
+
+  const editingTicket =
+    editingIndex !== null &&
+    Array.isArray(parkedTickets) &&
+    parkedTickets[editingIndex] &&
+    !parkedTickets[editingIndex].paid
+      ? parkedTickets[editingIndex]
+      : null;
+
+  if (hasSnapshotLines && !skipStockConfirm) {
+    const isEditing = !!editingTicket;
+    const canContinue = await confirmIfCartExceedsVisibleStock(snapshot, {
+      actionVerb: isEditing
+        ? "actualizar"
+        : keepActiveMesasTicket
+          ? "guardar"
+          : "aparcar",
+      modalTitle: isEditing
+        ? "Stock insuficiente para actualizar"
+        : keepActiveMesasTicket
+          ? "Stock insuficiente para guardar"
+          : "Stock insuficiente para aparcar",
+      baselineItems: isEditing ? editingTicket.items : null,
+    });
+    if (!canContinue) {
+      logFeatureWarn("APARCAR", "cancelado-stock", { requestId });
+      return;
+    }
+  }
+
+  const total = hasSnapshotLines ? getCartTotal(snapshot) : 0;
 
   const clientName = cartClientInput
     ? cartClientInput.value || "Cliente"
@@ -6792,21 +9833,47 @@ async function parkCurrentCart(name = "", obs = "") {
   const observation = String(obs || "").trim();
 
   // ✅ ACTUALIZAR ticket ya cargado
-  if (
-    currentParkedTicketIndex !== null &&
-    Array.isArray(parkedTickets) &&
-    parkedTickets[currentParkedTicketIndex] &&
-    !parkedTickets[currentParkedTicketIndex].paid
-  ) {
-    const existing = parkedTickets[currentParkedTicketIndex];
+  if (editingTicket) {
+    const existing = editingTicket;
+    existing.parkingMode = getCurrentParkingModeScope();
+    existing.docType = opts?.docType
+      ? requestedDocType
+      : getParkedTicketDocType(existing, "ticket");
+    const existingDocText = getParkedDocTypeTexts(existing.docType);
 
-    existing.items = snapshot;
-    existing.total = total;
+    if (hasSnapshotLines) {
+      existing.items = snapshot;
+      existing.total = total;
+    }
     existing.clientName = clientName;
-    existing.name = ticketName || existing.name || `Ticket #${existing.id}`;
+    existing.name =
+      ticketName ||
+      existing.name ||
+      `${existingDocText.shortLabel} #${existing.id}`;
     existing.obs = observation;
+    if (existing.docType === "pedido") {
+      existing.pedidoStatus = normalizePedidoTpvStatus(
+        existing?.pedidoStatus,
+        "pendiente",
+      );
+      if (existing.pedidoStatus === "pendiente") {
+        existing.paid = false;
+        existing.paidAt = null;
+        existing.paidTicketCode = null;
+        existing.paidTicketId = null;
+      }
+    } else {
+      delete existing.pedidoStatus;
+      delete existing.collectedAt;
+    }
+    existing.mesaAlerts = keepActiveMesasTicket
+      ? mesaAlerts
+      : normalizeMesaTicketAlerts(existing?.mesaAlerts);
+    existing.localRevisionAt = Date.now();
     existing.updatedAt = new Date();
+    applyMesaScopeToTicket(existing, mesaScope);
     saveParkedTicketsCache();
+    linkMesaSelectionWithTicketId(existing?.id || null);
 
     try {
       await apiSaveParkedReservation(existing);
@@ -6820,73 +9887,133 @@ async function parkCurrentCart(name = "", obs = "") {
 
       if (isParkedSyncTransientError(e)) {
         toast(
-          "Sin internet: actualización de aparcado guardada en cola.",
+          `Sin internet: actualizacion de ${labels.item} guardada en cola.`,
           "warn",
-          "Aparcados",
+          labels.featureTitle,
         );
       }
     }
 
     // opcional: si quieres actualizar presupuesto remoto más adelante, aquí irá
 
-    // ✅ limpiar carrito y salir del modo edición
-    cart = [];
-    renderCart();
+    if (keepActiveMesasTicket) {
+      const idx = (Array.isArray(parkedTickets) ? parkedTickets : []).findIndex(
+        (t) => String(t?.id || "") === String(existing?.id || "") && !t?.paid,
+      );
+      currentParkedTicketIndex = idx >= 0 ? idx : null;
+      cart = hasSnapshotLines ? snapshot.map((it) => ({ ...it })) : [];
+      renderCart();
+      if (currentParkedTicketIndex === null) syncTpvCartWithSelectedMesa();
+    } else {
+      // TPV normal: limpiar carrito tras aparcar/actualizar
+      cart = [];
+      renderCart();
+      currentParkedTicketIndex = null;
+    }
 
-    currentParkedTicketIndex = null;
     refreshParkButtonUI();
     refreshParkedEditingBanner();
     updateParkedCountBadge();
 
-    toast("Ticket aparcado actualizado ✅", "ok", "Aparcados");
-    setStatusText("Ticket aparcado actualizado.");
+    if (!silentAutoSave) {
+      const okMsg = hasSnapshotLines
+        ? `${labels.itemCap} actualizado ✅`
+        : `Datos del ${labels.item} actualizados ✅`;
+      toast(okMsg, "ok", labels.featureTitle);
+      setStatusText(
+        hasSnapshotLines
+          ? `${labels.itemCap} actualizado.`
+          : `Datos del ${labels.item} actualizados.`,
+      );
+    }
+
+    if (
+      keepActiveMesasTicket &&
+      (MESAS_RETURN_TO_VIEW_AFTER_PARK === "mapa" ||
+        MESAS_RETURN_TO_VIEW_AFTER_PARK === "diseno")
+    ) {
+      const targetView = MESAS_RETURN_TO_VIEW_AFTER_PARK;
+      MESAS_RETURN_TO_VIEW_AFTER_PARK = "";
+      setMesasInlineView(targetView, { persist: false });
+    }
+
     logFeatureInfo("APARCAR", "actualizado", {
       requestId,
       id: existing?.id || null,
       total: Number(total || 0),
       lineas: snapshot.length,
     });
+
+    if (!skipAutoPrint) {
+      maybeAutoPrintComandaOnSave(existing).catch((e) => {
+        console.warn(
+          "No se pudo auto-imprimir comanda al actualizar:",
+          e?.message || e,
+        );
+      });
+      await maybeAutoPrintPedidoOnSave(existing).catch((e) => {
+        console.warn(
+          "No se pudo auto-imprimir pedido al actualizar:",
+          e?.message || e,
+        );
+      });
+    }
+    if (!keepActiveMesasTicket && openListAfterSave) {
+      openParkedModal();
+    }
     return;
   }
 
   // ✅ CREAR ticket nuevo
-  parkedCounter += 1;
+  parkedCounter = getNextSuggestedParkTicketId();
+  saveParkedGlobalCounter(parkedCounter);
 
   const localTicket = {
     id: parkedCounter,
     createdAt: new Date(),
     updatedAt: null,
+    localRevisionAt: Date.now(),
     items: snapshot,
     total,
     clientName,
-    name: ticketName || `Ticket #${parkedCounter}`,
+    docType: requestedDocType,
+    pedidoStatus: requestedDocType === "pedido" ? "pendiente" : undefined,
+    name:
+      ticketName ||
+      `${getParkedDocTypeTexts(requestedDocType).shortLabel} #${parkedCounter}`,
     obs: observation,
+    parkingMode: getCurrentParkingModeScope(),
+    mesaAlerts: keepActiveMesasTicket ? mesaAlerts : [],
     paid: false,
     paidAt: null,
     paidTicketCode: null,
     paidTicketId: null,
     fs: null,
   };
+  applyMesaScopeToTicket(localTicket, mesaScope);
 
-  try {
-    const remote = await apiCreatePresupuestoFromCart(observation);
-    if (remote && (remote.doc || remote.data)) {
-      const doc = remote.doc || remote.data;
-      localTicket.fs = {
-        idpresupuesto: doc.idpresupuesto ?? doc.id ?? null,
-        codigo: doc.codigo ?? null,
-      };
+  if (requestedDocType !== "pedido") {
+    try {
+      const remote = await apiCreatePresupuestoFromCart(observation);
+      if (remote && (remote.doc || remote.data)) {
+        const doc = remote.doc || remote.data;
+        localTicket.fs = {
+          idpresupuesto: doc.idpresupuesto ?? doc.id ?? null,
+          codigo: doc.codigo ?? null,
+        };
+      }
+    } catch (e) {
+      // Si FS falla, mantenemos el aparcado local/remoto de reservas para no perder operativa.
+      console.warn(
+        "No se pudo crear presupuesto en FS al aparcar:",
+        e?.message || e,
+      );
     }
-  } catch (e) {
-    // Si FS falla, mantenemos el aparcado local/remoto de reservas para no perder operativa.
-    console.warn(
-      "No se pudo crear presupuesto en FS al aparcar:",
-      e?.message || e,
-    );
   }
 
   parkedTickets.push(localTicket);
   saveParkedTicketsCache();
+  linkMesaSelectionWithTicketId(localTicket?.id || null);
 
   try {
     await apiSaveParkedReservation(localTicket);
@@ -6900,30 +10027,71 @@ async function parkCurrentCart(name = "", obs = "") {
 
     if (isParkedSyncTransientError(e)) {
       toast(
-        "Sin internet: ticket aparcado guardado en cola.",
+        `Sin internet: ${labels.item} guardado en cola.`,
         "warn",
-        "Aparcados",
+        labels.featureTitle,
       );
     }
   }
 
-  // ✅ limpiar carrito
-  cart = [];
-  renderCart();
+  if (keepActiveMesasTicket) {
+    const idx = (Array.isArray(parkedTickets) ? parkedTickets : []).findIndex(
+      (t) => String(t?.id || "") === String(localTicket?.id || "") && !t?.paid,
+    );
+    currentParkedTicketIndex = idx >= 0 ? idx : null;
+    cart = snapshot.map((it) => ({ ...it }));
+    renderCart();
+    if (currentParkedTicketIndex === null) syncTpvCartWithSelectedMesa();
+  } else {
+    // TPV normal: limpiar carrito tras aparcar
+    cart = [];
+    renderCart();
+    currentParkedTicketIndex = null;
+  }
 
-  currentParkedTicketIndex = null;
   refreshParkButtonUI();
   refreshParkedEditingBanner();
   updateParkedCountBadge();
 
-  toast("Ticket aparcado ✅", "ok", "Aparcados");
-  setStatusText("Ticket aparcado.");
+  if (!silentAutoSave) {
+    toast(`${labels.itemCap} ✅`, "ok", labels.featureTitle);
+    setStatusText(`${labels.itemCap}.`);
+  }
+
+  if (
+    keepActiveMesasTicket &&
+    (MESAS_RETURN_TO_VIEW_AFTER_PARK === "mapa" ||
+      MESAS_RETURN_TO_VIEW_AFTER_PARK === "diseno")
+  ) {
+    const targetView = MESAS_RETURN_TO_VIEW_AFTER_PARK;
+    MESAS_RETURN_TO_VIEW_AFTER_PARK = "";
+    setMesasInlineView(targetView, { persist: false });
+  }
+
   logFeatureInfo("APARCAR", "creado", {
     requestId,
     id: localTicket?.id || null,
     total: Number(total || 0),
     lineas: snapshot.length,
   });
+
+  if (!skipAutoPrint) {
+    maybeAutoPrintComandaOnSave(localTicket).catch((e) => {
+      console.warn(
+        "No se pudo auto-imprimir comanda al guardar:",
+        e?.message || e,
+      );
+    });
+    await maybeAutoPrintPedidoOnSave(localTicket).catch((e) => {
+      console.warn(
+        "No se pudo auto-imprimir pedido al guardar:",
+        e?.message || e,
+      );
+    });
+  }
+  if (!keepActiveMesasTicket && openListAfterSave) {
+    openParkedModal();
+  }
 }
 
 function apiDeletePresupuesto(idpresupuesto) {
@@ -6964,12 +10132,22 @@ function parkedTicketMatchesSearch(t, term) {
       })
     : "";
 
+  const splitObsInfo = parseSplitInfoFromObs(t?.obs);
+  const cleanObs = String(splitObsInfo?.cleanObs || t?.obs || "").trim();
+  const docTypeTexts = getParkedDocTypeTexts(getParkedTicketDocType(t));
+  const pedidoMeta = getPedidoTpvStatusMeta(t);
+
   const haystack = [
     t.id || "",
     `ticket #${t.id || ""}`,
+    `pedido #${t.id || ""}`,
+    docTypeTexts.shortLabel,
+    docTypeTexts.longLabel,
+    pedidoMeta.text,
+    pedidoMeta.status,
     t.name || "",
     t.clientName || "",
-    t.obs || "",
+    cleanObs,
     t.total || "",
     hora,
     itemsText,
@@ -6983,6 +10161,25 @@ function parkedTicketMatchesSearch(t, term) {
 }
 
 function parkedTicketPassesFilter(t) {
+  const ticketDocType = getParkedTicketDocType(t, "ticket");
+  if (parkedViewState.docType === "ticket" && ticketDocType !== "ticket") {
+    return false;
+  }
+  if (parkedViewState.docType === "pedido" && ticketDocType !== "pedido") {
+    return false;
+  }
+
+  if (ticketDocType === "pedido") {
+    const pedidoStatus = getPedidoTpvStatus(t);
+    if (parkedViewState.filter === "all") return true;
+    if (parkedViewState.filter === "paid") {
+      return (
+        pedidoStatus === "pagado-no-recogido" || pedidoStatus === "recogido"
+      );
+    }
+    return pedidoStatus === "pendiente";
+  }
+
   if (parkedViewState.filter === "all") return true;
   if (parkedViewState.filter === "paid") return !!t.paid;
   return !t.paid;
@@ -6999,14 +10196,29 @@ function syncParkedSearchClearBtn() {
 }
 
 function syncParkedToolbarUI() {
+  const labels = getParkingLabels();
   const parkedSearch = document.getElementById("parkedSearch");
   const parkedFilterAll = document.getElementById("parkedFilterAll");
   const parkedFilterPending = document.getElementById("parkedFilterPending");
   const parkedFilterPaid = document.getElementById("parkedFilterPaid");
+  const parkedTypeAll = document.getElementById("parkedTypeAll");
+  const parkedTypeTicket = document.getElementById("parkedTypeTicket");
+  const parkedTypePedido = document.getElementById("parkedTypePedido");
   const parkedClearPaidBtn = document.getElementById("parkedClearPaidBtn");
+  const parkedFilterTabs = document.getElementById("parkedFilterTabs");
+  const parkedDocTypeTabs = document.getElementById("parkedDocTypeTabs");
+  const parkedScopeWrap = document.getElementById("parkedScopeWrap");
+  const parkedScopeSelect = document.getElementById("parkedScopeSelect");
+  const mesaScoped = String(parkedViewState.tableUid || "").trim().length > 0;
+
+  if (mesaScoped) {
+    parkedViewState.filter = "all";
+    parkedViewState.docType = "all";
+  }
 
   if (parkedSearch) {
     parkedSearch.value = parkedViewState.search || "";
+    parkedSearch.placeholder = labels.searchPlaceholder;
   }
 
   parkedFilterAll?.classList.toggle(
@@ -7022,11 +10234,70 @@ function syncParkedToolbarUI() {
     parkedViewState.filter === "paid",
   );
 
+  parkedTypeAll?.classList.toggle(
+    "is-active",
+    parkedViewState.docType === "all",
+  );
+  parkedTypeTicket?.classList.toggle(
+    "is-active",
+    parkedViewState.docType === "ticket",
+  );
+  parkedTypePedido?.classList.toggle(
+    "is-active",
+    parkedViewState.docType === "pedido",
+  );
+
+  if (parkedFilterTabs) {
+    parkedFilterTabs.classList.toggle("hidden", mesaScoped);
+  }
+  if (parkedDocTypeTabs) {
+    parkedDocTypeTabs.classList.toggle("hidden", mesaScoped);
+  }
+
   if (parkedClearPaidBtn) {
     parkedClearPaidBtn.classList.toggle(
       "hidden",
-      parkedViewState.filter !== "paid",
+      mesaScoped || parkedViewState.filter !== "paid",
     );
+  }
+
+  const mesasScopeEnabled = !!MESAS_INLINE_ACTIVE && !mesaScoped;
+  if (parkedScopeWrap) {
+    parkedScopeWrap.classList.toggle("hidden", !mesasScopeEnabled);
+  }
+
+  if (parkedScopeSelect) {
+    if (!mesasScopeEnabled) {
+      parkedViewState.scope = "global";
+      parkedScopeSelect.innerHTML = "";
+      parkedScopeSelect.disabled = true;
+    } else {
+      const state = loadMesasTablesStateForInline();
+      const roomList = Array.isArray(state?.roomList) ? state.roomList : [];
+      const options = [
+        { value: "global", label: "Global (todas las salas)" },
+        ...roomList.map((room) => ({
+          value: String(room?.id || ""),
+          label: String(room?.name || room?.id || "Sala"),
+        })),
+      ].filter((opt) => !!opt.value);
+
+      const selected = String(parkedViewState.scope || "global");
+      const selectedExists = options.some((opt) => opt.value === selected);
+      const nextValue = selectedExists ? selected : "global";
+      parkedViewState.scope = nextValue;
+
+      parkedScopeSelect.innerHTML = "";
+      options.forEach((opt) => {
+        const el = document.createElement("option");
+        el.value = opt.value;
+        el.textContent = opt.label;
+        if (opt.value === nextValue) el.selected = true;
+        parkedScopeSelect.appendChild(el);
+      });
+
+      parkedScopeSelect.disabled = options.length <= 1;
+    }
   }
 
   syncParkedSearchClearBtn();
@@ -7034,11 +10305,11 @@ function syncParkedToolbarUI() {
 
 async function clearPaidParkedHistory() {
   const source = Array.isArray(parkedTickets) ? parkedTickets : [];
-  const removedPaid = source.filter((t) => !!t?.paid);
+  const removedPaid = source.filter((t) => !!t?.paid && !isPedidoTpvTicket(t));
 
   if (!removedPaid.length) return;
 
-  parkedTickets = source.filter((t) => !t?.paid);
+  parkedTickets = source.filter((t) => !(!!t?.paid && !isPedidoTpvTicket(t)));
   saveParkedTicketsCache(parkedTickets);
 
   if (
@@ -7055,6 +10326,53 @@ async function clearPaidParkedHistory() {
   renderParkedTicketsModal?.();
 }
 
+async function setPedidoTpvStatusByIndex(index, nextStatus) {
+  if (!Array.isArray(parkedTickets) || !parkedTickets.length) return false;
+  if (index == null || index < 0 || index >= parkedTickets.length) return false;
+
+  const ticket = parkedTickets[index];
+  if (!ticket || !isPedidoTpvTicket(ticket)) return false;
+
+  const status = normalizePedidoTpvStatus(nextStatus, "pendiente");
+  ticket.pedidoStatus = status;
+
+  if (status === "pendiente") {
+    ticket.paid = false;
+    ticket.paidAt = null;
+    ticket.paidTicketCode = null;
+    ticket.paidTicketId = null;
+  } else {
+    ticket.paid = true;
+    if (!ticket.paidAt) ticket.paidAt = new Date();
+    if (!ticket.paidTicketCode) ticket.paidTicketCode = `PED-${ticket.id}`;
+  }
+
+  if (status === "recogido") {
+    ticket.collectedAt = new Date();
+  }
+
+  ticket.localRevisionAt = Date.now();
+  ticket.updatedAt = new Date();
+  saveParkedTicketsCache(parkedTickets);
+
+  try {
+    await apiSaveParkedReservation(ticket);
+    await refreshRemoteParkedReservationsOnly();
+  } catch (e) {
+    enqueueParkedSyncOperation("upsert", ticket);
+    console.warn(
+      "No se pudo sincronizar estado de pedido TPV:",
+      e?.message || e,
+    );
+  }
+
+  updateParkedCountBadge?.();
+  refreshParkButtonUI?.();
+  refreshParkedEditingBanner?.();
+  renderParkedTicketsModal?.();
+  return true;
+}
+
 function ensureParkedToolbar() {
   if (!parkedTicketsOverlay) return null;
 
@@ -7068,6 +10386,7 @@ function ensureParkedToolbar() {
   if (!body || !parkedTicketsList) return null;
 
   toolbar = document.createElement("div");
+  const labels = getParkingLabels();
   toolbar.id = "parkedToolbar";
   toolbar.className = "tickets-tools";
   toolbar.innerHTML = `
@@ -7075,7 +10394,7 @@ function ensureParkedToolbar() {
       <input
         id="parkedSearch"
         type="text"
-        placeholder="Buscar ticket aparcado..."
+        placeholder="${labels.searchPlaceholder}"
         autocomplete="off"
       />
       <button
@@ -7096,7 +10415,7 @@ function ensureParkedToolbar() {
       </button>
     </div>
 
-    <div class="tickets-tabs" style="margin-left: 10px;">
+    <div id="parkedFilterTabs" class="tickets-tabs" style="margin-left: 10px;">
       <button id="parkedFilterAll" type="button" class="cart-btn tickets-tab-btn">
         Todos
       </button>
@@ -7108,10 +10427,27 @@ function ensureParkedToolbar() {
       </button>
     </div>
 
+    <div id="parkedDocTypeTabs" class="tickets-tabs" style="margin-left: 10px;">
+      <button id="parkedTypeAll" type="button" class="cart-btn tickets-tab-btn">
+        Ticket + Pedido
+      </button>
+      <button id="parkedTypeTicket" type="button" class="cart-btn tickets-tab-btn">
+        Tickets
+      </button>
+      <button id="parkedTypePedido" type="button" class="cart-btn tickets-tab-btn">
+        Pedidos TPV
+      </button>
+    </div>
+
     <div class="tickets-tabs" style="margin-left: 10px; display:flex; align-items:center; gap:8px;">
       <button id="parkedClearPaidBtn" type="button" class="cart-btn tickets-tab-btn" title="Limpiar historial de cobrados">
         Limpiar cobrados
       </button>
+    </div>
+
+    <div id="parkedScopeWrap" class="tickets-scope-wrap hidden" style="margin-left: 10px;">
+      <label for="parkedScopeSelect">Vista</label>
+      <select id="parkedScopeSelect"></select>
     </div>
   `;
 
@@ -7122,8 +10458,12 @@ function ensureParkedToolbar() {
   const parkedFilterAll = document.getElementById("parkedFilterAll");
   const parkedFilterPending = document.getElementById("parkedFilterPending");
   const parkedFilterPaid = document.getElementById("parkedFilterPaid");
+  const parkedTypeAll = document.getElementById("parkedTypeAll");
+  const parkedTypeTicket = document.getElementById("parkedTypeTicket");
+  const parkedTypePedido = document.getElementById("parkedTypePedido");
   const parkedKeyboardBtn = document.getElementById("parkedKeyboardBtn");
   const parkedClearPaidBtn = document.getElementById("parkedClearPaidBtn");
+  const parkedScopeSelect = document.getElementById("parkedScopeSelect");
 
   let timer = null;
 
@@ -7163,6 +10503,30 @@ function ensureParkedToolbar() {
     renderParkedTicketsModal();
   });
 
+  parkedTypeAll?.addEventListener("click", () => {
+    parkedViewState.docType = "all";
+    syncParkedToolbarUI();
+    renderParkedTicketsModal();
+  });
+
+  parkedTypeTicket?.addEventListener("click", () => {
+    parkedViewState.docType = "ticket";
+    syncParkedToolbarUI();
+    renderParkedTicketsModal();
+  });
+
+  parkedTypePedido?.addEventListener("click", () => {
+    parkedViewState.docType = "pedido";
+    syncParkedToolbarUI();
+    renderParkedTicketsModal();
+  });
+
+  parkedScopeSelect?.addEventListener("change", () => {
+    parkedViewState.scope = String(parkedScopeSelect.value || "global");
+    syncParkedToolbarUI();
+    renderParkedTicketsModal();
+  });
+
   parkedKeyboardBtn?.addEventListener("click", () => {
     if (!parkedSearch) return;
     openQwertyForInput(parkedSearch, "text");
@@ -7170,22 +10534,26 @@ function ensureParkedToolbar() {
 
   parkedClearPaidBtn?.addEventListener("click", async () => {
     const hasPaid = (Array.isArray(parkedTickets) ? parkedTickets : []).some(
-      (t) => !!t?.paid,
+      (t) => !!t?.paid && !isPedidoTpvTicket(t),
     );
 
     if (!hasPaid) {
-      toast("No hay tickets cobrados que limpiar.", "info", "Aparcados");
+      toast(
+        "No hay tickets cobrados para limpiar. Los pedidos TPV no se borran desde aqui.",
+        "info",
+        labels.featureTitle,
+      );
       return;
     }
 
     const ok = await confirmModal(
       "Limpiar cobrados",
-      "Se eliminará el historial local de tickets aparcados cobrados. ¿Continuar?",
+      `Se eliminara el historial local de ${labels.itemsPlural} cobrados. ¿Continuar?`,
     );
     if (!ok) return;
 
     await clearPaidParkedHistory();
-    toast("Historial de cobrados limpiado.", "ok", "Aparcados");
+    toast("Historial de cobrados limpiado.", "ok", labels.featureTitle);
   });
 
   syncParkedToolbarUI();
@@ -7194,6 +10562,7 @@ function ensureParkedToolbar() {
 
 function refreshParkButtonUI() {
   if (!parkBtn) return;
+  const labels = getParkingLabels();
 
   const hasLoadedParkedTicket =
     currentParkedTicketIndex !== null &&
@@ -7201,30 +10570,77 @@ function refreshParkButtonUI() {
     parkedTickets[currentParkedTicketIndex] &&
     !parkedTickets[currentParkedTicketIndex].paid;
 
+  const mesasTransMode =
+    MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones";
+
   const hasCartLines = hasVisibleCartLines();
   parkBtn.disabled = !hasCartLines;
 
-  parkBtn.textContent = hasLoadedParkedTicket ? "Actualizar" : "Aparcar";
+  parkBtn.textContent = hasLoadedParkedTicket
+    ? "Actualizar"
+    : mesasTransMode
+      ? "Guardar"
+      : "Aparcar";
   if (!hasCartLines) {
-    parkBtn.title = "Añade productos al carrito para aparcar";
+    parkBtn.title = mesasTransMode
+      ? "Añade productos al carrito para guardar el pedido"
+      : "Añade productos al carrito para aparcar";
   } else {
     parkBtn.title = hasLoadedParkedTicket
-      ? "Actualizar ticket aparcado"
-      : "Aparcar ticket";
+      ? mesasTransMode
+        ? "Actualizar pedido de mesa"
+        : `Actualizar ${labels.item}`
+      : mesasTransMode
+        ? "Guardar pedido de mesa"
+        : labels.actionTitle;
   }
+}
+
+function hasLoadedOpenTicketForMesasTrans() {
+  return (
+    currentParkedTicketIndex !== null &&
+    Array.isArray(parkedTickets) &&
+    !!parkedTickets[currentParkedTicketIndex] &&
+    !parkedTickets[currentParkedTicketIndex].paid
+  );
 }
 
 function refreshParkedEditingBanner() {
   const wrap = document.getElementById("parkedEditingBanner");
   const title = document.getElementById("parkedEditingTitle");
+  const titleWrap = wrap?.querySelector(".peb-title-wrap");
+  const mesaMeta = document.getElementById("parkedEditingMesaMeta");
   const obs = document.getElementById("parkedEditingObs");
+  const flags = document.getElementById("parkedEditingFlags");
+  const restoreBtn = document.getElementById("parkedRestoreBtn");
+  const splitPrevBtn = document.getElementById("parkedSplitPrevBtn");
+  const splitNextBtn = document.getElementById("parkedSplitNextBtn");
 
-  if (!wrap || !title || !obs) return;
+  if (!wrap || !title || !mesaMeta || !obs || !flags) return;
+
+  const setActionButtonsDisabled = (disabled) => {
+    const splitBtnEl = document.getElementById("parkedSplitBtn");
+    const comandaBtnEl = document.getElementById("parkedComandaBtn");
+    const undoBtnEl = document.getElementById("parkedUndoBtn");
+    const redoBtnEl = document.getElementById("parkedRedoBtn");
+    if (splitBtnEl) splitBtnEl.disabled = !!disabled;
+    if (comandaBtnEl) comandaBtnEl.disabled = !!disabled;
+    if (undoBtnEl) undoBtnEl.disabled = !!disabled;
+    if (redoBtnEl) redoBtnEl.disabled = !!disabled;
+  };
 
   if (!cashSession?.open) {
     wrap.classList.add("hidden");
     title.textContent = "";
+    mesaMeta.innerHTML = "";
     obs.textContent = "";
+    flags.innerHTML = "";
+    if (restoreBtn) restoreBtn.disabled = true;
+    if (splitPrevBtn) splitPrevBtn.disabled = true;
+    if (splitNextBtn) splitNextBtn.disabled = true;
+    if (titleWrap) titleWrap.classList.add("hidden");
+    setActionButtonsDisabled(true);
+    refreshCartUndoRedoUi();
     return;
   }
 
@@ -7236,30 +10652,147 @@ function refreshParkedEditingBanner() {
       : null;
 
   if (!t || t.paid) {
+    if (tryResumePendingSplitSession()) {
+      return;
+    }
     wrap.classList.add("hidden");
     title.textContent = "";
+    mesaMeta.innerHTML = "";
     obs.textContent = "";
+    flags.innerHTML = "";
+    if (restoreBtn) restoreBtn.disabled = true;
+    if (splitPrevBtn) splitPrevBtn.disabled = true;
+    if (splitNextBtn) splitNextBtn.disabled = true;
+    if (titleWrap) titleWrap.classList.add("hidden");
+    setActionButtonsDisabled(true);
+    refreshCartUndoRedoUi();
     return;
   }
 
-  title.textContent = `Ticket Aparcado: ${t.label || `Ticket #${t.id}`}`;
-  obs.textContent = t.obs ? `Observación: ${t.obs}` : "Sin observaciones";
+  const labels = getParkingLabels();
 
+  const navState = getCurrentSplitNavigationState(t);
+  const bannerTicketName = String(
+    t.name || t.label || `${labels.shortRefLabel} #${t.id}`,
+  );
+  const docTypeTexts = getParkedDocTypeTexts(getParkedTicketDocType(t));
+  const hasPartAlreadyInName = navState.enabled
+    ? new RegExp(`\\b${navState.part}\\s*\\/\\s*${navState.total}\\b`).test(
+        bannerTicketName,
+      )
+    : false;
+  const splitSuffix = navState.enabled
+    ? hasPartAlreadyInName
+      ? ""
+      : ` · Parte ${navState.part}/${navState.total}`
+    : "";
+  title.textContent = navState.enabled
+    ? `${docTypeTexts.shortLabel}: Parte ${navState.part}/${navState.total}`
+    : "";
+  if (titleWrap) {
+    titleWrap.classList.toggle("hidden", !navState.enabled);
+  }
+
+  const mesasState = loadMesasTablesStateForInline();
+  const mesaUid = String(resolveTicketMesaUid(t, mesasState) || "").trim();
+  const mesaLink = getMesasRoomAndTableByUid(mesasState, mesaUid);
+  const mesaStatus = getMesaQuickStatusMeta(mesasState, mesaUid);
+
+  const mesaName = String(
+    mesaLink?.table?.name || mesaLink?.table?.id || "Sin mesa",
+  ).trim();
+  const roomName = String(
+    mesaLink?.room?.name || mesaLink?.room?.id || "Sin sala",
+  ).trim();
+  const diners = Math.max(
+    0,
+    Math.round(Number(mesasState?.tableMeta?.[mesaUid]?.diners ?? 0) || 0),
+  );
+
+  const openedAt = new Date(t?.createdAt || t?.updatedAt || Date.now());
+  const openedHour = Number.isNaN(openedAt.getTime())
+    ? "--:--"
+    : openedAt.toLocaleTimeString("es-ES", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+  const ticketLabel = String(t?.id || "").trim()
+    ? `Ticket #${String(t?.id || "").trim()}`
+    : `${docTypeTexts.shortLabel}: ${bannerTicketName}${splitSuffix}`;
+
+  mesaMeta.innerHTML = `
+    <div class="peb-mesa-main">Mesa ${escapeHtml(mesaName)} <span class="peb-ticket-inline">${escapeHtml(ticketLabel)}</span></div>
+    <div class="peb-mesa-sub">${escapeHtml(roomName)}${diners > 0 ? ` · Comensales: ${escapeHtml(String(diners))}` : ""}</div>
+    <div class="peb-mesa-badges">
+      <span class="peb-chip is-${escapeHtml(mesaStatus.kind)}">${escapeHtml(mesaStatus.text)}</span>
+      <span class="peb-chip">${escapeHtml(openedHour)}</span>
+    </div>
+  `;
+
+  const activeFlags = normalizeMesaTicketAlerts(t?.mesaAlerts);
+  const splitObsInfo = parseSplitInfoFromObs(t?.obs);
+  const visibleObs = String(splitObsInfo?.cleanObs || t?.obs || "").trim();
+  obs.textContent = visibleObs
+    ? `Observación: ${visibleObs}`
+    : "Sin observaciones";
+
+  flags.innerHTML = "";
+  if (activeFlags.length) {
+    activeFlags.forEach((key) => {
+      const chip = document.createElement("span");
+      chip.className = "peb-flag";
+      chip.textContent = getMesaTicketAlertLabel(key);
+      flags.appendChild(chip);
+    });
+  }
+
+  if (restoreBtn) {
+    const isDirty = hasUnsavedChangesForLoadedParkedTicket(t);
+    restoreBtn.disabled = !isDirty;
+  }
+
+  if (splitPrevBtn) {
+    splitPrevBtn.classList.toggle("hidden", !getTicketSplitMeta(t));
+    splitPrevBtn.disabled = !navState.enabled || navState.prevIndex < 0;
+  }
+  if (splitNextBtn) {
+    splitNextBtn.classList.toggle("hidden", !getTicketSplitMeta(t));
+    splitNextBtn.disabled = !navState.enabled || navState.nextIndex < 0;
+  }
+
+  setActionButtonsDisabled(false);
   wrap.classList.remove("hidden");
+  refreshPreprintButtonUI?.();
+  refreshCartUndoRedoUi();
 }
 
-function openParkedModal() {
+function openParkedModal(options = {}) {
   const requestId = createRequestId("PRKMOD");
+  const labels = getParkingLabels();
+  const modalOpts = options && typeof options === "object" ? options : {};
+  const forcedTableUid = String(modalOpts.tableUid || "").trim();
+
+  parkedViewState.tableUid = forcedTableUid || null;
+  if (forcedTableUid) {
+    parkedViewState.filter = "all";
+    parkedViewState.docType = "all";
+  }
 
   if (!parkedTicketsOverlay) return;
 
+  const allGlobal = Array.isArray(parkedTickets) ? parkedTickets : [];
   const allParked = getScopedAllParkedTickets(parkedTickets);
   const pending = getScopedPendingParkedTickets(parkedTickets);
   const paid = allParked.filter((t) => !!t?.paid);
 
-  if (!allParked.length) {
-    toast("No hay tickets aparcados.", "info", "Aparcados");
+  if (!allGlobal.length) {
+    toast(`No hay ${labels.itemsPlural}.`, "info", labels.featureTitle);
     return;
+  }
+
+  const parkedModalTitle = document.getElementById("parkedModalTitle");
+  if (parkedModalTitle) {
+    parkedModalTitle.textContent = String(modalOpts.title || labels.listTitle);
   }
 
   ensureParkedToolbar();
@@ -7296,9 +10829,10 @@ function renderParkedTicketsModal() {
   });
 
   if (!filtered.length) {
+    const labels = getParkingLabels();
     const empty = document.createElement("div");
     empty.className = "parked-ticket-empty";
-    empty.textContent = "No hay tickets aparcados en esta vista.";
+    empty.textContent = `No hay ${labels.itemsPlural} en esta vista.`;
     parkedTicketsList.appendChild(empty);
     return;
   }
@@ -7310,8 +10844,78 @@ function renderParkedTicketsModal() {
 
   const getItemQty = (it) => Number(it.qty ?? it.cantidad ?? 1) || 1;
 
-  filtered.forEach((t) => {
+  const mesasState = loadMesasTablesStateForInline();
+  const roomList = Array.isArray(mesasState?.roomList)
+    ? mesasState.roomList
+    : [];
+
+  const parseMesaObsContext = (obsText) => {
+    const splitObsInfo = parseSplitInfoFromObs(obsText);
+    const raw = String(splitObsInfo?.cleanObs || obsText || "").trim();
+    if (!raw) return { tableName: "", roomName: "" };
+
+    const m = raw.match(/^mesa\s+(.+?)\s*[·|-]\s*(.+)$/i);
+    if (!m) return { tableName: "", roomName: "" };
+
+    return {
+      tableName: String(m[1] || "").trim(),
+      roomName: String(m[2] || "").trim(),
+    };
+  };
+
+  const getTicketMesaContext = (ticket) => {
+    const uid = resolveTicketMesaUid(ticket, mesasState);
+    const [uidRoomId = "", uidTableId = ""] = String(uid || "").split("::");
+    const parsedObsCtx = parseMesaObsContext(ticket?.obs);
+
+    const roomId = String(ticket?.mesaRoomId || uidRoomId || "").trim();
+    const tableId = String(ticket?.mesaTableId || uidTableId || "").trim();
+
+    const roomFromState = roomId
+      ? roomList.find((r) => String(r?.id || "") === roomId)
+      : null;
+    const tableFromState = tableId
+      ? Array.isArray(roomFromState?.tables)
+        ? roomFromState.tables.find((tb) => String(tb?.id || "") === tableId)
+        : null
+      : null;
+
+    const roomName =
+      String(
+        roomFromState?.name ||
+          ticket?.mesaRoomName ||
+          parsedObsCtx.roomName ||
+          roomId ||
+          "Sin sala",
+      ).trim() || "Sin sala";
+
+    const tableName =
+      String(
+        tableFromState?.name ||
+          ticket?.mesaTableName ||
+          parsedObsCtx.tableName ||
+          ticket?.name ||
+          tableId ||
+          "Sin mesa",
+      ).trim() || "Sin mesa";
+
+    return {
+      uid: String(uid || "").trim(),
+      roomId,
+      roomName,
+      tableId,
+      tableName,
+    };
+  };
+
+  const buildTicketCard = (t) => {
+    const labels = getParkingLabels();
     const realIndex = parkedTickets.indexOf(t);
+    const mesaCtx = getTicketMesaContext(t);
+    const docTypeTexts = getParkedDocTypeTexts(getParkedTicketDocType(t));
+    const titleText =
+      String(t.name || `${docTypeTexts.shortLabel} #${t.id}`).trim() ||
+      `${docTypeTexts.shortLabel} #${t.id}`;
 
     const div = document.createElement("div");
     div.className = "parked-ticket-item parked-ticket-compact";
@@ -7344,16 +10948,32 @@ function renderParkedTicketsModal() {
       .join(" · ");
 
     const extra = tipos > 8 ? ` · +${tipos - 8}` : "";
-    const obs = (t.obs || "").trim();
+    const splitObsInfo = parseSplitInfoFromObs(t?.obs);
+    const obs = String(splitObsInfo?.cleanObs || t?.obs || "").trim();
+    const pedidoMeta = getPedidoTpvStatusMeta(t);
+    const alerts = normalizeMesaTicketAlerts(t?.mesaAlerts);
+    const alertsText = alerts
+      .map((key) => getMesaTicketAlertLabel(key))
+      .join(" · ");
 
-    const paidBadge = t.paid
-      ? `<span class="ticket-badge ticket-badge-ok">✔ COBRADO</span>`
-      : `<span class="ticket-badge ticket-badge-partial">PENDIENTE</span>`;
+    const paidBadge = isPedidoTpvTicket(t)
+      ? `<span class="ticket-badge ${pedidoMeta.badgeClass}">${escapeHtml(pedidoMeta.text)}</span>`
+      : t.paid
+        ? `<span class="ticket-badge ticket-badge-ok">✔ COBRADO</span>`
+        : `<span class="ticket-badge ticket-badge-partial">PENDIENTE</span>`;
 
     const paidSub = t.paid
       ? `<div class="pt-items pt-items-paid">Cobrado${
           t.paidTicketCode ? ` · ${escapeHtml(t.paidTicketCode)}` : ""
         }</div>`
+      : "";
+
+    const pedidoActionsHtml = isPedidoTpvTicket(t)
+      ? pedidoMeta.isPending
+        ? '<div class="pt-pedido-actions"><button type="button" class="pt-action pt-action-pay" data-pedido-action="pay">Cobrar pedido</button></div>'
+        : pedidoMeta.isPaidNotCollected
+          ? '<div class="pt-pedido-actions"><button type="button" class="pt-action pt-action-pick" data-pedido-action="pickup">Marcar recogido</button></div>'
+          : '<div class="pt-pedido-actions"><span class="pt-picked-label">Pedido entregado</span></div>'
       : "";
 
     if (t.paid) {
@@ -7364,8 +10984,11 @@ function renderParkedTicketsModal() {
       <div class="pt-left">
         <div class="pt-title">
           ${paidBadge}
-          ${escapeHtml(t.name || `Ticket #${t.id}`)}
+          ${docTypeTexts.badgeHtml}
+          ${escapeHtml(titleText)}
         </div>
+
+        <div class="pt-context">Mesa: ${escapeHtml(mesaCtx.tableName || "Sin mesa")} · Sala: ${escapeHtml(mesaCtx.roomName || "Sin sala")}</div>
 
         ${
           obs
@@ -7373,8 +10996,14 @@ function renderParkedTicketsModal() {
             : `<div class="pt-obs pt-obs-muted">Sin observación</div>`
         }
 
+        ${
+          alertsText
+            ? `<div class="pt-alerts">Avisos: ${escapeHtml(alertsText)}</div>`
+            : ""
+        }
+
         <div class="pt-sub">
-          ${hora} · ${escapeHtml(t.clientName || "Cliente")} · Ticket #${t.id}
+          ${hora} · ${escapeHtml(t.clientName || "Cliente")} · ${escapeHtml(docTypeTexts.shortLabel)} #${t.id}
         </div>
       </div>
 
@@ -7386,10 +11015,32 @@ function renderParkedTicketsModal() {
       <div class="pt-right">
         <div class="pt-right-top">
           <div class="pt-total">${totalTexto}</div>
-          <button type="button" class="pt-del" title="Eliminar ticket aparcado" aria-label="Eliminar">🗑</button>
+          <button type="button" class="pt-print" title="Imprimir ${docTypeTexts.shortLabel}" aria-label="Imprimir">🖨</button>
+          <button type="button" class="pt-del" title="Eliminar ${labels.item}" aria-label="Eliminar">🗑</button>
         </div>
+        ${pedidoActionsHtml}
       </div>
     `;
+
+    const printBtn = div.querySelector(".pt-print");
+    if (printBtn) {
+      printBtn.onclick = async (e) => {
+        e.stopPropagation();
+        try {
+          const draft = isPedidoTpvTicket(t)
+            ? buildPedidoPrintDraft(t)
+            : buildParkedTicketPrintDraft(t);
+          await printTicket(draft);
+          toast(
+            `${docTypeTexts.shortLabel} #${t.id} enviado a impresora.`,
+            "ok",
+            "Impresion",
+          );
+        } catch (err) {
+          toast("No se pudo imprimir el ticket.", "err", "Impresion");
+        }
+      };
+    }
 
     const delBtn = div.querySelector(".pt-del");
     if (delBtn) {
@@ -7397,8 +11048,8 @@ function renderParkedTicketsModal() {
         e.stopPropagation();
 
         const ok = await confirmModal(
-          "Eliminar ticket aparcado",
-          `¿Seguro que quieres eliminar el Ticket #${t.id}?`,
+          `Eliminar ${labels.item}`,
+          `¿Seguro que quieres eliminar ${docTypeTexts.shortLabel} #${t.id}?`,
         );
         if (!ok) return;
 
@@ -7411,9 +11062,9 @@ function renderParkedTicketsModal() {
 
           if (isParkedSyncTransientError(e)) {
             toast(
-              "Sin internet: borrado de aparcado guardado en cola.",
+              `Sin internet: borrado de ${labels.item} guardado en cola.`,
               "warn",
-              "Aparcados",
+              labels.featureTitle,
             );
           }
         }
@@ -7421,19 +11072,22 @@ function renderParkedTicketsModal() {
         parkedTickets.splice(realIndex, 1);
         saveParkedTicketsCache();
 
-        try {
-          const idcaja = getCajaIdSafe();
-          if (idcaja) {
-            await appendCajaAutoLogLineForId(
-              idcaja,
-              buildParkedManualDeleteLogLine(t),
+        const skipSplitIncident = shouldSkipSplitIncidentLog(t);
+        if (!skipSplitIncident) {
+          try {
+            const idcaja = getCajaIdSafe();
+            if (idcaja) {
+              await appendCajaAutoLogLineForId(
+                idcaja,
+                buildParkedManualDeleteLogLine(t),
+              );
+            }
+          } catch (e) {
+            console.warn(
+              "No se pudo registrar el borrado del ticket aparcado en la caja:",
+              e?.message || e,
             );
           }
-        } catch (e) {
-          console.warn(
-            "No se pudo registrar el borrado del ticket aparcado en la caja:",
-            e?.message || e,
-          );
         }
 
         if (currentParkedTicketIndex === realIndex) {
@@ -7445,27 +11099,84 @@ function renderParkedTicketsModal() {
           currentParkedTicketIndex -= 1;
         }
 
+        unlinkMesaTicketByTicketId(t?.id || null, t);
+
         updateParkedCountBadge();
         refreshParkButtonUI();
         refreshParkedEditingBanner();
 
         if (!parkedTickets.length) {
           closeParkedModal();
-          toast("No quedan tickets aparcados.", "info", "Aparcados");
+          toast(
+            `No quedan ${labels.itemsPlural}.`,
+            "info",
+            labels.featureTitle,
+          );
           return;
         }
 
         renderParkedTicketsModal();
-        toast("Ticket aparcado eliminado.", "ok", "Aparcados");
+        toast(`${labels.itemCap} eliminado.`, "ok", labels.featureTitle);
+      };
+    }
+
+    const pedidoActionBtn = div.querySelector("button[data-pedido-action]");
+    if (pedidoActionBtn) {
+      pedidoActionBtn.onclick = async (e) => {
+        e.stopPropagation();
+        const action = String(
+          pedidoActionBtn.dataset.pedidoAction || "",
+        ).trim();
+
+        if (action === "pay") {
+          const ok = await confirmModal(
+            "Cobrar pedido TPV",
+            `¿Marcar ${docTypeTexts.shortLabel} #${t.id} como pagado y pendiente de recogida?`,
+          );
+          if (!ok) return;
+
+          const changed = await setPedidoTpvStatusByIndex(
+            realIndex,
+            "pagado-no-recogido",
+          );
+          if (changed) {
+            toast(
+              `Pedido #${t.id} marcado como pagado (no recogido).`,
+              "ok",
+              "Pedidos TPV",
+            );
+          }
+          return;
+        }
+
+        if (action === "pickup") {
+          const ok = await confirmModal(
+            "Recoger pedido TPV",
+            `¿Marcar ${docTypeTexts.shortLabel} #${t.id} como recogido?`,
+          );
+          if (!ok) return;
+
+          const changed = await setPedidoTpvStatusByIndex(
+            realIndex,
+            "recogido",
+          );
+          if (changed) {
+            toast(
+              `Pedido #${t.id} marcado como recogido.`,
+              "ok",
+              "Pedidos TPV",
+            );
+          }
+        }
       };
     }
 
     div.onclick = () => {
       if (t.paid) {
         toast(
-          "Ese ticket ya está cobrado. No se puede volver a cargar.",
+          `Ese ${docTypeTexts.shortLabel} ya está cobrado. No se puede volver a cargar.`,
           "warn",
-          "Aparcados",
+          labels.featureTitle,
         );
         return;
       }
@@ -7474,16 +11185,188 @@ function renderParkedTicketsModal() {
       closeParkedModal();
     };
 
-    parkedTicketsList.appendChild(div);
+    return div;
+  };
+
+  const appendRoomHeader = (roomName) => {
+    const hdr = document.createElement("div");
+    hdr.className = "parked-group-room";
+    hdr.textContent = `Sala: ${roomName}`;
+    parkedTicketsList.appendChild(hdr);
+  };
+
+  const appendTableHeader = (tableName) => {
+    const hdr = document.createElement("div");
+    hdr.className = "parked-group-table";
+    hdr.textContent = `Mesa: ${tableName}`;
+    parkedTicketsList.appendChild(hdr);
+  };
+
+  const appendStatusHeader = (text) => {
+    const hdr = document.createElement("div");
+    hdr.className = "parked-group-room";
+    hdr.textContent = text;
+    parkedTicketsList.appendChild(hdr);
+  };
+
+  const tableScopeValue = String(parkedViewState.tableUid || "").trim();
+  if (tableScopeValue) {
+    const pendingTickets = filtered.filter((ticket) => !ticket?.paid);
+    const paidTickets = filtered.filter((ticket) => !!ticket?.paid);
+
+    if (pendingTickets.length) {
+      appendStatusHeader("Pendientes");
+      pendingTickets.forEach((ticket) => {
+        parkedTicketsList.appendChild(buildTicketCard(ticket));
+      });
+    }
+
+    if (paidTickets.length) {
+      appendStatusHeader("Cobrados");
+      paidTickets.forEach((ticket) => {
+        parkedTicketsList.appendChild(buildTicketCard(ticket));
+      });
+    }
+
+    return;
+  }
+
+  if (!MESAS_INLINE_ACTIVE) {
+    filtered.forEach((t) => {
+      parkedTicketsList.appendChild(buildTicketCard(t));
+    });
+    return;
+  }
+
+  const isGlobalScope = String(parkedViewState.scope || "global") === "global";
+
+  const grouped = new Map();
+
+  filtered.forEach((ticket) => {
+    const meta = getTicketMesaContext(ticket);
+    const roomKey = String(
+      meta.roomId ||
+        (meta.roomName ? `name::${meta.roomName.toLowerCase()}` : "__sin-sala"),
+    );
+    const tableKey = String(
+      meta.tableId ||
+        (meta.tableName ? `name::${meta.tableName.toLowerCase()}` : meta.uid) ||
+        "__sin-mesa",
+    );
+
+    if (!grouped.has(roomKey)) {
+      grouped.set(roomKey, {
+        roomName: meta.roomName,
+        tables: new Map(),
+      });
+    }
+
+    const roomGroup = grouped.get(roomKey);
+    if (!roomGroup.tables.has(tableKey)) {
+      roomGroup.tables.set(tableKey, {
+        tableName: meta.tableName,
+        splitTickets: [],
+        normalTickets: [],
+      });
+    }
+
+    const tableGroup = roomGroup.tables.get(tableKey);
+    if (getTicketSplitMeta(ticket)) tableGroup.splitTickets.push(ticket);
+    else tableGroup.normalTickets.push(ticket);
+  });
+
+  grouped.forEach((roomGroup) => {
+    if (isGlobalScope) appendRoomHeader(roomGroup.roomName);
+
+    roomGroup.tables.forEach((tableGroup) => {
+      appendTableHeader(tableGroup.tableName);
+
+      tableGroup.splitTickets.forEach((ticket) => {
+        parkedTicketsList.appendChild(buildTicketCard(ticket));
+      });
+
+      tableGroup.normalTickets.forEach((ticket) => {
+        parkedTicketsList.appendChild(buildTicketCard(ticket));
+      });
+    });
   });
 }
 
 async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
+  const labels = getParkingLabels();
   if (!Array.isArray(parkedTickets) || !parkedTickets.length) return false;
   if (index == null || index < 0 || index >= parkedTickets.length) return false;
 
   const ticket = parkedTickets[index];
   if (!ticket) return false;
+  if (isPedidoTpvTicket(ticket)) {
+    ticket.pedidoStatus = "pagado-no-recogido";
+    ticket.paid = true;
+    ticket.paidAt = new Date();
+    ticket.paidTicketCode =
+      paidInfo.codigo ||
+      paidInfo.numero ||
+      ticket.paidTicketCode ||
+      `PED-${ticket.id}`;
+    ticket.paidTicketId = paidInfo.idfactura || ticket.paidTicketId || null;
+    ticket.updatedAt = new Date();
+    ticket.localRevisionAt = Date.now();
+    saveParkedTicketsCache();
+
+    try {
+      await apiSaveParkedReservation(ticket);
+      await refreshRemoteParkedReservationsOnly();
+    } catch (e) {
+      enqueueParkedSyncOperation("upsert", ticket);
+      console.warn(
+        "No se pudo sincronizar pedido TPV cobrado:",
+        e?.message || e,
+      );
+    }
+
+    if (currentParkedTicketIndex === index) {
+      currentParkedTicketIndex = null;
+    }
+
+    updateParkedCountBadge();
+    refreshParkButtonUI();
+    refreshParkedEditingBanner();
+    return true;
+  }
+
+  const splitMeta = getTicketSplitMeta(ticket);
+
+  try {
+    const mesasState = loadMesasTablesStateForInline();
+    const uid = resolveTicketMesaUid(ticket, mesasState);
+    if (uid) {
+      if (
+        !mesasState.tableStates ||
+        typeof mesasState.tableStates !== "object"
+      ) {
+        mesasState.tableStates = {};
+      }
+      if (!mesasState.tableMeta || typeof mesasState.tableMeta !== "object") {
+        mesasState.tableMeta = {};
+      }
+      const prevMeta =
+        mesasState.tableMeta[uid] &&
+        typeof mesasState.tableMeta[uid] === "object"
+          ? mesasState.tableMeta[uid]
+          : {};
+      mesasState.tableStates[uid] = "cuenta";
+      mesasState.tableMeta[uid] = {
+        ...prevMeta,
+        serviceStage: "cobro-realizado",
+      };
+      saveMesasTablesStateForInline(mesasState);
+    }
+  } catch (e) {
+    console.warn(
+      "No se pudo marcar la mesa como cuenta cobrada:",
+      e?.message || e,
+    );
+  }
 
   ticket.paid = true;
   ticket.paidAt = new Date();
@@ -7491,6 +11374,7 @@ async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
     paidInfo.codigo || paidInfo.numero || ticket.paidTicketCode || null;
   ticket.paidTicketId = paidInfo.idfactura || ticket.paidTicketId || null;
   saveParkedTicketsCache();
+  unlinkMesaTicketByTicketId(ticket?.id || null, ticket);
 
   const fsInfo = ticket.fs || {};
   const idpresupuesto = fsInfo.idpresupuesto || null;
@@ -7523,7 +11407,7 @@ async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
       toast(
         "Sin internet: cobro aplicado localmente y borrado en cola.",
         "warn",
-        "Aparcados",
+        labels.featureTitle,
       );
     }
   }
@@ -7532,9 +11416,48 @@ async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
     currentParkedTicketIndex = null;
   }
 
+  if (splitMeta) {
+    const nextPart = Number(splitMeta.part || 0) + 1;
+    const totalParts = Number(splitMeta.total || 0) || 0;
+
+    toast(
+      `Parte ${Number(splitMeta.part || 0)}/${totalParts} cobrada.`,
+      "ok",
+      "Dividir",
+    );
+
+    if (nextPart > Number(splitMeta.total || 0)) {
+      clearSplitSessionState();
+      toast(
+        "Division completada. Volviendo al mapa de mesas.",
+        "ok",
+        "Dividir",
+      );
+    } else {
+      const mesasState = loadMesasTablesStateForInline();
+      saveSplitSessionState({
+        groupId: splitMeta.groupId,
+        nextPart,
+        totalParts: splitMeta.total,
+        mesaUid:
+          String(resolveTicketMesaUid(ticket, mesasState) || "").trim() || null,
+      });
+
+      toast(
+        `Siguiente parte lista: ${nextPart}/${totalParts}.`,
+        "info",
+        "Dividir",
+      );
+    }
+  }
+
   updateParkedCountBadge();
   refreshParkButtonUI();
   refreshParkedEditingBanner();
+
+  if (splitMeta) {
+    tryResumePendingSplitSession();
+  }
 
   return true;
 }
@@ -7565,9 +11488,21 @@ function hydrateParkedItemForCart(item) {
     return Number.isFinite(n) ? n : null;
   };
 
-  const srcPrice = toFiniteNumberOrNull(src.price);
-  const srcGross = toFiniteNumberOrNull(src.grossPrice);
-  const srcTax = toFiniteNumberOrNull(src.taxRate);
+  const srcPrice = toFiniteNumberOrNull(
+    src.price ?? src.pvpunitario ?? src.pvpUnitario ?? src.pvp,
+  );
+  const srcGross = toFiniteNumberOrNull(
+    src.grossPrice ??
+      src.pvptotalunitario ??
+      src.pvpTotalUnitario ??
+      src.pvptotal,
+  );
+  const srcTax = toFiniteNumberOrNull(
+    src.taxRate ?? src.iva ?? src.porcentajeiva ?? src.impuesto,
+  );
+  const srcTaxFromCode = toFiniteNumberOrNull(
+    src.codimpuesto ? extractTaxRateFromCode(src.codimpuesto) : null,
+  );
 
   const baseId = getProductBaseId(src);
   const product = Array.isArray(products)
@@ -7575,45 +11510,61 @@ function hydrateParkedItemForCart(item) {
     : null;
 
   const built = product ? buildCartLine(product, qty) : null;
+  const resolvedProductId =
+    Number(
+      src.idproducto ||
+        src.baseProductId ||
+        built?.baseProductId ||
+        built?.id ||
+        baseId ||
+        src.id ||
+        0,
+    ) || undefined;
+
+  const resolvedNetPrice =
+    srcPrice != null ? srcPrice : Number(built?.price || 0);
+  const resolvedGrossPrice =
+    srcGross != null
+      ? srcGross
+      : srcPrice != null
+        ? (srcTax != null ? srcTax : srcTaxFromCode) != null
+          ? srcPrice * (1 + (srcTax != null ? srcTax : srcTaxFromCode) / 100)
+          : srcPrice
+        : Number(built?.grossPrice || built?.price || 0);
 
   return {
     ...(built || {}),
     ...src,
     qty,
     _lineId: makeLineId(),
-    id:
-      Number(src.id || src.idproducto || built?.id || baseId || 0) || undefined,
-    baseProductId:
-      Number(
-        src.baseProductId ||
-          src.idproducto ||
-          built?.baseProductId ||
-          baseId ||
-          0,
-      ) || undefined,
+    id: resolvedProductId,
+    baseProductId: resolvedProductId,
     name: String(src.name || src.descripcion || built?.name || "Producto"),
     secondaryName: String(
       src.secondaryName || src.descripcion2 || built?.secondaryName || "",
     ),
     imageUrl: src.imageUrl || built?.imageUrl || null,
-    price: srcPrice != null ? srcPrice : Number(built?.price || 0),
-    grossPrice:
-      srcGross != null
-        ? srcGross
-        : Number(built?.grossPrice || built?.price || 0),
-    taxRate: srcTax != null ? srcTax : Number(built?.taxRate || 0),
+    price: resolvedNetPrice,
+    grossPrice: resolvedGrossPrice,
+    taxRate:
+      srcTax != null
+        ? srcTax
+        : srcTaxFromCode != null
+          ? srcTaxFromCode
+          : Number(built?.taxRate || 0),
     codimpuesto: src.codimpuesto || built?.codimpuesto || null,
   };
 }
 
 // Recuperar ticket por índice (lo usa el modal)
 function restoreParkedCartByIndex(index) {
+  const labels = getParkingLabels();
   if (!parkedTickets || parkedTickets.length === 0) {
     return;
   }
 
   if (index < 0 || index >= parkedTickets.length) {
-    toast("Ticket aparcado no válido.", "err", "Aparcados");
+    toast(`${labels.itemCap} no valido.`, "err", labels.featureTitle);
     return;
   }
 
@@ -7621,11 +11572,54 @@ function restoreParkedCartByIndex(index) {
 
   if (ticket.paid) {
     toast(
-      "Ese ticket ya está cobrado. No se puede volver a cargar.",
+      `Ese ${labels.shortRefLabel} ya esta cobrado. No se puede volver a cargar.`,
       "warn",
-      "Aparcados",
+      labels.featureTitle,
     );
     return;
+  }
+
+  if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+    const mesasState = loadMesasTablesStateForInline();
+    const selectedUid = String(mesasState?.selectedTableId || "").trim();
+    const ticketUid = String(
+      resolveTicketMesaUid(ticket, mesasState) || "",
+    ).trim();
+
+    if (ticketUid) {
+      if (
+        !mesasState.tableTicketMap ||
+        typeof mesasState.tableTicketMap !== "object"
+      ) {
+        mesasState.tableTicketMap = {};
+      }
+
+      const linkedId = String(
+        mesasState.tableTicketMap[ticketUid] || "",
+      ).trim();
+      const ticketId = String(ticket?.id || "").trim();
+      const isSplitTicket = !!getTicketSplitMeta(ticket);
+      if (!isSplitTicket && ticketId && linkedId !== ticketId) {
+        mesasState.tableTicketMap[ticketUid] = ticketId;
+        saveMesasTablesStateForInline(mesasState);
+      }
+
+      const linked = getMesasRoomAndTableByUid(mesasState, ticketUid);
+      if (linked) {
+        applyMesaScopeToTicket(ticket, {
+          uid: ticketUid,
+          roomId: String(linked.room?.id || ""),
+          tableId: String(linked.table?.id || ""),
+          roomName: String(linked.room?.name || linked.room?.id || ""),
+          tableName: String(linked.table?.name || linked.table?.id || ""),
+        });
+      }
+
+      if (selectedUid !== ticketUid) {
+        updateMesasSelectionFromContext({ tableUid: ticketUid });
+        return;
+      }
+    }
   }
 
   cart = (ticket.items || []).map((i) => hydrateParkedItemForCart(i));
@@ -7633,7 +11627,7 @@ function restoreParkedCartByIndex(index) {
 
   currentParkedTicketIndex = index;
 
-  setStatusText("Ticket aparcado cargado en el carrito.");
+  setStatusText(labels.loadStatus);
   refreshParkButtonUI();
   refreshParkedEditingBanner();
 }
@@ -7762,8 +11756,12 @@ function renderMainAgentBar() {
   const agentActions = document.createElement("div");
   agentActions.className = "agent-actions";
 
+  const modeSwitchWrap = document.createElement("div");
+  modeSwitchWrap.className = "agent-mode-switch";
+
   agentListWrap.appendChild(agentList);
   mainAgentBar.appendChild(agentListWrap);
+  mainAgentBar.appendChild(modeSwitchWrap);
   mainAgentBar.appendChild(agentActions);
 
   const createRefreshBtn = () => {
@@ -7780,30 +11778,6 @@ function renderMainAgentBar() {
     return refreshBtn;
   };
 
-  const createThemeStack = () => {
-    const stack = document.createElement("div");
-    stack.className = "agent-theme-stack";
-
-    const mainBtn = document.createElement("button");
-    mainBtn.type = "button";
-    mainBtn.className = "agent-btn agent-theme-mini agent-theme-btn-main";
-    mainBtn.onclick = () => {
-      toggleThemeMode();
-    };
-
-    const customerBtn = document.createElement("button");
-    customerBtn.type = "button";
-    customerBtn.className =
-      "agent-btn agent-theme-mini agent-theme-btn-customer";
-    customerBtn.onclick = () => {
-      toggleCustomerDisplayThemeMode();
-    };
-
-    stack.appendChild(mainBtn);
-    stack.appendChild(customerBtn);
-    return stack;
-  };
-
   const createDrawerBtn = () => {
     const drawerBtn = document.createElement("button");
     drawerBtn.type = "button";
@@ -7818,10 +11792,35 @@ function renderMainAgentBar() {
     return drawerBtn;
   };
 
+  const createTablesBtn = () => {
+    const tablesBtn = document.createElement("button");
+    tablesBtn.type = "button";
+    tablesBtn.className = "agent-btn agent-tables-btn agent-mode-switch-btn";
+    if (MESAS_INLINE_ACTIVE) tablesBtn.classList.add("is-active");
+    tablesBtn.innerHTML = MESAS_INLINE_ACTIVE
+      ? '<span class="tables-icon" aria-hidden="true">🧾</span>'
+      : '<span class="tables-icon" aria-hidden="true">🍽️</span>';
+    tablesBtn.title = MESAS_INLINE_ACTIVE ? "Ir a modo TPV" : "Ir a modo Mesas";
+    tablesBtn.onclick = () => {
+      const action = MESAS_INLINE_ACTIVE
+        ? closeInlineMesasMode()
+        : switchToMesasMode();
+
+      action.catch(() => {
+        toast("No se pudo cambiar modo mesas.", "err", "Modo mesas");
+      });
+    };
+    return tablesBtn;
+  };
+
+  const showMesasBtn = MESAS_MODULE_ENABLED || MESAS_INLINE_ACTIVE;
+
   // Si no hay terminal, mostrar solo acciones
   if (!currentTerminal) {
+    if (showMesasBtn) {
+      modeSwitchWrap.appendChild(createTablesBtn());
+    }
     agentActions.appendChild(createRefreshBtn());
-    agentActions.appendChild(createThemeStack());
     agentActions.appendChild(createDrawerBtn());
 
     if (agentNameEl) agentNameEl.textContent = "---";
@@ -7880,8 +11879,10 @@ function renderMainAgentBar() {
   }
 
   // Botones fijos a la derecha
+  if (showMesasBtn) {
+    modeSwitchWrap.appendChild(createTablesBtn());
+  }
   agentActions.appendChild(createRefreshBtn());
-  agentActions.appendChild(createThemeStack());
   agentActions.appendChild(createDrawerBtn());
 
   if (agentNameEl) {
@@ -8354,6 +12355,14 @@ async function updateTpvcajaObservaciones(idcaja, observaciones) {
         return await apiWrite(`tpvcajas/${idcaja}`, "PUT", body);
       }
     } catch (e) {
+      if (isNetworkError(e) || isProbablyNetworkError(e)) {
+        const wrapped = new Error(e?.message || String(e));
+        wrapped.__tpvCajaObsSync = {
+          remoteId: String(idcaja),
+          body,
+        };
+        throw wrapped;
+      }
       if (!isDeadlockError(e) || i === attempts) throw e;
       await sleep(150 * i); // backoff
     }
@@ -8387,7 +12396,23 @@ async function appendCajaAutoLogLineForId(idcaja, line) {
     autoLines.push(String(line || "").trim());
     const merged = buildCajaObservaciones(userText, autoLines);
 
-    await updateTpvcajaObservaciones(idcaja, merged);
+    try {
+      await updateTpvcajaObservaciones(idcaja, merged);
+    } catch (e) {
+      const meta =
+        e?.__tpvCajaObsSync && typeof e.__tpvCajaObsSync === "object"
+          ? e.__tpvCajaObsSync
+          : null;
+
+      if (meta?.remoteId && meta?.body) {
+        const queued = await enqueueTpvcajaObsSync(meta.remoteId, meta.body, {
+          source: "appendCajaAutoLogLineForId",
+        });
+        if (queued) return;
+      }
+
+      throw e;
+    }
   });
 }
 
@@ -8404,7 +12429,24 @@ async function saveUserObsToCajaForId(idcaja) {
     const { autoLines } = splitCajaObservaciones(rawObs);
 
     const merged = buildCajaObservaciones(userText, autoLines);
-    await updateTpvcajaObservaciones(idcaja, merged);
+
+    try {
+      await updateTpvcajaObservaciones(idcaja, merged);
+    } catch (e) {
+      const meta =
+        e?.__tpvCajaObsSync && typeof e.__tpvCajaObsSync === "object"
+          ? e.__tpvCajaObsSync
+          : null;
+
+      if (meta?.remoteId && meta?.body) {
+        const queued = await enqueueTpvcajaObsSync(meta.remoteId, meta.body, {
+          source: "saveUserObsToCajaForId",
+        });
+        if (queued) return;
+      }
+
+      throw e;
+    }
   });
 }
 
@@ -10526,25 +14568,52 @@ async function confirmCashOpening() {
   cashSession.openedAt = new Date().toISOString();
   pushCustomerState();
 
+  let openQueued = false;
   try {
     await apiOpenCashInFS();
-
-    const idcaja = getCajaIdSafe();
-    if (idcaja) {
-      clearCashLedger(idcaja);
-      loadCashLedgerIntoSession(idcaja);
-    }
   } catch (e) {
-    logFeatureWarn("CAJA", "apertura-fs-no-disponible", {
-      requestId,
-      error: e?.message || e,
-    });
-    console.warn("No se pudo abrir caja en FacturaScripts:", e?.message || e);
-    toast(
-      "Caja abierta, pero no se pudo registrar en FacturaScripts.",
-      "warn",
-      "Caja",
-    );
+    const isNetwork = isNetworkError(e) || isProbablyNetworkError(e);
+    const meta =
+      e?.__tpvCajaOpenSync && typeof e.__tpvCajaOpenSync === "object"
+        ? e.__tpvCajaOpenSync
+        : null;
+
+    if ((TPV_STATE?.offline || isNetwork) && meta?.body) {
+      openQueued = await enqueueTpvcajaOpenSync(meta.body, {
+        source: "confirmCashOpening",
+      });
+
+      if (openQueued) {
+        logFeatureWarn("CAJA", "apertura-encolada-offline", {
+          requestId,
+          error: e?.message || e,
+        });
+        toast(
+          "Sin internet: apertura de caja guardada en cola.",
+          "warn",
+          "Caja",
+        );
+      }
+    }
+
+    if (!openQueued) {
+      logFeatureWarn("CAJA", "apertura-fs-no-disponible", {
+        requestId,
+        error: e?.message || e,
+      });
+      console.warn("No se pudo abrir caja en FacturaScripts:", e?.message || e);
+      toast(
+        "Caja abierta, pero no se pudo registrar en FacturaScripts.",
+        "warn",
+        "Caja",
+      );
+    }
+  }
+
+  const idcaja = getCajaIdSafe();
+  if (idcaja) {
+    clearCashLedger(idcaja);
+    loadCashLedgerIntoSession(idcaja);
   }
 
   hideCashOpenDialog();
@@ -10610,6 +14679,7 @@ async function confirmCashClosing() {
   }
 
   let closedOk = false;
+  let closeQueued = false;
   try {
     await apiCloseCashInFS();
 
@@ -10618,13 +14688,44 @@ async function confirmCashClosing() {
 
     if (!check) closedOk = true;
   } catch (e) {
-    logFeatureWarn("CAJA", "cierre-fs-no-disponible", {
-      requestId,
-      cajaId: idcaja || null,
-      error: e?.message || e,
-    });
-    console.warn("No se pudo cerrar caja en FacturaScripts:", e?.message || e);
-    toast("No se pudo registrar el cierre en FacturaScripts.", "warn", "Caja");
+    const isNetwork = isNetworkError(e) || isProbablyNetworkError(e);
+    const meta =
+      e?.__tpvCajaCloseSync && typeof e.__tpvCajaCloseSync === "object"
+        ? e.__tpvCajaCloseSync
+        : null;
+
+    if (isNetwork && meta?.remoteId && meta?.body) {
+      closeQueued = await enqueueTpvcajaCloseSync(meta.remoteId, meta.body, {
+        source: "confirmCashClosing",
+      });
+
+      if (closeQueued) {
+        closedOk = true;
+        logFeatureWarn("CAJA", "cierre-encolado-offline", {
+          requestId,
+          cajaId: idcaja || null,
+          error: e?.message || e,
+        });
+        toast("Sin internet: cierre de caja guardado en cola.", "warn", "Caja");
+      }
+    }
+
+    if (!closeQueued) {
+      logFeatureWarn("CAJA", "cierre-fs-no-disponible", {
+        requestId,
+        cajaId: idcaja || null,
+        error: e?.message || e,
+      });
+      console.warn(
+        "No se pudo cerrar caja en FacturaScripts:",
+        e?.message || e,
+      );
+      toast(
+        "No se pudo registrar el cierre en FacturaScripts.",
+        "warn",
+        "Caja",
+      );
+    }
   }
 
   if (!closedOk) {
@@ -11270,7 +15371,8 @@ if (cashOpenOkBtn) {
         return;
       }
 
-      const parkedCount = getScopedPendingParkedTickets(parkedTickets).length;
+      const parkedCountGlobal =
+        getPendingParkedTicketsGlobal(parkedTickets).length;
 
       // Releer valor efectivo para evitar cierres bloqueados por estado stale.
       await loadAllowCloseWithParkedToggle();
@@ -11278,11 +15380,11 @@ if (cashOpenOkBtn) {
       let closeQuestion =
         "¿Seguro que quieres cerrar la caja?\n\nEsta acción registrará el cierre y no se puede deshacer.";
 
-      if (parkedCount > 0) {
+      if (parkedCountGlobal > 0) {
         if (!allowCloseWithParkedTickets) {
           await confirmModal(
             "No puedes cerrar la caja",
-            `Tienes ${parkedCount} ticket(s) aparcado(s).\n\nRecupéralos (o elimínalos) antes de cerrar la caja.`,
+            `Tienes ${parkedCountGlobal} ticket(s) aparcado(s).\n\nRecupéralos (o elimínalos) antes de cerrar la caja.`,
           );
           openParkedModal();
           return;
@@ -11291,7 +15393,7 @@ if (cashOpenOkBtn) {
         if (!closeWithParkedPreConfirmed) {
           const okWithParked = await confirmModal(
             "Tickets aparcados",
-            `Tienes ${parkedCount} ticket(s) aparcado(s).\n\nSe conservarán para recuperarlos después.\n\n¿Cerrar caja de todos modos?`,
+            `Tienes ${parkedCountGlobal} ticket(s) aparcado(s).\n\nSe conservarán para recuperarlos después.\n\n¿Cerrar caja de todos modos?`,
             {
               middleButtonText: "Revisar aparcados",
               middleButtonResult: "parked",
@@ -11464,8 +15566,32 @@ function nowFs() {
 
 // 3) Abrir/cerrar caja remota (tpvcajas)
 // NOTA: si en tu FS el recurso no es "tpvcajas", lo cambiamos al real.
+function buildOpenCashPayload() {
+  return {
+    idtpv: Number(currentTerminal?.id || 0),
+    fechaini: nowFs(),
+    dineroini: Number(cashSession?.openingTotal || 0),
+    nick: String(getLoginUser?.() || "").trim(),
+    observaciones: "",
+  };
+}
+
+function extractTpvcajaIdFromResponse(resp) {
+  const doc = resp?.doc || resp?.data || resp;
+  const remoteIdRaw =
+    doc?.idcaja ??
+    doc?.idCaja ??
+    doc?.idtpvcaja ??
+    doc?.idtpvCaja ??
+    doc?.id ??
+    resp?.idcaja ??
+    resp?.id ??
+    null;
+  return Number(remoteIdRaw || 0) || null;
+}
+
 async function apiOpenCashInFS() {
-  if (TPV_STATE.offline || TPV_STATE.locked) return null;
+  if (TPV_STATE.locked) return null;
   if (!currentTerminal?.id) throw new Error("No hay terminal seleccionado");
 
   // ✅ Si ya hay id remoto, NO abras otra caja por accidente
@@ -11478,30 +15604,24 @@ async function apiOpenCashInFS() {
     return { ok: true, reused: true, idcaja: existing };
   }
 
-  const payload = {
-    idtpv: Number(currentTerminal.id),
-    fechaini: nowFs(),
-    dineroini: Number(cashSession.openingTotal || 0),
-    nick: getLoginUser(),
-    observaciones: "",
-  };
+  const payload = buildOpenCashPayload();
+  const offlineError = new Error("offline");
+  offlineError.__tpvCajaOpenSync = { body: payload };
+  if (TPV_STATE.offline) throw offlineError;
 
-  const resp = await apiWrite("tpvcajas", "POST", payload);
+  let resp = null;
+  try {
+    resp = await apiWrite("tpvcajas", "POST", payload);
+  } catch (e) {
+    if (isNetworkError(e) || isProbablyNetworkError(e)) {
+      const wrapped = new Error(e?.message || String(e));
+      wrapped.__tpvCajaOpenSync = { body: payload };
+      throw wrapped;
+    }
+    throw e;
+  }
 
-  // ✅ FacturaScripts puede devolver el id en distintos formatos
-  const doc = resp?.doc || resp?.data || resp;
-
-  const remoteIdRaw =
-    doc?.idcaja ??
-    doc?.idCaja ??
-    doc?.idtpvcaja ??
-    doc?.idtpvCaja ??
-    doc?.id ??
-    resp?.idcaja ??
-    resp?.id ??
-    null;
-
-  const remoteId = Number(remoteIdRaw || 0) || null;
+  const remoteId = extractTpvcajaIdFromResponse(resp);
 
   if (!remoteId) {
     console.warn("⚠️ No pude detectar el id de caja en la respuesta:", resp);
@@ -11573,7 +15693,20 @@ async function apiCloseCashInFS() {
     payload.observaciones = String(remoteCaja.observaciones || "");
   }
 
-  const resp = await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
+  let resp = null;
+  try {
+    resp = await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
+  } catch (e) {
+    if (isNetworkError(e) || isProbablyNetworkError(e)) {
+      const wrapped = new Error(e?.message || String(e));
+      wrapped.__tpvCajaCloseSync = {
+        remoteId: String(remoteId),
+        body: payload,
+      };
+      throw wrapped;
+    }
+    throw e;
+  }
 
   // ✅ Si FS responde vacío pero fue OK, apiWrite devuelve null.
   // Normalizamos a {ok:true} para que el caller pueda decidir bien.
@@ -11729,7 +15862,7 @@ async function handleCashHeaderAction(opts = {}) {
         return true;
       }
 
-      const parkedCount = getScopedPendingParkedTickets(parkedTickets).length;
+      const parkedCount = getPendingParkedTicketsGlobal(parkedTickets).length;
 
       // Releer valor efectivo por si el toggle cambió en opciones recientemente.
       await loadAllowCloseWithParkedToggle();
@@ -12317,6 +16450,11 @@ async function loadDataFromApi(opts = {}) {
       companyInfo,
       productImagesMap: PRODUCT_IMAGES_MAP,
       source: "online-loadDataFromApi",
+    });
+    saveSharedCatalogCache({
+      categories,
+      products,
+      source: "tpv-online-loadDataFromApi",
     });
 
     // Aquí sí: ya está todo cargado correctamente
@@ -12942,6 +17080,18 @@ function closePostPayModal() {
 
   if (postPayOverlay) postPayOverlay.classList.add("hidden");
   if (postPayAutoCloseText) postPayAutoCloseText.textContent = "";
+
+  if (MESAS_INLINE_ACTIVE) {
+    MESAS_RETURN_TO_VIEW_AFTER_PARK = "";
+    const splitState = loadSplitSessionState();
+    const hasPendingSplitPart =
+      !!splitState &&
+      findPendingSplitTicketIndex(splitState.groupId, splitState.nextPart) >= 0;
+
+    setMesasInlineView(hasPendingSplitPart ? "transacciones" : "mapa", {
+      persist: false,
+    });
+  }
 }
 
 function updatePostPayModal({ docCode, total, cambio, enablePrint }) {
@@ -13025,20 +17175,34 @@ function openPostPayModal({ docCode, total, cambio }) {
 
 // ===== [09] Opciones (panel principal) =====
 const OPTIONS_AUTOPRINT_KEY = "tpv_autoPrint";
+const OPTIONS_AUTO_COMANDA_ON_SAVE_KEY = "tpv_autoComandaOnSave";
 const OPTIONS_GROUPLINES_KEY = "tpv_groupLines";
 
 const optionsBtn = document.getElementById("optionsBtn");
 const optionsOverlay = document.getElementById("optionsOverlay");
 const optionsCloseX = document.getElementById("optionsCloseX");
 const optionsCloseBtn = document.getElementById("optionsCloseBtn");
+const optionsThemeMainBtn = document.getElementById("optionsThemeMainBtn");
+const optionsThemeCustomerBtn = document.getElementById(
+  "optionsThemeCustomerBtn",
+);
 const optionsOpenDrawerBtn = document.getElementById("optionsOpenDrawerBtn");
 const payOpenDrawerBtn = document.getElementById("payOpenDrawerBtn");
 
 const optionsChangePrinterBtn = document.getElementById(
   "optionsChangePrinterBtn",
 );
+const optionsChangeComandaPrinterBtn = document.getElementById(
+  "optionsChangeComandaPrinterBtn",
+);
 const currentPrinterNameEl = document.getElementById("currentPrinterName");
+const currentComandaPrinterNameEl = document.getElementById(
+  "currentComandaPrinterName",
+);
 const autoPrintToggle = document.getElementById("autoPrintToggle");
+const autoComandaOnSaveToggle = document.getElementById(
+  "autoComandaOnSaveToggle",
+);
 const groupLinesToggle = document.getElementById("groupLinesToggle");
 // ===== [09] Opciones: abrir cajon siempre (toggle) =====
 const OPEN_DRAWER_ALWAYS_KEY = "tpv_openDrawerAlways";
@@ -13056,6 +17220,7 @@ function setOpenDrawerAlwaysEnabled(v) {
 // ===== [09] Opciones: impresora =====
 const PRINTER_REAL_KEY = "tpv_printerRealName"; // POS-80 (lo que ve el usuario)
 const PRINTER_QUEUE_KEY = "tpv_printerQueueName"; // RECIPOK_POS (Linux)
+const PRINTER_COMANDA_REAL_KEY = "tpv_printerComandaRealName";
 
 function isLinux() {
   return window.TPV_ENV?.platform === "linux";
@@ -13071,9 +17236,21 @@ function savePrinterQueue(name) {
   localStorage.setItem(PRINTER_QUEUE_KEY, name || "");
 }
 
+function getSavedComandaPrinterReal() {
+  return localStorage.getItem(PRINTER_COMANDA_REAL_KEY) || "";
+}
+
+function saveComandaPrinterReal(name) {
+  localStorage.setItem(PRINTER_COMANDA_REAL_KEY, name || "");
+}
+
 function getSavedPrinterNameForUI() {
   // en UI siempre mostramos la real
   return getSavedPrinterReal();
+}
+
+function getSavedComandaPrinterNameForUI() {
+  return getSavedComandaPrinterReal();
 }
 
 async function ensurePrinterSelectedForPrint() {
@@ -13113,14 +17290,42 @@ async function ensurePrinterSelectedForPrint() {
   return QUEUE;
 }
 
+async function ensureComandaPrinterSelectedForPrint() {
+  if (TPV_E2E_MODE) {
+    return "E2E Mock Printer";
+  }
+
+  let real = getSavedComandaPrinterReal();
+  if (real) return real;
+
+  const chosen = await openPrinterPicker(getSavedPrinterReal());
+  if (!chosen) return "";
+  saveComandaPrinterReal(chosen);
+  return chosen;
+}
+
 function refreshPrinterButtonsUI() {
   const testBtn = document.getElementById("optionsTestPrinterBtn");
-  if (!testBtn) return;
-  testBtn.style.display = getSavedPrinterNameForUI() ? "inline-block" : "none";
+  if (testBtn) {
+    testBtn.style.display = getSavedPrinterNameForUI()
+      ? "inline-block"
+      : "none";
+  }
+
+  const testComandaBtn = document.getElementById(
+    "optionsTestComandaPrinterBtn",
+  );
+  if (testComandaBtn) {
+    testComandaBtn.style.display = getSavedComandaPrinterNameForUI()
+      ? "inline-block"
+      : "none";
+  }
 }
 
 function refreshOptionsUI() {
   autoPrintToggle && (autoPrintToggle.checked = isAutoPrintEnabled());
+  autoComandaOnSaveToggle &&
+    (autoComandaOnSaveToggle.checked = isAutoComandaOnSaveEnabled());
   groupLinesToggle && (groupLinesToggle.checked = isGroupLinesEnabled());
   openDrawerAlwaysToggle &&
     (openDrawerAlwaysToggle.checked = isOpenDrawerAlwaysEnabled());
@@ -13146,6 +17351,10 @@ function refreshOptionsUI() {
   if (currentPrinterNameEl) {
     const p = getSavedPrinterNameForUI?.();
     currentPrinterNameEl.textContent = p ? p : "—";
+  }
+  if (currentComandaPrinterNameEl) {
+    const p = getSavedComandaPrinterNameForUI?.();
+    currentComandaPrinterNameEl.textContent = p ? p : "—";
   }
   refreshPrinterButtonsUI?.();
 }
@@ -13311,6 +17520,7 @@ async function openOptions() {
 
   if (!hasActiveLoginSession()) {
     setOptionsReadOnlyMode(true);
+    updateThemeButtonsUI();
     optionsOverlay?.classList.remove("hidden");
     return;
   }
@@ -13336,6 +17546,12 @@ async function openOptions() {
   bindAllowCloseWithParkedToggleOnce();
   await loadAllowCloseWithParkedToggle();
 
+  bindMesasDinersFamilyRuleControlsOnce();
+  await loadMesasDinersFamilyRules();
+
+  bindMesasComandaFamilyRuleControlsOnce();
+  await loadMesasComandaFamilyRules();
+
   bindAutostartToggleOnce();
   await loadAutostartToggle();
 
@@ -13344,6 +17560,7 @@ async function openOptions() {
   await applyOptionsAccordionState(st);
 
   await window.initScaleOptionsUI?.();
+  updateThemeButtonsUI();
 
   optionsOverlay?.classList.remove("hidden");
 
@@ -13360,9 +17577,78 @@ function closeOptions() {
   optionsOverlay?.classList.add("hidden");
 }
 
+var TPV_TUTORIAL_BLANK_MODE = false;
+var TPV_TUTORIAL_BLANK_SNAPSHOT = null;
+
+function cloneTutorialValue(value, fallback) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return fallback;
+  }
+}
+
+function beginTutorialBlankMode() {
+  if (TPV_TUTORIAL_BLANK_MODE) return true;
+
+  TPV_TUTORIAL_BLANK_SNAPSHOT = {
+    cart: cloneTutorialValue(Array.isArray(cart) ? cart : [], []),
+    currentParkedTicketIndex:
+      currentParkedTicketIndex != null
+        ? Number(currentParkedTicketIndex)
+        : null,
+  };
+
+  TPV_TUTORIAL_BLANK_MODE = true;
+  cart = [];
+  currentParkedTicketIndex = null;
+  renderCart();
+  refreshParkButtonUI?.();
+  refreshParkedEditingBanner?.();
+  return true;
+}
+
+function endTutorialBlankMode() {
+  const snap = TPV_TUTORIAL_BLANK_SNAPSHOT;
+  TPV_TUTORIAL_BLANK_MODE = false;
+  TPV_TUTORIAL_BLANK_SNAPSHOT = null;
+
+  if (!snap) return true;
+
+  cart = cloneTutorialValue(Array.isArray(snap.cart) ? snap.cart : [], []);
+  currentParkedTicketIndex =
+    snap.currentParkedTicketIndex != null
+      ? Number(snap.currentParkedTicketIndex)
+      : null;
+  renderCart();
+  refreshParkButtonUI?.();
+  refreshParkedEditingBanner?.();
+  return true;
+}
+
+function buildTutorialsBridgeApi() {
+  return {
+    closeOptions,
+    isAdminUser: () => !!isAdminUser?.(),
+    isMesasModuleEnabled: () => !!MESAS_MODULE_ENABLED,
+    isMesasInlineActive: () => !!MESAS_INLINE_ACTIVE,
+    setMesasInlineView,
+    switchToMesasMode,
+    toast,
+    beginTutorialBlankMode,
+    endTutorialBlankMode,
+  };
+}
+
+window.TPV_TUTORIALS_API = buildTutorialsBridgeApi();
+
 optionsBtn?.addEventListener("click", () => openOptions());
 optionsCloseX?.addEventListener("click", closeOptions);
 optionsCloseBtn?.addEventListener("click", closeOptions);
+optionsThemeMainBtn?.addEventListener("click", () => toggleThemeMode());
+optionsThemeCustomerBtn?.addEventListener("click", () => {
+  toggleCustomerDisplayThemeMode();
+});
 
 optionsOverlay?.addEventListener("click", (e) => {
   if (e.target === optionsOverlay) closeOptions();
@@ -13403,6 +17689,26 @@ optionsChangePrinterBtn?.addEventListener("click", async () => {
   } catch (e) {
     console.warn(e);
     toast?.("No se pudo cambiar impresora", "err", "Impresión");
+    openOptions?.();
+  }
+});
+
+optionsChangeComandaPrinterBtn?.addEventListener("click", async () => {
+  try {
+    closeOptions?.();
+
+    const chosen = await openPrinterPicker(getSavedComandaPrinterReal());
+    if (!chosen) {
+      openOptions?.();
+      return;
+    }
+
+    saveComandaPrinterReal(chosen);
+    toast?.("Impresora de comandas guardada ✅", "ok", "Impresión");
+    openOptions?.();
+  } catch (e) {
+    console.warn(e);
+    toast?.("No se pudo cambiar la impresora de comandas", "err", "Impresión");
     openOptions?.();
   }
 });
@@ -13480,11 +17786,78 @@ document
     }
   });
 
+document
+  .getElementById("optionsTestComandaPrinterBtn")
+  ?.addEventListener("click", async () => {
+    try {
+      closeOptions?.();
+
+      const printerName = await ensureComandaPrinterSelectedForPrint();
+      if (!printerName) {
+        toast?.(
+          "Selecciona una impresora de comandas primero.",
+          "warn",
+          "Impresión",
+        );
+        openOptions?.();
+        return;
+      }
+
+      toast?.("Enviando prueba de comanda...", "info", "Impresión");
+
+      const html = `<!doctype html><html><head><meta charset="utf-8"/>
+      <style>body{font-family:Arial;font-size:12px;margin:0}.t{width:72mm;padding:8px}.c{text-align:center}.big{font-size:24px;font-weight:800}.hr{border-top:1px dashed #000;margin:8px 0}</style>
+      </head><body><div class="t">
+        <div class="c"><b>PRUEBA COMANDA</b></div>
+        <div class="c big">MESA 10</div>
+        <div class="hr"></div>
+        <div>2 x Ensalada mixta</div>
+        <div>1 x Agua 1L</div>
+        <div class="hr"></div>
+        <div>Si ves esto, la impresora de comandas funciona ✅</div>
+      </div></body></html>`;
+
+      const rr = await window.TPV_PRINT.printTicket({
+        html,
+        deviceName: printerName,
+      });
+
+      if (!rr || !rr.ok) {
+        toast?.(
+          "No se pudo imprimir la prueba: " + (rr?.error || "desconocido"),
+          "err",
+          "Impresión",
+        );
+        openOptions?.();
+        return;
+      }
+
+      toast?.("Prueba de comanda enviada ✅", "ok", "Impresión");
+      openOptions?.();
+    } catch (e) {
+      console.warn(e);
+      toast?.(
+        "Error en prueba de comanda: " + (e?.message || e),
+        "err",
+        "Impresión",
+      );
+      openOptions?.();
+    }
+  });
+
 function isAutoPrintEnabled() {
   return localStorage.getItem(OPTIONS_AUTOPRINT_KEY) === "1";
 }
 function setAutoPrintEnabled(v) {
   localStorage.setItem(OPTIONS_AUTOPRINT_KEY, v ? "1" : "0");
+}
+
+function isAutoComandaOnSaveEnabled() {
+  return localStorage.getItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY) === "1";
+}
+
+function setAutoComandaOnSaveEnabled(v) {
+  localStorage.setItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY, v ? "1" : "0");
 }
 
 function isGroupLinesEnabled() {
@@ -13542,6 +17915,19 @@ autoPrintToggle?.addEventListener("change", () => {
       autoPrintToggle.checked
         ? "Auto-impresión activada ✅"
         : "Auto-impresión desactivada",
+      "info",
+      "Opciones",
+    );
+  }
+});
+
+autoComandaOnSaveToggle?.addEventListener("change", () => {
+  setAutoComandaOnSaveEnabled(!!autoComandaOnSaveToggle.checked);
+  if (typeof toast === "function") {
+    toast(
+      autoComandaOnSaveToggle.checked
+        ? "Auto-comanda al guardar activada ✅"
+        : "Auto-comanda al guardar desactivada",
       "info",
       "Opciones",
     );
@@ -13830,7 +18216,7 @@ function buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot) {
   };
 }
 
-async function openPrinterPicker() {
+async function openPrinterPicker(preferredPrinterName = "") {
   const overlay = document.getElementById("printerOverlay");
   const select = document.getElementById("printerSelect");
   const okBtn = document.getElementById("printerOkBtn");
@@ -13862,9 +18248,11 @@ async function openPrinterPicker() {
   });
 
   // Preseleccionar la guardada o la predeterminada
+  const preferred = String(preferredPrinterName || "").trim();
   const saved = getSavedPrinterReal();
-  if (saved && printers.some((p) => p.name === saved)) {
-    select.value = saved;
+  const wanted = preferred || saved;
+  if (wanted && printers.some((p) => p.name === wanted)) {
+    select.value = wanted;
   } else {
     const def = printers.find((p) => p.isDefault);
     if (def) select.value = def.name;
@@ -14607,7 +18995,7 @@ async function printTicket(ticket) {
   try {
     if (!ticket) {
       toast("No hay ticket para imprimir.", "warn", "Impresión");
-      return;
+      return false;
     }
 
     const isLinux = window.TPV_ENV?.platform === "linux";
@@ -14615,7 +19003,7 @@ async function printTicket(ticket) {
     const printerName = await ensurePrinterSelectedForPrint();
     if (!printerName) {
       toast("Impresión cancelada (sin impresora).", "warn", "Impresión");
-      return;
+      return false;
     }
 
     // 1) Fecha/hora base
@@ -14626,7 +19014,17 @@ async function printTicket(ticket) {
       now.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
 
     // 2) Tipo de ticket
-    const metaPrint = await getPrintableTicketMeta(ticket);
+    const baseMetaPrint = await getPrintableTicketMeta(ticket);
+    const isPreprint = !!ticket?._preprint;
+    const metaPrint = isPreprint
+      ? {
+          ...baseMetaPrint,
+          kind: "PREPRINT",
+          label: "Ticket no Facturado",
+          badge: "",
+          isRect: false,
+        }
+      : baseMetaPrint;
 
     let isRect = !!metaPrint.isRect;
 
@@ -14720,7 +19118,7 @@ async function printTicket(ticket) {
     if (isLinux) {
       if (!window.TPV_PRINT?.printRaw) {
         toast("Falta printRaw en TPV_PRINT (preload/IPC).", "err", "Impresión");
-        return;
+        return false;
       }
 
       const ticketForRaw = { ...ticket, fecha, hora };
@@ -14738,11 +19136,11 @@ async function printTicket(ticket) {
           "err",
           "Impresión",
         );
-        return;
+        return false;
       }
 
       toast("Ticket impreso ✅", "ok", "Impresión");
-      return;
+      return true;
     }
 
     // 5) Windows: HTML
@@ -14757,7 +19155,7 @@ async function printTicket(ticket) {
         "err",
         "Impresión",
       );
-      return;
+      return false;
     }
 
     const doc = new DOMParser().parseFromString(templateHtml, "text/html");
@@ -14835,13 +19233,15 @@ async function printTicket(ticket) {
         "err",
         "Impresión",
       );
-      return;
+      return false;
     }
 
     toast("Ticket impreso ✅", "ok", "Impresión");
+    return true;
   } catch (e) {
     console.error("[printTicket] error:", e);
     toast("Error al imprimir: " + (e?.message || e), "err", "Impresión");
+    return false;
   }
 }
 
@@ -15349,20 +19749,332 @@ function getCurrentSlugForReservations() {
 function getParkedScopedStorageKey(baseKey) {
   const slug = String(getCurrentSlugForReservations() || "").trim();
   const scope = slug || "default";
-  return `${baseKey}::${scope}`;
+  const modeScope = getCurrentParkingModeScope();
+  return `${baseKey}::${scope}::${modeScope}`;
 }
 
-function getScopedPendingParkedTickets(list = parkedTickets) {
+function getParkedGlobalCounterStorageKey() {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const scope = slug || "default";
+  return `${PARKED_GLOBAL_COUNTER_KEY}::${scope}`;
+}
+
+function loadParkedGlobalCounter() {
+  try {
+    const raw = localStorage.getItem(getParkedGlobalCounterStorageKey());
+    const n = Number(raw || 0);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function saveParkedGlobalCounter(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return;
+  try {
+    localStorage.setItem(
+      getParkedGlobalCounterStorageKey(),
+      String(Math.floor(n)),
+    );
+  } catch {}
+}
+
+function resetParkedGlobalCounter() {
+  try {
+    localStorage.removeItem(getParkedGlobalCounterStorageKey());
+  } catch {}
+}
+
+function normalizeParkingMode(value) {
+  const raw = String(value || "")
+    .trim()
+    .toLowerCase();
+  return raw === PARKED_MODE_MESAS ? PARKED_MODE_MESAS : PARKED_MODE_TPV;
+}
+
+function getParkedModeRegistryStorageKey() {
+  const slug =
+    String(getCurrentSlugForReservations() || "").trim() || "default";
+  return `${PARKED_MODE_REGISTRY_KEY}::${slug}`;
+}
+
+function loadParkedModeRegistry() {
+  try {
+    const raw = localStorage.getItem(getParkedModeRegistryStorageKey());
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveParkedModeRegistry(registry) {
+  try {
+    const safe = registry && typeof registry === "object" ? registry : {};
+    localStorage.setItem(
+      getParkedModeRegistryStorageKey(),
+      JSON.stringify(safe),
+    );
+  } catch {}
+}
+
+function rememberTicketParkingMode(ticket, mode = null) {
+  const keys = getParkedTicketSyncKeyVariants(ticket);
+  if (!keys.length) return;
+
+  const nextMode = normalizeParkingMode(mode || inferTicketParkingMode(ticket));
+  const registry = loadParkedModeRegistry();
+  keys.forEach((key) => {
+    registry[key] = nextMode;
+  });
+  saveParkedModeRegistry(registry);
+}
+
+function resolveRememberedTicketParkingMode(ticket) {
+  const keys = getParkedTicketSyncKeyVariants(ticket);
+  if (!keys.length) return "";
+  const registry = loadParkedModeRegistry();
+  for (const key of keys) {
+    const found = String(registry?.[key] || "")
+      .trim()
+      .toLowerCase();
+    if (found) return found;
+  }
+  return "";
+}
+
+function getCurrentParkingModeScope() {
+  return MESAS_INLINE_ACTIVE ? PARKED_MODE_MESAS : PARKED_MODE_TPV;
+}
+
+function inferTicketParkingMode(ticket) {
+  if (!ticket || typeof ticket !== "object") return PARKED_MODE_TPV;
+
+  const directRaw = String(
+    ticket?.parkingMode || ticket?.appMode || ticket?.mode || "",
+  )
+    .trim()
+    .toLowerCase();
+  if (directRaw === PARKED_MODE_MESAS) return PARKED_MODE_MESAS;
+  if (directRaw === PARKED_MODE_TPV) return PARKED_MODE_TPV;
+
+  const hasMesaScope =
+    !!String(ticket?.mesaUid || "").trim() ||
+    !!String(ticket?.mesaRoomId || "").trim() ||
+    !!String(ticket?.mesaTableId || "").trim();
+
+  if (hasMesaScope) return PARKED_MODE_MESAS;
+
+  const remembered = resolveRememberedTicketParkingMode(ticket);
+  if (remembered === PARKED_MODE_MESAS) return PARKED_MODE_MESAS;
+  if (remembered === PARKED_MODE_TPV) return PARKED_MODE_TPV;
+
+  return PARKED_MODE_TPV;
+}
+
+function isTicketInCurrentParkingMode(
+  ticket,
+  mode = getCurrentParkingModeScope(),
+) {
+  return inferTicketParkingMode(ticket) === normalizeParkingMode(mode);
+}
+
+function reloadParkedTicketsForCurrentMode() {
+  parkedTickets = loadParkedTicketsCache();
+  REMOTE_PARKED_RESERVATIONS = getPendingParkedTicketsGlobal(parkedTickets);
+  currentParkedTicketIndex = null;
+
+  rebuildRemoteReservedByProductMap();
+  updateRenderedProductStocks?.();
+  updateParkedCountBadge?.();
+  refreshParkButtonUI?.();
+  refreshParkedEditingBanner?.();
+  renderMesasTransContextBar?.();
+
+  if (
+    parkedTicketsOverlay &&
+    !parkedTicketsOverlay.classList.contains("hidden")
+  ) {
+    renderParkedTicketsModal?.();
+  }
+}
+
+function getPendingParkedTicketsGlobal(list = parkedTickets) {
   return (Array.isArray(list) ? list : []).filter((t) => !t?.paid);
 }
 
+function getStorableParkedTicketsForMode(list = parkedTickets) {
+  return (Array.isArray(list) ? list : [])
+    .filter(Boolean)
+    .filter((t) => isTicketInCurrentParkingMode(t));
+}
+
+function resolveTicketMesaUid(ticket, mesasState = null) {
+  const state = mesasState || loadMesasTablesStateForInline();
+  const map = state?.tableTicketMap;
+  const ticketId = String(ticket?.id || ticket?.ticketId || "").trim();
+  const directUid = String(ticket?.mesaUid || "").trim();
+
+  const isValidUidInState = (uid) => {
+    const [roomId = "", tableId = ""] = String(uid || "").split("::");
+    if (!roomId || !tableId) return false;
+    const room = Array.isArray(state?.roomList)
+      ? state.roomList.find((r) => String(r?.id || "") === roomId)
+      : null;
+    if (!room) return false;
+    const tables = Array.isArray(room?.tables) ? room.tables : [];
+    return tables.some((tb) => String(tb?.id || "") === tableId);
+  };
+
+  let mappedUid = "";
+  if (map && typeof map === "object" && ticketId) {
+    mappedUid =
+      Object.keys(map).find(
+        (uid) => String(map?.[uid] || "").trim() === ticketId,
+      ) || "";
+    mappedUid = String(mappedUid || "").trim();
+  }
+
+  // Priorizamos metadata directa del ticket para soportar múltiples tickets
+  // de una misma mesa (ej. divisiones), sin depender del map 1:1.
+  if (directUid && isValidUidInState(directUid)) return directUid;
+  if (mappedUid && isValidUidInState(mappedUid)) return mappedUid;
+  if (mappedUid) return mappedUid;
+  if (directUid) return directUid;
+
+  const splitMeta = getTicketSplitMeta(ticket);
+  if (splitMeta) {
+    const siblingWithUid = (
+      Array.isArray(parkedTickets) ? parkedTickets : []
+    ).find((other) => {
+      if (!other || other === ticket || other?.paid) return false;
+      const otherMeta = getTicketSplitMeta(other);
+      if (!otherMeta) return false;
+      if (String(otherMeta.groupId || "") !== String(splitMeta.groupId || "")) {
+        return false;
+      }
+      const otherUid = String(other?.mesaUid || "").trim();
+      return !!otherUid;
+    });
+
+    const siblingUid = String(siblingWithUid?.mesaUid || "").trim();
+    if (siblingUid && isValidUidInState(siblingUid)) return siblingUid;
+  }
+
+  const normalize = (v) =>
+    String(v || "")
+      .trim()
+      .toLowerCase();
+
+  const splitObsInfo = parseSplitInfoFromObs(ticket?.obs);
+  const obs = String(splitObsInfo?.cleanObs || ticket?.obs || "").trim();
+  const obsMatch = obs.match(/^mesa\s+(.+?)\s*[·|-]\s*(.+)$/i);
+  const mesaName = String(
+    ticket?.mesaName || (obsMatch ? obsMatch[1] : "") || "",
+  ).trim();
+  if (!mesaName) return "";
+
+  const roomHintId = String(ticket?.mesaRoomId || "").trim();
+  const roomHintName = String(
+    ticket?.mesaRoomName || (obsMatch ? obsMatch[2] : "") || "",
+  ).trim();
+
+  const roomList = Array.isArray(state?.roomList) ? state.roomList : [];
+  const tablesByRoom = state?.tablesByRoom || {};
+
+  const candidateRooms = roomList.filter((room) => {
+    if (roomHintId && String(room?.id || "").trim() === roomHintId) return true;
+    if (!roomHintName) return !roomHintId;
+    const roomName = String(room?.name || room?.id || "").trim();
+    return normalize(roomName) === normalize(roomHintName);
+  });
+
+  const roomsToScan = candidateRooms.length ? candidateRooms : roomList;
+  for (const room of roomsToScan) {
+    const roomId = String(room?.id || "").trim();
+    if (!roomId) continue;
+    const tables = Array.isArray(tablesByRoom?.[roomId])
+      ? tablesByRoom[roomId]
+      : Array.isArray(room?.tables)
+        ? room.tables
+        : [];
+    const match = tables.find((table) => {
+      const tableName = String(table?.name || table?.id || "").trim();
+      return tableName && normalize(tableName) === normalize(mesaName);
+    });
+    if (match) {
+      const tableId = String(match?.id || "").trim();
+      if (tableId) return `${roomId}::${tableId}`;
+    }
+  }
+
+  return "";
+}
+
+function resolveTicketRoomId(ticket, mesasState = null) {
+  const fromMeta = String(ticket?.mesaRoomId || "").trim();
+  if (fromMeta) return fromMeta;
+
+  const state = mesasState || loadMesasTablesStateForInline();
+  const roomList = Array.isArray(state?.roomList) ? state.roomList : [];
+
+  const normalize = (v) =>
+    String(v || "")
+      .trim()
+      .toLowerCase();
+
+  const splitObsInfo = parseSplitInfoFromObs(ticket?.obs);
+  const obs = String(splitObsInfo?.cleanObs || ticket?.obs || "").trim();
+  const obsMatch = obs.match(/^mesa\s+(.+?)\s*[·|-]\s*(.+)$/i);
+  const roomNameFromObs = obsMatch ? String(obsMatch[2] || "").trim() : "";
+  const roomNameFromMeta = String(ticket?.mesaRoomName || "").trim();
+
+  const roomByName = roomList.find((r) => {
+    const rn = normalize(r?.name || r?.id || "");
+    return (
+      rn &&
+      (rn === normalize(roomNameFromMeta) || rn === normalize(roomNameFromObs))
+    );
+  });
+  if (roomByName) return String(roomByName?.id || "").trim();
+
+  const uid = resolveTicketMesaUid(ticket, mesasState);
+  const [roomId = ""] = String(uid || "").split("::");
+  return String(roomId || "").trim();
+}
+
+function getScopedPendingParkedTickets(list = parkedTickets) {
+  return getScopedAllParkedTickets(list).filter((t) => !t?.paid);
+}
+
 function getScopedAllParkedTickets(list = parkedTickets) {
-  return Array.isArray(list) ? list : [];
+  const source = Array.isArray(list) ? list : [];
+  if (!MESAS_INLINE_ACTIVE) return source;
+
+  const tableScopeValue = String(parkedViewState.tableUid || "").trim();
+  if (tableScopeValue) {
+    const mesasState = loadMesasTablesStateForInline();
+    return source.filter(
+      (t) =>
+        String(resolveTicketMesaUid(t, mesasState) || "").trim() ===
+        tableScopeValue,
+    );
+  }
+
+  const scopeValue =
+    String(parkedViewState.scope || "global").trim() || "global";
+  if (scopeValue === "global") return source;
+
+  const mesasState = loadMesasTablesStateForInline();
+  return source.filter(
+    (t) => resolveTicketRoomId(t, mesasState) === scopeValue,
+  );
 }
 
 function getProductBaseId(product) {
   return (
-    Number(product?.baseProductId || product?.id || product?.idproducto || 0) ||
+    Number(product?.baseProductId || product?.idproducto || product?.id || 0) ||
     0
   );
 }
@@ -15416,6 +20128,18 @@ function normalizeRemoteParkedTicket(raw) {
       }))
     : [];
 
+  const docType = normalizeParkedDocType(
+    raw.docType || raw.documentType || "ticket",
+  );
+  const pedidoStatus = normalizePedidoTpvStatus(
+    raw.pedidoStatus || raw.orderStatus || "pendiente",
+    "pendiente",
+  );
+  const paidFlag =
+    docType === "pedido"
+      ? pedidoStatus === "pagado-no-recogido" || pedidoStatus === "recogido"
+      : !!raw.paid;
+
   return {
     id,
     slug: String(raw.slug || "").trim(),
@@ -15425,33 +20149,72 @@ function normalizeRemoteParkedTicket(raw) {
     items,
     total: Number(raw.total || 0),
     clientName: String(raw.clientName || "").trim() || "Cliente",
+    docType,
+    pedidoStatus,
     name:
       String(raw.ticketName || raw.name || "").trim() ||
-      (id ? `Ticket #${id}` : "Ticket"),
+      (id
+        ? `${getParkedDocTypeTexts(raw.docType || raw.documentType || "ticket").shortLabel} #${id}`
+        : "Ticket"),
     obs: String(raw.obs || raw.ticketObs || "").trim(),
-    paid: !!raw.paid,
+    splitGroupId: String(raw.splitGroupId || "").trim() || null,
+    splitPart: Number(raw.splitPart || 0) || null,
+    splitTotal: Number(raw.splitTotal || 0) || null,
+    comandaState:
+      raw.comandaState && typeof raw.comandaState === "object"
+        ? normalizeTicketComandaState(raw.comandaState)
+        : null,
+    paid: paidFlag,
     paidAt: raw.paidAt ? new Date(raw.paidAt) : null,
+    collectedAt: raw.collectedAt ? new Date(raw.collectedAt) : null,
     paidTicketCode: raw.paidTicketCode || null,
     paidTicketId: raw.paidTicketId || null,
+    parkingMode: String(raw.parkingMode || raw.appMode || raw.mode || "")
+      .trim()
+      .toLowerCase(),
+    mesaUid:
+      String(raw.mesaUid || raw.tableUid || raw.table_uid || "").trim() || null,
+    mesaRoomId:
+      String(raw.mesaRoomId || raw.roomId || raw.room_id || "").trim() || null,
+    mesaRoomName:
+      String(raw.mesaRoomName || raw.roomName || raw.room_name || "").trim() ||
+      null,
+    mesaTableId:
+      String(raw.mesaTableId || raw.tableId || raw.table_id || "").trim() ||
+      null,
+    mesaTableName:
+      String(
+        raw.mesaTableName || raw.tableName || raw.table_name || "",
+      ).trim() || null,
+    mesaAlerts: normalizeMesaTicketAlerts(
+      raw.mesaAlerts || raw.ticketFlags || raw.ticket_flags || raw.alerts,
+    ),
     fs: raw.fs && typeof raw.fs === "object" ? raw.fs : null,
   };
 }
 
 function saveParkedTicketsCache(list = parkedTickets) {
-  const safe = getScopedPendingParkedTickets(list).map((t) => ({
+  const safe = getStorableParkedTicketsForMode(list).map((t) => ({
     ...t,
+    parkingMode: inferTicketParkingMode(t),
     createdAt: t?.createdAt
       ? new Date(t.createdAt).toISOString()
       : new Date().toISOString(),
     updatedAt: t?.updatedAt ? new Date(t.updatedAt).toISOString() : null,
     paidAt: t?.paidAt ? new Date(t.paidAt).toISOString() : null,
+    collectedAt: t?.collectedAt ? new Date(t.collectedAt).toISOString() : null,
   }));
+
+  safe.forEach((ticket) => {
+    rememberTicketParkingMode(ticket, ticket?.parkingMode);
+  });
 
   try {
     localStorage.setItem(
       getParkedScopedStorageKey(PARKED_TICKETS_CACHE_KEY),
       JSON.stringify(safe),
     );
+    notifyMesasInlineStateChanged();
   } catch (e) {
     console.warn(
       "No se pudo guardar cache local de aparcados:",
@@ -15471,7 +20234,7 @@ function loadParkedTicketsCache() {
     return arr
       .map((it) => normalizeRemoteParkedTicket(it))
       .filter(Boolean)
-      .filter((t) => !t?.paid);
+      .filter((t) => isTicketInCurrentParkingMode(t));
   } catch (e) {
     console.warn("No se pudo leer cache local de aparcados:", e?.message || e);
     return [];
@@ -15484,6 +20247,34 @@ function getParkedTicketSyncKey(ticket) {
   const cajaId = String(ticket.cajaId || "").trim();
   const id = String(ticket.id || ticket.ticketId || "").trim();
   return `${slug}|${cajaId}|${id}`;
+}
+
+function getParkedTicketSyncKeyVariants(ticket) {
+  if (!ticket) return [];
+
+  const slug = String(ticket.slug || "").trim();
+  const cajaId = String(ticket.cajaId || "").trim();
+  const id = String(ticket.id || ticket.ticketId || "").trim();
+  if (!id) return [];
+
+  const modeRaw = String(
+    ticket?.parkingMode || ticket?.appMode || ticket?.mode || "",
+  )
+    .trim()
+    .toLowerCase();
+  const mode =
+    modeRaw === PARKED_MODE_MESAS ? PARKED_MODE_MESAS : PARKED_MODE_TPV;
+
+  const keys = [
+    `${slug}|${cajaId}|${id}`,
+    `${slug}||${id}`,
+    `|${cajaId}|${id}`,
+    `||${id}`,
+    `${mode}|${id}`,
+    `|${id}`,
+  ];
+
+  return Array.from(new Set(keys.filter(Boolean)));
 }
 
 function isParkedSyncTransientError(err) {
@@ -15584,16 +20375,102 @@ async function processParkedSyncQueue() {
 }
 
 function syncParkedTicketsFromRemote(list) {
+  const previousTickets = Array.isArray(parkedTickets) ? parkedTickets : [];
   const prevLoadedTicket =
     currentParkedTicketIndex != null
       ? parkedTickets[currentParkedTicketIndex]
       : null;
   const prevLoadedKey = getParkedTicketSyncKey(prevLoadedTicket);
 
-  const next = (Array.isArray(list) ? list : [])
+  const previousByKey = new Map();
+  previousTickets.forEach((ticket) => {
+    const keys = getParkedTicketSyncKeyVariants(ticket);
+    if (!keys.length) return;
+    keys.forEach((key) => {
+      if (!previousByKey.has(key)) previousByKey.set(key, ticket);
+    });
+  });
+
+  const nextPending = (Array.isArray(list) ? list : [])
     .map((it) => normalizeRemoteParkedTicket(it))
     .filter(Boolean)
-    .filter((t) => !t.paid);
+    .filter((t) => !t.paid)
+    .map((ticket) => {
+      const prev = getParkedTicketSyncKeyVariants(ticket)
+        .map((key) => previousByKey.get(key))
+        .find(Boolean);
+      const merged = { ...(prev || {}), ...ticket };
+
+      const prevTs =
+        Number(new Date(prev?.updatedAt || prev?.createdAt || 0).getTime()) ||
+        0;
+      const remoteTs =
+        Number(
+          new Date(ticket?.updatedAt || ticket?.createdAt || 0).getTime(),
+        ) || 0;
+      const localRevTs = Number(prev?.localRevisionAt || 0) || 0;
+      const localRevIsRecent =
+        localRevTs > 0 && Date.now() - localRevTs <= PARKED_LOCAL_PREFER_MS;
+      const prevItems = Array.isArray(prev?.items) ? prev.items : [];
+
+      // Evita parpadeos por refrescos remotos retrasados que pisan precios/items locales.
+      // Si la copia local es igual o más reciente, conservamos líneas y total locales.
+      if (
+        prev &&
+        prevItems.length &&
+        (prevTs >= remoteTs || localRevIsRecent)
+      ) {
+        merged.items = prevItems.map((it) => ({ ...it }));
+        if (Number.isFinite(Number(prev?.total))) {
+          merged.total = Number(prev.total || 0);
+        }
+        if (prev?.name != null) merged.name = String(prev.name || "");
+        if (prev?.obs != null) merged.obs = String(prev.obs || "");
+        if (prev?.clientName != null) {
+          merged.clientName = String(prev.clientName || "");
+        }
+        merged.localRevisionAt = localRevTs || Date.now();
+      }
+
+      merged.parkingMode = inferTicketParkingMode(merged);
+
+      if (!String(merged?.mesaUid || "").trim() && prev?.mesaUid) {
+        merged.mesaUid = prev.mesaUid;
+      }
+      if (!String(merged?.mesaRoomId || "").trim() && prev?.mesaRoomId) {
+        merged.mesaRoomId = prev.mesaRoomId;
+      }
+      if (!String(merged?.mesaRoomName || "").trim() && prev?.mesaRoomName) {
+        merged.mesaRoomName = prev.mesaRoomName;
+      }
+      if (!String(merged?.mesaTableId || "").trim() && prev?.mesaTableId) {
+        merged.mesaTableId = prev.mesaTableId;
+      }
+      if (!String(merged?.mesaTableName || "").trim() && prev?.mesaTableName) {
+        merged.mesaTableName = prev.mesaTableName;
+      }
+
+      if (!normalizeMesaTicketAlerts(merged?.mesaAlerts).length) {
+        merged.mesaAlerts = normalizeMesaTicketAlerts(prev?.mesaAlerts);
+      }
+
+      return merged;
+    })
+    .filter((t) => isTicketInCurrentParkingMode(t));
+
+  const nextByKey = new Set(
+    nextPending.map((t) => getParkedTicketSyncKey(t)).filter(Boolean),
+  );
+
+  const preservedPaid = previousTickets
+    .filter((t) => !!t?.paid)
+    .filter((t) => isTicketInCurrentParkingMode(t))
+    .filter((t) => {
+      const key = getParkedTicketSyncKey(t);
+      return key ? !nextByKey.has(key) : true;
+    });
+
+  const next = [...nextPending, ...preservedPaid];
 
   parkedTickets = next;
 
@@ -15603,6 +20480,7 @@ function syncParkedTicketsFromRemote(list) {
   }, 0);
 
   parkedCounter = Math.max(Number(parkedCounter || 0), maxId);
+  saveParkedGlobalCounter(parkedCounter);
   saveParkedTicketsCache(parkedTickets);
 
   if (prevLoadedKey) {
@@ -15617,6 +20495,7 @@ function syncParkedTicketsFromRemote(list) {
   updateParkedCountBadge?.();
   refreshParkButtonUI?.();
   refreshParkedEditingBanner?.();
+  renderMesasTransContextBar?.();
 
   if (
     parkedTicketsOverlay &&
@@ -15700,13 +20579,48 @@ async function apiSaveParkedReservation(ticket) {
     slug,
     cajaId,
     ticketId: String(ticket.id),
-    ticketName: String(ticket.name || `Ticket #${ticket.id}`),
+    docType: getParkedTicketDocType(ticket, "ticket"),
+    pedidoStatus: isPedidoTpvTicket(ticket)
+      ? normalizePedidoTpvStatus(ticket?.pedidoStatus, "pendiente")
+      : null,
+    collectedAt:
+      isPedidoTpvTicket(ticket) && ticket?.collectedAt
+        ? new Date(ticket.collectedAt).toISOString()
+        : null,
+    ticketName: String(
+      ticket.name ||
+        `${getParkedDocTypeTexts(getParkedTicketDocType(ticket, "ticket")).shortLabel} #${ticket.id}`,
+    ),
     obs: String(ticket.obs || ""),
+    splitGroupId: String(ticket?.splitGroupId || "").trim() || null,
+    splitPart: Number(ticket?.splitPart || 0) || null,
+    splitTotal: Number(ticket?.splitTotal || 0) || null,
+    comandaState:
+      ticket?.comandaState && typeof ticket.comandaState === "object"
+        ? {
+            seq: Math.max(0, Number(ticket.comandaState.seq || 0) || 0),
+            printedQtyByLineKey:
+              ticket.comandaState.printedQtyByLineKey &&
+              typeof ticket.comandaState.printedQtyByLineKey === "object"
+                ? ticket.comandaState.printedQtyByLineKey
+                : {},
+            lastPrintedAt: ticket.comandaState.lastPrintedAt
+              ? new Date(ticket.comandaState.lastPrintedAt).toISOString()
+              : null,
+          }
+        : null,
     clientName: String(ticket.clientName || ""),
     total: Number(ticket.total || 0),
     terminalId: String(currentTerminal?.id || ""),
     terminalName: String(currentTerminal?.name || ""),
     userName: String(currentAgent?.name || currentAgent?.nick || ""),
+    parkingMode: inferTicketParkingMode(ticket),
+    mesaUid: ticket?.mesaUid || null,
+    mesaRoomId: ticket?.mesaRoomId || null,
+    mesaRoomName: ticket?.mesaRoomName || null,
+    mesaTableId: ticket?.mesaTableId || null,
+    mesaTableName: ticket?.mesaTableName || null,
+    mesaAlerts: normalizeMesaTicketAlerts(ticket?.mesaAlerts),
     fs: ticket?.fs || null,
     items: Array.isArray(ticket.items)
       ? ticket.items.map((it) => ({
@@ -15735,6 +20649,8 @@ async function apiSaveParkedReservation(ticket) {
         }))
       : [],
   };
+
+  rememberTicketParkingMode(ticket, payload.parkingMode);
 
   const createUrl = `${TPV_SYNC_API_URL}?action=create-parked-reservation`;
 
@@ -15835,6 +20751,7 @@ async function refreshRemoteParkedReservationsOnly() {
       updateParkedCountBadge?.();
       refreshParkButtonUI?.();
       refreshParkedEditingBanner?.();
+      renderMesasTransContextBar?.();
       if (
         parkedTicketsOverlay &&
         !parkedTicketsOverlay.classList.contains("hidden")
@@ -16342,10 +21259,36 @@ async function onPayButtonClick() {
       } catch {}
     }
 
-    await apiUpdateCajaAfterSale({
-      totalVenta: facturaTotalFS,
-      pagos: pagosFinal,
-    });
+    try {
+      await apiUpdateCajaAfterSale({
+        totalVenta: facturaTotalFS,
+        pagos: pagosFinal,
+      });
+    } catch (e) {
+      if (isNetworkError(e) || isProbablyNetworkError(e)) {
+        const cajaSyncMeta =
+          e?.__tpvCajaSync && typeof e.__tpvCajaSync === "object"
+            ? e.__tpvCajaSync
+            : null;
+
+        if (cajaSyncMeta?.remoteId && cajaSyncMeta?.body) {
+          await enqueueTpvcajaTotalsSync(
+            cajaSyncMeta.remoteId,
+            cajaSyncMeta.body,
+            {
+              source: "post-sale-online",
+            },
+          );
+        }
+
+        console.warn(
+          "No se pudo sync caja en online; encolado para reintento.",
+          e?.message || e,
+        );
+      } else {
+        throw e;
+      }
+    }
 
     await runProductsStockRefreshOnce();
 
@@ -16585,7 +21528,19 @@ async function apiUpdateCajaAfterSale({ totalVenta, pagos }) {
     nick: getLoginUser(),
   };
 
-  await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
+  try {
+    await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
+  } catch (e) {
+    if (isNetworkError(e) || isProbablyNetworkError(e)) {
+      const wrapped = new Error(e?.message || String(e));
+      wrapped.__tpvCajaSync = {
+        remoteId: String(remoteId),
+        body: payload,
+      };
+      throw wrapped;
+    }
+    throw e;
+  }
 }
 
 // ===== [08] UI venta: boton eliminar todo =====
@@ -16594,9 +21549,42 @@ if (clearBtn) {
   clearBtn.onclick = () => {
     if (!cashSession?.open) return;
 
+    if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+      const mesasState = loadMesasTablesStateForInline();
+      const selectedUid = String(mesasState?.selectedTableId || "").trim();
+      const linkedTicketId = selectedUid
+        ? mesasState?.tableTicketMap?.[selectedUid]
+        : null;
+
+      const linkedActiveIndex = linkedTicketId
+        ? (Array.isArray(parkedTickets) ? parkedTickets : []).findIndex(
+            (t) => String(t?.id || "") === String(linkedTicketId) && !t?.paid,
+          )
+        : null;
+
+      if (linkedActiveIndex !== null && linkedActiveIndex >= 0) {
+        pushCartHistoryStep("clear-cart");
+        cart = [];
+        renderCart();
+        currentParkedTicketIndex = linkedActiveIndex;
+        if (selectedUid) {
+          saveDraftCartForMesaUid(selectedUid, [], { keepEmpty: true });
+        }
+        renderMesasTransContextBar();
+        refreshParkButtonUI();
+        refreshParkedEditingBanner();
+        return;
+      }
+    }
+
+    pushCartHistoryStep("clear-cart");
     cart = [];
     renderCart();
     currentParkedTicketIndex = null;
+    if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+      clearCurrentMesaDraft();
+      renderMesasTransContextBar();
+    }
     refreshParkButtonUI();
     refreshParkedEditingBanner();
   };
@@ -16604,14 +21592,2208 @@ if (clearBtn) {
 
 // ===== [08] UI venta: boton cobrar =====
 const payBtn = document.getElementById("payBtn");
+const cartActionGridEl = document.getElementById("cartActionGrid");
 if (payBtn) {
   payBtn.onclick = () => {
     onPayButtonClick();
   };
-
-  // ✅ estado inicial al arrancar
-  refreshAgentGuardUI?.();
 }
+
+const preprintTicketBtn = document.getElementById("preprintTicketBtn");
+
+const splitTicketOverlay = document.getElementById("splitTicketOverlay");
+const splitTicketCloseX = document.getElementById("splitTicketCloseX");
+const splitTicketCancelBtn = document.getElementById("splitTicketCancelBtn");
+const splitTicketConfirmBtn = document.getElementById("splitTicketConfirmBtn");
+const splitTicketPartsInput = document.getElementById("splitTicketPartsInput");
+const splitTicketSourceName = document.getElementById("splitTicketSourceName");
+const splitTicketSourceTotal = document.getElementById(
+  "splitTicketSourceTotal",
+);
+const splitTicketTargetTotal = document.getElementById(
+  "splitTicketTargetTotal",
+);
+const splitTicketRemainingTotal = document.getElementById(
+  "splitTicketRemainingTotal",
+);
+const splitTicketLines = document.getElementById("splitTicketLines");
+const splitTicketError = document.getElementById("splitTicketError");
+const splitTicketModeSelect = document.getElementById("splitTicketModeSelect");
+const splitTicketPartsMinusBtn = document.getElementById(
+  "splitTicketPartsMinusBtn",
+);
+const splitTicketPartsPlusBtn = document.getElementById(
+  "splitTicketPartsPlusBtn",
+);
+const splitTicketMergeQuickBtn = document.getElementById(
+  "splitTicketMergeQuickBtn",
+);
+
+const comandaOverlay = document.getElementById("comandaOverlay");
+const comandaCloseX = document.getElementById("comandaCloseX");
+const comandaCancelBtn = document.getElementById("comandaCancelBtn");
+const comandaPrintBtn = document.getElementById("comandaPrintBtn");
+const comandaMesaLabel = document.getElementById("comandaMesaLabel");
+const comandaAgentLabel = document.getElementById("comandaAgentLabel");
+const comandaCountLabel = document.getElementById("comandaCountLabel");
+const comandaLines = document.getElementById("comandaLines");
+const comandaObs = document.getElementById("comandaObs");
+const comandaError = document.getElementById("comandaError");
+
+let splitTicketPartsCount = 2;
+let splitTicketMode = "items";
+let splitTicketItemsMatrix = [];
+let splitLinesDragActive = false;
+let splitLinesDragStartX = 0;
+let splitLinesDragStartScrollLeft = 0;
+const SPLIT_SESSION_STATE_KEY = "tpv_split_session_state_v1";
+let SPLIT_RESUME_IN_FLIGHT = false;
+
+function makeSplitGroupId() {
+  return `SG-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function encodeSplitInfoInObs(obsText, meta) {
+  const parsed = parseSplitInfoFromObs(obsText);
+  const baseObs = String(parsed?.cleanObs || obsText || "").trim();
+  // Nuevo criterio: no contaminamos observaciones con metadatos de división.
+  return baseObs;
+}
+
+function parseSplitInfoFromObs(obsText) {
+  const raw = String(obsText || "").trim();
+  if (!raw) return null;
+
+  const m = raw.match(/^\[SPLIT:([^:\]]+):(\d+)\/(\d+)\]\s*/i);
+  if (!m) return null;
+
+  const groupId = String(m[1] || "").trim();
+  const part = Number(m[2] || 0) || 0;
+  const total = Number(m[3] || 0) || 0;
+  if (!groupId || part <= 0 || total <= 0) return null;
+
+  return {
+    groupId,
+    part,
+    total,
+    cleanObs: raw.replace(m[0], "").trim(),
+  };
+}
+
+function parseSplitInfoFromTicketName(nameText) {
+  const rawName = String(nameText || "").trim();
+  if (!rawName) return null;
+
+  const m = rawName.match(/\((\d+)\s*\/\s*(\d+)\)\s*$/);
+  if (!m) return null;
+
+  const part = Number(m[1] || 0) || 0;
+  const total = Number(m[2] || 0) || 0;
+  if (part <= 0 || total <= 0) return null;
+
+  const baseName = rawName.replace(/\s*\(\d+\s*\/\s*\d+\)\s*$/, "").trim();
+  return {
+    part,
+    total,
+    baseName,
+  };
+}
+
+function getTicketSplitMeta(ticket) {
+  if (!ticket || typeof ticket !== "object") return null;
+
+  const directGroupId = String(ticket?.splitGroupId || "").trim();
+  const directPart = Number(ticket?.splitPart || 0) || 0;
+  const directTotal = Number(ticket?.splitTotal || 0) || 0;
+  if (directGroupId && directPart > 0 && directTotal > 0) {
+    return {
+      groupId: directGroupId,
+      part: directPart,
+      total: directTotal,
+    };
+  }
+
+  // Compat: tickets antiguos con marcador en observación.
+  const fromObs = parseSplitInfoFromObs(ticket?.obs);
+  if (fromObs) {
+    return {
+      groupId: fromObs.groupId,
+      part: fromObs.part,
+      total: fromObs.total,
+    };
+  }
+
+  const fromName = parseSplitInfoFromTicketName(ticket?.name || ticket?.label);
+  if (!fromName) return null;
+
+  const mesaUid = String(ticket?.mesaUid || "").trim();
+  const stableBaseName = String(
+    fromName.baseName || ticket?.id || "ticket",
+  ).trim();
+  const fallbackGroupId = `legacy-name::${mesaUid || "sin-mesa"}::${stableBaseName.toLowerCase()}::${fromName.total}`;
+
+  return {
+    groupId: fallbackGroupId,
+    part: fromName.part,
+    total: fromName.total,
+  };
+}
+
+function shouldSkipSplitIncidentLog(ticketLike) {
+  return !!getTicketSplitMeta(ticketLike);
+}
+
+function getSplitGroupTicketsOrdered(groupId) {
+  const gid = String(groupId || "").trim();
+  if (!gid) return [];
+
+  return (Array.isArray(parkedTickets) ? parkedTickets : [])
+    .map((ticket, idx) => ({
+      ticket,
+      idx,
+      meta: getTicketSplitMeta(ticket),
+    }))
+    .filter(
+      (entry) =>
+        !entry.ticket?.paid &&
+        entry.meta &&
+        String(entry.meta.groupId || "") === gid,
+    )
+    .sort((a, b) => Number(a.meta.part || 0) - Number(b.meta.part || 0));
+}
+
+function getCurrentSplitNavigationState(ticket) {
+  const meta = getTicketSplitMeta(ticket);
+  if (!meta) {
+    return { enabled: false, prevIndex: -1, nextIndex: -1 };
+  }
+
+  const ordered = getSplitGroupTicketsOrdered(meta.groupId);
+  if (!ordered.length) {
+    return { enabled: false, prevIndex: -1, nextIndex: -1 };
+  }
+
+  const currentPos = ordered.findIndex(
+    (entry) => String(entry.ticket?.id || "") === String(ticket?.id || ""),
+  );
+  if (currentPos < 0) {
+    return { enabled: false, prevIndex: -1, nextIndex: -1 };
+  }
+
+  return {
+    enabled: true,
+    prevIndex: currentPos > 0 ? ordered[currentPos - 1].idx : -1,
+    nextIndex:
+      currentPos < ordered.length - 1 ? ordered[currentPos + 1].idx : -1,
+    part: Number(meta.part || 0),
+    total: Number(meta.total || 0),
+  };
+}
+
+function loadSplitSessionState() {
+  try {
+    const raw = localStorage.getItem(SPLIT_SESSION_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+
+    const groupId = String(parsed.groupId || "").trim();
+    const nextPart = Number(parsed.nextPart || 0) || 0;
+    const totalParts = Number(parsed.totalParts || 0) || 0;
+    const mesaUid = String(parsed.mesaUid || "").trim() || null;
+    if (!groupId || nextPart <= 0 || totalParts <= 0) return null;
+
+    return { groupId, nextPart, totalParts, mesaUid };
+  } catch {
+    return null;
+  }
+}
+
+function saveSplitSessionState(state) {
+  const groupId = String(state?.groupId || "").trim();
+  const nextPart = Number(state?.nextPart || 0) || 0;
+  const totalParts = Number(state?.totalParts || 0) || 0;
+  const mesaUid = String(state?.mesaUid || "").trim() || null;
+
+  if (!groupId || nextPart <= 0 || totalParts <= 0 || nextPart > totalParts) {
+    try {
+      localStorage.removeItem(SPLIT_SESSION_STATE_KEY);
+    } catch {}
+    return;
+  }
+
+  try {
+    localStorage.setItem(
+      SPLIT_SESSION_STATE_KEY,
+      JSON.stringify({
+        groupId,
+        nextPart,
+        totalParts,
+        mesaUid,
+        updatedAt: Date.now(),
+      }),
+    );
+  } catch {}
+}
+
+function clearSplitSessionState() {
+  try {
+    localStorage.removeItem(SPLIT_SESSION_STATE_KEY);
+  } catch {}
+}
+
+function findPendingSplitTicketIndex(groupId, part) {
+  const gid = String(groupId || "").trim();
+  const wanted = Number(part || 0) || 0;
+  if (!gid || wanted <= 0) return -1;
+
+  return (Array.isArray(parkedTickets) ? parkedTickets : []).findIndex((t) => {
+    if (t?.paid) return false;
+    const meta = getTicketSplitMeta(t);
+    return (
+      meta &&
+      String(meta.groupId || "") === gid &&
+      Number(meta.part || 0) === wanted
+    );
+  });
+}
+
+function tryResumePendingSplitSession() {
+  if (SPLIT_RESUME_IN_FLIGHT) return false;
+  if (!MESAS_INLINE_ACTIVE || MESAS_INLINE_VIEW !== "transacciones")
+    return false;
+  if (currentParkedTicketIndex !== null) return false;
+
+  const state = loadSplitSessionState();
+  if (!state) return false;
+
+  const idx = findPendingSplitTicketIndex(state.groupId, state.nextPart);
+  if (idx < 0) return false;
+
+  SPLIT_RESUME_IN_FLIGHT = true;
+  try {
+    restoreParkedCartByIndex(idx);
+    toast(
+      `Reanudado cobro dividido: parte ${state.nextPart}/${state.totalParts}.`,
+      "info",
+      "Dividir",
+    );
+    return true;
+  } finally {
+    SPLIT_RESUME_IN_FLIGHT = false;
+  }
+}
+
+function shouldShowSplitPayAndPreprint() {
+  const mesasTransMode =
+    MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones";
+  return mesasTransMode && hasLoadedOpenTicketForMesasTrans();
+}
+
+function isMesasTicketSplitAllowed() {
+  if (!shouldShowSplitPayAndPreprint()) return false;
+  return hasVisibleCartLines(cart);
+}
+
+function resolveProductByCartLine(line) {
+  const baseId = getProductBaseId(line);
+  if (!baseId) return null;
+  return (Array.isArray(products) ? products : []).find(
+    (p) => getProductBaseId(p) === baseId,
+  );
+}
+
+function cartLineMatchesComandaFamilyRules(line) {
+  if (!mesasComandaFamilyRules.length) return false;
+  const product = resolveProductByCartLine(line);
+  if (!product) return false;
+  return productMatchesCategoryRules(product, mesasComandaFamilyRules);
+}
+
+function getComandaPrintableLines(sourceCart = cart) {
+  const visible = getVisibleCartLines(sourceCart);
+  if (!mesasComandaFamilyRules.length) {
+    // Sin reglas configuradas: comanda sobre todas las líneas visibles.
+    return visible;
+  }
+  return visible.filter((line) => cartLineMatchesComandaFamilyRules(line));
+}
+
+function isMesasComandaAllowed() {
+  if (!shouldShowSplitPayAndPreprint()) return false;
+  return getComandaPrintableLines(cart).length > 0;
+}
+
+function refreshPayAndPreprintLayout() {
+  const payBtnEl = document.getElementById("payBtn");
+  const cartActionGrid = document.getElementById("cartActionGrid");
+  const parkBtnEl = document.getElementById("parkBtn");
+  if (!cartActionGrid || !payBtnEl) return;
+
+  const split = shouldShowSplitPayAndPreprint();
+  const mesasAutoSaveOpenTicket =
+    split && isMesasTransaccionesMode() && !!getCurrentLoadedParkedTicket();
+
+  cartActionGrid.classList.toggle("has-open-ticket", split);
+  cartActionGrid.classList.toggle(
+    "mesas-autosave-open-ticket",
+    mesasAutoSaveOpenTicket,
+  );
+  payBtnEl.classList.add("cart-btn-pay-tall");
+
+  if (parkBtnEl) {
+    parkBtnEl.classList.toggle("hidden", mesasAutoSaveOpenTicket);
+  }
+}
+
+async function runMesasAutoSaveIfNeeded() {
+  const loaded = getCurrentLoadedParkedTicket();
+  if (!isMesasTransaccionesMode() || !loaded || loaded?.paid) return;
+  if (!hasVisibleCartLines() || !hasUnsavedChangesForLoadedParkedTicket(loaded))
+    return;
+  if (!cashSession?.open || !currentTerminal) return;
+
+  if (MESAS_AUTO_SAVE_IN_FLIGHT) {
+    MESAS_AUTO_SAVE_RERUN = true;
+    return;
+  }
+
+  MESAS_AUTO_SAVE_IN_FLIGHT = true;
+  MESAS_AUTO_SAVE_RERUN = false;
+  try {
+    await parkCurrentCart(loaded.name || "", loaded.obs || "", {
+      mesaAlerts: normalizeMesaTicketAlerts(loaded?.mesaAlerts),
+      openListAfterSave: false,
+      silentAutoSave: true,
+      skipAutoPrint: true,
+      skipStockConfirm: true,
+    });
+  } catch (e) {
+    console.warn("No se pudo auto-guardar pedido de mesa:", e?.message || e);
+  } finally {
+    MESAS_AUTO_SAVE_IN_FLIGHT = false;
+    if (MESAS_AUTO_SAVE_RERUN) {
+      MESAS_AUTO_SAVE_RERUN = false;
+      scheduleMesasAutoSave();
+    }
+  }
+}
+
+function scheduleMesasAutoSave() {
+  if (MESAS_AUTO_SAVE_TIMER) {
+    clearTimeout(MESAS_AUTO_SAVE_TIMER);
+    MESAS_AUTO_SAVE_TIMER = null;
+  }
+
+  const loaded = getCurrentLoadedParkedTicket();
+  if (!isMesasTransaccionesMode() || !loaded || loaded?.paid) return;
+  if (!hasVisibleCartLines() || !hasUnsavedChangesForLoadedParkedTicket(loaded))
+    return;
+
+  MESAS_AUTO_SAVE_TIMER = setTimeout(() => {
+    MESAS_AUTO_SAVE_TIMER = null;
+    runMesasAutoSaveIfNeeded();
+  }, 700);
+}
+
+function isMesasPreprintAllowed() {
+  if (!shouldShowSplitPayAndPreprint()) {
+    return false;
+  }
+
+  const scope = getSelectedMesaScopeContext();
+  if (!scope?.uid) return false;
+
+  return hasVisibleCartLines();
+}
+
+function refreshPreprintButtonUI() {
+  refreshPayAndPreprintLayout();
+  const preprintBtnEl = document.getElementById("preprintTicketBtn");
+  const splitBtnEl = document.getElementById("parkedSplitBtn");
+  const comandaBtnEl = document.getElementById("parkedComandaBtn");
+  if (!preprintBtnEl) return;
+
+  const enabled = isMesasPreprintAllowed();
+  preprintBtnEl.disabled = !enabled;
+  preprintBtnEl.title = enabled
+    ? "Imprimir precuenta y marcar mesa pendiente de pago"
+    : "Disponible en Mesas > Transacciones con productos en el carrito";
+
+  if (splitBtnEl) {
+    const splitEnabled = isMesasTicketSplitAllowed();
+    splitBtnEl.disabled = !splitEnabled;
+    splitBtnEl.title = splitEnabled
+      ? "Dividir cuenta por artículos (igualitario opcional)"
+      : "Disponible con un ticket abierto y líneas en carrito";
+  }
+
+  if (comandaBtnEl) {
+    const comandaEnabled = isMesasComandaAllowed();
+    comandaBtnEl.disabled = !comandaEnabled;
+    comandaBtnEl.title = comandaEnabled
+      ? "Imprimir comanda de cocina"
+      : "Disponible con ticket abierto y líneas visibles en carrito";
+  }
+}
+
+function computeLinesTotal(lines) {
+  return (Array.isArray(lines) ? lines : []).reduce((sum, line) => {
+    const unit = getUnitGross(line);
+    const qty = Number(line?.qty || 0) || 0;
+    return sum + unit * qty;
+  }, 0);
+}
+
+function roundSplitQty(n) {
+  return Math.round((Number(n) || 0) * 10000) / 10000;
+}
+
+function getSplitPartsBounds() {
+  const loaded = getCurrentLoadedParkedTicket();
+  const hasSplit = !!getTicketSplitMeta(loaded);
+  return {
+    min: hasSplit ? 1 : 2,
+    max: 12,
+  };
+}
+
+function isSplitItemsMode() {
+  return String(splitTicketMode || "equal") === "items";
+}
+
+function getVisibleSplitSourceLines() {
+  return Array.isArray(getVisibleCartLines(cart))
+    ? getVisibleCartLines(cart)
+    : [];
+}
+
+function initSplitItemsMatrixFromCurrentCart() {
+  const visible = getVisibleSplitSourceLines();
+  const parts = resolveSplitPartsCount();
+
+  splitTicketItemsMatrix = visible.map(() => new Array(parts).fill(0));
+}
+
+function isSplitLineIntegerQty(totalQty) {
+  return (
+    Math.abs((Number(totalQty) || 0) - Math.round(Number(totalQty) || 0)) <
+    0.0001
+  );
+}
+
+function formatSplitQtyValue(value, asInteger = false) {
+  const n = roundSplitQty(Number(value || 0) || 0);
+  if (asInteger) return String(Math.max(0, Math.round(n)));
+  return String(Number(n.toFixed(4)));
+}
+
+function getSplitLineTotalQty(lineIdx) {
+  const visible = getVisibleSplitSourceLines();
+  return roundSplitQty(Number(visible[lineIdx]?.qty || 0) || 0);
+}
+
+function getSplitLineAssignedQty(lineIdx) {
+  const row = Array.isArray(splitTicketItemsMatrix[lineIdx])
+    ? splitTicketItemsMatrix[lineIdx]
+    : [];
+  return roundSplitQty(row.reduce((sum, v) => sum + (Number(v) || 0), 0));
+}
+
+function getSplitLineRemainingQty(lineIdx) {
+  return roundSplitQty(
+    getSplitLineTotalQty(lineIdx) - getSplitLineAssignedQty(lineIdx),
+  );
+}
+
+function getSplitLineMaxQtyForPart(lineIdx, partIdx) {
+  const totalQty = getSplitLineTotalQty(lineIdx);
+  const row = Array.isArray(splitTicketItemsMatrix[lineIdx])
+    ? splitTicketItemsMatrix[lineIdx]
+    : [];
+  const others = roundSplitQty(
+    row.reduce((sum, v, idx) => {
+      if (idx === partIdx) return sum;
+      return sum + (Number(v) || 0);
+    }, 0),
+  );
+  return roundSplitQty(Math.max(0, totalQty - others));
+}
+
+function setSplitLinePartQty(lineIdx, partIdx, rawValue) {
+  const totalQty = getSplitLineTotalQty(lineIdx);
+  const integerQty = isSplitLineIntegerQty(totalQty);
+  let value = Number(rawValue || 0);
+  if (!Number.isFinite(value)) value = 0;
+  value = Math.max(0, value);
+  if (integerQty) value = Math.round(value);
+  else value = roundSplitQty(value);
+
+  const maxForPart = getSplitLineMaxQtyForPart(lineIdx, partIdx);
+  value = Math.min(value, maxForPart);
+  value = integerQty ? Math.round(value) : roundSplitQty(value);
+
+  if (!Array.isArray(splitTicketItemsMatrix[lineIdx])) {
+    splitTicketItemsMatrix[lineIdx] = [];
+  }
+  splitTicketItemsMatrix[lineIdx][partIdx] = value;
+  return value;
+}
+
+function normalizeSplitItemsMatrixShape() {
+  const visible = getVisibleSplitSourceLines();
+  const parts = resolveSplitPartsCount();
+
+  if (!Array.isArray(splitTicketItemsMatrix)) {
+    splitTicketItemsMatrix = [];
+  }
+
+  splitTicketItemsMatrix = visible.map((line, lineIdx) => {
+    const prev = Array.isArray(splitTicketItemsMatrix[lineIdx])
+      ? splitTicketItemsMatrix[lineIdx]
+      : [];
+
+    const next = new Array(parts)
+      .fill(0)
+      .map((_, partIdx) => roundSplitQty(Number(prev[partIdx] || 0) || 0));
+
+    const totalQty = roundSplitQty(Number(line?.qty || 0) || 0);
+    const integerQty = isSplitLineIntegerQty(totalQty);
+
+    for (let partIdx = 0; partIdx < parts; partIdx += 1) {
+      let v = Number(next[partIdx] || 0) || 0;
+      if (v < 0) v = 0;
+      next[partIdx] = integerQty ? Math.round(v) : roundSplitQty(v);
+    }
+
+    return next;
+  });
+}
+
+function validateSplitItemsMatrix() {
+  const visible = getVisibleSplitSourceLines();
+  const parts = resolveSplitPartsCount();
+
+  if (!visible.length) {
+    return { ok: false, error: "No hay líneas para dividir." };
+  }
+
+  for (let lineIdx = 0; lineIdx < visible.length; lineIdx += 1) {
+    const line = visible[lineIdx];
+    const lineName = String(
+      line?.name || line?.descripcion || "Producto",
+    ).trim();
+    const totalQty = roundSplitQty(Number(line?.qty || 0) || 0);
+    const alloc = Array.isArray(splitTicketItemsMatrix[lineIdx])
+      ? splitTicketItemsMatrix[lineIdx]
+      : [];
+
+    let sum = 0;
+    for (let partIdx = 0; partIdx < parts; partIdx += 1) {
+      const q = roundSplitQty(Number(alloc[partIdx] || 0) || 0);
+      if (q < 0) {
+        return {
+          ok: false,
+          error: `Cantidad inválida en ${lineName}.`,
+        };
+      }
+      sum = roundSplitQty(sum + q);
+    }
+
+    if (Math.abs(sum - totalQty) > 0.0001) {
+      return {
+        ok: false,
+        error: `División incompleta en ${lineName}. Debe sumar ${Number(totalQty.toFixed(4))}.`,
+      };
+    }
+  }
+
+  return { ok: true };
+}
+
+function buildSplitLinesByPartFromItemsMatrix() {
+  const visible = getVisibleSplitSourceLines();
+  const parts = resolveSplitPartsCount();
+  const perPart = new Array(parts).fill(null).map(() => []);
+
+  visible.forEach((line, lineIdx) => {
+    const alloc = Array.isArray(splitTicketItemsMatrix[lineIdx])
+      ? splitTicketItemsMatrix[lineIdx]
+      : [];
+
+    for (let partIdx = 0; partIdx < parts; partIdx += 1) {
+      const q = roundSplitQty(Number(alloc[partIdx] || 0) || 0);
+      if (q <= 0) continue;
+
+      perPart[partIdx].push({
+        ...line,
+        _lineId: makeLineId(),
+        qty: q,
+      });
+    }
+  });
+
+  return perPart;
+}
+
+function buildMergedLinesForSplitTicket(ticket) {
+  const splitMeta = getTicketSplitMeta(ticket);
+  if (!splitMeta) {
+    const items = Array.isArray(ticket?.items) ? ticket.items : [];
+    return items
+      .map((line) => ({ ...line, _lineId: makeLineId() }))
+      .filter((line) => (Number(line?.qty || 0) || 0) > 0);
+  }
+
+  const sameGroupTickets = (Array.isArray(parkedTickets) ? parkedTickets : [])
+    .filter((tk) => {
+      if (!tk || tk?.paid) return false;
+      const meta = getTicketSplitMeta(tk);
+      return (
+        meta && String(meta.groupId || "") === String(splitMeta.groupId || "")
+      );
+    })
+    .sort((a, b) => {
+      const ma = getTicketSplitMeta(a);
+      const mb = getTicketSplitMeta(b);
+      return Number(ma?.part || 0) - Number(mb?.part || 0);
+    });
+
+  const roundQty = (n) => Math.round((Number(n) || 0) * 10000) / 10000;
+  const merged = new Map();
+
+  sameGroupTickets.forEach((tk) => {
+    (Array.isArray(tk?.items) ? tk.items : []).forEach((line) => {
+      const key = JSON.stringify({
+        id: getProductBaseId(line) || String(line?.id || ""),
+        name: String(line?.name || line?.descripcion || ""),
+        secondaryName: String(line?.secondaryName || line?.descripcion2 || ""),
+        price: Number(line?.price || 0) || 0,
+        grossPrice: Number(line?.grossPrice || 0) || 0,
+        taxRate: Number(line?.taxRate || 0) || 0,
+        codimpuesto: String(line?.codimpuesto || ""),
+      });
+
+      const qty = Number(line?.qty || 0) || 0;
+      if (!merged.has(key)) {
+        merged.set(key, {
+          ...line,
+          _lineId: makeLineId(),
+          qty: roundQty(qty),
+        });
+        return;
+      }
+
+      const prev = merged.get(key);
+      prev.qty = roundQty((Number(prev?.qty || 0) || 0) + qty);
+    });
+  });
+
+  return Array.from(merged.values()).filter(
+    (line) => (Number(line?.qty || 0) || 0) > 0,
+  );
+}
+
+function renderSplitTicketItemsMatrixLines() {
+  if (!splitTicketLines) return;
+
+  const parts = resolveSplitPartsCount();
+  const loaded = getCurrentLoadedParkedTicket();
+  const hasSplit = !!getTicketSplitMeta(loaded);
+  const visible = getVisibleSplitSourceLines();
+
+  if (parts === 1 && hasSplit) {
+    splitTicketLines.style.removeProperty("--split-parts");
+    splitTicketLines.innerHTML = "";
+    const mergeInfo = document.createElement("div");
+    mergeInfo.className = "split-ticket-line-empty split-ticket-merge-info";
+    mergeInfo.textContent =
+      "Revertir division: se unificaran todas las partes en un unico ticket.";
+    splitTicketLines.appendChild(mergeInfo);
+
+    const mergedPreviewLines = buildMergedLinesForSplitTicket(loaded);
+    mergedPreviewLines.forEach((line) => {
+      const row = document.createElement("div");
+      row.className = "split-ticket-line split-ticket-line-merge-preview";
+
+      const left = document.createElement("div");
+      left.className = "split-ticket-line-main";
+
+      const info = document.createElement("div");
+      const name = document.createElement("div");
+      name.className = "split-ticket-line-name";
+      name.textContent = String(line?.name || line?.descripcion || "Producto");
+
+      const meta = document.createElement("div");
+      meta.className = "split-ticket-line-meta";
+      const qty = Number(line?.qty || 0) || 0;
+      const unit = getUnitGross(line);
+      const lineTotal = unit * qty;
+      meta.textContent = `Cantidad final: ${Number(qty.toFixed(4))} · Total línea: ${eurTicket(lineTotal)}`;
+
+      info.appendChild(name);
+      info.appendChild(meta);
+      left.appendChild(info);
+      row.appendChild(left);
+      splitTicketLines.appendChild(row);
+    });
+
+    return;
+  }
+
+  normalizeSplitItemsMatrixShape();
+  splitTicketLines.style.setProperty("--split-parts", String(parts));
+
+  splitTicketLines.innerHTML = "";
+  if (!visible.length) {
+    const empty = document.createElement("div");
+    empty.className = "split-ticket-line-empty";
+    empty.textContent = "No hay líneas visibles para dividir.";
+    splitTicketLines.appendChild(empty);
+    return;
+  }
+
+  const header = document.createElement("div");
+  header.className = "split-items-grid split-items-grid-header";
+
+  const headerName = document.createElement("div");
+  headerName.className = "split-items-grid-title";
+  headerName.textContent = "Producto";
+  header.appendChild(headerName);
+
+  for (let partIdx = 0; partIdx < parts; partIdx += 1) {
+    const h = document.createElement("div");
+    h.className = "split-items-grid-col-title";
+    h.textContent = `P${partIdx + 1}`;
+    header.appendChild(h);
+  }
+  splitTicketLines.appendChild(header);
+
+  visible.forEach((line, lineIdx) => {
+    const totalQty = getSplitLineTotalQty(lineIdx);
+    const integerQty = isSplitLineIntegerQty(totalQty);
+
+    const row = document.createElement("div");
+    row.className = "split-items-grid split-items-grid-row";
+    row.dataset.lineIdx = String(lineIdx);
+
+    const left = document.createElement("div");
+    left.className = "split-items-grid-left";
+
+    const name = document.createElement("div");
+    name.className = "split-ticket-line-name";
+    name.textContent = String(line?.name || line?.descripcion || "Producto");
+
+    const meta = document.createElement("div");
+    meta.className = "split-ticket-line-meta split-items-grid-meta";
+    left.appendChild(name);
+    left.appendChild(meta);
+    row.appendChild(left);
+
+    const refreshRowUi = () => {
+      const remaining = getSplitLineRemainingQty(lineIdx);
+      meta.textContent = `Cant total: ${formatSplitQtyValue(totalQty, integerQty)} · Restante: ${formatSplitQtyValue(remaining, integerQty)}`;
+
+      const exhausted = remaining <= 0.0001;
+      row.classList.toggle("is-exhausted", exhausted);
+
+      const inputs = row.querySelectorAll("input[data-split-part-idx]");
+      inputs.forEach((inputEl) => {
+        const partIdx = Number(inputEl.dataset.splitPartIdx || 0) || 0;
+        const maxForPart = getSplitLineMaxQtyForPart(lineIdx, partIdx);
+        inputEl.max = formatSplitQtyValue(maxForPart, integerQty);
+        const currentVal = roundSplitQty(
+          Number(splitTicketItemsMatrix[lineIdx]?.[partIdx] || 0),
+        );
+
+        const minusBtn = row.querySelector(
+          `button[data-split-cell-minus="${partIdx}"]`,
+        );
+        const plusBtn = row.querySelector(
+          `button[data-split-cell-plus="${partIdx}"]`,
+        );
+
+        if (minusBtn) {
+          minusBtn.disabled = currentVal <= 0;
+        }
+        if (plusBtn) {
+          plusBtn.disabled = exhausted || maxForPart <= currentVal;
+        }
+
+        inputEl.readOnly = exhausted;
+      });
+    };
+
+    for (let partIdx = 0; partIdx < parts; partIdx += 1) {
+      const wrap = document.createElement("div");
+      wrap.className = "split-items-grid-cell";
+
+      const minusBtn = document.createElement("button");
+      minusBtn.type = "button";
+      minusBtn.className = "split-qty-btn split-qty-minus";
+      minusBtn.dataset.splitCellMinus = String(partIdx);
+      minusBtn.textContent = "-";
+
+      const input = document.createElement("input");
+      input.type = "number";
+      input.step = integerQty ? "1" : "0.0001";
+      input.min = "0";
+      input.dataset.splitPartIdx = String(partIdx);
+      input.value = formatSplitQtyValue(
+        Number(splitTicketItemsMatrix[lineIdx]?.[partIdx] || 0),
+        integerQty,
+      );
+      input.max = formatSplitQtyValue(
+        getSplitLineMaxQtyForPart(lineIdx, partIdx),
+        integerQty,
+      );
+
+      const syncFromRaw = (raw) => {
+        const next = setSplitLinePartQty(lineIdx, partIdx, raw);
+        input.value = formatSplitQtyValue(next, integerQty);
+        refreshRowUi();
+        refreshSplitTicketTotals();
+      };
+
+      minusBtn.addEventListener("click", () => {
+        const current =
+          Number(splitTicketItemsMatrix[lineIdx]?.[partIdx] || 0) || 0;
+        const step = integerQty ? 1 : 0.5;
+        syncFromRaw(Math.max(0, roundSplitQty(current - step)));
+      });
+
+      input.addEventListener("input", () => {
+        syncFromRaw(input.value);
+      });
+
+      input.addEventListener("change", () => {
+        syncFromRaw(input.value);
+      });
+
+      input.addEventListener("click", (ev) => {
+        if (typeof openNumPad !== "function") return;
+        if (input.readOnly) return;
+
+        openNumPad(
+          Number(splitTicketItemsMatrix[lineIdx]?.[partIdx] || 0),
+          (value) => {
+            syncFromRaw(value);
+          },
+          `${name.textContent || "Producto"} · P${partIdx + 1}`,
+          "qty",
+        );
+      });
+
+      const plusBtn = document.createElement("button");
+      plusBtn.type = "button";
+      plusBtn.className = "split-qty-btn split-qty-plus";
+      plusBtn.dataset.splitCellPlus = String(partIdx);
+      plusBtn.textContent = "+";
+      plusBtn.addEventListener("click", () => {
+        const current =
+          Number(splitTicketItemsMatrix[lineIdx]?.[partIdx] || 0) || 0;
+        const step = integerQty ? 1 : 0.5;
+        syncFromRaw(roundSplitQty(current + step));
+      });
+
+      wrap.appendChild(minusBtn);
+      wrap.appendChild(input);
+      wrap.appendChild(plusBtn);
+      row.appendChild(wrap);
+    }
+
+    refreshRowUi();
+    splitTicketLines.appendChild(row);
+  });
+}
+
+function resolveSplitPartsCount() {
+  const raw = Number(
+    splitTicketPartsInput?.value || splitTicketPartsCount || 2,
+  );
+  const bounds = getSplitPartsBounds();
+  const parsed = Number.isFinite(raw) ? Math.floor(raw) : splitTicketPartsCount;
+  const normalized = Math.max(
+    bounds.min,
+    Math.min(bounds.max, Number(parsed || 0) || bounds.min),
+  );
+  splitTicketPartsCount = normalized;
+  if (splitTicketPartsInput) {
+    splitTicketPartsInput.min = String(bounds.min);
+    splitTicketPartsInput.max = String(bounds.max);
+    splitTicketPartsInput.value = String(normalized);
+  }
+  return normalized;
+}
+
+function renderSplitTicketLines() {
+  if (!splitTicketLines) return;
+
+  if (isSplitItemsMode()) {
+    renderSplitTicketItemsMatrixLines();
+    return;
+  }
+
+  splitTicketLines.style.removeProperty("--split-parts");
+
+  const parts = resolveSplitPartsCount();
+  const visible = getVisibleCartLines(cart);
+  splitTicketLines.innerHTML = "";
+
+  if (!visible.length) {
+    const empty = document.createElement("div");
+    empty.className = "split-ticket-line-empty";
+    empty.textContent = "No hay líneas visibles para dividir.";
+    splitTicketLines.appendChild(empty);
+    return;
+  }
+
+  visible.forEach((line) => {
+    const row = document.createElement("div");
+    row.className = "split-ticket-line";
+
+    const left = document.createElement("div");
+    left.className = "split-ticket-line-main";
+
+    const info = document.createElement("div");
+    const name = document.createElement("div");
+    name.className = "split-ticket-line-name";
+    name.textContent = String(line?.name || line?.descripcion || "Producto");
+
+    const meta = document.createElement("div");
+    meta.className = "split-ticket-line-meta";
+    const qty = Number(line?.qty || 0) || 0;
+    const unit = getUnitGross(line);
+    const lineTotal = unit * qty;
+    const isQtyOne = Math.abs(qty - 1) < 0.0001;
+    if (isQtyOne) {
+      meta.textContent = `Cant: ${Number(qty.toFixed(4))} · Precio: ${eurTicket(lineTotal)}`;
+    } else {
+      meta.textContent = `Cant: ${Number(qty.toFixed(4))} · Precio línea: ${eurTicket(lineTotal)} · Unitario: ${eurTicket(unit)}`;
+    }
+
+    info.appendChild(name);
+    info.appendChild(meta);
+    left.appendChild(info);
+
+    row.appendChild(left);
+    splitTicketLines.appendChild(row);
+  });
+}
+
+function refreshSplitTicketTotals() {
+  const parts = resolveSplitPartsCount();
+  const sourceTotal = computeLinesTotal(cart);
+  const perPartTotal = parts > 0 ? sourceTotal / parts : sourceTotal;
+  const loaded = getCurrentLoadedParkedTicket();
+  const currentSplitMeta = getTicketSplitMeta(loaded);
+
+  if (splitTicketSourceTotal) {
+    splitTicketSourceTotal.textContent = eurTicket(sourceTotal);
+  }
+  if (splitTicketTargetTotal) {
+    if (parts === 1 && currentSplitMeta) {
+      splitTicketTargetTotal.textContent = "Revertir division";
+    } else if (isSplitItemsMode()) {
+      const validate = validateSplitItemsMatrix();
+      if (validate.ok) {
+        splitTicketTargetTotal.textContent = "División OK";
+      } else {
+        const pendingQty = getVisibleSplitSourceLines().reduce(
+          (sum, _, idx) => {
+            return sum + Math.max(0, getSplitLineRemainingQty(idx));
+          },
+          0,
+        );
+        splitTicketTargetTotal.textContent =
+          pendingQty > 0
+            ? `Pendiente: ${Number(pendingQty.toFixed(4))} uds`
+            : "División pendiente";
+      }
+    } else {
+      splitTicketTargetTotal.textContent = eurTicket(perPartTotal);
+    }
+  }
+  if (splitTicketRemainingTotal) {
+    const mesaState = loadMesasTablesStateForInline();
+    const uid = String(resolveTicketMesaUid(loaded, mesaState) || "").trim();
+    const linked = uid ? getMesasRoomAndTableByUid(mesaState, uid) : null;
+    const room = String(
+      loaded?.mesaRoomName ||
+        linked?.room?.name ||
+        linked?.room?.id ||
+        "Sin sala",
+    ).trim();
+    const table = String(
+      loaded?.mesaTableName ||
+        linked?.table?.name ||
+        linked?.table?.id ||
+        "Sin mesa",
+    ).trim();
+    splitTicketRemainingTotal.textContent = `${table} · ${room}`;
+  }
+}
+
+function closeSplitTicketModal() {
+  if (splitTicketOverlay) splitTicketOverlay.classList.add("hidden");
+}
+
+function refreshSplitTicketActionUi() {
+  if (!splitTicketConfirmBtn) return;
+  const loaded = getCurrentLoadedParkedTicket();
+  const hasSplit = !!getTicketSplitMeta(loaded);
+  const parts = resolveSplitPartsCount();
+
+  if (splitTicketPartsInput) {
+    const bounds = getSplitPartsBounds();
+    splitTicketPartsInput.min = String(bounds.min);
+    splitTicketPartsInput.max = String(bounds.max);
+  }
+
+  if (splitTicketMergeQuickBtn) {
+    splitTicketMergeQuickBtn.classList.toggle("hidden", !hasSplit);
+  }
+
+  if (parts === 1 && hasSplit) {
+    splitTicketConfirmBtn.textContent = "Revertir división";
+    splitTicketConfirmBtn.title =
+      "Unificar todas las partes en un único ticket";
+    return;
+  }
+
+  splitTicketConfirmBtn.textContent = "Generar división";
+  splitTicketConfirmBtn.title = "Crear tickets divididos";
+}
+
+function openSplitTicketModal() {
+  if (!isMesasTicketSplitAllowed()) {
+    toast(
+      "Abre un ticket de mesa con productos para dividir.",
+      "warn",
+      "Dividir",
+    );
+    return;
+  }
+
+  const loaded = getCurrentLoadedParkedTicket();
+  if (!loaded) {
+    toast("No hay ticket cargado para dividir.", "warn", "Dividir");
+    return;
+  }
+
+  const splitMeta = getTicketSplitMeta(loaded);
+  splitTicketPartsCount = splitMeta
+    ? Math.max(1, Number(splitMeta.total || 1))
+    : 2;
+  if (splitTicketPartsInput) {
+    splitTicketPartsInput.min = splitMeta ? "1" : "2";
+    splitTicketPartsInput.max = "12";
+    splitTicketPartsInput.value = String(splitTicketPartsCount);
+  }
+  splitTicketMode = String(splitTicketModeSelect?.value || "items");
+  initSplitItemsMatrixFromCurrentCart();
+  if (splitTicketError) splitTicketError.textContent = "";
+
+  if (splitTicketSourceName) {
+    splitTicketSourceName.textContent = String(
+      loaded?.name || loaded?.label || `Ticket #${loaded?.id || ""}`,
+    ).trim();
+  }
+
+  renderSplitTicketLines();
+  refreshSplitTicketTotals();
+  refreshSplitTicketActionUi();
+
+  splitTicketOverlay?.classList.remove("hidden");
+}
+
+async function confirmSplitTicket() {
+  if (splitTicketError) splitTicketError.textContent = "";
+
+  const loaded = getCurrentLoadedParkedTicket();
+  if (!loaded) {
+    if (splitTicketError)
+      splitTicketError.textContent = "No hay ticket cargado.";
+    return;
+  }
+
+  const parts = resolveSplitPartsCount();
+  splitTicketMode = String(
+    splitTicketModeSelect?.value || splitTicketMode || "items",
+  );
+  const currentSplitMeta = getTicketSplitMeta(loaded);
+
+  const stripSplitSuffixFromTicketName = (nameText) =>
+    String(nameText || "")
+      .replace(/\s*-\s*parte\s*\d+\s*\/\s*\d+\s*$/i, "")
+      .replace(/\s*\(\d+\s*\/\s*\d+\)\s*$/g, "")
+      .trim();
+
+  const mergeSplitLines = (tickets) => {
+    const roundQty = (n) => Math.round((Number(n) || 0) * 10000) / 10000;
+    const merged = new Map();
+
+    (Array.isArray(tickets) ? tickets : []).forEach((tk) => {
+      (Array.isArray(tk?.items) ? tk.items : []).forEach((line) => {
+        const key = JSON.stringify({
+          id: getProductBaseId(line) || String(line?.id || ""),
+          name: String(line?.name || line?.descripcion || ""),
+          secondaryName: String(
+            line?.secondaryName || line?.descripcion2 || "",
+          ),
+          price: Number(line?.price || 0) || 0,
+          grossPrice: Number(line?.grossPrice || 0) || 0,
+          taxRate: Number(line?.taxRate || 0) || 0,
+          codimpuesto: String(line?.codimpuesto || ""),
+        });
+
+        const qty = Number(line?.qty || 0) || 0;
+        if (!merged.has(key)) {
+          merged.set(key, {
+            ...line,
+            _lineId: makeLineId(),
+            qty: roundQty(qty),
+          });
+          return;
+        }
+
+        const prev = merged.get(key);
+        prev.qty = roundQty((Number(prev?.qty || 0) || 0) + qty);
+      });
+    });
+
+    return Array.from(merged.values()).filter(
+      (line) => (Number(line?.qty || 0) || 0) > 0,
+    );
+  };
+
+  if (parts === 1) {
+    if (!currentSplitMeta) {
+      if (splitTicketError) {
+        splitTicketError.textContent = "Este ticket no está dividido.";
+      }
+      return;
+    }
+
+    const sameGroupEntries = (Array.isArray(parkedTickets) ? parkedTickets : [])
+      .map((ticket, idx) => ({ ticket, idx, meta: getTicketSplitMeta(ticket) }))
+      .filter(
+        (entry) =>
+          entry.meta &&
+          String(entry.meta.groupId || "") ===
+            String(currentSplitMeta.groupId || ""),
+      );
+
+    if (!sameGroupEntries.length) {
+      if (splitTicketError) {
+        splitTicketError.textContent =
+          "No se encontraron partes para unificar.";
+      }
+      return;
+    }
+
+    if (sameGroupEntries.some((entry) => !!entry.ticket?.paid)) {
+      if (splitTicketError) {
+        splitTicketError.textContent =
+          "No se puede deshacer: hay partes de esta división ya cobradas.";
+      }
+      return;
+    }
+
+    const mergedLines = mergeSplitLines(
+      sameGroupEntries.map((entry) => entry.ticket),
+    );
+    const cleanObs = String(
+      parseSplitInfoFromObs(loaded?.obs)?.cleanObs || loaded?.obs || "",
+    ).trim();
+    const baseName =
+      stripSplitSuffixFromTicketName(loaded?.name) ||
+      `Ticket #${loaded?.id || ""}`;
+
+    loaded.items = mergedLines;
+    loaded.total = getCartTotal(mergedLines);
+    loaded.name = baseName;
+    loaded.obs = cleanObs;
+    delete loaded.splitGroupId;
+    delete loaded.splitPart;
+    delete loaded.splitTotal;
+    loaded.updatedAt = new Date();
+    loaded.localRevisionAt = Date.now();
+
+    const toDelete = sameGroupEntries.filter(
+      (entry) => String(entry.ticket?.id || "") !== String(loaded?.id || ""),
+    );
+
+    toDelete
+      .sort((a, b) => b.idx - a.idx)
+      .forEach((entry) => {
+        parkedTickets.splice(entry.idx, 1);
+      });
+
+    clearSplitSessionState();
+    saveParkedTicketsCache();
+
+    try {
+      await apiSaveParkedReservation(loaded);
+    } catch (e) {
+      enqueueParkedSyncOperation("upsert", loaded);
+      console.warn("No se pudo sincronizar ticket unificado:", e?.message || e);
+    }
+
+    for (const entry of toDelete) {
+      try {
+        await apiDeleteParkedReservation(entry.ticket);
+      } catch (e) {
+        enqueueParkedSyncOperation("delete", entry.ticket);
+        console.warn(
+          "No se pudo borrar ticket dividido remoto al unificar:",
+          e?.message || e,
+        );
+      }
+    }
+
+    refreshRemoteParkedReservationsOnly().catch(() => {});
+
+    cart = mergedLines.map((it) => ({ ...it }));
+    renderCart();
+
+    const loadedIdx = (
+      Array.isArray(parkedTickets) ? parkedTickets : []
+    ).findIndex(
+      (t) => String(t?.id || "") === String(loaded?.id || "") && !t?.paid,
+    );
+    currentParkedTicketIndex = loadedIdx >= 0 ? loadedIdx : null;
+    refreshParkedEditingBanner();
+    refreshParkButtonUI();
+    updateParkedCountBadge();
+
+    closeSplitTicketModal();
+    toast("División deshecha: ticket unificado.", "ok", "Dividir");
+    return;
+  }
+
+  if (currentSplitMeta) {
+    if (splitTicketError) {
+      splitTicketError.textContent =
+        "Este ticket ya está dividido. Usa Partes = 1 para unificar primero.";
+    }
+    return;
+  }
+
+  const sourceLines = Array.isArray(cart) ? cart.map((it) => ({ ...it })) : [];
+  if (!sourceLines.length) {
+    if (splitTicketError)
+      splitTicketError.textContent = "No hay líneas para dividir.";
+    return;
+  }
+
+  const roundQty = (n) => Math.round((Number(n) || 0) * 10000) / 10000;
+  const buildShareLines = () =>
+    sourceLines.map((line) => {
+      const qty = Number(line?.qty || 0) || 0;
+      return {
+        ...line,
+        _lineId: makeLineId(),
+        qty: roundQty(qty / parts),
+      };
+    });
+
+  let linesByPart = [];
+  let activePartsData = [];
+  let targetSplitParts = parts;
+  if (isSplitItemsMode()) {
+    normalizeSplitItemsMatrixShape();
+    const valid = validateSplitItemsMatrix();
+    if (!valid.ok) {
+      if (splitTicketError) splitTicketError.textContent = valid.error;
+      return;
+    }
+
+    linesByPart = buildSplitLinesByPartFromItemsMatrix();
+    activePartsData = linesByPart
+      .map((list, idx) => ({
+        originalPart: idx + 1,
+        lines: Array.isArray(list) ? list : [],
+      }))
+      .filter((entry) => entry.lines.length > 0);
+
+    if (activePartsData.length < 2) {
+      if (splitTicketError) {
+        splitTicketError.textContent =
+          "Asigna artículos al menos a dos partes para poder dividir.";
+      }
+      return;
+    }
+
+    targetSplitParts = activePartsData.length;
+  }
+
+  const sourceName = String(
+    loaded?.name || `Ticket #${loaded?.id || ""}`,
+  ).trim();
+  const splitGroupId = makeSplitGroupId();
+  const mesaScope = getSelectedMesaScopeContext();
+  const splitTickets = [];
+
+  for (let i = 2; i <= targetSplitParts; i += 1) {
+    const nextId = getNextSuggestedParkTicketId() + (i - 2);
+    const ticketLines = isSplitItemsMode()
+      ? Array.isArray(activePartsData[i - 1]?.lines)
+        ? activePartsData[i - 1].lines
+        : []
+      : buildShareLines();
+    const splitTicket = {
+      id: nextId,
+      createdAt: new Date(),
+      updatedAt: null,
+      localRevisionAt: Date.now(),
+      items: ticketLines,
+      total: getCartTotal(ticketLines),
+      clientName: String(loaded?.clientName || "Cliente").trim() || "Cliente",
+      name: `${sourceName} (${i}/${targetSplitParts})`,
+      obs: encodeSplitInfoInObs(loaded?.obs, {
+        groupId: splitGroupId,
+        part: i,
+        total: targetSplitParts,
+      }),
+      splitGroupId,
+      splitPart: i,
+      splitTotal: targetSplitParts,
+      parkingMode: inferTicketParkingMode(loaded),
+      mesaAlerts: normalizeMesaTicketAlerts(loaded?.mesaAlerts),
+      paid: false,
+      paidAt: null,
+      paidTicketCode: null,
+      paidTicketId: null,
+      fs: null,
+      mesaUid: null,
+      mesaRoomId: null,
+      mesaRoomName: null,
+      mesaTableId: null,
+      mesaTableName: null,
+    };
+    applyMesaScopeToTicket(splitTicket, mesaScope);
+    splitTickets.push(splitTicket);
+  }
+
+  const loadedShareLines = isSplitItemsMode()
+    ? Array.isArray(activePartsData[0]?.lines)
+      ? activePartsData[0].lines
+      : []
+    : buildShareLines();
+  loaded.items = loadedShareLines;
+  loaded.total = getCartTotal(loadedShareLines);
+  loaded.name = `${sourceName} (1/${targetSplitParts})`;
+  loaded.obs = encodeSplitInfoInObs(loaded?.obs, {
+    groupId: splitGroupId,
+    part: 1,
+    total: targetSplitParts,
+  });
+  loaded.splitGroupId = splitGroupId;
+  loaded.splitPart = 1;
+  loaded.splitTotal = targetSplitParts;
+  loaded.updatedAt = new Date();
+  loaded.localRevisionAt = Date.now();
+
+  saveSplitSessionState({
+    groupId: splitGroupId,
+    nextPart: 1,
+    totalParts: targetSplitParts,
+    mesaUid: String(mesaScope?.uid || "").trim() || null,
+  });
+
+  if (splitTickets.length) {
+    const maxCreatedId = splitTickets.reduce(
+      (max, t) => Math.max(max, Number(t?.id || 0)),
+      0,
+    );
+    parkedCounter = Math.max(Number(parkedCounter || 0), maxCreatedId);
+    saveParkedGlobalCounter(parkedCounter);
+    parkedTickets.push(...splitTickets);
+  }
+
+  saveParkedTicketsCache();
+
+  try {
+    await apiSaveParkedReservation(loaded);
+  } catch (e) {
+    enqueueParkedSyncOperation("upsert", loaded);
+    console.warn(
+      "No se pudo sincronizar ticket origen al dividir:",
+      e?.message || e,
+    );
+  }
+
+  for (const splitTicket of splitTickets) {
+    try {
+      await apiSaveParkedReservation(splitTicket);
+    } catch (e) {
+      enqueueParkedSyncOperation("upsert", splitTicket);
+      console.warn("No se pudo sincronizar ticket dividido:", e?.message || e);
+    }
+  }
+
+  refreshRemoteParkedReservationsOnly().catch(() => {});
+
+  cart = loadedShareLines.map((it) => ({ ...it }));
+  renderCart();
+
+  const loadedIdx = (
+    Array.isArray(parkedTickets) ? parkedTickets : []
+  ).findIndex(
+    (t) => String(t?.id || "") === String(loaded?.id || "") && !t?.paid,
+  );
+  currentParkedTicketIndex = loadedIdx >= 0 ? loadedIdx : null;
+  refreshParkedEditingBanner();
+  refreshParkButtonUI();
+  updateParkedCountBadge();
+
+  closeSplitTicketModal();
+  toast(`Ticket dividido en ${targetSplitParts} partes.`, "ok", "Dividir");
+}
+
+function normalizeTicketComandaState(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const seq = Math.max(0, Number(src?.seq || 0) || 0);
+  const printedQtyByLineKey =
+    src?.printedQtyByLineKey && typeof src.printedQtyByLineKey === "object"
+      ? Object.fromEntries(
+          Object.entries(src.printedQtyByLineKey)
+            .map(([k, v]) => [
+              String(k || "").trim(),
+              Math.max(0, Number(v || 0) || 0),
+            ])
+            .filter(([k]) => !!k),
+        )
+      : {};
+
+  return {
+    seq,
+    printedQtyByLineKey,
+    lastPrintedAt: src?.lastPrintedAt ? new Date(src.lastPrintedAt) : null,
+  };
+}
+
+function buildComandaLineKey(line) {
+  const baseId = getProductBaseId(line);
+  const name = String(line?.name || line?.descripcion || "").trim();
+  const ref = String(line?.referencia || "").trim();
+  return JSON.stringify({
+    id: baseId || null,
+    name,
+    ref,
+  });
+}
+
+function buildComandaQtyMap(lines) {
+  const map = new Map();
+  (Array.isArray(lines) ? lines : []).forEach((line) => {
+    const key = buildComandaLineKey(line);
+    const qty = Math.max(0, Number(line?.qty || 0) || 0);
+    map.set(key, Number(map.get(key) || 0) + qty);
+  });
+  return map;
+}
+
+function getComandaDeltaLinesForTicket(ticket, sourceLines = cart) {
+  const baseLines = getComandaPrintableLines(sourceLines || []);
+  if (!baseLines.length) return [];
+
+  const state = normalizeTicketComandaState(ticket?.comandaState);
+  const currentMap = buildComandaQtyMap(baseLines);
+  const pendingByKey = new Map();
+
+  currentMap.forEach((currentQty, key) => {
+    const alreadyPrinted = Math.max(
+      0,
+      Number(state?.printedQtyByLineKey?.[key] || 0) || 0,
+    );
+    const delta = Math.max(0, currentQty - alreadyPrinted);
+    if (delta > 0) pendingByKey.set(key, delta);
+  });
+
+  if (!pendingByKey.size) return [];
+
+  const out = [];
+  baseLines.forEach((line) => {
+    const key = buildComandaLineKey(line);
+    const pending = Math.max(0, Number(pendingByKey.get(key) || 0) || 0);
+    if (pending <= 0) return;
+
+    const lineQty = Math.max(0, Number(line?.qty || 0) || 0);
+    const take = Math.min(lineQty, pending);
+    if (take <= 0) return;
+
+    out.push({
+      ...line,
+      qty: Math.round(take * 10000) / 10000,
+    });
+    pendingByKey.set(key, Math.max(0, pending - take));
+  });
+
+  return out;
+}
+
+function getNextComandaPartNumber(ticket) {
+  const state = normalizeTicketComandaState(ticket?.comandaState);
+  return Math.max(1, Number(state?.seq || 0) + 1);
+}
+
+function commitComandaPrintedState(ticket, sourceLines = cart) {
+  if (!ticket || typeof ticket !== "object") return;
+  const filteredLines = getComandaPrintableLines(sourceLines || []);
+  const qtyMap = buildComandaQtyMap(filteredLines);
+  const prev = normalizeTicketComandaState(ticket?.comandaState);
+
+  const persisted = {};
+  qtyMap.forEach((qty, key) => {
+    persisted[key] = Math.max(0, Number(qty || 0) || 0);
+  });
+
+  ticket.comandaState = {
+    seq: Math.max(0, Number(prev?.seq || 0) || 0) + 1,
+    printedQtyByLineKey: persisted,
+    lastPrintedAt: new Date(),
+  };
+  ticket.updatedAt = new Date();
+  ticket.localRevisionAt = Date.now();
+}
+
+async function persistTicketAfterComandaPrint(ticket) {
+  if (!ticket || typeof ticket !== "object") return;
+  saveParkedTicketsCache();
+
+  try {
+    await apiSaveParkedReservation(ticket);
+    await refreshRemoteParkedReservationsOnly();
+  } catch (e) {
+    enqueueParkedSyncOperation("upsert", ticket);
+    console.warn(
+      "No se pudo sincronizar estado de comanda en ticket:",
+      e?.message || e,
+    );
+  }
+}
+
+function closeComandaModal() {
+  if (comandaOverlay) comandaOverlay.classList.add("hidden");
+}
+
+function renderComandaLinesPreview(lines) {
+  if (!comandaLines) return;
+
+  comandaLines.innerHTML = "";
+  const list = Array.isArray(lines) ? lines : [];
+  if (!list.length) {
+    const empty = document.createElement("div");
+    empty.className = "split-ticket-line-empty";
+    empty.textContent =
+      "No hay líneas de las familias configuradas para comanda.";
+    comandaLines.appendChild(empty);
+    return;
+  }
+
+  list.forEach((line) => {
+    const row = document.createElement("div");
+    row.className = "split-ticket-line";
+
+    const left = document.createElement("div");
+    left.className = "split-ticket-line-main";
+
+    const info = document.createElement("div");
+    const name = document.createElement("div");
+    name.className = "split-ticket-line-name";
+    name.textContent = String(line?.name || line?.descripcion || "Producto");
+
+    const ref = String(line?.referencia || "").trim();
+    const qty = Number(line?.qty || 0) || 0;
+    const meta = document.createElement("div");
+    meta.className = "split-ticket-line-meta";
+    meta.textContent = ref ? `Ref: ${ref} · Cant: ${qty}` : `Cant: ${qty}`;
+
+    info.appendChild(name);
+    info.appendChild(meta);
+    left.appendChild(info);
+    row.appendChild(left);
+    comandaLines.appendChild(row);
+  });
+}
+
+function getConfiguredComandaPrinterForPrint() {
+  return String(getSavedComandaPrinterReal() || "").trim();
+}
+
+function resolveComandaTicketForSelectedMesa() {
+  const loaded = getCurrentLoadedParkedTicket();
+  if (!isMesasTransaccionesMode()) return loaded;
+
+  const selectedScope = getSelectedMesaScopeContext();
+  const selectedUid = String(selectedScope?.uid || "").trim();
+  if (!selectedUid) return loaded;
+
+  const loadedUid = String(resolveTicketMesaUid(loaded) || "").trim();
+  if (loaded && loadedUid === selectedUid) return loaded;
+
+  const mesasState = loadMesasTablesStateForInline();
+  const linkedTicketId = mesasState?.tableTicketMap?.[selectedUid];
+  if (!linkedTicketId) return loaded;
+
+  const linkedTicket = (Array.isArray(parkedTickets) ? parkedTickets : []).find(
+    (t) => String(t?.id || "") === String(linkedTicketId || "") && !t?.paid,
+  );
+
+  return linkedTicket || loaded;
+}
+
+function resolveMesaScopeFromTicket(ticket) {
+  const mesasState = loadMesasTablesStateForInline();
+  const uid = String(resolveTicketMesaUid(ticket, mesasState) || "").trim();
+
+  if (uid) {
+    const linked = getMesasRoomAndTableByUid(mesasState, uid);
+    if (linked) {
+      return {
+        uid,
+        roomId: String(linked.room?.id || "").trim(),
+        roomName: String(linked.room?.name || linked.room?.id || "Sala").trim(),
+        tableId: String(linked.table?.id || "").trim(),
+        tableName: String(
+          linked.table?.name || linked.table?.id || "Mesa",
+        ).trim(),
+      };
+    }
+  }
+
+  return {
+    uid: uid || null,
+    roomId: String(ticket?.mesaRoomId || "").trim() || null,
+    roomName: String(ticket?.mesaRoomName || "Sala").trim() || "Sala",
+    tableId: String(ticket?.mesaTableId || "").trim() || null,
+    tableName: String(ticket?.mesaTableName || "Mesa").trim() || "Mesa",
+  };
+}
+
+async function printComandaWithContext({
+  scope,
+  lines,
+  obsText,
+  partNumber = null,
+  printerName,
+  successToastMessage = "Comanda enviada a impresora.",
+  errorPrefix = "No se pudo imprimir la comanda:",
+}) {
+  let templateHtml = "";
+  try {
+    const res = await fetch("comanda_print.html", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    templateHtml = await res.text();
+  } catch (e) {
+    return {
+      ok: false,
+      error: "No se pudo cargar comanda_print.html: " + (e?.message || e),
+    };
+  }
+
+  const now = new Date();
+  const fecha = now.toLocaleDateString("es-ES");
+  const hora = now.toLocaleTimeString("es-ES", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  const room = String(scope?.roomName || scope?.roomId || "Sala").trim();
+  const table = String(scope?.tableName || scope?.tableId || "Mesa").trim();
+  const mesaBig = String(scope?.tableName || scope?.tableId || "Mesa").trim();
+  const agent =
+    String(currentAgent?.name || currentAgent?.nick || "-").trim() || "-";
+
+  const doc = new DOMParser().parseFromString(templateHtml, "text/html");
+  setText(doc, "comandaMesaBig", mesaBig);
+  setText(doc, "comandaMesa", `${room} · ${table}`);
+  setText(doc, "comandaAgent", agent);
+  setText(doc, "comandaDate", fecha);
+  setText(doc, "comandaTime", hora);
+  const partRow = doc.getElementById("comandaPartRow");
+  const partText =
+    Number(partNumber || 0) > 0 ? `Parte ${Number(partNumber)}` : "";
+  setText(doc, "comandaPart", partText);
+  if (partRow) partRow.style.display = partText ? "block" : "none";
+  setText(
+    doc,
+    "comandaObs",
+    String(obsText || "").trim() || "Sin observaciones",
+  );
+
+  const itemsEl = doc.getElementById("comandaItems");
+  if (itemsEl) {
+    itemsEl.innerHTML = "";
+    (Array.isArray(lines) ? lines : []).forEach((line) => {
+      const qty = Number(line?.qty || 0) || 0;
+      const ref = String(line?.referencia || "").trim();
+      const desc = String(line?.name || line?.descripcion || "Producto").trim();
+
+      const row = doc.createElement("div");
+      row.className = "comanda-item";
+
+      const qtyEl = doc.createElement("div");
+      qtyEl.className = "comanda-qty";
+      qtyEl.textContent = String(qty);
+
+      const descEl = doc.createElement("div");
+      descEl.className = "comanda-desc";
+      descEl.textContent = ref ? `${ref} - ${desc}` : desc;
+
+      row.appendChild(qtyEl);
+      row.appendChild(descEl);
+      itemsEl.appendChild(row);
+    });
+  }
+
+  const finalHtml = "<!doctype html>\n" + doc.documentElement.outerHTML;
+  const printResult = await window.TPV_PRINT.printTicket({
+    html: finalHtml,
+    deviceName: printerName,
+  });
+
+  if (!printResult?.ok) {
+    return {
+      ok: false,
+      error: `${errorPrefix} ${printResult?.error || "error desconocido"}`,
+    };
+  }
+
+  toast(successToastMessage, "ok", "Comandas");
+  return { ok: true };
+}
+
+async function maybeAutoPrintComandaOnSave(ticket) {
+  if (!isAutoComandaOnSaveEnabled()) return;
+  if (!MESAS_INLINE_ACTIVE || MESAS_INLINE_VIEW !== "transacciones") return;
+
+  const lines = getComandaDeltaLinesForTicket(ticket, ticket?.items || []);
+  if (!lines.length) return;
+
+  const printerName = getConfiguredComandaPrinterForPrint();
+  if (!printerName) {
+    toast(
+      "Auto-comanda activa pero no hay impresora de comandas configurada.",
+      "warn",
+      "Comandas",
+    );
+    return;
+  }
+
+  const scope = resolveMesaScopeFromTicket(ticket);
+  const splitObsInfo = parseSplitInfoFromObs(ticket?.obs);
+  const obsText = String(splitObsInfo?.cleanObs || ticket?.obs || "").trim();
+  const partNumber = getNextComandaPartNumber(ticket);
+  const res = await printComandaWithContext({
+    scope,
+    lines,
+    obsText,
+    partNumber,
+    printerName,
+    successToastMessage: "Comanda enviada automáticamente al guardar.",
+    errorPrefix: "No se pudo imprimir la comanda automática:",
+  });
+
+  if (!res?.ok && res?.error) {
+    toast(res.error, "err", "Comandas");
+    return;
+  }
+
+  commitComandaPrintedState(ticket, ticket?.items || []);
+  await persistTicketAfterComandaPrint(ticket);
+}
+
+function openComandaModal() {
+  if (comandaError) comandaError.textContent = "";
+
+  if (!isMesasComandaAllowed()) {
+    toast(
+      "No hay líneas de familias de comanda. Revisa la configuración en Opciones.",
+      "warn",
+      "Comandas",
+    );
+    return;
+  }
+
+  const scope = getSelectedMesaScopeContext();
+  const loaded = resolveComandaTicketForSelectedMesa();
+  const lines = loaded
+    ? getComandaDeltaLinesForTicket(loaded, cart)
+    : getComandaPrintableLines(cart);
+
+  if (!lines.length) {
+    toast(
+      "No hay artículos nuevos para enviar a cocina en esta comanda.",
+      "info",
+      "Comandas",
+    );
+    return;
+  }
+
+  if (comandaMesaLabel) {
+    const table = String(scope?.tableName || scope?.tableId || "Mesa").trim();
+    const room = String(scope?.roomName || scope?.roomId || "Sala").trim();
+    comandaMesaLabel.textContent = `${room} · ${table}`;
+  }
+  if (comandaAgentLabel) {
+    comandaAgentLabel.textContent =
+      String(currentAgent?.name || currentAgent?.nick || "-").trim() || "-";
+  }
+  if (comandaCountLabel) comandaCountLabel.textContent = String(lines.length);
+
+  if (comandaObs) {
+    comandaObs.value = "";
+    comandaObs.readOnly = true;
+    const open = () => {
+      if (typeof window.openQwertyForInput === "function") {
+        window.openQwertyForInput(comandaObs, "text");
+      } else {
+        comandaObs.readOnly = false;
+      }
+    };
+    comandaObs.onfocus = open;
+    comandaObs.onclick = open;
+  }
+
+  renderComandaLinesPreview(lines);
+  comandaOverlay?.classList.remove("hidden");
+}
+
+async function printComandaFromCurrentMesa() {
+  if (comandaError) comandaError.textContent = "";
+
+  const scope = getSelectedMesaScopeContext();
+  const loaded = resolveComandaTicketForSelectedMesa();
+  const lines = loaded
+    ? getComandaDeltaLinesForTicket(loaded, cart)
+    : getComandaPrintableLines(cart);
+  if (!lines.length) {
+    if (comandaError) {
+      comandaError.textContent =
+        "No hay líneas nuevas para imprimir en la comanda.";
+    }
+    return;
+  }
+
+  const printerName = getConfiguredComandaPrinterForPrint();
+  if (!printerName) {
+    if (comandaError) {
+      comandaError.textContent =
+        "No hay impresora de comandas configurada en Opciones.";
+    }
+    return;
+  }
+  const obsText = String(comandaObs?.value || "").trim();
+  const partNumber = loaded ? getNextComandaPartNumber(loaded) : 1;
+
+  const result = await printComandaWithContext({
+    scope,
+    lines,
+    obsText,
+    partNumber,
+    printerName,
+  });
+
+  if (!result?.ok) {
+    if (comandaError) {
+      comandaError.textContent = String(
+        result?.error || "No se pudo imprimir la comanda.",
+      );
+    }
+    return;
+  }
+
+  if (loaded) {
+    commitComandaPrintedState(loaded, cart);
+    await persistTicketAfterComandaPrint(loaded);
+  }
+
+  closeComandaModal();
+}
+
+function buildMesasPreprintTicketDraft() {
+  const scope = getSelectedMesaScopeContext();
+  const loaded = resolveComandaTicketForSelectedMesa();
+  const now = new Date();
+  const fecha = now.toLocaleDateString("es-ES");
+  const hora = now.toLocaleTimeString("es-ES", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  const snapshot = Array.isArray(cart) ? cart.map((it) => ({ ...it })) : [];
+  const total = getCartTotal(snapshot);
+  const tableLabel = String(
+    scope?.tableName || scope?.tableId || "Mesa",
+  ).trim();
+  const roomLabel = String(scope?.roomName || scope?.roomId || "Sala").trim();
+  const clientName =
+    (cartClientInput && String(cartClientInput.value || "").trim()) ||
+    "Ventas tickets";
+
+  return {
+    numero: String(loaded?.id || "").trim(),
+    fecha,
+    hora,
+    paymentMethod: "Pendiente de pago",
+    clientName,
+    terminalName: currentTerminal ? currentTerminal.name || "" : "",
+    agentName: currentAgent ? currentAgent.name || "" : "",
+    company: companyInfo ? { ...companyInfo } : null,
+    lineas: snapshot,
+    total,
+    obs: `Mesa ${tableLabel} · ${roomLabel}`,
+    mesaUid: String(scope?.uid || "").trim(),
+    mesaRoomName: roomLabel,
+    mesaTableName: tableLabel,
+    _preprint: true,
+  };
+}
+
+function markMesaAsPendingPaymentByUid(uid) {
+  const mesaUid = String(uid || "").trim();
+  if (!mesaUid) return false;
+
+  const mesasState = loadMesasTablesStateForInline();
+  if (!mesasState || typeof mesasState !== "object") return false;
+
+  if (!mesasState.tableStates || typeof mesasState.tableStates !== "object") {
+    mesasState.tableStates = {};
+  }
+  if (!mesasState.tableMeta || typeof mesasState.tableMeta !== "object") {
+    mesasState.tableMeta = {};
+  }
+
+  const prevMeta =
+    mesasState.tableMeta[mesaUid] &&
+    typeof mesasState.tableMeta[mesaUid] === "object"
+      ? mesasState.tableMeta[mesaUid]
+      : {};
+
+  mesasState.tableStates[mesaUid] = "cuenta";
+  mesasState.tableMeta[mesaUid] = {
+    ...prevMeta,
+    serviceStage: "cuenta-pedida",
+  };
+
+  saveMesasTablesStateForInline(mesasState);
+  renderMesasTransContextBar?.();
+  return true;
+}
+
+async function preprintCurrentMesaTicket() {
+  if (!isMesasPreprintAllowed()) {
+    toast(
+      "Abre una mesa en Transacciones y añade productos para preimprimir.",
+      "warn",
+      "Precuenta",
+    );
+    return;
+  }
+
+  const draftTicket = buildMesasPreprintTicketDraft();
+  const ok = await printTicket(draftTicket);
+  if (!ok) return;
+
+  const mesaUid = String(draftTicket?.mesaUid || "").trim();
+  if (mesaUid && markMesaAsPendingPaymentByUid(mesaUid)) {
+    setStatusText("Precuenta impresa. Mesa pendiente de pago.");
+    toast("Mesa marcada como pendiente de pago.", "ok", "Precuenta");
+  }
+}
+
+if (preprintTicketBtn) {
+  preprintTicketBtn.addEventListener("click", () => {
+    preprintCurrentMesaTicket();
+  });
+  refreshPreprintButtonUI();
+}
+
+const parkedSplitBtnEl = document.getElementById("parkedSplitBtn");
+if (parkedSplitBtnEl) {
+  parkedSplitBtnEl.addEventListener("click", () => {
+    openSplitTicketModal();
+  });
+}
+
+const parkedUndoBtnEl = document.getElementById("parkedUndoBtn");
+if (parkedUndoBtnEl) {
+  parkedUndoBtnEl.addEventListener("click", () => {
+    undoCartHistoryStep();
+  });
+}
+
+const parkedRedoBtnEl = document.getElementById("parkedRedoBtn");
+if (parkedRedoBtnEl) {
+  parkedRedoBtnEl.addEventListener("click", () => {
+    redoCartHistoryStep();
+  });
+}
+
+const parkedSplitPrevBtnEl = document.getElementById("parkedSplitPrevBtn");
+if (parkedSplitPrevBtnEl) {
+  parkedSplitPrevBtnEl.addEventListener("click", () => {
+    const loaded = getCurrentLoadedParkedTicket();
+    const navState = getCurrentSplitNavigationState(loaded);
+    if (!navState.enabled || navState.prevIndex < 0) return;
+    restoreParkedCartByIndex(navState.prevIndex);
+  });
+}
+
+const parkedSplitNextBtnEl = document.getElementById("parkedSplitNextBtn");
+if (parkedSplitNextBtnEl) {
+  parkedSplitNextBtnEl.addEventListener("click", () => {
+    const loaded = getCurrentLoadedParkedTicket();
+    const navState = getCurrentSplitNavigationState(loaded);
+    if (!navState.enabled || navState.nextIndex < 0) return;
+    restoreParkedCartByIndex(navState.nextIndex);
+  });
+}
+
+splitTicketPartsInput?.addEventListener("input", () => {
+  resolveSplitPartsCount();
+  if (isSplitItemsMode()) {
+    normalizeSplitItemsMatrixShape();
+  }
+  renderSplitTicketLines();
+  refreshSplitTicketTotals();
+  refreshSplitTicketActionUi();
+});
+
+splitTicketPartsInput?.addEventListener("click", () => {
+  if (typeof openNumPad !== "function") return;
+  const bounds = getSplitPartsBounds();
+  const current = resolveSplitPartsCount();
+  openNumPad(
+    current,
+    (value) => {
+      const parsed = Math.floor(Number(value || current) || current);
+      const next = Math.max(bounds.min, Math.min(bounds.max, parsed));
+      if (splitTicketPartsInput) splitTicketPartsInput.value = String(next);
+      resolveSplitPartsCount();
+      if (isSplitItemsMode()) {
+        normalizeSplitItemsMatrixShape();
+      }
+      renderSplitTicketLines();
+      refreshSplitTicketTotals();
+      refreshSplitTicketActionUi();
+    },
+    "Partes",
+    "qty",
+  );
+});
+
+splitTicketPartsMinusBtn?.addEventListener("click", () => {
+  const bounds = getSplitPartsBounds();
+  const current = resolveSplitPartsCount();
+  const next = Math.max(bounds.min, current - 1);
+  if (splitTicketPartsInput) splitTicketPartsInput.value = String(next);
+  resolveSplitPartsCount();
+  if (isSplitItemsMode()) {
+    normalizeSplitItemsMatrixShape();
+  }
+  renderSplitTicketLines();
+  refreshSplitTicketTotals();
+  refreshSplitTicketActionUi();
+});
+
+splitTicketPartsPlusBtn?.addEventListener("click", () => {
+  const bounds = getSplitPartsBounds();
+  const current = resolveSplitPartsCount();
+  const next = Math.min(bounds.max, current + 1);
+  if (splitTicketPartsInput) splitTicketPartsInput.value = String(next);
+  resolveSplitPartsCount();
+  if (isSplitItemsMode()) {
+    normalizeSplitItemsMatrixShape();
+  }
+  renderSplitTicketLines();
+  refreshSplitTicketTotals();
+  refreshSplitTicketActionUi();
+});
+
+splitTicketMergeQuickBtn?.addEventListener("click", () => {
+  const loaded = getCurrentLoadedParkedTicket();
+  if (!getTicketSplitMeta(loaded)) return;
+  if (splitTicketPartsInput) splitTicketPartsInput.value = "1";
+  resolveSplitPartsCount();
+  renderSplitTicketLines();
+  refreshSplitTicketTotals();
+  refreshSplitTicketActionUi();
+});
+
+function isSplitLinesDragAllowedTarget(target) {
+  const el = target && typeof target.closest === "function" ? target : null;
+  if (!el) return false;
+  return !el.closest("button, input, select, option, label");
+}
+
+splitTicketLines?.addEventListener("pointerdown", (ev) => {
+  if (!isSplitLinesDragAllowedTarget(ev.target)) return;
+  if (splitTicketLines.scrollWidth <= splitTicketLines.clientWidth + 2) return;
+
+  splitLinesDragActive = true;
+  splitLinesDragStartX = Number(ev.clientX || 0);
+  splitLinesDragStartScrollLeft = splitTicketLines.scrollLeft;
+  splitTicketLines.classList.add("is-dragging");
+});
+
+splitTicketLines?.addEventListener("pointermove", (ev) => {
+  if (!splitLinesDragActive) return;
+  const currentX = Number(ev.clientX || 0);
+  const delta = currentX - splitLinesDragStartX;
+  splitTicketLines.scrollLeft = splitLinesDragStartScrollLeft - delta;
+  ev.preventDefault();
+});
+
+function stopSplitLinesDragging() {
+  if (!splitLinesDragActive) return;
+  splitLinesDragActive = false;
+  splitTicketLines?.classList.remove("is-dragging");
+}
+
+splitTicketLines?.addEventListener("pointerup", stopSplitLinesDragging);
+splitTicketLines?.addEventListener("pointercancel", stopSplitLinesDragging);
+splitTicketLines?.addEventListener("pointerleave", stopSplitLinesDragging);
+
+splitTicketModeSelect?.addEventListener("change", () => {
+  splitTicketMode = String(splitTicketModeSelect.value || "items");
+  if (isSplitItemsMode()) {
+    initSplitItemsMatrixFromCurrentCart();
+  }
+  renderSplitTicketLines();
+  refreshSplitTicketTotals();
+  refreshSplitTicketActionUi();
+});
+
+splitTicketConfirmBtn?.addEventListener("click", () => {
+  confirmSplitTicket();
+});
+
+splitTicketCancelBtn?.addEventListener("click", closeSplitTicketModal);
+splitTicketCloseX?.addEventListener("click", closeSplitTicketModal);
+splitTicketOverlay?.addEventListener("click", (e) => {
+  if (e.target === splitTicketOverlay) closeSplitTicketModal();
+});
+
+const parkedComandaBtnEl = document.getElementById("parkedComandaBtn");
+if (parkedComandaBtnEl) {
+  parkedComandaBtnEl.addEventListener("click", () => {
+    openComandaModal();
+  });
+}
+
+comandaPrintBtn?.addEventListener("click", () => {
+  printComandaFromCurrentMesa();
+});
+
+comandaCancelBtn?.addEventListener("click", closeComandaModal);
+comandaCloseX?.addEventListener("click", closeComandaModal);
+comandaOverlay?.addEventListener("click", (e) => {
+  if (e.target === comandaOverlay) closeComandaModal();
+});
 
 // Botón imprimir ticket
 const printTicketBtn = document.getElementById("printTicketBtn");
@@ -16675,21 +23857,9 @@ function buildCashCodpagosFromFormapagos(list) {
         descripcion: fp.descripcion,
       })
     ) {
-      s.add(cod);
+      s.add(cod.trim().toUpperCase());
     }
   });
-
-  // fallback seguro: si existe CONT, lo añadimos
-  if (
-    (list || []).some(
-      (x) =>
-        String(x.codpago || "")
-          .trim()
-          .toUpperCase() === "CONT",
-    )
-  ) {
-    s.add("CONT");
-  }
 
   return s;
 }
@@ -16932,19 +24102,26 @@ function renderPayMethods() {
 
       let targetC = 0;
 
+      const otherPaidC = payModalState.formas.reduce((sum, x) => {
+        const c = x.codpago;
+        if (c === cod) return sum;
+        return sum + euroStrToCents(payModalState.values[c] || "");
+      }, 0);
+
+      targetC = Math.max(0, payModalState.totalCents - otherPaidC);
+
       if (
-        nonZeroCods.length <= 1 &&
-        (nonZeroCods.length === 0 || nonZeroCods[0] === cod)
+        nonZeroCods.length > 1 &&
+        !nonZeroCods.includes(cod) &&
+        targetC === payModalState.totalCents
       ) {
-        targetC = payModalState.totalCents || 0;
-      } else {
-        targetC = remainingToPayCents();
+        targetC = 0;
       }
 
       payModalState.values[cod] = centsToEuro2(targetC);
-      inp.value = centsToEuro2(targetC);
-
+      inp.value = payModalState.values[cod];
       selectPayInput(cod);
+      clampNonCashValue(cod);
       renderPayHeaderTotals();
       setPayError("");
     });
@@ -17354,77 +24531,584 @@ const parkObsOkBtn = document.getElementById("parkObsOkBtn");
 const parkObsKeyboardBtn = document.getElementById("parkObsKeyboardBtn");
 const parkNameInput = document.getElementById("parkNameInput");
 const parkNameKeyboardBtn = document.getElementById("parkNameKeyboardBtn");
+const parkObsTargetInfo = document.getElementById("parkObsTargetInfo");
+const parkQuickFlagsWrap = document.getElementById("parkQuickFlagsWrap");
+const parkQuickFlagsList = document.getElementById("parkQuickFlagsList");
+const parkDocTypeWrap = document.getElementById("parkDocTypeWrap");
+const parkDocTypePedido = document.getElementById("parkDocTypePedido");
+
+const MESA_QUICK_ALERT_PRESETS = [
+  { key: "ninos", label: "Ninos" },
+  { key: "vegetariano", label: "Vegetariano" },
+  { key: "sin-sal", label: "Sin sal" },
+  { key: "alergicos", label: "Alergicos" },
+  { key: "sin-gluten", label: "Sin gluten" },
+];
+
+let parkModalMesaAlerts = [];
+let parkModalDocType = "ticket";
+
+function normalizeMesaTicketAlerts(alerts) {
+  const allowed = new Set(
+    MESA_QUICK_ALERT_PRESETS.map((x) => String(x.key || "")),
+  );
+  const arr = Array.isArray(alerts) ? alerts : [];
+  const unique = [];
+
+  arr.forEach((raw) => {
+    const key = String(raw || "").trim();
+    if (!key || !allowed.has(key) || unique.includes(key)) return;
+    unique.push(key);
+  });
+
+  return unique;
+}
+
+function getMesaTicketAlertLabel(key) {
+  const k = String(key || "").trim();
+  const found = MESA_QUICK_ALERT_PRESETS.find((x) => x.key === k);
+  return found ? found.label : k;
+}
+
+function getCurrentLoadedParkedTicket() {
+  const idx =
+    currentParkedTicketIndex !== null ? Number(currentParkedTicketIndex) : null;
+  if (idx === null || !Array.isArray(parkedTickets) || !parkedTickets[idx]) {
+    return null;
+  }
+
+  const ticket = parkedTickets[idx];
+  if (ticket?.paid) return null;
+
+  return ticket;
+}
+
+function isMesasTransaccionesMode() {
+  return MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones";
+}
+
+function normalizeParkedDocType(rawType) {
+  const normalized = String(rawType || "")
+    .trim()
+    .toLowerCase();
+  return normalized === "pedido" ? "pedido" : "ticket";
+}
+
+function getParkedTicketDocType(ticket, fallback = "ticket") {
+  if (!ticket || typeof ticket !== "object") {
+    return normalizeParkedDocType(fallback);
+  }
+  return normalizeParkedDocType(ticket?.docType || fallback);
+}
+
+function getParkedDocTypeTexts(rawType) {
+  const docType = normalizeParkedDocType(rawType);
+  if (docType === "pedido") {
+    return {
+      docType,
+      shortLabel: "Pedido",
+      longLabel: "Pedido de venta",
+      badgeHtml: '<span class="ticket-badge ticket-badge-info">PEDIDO</span>',
+      printMethod: "Pedido (sin cobro)",
+    };
+  }
+
+  return {
+    docType,
+    shortLabel: "Ticket",
+    longLabel: "Ticket aparcado",
+    badgeHtml: "",
+    printMethod: "Pendiente de pago",
+  };
+}
+
+function normalizePedidoTpvStatus(rawStatus, fallback = "pendiente") {
+  const normalized = String(rawStatus || "")
+    .trim()
+    .toLowerCase();
+
+  if (normalized === "pagado-no-recogido") return "pagado-no-recogido";
+  if (normalized === "recogido") return "recogido";
+
+  const fallbackNorm = String(fallback || "pendiente")
+    .trim()
+    .toLowerCase();
+  if (fallbackNorm === "pagado-no-recogido") return "pagado-no-recogido";
+  if (fallbackNorm === "recogido") return "recogido";
+  return "pendiente";
+}
+
+function isPedidoTpvTicket(ticket) {
+  return getParkedTicketDocType(ticket, "ticket") === "pedido";
+}
+
+function getPedidoTpvStatus(ticket) {
+  if (!isPedidoTpvTicket(ticket)) return "";
+  return normalizePedidoTpvStatus(ticket?.pedidoStatus, "pendiente");
+}
+
+function getPedidoTpvStatusMeta(ticket) {
+  const status = getPedidoTpvStatus(ticket);
+  if (!status) {
+    return {
+      status: "",
+      text: "",
+      badgeClass: "",
+      isPending: false,
+      isPaidNotCollected: false,
+      isCollected: false,
+    };
+  }
+
+  if (status === "pagado-no-recogido") {
+    return {
+      status,
+      text: "PAGADO · NO RECOGIDO",
+      badgeClass: "ticket-badge-pedido-paid",
+      isPending: false,
+      isPaidNotCollected: true,
+      isCollected: false,
+    };
+  }
+
+  if (status === "recogido") {
+    return {
+      status,
+      text: "RECOGIDO",
+      badgeClass: "ticket-badge-pedido-picked",
+      isPending: false,
+      isPaidNotCollected: false,
+      isCollected: true,
+    };
+  }
+
+  return {
+    status: "pendiente",
+    text: "PENDIENTE DE COBRO",
+    badgeClass: "ticket-badge-pedido-pending",
+    isPending: true,
+    isPaidNotCollected: false,
+    isCollected: false,
+  };
+}
+
+function getParkingLabels() {
+  const mesasMode = !!MESAS_INLINE_ACTIVE;
+
+  return {
+    mesasMode,
+    item: mesasMode ? "pedido de mesa" : "ticket aparcado",
+    itemCap: mesasMode ? "Pedido de mesa" : "Ticket aparcado",
+    bannerTitle: mesasMode ? "Pedido" : "Aparcado",
+    itemsPlural: mesasMode ? "pedidos de mesa" : "tickets aparcados",
+    featureTitle: mesasMode ? "Pedidos" : "Aparcados",
+    listTitle: mesasMode ? "Pedidos de mesa" : "Tickets aparcados",
+    actionTitle: mesasMode ? "Guardar pedido de mesa" : "Aparcar ticket",
+    nameLabel: mesasMode ? "Nombre del pedido" : "Nombre del ticket",
+    shortRefLabel: mesasMode ? "Pedido" : "Ticket",
+    loadStatus: mesasMode
+      ? "Pedido de mesa cargado en el carrito."
+      : "Ticket aparcado cargado en el carrito.",
+    emptyObs: "Sin observaciones",
+    searchPlaceholder: mesasMode
+      ? "Buscar pedido de mesa..."
+      : "Buscar ticket aparcado...",
+  };
+}
+
+function syncParkingOverlayLabels() {
+  const labels = getParkingLabels();
+
+  const parkedModalTitle = document.getElementById("parkedModalTitle");
+  if (parkedModalTitle) parkedModalTitle.textContent = labels.listTitle;
+
+  const parkObsTitle = document.getElementById("parkObsTitle");
+  if (parkObsTitle) parkObsTitle.textContent = labels.actionTitle;
+
+  const parkNameLabel = document.getElementById("parkNameLabel");
+  if (parkNameLabel) parkNameLabel.textContent = labels.nameLabel;
+}
+
+function renderParkQuickFlags() {
+  if (!parkQuickFlagsList) return;
+
+  parkQuickFlagsList.innerHTML = "";
+  MESA_QUICK_ALERT_PRESETS.forEach((preset) => {
+    const isActive = parkModalMesaAlerts.includes(preset.key);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `park-quick-flag${isActive ? " is-active" : ""}`;
+    btn.dataset.flag = preset.key;
+    btn.textContent = preset.label;
+    parkQuickFlagsList.appendChild(btn);
+  });
+}
+
+function getNextSuggestedParkTicketName() {
+  return `Ticket #${getNextSuggestedParkTicketId()}`;
+}
+
+function getNextSuggestedParkTicketId() {
+  const maxId = (Array.isArray(parkedTickets) ? parkedTickets : []).reduce(
+    (max, ticket) => Math.max(max, Number(ticket?.id || 0) || 0),
+    0,
+  );
+
+  const globalCounter = loadParkedGlobalCounter();
+  const basis = Math.max(Number(parkedCounter || 0), maxId, globalCounter);
+  if (basis <= 0) return 1;
+
+  return basis + 1;
+}
+
+function getParkModalTargetText() {
+  if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+    const scope = getSelectedMesaScopeContext();
+    const roomLabel =
+      String(scope?.roomName || scope?.roomId || "-").trim() || "-";
+    const tableLabel =
+      String(scope?.tableName || scope?.tableId || "-").trim() || "-";
+    return `Destino: Sala ${roomLabel} · Mesa ${tableLabel}`;
+  }
+
+  return "Destino: TPV general (sin mesa)";
+}
+
+function getParkModalDocTypeFromUI() {
+  const input = document.getElementById("parkDocTypePedido");
+  return input?.checked ? "pedido" : "ticket";
+}
+
+function buildPedidoPrintDraft(ticket) {
+  const now = new Date();
+  const fecha = now.toLocaleDateString("es-ES");
+  const hora = now.toLocaleTimeString("es-ES", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  const items = Array.isArray(ticket?.items) ? ticket.items : [];
+  const lineas = items.map((it) => {
+    const qty = Number(it?.qty ?? it?.cantidad ?? 0) || 0;
+    const grossUnit = Number(
+      it?.grossPrice ??
+        it?.__forceUnitGross ??
+        it?.price ??
+        it?.pvpunitario ??
+        0,
+    );
+    const taxRate = Number(it?.taxRate || 0);
+    const netUnit = taxRate > 0 ? grossUnit / (1 + taxRate / 100) : grossUnit;
+    const lineGross = Number(
+      (it?.lineTotal ?? it?.pvptotal ?? grossUnit * qty) || 0,
+    );
+    const lineNet = taxRate > 0 ? lineGross / (1 + taxRate / 100) : lineGross;
+
+    return {
+      descripcion: String(it?.name || it?.descripcion || "Producto").trim(),
+      cantidad: qty,
+      pvpunitario: Number.isFinite(netUnit) ? netUnit : 0,
+      pvptotal: Number.isFinite(lineNet) ? lineNet : 0,
+      codimpuesto: it?.codimpuesto || null,
+      taxRate: Number.isFinite(taxRate) ? taxRate : 0,
+      __forceUnitGross: Number.isFinite(grossUnit) ? grossUnit : 0,
+    };
+  });
+
+  return {
+    numero: `PED-${ticket?.id || ""}`,
+    fecha,
+    hora,
+    paymentMethod: "Pedido (sin cobro)",
+    clientName: String(ticket?.clientName || "Cliente").trim() || "Cliente",
+    terminalName: currentTerminal ? currentTerminal.name || "" : "",
+    agentName: currentAgent ? currentAgent.name || "" : "",
+    company: companyInfo ? { ...companyInfo } : null,
+    lineas,
+    total: Number(ticket?.total || 0),
+    obs: String(ticket?.obs || "").trim(),
+  };
+}
+
+function buildParkedTicketPrintDraft(ticket) {
+  const now = new Date();
+  const fecha = now.toLocaleDateString("es-ES");
+  const hora = now.toLocaleTimeString("es-ES", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  const items = Array.isArray(ticket?.items) ? ticket.items : [];
+  const lineas = items.map((it) => {
+    const qty = Number(it?.qty ?? it?.cantidad ?? 0) || 0;
+    const grossUnit = Number(
+      it?.grossPrice ??
+        it?.__forceUnitGross ??
+        it?.price ??
+        it?.pvpunitario ??
+        0,
+    );
+    const taxRate = Number(it?.taxRate || 0);
+    const netUnit = taxRate > 0 ? grossUnit / (1 + taxRate / 100) : grossUnit;
+    const lineGross = Number(
+      (it?.lineTotal ?? it?.pvptotal ?? grossUnit * qty) || 0,
+    );
+    const lineNet = taxRate > 0 ? lineGross / (1 + taxRate / 100) : lineGross;
+
+    return {
+      descripcion: String(it?.name || it?.descripcion || "Producto").trim(),
+      cantidad: qty,
+      pvpunitario: Number.isFinite(netUnit) ? netUnit : 0,
+      pvptotal: Number.isFinite(lineNet) ? lineNet : 0,
+      codimpuesto: it?.codimpuesto || null,
+      taxRate: Number.isFinite(taxRate) ? taxRate : 0,
+      __forceUnitGross: Number.isFinite(grossUnit) ? grossUnit : 0,
+    };
+  });
+
+  const splitObsInfo = parseSplitInfoFromObs(ticket?.obs);
+
+  return {
+    numero: `PRK-${ticket?.id || ""}`,
+    fecha,
+    hora,
+    paymentMethod: "Pendiente de pago",
+    clientName: String(ticket?.clientName || "Cliente").trim() || "Cliente",
+    terminalName: currentTerminal ? currentTerminal.name || "" : "",
+    agentName: currentAgent ? currentAgent.name || "" : "",
+    company: companyInfo ? { ...companyInfo } : null,
+    lineas,
+    total: Number(ticket?.total || 0),
+    obs: String(splitObsInfo?.cleanObs || ticket?.obs || "").trim(),
+  };
+}
+
+async function maybeAutoPrintPedidoOnSave(ticket) {
+  const docType = getParkedTicketDocType(ticket, "ticket");
+  if (docType !== "pedido") return;
+
+  const draft = buildPedidoPrintDraft(ticket);
+  const ok = await printTicket(draft);
+  if (!ok) {
+    toast("No se pudo imprimir el pedido.", "warn", "Pedido");
+  }
+}
 
 function openParkObsModal() {
+  const labels = getParkingLabels();
   const overlay = document.getElementById("parkObsOverlay");
   const nameInput = document.getElementById("parkNameInput");
   const obsInput = document.getElementById("parkObsInput");
+  const titleEl = document.getElementById("parkObsTitle");
 
   if (!overlay || !nameInput || !obsInput) {
-    toast("Falta el HTML del modal de aparcar.", "err", "Aparcar");
+    toast("Falta el HTML del modal de aparcar.", "err", labels.actionTitle);
     return;
   }
 
-  // ✅ si estamos editando un ticket ya cargado, rellenar datos
-  if (
-    currentParkedTicketIndex !== null &&
-    Array.isArray(parkedTickets) &&
-    parkedTickets[currentParkedTicketIndex]
-  ) {
-    const t = parkedTickets[currentParkedTicketIndex];
-    nameInput.value = t.name || "";
-    obsInput.value = t.obs || "";
-  } else {
-    nameInput.value = "";
-    obsInput.value = "";
+  syncParkingOverlayLabels();
+
+  const mesasMode = isMesasTransaccionesMode();
+  if (parkObsTargetInfo) {
+    parkObsTargetInfo.textContent = getParkModalTargetText();
+    parkObsTargetInfo.classList.toggle("hidden", !mesasMode);
   }
+
+  if (parkDocTypeWrap) parkDocTypeWrap.classList.toggle("hidden", mesasMode);
+  if (parkQuickFlagsWrap)
+    parkQuickFlagsWrap.classList.toggle("hidden", !mesasMode);
+
+  // ✅ si estamos editando un ticket ya cargado, rellenar datos
+  const loadedTicket = getCurrentLoadedParkedTicket();
+  if (loadedTicket) {
+    const t = loadedTicket;
+    nameInput.value = t.name || `${labels.shortRefLabel} #${t.id}`;
+    const splitObsInfo = parseSplitInfoFromObs(t?.obs);
+    obsInput.value = String(splitObsInfo?.cleanObs || t?.obs || "").trim();
+    parkModalMesaAlerts = mesasMode
+      ? normalizeMesaTicketAlerts(t?.mesaAlerts)
+      : [];
+    parkModalDocType = getParkedTicketDocType(t, "ticket");
+  } else {
+    nameInput.value = getNextSuggestedParkTicketName();
+    obsInput.value = "";
+    parkModalMesaAlerts = [];
+    parkModalDocType = "ticket";
+  }
+
+  if (parkDocTypePedido) {
+    parkDocTypePedido.checked = parkModalDocType === "pedido";
+  }
+
+  if (titleEl) {
+    titleEl.textContent = loadedTicket
+      ? labels.mesasMode
+        ? "Editar pedido de mesa"
+        : parkModalDocType === "pedido"
+          ? "Editar pedido de venta"
+          : "Editar ticket aparcado"
+      : labels.actionTitle;
+  }
+
+  if (parkObsOkBtn) {
+    parkObsOkBtn.textContent = loadedTicket
+      ? "Actualizar"
+      : mesasMode
+        ? "Guardar"
+        : parkModalDocType === "pedido"
+          ? "Guardar pedido"
+          : "Aparcar";
+  }
+
+  if (mesasMode) renderParkQuickFlags();
 
   overlay.classList.remove("hidden");
   nameInput.focus();
 }
 
+let parkObsMetaEditMode = false;
+
 function closeParkObsModal() {
   parkObsOverlay.classList.add("hidden");
 }
 
-parkBtn?.addEventListener("click", () => {
-  if (!cashSession?.open) {
-    toast("Abre la caja para aparcar tickets.", "warn", "Aparcar");
+function refreshParkDocTypeActionLabel() {
+  if (!parkObsOkBtn) return;
+  const loadedTicket = getCurrentLoadedParkedTicket();
+  if (loadedTicket) {
+    parkObsOkBtn.textContent = "Actualizar";
+    return;
+  }
+  if (isMesasTransaccionesMode()) {
+    parkObsOkBtn.textContent = "Guardar";
+    return;
+  }
+  parkObsOkBtn.textContent =
+    getParkModalDocTypeFromUI() === "pedido" ? "Guardar pedido" : "Aparcar";
+}
+
+parkBtn?.addEventListener("click", async () => {
+  const labels = getParkingLabels();
+  const mesasMode = isMesasTransaccionesMode();
+  if (mesasMode && !cashSession?.open) {
+    toast(
+      `Abre la caja para guardar ${labels.itemsPlural}.`,
+      "warn",
+      labels.actionTitle,
+    );
     return;
   }
 
   // 1) No permitir aparcar si el carrito está vacío
   if (!hasVisibleCartLines()) {
-    toast("No puedes aparcar un ticket vacío.", "warn", "Aparcar");
+    toast(
+      `No puedes guardar un ${labels.item} vacio.`,
+      "warn",
+      labels.actionTitle,
+    );
     return;
   }
 
   // 2) (Opcional pero recomendado) exigir terminal seleccionada antes de aparcar
   if (!currentTerminal) {
-    toast("Debes seleccionar un terminal antes de aparcar.", "warn", "Aparcar");
+    toast(
+      "Debes seleccionar un terminal antes de guardar.",
+      "warn",
+      labels.actionTitle,
+    );
+    return;
+  }
+
+  const loadedTicket = getCurrentLoadedParkedTicket();
+  if (loadedTicket) {
+    const loadedDocType = getParkedTicketDocType(loadedTicket, "ticket");
+    if (!cashSession?.open && loadedDocType !== "pedido") {
+      toast(
+        "Para actualizar un ticket aparcado debes abrir la caja.",
+        "warn",
+        labels.actionTitle,
+      );
+      return;
+    }
+    const mesaAlerts = isMesasTransaccionesMode()
+      ? normalizeMesaTicketAlerts(loadedTicket?.mesaAlerts)
+      : [];
+    await parkCurrentCart(loadedTicket.name || "", loadedTicket.obs || "", {
+      mesaAlerts,
+      openListAfterSave: !mesasMode,
+    });
     return;
   }
 
   // 3) Si todo OK, recién ahí abrimos el modal de observación
+  parkObsMetaEditMode = false;
   openParkObsModal();
 });
 
 parkObsCancelBtn?.addEventListener("click", () => {
+  parkObsMetaEditMode = false;
   closeParkObsModal();
 });
 
-parkObsOkBtn?.addEventListener("click", () => {
-  const ticketName = (parkNameInput?.value || "").trim();
+parkQuickFlagsList?.addEventListener("click", (ev) => {
+  const btn = ev?.target?.closest?.("button[data-flag]");
+  if (!btn) return;
+
+  const key = String(btn.dataset.flag || "").trim();
+  if (!key) return;
+
+  if (parkModalMesaAlerts.includes(key)) {
+    parkModalMesaAlerts = parkModalMesaAlerts.filter((x) => x !== key);
+  } else {
+    parkModalMesaAlerts = [...parkModalMesaAlerts, key];
+  }
+
+  parkModalMesaAlerts = normalizeMesaTicketAlerts(parkModalMesaAlerts);
+  renderParkQuickFlags();
+});
+
+parkObsOkBtn?.addEventListener("click", async () => {
+  const ticketName =
+    (parkNameInput?.value || "").trim() || getNextSuggestedParkTicketName();
   const obs = (parkObsInput?.value || "").trim();
+  const mesaAlerts = isMesasTransaccionesMode()
+    ? normalizeMesaTicketAlerts(parkModalMesaAlerts)
+    : [];
+  const docType = isMesasTransaccionesMode()
+    ? "ticket"
+    : getParkModalDocTypeFromUI();
+
+  if (isMesasTransaccionesMode() && !cashSession?.open) {
+    toast("Abre la caja para guardar pedidos de mesa.", "warn", "Pedidos");
+    return;
+  }
+
+  if (
+    !isMesasTransaccionesMode() &&
+    docType === "ticket" &&
+    !cashSession?.open
+  ) {
+    toast(
+      "Para aparcar tickets debes abrir la caja. Si quieres dejarlo para dias, guardalo como Pedido.",
+      "warn",
+      "Aparcados",
+    );
+    return;
+  }
 
   closeParkObsModal();
-  parkCurrentCart(ticketName, obs);
+  await parkCurrentCart(ticketName, obs, {
+    mesaAlerts,
+    docType,
+    skipAutoPrint: !!parkObsMetaEditMode,
+    openListAfterSave: !isMesasTransaccionesMode(),
+  });
+  parkObsMetaEditMode = false;
 });
 
-parkObsKeyboardBtn?.addEventListener("click", () => {
-  // Reutiliza tu teclado QWERTY actual
-  // Necesitas una función tipo: openQwerty(targetInput)
-  openQwertyForInput(parkObsInput);
+parkDocTypePedido?.addEventListener("change", () => {
+  parkModalDocType = parkDocTypePedido.checked ? "pedido" : "ticket";
+  refreshParkDocTypeActionLabel();
 });
 
 parkNameKeyboardBtn?.addEventListener("click", () => {
@@ -17435,12 +25119,42 @@ parkObsKeyboardBtn?.addEventListener("click", () => {
   openQwertyForInput(parkObsInput, "text");
 });
 
+const parkedEditingMetaBtn = document.getElementById("parkedEditingMetaBtn");
+parkedEditingMetaBtn?.addEventListener("click", () => {
+  const labels = getParkingLabels();
+  if (!cashSession?.open) return;
+
+  const loadedTicket = getCurrentLoadedParkedTicket();
+  if (!loadedTicket) {
+    toast(
+      `No hay ${labels.item} activo para editar.`,
+      "info",
+      labels.featureTitle,
+    );
+    return;
+  }
+
+  parkObsMetaEditMode = true;
+  openParkObsModal();
+});
+
+const parkedRestoreBtn = document.getElementById("parkedRestoreBtn");
+parkedRestoreBtn?.addEventListener("click", async () => {
+  if (!cashSession?.open) return;
+  await restoreLoadedParkedTicket();
+});
+
 // Botón ver/recuperar aparcados
 const parkedListBtn = document.getElementById("parkedListBtn");
 if (parkedListBtn) {
   parkedListBtn.onclick = () => {
+    const labels = getParkingLabels();
     if (!cashSession?.open) {
-      toast("Abre la caja para ver aparcados.", "info", "Aparcados");
+      toast(
+        `Abre la caja para ver ${labels.itemsPlural}.`,
+        "info",
+        labels.featureTitle,
+      );
       return;
     }
 
@@ -18641,6 +26355,10 @@ function showReconnectIfAvailable(
       setStatusText("Sin internet (modo offline). Reintentando conexión...");
       return;
     }
+
+    // Reinicia numeracion de tickets aparcados al cerrar caja.
+    parkedCounter = 0;
+    resetParkedGlobalCounter();
   }
 
   try {
@@ -21810,6 +29528,7 @@ async function bootstrapE2EMode() {
   localStorage.setItem("tpv_login_codalmacen", "1");
   localStorage.setItem("tpv_login_isAdmin", "1");
   localStorage.setItem("tpv_printerRealName", "E2E Mock Printer");
+  localStorage.setItem("tpv_printerComandaRealName", "E2E Mock Printer");
   localStorage.setItem("tpv_autoPrint", "1");
 
   let bootSource = "local-fallback";
@@ -21846,10 +29565,9 @@ async function bootstrapE2EMode() {
     products = [...demoProducts];
 
     if (requireOnline) {
-      const reason =
-        e2eApiKey
-          ? `No se pudo conectar al slug demo remoto con la API key indicada.${lastBootstrapError ? ` Detalle: ${lastBootstrapError}` : ""}`
-          : "Falta TPV_E2E_API_KEY para conectar al slug demo remoto.";
+      const reason = e2eApiKey
+        ? `No se pudo conectar al slug demo remoto con la API key indicada.${lastBootstrapError ? ` Detalle: ${lastBootstrapError}` : ""}`
+        : "Falta TPV_E2E_API_KEY para conectar al slug demo remoto.";
 
       window.__TPV_E2E_BOOT_ERROR__ = reason;
       throw new Error(reason);
@@ -21904,6 +29622,22 @@ async function bootstrapE2EMode() {
 window.addEventListener("DOMContentLoaded", async () => {
   initThemeMode();
   await initCustomerDisplayThemeMode();
+  bindMesasInlineEventsOnce();
+  await loadMesasModuleAvailability();
+  if (MESAS_MODULE_ENABLED) {
+    await refreshMesasLayoutFromRemote();
+  }
+
+  const localMode = String(localStorage.getItem(APP_MODE_KEY) || "")
+    .trim()
+    .toLowerCase();
+  const cfgMode = String((await window.TPV_CFG?.get?.(APP_MODE_CFG_KEY)) || "")
+    .trim()
+    .toLowerCase();
+  const startMesasMode =
+    MESAS_MODULE_ENABLED && (localMode === "mesas" || cfgMode === "mesas");
+  await setMesasInlineModeEnabled(startMesasMode, { persist: false });
+
   setTpvLoadingState(true);
   renderCart();
   updateSessionLockUi();
@@ -21915,7 +29649,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     try {
       await bootstrapE2EMode();
     } catch (e) {
-      window.__TPV_E2E_BOOT_ERROR__ = e?.message || "No se pudo iniciar E2E remoto.";
+      window.__TPV_E2E_BOOT_ERROR__ =
+        e?.message || "No se pudo iniciar E2E remoto.";
       window.__TPV_E2E_BOOT_SOURCE__ = "boot-error";
       try {
         document.body.dataset.e2eMode = "1";
@@ -22396,6 +30131,24 @@ async function startOnlineMonitor() {
       }
 
       try {
+        await processParkedSyncQueue?.();
+      } catch (e) {
+        console.warn(
+          "No se pudo drenar cola de aparcados al volver online:",
+          e?.message || e,
+        );
+      }
+
+      try {
+        await processMesasLayoutSyncQueue?.();
+      } catch (e) {
+        console.warn(
+          "No se pudo drenar cola de layout de Mesas al volver online:",
+          e?.message || e,
+        );
+      }
+
+      try {
         await handleCashHeaderAction({ auto: true });
       } catch (e) {
         console.warn(
@@ -22411,6 +30164,11 @@ async function startOnlineMonitor() {
         if ((c?.pending || 0) > 0) {
           await syncQueueNow();
         }
+      }
+
+      if (ok) {
+        await processParkedSyncQueue?.();
+        await processMesasLayoutSyncQueue?.();
       }
     } catch (e) {
       console.warn("No se pudo comprobar/sincronizar cola:", e?.message || e);
@@ -22500,6 +30258,127 @@ async function sendOrQueueFactura(payload) {
   }
 }
 
+async function enqueueTpvcajaTotalsSync(remoteId, body, opts = {}) {
+  const id = String(remoteId || "").trim();
+  const payload = body && typeof body === "object" ? body : null;
+  if (!id || !payload) return false;
+
+  try {
+    await window.TPV_QUEUE?.enqueue?.({
+      type: "UPDATE_TPVCAJA_TOTALS",
+      payload: {
+        remoteId: id,
+        body: payload,
+      },
+      source: String(opts?.source || "runtime"),
+      createdAt: new Date().toISOString(),
+    });
+    return true;
+  } catch (e) {
+    console.warn(
+      "No se pudo encolar sync de totales de caja:",
+      e?.message || e,
+    );
+    return false;
+  }
+}
+
+async function enqueueTpvcajaOpenSync(body, opts = {}) {
+  const payload = body && typeof body === "object" ? body : null;
+  if (!payload) return false;
+
+  try {
+    await window.TPV_QUEUE?.enqueue?.({
+      type: "CREATE_TPVCAJA_OPEN",
+      payload: { body: payload },
+      source: String(opts?.source || "runtime"),
+      createdAt: new Date().toISOString(),
+    });
+    return true;
+  } catch (e) {
+    console.warn(
+      "No se pudo encolar apertura de caja para sync:",
+      e?.message || e,
+    );
+    return false;
+  }
+}
+
+async function enqueueTpvcajaObsSync(remoteId, body, opts = {}) {
+  const id = String(remoteId || "").trim();
+  const payload = body && typeof body === "object" ? body : null;
+  if (!id || !payload) return false;
+
+  try {
+    await window.TPV_QUEUE?.enqueue?.({
+      type: "UPDATE_TPVCAJA_OBS",
+      payload: {
+        remoteId: id,
+        body: payload,
+      },
+      source: String(opts?.source || "runtime"),
+      createdAt: new Date().toISOString(),
+    });
+    return true;
+  } catch (e) {
+    console.warn(
+      "No se pudo encolar observaciones de caja para sync:",
+      e?.message || e,
+    );
+    return false;
+  }
+}
+
+async function enqueueTpvcajaNickSync(remoteId, body, opts = {}) {
+  const id = String(remoteId || "").trim();
+  const payload = body && typeof body === "object" ? body : null;
+  if (!id || !payload) return false;
+
+  try {
+    await window.TPV_QUEUE?.enqueue?.({
+      type: "UPDATE_TPVCAJA_NICK",
+      payload: {
+        remoteId: id,
+        body: payload,
+      },
+      source: String(opts?.source || "runtime"),
+      createdAt: new Date().toISOString(),
+    });
+    return true;
+  } catch (e) {
+    console.warn(
+      "No se pudo encolar actualización de nick en caja:",
+      e?.message || e,
+    );
+    return false;
+  }
+}
+
+async function enqueueTpvcajaCloseSync(remoteId, body, opts = {}) {
+  const id = String(remoteId || "").trim();
+  const payload = body && typeof body === "object" ? body : null;
+  if (!id || !payload) return false;
+
+  try {
+    await window.TPV_QUEUE?.enqueue?.({
+      type: "UPDATE_TPVCAJA_CLOSE",
+      payload: {
+        remoteId: id,
+        body: payload,
+      },
+      source: String(opts?.source || "runtime"),
+      createdAt: new Date().toISOString(),
+    });
+    return true;
+  } catch (e) {
+    console.warn(
+      "No se pudo encolar cierre de caja para sync:",
+      e?.message || e,
+    );
+    return false;
+  }
+}
+
 // ===== [08][Z08.2] Cola offline: sincronizacion =====
 async function syncQueueNow() {
   if (window.__SYNCING__) return;
@@ -22514,11 +30393,73 @@ async function syncQueueNow() {
 
       try {
         // =============================================================
-        // 1) Ventas offline
+        // 1) Apertura de caja offline
+        // =============================================================
+        if (item.type === "CREATE_TPVCAJA_OPEN") {
+          try {
+            const existing = getCajaIdSafe?.();
+            if (existing) {
+              await window.TPV_QUEUE.done(item.id, {
+                ok: true,
+                reused: true,
+                idcaja: existing,
+              });
+              continue;
+            }
+
+            const body =
+              item?.payload?.body && typeof item.payload.body === "object"
+                ? item.payload.body
+                : null;
+
+            if (!body) {
+              await window.TPV_QUEUE.done(item.id, {
+                ok: false,
+                error: "payload-invalido",
+              });
+              continue;
+            }
+
+            const resp = await apiWrite("tpvcajas", "POST", body);
+            const remoteId = extractTpvcajaIdFromResponse(resp);
+
+            if (remoteId) {
+              cashSession.remoteCajaId = remoteId;
+              try {
+                localStorage.setItem("tpv_remoteCajaId", String(remoteId));
+              } catch {}
+              renderCashIdChip?.();
+            }
+
+            await window.TPV_QUEUE.done(item.id, {
+              ok: true,
+              idcaja: remoteId || null,
+            });
+          } catch (e) {
+            if (isNetworkError(e) || isProbablyNetworkError(e)) {
+              await window.TPV_QUEUE.error(item.id, e?.message || String(e));
+            } else {
+              await window.TPV_QUEUE.done(item.id, {
+                ok: false,
+                error: e?.message || String(e),
+              });
+            }
+          }
+          continue;
+        }
+
+        // =============================================================
+        // 2) Ventas offline
         // =============================================================
         if (item.type === "CREATE_FACTURACLIENTE") {
           // 1) Crear factura
           const resp = await createTicketInFacturaScripts(item.payload);
+          const pagosOffline = Array.isArray(item.post?.pagos)
+            ? item.post.pagos
+            : [];
+
+          const facturaSyncResp =
+            resp?.doc || resp?.factura || resp?.data || resp || null;
 
           const idfactura =
             resp?.idfactura ||
@@ -22557,12 +30498,8 @@ async function syncQueueNow() {
 
             // 3) Emitir y marcar pagada (tpv_efectivo/tpv_cambio/etc.)
             try {
-              const pagos = Array.isArray(item.post?.pagos)
-                ? item.post.pagos
-                : [];
-
               // efectivo = ENTREGADO en efectivo (como tu criterio en online)
-              const tpv_efectivo = pagos
+              const tpv_efectivo = pagosOffline
                 .filter((p) =>
                   isCashPago({
                     codpago: p?.codpago,
@@ -22624,13 +30561,10 @@ async function syncQueueNow() {
             // 4) Recibos por método + cleanup
             try {
               const today = new Date().toISOString().slice(0, 10);
-              const pagos = Array.isArray(item.post?.pagos)
-                ? item.post.pagos
-                : [];
               const fc = await fetchFacturaClienteById(idfactura);
 
-              if (fc?.codcliente && pagos.length) {
-                for (const p of pagos) {
+              if (fc?.codcliente && pagosOffline.length) {
+                for (const p of pagosOffline) {
                   const importe = Number(Number(p?.importe || 0).toFixed(2));
                   if (!(importe > 0)) continue;
 
@@ -22647,7 +30581,7 @@ async function syncQueueNow() {
                   });
                 }
 
-                await cleanupRecibosFactura(idfactura, pagos);
+                await cleanupRecibosFactura(idfactura, pagosOffline);
 
                 // opcional: valida (si ya tienes función)
                 try {
@@ -22659,6 +30593,45 @@ async function syncQueueNow() {
                 "No se pudieron crear/limpiar recibos offline:",
                 e?.message || e,
               );
+            }
+
+            // 4.5) Sincronizar acumulados de caja (simetría con flujo online)
+            try {
+              const totalSync =
+                Math.round(
+                  (Number(facturaSyncResp?.total ?? item.payload?.total ?? 0) +
+                    Number.EPSILON) *
+                    100,
+                ) / 100;
+
+              await apiUpdateCajaAfterSale({
+                totalVenta: totalSync,
+                pagos: pagosOffline,
+              });
+            } catch (e) {
+              if (isNetworkError(e) || isProbablyNetworkError(e)) {
+                const cajaSyncMeta =
+                  e?.__tpvCajaSync && typeof e.__tpvCajaSync === "object"
+                    ? e.__tpvCajaSync
+                    : null;
+
+                if (cajaSyncMeta?.remoteId && cajaSyncMeta?.body) {
+                  await enqueueTpvcajaTotalsSync(
+                    cajaSyncMeta.remoteId,
+                    cajaSyncMeta.body,
+                    { source: "syncQueueNow" },
+                  );
+                }
+
+                console.warn(
+                  "Caja pendiente de sincronizar tras venta offline.",
+                );
+              } else {
+                console.warn(
+                  "No se pudo actualizar caja tras sync offline:",
+                  e?.message || e,
+                );
+              }
             }
 
             // 5) Quitar del modal offline
@@ -22675,7 +30648,7 @@ async function syncQueueNow() {
         }
 
         // =============================================================
-        // 2) Cambio cliente por defecto de terminal
+        // 3) Cambio cliente por defecto de terminal
         // =============================================================
         if (item.type === "tpvterminal.setCodcliente") {
           try {
@@ -22706,7 +30679,177 @@ async function syncQueueNow() {
         }
 
         // =============================================================
-        // 3) Otros (done)
+        // 4) Movimientos de caja offline
+        // =============================================================
+        if (item.type === "CREATE_TPVMOVIMIENTO") {
+          try {
+            const movementPayload =
+              item?.payload && typeof item.payload === "object"
+                ? item.payload
+                : {};
+
+            await apiWrite("tpvmovimientos", "POST", movementPayload);
+
+            if (
+              String(movementPayload?.idcaja || "") &&
+              String(cashSession?.remoteCajaId || "") ===
+                String(movementPayload?.idcaja || "")
+            ) {
+              await syncFsCajaTotalsRealtime();
+            }
+
+            await window.TPV_QUEUE.done(item.id, { ok: true });
+          } catch (e) {
+            if (isNetworkError(e)) {
+              await window.TPV_QUEUE.error(item.id, e?.message || String(e));
+            } else {
+              await window.TPV_QUEUE.done(item.id, {
+                ok: false,
+                error: e?.message || String(e),
+              });
+            }
+          }
+          continue;
+        }
+
+        // =============================================================
+        // 5) Sync de totales de caja
+        // =============================================================
+        if (item.type === "UPDATE_TPVCAJA_TOTALS") {
+          try {
+            const remoteId = String(item?.payload?.remoteId || "").trim();
+            const body =
+              item?.payload?.body && typeof item.payload.body === "object"
+                ? item.payload.body
+                : null;
+
+            if (!remoteId || !body) {
+              await window.TPV_QUEUE.done(item.id, {
+                ok: false,
+                error: "payload-invalido",
+              });
+              continue;
+            }
+
+            await apiWrite(`tpvcajas/${remoteId}`, "PUT", body);
+            await window.TPV_QUEUE.done(item.id, { ok: true });
+          } catch (e) {
+            if (isNetworkError(e) || isProbablyNetworkError(e)) {
+              await window.TPV_QUEUE.error(item.id, e?.message || String(e));
+            } else {
+              await window.TPV_QUEUE.done(item.id, {
+                ok: false,
+                error: e?.message || String(e),
+              });
+            }
+          }
+          continue;
+        }
+
+        // =============================================================
+        // 6) Observaciones de caja encoladas
+        // =============================================================
+        if (item.type === "UPDATE_TPVCAJA_OBS") {
+          try {
+            const remoteId = String(item?.payload?.remoteId || "").trim();
+            const body =
+              item?.payload?.body && typeof item.payload.body === "object"
+                ? item.payload.body
+                : null;
+
+            if (!remoteId || !body) {
+              await window.TPV_QUEUE.done(item.id, {
+                ok: false,
+                error: "payload-invalido",
+              });
+              continue;
+            }
+
+            await apiWrite(`tpvcajas/${remoteId}`, "PUT", body);
+            await window.TPV_QUEUE.done(item.id, { ok: true });
+          } catch (e) {
+            if (isNetworkError(e) || isProbablyNetworkError(e)) {
+              await window.TPV_QUEUE.error(item.id, e?.message || String(e));
+            } else {
+              await window.TPV_QUEUE.done(item.id, {
+                ok: false,
+                error: e?.message || String(e),
+              });
+            }
+          }
+          continue;
+        }
+
+        // =============================================================
+        // 7) Nick de caja encolado
+        // =============================================================
+        if (item.type === "UPDATE_TPVCAJA_NICK") {
+          try {
+            const remoteId = String(item?.payload?.remoteId || "").trim();
+            const body =
+              item?.payload?.body && typeof item.payload.body === "object"
+                ? item.payload.body
+                : null;
+
+            if (!remoteId || !body) {
+              await window.TPV_QUEUE.done(item.id, {
+                ok: false,
+                error: "payload-invalido",
+              });
+              continue;
+            }
+
+            await apiWrite(`tpvcajas/${remoteId}`, "PATCH", body);
+            await window.TPV_QUEUE.done(item.id, { ok: true });
+          } catch (e) {
+            if (isNetworkError(e) || isProbablyNetworkError(e)) {
+              await window.TPV_QUEUE.error(item.id, e?.message || String(e));
+            } else {
+              await window.TPV_QUEUE.done(item.id, {
+                ok: false,
+                error: e?.message || String(e),
+              });
+            }
+          }
+          continue;
+        }
+
+        // =============================================================
+        // 8) Cierre de caja encolado
+        // =============================================================
+        if (item.type === "UPDATE_TPVCAJA_CLOSE") {
+          try {
+            const remoteId = String(item?.payload?.remoteId || "").trim();
+            const body =
+              item?.payload?.body && typeof item.payload.body === "object"
+                ? item.payload.body
+                : null;
+
+            if (!remoteId || !body) {
+              await window.TPV_QUEUE.done(item.id, {
+                ok: false,
+                error: "payload-invalido",
+              });
+              continue;
+            }
+
+            await apiWrite(`tpvcajas/${remoteId}`, "PUT", body);
+            await window.TPV_QUEUE.done(item.id, { ok: true });
+          } catch (e) {
+            if (isNetworkError(e) || isProbablyNetworkError(e)) {
+              await window.TPV_QUEUE.error(item.id, e?.message || String(e));
+            } else {
+              await window.TPV_QUEUE.done(item.id, {
+                ok: false,
+                error: e?.message || String(e),
+              });
+            }
+          }
+          continue;
+        }
+
+        // =============================================================
+        // 9) Otros (done)
         // =============================================================
         await window.TPV_QUEUE.done(item.id, {});
       } catch (e) {
@@ -22836,6 +30979,30 @@ function saveBootSnapshot(payload = {}) {
     localStorage.setItem(BOOT_SNAPSHOT_CACHE_TS_KEY, String(Date.now()));
   } catch (e) {
     console.warn("No se pudo guardar snapshot de arranque:", e?.message || e);
+  }
+}
+
+function saveSharedCatalogCache(payload = {}) {
+  try {
+    const cfg = window.RECIPOK_API || {};
+    const safe = {
+      version: 1,
+      ts: Date.now(),
+      baseUrl: String(cfg.baseUrl || "")
+        .trim()
+        .replace(/\/+$/, ""),
+      categories: Array.isArray(payload.categories) ? payload.categories : [],
+      products: Array.isArray(payload.products) ? payload.products : [],
+      source: String(payload.source || "tpv").trim(),
+    };
+
+    if (!safe.baseUrl || !safe.categories.length || !safe.products.length) {
+      return;
+    }
+
+    localStorage.setItem(SHARED_CATALOG_CACHE_KEY, JSON.stringify(safe));
+  } catch (e) {
+    console.warn("No se pudo guardar cache compartida de catalogo:", e);
   }
 }
 
@@ -23187,12 +31354,59 @@ async function saveCashMovement() {
     await syncFsCajaTotalsRealtime();
     fsOk = true;
   } catch (e) {
-    console.warn("No se pudo registrar el movimiento en FacturaScripts:", e);
-    toast(
-      "Movimiento guardado solo en el TPV (no se registró en FacturaScripts).",
-      "warn",
-      "Caja",
-    );
+    const isNetwork = isProbablyNetworkError(e);
+
+    if (isNetwork) {
+      try {
+        const fsBoxId =
+          (cashSession && cashSession.remoteCajaId) ||
+          (cashSession && cashSession.idcaja) ||
+          null;
+        const fsTerminal = currentTerminal || null;
+        const fsAgent = currentAgent || null;
+
+        await window.TPV_QUEUE?.enqueue?.({
+          type: "CREATE_TPVMOVIMIENTO",
+          payload: {
+            amount: signedAmount,
+            idcaja: fsBoxId ? String(fsBoxId) : "",
+            idtpv: fsTerminal?.id ? String(fsTerminal.id) : "",
+            codagente: fsAgent?.codagente ? String(fsAgent.codagente) : "",
+            motive:
+              reason && reason.trim()
+                ? reason.trim()
+                : type === "out"
+                  ? "Salida de caja"
+                  : "Entrada de caja",
+            nick: fsAgent?.nick || getLoginUser() || "admin",
+          },
+          createdAt: new Date().toISOString(),
+        });
+
+        toast(
+          "Sin internet: movimiento encolado y pendiente de sincronizar.",
+          "warn",
+          "Caja",
+        );
+      } catch (qErr) {
+        console.warn(
+          "No se pudo encolar el movimiento de caja offline:",
+          qErr?.message || qErr,
+        );
+        toast(
+          "Movimiento guardado solo en el TPV (sin encolado remoto).",
+          "warn",
+          "Caja",
+        );
+      }
+    } else {
+      console.warn("No se pudo registrar el movimiento en FacturaScripts:", e);
+      toast(
+        "Movimiento guardado solo en el TPV (no se registró en FacturaScripts).",
+        "warn",
+        "Caja",
+      );
+    }
   }
 
   // ✅ LOG: confirmó movimiento (con detalle)
@@ -23341,6 +31555,16 @@ async function syncFsCajaTotalsRealtime() {
     // ✅ IMPORTANTE: PUT al registro concreto
     await apiWrite(`tpvcajas/${fsBoxId}`, "PUT", payload);
   } catch (e) {
+    if (isNetworkError(e) || isProbablyNetworkError(e)) {
+      await enqueueTpvcajaTotalsSync(fsBoxId, payload, {
+        source: "syncFsCajaTotalsRealtime",
+      });
+      console.warn(
+        "Totales de caja pendientes de sincronizar (encolado offline).",
+      );
+      return;
+    }
+
     console.warn("Error al actualizar totales de caja en FS:", e);
   }
 }
@@ -23519,7 +31743,6 @@ document.addEventListener("tpv:sessionReady", () => {
     maybeOpenCashOrRecover();
   }
 });
-
 // helper para emitir sessionReady siempre con el mismo formato
 function dispatchSessionReady() {
   document.dispatchEvent(

@@ -1906,14 +1906,39 @@ function getIndexHtmlPath() {
 
 const { pathToFileURL } = require("url");
 
-function loadUI(win) {
-  const indexPath = path.join(__dirname, "index.html");
-  const url = pathToFileURL(indexPath).toString();
+const APP_MODE_CFG_KEY = "app.mode";
 
-  console.log("Loading UI:", indexPath);
+function getConfiguredAppMode() {
+  const cfg = readCfg();
+  const raw = String(cfg?.[APP_MODE_CFG_KEY] || "")
+    .trim()
+    .toLowerCase();
+  return raw === "mesas" ? "mesas" : "tpv";
+}
+
+function getUiEntryPath() {
+  const candidates = [
+    path.join(__dirname, "index.html"),
+    path.join(app.getAppPath(), "index.html"),
+    path.join(__dirname, "mesas", "mesas.html"),
+    path.join(app.getAppPath(), "mesas", "mesas.html"),
+  ];
+
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+
+  return candidates[0];
+}
+
+function loadUI(win) {
+  const entryPath = getUiEntryPath();
+  const url = pathToFileURL(entryPath).toString();
+
+  console.log("Loading UI:", entryPath);
   console.log("Loading URL:", url);
 
-  return win.loadFile(indexPath).catch(console.log);
+  return win.loadFile(entryPath).catch(console.log);
 }
 
 ipcMain.handle("auth:setCurrentUser", async (_e, { user, isAdmin } = {}) => {

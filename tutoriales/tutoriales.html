@@ -1,0 +1,211 @@
+<!-- Overlay: Tutoriales -->
+<div id="tutorialHubOverlay" class="simple-overlay hidden">
+  <div class="simple-dialog tutorial-hub-dialog">
+    <div class="opt-head">
+      <h2 class="opt-title">Tutoriales</h2>
+      <button type="button" id="tutorialHubCloseX" class="small-btn">✕</button>
+    </div>
+
+    <div class="tutorial-hub-body">
+      <div class="tutorial-hub-note">
+        Modo guiado: los tutoriales de esta seccion no modifican datos de
+        ventas.
+      </div>
+
+      <div
+        class="tutorial-hub-switcher"
+        role="tablist"
+        aria-label="Tipo de tutoriales"
+      >
+        <button
+          type="button"
+          id="tutorialModeTPVBtn"
+          class="tutorial-mode-btn is-active"
+          role="tab"
+          aria-selected="true"
+        >
+          TPV normal
+        </button>
+        <button
+          type="button"
+          id="tutorialModeMesasBtn"
+          class="tutorial-mode-btn"
+          role="tab"
+          aria-selected="false"
+        >
+          Modo Mesas
+        </button>
+      </div>
+
+      <section id="tutorialListTPV" class="tutorial-list-pane">
+        <div class="tutorial-group">
+          <div class="tutorial-group-title">Operacion diaria</div>
+          <div id="tutorialTpvStatus" class="tutorial-group-sub">
+            Disponible en este terminal.
+          </div>
+          <div class="tutorial-group-actions tutorial-group-actions-grid">
+            <button
+              type="button"
+              id="tutorialTpvBasicsBtn"
+              class="small-btn tutorial-item-btn"
+            >
+              Apertura rapida del TPV
+            </button>
+            <button
+              type="button"
+              id="tutorialTpvTicketsBtn"
+              class="small-btn tutorial-item-btn"
+            >
+              Tickets y busqueda
+            </button>
+            <button
+              type="button"
+              id="tutorialTpvChargeBtn"
+              class="small-btn tutorial-item-btn"
+            >
+              Cobro y cierre de venta
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section id="tutorialListMesas" class="tutorial-list-pane hidden">
+        <div class="tutorial-group">
+          <div class="tutorial-group-title">Fundamentos de Mesas</div>
+          <div id="tutorialMesasStatus" class="tutorial-group-sub"></div>
+          <div class="tutorial-group-actions tutorial-group-actions-grid">
+            <button
+              type="button"
+              id="tutorialMesasBasicsBtn"
+              class="small-btn tutorial-item-btn"
+            >
+              Primeros pasos en Mesas
+            </button>
+            <button
+              type="button"
+              id="tutorialMesasTicketsBtn"
+              class="small-btn tutorial-item-btn"
+            >
+              Tickets de mesa y filtros
+            </button>
+            <button
+              type="button"
+              id="tutorialMesasServiceBtn"
+              class="small-btn tutorial-item-btn"
+            >
+              Flujo de servicio seguro
+            </button>
+            <button
+              type="button"
+              id="tutorialMesasContextBtn"
+              class="small-btn tutorial-item-btn"
+            >
+              Contexto rapido: sala y mesa
+            </button>
+          </div>
+        </div>
+
+        <div class="tutorial-group">
+          <div class="tutorial-group-title">Diseno y reservas</div>
+          <div class="tutorial-group-sub">
+            Gestiona salas, mesas y reservas sin tocar ventas reales.
+          </div>
+          <div class="tutorial-group-actions tutorial-group-actions-grid">
+            <button
+              type="button"
+              id="tutorialMesasRoomsBtn"
+              class="small-btn tutorial-item-btn"
+            >
+              Salas: crear y renombrar
+            </button>
+            <button
+              type="button"
+              id="tutorialMesasDesignTablesBtn"
+              class="small-btn tutorial-item-btn"
+            >
+              Mesas: crear y propiedades
+            </button>
+            <button
+              type="button"
+              id="tutorialMesasReservaBtn"
+              class="small-btn tutorial-item-btn"
+            >
+              Reservas y personas
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="dialog-actions opt-actions">
+      <button type="button" id="tutorialHubCloseBtn">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Panel flotante: Tutorial interactivo -->
+<div
+  id="tutorialModeBackdrop"
+  class="tutorial-mode-backdrop hidden"
+  aria-hidden="true"
+></div>
+<div id="tutorialCoachDock" class="tutorial-coach hidden" aria-live="polite">
+  <div class="tutorial-coach-head">
+    <div class="tutorial-coach-head-main">
+      <strong id="tutorialCoachTitle">Tutorial</strong>
+      <span class="tutorial-coach-badge"
+        >DEMO GUIADA · SIN CAMBIOS PERMANENTES</span
+      >
+    </div>
+    <button
+      type="button"
+      id="tutorialCoachCloseBtn"
+      class="small-btn"
+      title="Salir tutorial"
+    >
+      ✕
+    </button>
+  </div>
+  <div id="tutorialCoachText" class="tutorial-coach-text"></div>
+  <div id="tutorialCoachHint" class="tutorial-coach-hint"></div>
+  <div class="tutorial-coach-actions">
+    <button
+      type="button"
+      id="tutorialCoachPrevBtn"
+      class="small-btn tutorial-nav-btn"
+      title="Paso anterior"
+    >
+      ◀
+    </button>
+    <button
+      type="button"
+      id="tutorialCoachNextBtn"
+      class="small-btn tutorial-nav-btn"
+      title="Paso siguiente"
+    >
+      ▶
+    </button>
+  </div>
+</div>
+
+<!-- Modal visual: reanudar tutorial -->
+<div id="tutorialResumeOverlay" class="simple-overlay hidden">
+  <div
+    class="simple-dialog tutorial-resume-dialog"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="tutorialResumeTitle"
+  >
+    <div class="opt-head">
+      <h2 id="tutorialResumeTitle" class="opt-title">Reanudar tutorial</h2>
+    </div>
+    <div id="tutorialResumeText" class="tutorial-resume-text"></div>
+    <div class="dialog-actions opt-actions tutorial-resume-actions">
+      <button type="button" id="tutorialResumeCancelBtn">Cancelar</button>
+      <button type="button" id="tutorialResumeNoBtn">Empezar de nuevo</button>
+      <button type="button" id="tutorialResumeYesBtn" class="small-btn">
+        Reanudar
+      </button>
+    </div>
+  </div>
+</div>

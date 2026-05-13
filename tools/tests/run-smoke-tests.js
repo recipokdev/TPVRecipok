@@ -31,13 +31,17 @@ function ensureFileExists(relPath) {
 }
 
 const rendererPath = ensureFileExists("renderer.js");
+const indexPath = ensureFileExists("index.html");
+const stylesPath = ensureFileExists("styles.css");
 const checklistPath = ensureFileExists("tools/tests/cash-smoke-checklist.md");
 
-if (!rendererPath || !checklistPath) {
+if (!rendererPath || !indexPath || !stylesPath || !checklistPath) {
   process.exit(1);
 }
 
 const renderer = fs.readFileSync(rendererPath, "utf8");
+const index = fs.readFileSync(indexPath, "utf8");
+const styles = fs.readFileSync(stylesPath, "utf8");
 
 console.log("\n[SMOKE] Checking key flows in renderer.js\n");
 
@@ -95,6 +99,39 @@ mustContain(
   renderer,
   "async function canCallApiResource(resourceName, opts = {})",
   "Generic API resource precheck present",
+);
+mustContain(
+  renderer,
+  "const createTablesBtn = () =>",
+  "Mesas mode button wiring present",
+);
+mustContain(
+  renderer,
+  "function getMesaQuickStatusMeta(state, uid)",
+  "Mesas quick-switch status helper present",
+);
+mustContain(
+  renderer,
+  "mesasContextQuickSwitch",
+  "Mesas quick-switch renderer wiring present",
+);
+
+console.log("\n[SMOKE] Checking Mesas quick-switch UI presence\n");
+
+mustContain(
+  index,
+  'id="mesasContextQuickSwitch"',
+  "Mesas quick-switch container in index.html",
+);
+mustContain(
+  styles,
+  ".mesas-context-quick-switch",
+  "Mesas quick-switch styles present",
+);
+mustContain(
+  styles,
+  ".mesas-quick-btn.is-parked .mq-dot",
+  "Mesas quick-switch parked status color present",
 );
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");

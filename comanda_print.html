@@ -1,0 +1,135 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      @page {
+        size: 80mm auto;
+        margin: 0;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+
+      #comanda {
+        width: 72mm;
+        padding: 0 2mm;
+        color: #000;
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New",
+          monospace;
+        font-size: 12px;
+        line-height: 1.25;
+      }
+
+      .center {
+        text-align: center;
+      }
+
+      .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .sep {
+        border-top: 1px dashed #000;
+        margin: 8px 0;
+      }
+
+      .title {
+        text-align: center;
+        font-size: 18px;
+        font-weight: 800;
+        letter-spacing: 0.7px;
+      }
+
+      .mesa-big {
+        text-align: center;
+        font-size: 32px;
+        line-height: 1;
+        font-weight: 900;
+        margin: 6px 0 2px;
+      }
+
+      .meta {
+        font-size: 11px;
+      }
+
+      .items-head {
+        display: grid;
+        grid-template-columns: 14mm 1fr;
+        gap: 4px;
+        font-size: 11px;
+        opacity: 0.85;
+      }
+
+      .comanda-item {
+        display: grid;
+        grid-template-columns: 14mm 1fr;
+        gap: 4px;
+        align-items: start;
+        margin: 2px 0;
+      }
+
+      .comanda-qty {
+        font-weight: 800;
+      }
+
+      .comanda-desc {
+        word-break: break-word;
+      }
+
+      .obs-title {
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .obs-text {
+        font-size: 11px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="comanda">
+      <div class="title">COMANDA</div>
+      <div class="mesa-big" id="comandaMesaBig">MESA</div>
+
+      <div class="sep"></div>
+
+      <div class="meta">Mesa: <span id="comandaMesa">-</span></div>
+      <div class="meta">Agente: <span id="comandaAgent">-</span></div>
+      <div class="meta" id="comandaPartRow" style="display: none">
+        Parte: <span id="comandaPart">-</span>
+      </div>
+      <div class="row meta">
+        <div>Fecha: <span id="comandaDate">--/--/----</span></div>
+        <div>Hora: <span id="comandaTime">--:--</span></div>
+      </div>
+
+      <div class="sep"></div>
+
+      <div class="items-head">
+        <div>Cant.</div>
+        <div>Producto / Ref.</div>
+      </div>
+      <div class="sep"></div>
+
+      <div id="comandaItems"></div>
+
+      <div class="sep"></div>
+
+      <div class="obs-title">Observaciones</div>
+      <div class="obs-text" id="comandaObs">Sin observaciones</div>
+    </div>
+  </body>
+</html>

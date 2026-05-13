@@ -9,6 +9,7 @@ const PHASE_PACE_MS = Math.max(
 );
 const RUN_RESILIENCE_PROBES =
   String(process.env.TPV_E2E_RUN_RESILIENCE || "0") === "1";
+const ONLY_MESAS_E2E = String(process.env.TPV_E2E_ONLY_MESAS || "0") === "1";
 
 async function pace(ms = PHASE_PACE_MS) {
   if (ms <= 0) return;
@@ -96,7 +97,9 @@ async function attachDiagnostics(win) {
 }
 
 function logTpvConsoleWindow(diagnostics, label, sinceTs = 0) {
-  const lines = (Array.isArray(diagnostics?.consoleAll) ? diagnostics.consoleAll : [])
+  const lines = (
+    Array.isArray(diagnostics?.consoleAll) ? diagnostics.consoleAll : []
+  )
     .filter((x) => Number(x?.at || 0) >= Number(sinceTs || 0))
     .filter((x) => {
       const t = String(x?.text || "");
@@ -116,9 +119,7 @@ function logTpvConsoleWindow(diagnostics, label, sinceTs = 0) {
     return;
   }
 
-  const preview = lines
-    .map((x) => `[${x.type}] ${x.text}`)
-    .join(" | ");
+  const preview = lines.map((x) => `[${x.type}] ${x.text}`).join(" | ");
   ok(`${label}: TPV renderer logs => ${preview}`);
 }
 
@@ -142,7 +143,9 @@ async function assertNoCriticalDiagnostics(win, diagnostics) {
   }
 
   if (Array.isArray(diagnostics?.pageErrors) && diagnostics.pageErrors.length) {
-    fail(`Page error(s) detected: ${diagnostics.pageErrors.slice(0, 3).join(" | ")}`);
+    fail(
+      `Page error(s) detected: ${diagnostics.pageErrors.slice(0, 3).join(" | ")}`,
+    );
   }
 
   const consoleErrors = Array.isArray(diagnostics?.consoleErrors)
@@ -159,7 +162,10 @@ async function assertNoCriticalDiagnostics(win, diagnostics) {
 
     const isResourceLoadError = m.includes("Failed to load resource");
     const isBenign4xx =
-      isResourceLoadError && Number.isFinite(statusCode) && statusCode >= 400 && statusCode < 500;
+      isResourceLoadError &&
+      Number.isFinite(statusCode) &&
+      statusCode >= 400 &&
+      statusCode < 500;
 
     const isExpectedOfflineSimulationError =
       m.includes("Failed to load resource: net::ERR_FAILED") ||
@@ -167,12 +173,15 @@ async function assertNoCriticalDiagnostics(win, diagnostics) {
       (m.includes("Respuesta de error crearFacturaCliente") &&
         m.includes("Ha ocurrido un error mientras se guardaban los datos"));
 
-    if (isBenign4xx || isExpectedOfflineSimulationError) ignoredConsoleErrors.push(m);
+    if (isBenign4xx || isExpectedOfflineSimulationError)
+      ignoredConsoleErrors.push(m);
     else criticalConsoleErrors.push(m);
   }
 
   if (criticalConsoleErrors.length) {
-    fail(`console.error detected: ${criticalConsoleErrors.slice(0, 3).join(" | ")}`);
+    fail(
+      `console.error detected: ${criticalConsoleErrors.slice(0, 3).join(" | ")}`,
+    );
   }
 
   if (ignoredConsoleErrors.length) {
@@ -199,11 +208,14 @@ async function runBootFailureProbe(root, label, envOverrides = {}) {
     const win = await findMainWindow(electronApp);
     if (!win) fail(`[${label}] main window not found`);
 
-    await win.waitForFunction(() => {
-      const src = String(window.__TPV_E2E_BOOT_SOURCE__ || "");
-      const err = String(window.__TPV_E2E_BOOT_ERROR__ || "");
-      return src !== "booting" || !!err;
-    }, { timeout: 30000 });
+    await win.waitForFunction(
+      () => {
+        const src = String(window.__TPV_E2E_BOOT_SOURCE__ || "");
+        const err = String(window.__TPV_E2E_BOOT_ERROR__ || "");
+        return src !== "booting" || !!err;
+      },
+      { timeout: 30000 },
+    );
 
     const state = await win.evaluate(() => ({
       source: String(window.__TPV_E2E_BOOT_SOURCE__ || ""),
@@ -211,7 +223,9 @@ async function runBootFailureProbe(root, label, envOverrides = {}) {
     }));
 
     if (!state.bootError) {
-      fail(`[${label}] expected boot error but none was reported (source=${state.source || "unknown"})`);
+      fail(
+        `[${label}] expected boot error but none was reported (source=${state.source || "unknown"})`,
+      );
     }
 
     ok(`${label} handled with explicit boot error`);
@@ -258,7 +272,9 @@ async function findMainWindow(electronApp) {
     for (const w of wins) {
       try {
         await w.waitForLoadState("domcontentloaded", { timeout: 5000 });
-        const hasRoot = await w.evaluate(() => !!document.getElementById("cashHeaderBtn"));
+        const hasRoot = await w.evaluate(
+          () => !!document.getElementById("cashHeaderBtn"),
+        );
         if (hasRoot) {
           return w;
         }
@@ -320,11 +336,14 @@ async function testModalToggle(
 }
 
 async function ensureE2EIsolatedMode(win) {
-  await win.waitForFunction(() => {
-    const src = String(window.__TPV_E2E_BOOT_SOURCE__ || "");
-    const err = String(window.__TPV_E2E_BOOT_ERROR__ || "");
-    return src !== "booting" || !!err;
-  }, { timeout: 25000 });
+  await win.waitForFunction(
+    () => {
+      const src = String(window.__TPV_E2E_BOOT_SOURCE__ || "");
+      const err = String(window.__TPV_E2E_BOOT_ERROR__ || "");
+      return src !== "booting" || !!err;
+    },
+    { timeout: 25000 },
+  );
 
   const state = await win.evaluate(() => ({
     e2eFlag: !!window.TPV_ENV?.e2e,
@@ -337,7 +356,8 @@ async function ensureE2EIsolatedMode(win) {
   }));
 
   if (!state.e2eFlag) fail("TPV_ENV.e2e is false");
-  if (state.mode !== "demo") fail(`TPV_ENV.mode is '${state.mode}', expected 'demo'`);
+  if (state.mode !== "demo")
+    fail(`TPV_ENV.mode is '${state.mode}', expected 'demo'`);
   if (state.bodyFlag !== "1") fail("Body e2e marker missing (data-e2e-mode)");
 
   if (state.bootError) {
@@ -345,7 +365,9 @@ async function ensureE2EIsolatedMode(win) {
   }
 
   if (state.strictOnline && state.source !== "remote-demo") {
-    fail(`Strict online E2E requires remote-demo source, got '${state.source || "unknown"}'`);
+    fail(
+      `Strict online E2E requires remote-demo source, got '${state.source || "unknown"}'`,
+    );
   }
 
   if (!state.allowWrites) {
@@ -353,6 +375,97 @@ async function ensureE2EIsolatedMode(win) {
   }
 
   ok(`E2E isolated demo mode detected (source: ${state.source || "unknown"})`);
+}
+
+async function runOptionalMesasModeAssertions(win) {
+  const tablesBtnCount = await win
+    .locator("#mainAgentBar .agent-tables-btn")
+    .count();
+  if (!tablesBtnCount) {
+    ok(
+      "Mesas mode toggle not available in this build. Skipping Mesas E2E checks",
+    );
+    return;
+  }
+
+  await win.click("#mainAgentBar .agent-tables-btn");
+  await win.waitForTimeout(350);
+
+  const mesasRowVisible = await win.evaluate(() => {
+    const row = document.getElementById("mesasInlineTabsRow");
+    if (!row) return false;
+    return !row.classList.contains("hidden");
+  });
+  if (!mesasRowVisible)
+    fail("Mesas mode did not open after clicking toggle button");
+  ok("Mesas mode opens from toggle button");
+
+  const quickSwitchState = await win.evaluate(() => {
+    const wrap = document.getElementById("mesasContextQuickSwitch");
+    const roomSelect = document.getElementById("mesasContextRoomSelect");
+    const tableSelect = document.getElementById("mesasContextTableSelect");
+    const buttons = Array.from(
+      document.querySelectorAll("#mesasContextQuickSwitch button[data-uid]"),
+    );
+
+    return {
+      hasWrap: !!wrap,
+      wrapVisible: !!wrap && !wrap.classList.contains("hidden"),
+      roomValue: roomSelect ? String(roomSelect.value || "") : "",
+      tableValue: tableSelect ? String(tableSelect.value || "") : "",
+      buttonCount: buttons.length,
+      firstUid: buttons[0] ? String(buttons[0].dataset.uid || "") : "",
+      secondUid: buttons[1] ? String(buttons[1].dataset.uid || "") : "",
+    };
+  });
+
+  if (!quickSwitchState.hasWrap) {
+    fail("Mesas quick-switch container missing (#mesasContextQuickSwitch)");
+  }
+
+  ok("Mesas quick-switch container present");
+
+  if (quickSwitchState.buttonCount > 0 && quickSwitchState.wrapVisible) {
+    const targetUid = quickSwitchState.secondUid || quickSwitchState.firstUid;
+    if (targetUid) {
+      await win.click(
+        `#mesasContextQuickSwitch button[data-uid='${targetUid}']`,
+      );
+      await win.waitForTimeout(250);
+
+      const selectedUid = await win.evaluate(() => {
+        const tableSelect = document.getElementById("mesasContextTableSelect");
+        return tableSelect ? String(tableSelect.value || "") : "";
+      });
+
+      if (selectedUid !== targetUid) {
+        fail(
+          `Mesas quick-switch did not select target table. expected=${targetUid}, actual=${selectedUid}`,
+        );
+      }
+
+      ok("Mesas quick-switch selects tables correctly");
+    }
+  } else {
+    ok(
+      "Mesas quick-switch has no tables for current room. Selection check skipped",
+    );
+  }
+
+  await win.click("#mainAgentBar .agent-tables-btn");
+  await win.waitForTimeout(300);
+
+  const mesasRowHidden = await win.evaluate(() => {
+    const row = document.getElementById("mesasInlineTabsRow");
+    if (!row) return true;
+    return row.classList.contains("hidden");
+  });
+
+  if (!mesasRowHidden) {
+    fail("Mesas mode did not close after toggling back to normal mode");
+  }
+
+  ok("Mesas mode closes and returns to normal mode");
 }
 
 async function addProductByIndex(win, index, times = 1) {
@@ -378,7 +491,9 @@ async function getTotalAmountValue(win) {
 async function getPayableProducts(win) {
   return await win.evaluate(() => {
     const parsePrice = (txt) => {
-      let s = String(txt || "").replace(/[^0-9,.-]/g, "").trim();
+      let s = String(txt || "")
+        .replace(/[^0-9,.-]/g, "")
+        .trim();
       if (!s) return 0;
 
       const lastComma = s.lastIndexOf(",");
@@ -404,7 +519,8 @@ async function getPayableProducts(win) {
         const name =
           tile.querySelector(".product-name")?.textContent?.trim() ||
           `Producto ${idx + 1}`;
-        const priceTxt = tile.querySelector(".product-price")?.textContent || "";
+        const priceTxt =
+          tile.querySelector(".product-price")?.textContent || "";
         return {
           index: idx,
           name,
@@ -427,9 +543,34 @@ async function clearCartByUi(win) {
   if (rowsLeft !== 0) fail(`Unable to clear cart. Remaining lines=${rowsLeft}`);
 }
 
-async function setGroupLinesMode(win, enabled) {
+async function openOptionsOverlay(win) {
+  const hidden = await isHidden(win, "optionsOverlay");
+  if (hidden === false) return;
+
   await win.click("#optionsBtn");
   await win.waitForSelector("#optionsOverlay:not(.hidden)", { timeout: 10000 });
+}
+
+async function closeOptionsOverlay(win) {
+  const hidden = await isHidden(win, "optionsOverlay");
+  if (hidden !== false) return;
+
+  const hasCloseBtn = await win.locator("#optionsCloseBtn").count();
+  if (hasCloseBtn) {
+    await win.click("#optionsCloseBtn");
+  }
+
+  await win.waitForFunction(
+    () => {
+      const el = document.getElementById("optionsOverlay");
+      return !!el && el.classList.contains("hidden");
+    },
+    { timeout: 10000 },
+  );
+}
+
+async function setGroupLinesMode(win, enabled) {
+  await openOptionsOverlay(win);
 
   await win.evaluate((want) => {
     const t = document.getElementById("groupLinesToggle");
@@ -441,11 +582,7 @@ async function setGroupLinesMode(win, enabled) {
   }, !!enabled);
   await win.waitForTimeout(250);
 
-  await win.click("#optionsCloseBtn");
-  await win.waitForFunction(() => {
-    const el = document.getElementById("optionsOverlay");
-    return !!el && el.classList.contains("hidden");
-  }, { timeout: 10000 });
+  await closeOptionsOverlay(win);
 }
 
 async function setNumPadValue(win, value) {
@@ -459,10 +596,13 @@ async function setNumPadValue(win, value) {
   }
 
   await win.click('#numPadOverlay [data-key="ok"]');
-  await win.waitForFunction(() => {
-    const el = document.getElementById("numPadOverlay");
-    return !!el && el.classList.contains("hidden");
-  }, { timeout: 8000 });
+  await win.waitForFunction(
+    () => {
+      const el = document.getElementById("numPadOverlay");
+      return !!el && el.classList.contains("hidden");
+    },
+    { timeout: 8000 },
+  );
 }
 
 async function runCartAdvancedAssertions(win) {
@@ -480,10 +620,14 @@ async function runCartAdvancedAssertions(win) {
 
   const groupedView = await win.evaluate((name) => {
     const rows = Array.from(document.querySelectorAll("#cartLines .cart-line"));
-    const targetRows = rows.filter((r) =>
-      String(r.querySelector(".cart-line-name > div")?.textContent || "")
-        .trim()
-        .toLowerCase() === String(name || "").trim().toLowerCase(),
+    const targetRows = rows.filter(
+      (r) =>
+        String(r.querySelector(".cart-line-name > div")?.textContent || "")
+          .trim()
+          .toLowerCase() ===
+        String(name || "")
+          .trim()
+          .toLowerCase(),
     );
 
     const qtySum = targetRows.reduce((s, r) => {
@@ -508,13 +652,19 @@ async function runCartAdvancedAssertions(win) {
 
   const mergedView = await win.evaluate((name) => {
     const rows = Array.from(document.querySelectorAll("#cartLines .cart-line"));
-    const targetRows = rows.filter((r) =>
-      String(r.querySelector(".cart-line-name > div")?.textContent || "")
-        .trim()
-        .toLowerCase() === String(name || "").trim().toLowerCase(),
+    const targetRows = rows.filter(
+      (r) =>
+        String(r.querySelector(".cart-line-name > div")?.textContent || "")
+          .trim()
+          .toLowerCase() ===
+        String(name || "")
+          .trim()
+          .toLowerCase(),
     );
 
-    const qtyTxt = String(targetRows[0]?.querySelector(".qty-display")?.textContent || "0")
+    const qtyTxt = String(
+      targetRows[0]?.querySelector(".qty-display")?.textContent || "0",
+    )
       .replace(",", ".")
       .trim();
     const qty = Number(qtyTxt);
@@ -526,7 +676,9 @@ async function runCartAdvancedAssertions(win) {
   }, p.name);
 
   if (mergedView.lines !== 1 || !almostEqual(mergedView.qty, 2, 0.001)) {
-    fail(`Group-lines OFF expected 1 row qty=2, got lines=${mergedView.lines}, qty=${mergedView.qty}`);
+    fail(
+      `Group-lines OFF expected 1 row qty=2, got lines=${mergedView.lines}, qty=${mergedView.qty}`,
+    );
   }
   ok("Group-lines OFF merges same product quantities");
 
@@ -537,11 +689,16 @@ async function runCartAdvancedAssertions(win) {
   await setNumPadValue(win, "1.5");
 
   const afterQty = await win.evaluate(() => {
-    const qtyTxt = String(document.querySelector('#cartLines .cart-line .qty-display')?.textContent || "0")
+    const qtyTxt = String(
+      document.querySelector("#cartLines .cart-line .qty-display")
+        ?.textContent || "0",
+    )
       .replace(",", ".")
       .trim();
     const qty = Number(qtyTxt);
-    const totalTxt = String(document.getElementById("totalAmount")?.textContent || "")
+    const totalTxt = String(
+      document.getElementById("totalAmount")?.textContent || "",
+    )
       .replace(/[^0-9,.-]/g, "")
       .replace(".", "")
       .replace(",", ".");
@@ -556,7 +713,9 @@ async function runCartAdvancedAssertions(win) {
     fail(`Decimal quantity edit failed. Expected 1.5, got ${afterQty.qty}`);
   }
   if (!(afterQty.total > 0 && afterQty.total < totalBeforeEdits)) {
-    fail(`Unexpected total after decimal qty. before=${totalBeforeEdits}, after=${afterQty.total}`);
+    fail(
+      `Unexpected total after decimal qty. before=${totalBeforeEdits}, after=${afterQty.total}`,
+    );
   }
   ok("Decimal quantity edit works in cart");
 
@@ -565,7 +724,9 @@ async function runCartAdvancedAssertions(win) {
 
   const afterPrice = await win.evaluate(() => {
     const mod = !!document.querySelector("#cartLines .cart-line .price-mod");
-    const totalTxt = String(document.getElementById("totalAmount")?.textContent || "")
+    const totalTxt = String(
+      document.getElementById("totalAmount")?.textContent || "",
+    )
       .replace(/[^0-9,.-]/g, "")
       .replace(".", "")
       .replace(",", ".");
@@ -580,13 +741,14 @@ async function runCartAdvancedAssertions(win) {
     fail("Price override marker (MOD) not shown after line price edit");
   }
   if (!almostEqual(afterPrice.total, 7.5, 0.03)) {
-    fail(`Unexpected total after price override. Expected ~7.50, got ${afterPrice.total}`);
+    fail(
+      `Unexpected total after price override. Expected ~7.50, got ${afterPrice.total}`,
+    );
   }
   ok("Cart line price override works and updates totals");
 
   // C) Admin-only options visibility
-  await win.click("#optionsBtn");
-  await win.waitForSelector("#optionsOverlay:not(.hidden)", { timeout: 10000 });
+  await openOptionsOverlay(win);
 
   const visibleForAdmin = await win.evaluate(() => {
     if (!window.TPV_STATE) window.TPV_STATE = {};
@@ -595,10 +757,11 @@ async function runCartAdvancedAssertions(win) {
     try {
       if (typeof applyAdminOnlyUI === "function") applyAdminOnlyUI();
       if (typeof refreshOptionsUI === "function") refreshOptionsUI();
-      if (typeof refreshPriceEditToggleUI === "function") refreshPriceEditToggleUI();
+      if (typeof refreshPriceEditToggleUI === "function")
+        refreshPriceEditToggleUI();
     } catch {}
 
-    const sec = document.querySelector('#optionsOverlay [data-admin-only]');
+    const sec = document.querySelector("#optionsOverlay [data-admin-only]");
     if (!sec) return false;
     const st = window.getComputedStyle(sec);
     return st.display !== "none";
@@ -615,10 +778,11 @@ async function runCartAdvancedAssertions(win) {
     try {
       if (typeof applyAdminOnlyUI === "function") applyAdminOnlyUI();
       if (typeof refreshOptionsUI === "function") refreshOptionsUI();
-      if (typeof refreshPriceEditToggleUI === "function") refreshPriceEditToggleUI();
+      if (typeof refreshPriceEditToggleUI === "function")
+        refreshPriceEditToggleUI();
     } catch {}
 
-    const sec = document.querySelector('#optionsOverlay [data-admin-only]');
+    const sec = document.querySelector("#optionsOverlay [data-admin-only]");
     if (!sec) return false;
     const st = window.getComputedStyle(sec);
     return st.display === "none";
@@ -634,15 +798,12 @@ async function runCartAdvancedAssertions(win) {
     try {
       if (typeof applyAdminOnlyUI === "function") applyAdminOnlyUI();
       if (typeof refreshOptionsUI === "function") refreshOptionsUI();
-      if (typeof refreshPriceEditToggleUI === "function") refreshPriceEditToggleUI();
+      if (typeof refreshPriceEditToggleUI === "function")
+        refreshPriceEditToggleUI();
     } catch {}
   });
 
-  await win.click("#optionsCloseBtn");
-  await win.waitForFunction(() => {
-    const el = document.getElementById("optionsOverlay");
-    return !!el && el.classList.contains("hidden");
-  }, { timeout: 10000 });
+  await closeOptionsOverlay(win);
 
   ok("Admin-only options visibility behaves correctly");
 
@@ -651,22 +812,29 @@ async function runCartAdvancedAssertions(win) {
 }
 
 async function runOptionsAdvancedAssertions(win) {
-  await win.click("#optionsBtn");
-  await win.waitForSelector("#optionsOverlay:not(.hidden)", { timeout: 10000 });
+  await openOptionsOverlay(win);
 
   const ensureOptionsSectionOpen = async (sectionKey) => {
     await win.evaluate((key) => {
-      const sec = document.querySelector(`#optionsAccordion .opt-sec[data-sec="${key}"]`);
+      const sec = document.querySelector(
+        `#optionsAccordion .opt-sec[data-sec="${key}"]`,
+      );
       if (!sec) return;
       if (sec.dataset.open === "1") return;
       const header = sec.querySelector(".opt-sec-h");
       if (header) header.click();
     }, sectionKey);
 
-    await win.waitForFunction((key) => {
-      const sec = document.querySelector(`#optionsAccordion .opt-sec[data-sec="${key}"]`);
-      return !!sec && sec.dataset.open === "1";
-    }, sectionKey, { timeout: 10000 });
+    await win.waitForFunction(
+      (key) => {
+        const sec = document.querySelector(
+          `#optionsAccordion .opt-sec[data-sec="${key}"]`,
+        );
+        return !!sec && sec.dataset.open === "1";
+      },
+      sectionKey,
+      { timeout: 10000 },
+    );
   };
 
   // A) Kiosk toggle should flip and restore correctly.
@@ -701,7 +869,10 @@ async function runOptionsAdvancedAssertions(win) {
   if (!kioskState?.ok) {
     fail(`Options flow: ${kioskState?.reason || "kiosk toggle unavailable"}`);
   }
-  if (kioskState.changed === kioskState.original || kioskState.restored !== kioskState.original) {
+  if (
+    kioskState.changed === kioskState.original ||
+    kioskState.restored !== kioskState.original
+  ) {
     fail(
       `Options flow: kiosk toggle did not apply/restore (original=${kioskState.original}, changed=${kioskState.changed}, restored=${kioskState.restored})`,
     );
@@ -724,37 +895,50 @@ async function runOptionsAdvancedAssertions(win) {
   }
 
   await win.click("#printerOkBtn");
-  await win.waitForFunction(() => {
-    const el = document.getElementById("printerOverlay");
-    return !!el && el.classList.contains("hidden");
-  }, { timeout: 10000 });
+  await win.waitForFunction(
+    () => {
+      const el = document.getElementById("printerOverlay");
+      return !!el && el.classList.contains("hidden");
+    },
+    { timeout: 10000 },
+  );
 
   const toastBeforePrintTest = await win.evaluate(() =>
     Array.isArray(window.__E2E_TOASTS__) ? window.__E2E_TOASTS__.length : 0,
   );
 
   await win.click("#optionsTestPrinterBtn");
-  await win.waitForFunction((base) => {
-    const list = Array.isArray(window.__E2E_TOASTS__) ? window.__E2E_TOASTS__ : [];
-    if (list.length <= base) return false;
-    const last = String(list[list.length - 1]?.message || "").toLowerCase();
-    return (
-      last.includes("prueba") ||
-      last.includes("impres") ||
-      last.includes("enviada") ||
-      last.includes("error")
-    );
-  }, toastBeforePrintTest, { timeout: 10000 });
+  await win.waitForFunction(
+    (base) => {
+      const list = Array.isArray(window.__E2E_TOASTS__)
+        ? window.__E2E_TOASTS__
+        : [];
+      if (list.length <= base) return false;
+      const last = String(list[list.length - 1]?.message || "").toLowerCase();
+      return (
+        last.includes("prueba") ||
+        last.includes("impres") ||
+        last.includes("enviada") ||
+        last.includes("error")
+      );
+    },
+    toastBeforePrintTest,
+    { timeout: 10000 },
+  );
 
   ok("Options printer picker and test action executed");
 
   // C) Terminal families color change with cleanup.
   await ensureOptionsSectionOpen("terminales");
   await win.click("#optionsTerminalFamiliesBtn");
-  await win.waitForSelector("#terminalFamiliesOverlay:not(.hidden)", { timeout: 10000 });
+  await win.waitForSelector("#terminalFamiliesOverlay:not(.hidden)", {
+    timeout: 10000,
+  });
 
   const colorStep = await win.evaluate(() => {
-    const first = document.querySelector("#terminalFamiliesList .family-color-input");
+    const first = document.querySelector(
+      "#terminalFamiliesList .family-color-input",
+    );
     if (!first) return { ok: false, reason: "No family color input found" };
 
     const prev = String(first.value || "").toLowerCase();
@@ -771,10 +955,13 @@ async function runOptionsAdvancedAssertions(win) {
   }
 
   await win.click("#terminalFamiliesSaveBtn");
-  await win.waitForFunction(() => {
-    const el = document.getElementById("terminalFamiliesOverlay");
-    return !!el && el.classList.contains("hidden");
-  }, { timeout: 10000 });
+  await win.waitForFunction(
+    () => {
+      const el = document.getElementById("terminalFamiliesOverlay");
+      return !!el && el.classList.contains("hidden");
+    },
+    { timeout: 10000 },
+  );
 
   const savedColor = await win.evaluate(async () => {
     const map = await window.TPV_CFG?.get?.("ui.familyColors");
@@ -784,7 +971,9 @@ async function runOptionsAdvancedAssertions(win) {
   const changedApplied =
     !!savedColor &&
     Object.values(savedColor).some(
-      (v) => String(v || "").toLowerCase() === String(colorStep.next || "").toLowerCase(),
+      (v) =>
+        String(v || "").toLowerCase() ===
+        String(colorStep.next || "").toLowerCase(),
     );
 
   if (!changedApplied) {
@@ -794,28 +983,38 @@ async function runOptionsAdvancedAssertions(win) {
   // Restore previous color to avoid leaving test garbage.
   await ensureOptionsSectionOpen("terminales");
   await win.click("#optionsTerminalFamiliesBtn");
-  await win.waitForSelector("#terminalFamiliesOverlay:not(.hidden)", { timeout: 10000 });
+  await win.waitForSelector("#terminalFamiliesOverlay:not(.hidden)", {
+    timeout: 10000,
+  });
 
   await win.evaluate((prevColor) => {
-    const first = document.querySelector("#terminalFamiliesList .family-color-input");
+    const first = document.querySelector(
+      "#terminalFamiliesList .family-color-input",
+    );
     if (!first) return;
     first.value = String(prevColor || "#ffffff");
     first.dispatchEvent(new Event("input", { bubbles: true }));
   }, colorStep.prev);
 
   await win.click("#terminalFamiliesSaveBtn");
-  await win.waitForFunction(() => {
-    const el = document.getElementById("terminalFamiliesOverlay");
-    return !!el && el.classList.contains("hidden");
-  }, { timeout: 10000 });
+  await win.waitForFunction(
+    () => {
+      const el = document.getElementById("terminalFamiliesOverlay");
+      return !!el && el.classList.contains("hidden");
+    },
+    { timeout: 10000 },
+  );
 
   ok("Options terminal family color change tested and restored");
 
   await win.click("#optionsCloseBtn");
-  await win.waitForFunction(() => {
-    const el = document.getElementById("optionsOverlay");
-    return !!el && el.classList.contains("hidden");
-  }, { timeout: 10000 });
+  await win.waitForFunction(
+    () => {
+      const el = document.getElementById("optionsOverlay");
+      return !!el && el.classList.contains("hidden");
+    },
+    { timeout: 10000 },
+  );
 }
 
 async function runSaleAndPrintAssertions(win) {
@@ -823,7 +1022,9 @@ async function runSaleAndPrintAssertions(win) {
 
   const picks = await win.evaluate(() => {
     const parsePrice = (txt) => {
-      let s = String(txt || "").replace(/[^0-9,.-]/g, "").trim();
+      let s = String(txt || "")
+        .replace(/[^0-9,.-]/g, "")
+        .trim();
       if (!s) return 0;
 
       const lastComma = s.lastIndexOf(",");
@@ -844,27 +1045,33 @@ async function runSaleAndPrintAssertions(win) {
     };
 
     const tiles = Array.from(document.querySelectorAll(".product-tile"));
-    return tiles.map((tile, idx) => {
-      const name = tile.querySelector(".product-name")?.textContent?.trim() || `Producto ${idx + 1}`;
-      const priceTxt = tile.querySelector(".product-price")?.textContent || "";
-      return {
-        index: idx,
-        name,
-        unitPrice: parsePrice(priceTxt),
-      };
-    }).filter((p) => Number(p.unitPrice || 0) > 0);
+    return tiles
+      .map((tile, idx) => {
+        const name =
+          tile.querySelector(".product-name")?.textContent?.trim() ||
+          `Producto ${idx + 1}`;
+        const priceTxt =
+          tile.querySelector(".product-price")?.textContent || "";
+        return {
+          index: idx,
+          name,
+          unitPrice: parsePrice(priceTxt),
+        };
+      })
+      .filter((p) => Number(p.unitPrice || 0) > 0);
   });
 
   if (!Array.isArray(picks) || !picks.length) {
     fail("No payable products (price > 0) available in grid for sale test");
   }
 
-  const lineSpecs = picks.length >= 2
-    ? [
-        { ...picks[0], qty: 2 },
-        { ...picks[1], qty: 1 },
-      ]
-    : [{ ...picks[0], qty: 3 }];
+  const lineSpecs =
+    picks.length >= 2
+      ? [
+          { ...picks[0], qty: 2 },
+          { ...picks[1], qty: 1 },
+        ]
+      : [{ ...picks[0], qty: 3 }];
 
   for (const spec of lineSpecs) {
     await addProductByIndex(win, spec.index, spec.qty);
@@ -878,7 +1085,9 @@ async function runSaleAndPrintAssertions(win) {
 
   const total = await getTotalAmountValue(win);
   if (!almostEqual(total, expectedTotal)) {
-    fail(`Unexpected cart total. Expected ${expectedTotal.toFixed(2)}, got ${total}`);
+    fail(
+      `Unexpected cart total. Expected ${expectedTotal.toFixed(2)}, got ${total}`,
+    );
   }
   ok(`Cart total after product adds is correct (${expectedTotal.toFixed(2)})`);
 
@@ -888,22 +1097,28 @@ async function runSaleAndPrintAssertions(win) {
   await win.fill("#parkNameInput", "E2E Parked Ticket");
   await win.fill("#parkObsInput", "E2E transactional create");
   await win.click("#parkObsOkBtn");
-  await win.waitForFunction(() => {
-    const el = document.getElementById("parkObsOverlay");
-    return !!el && el.classList.contains("hidden");
-  }, { timeout: 10000 });
+  await win.waitForFunction(
+    () => {
+      const el = document.getElementById("parkObsOverlay");
+      return !!el && el.classList.contains("hidden");
+    },
+    { timeout: 10000 },
+  );
 
-  await win.waitForFunction(() => {
-    const totalEl = document.getElementById("totalAmount");
-    const badge = document.getElementById("parkedCountBadge");
-    const raw = String(totalEl?.textContent || "")
-      .replace(/[^0-9,.-]/g, "")
-      .replace(".", "")
-      .replace(",", ".");
-    const total = Number(raw);
-    const parked = Number(String(badge?.textContent || "0").trim()) || 0;
-    return Number.isFinite(total) && total <= 0.001 && parked >= 1;
-  }, { timeout: 25000 });
+  await win.waitForFunction(
+    () => {
+      const totalEl = document.getElementById("totalAmount");
+      const badge = document.getElementById("parkedCountBadge");
+      const raw = String(totalEl?.textContent || "")
+        .replace(/[^0-9,.-]/g, "")
+        .replace(".", "")
+        .replace(",", ".");
+      const total = Number(raw);
+      const parked = Number(String(badge?.textContent || "0").trim()) || 0;
+      return Number.isFinite(total) && total <= 0.001 && parked >= 1;
+    },
+    { timeout: 25000 },
+  );
 
   ok("Parked ticket created");
 
@@ -915,16 +1130,23 @@ async function runSaleAndPrintAssertions(win) {
 
   // 2) Open parked list only after a ticket exists
   await win.click("#parkedListBtn");
-  await win.waitForSelector("#parkedTicketsOverlay:not(.hidden)", { timeout: 10000 });
-  await win.waitForSelector("#parkedTicketsList .parked-ticket-item", { timeout: 10000 });
+  await win.waitForSelector("#parkedTicketsOverlay:not(.hidden)", {
+    timeout: 10000,
+  });
+  await win.waitForSelector("#parkedTicketsList .parked-ticket-item", {
+    timeout: 10000,
+  });
   ok("Parked tickets modal opens with created ticket");
 
   // 3) Restore parked ticket to cart, add one item, park again (update)
   await win.click("#parkedTicketsList .parked-ticket-item");
-  await win.waitForFunction(() => {
-    const el = document.getElementById("parkedTicketsOverlay");
-    return !!el && el.classList.contains("hidden");
-  }, { timeout: 10000 });
+  await win.waitForFunction(
+    () => {
+      const el = document.getElementById("parkedTicketsOverlay");
+      return !!el && el.classList.contains("hidden");
+    },
+    { timeout: 10000 },
+  );
 
   await addProductByIndex(win, lineSpecs[0].index, 1);
 
@@ -932,18 +1154,27 @@ async function runSaleAndPrintAssertions(win) {
   await win.waitForSelector("#parkObsOverlay:not(.hidden)", { timeout: 10000 });
   await win.fill("#parkObsInput", "E2E transactional update");
   await win.click("#parkObsOkBtn");
-  await win.waitForFunction(() => {
-    const el = document.getElementById("parkObsOverlay");
-    return !!el && el.classList.contains("hidden");
-  }, { timeout: 10000 });
+  await win.waitForFunction(
+    () => {
+      const el = document.getElementById("parkObsOverlay");
+      return !!el && el.classList.contains("hidden");
+    },
+    { timeout: 10000 },
+  );
   ok("Parked ticket updated");
 
   await win.click("#parkedListBtn");
-  await win.waitForSelector("#parkedTicketsOverlay:not(.hidden)", { timeout: 10000 });
+  await win.waitForSelector("#parkedTicketsOverlay:not(.hidden)", {
+    timeout: 10000,
+  });
 
   const parkedObsOk = await win.evaluate(() => {
-    const obs = document.querySelector("#parkedTicketsList .parked-ticket-item .pt-obs");
-    const total = document.querySelector("#parkedTicketsList .parked-ticket-item .pt-total");
+    const obs = document.querySelector(
+      "#parkedTicketsList .parked-ticket-item .pt-obs",
+    );
+    const total = document.querySelector(
+      "#parkedTicketsList .parked-ticket-item .pt-total",
+    );
     return {
       obs: String(obs?.textContent || "").toLowerCase(),
       total: String(total?.textContent || ""),
@@ -981,10 +1212,13 @@ async function runSaleAndPrintAssertions(win) {
   ok("Pay overlay opens");
 
   await win.click("#payCancelBtn");
-  await win.waitForFunction(() => {
-    const el = document.getElementById("payOverlay");
-    return !!el && el.classList.contains("hidden");
-  }, { timeout: 10000 });
+  await win.waitForFunction(
+    () => {
+      const el = document.getElementById("payOverlay");
+      return !!el && el.classList.contains("hidden");
+    },
+    { timeout: 10000 },
+  );
   ok("Pay overlay closes");
 
   const printResult = await win.evaluate(async (specs) => {
@@ -1037,7 +1271,11 @@ async function runSaleAndPrintAssertions(win) {
 
   for (const spec of lineSpecs) {
     const qty = m.lineas
-      .filter((l) => String(l.descripcion || "").toLowerCase() === String(spec.name || "").toLowerCase())
+      .filter(
+        (l) =>
+          String(l.descripcion || "").toLowerCase() ===
+          String(spec.name || "").toLowerCase(),
+      )
       .reduce((s, l) => s + Number(l.cantidad || 0), 0);
 
     if (qty < Number(spec.qty || 0)) {
@@ -1046,7 +1284,9 @@ async function runSaleAndPrintAssertions(win) {
   }
 
   if (!almostEqual(Number(m.totalToShow || 0), expectedTotal)) {
-    fail(`Printed total invalid. Expected ${expectedTotal.toFixed(2)}, got ${m.totalToShow}`);
+    fail(
+      `Printed total invalid. Expected ${expectedTotal.toFixed(2)}, got ${m.totalToShow}`,
+    );
   }
 
   ok("Printable data validated (lines, quantities, total)");
@@ -1056,7 +1296,9 @@ async function runOfflineQueueRecoveryFlow(win, diagnostics) {
   const phaseStart = Date.now();
   const product = await win.evaluate(() => {
     const parsePrice = (txt) => {
-      let s = String(txt || "").replace(/[^0-9,.-]/g, "").trim();
+      let s = String(txt || "")
+        .replace(/[^0-9,.-]/g, "")
+        .trim();
       if (!s) return 0;
 
       const lastComma = s.lastIndexOf(",");
@@ -1079,7 +1321,8 @@ async function runOfflineQueueRecoveryFlow(win, diagnostics) {
     const tiles = Array.from(document.querySelectorAll(".product-tile"));
     for (let i = 0; i < tiles.length; i += 1) {
       const tile = tiles[i];
-      const name = tile.querySelector(".product-name")?.textContent?.trim() || "Producto";
+      const name =
+        tile.querySelector(".product-name")?.textContent?.trim() || "Producto";
       const priceTxt = tile.querySelector(".product-price")?.textContent || "";
       const unitPrice = parsePrice(priceTxt);
 
@@ -1095,7 +1338,9 @@ async function runOfflineQueueRecoveryFlow(win, diagnostics) {
     fail("Offline flow: no payable product tile (price > 0) found");
   }
 
-  const apiBaseUrl = await win.evaluate(() => String(window.RECIPOK_API?.baseUrl || "").replace(/\/+$/, ""));
+  const apiBaseUrl = await win.evaluate(() =>
+    String(window.RECIPOK_API?.baseUrl || "").replace(/\/+$/, ""),
+  );
   if (!apiBaseUrl) fail("Offline flow: missing RECIPOK_API.baseUrl");
 
   await win.evaluate(() => window.TPV_TEST?.clearPrintJobs?.());
@@ -1118,17 +1363,23 @@ async function runOfflineQueueRecoveryFlow(win, diagnostics) {
   await win.waitForSelector("#payOverlay:not(.hidden)", { timeout: 15000 });
 
   const chosenPayCode = await win.evaluate(() => {
-    const rows = Array.from(document.querySelectorAll("#payMethodsList .pay-method-row"));
+    const rows = Array.from(
+      document.querySelectorAll("#payMethodsList .pay-method-row"),
+    );
     if (!rows.length) return "";
 
     const byPreferredCode = rows.find((row) => {
       const inp = row.querySelector(".pay-amount");
-      const code = String(inp?.dataset?.codpago || "").trim().toUpperCase();
+      const code = String(inp?.dataset?.codpago || "")
+        .trim()
+        .toUpperCase();
       return ["CONT", "EFECTIVO", "CASH"].includes(code);
     });
 
     const byLabel = rows.find((row) => {
-      const label = String(row.querySelector(".pay-pill")?.textContent || "").toLowerCase();
+      const label = String(
+        row.querySelector(".pay-pill")?.textContent || "",
+      ).toLowerCase();
       return label.includes("contado") || label.includes("efectivo");
     });
 
@@ -1148,22 +1399,37 @@ async function runOfflineQueueRecoveryFlow(win, diagnostics) {
   ok(`Offline flow payment method selected (${chosenPayCode})`);
 
   await win.click("#paySaveBtn");
-  await win.waitForFunction(() => {
-    const el = document.getElementById("payOverlay");
-    return !!el && el.classList.contains("hidden");
-  }, { timeout: 20000 });
+  await win.waitForFunction(
+    () => {
+      const el = document.getElementById("payOverlay");
+      return !!el && el.classList.contains("hidden");
+    },
+    { timeout: 20000 },
+  );
 
-  const sawOfflineToast = await win.waitForFunction(() => {
-    const list = Array.isArray(window.__E2E_TOASTS__) ? window.__E2E_TOASTS__ : [];
-    return list.some((t) =>
-      String(t?.message || "").toLowerCase().includes("venta guardada en cola"),
-    );
-  }, { timeout: 12000 }).then(() => true).catch(() => false);
+  const sawOfflineToast = await win
+    .waitForFunction(
+      () => {
+        const list = Array.isArray(window.__E2E_TOASTS__)
+          ? window.__E2E_TOASTS__
+          : [];
+        return list.some((t) =>
+          String(t?.message || "")
+            .toLowerCase()
+            .includes("venta guardada en cola"),
+        );
+      },
+      { timeout: 12000 },
+    )
+    .then(() => true)
+    .catch(() => false);
 
   if (!sawOfflineToast) {
     fail("Offline flow: missing 'venta guardada en cola' toast");
   }
-  ok(`Offline queue toast detected (${Date.now() - phaseStart}ms since offline pay save)`);
+  ok(
+    `Offline queue toast detected (${Date.now() - phaseStart}ms since offline pay save)`,
+  );
 
   const queueAfterOffline = await win.evaluate(async () => {
     const q = await window.TPV_QUEUE?.count?.();
@@ -1175,8 +1441,14 @@ async function runOfflineQueueRecoveryFlow(win, diagnostics) {
   });
 
   if (!(queueAfterOffline >= 1)) {
-    logTpvConsoleWindow(diagnostics, "Offline flow debug (queue not visible after toast)", phaseStart);
-    fail(`Offline flow: expected queued sales >=1 after toast, got ${queueAfterOffline}`);
+    logTpvConsoleWindow(
+      diagnostics,
+      "Offline flow debug (queue not visible after toast)",
+      phaseStart,
+    );
+    fail(
+      `Offline flow: expected queued sales >=1 after toast, got ${queueAfterOffline}`,
+    );
   }
   ok(`Offline queue captured sale (pending=${queueAfterOffline})`);
 
@@ -1214,7 +1486,9 @@ async function runOfflineQueueRecoveryFlow(win, diagnostics) {
 
   while (Date.now() < deadline) {
     if (win.isClosed()) {
-      fail("Offline flow: renderer window closed unexpectedly while waiting queue drain");
+      fail(
+        "Offline flow: renderer window closed unexpectedly while waiting queue drain",
+      );
     }
 
     const step = await win.evaluate(async () => {
@@ -1267,7 +1541,11 @@ async function runOfflineQueueRecoveryFlow(win, diagnostics) {
   });
 
   if (!lastOfflineState && lastPending > 0) {
-    logTpvConsoleWindow(diagnostics, "Offline flow reconnect (pending after online)", phaseStart);
+    logTpvConsoleWindow(
+      diagnostics,
+      "Offline flow reconnect (pending after online)",
+      phaseStart,
+    );
     ok(
       `Offline flow reconnected but queue kept pending items (likely backend validation/retry policy). pending=${lastPending}, syncError=${lastSyncError || "none"}`,
     );
@@ -1308,6 +1586,15 @@ async function runOfflineQueueRecoveryFlow(win, diagnostics) {
     await ensureVisible(win, "#parkBtn", "Park button");
     await ensureVisible(win, "#payBtn", "Pay button");
     await ensureVisible(win, "#optionsBtn", "Options button");
+
+    await runOptionalMesasModeAssertions(win);
+    await pace();
+
+    if (ONLY_MESAS_E2E) {
+      await assertNoCriticalDiagnostics(win, diagnostics);
+      ok("Mesas-only E2E smoke passed");
+      return;
+    }
 
     await testModalToggle(
       win,
@@ -1379,6 +1666,8 @@ async function runOfflineQueueRecoveryFlow(win, diagnostics) {
 
     ok("E2E resilience probes passed");
   } else {
-    ok("E2E resilience probes skipped (set TPV_E2E_RUN_RESILIENCE=1 to enable)");
+    ok(
+      "E2E resilience probes skipped (set TPV_E2E_RUN_RESILIENCE=1 to enable)",
+    );
   }
 })();

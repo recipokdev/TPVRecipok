@@ -1,0 +1,2116 @@
+const APP_MODE_KEY = "tpv_app_mode";
+const APP_MODE_CFG_KEY = "app.mode";
+const TPV_THEME_KEY = "tpv_theme_mode";
+const MESAS_CATALOG_SESSION_KEY = "tpv_mesas_catalog_session_v1";
+const SHARED_CATALOG_CACHE_KEY = "tpv_shared_catalog_v1";
+const PRODUCT_VISUAL_MIN_SLOTS = 24;
+const PARKED_TICKETS_CACHE_KEY = "tpv_parked_tickets_cache_v1";
+const TABLES_STATE_KEY = "tpv_tables_state_v3";
+const LEGACY_TABLES_STATE_KEY = "tpv_tables_state_v2";
+const MESAS_LAYOUT_CACHE_KEY = "tpv_mesas_layout_cache_v1";
+const MESAS_LAYOUT_SYNC_QUEUE_KEY = "tpv_mesas_layout_sync_queue_v1";
+const MESAS_REMOTE_SYNC_POLL_MS = 8000;
+
+const DEFAULT_STATE = {
+  activeView: "mapa",
+  activeRoomId: null,
+  selectedTableId: null,
+  category: "all",
+  search: "",
+  parkedCounter: 0,
+  roomList: [],
+  tableTicketMap: {},
+  tableStates: {},
+  tableMeta: {},
+  draftCartByTable: {},
+  roomDesigns: {},
+};
+
+const DEMO_CATEGORIES = [
+  { id: "bebidas", name: "Bebidas" },
+  { id: "desayunos", name: "Desayunos" },
+  { id: "comida", name: "Comida" },
+];
+
+const DEMO_PRODUCTS = [
+  {
+    id: 1,
+    name: "Cafe solo",
+    secondaryName: "",
+    price: 1.2,
+    category: "bebidas",
+  },
+  {
+    id: 2,
+    name: "Cafe con leche",
+    secondaryName: "",
+    price: 1.6,
+    category: "bebidas",
+  },
+  {
+    id: 3,
+    name: "Tostada tomate",
+    secondaryName: "",
+    price: 2.2,
+    category: "desayunos",
+  },
+  {
+    id: 4,
+    name: "Bocadillo jamon",
+    secondaryName: "",
+    price: 4.5,
+    category: "comida",
+  },
+  {
+    id: 5,
+    name: "Sandwich mixto",
+    secondaryName: "",
+    price: 3.2,
+    category: "comida",
+  },
+];
+
+let state = cloneDefaultState();
+let parkedTickets = [];
+let cart = [];
+let categories = [];
+let products = [];
+let selectedDesignObjectId = null;
+let activeDesignTool = "select";
+let dragState = null;
+let mesasRemoteSyncTimer = null;
+let mesasRemoteSyncInFlight = false;
+let mesasRemotePollTimer = null;
+let mesasRemoteFetchInFlight = false;
+let mesasRemoteEventsBound = false;
+let mesasRemoteQueueDrainInFlight = false;
+
+const tabs = Array.from(document.querySelectorAll(".mesas-tab"));
+const views = {
+  mapa: document.getElementById("view-mapa"),
+  transacciones: document.getElementById("view-transacciones"),
+  diseno: document.getElementById("view-diseno"),
+};
+
+const roomSelect = document.getElementById("roomSelect");
+const designRoomSelect = document.getElementById("designRoomSelect");
+const mapEmptyState = document.getElementById("mapEmptyState");
+const mesaCards = document.getElementById("mesaCards");
+const selectedTableTitle = document.getElementById("selectedTableTitle");
+const selectedTableState = document.getElementById("selectedTableState");
+const ticketMesaTitle = document.getElementById("ticketMesaTitle");
+const ticketMeta = document.getElementById("ticketMeta");
+const ticketLines = document.getElementById("ticketLinesMesas");
+const ticketTotal = document.getElementById("ticketTotalMesas");
+const productsGrid = document.getElementById("productsGridMesas");
+const categoryBar = document.getElementById("categoryBar");
+const otherTablesList = document.getElementById("otherTablesList");
+const productSearchInput = document.getElementById("productSearchMesas");
+const designCanvas = document.getElementById("designCanvas");
+const designHintText = document.getElementById("designHintText");
+const toolButtons = Array.from(document.querySelectorAll(".tool-btn"));
+const MESAS_BRIDGE = window.MESAS_BRIDGE || null;
+const MESAS_URL_PARAMS = new URLSearchParams(window.location.search);
+const MESAS_EMBED_MODE = MESAS_URL_PARAMS.get("embed") === "1";
+const MESAS_EMBED_VIEW = ["mapa", "transacciones", "diseno"].includes(
+  String(MESAS_URL_PARAMS.get("view") || "").toLowerCase(),
+)
+  ? String(MESAS_URL_PARAMS.get("view") || "").toLowerCase()
+  : "";
+
+function cloneDefaultState() {
+  return {
+    ...DEFAULT_STATE,
+    tableTicketMap: { ...DEFAULT_STATE.tableTicketMap },
+    tableStates: { ...DEFAULT_STATE.tableStates },
+    tableMeta: { ...DEFAULT_STATE.tableMeta },
+    draftCartByTable: { ...DEFAULT_STATE.draftCartByTable },
+    roomList: [],
+    roomDesigns: {},
+  };
+}
+
+function slugify(value) {
+  return String(value || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+}
+
+function uniqueId(base, taken) {
+  let i = 1;
+  let candidate = base || "item";
+  while (taken.has(candidate)) {
+    i += 1;
+    candidate = `${base}-${i}`;
+  }
+  return candidate;
+}
+
+function safeText(value, fallback = "") {
+  const t = String(value || "").trim();
+  return t || fallback;
+}
+
+function sanitizeEntityName(value, fallback = "") {
+  return safeText(value, fallback).replace(/\s+/g, " ");
+}
+
+function normalizeEntityName(value) {
+  return sanitizeEntityName(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function isRoomNameTaken(name, opts = {}) {
+  const target = normalizeEntityName(name);
+  if (!target) return false;
+
+  const excludeRoomId = String(opts?.excludeRoomId || "").trim();
+  return state.roomList.some((room) => {
+    const roomId = String(room?.id || "").trim();
+    if (excludeRoomId && roomId === excludeRoomId) return false;
+    return normalizeEntityName(room?.name || "") === target;
+  });
+}
+
+function isTableNameTaken(room, name, opts = {}) {
+  const target = normalizeEntityName(name);
+  if (!target || !room || !Array.isArray(room.tables)) return false;
+
+  const excludeTableId = String(opts?.excludeTableId || "").trim();
+  return room.tables.some((table) => {
+    const tableId = String(table?.id || "").trim();
+    if (excludeTableId && tableId === excludeTableId) return false;
+    return normalizeEntityName(table?.name || "") === target;
+  });
+}
+
+function eur(v) {
+  return `${(Number(v) || 0).toFixed(2).replace(".", ",")} EUR`;
+}
+
+function applySavedThemeMode() {
+  const mode = String(
+    MESAS_BRIDGE?.getThemeMode?.() ||
+      localStorage.getItem(TPV_THEME_KEY) ||
+      "light",
+  )
+    .trim()
+    .toLowerCase();
+  document.body.classList.toggle("theme-dark", mode === "dark");
+}
+
+function tableUid(roomId, tableId) {
+  return `${roomId}::${tableId}`;
+}
+
+function splitTableUid(uid) {
+  const [roomId, tableId] = String(uid || "").split("::");
+  return { roomId: roomId || "", tableId: tableId || "" };
+}
+
+function getSyncConfigRuntime() {
+  const own = window.TPV_CONFIG || null;
+  if (own) return own;
+  try {
+    if (window.parent && window.parent !== window) {
+      return window.parent.TPV_CONFIG || null;
+    }
+  } catch {}
+  return null;
+}
+
+function getMesasSyncApiUrl() {
+  const cfg = getSyncConfigRuntime();
+  return (
+    String(cfg?.tpvSyncApiUrl || "").trim() ||
+    "https://plus.recipok.com/tpv/api/index.php"
+  );
+}
+
+function getMesasSyncApiKey() {
+  const cfg = getSyncConfigRuntime();
+  const fromCfg = String(cfg?.tpvApiKey || "").trim();
+  if (fromCfg) return fromCfg;
+
+  const fromRuntime = String(window.RECIPOK_API?.apiKey || "").trim();
+  if (fromRuntime) return fromRuntime;
+
+  const fromLs = String(localStorage.getItem("tpv_sync_api_key") || "").trim();
+  if (fromLs) return fromLs;
+
+  return "";
+}
+
+function getMesasSlugScope() {
+  const baseUrl =
+    localStorage.getItem("tpv_baseUrl") || window.RECIPOK_API?.baseUrl || "";
+  const m = String(baseUrl).match(/plus\.recipok\.com\/([^/]+)\/api\/\d+/i);
+  return m ? String(m[1]).trim() : "";
+}
+
+function getMesasLayoutScopedStorageKey() {
+  const slug = String(getMesasSlugScope() || "").trim() || "default";
+  return `${MESAS_LAYOUT_CACHE_KEY}::${slug}`;
+}
+
+function writeTablesStateRaw(payload) {
+  if (MESAS_BRIDGE?.setTablesStateRaw) {
+    MESAS_BRIDGE.setTablesStateRaw(payload);
+  } else {
+    localStorage.setItem(TABLES_STATE_KEY, payload);
+  }
+  localStorage.setItem(getMesasLayoutScopedStorageKey(), payload);
+}
+
+function readTablesStateRaw() {
+  return (
+    MESAS_BRIDGE?.getTablesStateRaw?.() ||
+    localStorage.getItem(TABLES_STATE_KEY) ||
+    localStorage.getItem(LEGACY_TABLES_STATE_KEY) ||
+    localStorage.getItem(getMesasLayoutScopedStorageKey()) ||
+    ""
+  );
+}
+
+async function apiGetMesasLayoutRemote() {
+  const slug = String(getMesasSlugScope() || "").trim();
+  const apiKey = getMesasSyncApiKey();
+  if (!slug || !apiKey) return null;
+
+  const apiUrl = getMesasSyncApiUrl();
+  const url = `${apiUrl}?action=get-mesas-layout&slug=${encodeURIComponent(slug)}`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      "X-TPV-API-KEY": apiKey,
+    },
+    cache: "no-store",
+  });
+
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  const layout = data?.data?.layout ?? data?.layout ?? data?.data ?? null;
+  return layout && typeof layout === "object" ? layout : null;
+}
+
+async function apiSaveMesasLayoutRemote(nextState) {
+  const slug = String(getMesasSlugScope() || "").trim();
+  const apiKey = getMesasSyncApiKey();
+  if (!slug || !apiKey) {
+    throw new Error("missing-mesas-remote-config");
+  }
+
+  const apiUrl = getMesasSyncApiUrl();
+  const payload = {
+    slug,
+    layout: nextState && typeof nextState === "object" ? nextState : {},
+    updatedAt: new Date().toISOString(),
+  };
+
+  const res = await fetch(`${apiUrl}?action=save-mesas-layout`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-TPV-API-KEY": apiKey,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    throw new Error(`mesas-layout-save-http-${res.status}`);
+  }
+
+  return true;
+}
+
+function getMesasLayoutSyncQueueStorageKey() {
+  const slug = String(getMesasSlugScope() || "").trim() || "default";
+  return `${MESAS_LAYOUT_SYNC_QUEUE_KEY}::${slug}`;
+}
+
+function loadMesasLayoutSyncQueue() {
+  try {
+    const raw = localStorage.getItem(getMesasLayoutSyncQueueStorageKey());
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveMesasLayoutSyncQueue(queue) {
+  try {
+    const safe = Array.isArray(queue) ? queue : [];
+    localStorage.setItem(
+      getMesasLayoutSyncQueueStorageKey(),
+      JSON.stringify(safe.slice(-200)),
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar cola de sync de Mesas:", e?.message || e);
+  }
+}
+
+function enqueueMesasLayoutSync(nextState, opts = {}) {
+  const slug = String(getMesasSlugScope() || "").trim() || "default";
+  const layout = nextState && typeof nextState === "object" ? nextState : {};
+  const updatedAt = String(opts?.updatedAt || new Date().toISOString());
+
+  const queue = loadMesasLayoutSyncQueue();
+  const entry = {
+    key: `${slug}|layout`,
+    slug,
+    layout,
+    queuedAt: new Date().toISOString(),
+    updatedAt,
+  };
+
+  const idx = queue.findIndex((it) => String(it?.key || "") === entry.key);
+  if (idx >= 0) queue[idx] = entry;
+  else queue.push(entry);
+
+  saveMesasLayoutSyncQueue(queue);
+}
+
+function isMesasSyncTransientError(err) {
+  const msg = String(err?.message || err || "").toLowerCase();
+  return (
+    msg.includes("offline") ||
+    msg.includes("network") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("timeout") ||
+    msg.includes("abort") ||
+    msg.includes("http 5") ||
+    msg.includes("http 429") ||
+    msg.includes("missing-mesas-remote-config")
+  );
+}
+
+async function processMesasLayoutSyncQueue() {
+  if (mesasRemoteQueueDrainInFlight) return false;
+
+  const queue = loadMesasLayoutSyncQueue();
+  if (!queue.length) return true;
+
+  mesasRemoteQueueDrainInFlight = true;
+  try {
+    const remaining = [];
+
+    for (const entry of queue) {
+      try {
+        await apiSaveMesasLayoutRemote(entry?.layout || {});
+      } catch (e) {
+        remaining.push(entry);
+        if (!isMesasSyncTransientError(e)) {
+          console.warn("Error persistente drenando cola de Mesas:", e?.message || e);
+        }
+      }
+    }
+
+    saveMesasLayoutSyncQueue(remaining);
+    return remaining.length === 0;
+  } finally {
+    mesasRemoteQueueDrainInFlight = false;
+  }
+}
+
+function scheduleRemoteMesasStateSave(nextState) {
+  if (mesasRemoteSyncTimer) {
+    clearTimeout(mesasRemoteSyncTimer);
+    mesasRemoteSyncTimer = null;
+  }
+
+  const safeState = nextState && typeof nextState === "object" ? nextState : {};
+  mesasRemoteSyncTimer = setTimeout(async () => {
+    mesasRemoteSyncTimer = null;
+    if (mesasRemoteSyncInFlight) return;
+
+    mesasRemoteSyncInFlight = true;
+    try {
+      await apiSaveMesasLayoutRemote(safeState);
+    } catch (e) {
+      enqueueMesasLayoutSync(safeState);
+      console.warn("No se pudo guardar Mesas en remoto:", e?.message || e);
+    } finally {
+      mesasRemoteSyncInFlight = false;
+    }
+  }, 350);
+}
+
+function saveState() {
+  const payload = JSON.stringify(state);
+  writeTablesStateRaw(payload);
+  scheduleRemoteMesasStateSave(state);
+  if (window.parent && window.parent !== window) {
+    try {
+      window.parent.postMessage({ type: "tpv:mesas-state-changed" }, "*");
+    } catch {}
+  }
+}
+
+function normalizeTables(rawTables, roomId) {
+  if (!Array.isArray(rawTables)) return [];
+  const seen = new Set();
+  const seenNames = new Set();
+  const out = [];
+
+  rawTables.forEach((entry, idx) => {
+    if (typeof entry === "string") {
+      const tableName = sanitizeEntityName(entry);
+      if (!tableName) return;
+
+      const normName = normalizeEntityName(tableName);
+      if (!normName || seenNames.has(normName)) return;
+
+      const id = uniqueId(slugify(tableName) || `mesa-${idx + 1}`, seen);
+      seen.add(id);
+      seenNames.add(normName);
+      out.push({ id, name: tableName });
+      return;
+    }
+
+    const name = sanitizeEntityName(entry?.name || entry?.id, "Mesa");
+    const normName = normalizeEntityName(name);
+    if (!normName || seenNames.has(normName)) return;
+
+    const proposedId = slugify(entry?.id || entry?.name || `mesa-${idx + 1}`);
+    const id = uniqueId(proposedId || `mesa-${idx + 1}`, seen);
+    seen.add(id);
+    seenNames.add(normName);
+    out.push({ id, name });
+  });
+
+  return out;
+}
+
+function loadState() {
+  try {
+    const raw =
+      MESAS_BRIDGE?.getTablesStateRaw?.() ||
+      localStorage.getItem(TABLES_STATE_KEY) ||
+      localStorage.getItem(LEGACY_TABLES_STATE_KEY) ||
+      localStorage.getItem(getMesasLayoutScopedStorageKey());
+    if (!raw) {
+      state = cloneDefaultState();
+      return;
+    }
+
+    const parsed = JSON.parse(raw);
+    const base = cloneDefaultState();
+    const roomList = Array.isArray(parsed?.roomList)
+      ? parsed.roomList
+          .map((r, idx) => {
+            const name = sanitizeEntityName(r?.name, `Sala ${idx + 1}`);
+            const id = slugify(r?.id || name) || `sala-${idx + 1}`;
+            const tables = normalizeTables(r?.tables, id);
+            return { id, name, tables };
+          })
+          .filter((r) => r.id)
+      : [];
+
+    state = {
+      ...base,
+      activeView: ["mapa", "transacciones", "diseno"].includes(
+        parsed?.activeView,
+      )
+        ? parsed.activeView
+        : base.activeView,
+      activeRoomId: parsed?.activeRoomId ? String(parsed.activeRoomId) : null,
+      selectedTableId: parsed?.selectedTableId
+        ? String(parsed.selectedTableId)
+        : null,
+      category: String(parsed?.category || "all"),
+      search: String(parsed?.search || ""),
+      parkedCounter: Number(parsed?.parkedCounter || 0) || 0,
+      tableTicketMap:
+        parsed?.tableTicketMap && typeof parsed.tableTicketMap === "object"
+          ? { ...parsed.tableTicketMap }
+          : {},
+      tableStates:
+        parsed?.tableStates && typeof parsed.tableStates === "object"
+          ? { ...parsed.tableStates }
+          : {},
+      tableMeta:
+        parsed?.tableMeta && typeof parsed.tableMeta === "object"
+          ? { ...parsed.tableMeta }
+          : {},
+      draftCartByTable:
+        parsed?.draftCartByTable && typeof parsed.draftCartByTable === "object"
+          ? { ...parsed.draftCartByTable }
+          : {},
+      roomDesigns:
+        parsed?.roomDesigns && typeof parsed.roomDesigns === "object"
+          ? { ...parsed.roomDesigns }
+          : {},
+      roomList,
+    };
+  } catch {
+    state = cloneDefaultState();
+  }
+}
+
+async function hydrateStateFromRemote() {
+  if (mesasRemoteFetchInFlight) return false;
+
+  try {
+    await processMesasLayoutSyncQueue();
+    mesasRemoteFetchInFlight = true;
+    const remote = await apiGetMesasLayoutRemote();
+    if (!remote || typeof remote !== "object") return false;
+
+    const payload = JSON.stringify(remote);
+    const currentRaw = String(readTablesStateRaw() || "").trim();
+    if (payload === currentRaw) return false;
+
+    writeTablesStateRaw(payload);
+    return true;
+  } catch (e) {
+    console.warn("No se pudo cargar Mesas desde remoto:", e?.message || e);
+    return false;
+  } finally {
+    mesasRemoteFetchInFlight = false;
+  }
+}
+
+async function refreshMesasStateFromRemoteWithRerender() {
+  const changed = await hydrateStateFromRemote();
+  if (!changed) return false;
+
+  loadState();
+  ensureActiveRoomAndTable();
+  loadCartFromSelectedTable();
+  renderEverything();
+  switchView(state.activeView);
+  return true;
+}
+
+function startMesasRemoteSyncPolling() {
+  if (mesasRemotePollTimer) return;
+
+  mesasRemotePollTimer = setInterval(() => {
+    if (document.hidden) return;
+    refreshMesasStateFromRemoteWithRerender().catch(() => {});
+  }, MESAS_REMOTE_SYNC_POLL_MS);
+}
+
+function bindMesasRemoteSyncEventsOnce() {
+  if (mesasRemoteEventsBound) return;
+  mesasRemoteEventsBound = true;
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    refreshMesasStateFromRemoteWithRerender().catch(() => {});
+  });
+
+  window.addEventListener("focus", () => {
+    refreshMesasStateFromRemoteWithRerender().catch(() => {});
+  });
+
+  window.addEventListener("online", () => {
+    processMesasLayoutSyncQueue()
+      .then(() => refreshMesasStateFromRemoteWithRerender())
+      .catch(() => {});
+  });
+}
+
+function loadParkedTickets() {
+  try {
+    const raw = localStorage.getItem(PARKED_TICKETS_CACHE_KEY);
+    parkedTickets = raw ? JSON.parse(raw) : [];
+  } catch {
+    parkedTickets = [];
+  }
+
+  if (!Array.isArray(parkedTickets)) parkedTickets = [];
+}
+
+function saveParkedTickets() {
+  localStorage.setItem(PARKED_TICKETS_CACHE_KEY, JSON.stringify(parkedTickets));
+}
+
+async function persistAppMode(mode) {
+  const next =
+    String(mode || "tpv").toLowerCase() === "mesas" ? "mesas" : "tpv";
+
+  try {
+    if (MESAS_BRIDGE?.setAppMode) MESAS_BRIDGE.setAppMode(next);
+    else localStorage.setItem(APP_MODE_KEY, next);
+  } catch {}
+
+  try {
+    await window.TPV_CFG?.set?.(APP_MODE_CFG_KEY, next);
+  } catch {}
+
+  return next;
+}
+
+function roomById(roomId) {
+  return state.roomList.find((r) => r.id === roomId) || null;
+}
+
+function findTableByUid(uid) {
+  const { roomId, tableId } = splitTableUid(uid);
+  const room = roomById(roomId);
+  if (!room) return null;
+  const table = room.tables.find((t) => t.id === tableId);
+  if (!table) return null;
+  return { room, table, uid };
+}
+
+function allTables() {
+  const result = [];
+  state.roomList.forEach((room) => {
+    room.tables.forEach((table) => {
+      result.push({ room, table, uid: tableUid(room.id, table.id) });
+    });
+  });
+  return result;
+}
+
+function getMappedTicketForTable(uid) {
+  const ticketId = state.tableTicketMap[uid];
+  if (!ticketId) return null;
+  return (
+    parkedTickets.find((t) => String(t.id) === String(ticketId) && !t.paid) ||
+    null
+  );
+}
+
+function getTableStatus(uid) {
+  const ticket = getMappedTicketForTable(uid);
+
+  const forcedState = String(state?.tableStates?.[uid] || "")
+    .trim()
+    .toLowerCase();
+  const serviceStage = String(state?.tableMeta?.[uid]?.serviceStage || "")
+    .trim()
+    .toLowerCase();
+  const hasDraft = Array.isArray(state?.draftCartByTable?.[uid])
+    ? state.draftCartByTable[uid].length > 0
+    : false;
+
+  if (!ticket) {
+    if (forcedState === "cuenta") {
+      if (serviceStage === "cobro-realizado") {
+        return {
+          code: "cobradas",
+          label: "Recoger",
+          total: 0,
+          serviceStage,
+          phaseClass: "phase-cobro-realizado",
+          phaseLabel: "Cobro realizado",
+        };
+      }
+
+      return {
+        code: "cuenta",
+        label: "Pide cuenta",
+        total: 0,
+        serviceStage,
+        phaseClass:
+          serviceStage === "cuenta-pedida" ? "phase-cuenta-pedida" : "",
+        phaseLabel: serviceStage === "cuenta-pedida" ? "Cuenta pedida" : "",
+      };
+    }
+
+    if (forcedState === "ocupada") {
+      return {
+        code: "ocupada",
+        label: "Ocupada",
+        total: 0,
+        serviceStage,
+        phaseClass: "",
+        phaseLabel: "",
+      };
+    }
+
+    if (forcedState === "reservada" || hasDraft) {
+      return {
+        code: "reservada",
+        label: "Reservada",
+        total: 0,
+        serviceStage,
+        phaseClass: "",
+        phaseLabel: "",
+      };
+    }
+
+    return {
+      code: "libre",
+      label: "Libre",
+      total: 0,
+      serviceStage,
+      phaseClass: "",
+      phaseLabel: "",
+    };
+  }
+
+  const total = Number(ticket.total) || 0;
+  if (forcedState === "cuenta") {
+    if (serviceStage === "cobro-realizado") {
+      return {
+        code: "cobradas",
+        label: "Recoger",
+        total,
+        serviceStage,
+        phaseClass: "phase-cobro-realizado",
+        phaseLabel: "Cobro realizado",
+      };
+    }
+
+    return {
+      code: "cuenta",
+      label: "Pide cuenta",
+      total,
+      serviceStage,
+      phaseClass: serviceStage === "cuenta-pedida" ? "phase-cuenta-pedida" : "",
+      phaseLabel: serviceStage === "cuenta-pedida" ? "Cuenta pedida" : "",
+    };
+  }
+
+  if (forcedState === "reservada") {
+    return {
+      code: "reservada",
+      label: "Reservada",
+      total,
+      serviceStage,
+      phaseClass: "",
+      phaseLabel: "",
+    };
+  }
+
+  return {
+    code: total > 0 ? "ocupada" : "libre",
+    label: total > 0 ? "Ocupada" : "Libre",
+    total,
+    serviceStage,
+    phaseClass:
+      serviceStage === "sin-pedir"
+        ? "phase-sin-pedir"
+        : serviceStage === "pedido"
+          ? "phase-pedido"
+          : serviceStage === "entregado"
+            ? "phase-entregado"
+            : "",
+    phaseLabel:
+      serviceStage === "sin-pedir"
+        ? "Sin pedir"
+        : serviceStage === "pedido"
+          ? "Pedido"
+          : serviceStage === "entregado"
+            ? "Entregado"
+            : "",
+  };
+}
+
+function lineTotal(line) {
+  return (Number(line.qty) || 0) * (Number(line.price) || 0);
+}
+
+function cartTotal() {
+  return cart.reduce((sum, line) => sum + lineTotal(line), 0);
+}
+
+function ensureActiveRoomAndTable() {
+  if (!state.roomList.length) {
+    state.activeRoomId = null;
+    state.selectedTableId = null;
+    cart = [];
+    return;
+  }
+
+  if (!roomById(state.activeRoomId)) {
+    state.activeRoomId = state.roomList[0].id;
+  }
+
+  const current = findTableByUid(state.selectedTableId);
+  if (!current) {
+    const room = roomById(state.activeRoomId);
+    if (room && room.tables.length) {
+      state.selectedTableId = tableUid(room.id, room.tables[0].id);
+    } else {
+      state.selectedTableId = null;
+      cart = [];
+    }
+  }
+}
+
+function switchView(viewName) {
+  state.activeView = ["mapa", "transacciones", "diseno"].includes(viewName)
+    ? viewName
+    : "mapa";
+  saveState();
+
+  tabs.forEach((tab) =>
+    tab.classList.toggle("is-active", tab.dataset.view === state.activeView),
+  );
+  Object.entries(views).forEach(([name, el]) => {
+    el.classList.toggle("is-active", name === state.activeView);
+  });
+
+  if (state.activeView === "diseno") {
+    renderDesignCanvas();
+  }
+}
+
+function renderRoomSelectors() {
+  const hasRooms = state.roomList.length > 0;
+  mapEmptyState.classList.toggle("hidden", hasRooms);
+  mesaCards.classList.toggle("hidden", !hasRooms);
+
+  roomSelect.innerHTML = "";
+  designRoomSelect.innerHTML = "";
+
+  state.roomList.forEach((room) => {
+    const option = document.createElement("option");
+    option.value = room.id;
+    option.textContent = room.name;
+    if (room.id === state.activeRoomId) option.selected = true;
+    roomSelect.appendChild(option);
+
+    const optionDesign = document.createElement("option");
+    optionDesign.value = room.id;
+    optionDesign.textContent = room.name;
+    if (room.id === state.activeRoomId) optionDesign.selected = true;
+    designRoomSelect.appendChild(optionDesign);
+  });
+
+  roomSelect.disabled = !hasRooms;
+  designRoomSelect.disabled = !hasRooms;
+}
+
+function renderMapCards() {
+  mesaCards.innerHTML = "";
+  const room = roomById(state.activeRoomId);
+  if (!room) return;
+
+  const roomDesignObjects = Array.isArray(state?.roomDesigns?.[room.id])
+    ? state.roomDesigns[room.id]
+    : [];
+
+  const tableDesignObjects = roomDesignObjects.filter((obj) =>
+    String(obj?.cls || "").startsWith("table-"),
+  );
+  const structureDesignObjects = roomDesignObjects.filter(
+    (obj) => !String(obj?.cls || "").startsWith("table-"),
+  );
+
+  if (tableDesignObjects.length) {
+    mesaCards.classList.add("gestion-canvas");
+
+    const maxRight = roomDesignObjects.reduce(
+      (acc, obj) => Math.max(acc, Number(obj?.x || 0) + Number(obj?.w || 0)),
+      0,
+    );
+    const maxBottom = roomDesignObjects.reduce(
+      (acc, obj) => Math.max(acc, Number(obj?.y || 0) + Number(obj?.h || 0)),
+      0,
+    );
+
+    const workspaceWidth = Math.max(1200, maxRight + 120);
+    const workspaceHeight = Math.max(760, maxBottom + 120);
+    mesaCards.style.setProperty("--design-workspace-w", `${workspaceWidth}px`);
+    mesaCards.style.setProperty("--design-workspace-h", `${workspaceHeight}px`);
+
+    structureDesignObjects.forEach((obj) => {
+      const node = document.createElement("div");
+      node.className = `gestion-obj structure ${String(obj?.cls || "")}`;
+      node.style.left = `${Number(obj?.x || 0)}px`;
+      node.style.top = `${Number(obj?.y || 0)}px`;
+      node.style.width = `${Math.max(12, Number(obj?.w || 0))}px`;
+      node.style.height = `${Math.max(12, Number(obj?.h || 0))}px`;
+
+      const label = document.createElement("span");
+      label.className = "gestion-name";
+      label.textContent = String(obj?.label || "").trim();
+      if (Math.max(0, Number(obj?.h || 0)) > Math.max(0, Number(obj?.w || 0))) {
+        label.classList.add("is-vertical");
+      } else {
+        label.classList.add("is-horizontal");
+      }
+
+      node.appendChild(label);
+      mesaCards.appendChild(node);
+    });
+
+    room.tables.forEach((table, idx) => {
+      const obj = tableDesignObjects[idx] || null;
+      const uid = tableUid(room.id, table.id);
+      const st = getTableStatus(uid);
+
+      const left = obj ? Number(obj?.x || 0) : 24 + (idx % 6) * 140;
+      const top = obj ? Number(obj?.y || 0) : 24 + Math.floor(idx / 6) * 140;
+      const width = obj ? Math.max(56, Number(obj?.w || 0)) : 96;
+      const height = obj ? Math.max(56, Number(obj?.h || 0)) : 96;
+
+      const node = document.createElement("button");
+      node.type = "button";
+      node.className = `gestion-obj table ${String(obj?.cls || "table-square")} state-${st.code} ${st.phaseClass || ""}`;
+      if (state.selectedTableId === uid) node.classList.add("is-selected");
+      node.style.left = `${left}px`;
+      node.style.top = `${top}px`;
+      node.style.width = `${width}px`;
+      node.style.height = `${height}px`;
+
+      node.innerHTML = `
+        <span class="gestion-name">${table.name}</span>
+        ${st.total > 0 ? `<span class="gestion-total">${eur(st.total)}</span>` : ""}
+        ${st.code === "reservada" ? `<span class="gestion-badge reserva">Reservada</span>` : ""}
+        ${st.phaseLabel ? `<span class="gestion-phase">${st.phaseLabel}</span>` : ""}
+      `;
+
+      node.addEventListener("click", () => {
+        switchTable(uid, { openTrans: true });
+      });
+
+      mesaCards.appendChild(node);
+    });
+
+    return;
+  }
+
+  mesaCards.classList.remove("gestion-canvas");
+  mesaCards.style.removeProperty("--design-workspace-w");
+  mesaCards.style.removeProperty("--design-workspace-h");
+
+  room.tables.forEach((table) => {
+    const uid = tableUid(room.id, table.id);
+    const st = getTableStatus(uid);
+
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "mesa-card";
+    if (state.selectedTableId === uid) card.classList.add("is-selected");
+
+    card.innerHTML = `
+      <div class="mesa-card-head">
+        <span class="mesa-name">${table.name}</span>
+        <span class="mesa-state-dot ${st.code}"></span>
+      </div>
+      <div class="mesa-sub">${st.total > 0 ? eur(st.total) : st.label}${st.phaseLabel ? ` · ${st.phaseLabel}` : ""}</div>
+      <div class="mesa-card-actions">
+        <button type="button" class="mini-action" data-table-act="edit" data-table-uid="${uid}">Editar</button>
+        <button type="button" class="mini-action danger" data-table-act="delete" data-table-uid="${uid}">Borrar</button>
+      </div>
+    `;
+
+    card.addEventListener("click", (event) => {
+      if (event.target.closest("[data-table-act]")) return;
+      switchTable(uid, { openTrans: true });
+    });
+
+    mesaCards.appendChild(card);
+  });
+}
+
+function renderSelectedTableInfo() {
+  const current = findTableByUid(state.selectedTableId);
+  const st = state.selectedTableId
+    ? getTableStatus(state.selectedTableId)
+    : { label: "Sin seleccionar", total: 0 };
+  const tableLabel = current ? current.table.name : "-";
+
+  selectedTableTitle.textContent = tableLabel;
+  selectedTableState.textContent =
+    st.total > 0 ? `${st.label} · ${eur(st.total)}` : st.label;
+  ticketMesaTitle.textContent = `Mesa ${tableLabel}`;
+  ticketMeta.textContent = cart.length ? `${cart.length} lineas` : "Sin pedido";
+}
+
+function renderOtherTables() {
+  otherTablesList.innerHTML = "";
+
+  const currentUid = state.selectedTableId;
+  allTables().forEach(({ room, table, uid }) => {
+    if (uid === currentUid) return;
+    const st = getTableStatus(uid);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "other-table-btn";
+    button.innerHTML = `<span>${table.name} · ${room.name}</span><span>${st.total > 0 ? eur(st.total) : st.label}</span>`;
+    button.addEventListener("click", () => switchTable(uid));
+    otherTablesList.appendChild(button);
+  });
+}
+
+function renderCategoryBar() {
+  categoryBar.innerHTML = "";
+  const list = [{ id: "all", name: "Todos" }, ...categories];
+
+  list.forEach((cat) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "cat-btn";
+    if (state.category === cat.id) button.classList.add("active");
+    button.textContent = cat.name;
+    button.addEventListener("click", () => {
+      state.category = cat.id;
+      saveState();
+      renderCategoryBar();
+      renderProducts();
+    });
+    categoryBar.appendChild(button);
+  });
+}
+
+function productVisible(product) {
+  if (
+    state.category !== "all" &&
+    String(product.category) !== String(state.category)
+  ) {
+    return false;
+  }
+
+  const q = String(state.search || "")
+    .trim()
+    .toLowerCase();
+  if (!q) return true;
+
+  const haystack = [product.name, product.secondaryName, product.referencia]
+    .map((v) => String(v || "").toLowerCase())
+    .join(" ");
+  return haystack.includes(q);
+}
+
+function renderProducts() {
+  productsGrid.innerHTML = "";
+  const visible = products.filter(productVisible);
+
+  if (!visible.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-products";
+    empty.textContent = "No hay productos para este filtro.";
+    productsGrid.appendChild(empty);
+    return;
+  }
+
+  visible.forEach((product) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "product-card";
+    button.innerHTML = `
+      <div class="product-overlay-top">
+        <div class="product-name">${product.name}</div>
+        ${product.secondaryName ? `<div class="product-secondary">${product.secondaryName}</div>` : ""}
+      </div>
+      <div class="product-footer">
+        <span class="product-price">${eur(product.price)}</span>
+      </div>
+    `;
+    button.addEventListener("click", () => addProductToCart(product));
+    productsGrid.appendChild(button);
+  });
+
+  const placeholders = Math.max(0, PRODUCT_VISUAL_MIN_SLOTS - visible.length);
+  for (let i = 0; i < placeholders; i += 1) {
+    const ghost = document.createElement("button");
+    ghost.type = "button";
+    ghost.className = "product-card product-card-placeholder";
+    ghost.disabled = true;
+    ghost.tabIndex = -1;
+    ghost.setAttribute("aria-hidden", "true");
+    ghost.innerHTML = `
+      <div class="product-overlay-top">
+        <div class="product-name">Producto</div>
+      </div>
+      <div class="product-footer">
+        <span class="product-price">0,00 EUR</span>
+      </div>
+    `;
+    productsGrid.appendChild(ghost);
+  }
+}
+
+function renderCart() {
+  ticketLines.innerHTML = "";
+
+  cart.forEach((line, idx) => {
+    const row = document.createElement("div");
+    row.className = "ticket-line";
+    row.innerHTML = `
+      <div class="ticket-line-top">
+        <div class="ticket-line-name">${line.name}</div>
+        <strong>${eur(lineTotal(line))}</strong>
+      </div>
+      <div class="ticket-line-sub">${line.qty} x ${eur(line.price)}</div>
+      <div class="ticket-line-sub">
+        <button data-act="minus" data-idx="${idx}">-</button>
+        <button data-act="plus" data-idx="${idx}">+</button>
+        <button data-act="del" data-idx="${idx}">Eliminar</button>
+      </div>
+    `;
+    ticketLines.appendChild(row);
+  });
+
+  ticketTotal.textContent = eur(cartTotal());
+  renderSelectedTableInfo();
+}
+
+function addProductToCart(product) {
+  if (!state.selectedTableId) {
+    alert("Selecciona una mesa primero.");
+    return;
+  }
+
+  const existing = cart.find((line) => String(line.id) === String(product.id));
+  if (existing) {
+    existing.qty += 1;
+  } else {
+    cart.push({
+      id: product.id,
+      name: product.name,
+      qty: 1,
+      price: Number(product.price) || 0,
+      referencia: product.referencia || "",
+      secondaryName: product.secondaryName || "",
+    });
+  }
+
+  renderCart();
+}
+
+function updateCartLine(action, idx) {
+  const line = cart[idx];
+  if (!line) return;
+
+  if (action === "plus") line.qty += 1;
+  if (action === "minus") line.qty -= 1;
+  if (action === "del" || line.qty <= 0) cart.splice(idx, 1);
+
+  renderCart();
+}
+
+function nextTicketId() {
+  const maxId = parkedTickets.reduce(
+    (max, ticket) => Math.max(max, Number(ticket.id) || 0),
+    0,
+  );
+  state.parkedCounter = Math.max(state.parkedCounter + 1, maxId + 1);
+  saveState();
+  return state.parkedCounter;
+}
+
+function upsertSelectedTableTicket() {
+  const tableInfo = findTableByUid(state.selectedTableId);
+  if (!tableInfo) return null;
+
+  if (!cart.length) {
+    delete state.tableTicketMap[tableInfo.uid];
+    saveState();
+    return null;
+  }
+
+  const mapped = getMappedTicketForTable(tableInfo.uid);
+
+  if (mapped) {
+    mapped.items = cart.map((line) => ({ ...line }));
+    mapped.total = cartTotal();
+    mapped.updatedAt = new Date().toISOString();
+    mapped.name = tableInfo.table.name;
+    mapped.obs = `Mesa ${tableInfo.table.name} · ${tableInfo.room.name}`;
+    saveParkedTickets();
+    saveState();
+    return mapped;
+  }
+
+  const ticket = {
+    id: nextTicketId(),
+    createdAt: new Date().toISOString(),
+    updatedAt: null,
+    items: cart.map((line) => ({ ...line })),
+    total: cartTotal(),
+    clientName: "Ventas tickets",
+    name: tableInfo.table.name,
+    obs: `Mesa ${tableInfo.table.name} · ${tableInfo.room.name}`,
+    paid: false,
+    paidAt: null,
+    paidTicketCode: null,
+    paidTicketId: null,
+    fs: null,
+  };
+
+  parkedTickets.push(ticket);
+  state.tableTicketMap[tableInfo.uid] = ticket.id;
+  saveParkedTickets();
+  saveState();
+  return ticket;
+}
+
+function loadCartFromSelectedTable() {
+  const mapped = getMappedTicketForTable(state.selectedTableId);
+  if (!mapped || !Array.isArray(mapped.items)) {
+    cart = [];
+    return;
+  }
+
+  cart = mapped.items.map((line) => ({
+    id: line.id,
+    name: String(line.name || "Producto"),
+    qty: Math.max(1, Number(line.qty) || 1),
+    price: Number(line.price) || 0,
+    referencia: String(line.referencia || ""),
+    secondaryName: String(line.secondaryName || ""),
+  }));
+}
+
+function switchTable(uid, opts = {}) {
+  const { openTrans = false } = opts;
+  if (state.selectedTableId && state.selectedTableId !== uid) {
+    upsertSelectedTableTicket();
+  }
+
+  const tableInfo = findTableByUid(uid);
+  if (!tableInfo) return;
+
+  state.selectedTableId = uid;
+  state.activeRoomId = tableInfo.room.id;
+  saveState();
+
+  loadCartFromSelectedTable();
+  renderEverything();
+  if (openTrans) switchView("transacciones");
+}
+
+function parkSelectedTable() {
+  const tableInfo = findTableByUid(state.selectedTableId);
+  if (!tableInfo) {
+    alert("Selecciona una mesa primero.");
+    return;
+  }
+
+  if (!cart.length) {
+    alert("No hay productos para aparcar en esta mesa.");
+    return;
+  }
+
+  upsertSelectedTableTicket();
+  renderEverything();
+  alert(`Mesa ${tableInfo.table.name} aparcada.`);
+}
+
+function chargeSelectedTable() {
+  const tableInfo = findTableByUid(state.selectedTableId);
+  if (!tableInfo) {
+    alert("Selecciona una mesa primero.");
+    return;
+  }
+
+  if (!cart.length) {
+    alert("No hay productos para cobrar.");
+    return;
+  }
+
+  const ticket = upsertSelectedTableTicket();
+  if (ticket) {
+    ticket.paid = true;
+    ticket.paidAt = new Date().toISOString();
+    ticket.paidTicketCode = `MESA-${ticket.id}`;
+    delete state.tableTicketMap[tableInfo.uid];
+    saveParkedTickets();
+    saveState();
+  }
+
+  cart = [];
+  renderEverything();
+  switchView("mapa");
+  alert(`Mesa ${tableInfo.table.name} cobrada y liberada.`);
+}
+
+function addRoom() {
+  const roomName = prompt("Nombre de la nueva sala:", "Nueva sala");
+  if (!roomName) return;
+
+  const trimmedName = sanitizeEntityName(roomName);
+  if (!trimmedName) return;
+
+  if (isRoomNameTaken(trimmedName)) {
+    alert("Ya existe una sala con ese nombre.");
+    return;
+  }
+
+  const used = new Set(state.roomList.map((room) => room.id));
+  const id = uniqueId(slugify(trimmedName) || "sala", used);
+  const room = { id, name: trimmedName, tables: [] };
+  state.roomList.push(room);
+  state.roomDesigns[id] = state.roomDesigns[id] || [];
+  state.activeRoomId = id;
+  state.selectedTableId = null;
+  ensureActiveRoomAndTable();
+  saveState();
+  renderEverything();
+}
+
+function renameActiveRoom() {
+  const room = roomById(state.activeRoomId);
+  if (!room) {
+    alert("No hay una sala seleccionada.");
+    return;
+  }
+
+  const newName = prompt("Nuevo nombre de la sala:", room.name);
+  if (!newName) return;
+
+  const cleanName = sanitizeEntityName(newName, room.name);
+  if (!cleanName) return;
+
+  if (isRoomNameTaken(cleanName, { excludeRoomId: room.id })) {
+    alert("Ya existe otra sala con ese nombre.");
+    return;
+  }
+
+  room.name = cleanName;
+  saveState();
+  renderEverything();
+}
+
+function deleteActiveRoom() {
+  const room = roomById(state.activeRoomId);
+  if (!room) {
+    alert("No hay una sala seleccionada.");
+    return;
+  }
+
+  if (!confirm(`Borrar sala \"${room.name}\" y sus mesas?`)) return;
+
+  room.tables.forEach((table) => {
+    const uid = tableUid(room.id, table.id);
+    delete state.tableTicketMap[uid];
+  });
+
+  delete state.roomDesigns[room.id];
+  state.roomList = state.roomList.filter((entry) => entry.id !== room.id);
+  ensureActiveRoomAndTable();
+  loadCartFromSelectedTable();
+  saveState();
+  renderEverything();
+}
+
+function addTableToActiveRoom() {
+  const room = roomById(state.activeRoomId);
+  if (!room) {
+    alert("Crea o selecciona una sala primero.");
+    return;
+  }
+
+  const tableName = prompt(
+    "Nombre o numero de mesa:",
+    `Mesa ${room.tables.length + 1}`,
+  );
+  if (!tableName) return;
+
+  const trimmedName = sanitizeEntityName(tableName);
+  if (!trimmedName) return;
+
+  if (isTableNameTaken(room, trimmedName)) {
+    alert("Ya existe una mesa con ese nombre en esta sala.");
+    return;
+  }
+
+  const used = new Set(room.tables.map((table) => table.id));
+  const id = uniqueId(
+    slugify(trimmedName) || `mesa-${room.tables.length + 1}`,
+    used,
+  );
+  const table = { id, name: trimmedName };
+  room.tables.push(table);
+  state.selectedTableId = tableUid(room.id, table.id);
+  saveState();
+  loadCartFromSelectedTable();
+  renderEverything();
+}
+
+function editTable(uid) {
+  const info = findTableByUid(uid);
+  if (!info) return;
+
+  const newName = prompt("Nuevo nombre de mesa:", info.table.name);
+  if (!newName) return;
+
+  const cleanName = sanitizeEntityName(newName, info.table.name);
+  if (!cleanName) return;
+
+  if (
+    isTableNameTaken(info.room, cleanName, { excludeTableId: info.table.id })
+  ) {
+    alert("Ya existe otra mesa con ese nombre en esta sala.");
+    return;
+  }
+
+  info.table.name = cleanName;
+  saveState();
+  renderEverything();
+}
+
+function deleteTable(uid) {
+  const info = findTableByUid(uid);
+  if (!info) return;
+
+  if (!confirm(`Borrar mesa \"${info.table.name}\"?`)) return;
+
+  info.room.tables = info.room.tables.filter(
+    (table) => table.id !== info.table.id,
+  );
+  delete state.tableTicketMap[uid];
+
+  if (state.selectedTableId === uid) {
+    state.selectedTableId = null;
+  }
+
+  ensureActiveRoomAndTable();
+  loadCartFromSelectedTable();
+  saveState();
+  renderEverything();
+}
+
+function fetchApiResource(resource) {
+  const cfg = window.RECIPOK_API || {};
+  const baseUrl = String(cfg.baseUrl || "").replace(/\/+$/, "");
+  const apiKey = String(cfg.apiKey || "").trim();
+  if (!baseUrl || !apiKey) {
+    return Promise.reject(new Error("Config API no definida"));
+  }
+
+  const url = `${baseUrl}/${resource}?limit=0`;
+  return fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Token: apiKey,
+    },
+    cache: "no-store",
+  }).then(async (res) => {
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} en ${resource}`);
+    }
+    if (!Array.isArray(data)) {
+      throw new Error(`Formato inesperado en ${resource}`);
+    }
+    return data;
+  });
+}
+
+function loadDemoCatalog() {
+  categories = DEMO_CATEGORIES.map((cat) => ({ ...cat }));
+  products = DEMO_PRODUCTS.map((product) => ({ ...product }));
+}
+
+function loadCatalogSessionCache(baseUrl) {
+  try {
+    const raw = sessionStorage.getItem(MESAS_CATALOG_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+
+    if (String(parsed.baseUrl || "") !== String(baseUrl || "")) return null;
+
+    const cachedCategories = Array.isArray(parsed.categories)
+      ? parsed.categories
+      : [];
+    const cachedProducts = Array.isArray(parsed.products)
+      ? parsed.products
+      : [];
+    if (!cachedCategories.length || !cachedProducts.length) return null;
+
+    return {
+      categories: cachedCategories,
+      products: cachedProducts,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveCatalogSessionCache(baseUrl, nextCategories, nextProducts) {
+  try {
+    const payload = {
+      baseUrl: String(baseUrl || ""),
+      categories: Array.isArray(nextCategories) ? nextCategories : [],
+      products: Array.isArray(nextProducts) ? nextProducts : [],
+      savedAt: Date.now(),
+    };
+    sessionStorage.setItem(MESAS_CATALOG_SESSION_KEY, JSON.stringify(payload));
+  } catch {}
+}
+
+function loadSharedCatalogCache(baseUrl) {
+  if (MESAS_BRIDGE?.getSharedCatalog) {
+    const fromBridge = MESAS_BRIDGE.getSharedCatalog(baseUrl);
+    if (fromBridge) {
+      return {
+        categories: fromBridge.categories,
+        products: fromBridge.products,
+      };
+    }
+  }
+
+  try {
+    const raw = localStorage.getItem(SHARED_CATALOG_CACHE_KEY);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    if (String(parsed.baseUrl || "") !== String(baseUrl || "")) return null;
+
+    const cachedCategories = Array.isArray(parsed.categories)
+      ? parsed.categories
+      : [];
+    const cachedProducts = Array.isArray(parsed.products)
+      ? parsed.products
+      : [];
+    if (!cachedCategories.length || !cachedProducts.length) return null;
+
+    return {
+      categories: cachedCategories,
+      products: cachedProducts,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveSharedCatalogCache(baseUrl, nextCategories, nextProducts) {
+  if (MESAS_BRIDGE?.setSharedCatalog) {
+    const ok = MESAS_BRIDGE.setSharedCatalog(
+      baseUrl,
+      nextCategories,
+      nextProducts,
+      "mesas",
+    );
+    if (ok) return;
+  }
+
+  try {
+    const payload = {
+      version: 1,
+      ts: Date.now(),
+      baseUrl: String(baseUrl || ""),
+      categories: Array.isArray(nextCategories) ? nextCategories : [],
+      products: Array.isArray(nextProducts) ? nextProducts : [],
+      source: "mesas",
+    };
+
+    if (
+      !payload.baseUrl ||
+      !payload.categories.length ||
+      !payload.products.length
+    ) {
+      return;
+    }
+
+    localStorage.setItem(SHARED_CATALOG_CACHE_KEY, JSON.stringify(payload));
+  } catch {}
+}
+
+async function loadCatalog() {
+  const cfg = window.RECIPOK_API || {};
+  const hasApi =
+    String(cfg.baseUrl || "").trim() && String(cfg.apiKey || "").trim();
+
+  if (!hasApi) {
+    loadDemoCatalog();
+    return;
+  }
+
+  const baseUrl = String(cfg.baseUrl || "")
+    .trim()
+    .replace(/\/+$/, "");
+  const cachedCatalog = loadCatalogSessionCache(baseUrl);
+  if (cachedCatalog) {
+    categories = cachedCatalog.categories.map((cat) => ({ ...cat }));
+    products = cachedCatalog.products.map((product) => ({ ...product }));
+    return;
+  }
+
+  const sharedCatalog = loadSharedCatalogCache(baseUrl);
+  if (sharedCatalog) {
+    categories = sharedCatalog.categories.map((cat) => ({ ...cat }));
+    products = sharedCatalog.products.map((product) => ({ ...product }));
+    saveCatalogSessionCache(baseUrl, categories, products);
+    return;
+  }
+
+  try {
+    const [familiasRaw, productosRaw] = await Promise.all([
+      fetchApiResource("familias"),
+      fetchApiResource("productos"),
+    ]);
+
+    categories = familiasRaw
+      .filter((family) => {
+        const flag =
+          family.tpv_show ??
+          family.tpv ??
+          family.mostrarentpv ??
+          family.mostrar_en_tpv;
+        return flag !== false && flag !== 0 && flag !== "0";
+      })
+      .map((family, idx) => ({
+        id: String(family.codfamilia ?? family.id ?? idx),
+        name: safeText(
+          family.descripcion ?? family.nombre ?? family.codfamilia,
+          `Grupo ${idx + 1}`,
+        ),
+      }));
+
+    const allowedCategories = new Set(categories.map((cat) => String(cat.id)));
+    products = productosRaw
+      .filter((product) => {
+        if (product.bloqueado) return false;
+        if (
+          product.sevende === false ||
+          product.sevende === 0 ||
+          product.sevende === "0"
+        )
+          return false;
+        const name = safeText(product.descripcion ?? product.referencia);
+        if (!name || name === "-") return false;
+        const cat = String(product.codfamilia ?? "");
+        return !allowedCategories.size || allowedCategories.has(cat);
+      })
+      .map((product, idx) => {
+        const name = safeText(
+          product.descripcion ?? product.referencia,
+          `Producto ${idx + 1}`,
+        );
+        return {
+          id: String(product.idproducto ?? product.id ?? idx),
+          name,
+          secondaryName: "",
+          referencia: safeText(product.referencia, name),
+          price: Number(product.precio ?? 0) || 0,
+          category: String(product.codfamilia ?? ""),
+        };
+      });
+
+    if (!products.length) {
+      loadDemoCatalog();
+      return;
+    }
+
+    saveCatalogSessionCache(baseUrl, categories, products);
+    saveSharedCatalogCache(baseUrl, categories, products);
+  } catch (error) {
+    console.warn(
+      "No se pudo cargar catalogo real para mesas:",
+      error?.message || error,
+    );
+    loadDemoCatalog();
+  }
+}
+
+function getCurrentDesignRoomId() {
+  return designRoomSelect.value || state.activeRoomId;
+}
+
+function getRoomDesignObjects(roomId) {
+  if (!roomId) return [];
+  if (!Array.isArray(state.roomDesigns[roomId])) {
+    state.roomDesigns[roomId] = [];
+  }
+  return state.roomDesigns[roomId];
+}
+
+function toolToObject(tool) {
+  const map = {
+    "mesa-redonda": { cls: "table-round", label: "Mesa", w: 78, h: 78 },
+    "mesa-cuadrada": { cls: "table-square", label: "Mesa", w: 82, h: 82 },
+    "mesa-rectangular": { cls: "table-rect", label: "Mesa", w: 120, h: 72 },
+    barra: { cls: "structure-barra", label: "Barra", w: 170, h: 46 },
+    entrada: { cls: "structure-entrada", label: "Entrada", w: 120, h: 44 },
+    muro: { cls: "structure-muro", label: "Muro", w: 140, h: 20 },
+  };
+  return map[tool] || null;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function renderDesignCanvas() {
+  designCanvas.querySelectorAll(".design-obj").forEach((node) => node.remove());
+
+  const roomId = getCurrentDesignRoomId();
+  const objects = getRoomDesignObjects(roomId);
+  const canPaint = Boolean(roomId);
+
+  designHintText.classList.toggle("hidden", canPaint && objects.length > 0);
+  if (!canPaint) {
+    designHintText.textContent = "Crea una sala para empezar a diseñar.";
+    designHintText.classList.remove("hidden");
+    return;
+  }
+
+  if (!objects.length) {
+    designHintText.textContent =
+      "Selecciona una herramienta y haz clic en el plano.";
+  }
+
+  objects.forEach((obj) => {
+    const node = document.createElement("div");
+    node.className = `design-obj ${obj.cls}`;
+    node.dataset.objectId = obj.id;
+    node.style.left = `${obj.x}px`;
+    node.style.top = `${obj.y}px`;
+    node.style.width = `${obj.w}px`;
+    node.style.height = `${obj.h}px`;
+    node.textContent = obj.label || "";
+    if (obj.id === selectedDesignObjectId) node.classList.add("selected");
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "design-obj-delete";
+    del.dataset.objectDelete = obj.id;
+    del.textContent = "x";
+    node.appendChild(del);
+
+    designCanvas.appendChild(node);
+  });
+}
+
+function addDesignObjectAt(clientX, clientY) {
+  const roomId = getCurrentDesignRoomId();
+  if (!roomId) {
+    alert("Selecciona una sala en el diseno.");
+    return;
+  }
+
+  const base = toolToObject(activeDesignTool);
+  if (!base) return;
+
+  const rect = designCanvas.getBoundingClientRect();
+  const x = clamp(
+    clientX - rect.left - base.w / 2,
+    0,
+    Math.max(0, rect.width - base.w),
+  );
+  const y = clamp(
+    clientY - rect.top - base.h / 2,
+    0,
+    Math.max(0, rect.height - base.h),
+  );
+
+  const objects = getRoomDesignObjects(roomId);
+  objects.push({
+    id: `obj-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    cls: base.cls,
+    label: base.label,
+    x,
+    y,
+    w: base.w,
+    h: base.h,
+  });
+
+  saveState();
+  renderDesignCanvas();
+}
+
+function selectDesignObject(objectId) {
+  selectedDesignObjectId = objectId;
+  renderDesignCanvas();
+}
+
+function removeDesignObject(objectId) {
+  const roomId = getCurrentDesignRoomId();
+  if (!roomId) return;
+  const objects = getRoomDesignObjects(roomId);
+  state.roomDesigns[roomId] = objects.filter((obj) => obj.id !== objectId);
+  if (selectedDesignObjectId === objectId) selectedDesignObjectId = null;
+  saveState();
+  renderDesignCanvas();
+}
+
+function updateDesignTool(tool) {
+  activeDesignTool = tool;
+  toolButtons.forEach((button) => {
+    button.classList.toggle(
+      "is-active",
+      button.dataset.tool === activeDesignTool,
+    );
+  });
+}
+
+function bindDesignerEvents() {
+  toolButtons.forEach((button) => {
+    button.addEventListener("click", () =>
+      updateDesignTool(button.dataset.tool),
+    );
+  });
+
+  designCanvas.addEventListener("click", (event) => {
+    const deleteBtn = event.target.closest("[data-object-delete]");
+    if (deleteBtn) {
+      removeDesignObject(deleteBtn.dataset.objectDelete);
+      return;
+    }
+
+    const objNode = event.target.closest(".design-obj");
+    if (objNode) {
+      selectDesignObject(objNode.dataset.objectId);
+      return;
+    }
+
+    if (activeDesignTool !== "select") {
+      addDesignObjectAt(event.clientX, event.clientY);
+    }
+  });
+
+  designCanvas.addEventListener("mousedown", (event) => {
+    if (activeDesignTool !== "select") return;
+    const node = event.target.closest(".design-obj");
+    if (!node) return;
+
+    const objectId = node.dataset.objectId;
+    const roomId = getCurrentDesignRoomId();
+    const objects = getRoomDesignObjects(roomId);
+    const obj = objects.find((entry) => entry.id === objectId);
+    if (!obj) return;
+
+    const rect = designCanvas.getBoundingClientRect();
+    dragState = {
+      objectId,
+      roomId,
+      offsetX: event.clientX - rect.left - obj.x,
+      offsetY: event.clientY - rect.top - obj.y,
+    };
+    selectDesignObject(objectId);
+  });
+
+  window.addEventListener("mousemove", (event) => {
+    if (!dragState) return;
+
+    const objects = getRoomDesignObjects(dragState.roomId);
+    const obj = objects.find((entry) => entry.id === dragState.objectId);
+    if (!obj) return;
+
+    const rect = designCanvas.getBoundingClientRect();
+    const x = clamp(
+      event.clientX - rect.left - dragState.offsetX,
+      0,
+      Math.max(0, rect.width - obj.w),
+    );
+    const y = clamp(
+      event.clientY - rect.top - dragState.offsetY,
+      0,
+      Math.max(0, rect.height - obj.h),
+    );
+    obj.x = x;
+    obj.y = y;
+    renderDesignCanvas();
+  });
+
+  window.addEventListener("mouseup", () => {
+    if (!dragState) return;
+    dragState = null;
+    saveState();
+  });
+}
+
+function renderEverything() {
+  ensureActiveRoomAndTable();
+  renderRoomSelectors();
+  renderMapCards();
+  renderSelectedTableInfo();
+  renderOtherTables();
+  renderCategoryBar();
+  renderProducts();
+  renderCart();
+  renderDesignCanvas();
+}
+
+function tickClock() {
+  const now = new Date();
+  const hh = now.toLocaleTimeString("es-ES", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const dd = now.toLocaleDateString("es-ES");
+  document.getElementById("mesasClock").textContent = hh;
+  document.getElementById("mesasDate").textContent = dd;
+}
+
+function bindEvents() {
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", () => switchView(tab.dataset.view));
+  });
+
+  roomSelect.addEventListener("change", () => {
+    upsertSelectedTableTicket();
+    state.activeRoomId = roomSelect.value;
+    ensureActiveRoomAndTable();
+    loadCartFromSelectedTable();
+    saveState();
+    renderEverything();
+  });
+
+  designRoomSelect.addEventListener("change", () => {
+    state.activeRoomId = designRoomSelect.value;
+    ensureActiveRoomAndTable();
+    saveState();
+    renderEverything();
+  });
+
+  const addRoomBtn =
+    document.getElementById("addRoomBtn") ||
+    document.getElementById("designAddRoomBtn");
+  const createFirstRoomBtn = document.getElementById("createFirstRoomBtn");
+  const renameRoomBtn =
+    document.getElementById("renameRoomBtn") ||
+    document.getElementById("designRenameRoomBtn");
+  const deleteRoomBtn =
+    document.getElementById("deleteRoomBtn") ||
+    document.getElementById("designDeleteRoomBtn");
+  const addTableBtn =
+    document.getElementById("addTableBtn") ||
+    document.getElementById("designAddTableBtn");
+
+  addRoomBtn?.addEventListener("click", addRoom);
+  createFirstRoomBtn?.addEventListener("click", addRoom);
+  renameRoomBtn?.addEventListener("click", renameActiveRoom);
+  deleteRoomBtn?.addEventListener("click", deleteActiveRoom);
+  addTableBtn?.addEventListener("click", addTableToActiveRoom);
+
+  mesaCards.addEventListener("click", (event) => {
+    const actionBtn = event.target.closest("[data-table-act]");
+    if (!actionBtn) return;
+
+    const action = actionBtn.dataset.tableAct;
+    const uid = actionBtn.dataset.tableUid;
+    if (!uid) return;
+
+    if (action === "edit") editTable(uid);
+    if (action === "delete") deleteTable(uid);
+  });
+
+  document
+    .getElementById("backToMapBtn")
+    .addEventListener("click", () => switchView("mapa"));
+
+  productSearchInput.value = state.search || "";
+  productSearchInput.addEventListener("input", () => {
+    state.search = productSearchInput.value;
+    saveState();
+    renderProducts();
+  });
+
+  document.getElementById("clearSearchMesas").addEventListener("click", () => {
+    state.search = "";
+    productSearchInput.value = "";
+    saveState();
+    renderProducts();
+  });
+
+  document.getElementById("clearCartBtnMesas").addEventListener("click", () => {
+    if (!cart.length) return;
+    if (!confirm("Vaciar pedido actual de la mesa?")) return;
+    cart = [];
+    upsertSelectedTableTicket();
+    renderEverything();
+  });
+
+  document
+    .getElementById("parkBtnMesas")
+    .addEventListener("click", parkSelectedTable);
+  document
+    .getElementById("chargeBtnMesas")
+    .addEventListener("click", chargeSelectedTable);
+
+  ticketLines.addEventListener("click", (event) => {
+    const btn = event.target.closest("button[data-act]");
+    if (!btn) return;
+    updateCartLine(btn.dataset.act, Number(btn.dataset.idx));
+  });
+
+  document.getElementById("saveDesignBtn").addEventListener("click", () => {
+    saveState();
+    alert("Diseno de sala guardado.");
+  });
+
+  document.getElementById("clearDesignBtn").addEventListener("click", () => {
+    const roomId = getCurrentDesignRoomId();
+    const room = roomById(roomId);
+    if (!room) {
+      alert("Selecciona una sala en el diseno.");
+      return;
+    }
+    if (!confirm(`Limpiar diseno de la sala \"${room.name}\"?`)) return;
+    state.roomDesigns[roomId] = [];
+    selectedDesignObjectId = null;
+    saveState();
+    renderDesignCanvas();
+  });
+
+  document.getElementById("switchToNormalBtn").addEventListener("click", () => {
+    if (window.parent && window.parent !== window) {
+      try {
+        window.parent.postMessage({ type: "tpv:mesas-exit" }, "*");
+        return;
+      } catch {}
+    }
+
+    persistAppMode("tpv").finally(() => {
+      window.location.href = "../index.html";
+    });
+  });
+
+  bindDesignerEvents();
+}
+
+async function init() {
+  if (MESAS_EMBED_MODE) document.body.classList.add("embed-mode");
+
+  applySavedThemeMode();
+
+  if (!MESAS_EMBED_MODE) {
+    const localMode = String(
+      MESAS_BRIDGE?.getAppMode?.() || localStorage.getItem(APP_MODE_KEY) || "",
+    )
+      .trim()
+      .toLowerCase();
+    const cfgMode = String(
+      (await window.TPV_CFG?.get?.(APP_MODE_CFG_KEY)) || "",
+    )
+      .trim()
+      .toLowerCase();
+
+    if (localMode !== "mesas" || cfgMode !== "mesas") {
+      await persistAppMode("mesas");
+    }
+  }
+
+  if (MESAS_EMBED_MODE) {
+    await hydrateStateFromRemote();
+  } else {
+    await hydrateStateFromRemote();
+  }
+
+  loadState();
+  loadParkedTickets();
+  ensureActiveRoomAndTable();
+  await loadCatalog();
+  loadCartFromSelectedTable();
+
+  bindEvents();
+  if (MESAS_EMBED_VIEW) {
+    state.activeView = MESAS_EMBED_VIEW;
+    saveState();
+  }
+  renderEverything();
+  switchView(state.activeView);
+
+  if (!MESAS_EMBED_MODE) {
+    processMesasLayoutSyncQueue().catch(() => {});
+    startMesasRemoteSyncPolling();
+    bindMesasRemoteSyncEventsOnce();
+  }
+
+  tickClock();
+  setInterval(tickClock, 1000);
+}
+
+init();
