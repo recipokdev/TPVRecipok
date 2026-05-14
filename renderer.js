@@ -274,6 +274,16 @@ const searchInput = document.getElementById("searchInput");
 const searchClearBtn = document.getElementById("searchClearBtn");
 const searchKeyboardBtn = document.getElementById("searchKeyboardBtn");
 
+const BARCODE_SCANNER_CFG = {
+  minLength: 6,
+  maxLength: 64,
+  interKeyMaxMs: 120,
+};
+
+let barcodeScannerBuffer = "";
+let barcodeScannerLastKeyAt = 0;
+let barcodeScannerLookupInFlight = false;
+
 // Terminal / caja
 const terminalNameEl = document.getElementById("terminalName");
 const agentNameEl = document.getElementById("agentName");
@@ -6441,6 +6451,60 @@ window.addEventListener("keydown", (e) => {
   } else if (e.key === "Escape") {
     e.preventDefault();
     closeQwerty("cancel");
+  }
+});
+
+window.addEventListener("keydown", (e) => {
+  if (e.defaultPrevented) return;
+  if (numPadVisible || qwertyVisible) return;
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+
+  const target = e.target;
+  const tagName = String(target?.tagName || "").toUpperCase();
+  const isEditable =
+    !!target?.isContentEditable ||
+    tagName === "INPUT" ||
+    tagName === "TEXTAREA" ||
+    tagName === "SELECT";
+
+  if (isEditable) return;
+
+  const now = Date.now();
+  const key = String(e.key || "");
+
+  if (/^\d$/.test(key)) {
+    if (now - barcodeScannerLastKeyAt > BARCODE_SCANNER_CFG.interKeyMaxMs) {
+      barcodeScannerBuffer = "";
+    }
+
+    barcodeScannerBuffer += key;
+    barcodeScannerLastKeyAt = now;
+
+    if (barcodeScannerBuffer.length > BARCODE_SCANNER_CFG.maxLength) {
+      barcodeScannerBuffer = barcodeScannerBuffer.slice(
+        -BARCODE_SCANNER_CFG.maxLength,
+      );
+    }
+
+    return;
+  }
+
+  if (key === "Enter") {
+    const scanned = barcodeScannerBuffer;
+    barcodeScannerBuffer = "";
+    barcodeScannerLastKeyAt = 0;
+
+    const normalized = normalizeBarcodeInput(scanned);
+    if (normalized.length < BARCODE_SCANNER_CFG.minLength) return;
+
+    e.preventDefault();
+    void handleBarcodeScannerSubmit(normalized);
+    return;
+  }
+
+  if (now - barcodeScannerLastKeyAt > BARCODE_SCANNER_CFG.interKeyMaxMs) {
+    barcodeScannerBuffer = "";
+    barcodeScannerLastKeyAt = 0;
   }
 });
 
@@ -19606,6 +19670,94 @@ async function fetchProductoByReferencia(ref) {
   } catch {
     PACKS_STATE.productByRefCache.set(key, null);
     return null;
+  }
+}
+
+function normalizeBarcodeInput(raw) {
+  return String(raw || "")
+    .trim()
+    .replace(/\s+/g, "");
+}
+
+function resolveProductFromVariantRow(variantRow) {
+  if (!variantRow || !Array.isArray(products) || products.length === 0) {
+    return null;
+  }
+
+  const idVar = Number(variantRow.idvariante ?? variantRow.id ?? 0);
+  if (idVar) {
+    const byVariantId = products.find((p) => Number(p.id) === idVar);
+    if (byVariantId) return byVariantId;
+  }
+
+  const baseId = Number(variantRow.idproducto ?? 0);
+  if (baseId) {
+    const primaryVariant = products.find(
+      (p) =>
+        Number(p.baseProductId || 0) === baseId &&
+        (p.isPrimaryVariant || p.variantOrder === 0),
+    );
+    if (primaryVariant) return primaryVariant;
+
+    const byBaseProduct = products.find(
+      (p) => Number(p.baseProductId || p.id || 0) === baseId,
+    );
+    if (byBaseProduct) return byBaseProduct;
+  }
+
+  const ref = String(variantRow.referencia ?? "").trim();
+  if (ref) {
+    const byRef = products.find(
+      (p) => String(p.referencia || p.name || "").trim() === ref,
+    );
+    if (byRef) return byRef;
+  }
+
+  return null;
+}
+
+async function addProductToCartByBarcode(barcode) {
+  const normalized = normalizeBarcodeInput(barcode);
+  if (!normalized) return false;
+
+  const variants = await fetchApiResourceWithParams("variantes", {
+    "filter[codbarras]": normalized,
+    limit: 10,
+    "sort[idvariante]": "DESC",
+  });
+
+  const rows = Array.isArray(variants) ? variants : [];
+  if (!rows.length) return false;
+
+  let productToAdd = null;
+  for (const row of rows) {
+    productToAdd = resolveProductFromVariantRow(row);
+    if (productToAdd) break;
+  }
+
+  if (!productToAdd) return false;
+
+  await addToCart(productToAdd, 1);
+  return true;
+}
+
+async function handleBarcodeScannerSubmit(barcode) {
+  if (barcodeScannerLookupInFlight) return;
+
+  const normalized = normalizeBarcodeInput(barcode);
+  if (!normalized || normalized.length < BARCODE_SCANNER_CFG.minLength) return;
+
+  barcodeScannerLookupInFlight = true;
+  try {
+    const added = await addProductToCartByBarcode(normalized);
+    if (!added) {
+      toast(`No se encontro producto para el codigo ${normalized}.`, "warn");
+    }
+  } catch (e) {
+    console.warn("Error en busqueda por codigo de barras:", e?.message || e);
+    toast("No se pudo buscar el codigo de barras.", "error");
+  } finally {
+    barcodeScannerLookupInFlight = false;
   }
 }
 
