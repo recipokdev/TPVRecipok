@@ -156,7 +156,9 @@ function installE2ERemoteWriteGuard(baseUrl) {
   if (!TPV_E2E_MODE || TPV_E2E_ALLOW_WRITES) return;
   if (typeof window.__TPV_E2E_FETCH_GUARD_INSTALLED__ !== "undefined") return;
 
-  const targetBase = String(baseUrl || "").trim().replace(/\/+$/, "");
+  const targetBase = String(baseUrl || "")
+    .trim()
+    .replace(/\/+$/, "");
   if (!targetBase) return;
 
   const originalFetch = window.fetch.bind(window);
@@ -170,7 +172,8 @@ function installE2ERemoteWriteGuard(baseUrl) {
           : "";
 
     const isWrite = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
-    const isTarget = !!url && (url.startsWith(targetBase) || url.includes("/demo/api/"));
+    const isTarget =
+      !!url && (url.startsWith(targetBase) || url.includes("/demo/api/"));
 
     if (isWrite && isTarget) {
       throw new Error(`[E2E_WRITE_BLOCKED] ${method} ${url}`);
@@ -676,11 +679,14 @@ function triggerApi429Cooldown(source = "api", retryAfterHeader = "") {
     api429BlockedUntil = nextUntil;
   }
 
-  enterApiRetryMode("API con bloqueo temporal (429). Esperando para reintentar...", {
-    lock: false,
-    scheduleRetry: false,
-    showOverlay: false,
-  });
+  enterApiRetryMode(
+    "API con bloqueo temporal (429). Esperando para reintentar...",
+    {
+      lock: false,
+      scheduleRetry: false,
+      showOverlay: false,
+    },
+  );
 
   const now = Date.now();
   if (now - api429LastWarnAt > 10000) {
@@ -697,7 +703,9 @@ function throwIfApi429Cooldown(source = "api") {
   if (now - api429LastWarnAt > 10000) {
     api429LastWarnAt = now;
     const seconds = Math.max(1, Math.ceil(getApi429RemainingMs() / 1000));
-    console.warn(`[API429] Saltando llamada durante cooldown ${seconds}s (${source})`);
+    console.warn(
+      `[API429] Saltando llamada durante cooldown ${seconds}s (${source})`,
+    );
   }
 
   throw buildApi429Error();
@@ -8905,6 +8913,15 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
     throw new Error("No pude crear rectificativa.");
   }
 
+  // Sincroniza predictor también para la rectificativa (serie R)
+  updateFastTicketNumberByConfirmedCode({
+    codigo: docRect?.codigo,
+    codserie: payloadRect?.serie,
+    numero2: payloadRect?.numero2,
+    idfactura: rectId,
+    terminalId: idtpv,
+  });
+
   // Parche packs rectificativa
   try {
     const desiredRect = negateDesiredByPid(desiredBaseByPid);
@@ -8997,6 +9014,16 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
     codpago: newCod,
     codagente: codagente || undefined,
     numero2: n2New,
+  });
+
+  // Sincroniza predictor de numeracion para siguientes preimpresiones
+  // (este flujo crea un ticket nuevo real fuera del cobro normal onPay).
+  updateFastTicketNumberByConfirmedCode({
+    codigo: docNew?.codigo,
+    codserie: payloadNew?.serie,
+    numero2: payloadNew?.numero2,
+    idfactura: newId,
+    terminalId: idtpv,
   });
 
   // Log
@@ -13045,9 +13072,16 @@ function openPostPayModal({ docCode, total, cambio }) {
 
   // botones (solo hace falta setearlos una vez, pero ok si lo dejas aquí)
   if (postPayPrintBtn) {
-    setPostPayPrintEnabled(!!(window.lastTicket || lastTicket));
+    const canPrintPendingDraft = !!window.__POSTPAY_PENDING__?.printDraft;
+    setPostPayPrintEnabled(
+      !!(window.lastTicket || lastTicket || canPrintPendingDraft),
+    );
     postPayPrintBtn.onclick = async () => {
-      const t = window.lastTicket || lastTicket;
+      const t =
+        window.lastTicket ||
+        lastTicket ||
+        window.__POSTPAY_PENDING__?.printDraft ||
+        null;
       if (!t) return;
       await printTicket(t);
     };
@@ -13090,6 +13124,7 @@ function openPostPayModal({ docCode, total, cambio }) {
 // ===== [09] Opciones (panel principal) =====
 const OPTIONS_AUTOPRINT_KEY = "tpv_autoPrint";
 const OPTIONS_GROUPLINES_KEY = "tpv_groupLines";
+const FAST_TICKET_NUMBER_CACHE_KEY = "tpv_fast_ticket_number_by_type_v1";
 
 const optionsBtn = document.getElementById("optionsBtn");
 const optionsOverlay = document.getElementById("optionsOverlay");
@@ -13123,6 +13158,228 @@ const PRINTER_QUEUE_KEY = "tpv_printerQueueName"; // RECIPOK_POS (Linux)
 
 function isLinux() {
   return window.TPV_ENV?.platform === "linux";
+}
+
+function getFastTicketNumberCache() {
+  try {
+    const raw = localStorage.getItem(FAST_TICKET_NUMBER_CACHE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function setFastTicketNumberCache(cache) {
+  try {
+    const safe = cache && typeof cache === "object" ? cache : {};
+    localStorage.setItem(FAST_TICKET_NUMBER_CACHE_KEY, JSON.stringify(safe));
+  } catch {}
+}
+
+function parseTrailingInteger(value) {
+  const s = String(value || "").trim();
+  if (!s) return null;
+  const m = s.match(/(\d+)(?!.*\d)/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeTicketCode(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase();
+}
+
+function formatTicketPrintDate(date = new Date()) {
+  const d = date instanceof Date ? date : new Date(date);
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = String(d.getFullYear());
+  return `${dd}-${mm}-${yyyy}`;
+}
+
+function formatTicketPrintTimeWithSeconds(date = new Date()) {
+  const d = date instanceof Date ? date : new Date(date);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${hh}:${mi}:${ss}`;
+}
+
+function getSalePrintTypeKey({ codserie, numero2, terminalId }) {
+  const serie = String(codserie || "S")
+    .trim()
+    .toUpperCase();
+  const n2 = String(numero2 || "").trim();
+  const term = String(terminalId || "NO_TERM").trim();
+  return `${term}::${serie}::${n2 || "_"}`;
+}
+
+function formatPredictedCode(lastCode, nextNumber, codserie) {
+  const safeNext = Math.max(1, Number(nextNumber || 1));
+  const baseSerie = String(codserie || "S")
+    .trim()
+    .toUpperCase();
+
+  const fromLast = String(lastCode || "").trim();
+  if (fromLast) {
+    const m = fromLast.match(/(\d+)(?!.*\d)/);
+    if (m) {
+      const width = m[1].length;
+      const padded = String(safeNext).padStart(width, "0");
+      return fromLast.replace(/(\d+)(?!.*\d)/, padded);
+    }
+  }
+
+  return `${baseSerie}-${safeNext}`;
+}
+
+function predictNextTicketCodeByType({ codserie, numero2, terminalId }) {
+  const typeKey = getSalePrintTypeKey({ codserie, numero2, terminalId });
+  const cache = getFastTicketNumberCache();
+  const entry = cache[typeKey] || {};
+
+  const lastNumber = Number(entry?.lastNumber || 0);
+  const nextNumber =
+    Number.isFinite(lastNumber) && lastNumber > 0 ? lastNumber + 1 : 1;
+  const code = formatPredictedCode(entry?.lastCode, nextNumber, codserie);
+
+  return {
+    typeKey,
+    nextNumber,
+    code,
+    hasHistory: Number.isFinite(lastNumber) && lastNumber > 0,
+  };
+}
+
+function hasFastTicketPredictorHistory({ codserie, numero2, terminalId }) {
+  const typeKey = getSalePrintTypeKey({ codserie, numero2, terminalId });
+  const cache = getFastTicketNumberCache();
+  const entry = cache[typeKey] || {};
+  const lastNumber = Number(entry?.lastNumber || 0);
+  return Number.isFinite(lastNumber) && lastNumber > 0;
+}
+
+function updateFastTicketNumberByConfirmedCode({
+  codigo,
+  codserie,
+  numero2,
+  idfactura,
+  terminalId,
+}) {
+  const cache = getFastTicketNumberCache();
+
+  const code = String(codigo || "").trim();
+  const trailing = parseTrailingInteger(code);
+  const fallbackId = Number(idfactura || 0);
+
+  const confirmedNumber =
+    trailing !== null ? trailing : fallbackId > 0 ? fallbackId : null;
+
+  if (confirmedNumber === null) return;
+
+  const upsertCacheKey = (key) => {
+    const prev = cache[key] || {};
+    const prevNumber = Number(prev?.lastNumber || 0);
+
+    // Nunca retroceder numeracion si llega una confirmacion antigua
+    if (Number.isFinite(prevNumber) && prevNumber > confirmedNumber) return;
+
+    cache[key] = {
+      lastNumber: confirmedNumber,
+      lastCode: code || String(confirmedNumber),
+      updatedAt: Date.now(),
+    };
+  };
+
+  // 1) clave exacta (terminal + serie + tipo/numero2)
+  const exactTypeKey = getSalePrintTypeKey({ codserie, numero2, terminalId });
+  upsertCacheKey(exactTypeKey);
+
+  // 2) clave base (terminal + serie sin tipo): usada por ventas normales
+  //    Esto evita repetir numero tras reemisiones/cambios de pago con numero2 especial.
+  const baseTypeKey = getSalePrintTypeKey({
+    codserie,
+    numero2: "",
+    terminalId,
+  });
+  upsertCacheKey(baseTypeKey);
+
+  setFastTicketNumberCache(cache);
+}
+
+function buildFastPreApiTicketDraft(ticketPayload, cartSnapshot) {
+  const serie = String(ticketPayload?.codserie || ticketPayload?.serie || "S")
+    .trim()
+    .toUpperCase();
+  const numero2 = String(ticketPayload?.numero2 || "").trim();
+  const terminalId = String(
+    ticketPayload?.idtpv || currentTerminal?.id || "",
+  ).trim();
+
+  const predicted = predictNextTicketCodeByType({
+    codserie: serie,
+    numero2,
+    terminalId,
+  });
+
+  // Primera venta de este terminal/tipo: no preimprimir hasta tener referencia real
+  if (!predicted?.hasHistory) return null;
+
+  const total = (Array.isArray(cartSnapshot) ? cartSnapshot : []).reduce(
+    (sum, item) => {
+      const unit = getUnitGross(item);
+      return sum + unit * (item?.qty || 1);
+    },
+    0,
+  );
+
+  const now = new Date();
+  const fecha = formatTicketPrintDate(now);
+  const hora = formatTicketPrintTimeWithSeconds(now);
+
+  const clientName =
+    (cartClientInput && (cartClientInput.value || "").trim()) || "Cliente";
+
+  const pagos = Array.isArray(ticketPayload?._payBreakdown)
+    ? ticketPayload._payBreakdown
+    : Array.isArray(ticketPayload?.pagos)
+      ? ticketPayload.pagos
+      : [];
+
+  const cambio = Number(ticketPayload?._payCambio ?? 0) || 0;
+
+  const cashMeta = buildCashTicketMeta({
+    pagos,
+    total: Number(total || 0),
+    cambio,
+  });
+
+  return {
+    numero: predicted.code,
+    paymentMethod: ticketPayload?.paymentMethod || "—",
+    fecha,
+    hora,
+    total: Number(total || 0),
+    terminalName: currentTerminal ? currentTerminal.name || "" : "",
+    agentName: currentAgent ? currentAgent.name || "" : "",
+    clientName,
+    company: companyInfo ? { ...companyInfo } : null,
+    lineas: Array.isArray(cartSnapshot) ? cartSnapshot : [],
+    pagos,
+    cambio,
+    cashMeta,
+    tpv_efectivo: Number(cashMeta?.cashTendered || 0),
+    tpv_cambio: Number(cambio || 0),
+    codserie: serie,
+    numero2,
+    idfactura: null,
+    idtpv: terminalId || null,
+    _fastPreApiPrint: true,
+  };
 }
 
 function getSavedPrinterReal() {
@@ -13891,6 +14148,10 @@ function buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot) {
     clientName,
     company: companyInfo ? { ...companyInfo } : null,
     lineas: cartSnapshot,
+    codserie:
+      factura.codserie || safePayload.codserie || safePayload.serie || null,
+    numero2: factura.numero2 || safePayload.numero2 || null,
+    idfactura: factura.idfactura || factura.id || null,
   };
 }
 
@@ -16003,6 +16264,8 @@ async function onPayButtonClick() {
   let cartSnapshot = [];
   let saleLineIds = new Set();
   let saleCommitted = false;
+  let didFastAutoPrint = false;
+  let fastPreApiPrintedNumber = "";
 
   try {
     if (isPayingNow) return;
@@ -16161,6 +16424,29 @@ async function onPayButtonClick() {
       "Ventas"
     ).toString();
 
+    const hasFastPredictorHistory = hasFastTicketPredictorHistory({
+      codserie: ticketPayload?.codserie || ticketPayload?.serie,
+      numero2: ticketPayload?.numero2,
+      terminalId: ticketPayload?.idtpv || currentTerminal?.id,
+    });
+
+    // Preprint rapido: imprime antes de enviar a API usando numeracion local por serie/tipo
+    if (isAutoPrintEnabled() && hasFastPredictorHistory) {
+      try {
+        const preApiDraft = buildFastPreApiTicketDraft(
+          ticketPayload,
+          cartSnapshot,
+        );
+        if (preApiDraft) {
+          fastPreApiPrintedNumber = String(preApiDraft?.numero || "").trim();
+          await printTicket(preApiDraft);
+          didFastAutoPrint = true;
+        }
+      } catch (e) {
+        console.warn("Preprint rápido falló:", e?.message || e);
+      }
+    }
+
     const payingItemsSnapshot = buildCustomerItemsFromCart(cartSnapshot);
     customerDisplayOverride = {
       items: payingItemsSnapshot,
@@ -16290,6 +16576,31 @@ async function onPayButtonClick() {
     }
 
     const idfactura = facturaResp?.idfactura || null;
+
+    const confirmedTicketCode = String(facturaResp?.codigo || "").trim();
+    const hadFastPreprintCode = String(fastPreApiPrintedNumber || "").trim();
+    if (hadFastPreprintCode && confirmedTicketCode) {
+      const preNorm = normalizeTicketCode(hadFastPreprintCode);
+      const fsNorm = normalizeTicketCode(confirmedTicketCode);
+      if (preNorm !== fsNorm) {
+        logFeatureWarn("COBRO", "preprint-code-mismatch", {
+          requestId,
+          preprintedCode: hadFastPreprintCode,
+          confirmedCode: confirmedTicketCode,
+          codserie: ticketPayload?.codserie || ticketPayload?.serie || null,
+          numero2: ticketPayload?.numero2 || null,
+          terminalId: ticketPayload?.idtpv || currentTerminal?.id || null,
+        });
+      }
+    }
+
+    updateFastTicketNumberByConfirmedCode({
+      codigo: facturaResp?.codigo,
+      codserie: ticketPayload?.codserie || ticketPayload?.serie,
+      numero2: ticketPayload?.numero2,
+      idfactura,
+      terminalId: ticketPayload?.idtpv || currentTerminal?.id,
+    });
 
     // ✅ CLAVE: parchear cantidades de líneas gratis del pack
     if (idfactura) {
@@ -16480,7 +16791,7 @@ async function onPayButtonClick() {
       "Cobrar",
     );
 
-    if (isAutoPrintEnabled()) {
+    if (isAutoPrintEnabled() && !didFastAutoPrint) {
       try {
         await printTicket(lastTicket);
       } catch (e) {
@@ -17391,13 +17702,37 @@ async function openPayModal(total) {
 
         // post-pago inmediato
         try {
+          const pendingPayload = {
+            codserie: result.serie || "S",
+            serie: result.serie || "S",
+            numero2: result.numero || "",
+            idtpv: Number(currentTerminal?.id || 0) || null,
+            paymentMethod:
+              (Array.isArray(pagos) && pagos.length === 1
+                ? pagos?.[0]?.descripcion || pagos?.[0]?.codpago
+                : "Mixto") || "—",
+            _payBreakdown: Array.isArray(pagos) ? pagos : [],
+            _payCambio: Number(result.cambio || 0),
+          };
+
+          const canFastPrintPending = hasFastTicketPredictorHistory({
+            codserie: pendingPayload.codserie,
+            numero2: pendingPayload.numero2,
+            terminalId: pendingPayload.idtpv || currentTerminal?.id,
+          });
+
+          const pendingDraft = canFastPrintPending
+            ? buildFastPreApiTicketDraft(pendingPayload, cart)
+            : null;
+
           window.__POSTPAY_PENDING__ = {
             docCode: "Procesando…",
             total: result.total,
             cambio: result.cambio,
+            printDraft: pendingDraft,
           };
           openPostPayModal(window.__POSTPAY_PENDING__);
-          setPostPayPrintEnabled(false);
+          setPostPayPrintEnabled(!!pendingDraft);
         } catch {}
 
         cleanupBtns();
@@ -21563,6 +21898,15 @@ async function createRefundInFacturaScriptsPackAware(
     throw new Error("No pude crear la rectificativa.");
   }
 
+  // Sincroniza predictor para la serie de rectificativas.
+  updateFastTicketNumberByConfirmedCode({
+    codigo: docRect?.codigo,
+    codserie: payloadRect?.serie,
+    numero2: payloadRect?.numero2,
+    idfactura: rectId,
+    terminalId: idtpv,
+  });
+
   // =========================================================
   // 3) PATCH packs en líneas hijas gratis
   // =========================================================
@@ -21998,10 +22342,9 @@ async function bootstrapE2EMode() {
     products = [...demoProducts];
 
     if (requireOnline) {
-      const reason =
-        e2eApiKey
-          ? `No se pudo conectar al slug demo remoto con la API key indicada.${lastBootstrapError ? ` Detalle: ${lastBootstrapError}` : ""}`
-          : "Falta TPV_E2E_API_KEY para conectar al slug demo remoto.";
+      const reason = e2eApiKey
+        ? `No se pudo conectar al slug demo remoto con la API key indicada.${lastBootstrapError ? ` Detalle: ${lastBootstrapError}` : ""}`
+        : "Falta TPV_E2E_API_KEY para conectar al slug demo remoto.";
 
       window.__TPV_E2E_BOOT_ERROR__ = reason;
       throw new Error(reason);
@@ -22067,7 +22410,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     try {
       await bootstrapE2EMode();
     } catch (e) {
-      window.__TPV_E2E_BOOT_ERROR__ = e?.message || "No se pudo iniciar E2E remoto.";
+      window.__TPV_E2E_BOOT_ERROR__ =
+        e?.message || "No se pudo iniciar E2E remoto.";
       window.__TPV_E2E_BOOT_SOURCE__ = "boot-error";
       try {
         document.body.dataset.e2eMode = "1";
@@ -22672,12 +23016,23 @@ async function syncQueueNow() {
           // 1) Crear factura
           const resp = await createTicketInFacturaScripts(item.payload);
 
+          const doc = resp?.doc || resp?.factura || resp?.data || resp || null;
+
           const idfactura =
             resp?.idfactura ||
             resp?.doc?.idfactura ||
             resp?.data?.idfactura ||
             resp?.factura?.idfactura ||
             null;
+
+          // Mantener predictor al día también con ventas sincronizadas desde cola offline.
+          updateFastTicketNumberByConfirmedCode({
+            codigo: doc?.codigo,
+            codserie: item?.payload?.serie || item?.payload?.codserie,
+            numero2: item?.payload?.numero2,
+            idfactura,
+            terminalId: item?.payload?.idtpv,
+          });
 
           // Guardar timestamp local->remoto si lo usas
           if (idfactura && item.createdAt) {
