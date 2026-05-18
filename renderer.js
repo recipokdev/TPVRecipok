@@ -788,6 +788,8 @@ let __stockRefreshTimer = null;
 let __stockRefreshInFlight = false;
 
 async function runProductsStockRefreshOnce() {
+  if (isTutorialGlobalPauseActive()) return;
+  if (isMesasDesignViewActive()) return;
   if (__stockRefreshInFlight) return;
   if (TPV_STATE?.offline) return;
   if (!cashSession?.open) return;
@@ -3574,7 +3576,10 @@ const MESAS_TABLES_STATE_KEY = "tpv_tables_state_v3";
 const MESAS_TABLES_LEGACY_STATE_KEY = "tpv_tables_state_v2";
 const MESAS_LAYOUT_CACHE_KEY = "tpv_mesas_layout_cache_v1";
 const MESAS_LAYOUT_SYNC_QUEUE_KEY = "tpv_mesas_layout_sync_queue_v1";
+const MESAS_LOCAL_EDIT_TS_KEY = "tpv_mesas_local_edit_ts_v1";
+const TUTORIAL_ACTIVE_KEY = "tpv_tutorial_active_v1";
 const MESAS_LAYOUT_REMOTE_POLL_MS = 8000;
+const MESAS_REMOTE_PULL_GRACE_MS = 15000;
 let TPV_THEME_MODE = "light";
 let TPV_CUSTOMER_THEME_MODE = "dark";
 let MESAS_INLINE_ACTIVE = false;
@@ -3859,6 +3864,10 @@ async function processMesasLayoutSyncQueue() {
 }
 
 function applyMesasLayoutFromRemoteForInline(remoteLayout) {
+  if (isTutorialGlobalPauseActive()) return false;
+  if (isAnyVirtualKeyboardOverlayOpen()) return false;
+  if (isMesasDesignViewActive()) return false;
+  if (hasRecentMesasLocalEdit()) return false;
   if (!remoteLayout || typeof remoteLayout !== "object") return false;
 
   // Si tenemos cambios locales pendientes de sincronizar, evitamos pisarlos
@@ -3946,6 +3955,7 @@ function applyMesasLayoutFromRemoteForInline(remoteLayout) {
 }
 
 function scheduleMesasLayoutRemoteSync(nextState) {
+  if (TPV_TUTORIAL_BLANK_MODE) return;
   if (MESAS_LAYOUT_SYNC_TIMER) {
     clearTimeout(MESAS_LAYOUT_SYNC_TIMER);
     MESAS_LAYOUT_SYNC_TIMER = null;
@@ -3969,6 +3979,10 @@ function scheduleMesasLayoutRemoteSync(nextState) {
 }
 
 async function refreshMesasLayoutFromRemote() {
+  if (isTutorialGlobalPauseActive()) return false;
+  if (isAnyVirtualKeyboardOverlayOpen()) return false;
+  if (isMesasDesignViewActive()) return false;
+  if (hasRecentMesasLocalEdit()) return false;
   if (MESAS_LAYOUT_REMOTE_FETCH_IN_FLIGHT) return false;
 
   try {
@@ -3993,8 +4007,32 @@ function startMesasLayoutRemotePolling() {
   MESAS_LAYOUT_REMOTE_POLL_TIMER = setInterval(() => {
     if (!MESAS_INLINE_ACTIVE) return;
     if (document.hidden) return;
+    if (isTutorialGlobalPauseActive()) return;
+    if (isAnyVirtualKeyboardOverlayOpen()) return;
     refreshMesasLayoutFromRemote().catch(() => {});
   }, MESAS_LAYOUT_REMOTE_POLL_MS);
+}
+
+function isAnyVirtualKeyboardOverlayOpen() {
+  try {
+    const qwerty = document.getElementById("qwertyOverlay");
+    if (qwerty && !qwerty.classList.contains("hidden")) return true;
+
+    const numPad = document.getElementById("numPadOverlay");
+    if (numPad && !numPad.classList.contains("hidden")) return true;
+  } catch {}
+
+  return false;
+}
+
+function isTutorialGlobalPauseActive() {
+  if (TPV_TUTORIAL_BLANK_MODE) return true;
+  try {
+    if (String(localStorage.getItem(TUTORIAL_ACTIVE_KEY) || "") === "1") {
+      return true;
+    }
+  } catch {}
+  return false;
 }
 
 function stopMesasLayoutRemotePolling() {
@@ -4019,6 +4057,7 @@ function saveMesasTablesStateForInline(nextState) {
   try {
     const raw = JSON.stringify(nextState || {});
     writeMesasTablesStateRawLocal(raw);
+    markMesasLocalEditNow();
     scheduleMesasLayoutRemoteSync(nextState || {});
     notifyMesasInlineStateChanged();
   } catch {}
@@ -5549,11 +5588,15 @@ function bindMesasInlineEventsOnce() {
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) return;
     if (!MESAS_INLINE_ACTIVE) return;
+    if (isTutorialGlobalPauseActive()) return;
+    if (isAnyVirtualKeyboardOverlayOpen()) return;
     refreshMesasLayoutFromRemote().catch(() => {});
   });
 
   window.addEventListener("focus", () => {
     if (!MESAS_INLINE_ACTIVE) return;
+    if (isTutorialGlobalPauseActive()) return;
+    if (isAnyVirtualKeyboardOverlayOpen()) return;
     refreshMesasLayoutFromRemote().catch(() => {});
   });
 }
@@ -8065,6 +8108,26 @@ function handleOverlayOutsideClick(e, padSelector, closeFn) {
   return false;
 }
 
+function markMesasLocalEditNow() {
+  try {
+    localStorage.setItem(MESAS_LOCAL_EDIT_TS_KEY, String(Date.now()));
+  } catch {}
+}
+
+function hasRecentMesasLocalEdit() {
+  try {
+    const ts = Number(localStorage.getItem(MESAS_LOCAL_EDIT_TS_KEY) || 0) || 0;
+    if (!ts) return false;
+    return Date.now() - ts < MESAS_REMOTE_PULL_GRACE_MS;
+  } catch {
+    return false;
+  }
+}
+
+function isMesasDesignViewActive() {
+  return !!(MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "diseno");
+}
+
 const KEYBOARD_LAYOUT_STORAGE_KEY = "tpv_keyboard_layout_v1";
 
 function loadKeyboardLayoutState() {
@@ -9058,15 +9121,16 @@ function setQwertySelection(start, end = start) {
 }
 
 function applyQwertyPreview() {
-  if (!qwertyTargetInput) return;
-  qwertyTargetInput.value = qwertyCurrentValue;
+  const target = resolveQwertyTargetInput();
+  if (!target) return;
+  target.value = qwertyCurrentValue;
 
-  if (qwertyTargetInput === searchInput) {
+  if (target === searchInput) {
     searchTerm = qwertyCurrentValue;
     renderProducts();
   }
 
-  qwertyTargetInput.dispatchEvent(new Event("input", { bubbles: true }));
+  target.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 function updateQwertyDisplay() {
@@ -9117,6 +9181,79 @@ function initQwertyKeysStyling() {
 }
 
 let qwertyTargetInput = null;
+let qwertyTargetDescriptor = null;
+
+function escapeSelectorAttrValue(value) {
+  return String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"');
+}
+
+function buildQwertyTargetDescriptor(inputEl) {
+  if (
+    !(
+      inputEl instanceof HTMLInputElement ||
+      inputEl instanceof HTMLTextAreaElement
+    )
+  ) {
+    return null;
+  }
+
+  const doc = inputEl.ownerDocument || document;
+  const selectors = [];
+  const id = String(inputEl.id || "").trim();
+  const name = String(inputEl.getAttribute("name") || "").trim();
+  const designField = String(
+    inputEl.getAttribute("data-design-field") || "",
+  ).trim();
+  const tableInput = String(
+    inputEl.getAttribute("data-table-input") || "",
+  ).trim();
+  const tableUid = String(inputEl.getAttribute("data-table-uid") || "").trim();
+
+  if (id) selectors.push(`#${escapeSelectorAttrValue(id)}`);
+  if (designField) {
+    selectors.push(
+      `[data-design-field="${escapeSelectorAttrValue(designField)}"]`,
+    );
+  }
+  if (tableInput && tableUid) {
+    selectors.push(
+      `[data-table-input="${escapeSelectorAttrValue(tableInput)}"][data-table-uid="${escapeSelectorAttrValue(tableUid)}"]`,
+    );
+  }
+  if (name) {
+    selectors.push(`[name="${escapeSelectorAttrValue(name)}"]`);
+  }
+
+  return { doc, selectors };
+}
+
+function resolveQwertyTargetInput() {
+  if (qwertyTargetInput?.isConnected) return qwertyTargetInput;
+  if (!qwertyTargetDescriptor?.doc) return null;
+
+  const doc = qwertyTargetDescriptor.doc;
+  const selectors = Array.isArray(qwertyTargetDescriptor.selectors)
+    ? qwertyTargetDescriptor.selectors
+    : [];
+
+  for (const selector of selectors) {
+    if (!selector) continue;
+    try {
+      const found = doc.querySelector(selector);
+      if (
+        found instanceof HTMLInputElement ||
+        found instanceof HTMLTextAreaElement
+      ) {
+        qwertyTargetInput = found;
+        return found;
+      }
+    } catch {}
+  }
+
+  return null;
+}
 
 // default: text
 function openQwertyForInput(inputEl, mode = "text") {
@@ -9129,6 +9266,7 @@ function openQwertyForInput(inputEl, mode = "text") {
   }
 
   qwertyTargetInput = inputEl || null;
+  qwertyTargetDescriptor = buildQwertyTargetDescriptor(qwertyTargetInput);
   qwertyOriginalValue = inputEl?.value ? String(inputEl.value) : "";
   qwertyCurrentValue = qwertyOriginalValue;
   qwertyCapsMode = "off";
@@ -9158,25 +9296,26 @@ function closeQwerty(reason = "cancel") {
 
   const shouldCommit = reason === "confirm" || qwertyCommitted;
 
-  if (qwertyTargetInput) {
+  const target = resolveQwertyTargetInput();
+  if (target) {
     if (shouldCommit) {
-      qwertyTargetInput.value = qwertyCurrentValue;
+      target.value = qwertyCurrentValue;
     } else {
-      qwertyTargetInput.value = qwertyOriginalValue;
+      target.value = qwertyOriginalValue;
       qwertyCurrentValue = qwertyOriginalValue;
       const end = qwertyCurrentValue.length;
       qwertyCaretStart = end;
       qwertyCaretEnd = end;
     }
 
-    if (qwertyTargetInput === searchInput) {
-      searchTerm = qwertyTargetInput.value || "";
+    if (target === searchInput) {
+      searchTerm = target.value || "";
       renderProducts();
     }
 
-    qwertyTargetInput.dispatchEvent(new Event("input", { bubbles: true }));
+    target.dispatchEvent(new Event("input", { bubbles: true }));
     if (shouldCommit) {
-      qwertyTargetInput.dispatchEvent(new Event("change", { bubbles: true }));
+      target.dispatchEvent(new Event("change", { bubbles: true }));
     }
   }
 
@@ -9186,6 +9325,7 @@ function closeQwerty(reason = "cancel") {
   qwertyVisible = false;
   qwertyMode = "text";
   qwertyTargetInput = null;
+  qwertyTargetDescriptor = null;
   qwertyOriginalValue = "";
   qwertyCapsMode = "off";
   qwertyCapsLastTapTs = 0;
@@ -17643,6 +17783,10 @@ function closeOptions() {
 
 var TPV_TUTORIAL_BLANK_MODE = false;
 var TPV_TUTORIAL_BLANK_SNAPSHOT = null;
+var TPV_TUTORIAL_BLANK_MODE_KEY = "tpv_tutorial_blank_mode_v1";
+try {
+  localStorage.removeItem(TPV_TUTORIAL_BLANK_MODE_KEY);
+} catch {}
 
 function cloneTutorialValue(value, fallback) {
   try {
@@ -17664,6 +17808,9 @@ function beginTutorialBlankMode() {
   };
 
   TPV_TUTORIAL_BLANK_MODE = true;
+  try {
+    localStorage.setItem(TPV_TUTORIAL_BLANK_MODE_KEY, "1");
+  } catch {}
   cart = [];
   currentParkedTicketIndex = null;
   renderCart();
@@ -17676,6 +17823,9 @@ function endTutorialBlankMode() {
   const snap = TPV_TUTORIAL_BLANK_SNAPSHOT;
   TPV_TUTORIAL_BLANK_MODE = false;
   TPV_TUTORIAL_BLANK_SNAPSHOT = null;
+  try {
+    localStorage.removeItem(TPV_TUTORIAL_BLANK_MODE_KEY);
+  } catch {}
 
   if (!snap) return true;
 
@@ -17691,6 +17841,77 @@ function endTutorialBlankMode() {
 }
 
 function buildTutorialsBridgeApi() {
+  function applyMesasTutorialStateLocal(nextState) {
+    try {
+      const safeState =
+        nextState && typeof nextState === "object" ? nextState : {};
+      writeMesasTablesStateRawLocal(JSON.stringify(safeState));
+      notifyMesasInlineStateChanged();
+      renderMesasTransContextBar?.();
+      refreshMesasTransSidebar?.();
+      if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+        syncTpvCartWithSelectedMesa?.();
+      }
+      updateParkedCountBadge?.();
+      return true;
+    } catch (err) {
+      console.warn(
+        "No se pudo aplicar estado local de Mesas para tutorial:",
+        err,
+      );
+      return false;
+    }
+  }
+
+  function getMesasTutorialStateRaw() {
+    try {
+      return String(readMesasTablesStateRawLocal() || "");
+    } catch {
+      return "";
+    }
+  }
+
+  function getMesasTutorialSelectionState() {
+    try {
+      const state = loadMesasTablesStateForInline();
+      const selectedUid = String(state?.selectedTableId || "").trim();
+      const status = selectedUid
+        ? getMesaQuickStatusMeta(state, selectedUid)
+        : { kind: "" };
+      const roomCount = Array.isArray(state?.roomList)
+        ? state.roomList.length
+        : 0;
+      return {
+        selectedUid,
+        selectedStatusKind: String(status?.kind || "")
+          .trim()
+          .toLowerCase(),
+        roomCount,
+      };
+    } catch {
+      return {
+        selectedUid: "",
+        selectedStatusKind: "",
+        roomCount: 0,
+      };
+    }
+  }
+
+  async function refreshMesasLayoutFromRemoteNow() {
+    try {
+      const changed = await refreshMesasLayoutFromRemote();
+      renderMesasTransContextBar?.();
+      refreshMesasTransSidebar?.();
+      if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+        syncTpvCartWithSelectedMesa?.();
+      }
+      updateParkedCountBadge?.();
+      return !!changed;
+    } catch {
+      return false;
+    }
+  }
+
   return {
     closeOptions,
     isAdminUser: () => !!isAdminUser?.(),
@@ -17701,6 +17922,10 @@ function buildTutorialsBridgeApi() {
     toast,
     beginTutorialBlankMode,
     endTutorialBlankMode,
+    applyMesasTutorialStateLocal,
+    getMesasTutorialStateRaw,
+    getMesasTutorialSelectionState,
+    refreshMesasLayoutFromRemoteNow,
   };
 }
 
@@ -20792,6 +21017,8 @@ async function apiDeleteParkedReservation(ticket) {
 }
 
 async function refreshRemoteParkedReservationsOnly() {
+  if (isTutorialGlobalPauseActive()) return false;
+  if (isMesasDesignViewActive()) return false;
   if (TPV_STATE?.offline) return false;
 
   try {
@@ -30155,6 +30382,10 @@ async function openDrawerNow({ source = "MAIN" } = {}) {
 }
 
 async function checkFSOnline() {
+  if (isTutorialGlobalPauseActive()) {
+    return navigator.onLine ? true : false;
+  }
+
   try {
     if (navigator.onLine === false) {
       return false;

@@ -1,4 +1,5 @@
 name: Build & Release (Electron)
+run-name: "chore(release): ${{ github.ref_name }}"
 
 on:
   push:

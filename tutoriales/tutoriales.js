@@ -24,6 +24,24 @@
   const TUTORIAL_PROGRESS_KEY = "tpv_tutorial_progress_v1";
   const TUTORIAL_DEMO_SNAPSHOT_KEY = "tpv_tutorial_demo_snapshot_v1";
   const TUTORIAL_HUB_MODE_KEY = "tpv_tutorial_hub_mode_v1";
+  const TUTORIAL_MESAS_BACKUP_KEY = "tpv_tutorial_mesas_backup_v1";
+  const TUTORIAL_ACTIVE_KEY = "tpv_tutorial_active_v1";
+  const MESAS_STATE_KEY = "tpv_tables_state_v3";
+  const MESAS_STATE_LEGACY_KEY = "tpv_tables_state_v2";
+
+  try {
+    localStorage.removeItem(TUTORIAL_ACTIVE_KEY);
+  } catch {}
+
+  function setTutorialActiveFlag(active) {
+    try {
+      if (active) {
+        localStorage.setItem(TUTORIAL_ACTIVE_KEY, "1");
+      } else {
+        localStorage.removeItem(TUTORIAL_ACTIVE_KEY);
+      }
+    } catch {}
+  }
 
   const DEMO_KEY_PATTERNS = [
     /^tpv_tables_state_v3$/,
@@ -70,6 +88,7 @@
 
   function captureDemoSnapshot() {
     const entries = {};
+    let mesasRaw = "";
 
     try {
       for (let i = 0; i < localStorage.length; i += 1) {
@@ -82,9 +101,16 @@
       return null;
     }
 
+    try {
+      if (typeof api.getMesasTutorialStateRaw === "function") {
+        mesasRaw = String(api.getMesasTutorialStateRaw() || "");
+      }
+    } catch {}
+
     return {
       createdAt: Date.now(),
       entries,
+      mesasRaw,
     };
   }
 
@@ -156,7 +182,7 @@
 
   function restoreDemoSnapshot() {
     const snap = tutorialDemoSnapshot || loadPersistentDemoSnapshot();
-    if (!snap) return;
+    if (!snap) return false;
 
     try {
       const existingKeys = [];
@@ -174,25 +200,102 @@
         localStorage.setItem(key, value);
       });
 
+      if (typeof api.applyMesasTutorialStateLocal === "function") {
+        const raw = String(snap?.mesasRaw || "").trim();
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            api.applyMesasTutorialStateLocal(parsed);
+          } catch {}
+        }
+      }
+
       window.dispatchEvent(
         new StorageEvent("storage", { key: "tpv_tables_state_v3" }),
       );
-      toast("Demo restaurada: se recupero el estado real de Mesas.", "ok");
+      toast("Demo restaurada: se recuperó el estado real de Mesas.", "ok");
     } catch (err) {
       console.warn("[TUTORIALES] No se pudo restaurar snapshot demo:", err);
-      toast("No se pudo restaurar automaticamente la demo.", "warn");
+      toast("No se pudo restaurar automáticamente la demo.", "warn");
     }
 
     tutorialDemoSnapshot = null;
     savePersistentDemoSnapshot(null);
+    return true;
   }
 
   function restoreDemoSnapshotIfCrashedBefore() {
     const pending = loadPersistentDemoSnapshot();
-    if (!pending) return;
+    if (pending) {
+      tutorialDemoSnapshot = pending;
+      restoreDemoSnapshot();
+    }
+    restoreMesasBackupIfPending();
+  }
 
-    tutorialDemoSnapshot = pending;
-    restoreDemoSnapshot();
+  function saveMesasBackupBeforeTutorial() {
+    try {
+      const existing = localStorage.getItem(TUTORIAL_MESAS_BACKUP_KEY);
+      if (String(existing || "").trim()) return;
+
+      let raw = "";
+      if (typeof api.getMesasTutorialStateRaw === "function") {
+        raw = String(api.getMesasTutorialStateRaw() || "");
+      }
+      if (!raw) {
+        raw = String(
+          localStorage.getItem(MESAS_STATE_KEY) ||
+            localStorage.getItem(MESAS_STATE_LEGACY_KEY) ||
+            "",
+        );
+      }
+      if (!raw) return;
+
+      localStorage.setItem(
+        TUTORIAL_MESAS_BACKUP_KEY,
+        JSON.stringify({ savedAt: Date.now(), raw }),
+      );
+    } catch {}
+  }
+
+  function clearMesasBackup() {
+    try {
+      localStorage.removeItem(TUTORIAL_MESAS_BACKUP_KEY);
+    } catch {}
+  }
+
+  function restoreMesasBackupIfPending() {
+    try {
+      const rawBackup = String(
+        localStorage.getItem(TUTORIAL_MESAS_BACKUP_KEY) || "",
+      ).trim();
+      if (!rawBackup) return false;
+
+      const parsedBackup = JSON.parse(rawBackup);
+      const mesasRaw = String(parsedBackup?.raw || "").trim();
+      if (!mesasRaw) {
+        clearMesasBackup();
+        return false;
+      }
+
+      if (typeof api.applyMesasTutorialStateLocal === "function") {
+        try {
+          const nextState = JSON.parse(mesasRaw);
+          api.applyMesasTutorialStateLocal(nextState);
+        } catch {}
+      }
+
+      localStorage.setItem(MESAS_STATE_KEY, mesasRaw);
+      localStorage.setItem(MESAS_STATE_LEGACY_KEY, mesasRaw);
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: MESAS_STATE_KEY }),
+      );
+      clearMesasBackup();
+      return true;
+    } catch {
+      clearMesasBackup();
+      return false;
+    }
   }
 
   function hasPendingProgressForTutorial(tutorialId) {
@@ -216,6 +319,146 @@
     } catch {
       return null;
     }
+  }
+
+  function buildTutorialMesasBaseState() {
+    const roomId = "tut-room-1";
+    const roomId2 = "tut-room-2";
+    return {
+      activeRoomId: roomId,
+      selectedTableId: `${roomId}::m2`,
+      roomList: [
+        {
+          id: roomId,
+          name: "Sala Tutorial",
+          tables: [
+            { id: "m1", name: "M1" },
+            { id: "m2", name: "M2" },
+            { id: "m3", name: "M3" },
+            { id: "m4", name: "M4" },
+          ],
+        },
+        {
+          id: roomId2,
+          name: "Sala Tutorial 2",
+          tables: [
+            { id: "n1", name: "N1" },
+            { id: "n2", name: "N2" },
+          ],
+        },
+      ],
+      tableStates: {
+        [`${roomId}::m1`]: "ocupada",
+        [`${roomId}::m2`]: "libre",
+        [`${roomId}::m3`]: "reservada",
+        [`${roomId}::m4`]: "cuenta",
+        [`${roomId2}::n1`]: "libre",
+        [`${roomId2}::n2`]: "ocupada",
+      },
+      tableMeta: {
+        [`${roomId}::m1`]: { diners: 4 },
+        [`${roomId}::m2`]: { diners: 0 },
+        [`${roomId}::m3`]: {
+          diners: 2,
+          reservationName: "Reserva demo",
+          reservationTime: "21:00",
+        },
+        [`${roomId}::m4`]: {
+          diners: 3,
+          serviceStage: "cuenta-pedida",
+        },
+        [`${roomId2}::n1`]: { diners: 0 },
+        [`${roomId2}::n2`]: { diners: 2 },
+      },
+      tableTicketMap: {},
+      draftCartByTable: {},
+    };
+  }
+
+  function applyMesasTutorialBaseState() {
+    try {
+      const nextState = buildTutorialMesasBaseState();
+      const raw = JSON.stringify(nextState);
+
+      const appliedViaApi =
+        typeof api.applyMesasTutorialStateLocal === "function"
+          ? api.applyMesasTutorialStateLocal(nextState)
+          : false;
+
+      if (!appliedViaApi && window.MESAS_BRIDGE?.setTablesStateRaw) {
+        window.MESAS_BRIDGE.setTablesStateRaw(raw);
+      }
+
+      // Respaldo en local para mantener coherencia de lectura en distintos flujos.
+      localStorage.setItem(MESAS_STATE_KEY, raw);
+      localStorage.setItem(MESAS_STATE_LEGACY_KEY, raw);
+
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = String(localStorage.key(i) || "");
+        if (key.startsWith("tpv_mesas_layout_cache_v1::")) {
+          localStorage.setItem(key, raw);
+        }
+      }
+
+      api.setMesasInlineView?.("transacciones", { persist: false });
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: MESAS_STATE_KEY }),
+      );
+    } catch (err) {
+      console.warn("[TUTORIALES] No se pudo preparar base demo de Mesas:", err);
+    }
+  }
+
+  function maybeApplyMesasTutorialBaseState() {
+    if (!tutorialState?.active) return;
+    if (String(tutorialState?.tutorialFamily || "") !== "mesas") return;
+    if (tutorialState?.mesasDemoSeedApplied) return;
+
+    applyMesasTutorialBaseState();
+    tutorialState.mesasDemoSeedApplied = true;
+  }
+
+  function refreshDynamicSelectFreeMesaStep(step) {
+    if (!step || step.stepKey !== "select-free-mesa") return;
+
+    const info =
+      typeof api.getMesasTutorialSelectionState === "function"
+        ? api.getMesasTutorialSelectionState() || {}
+        : {};
+
+    const isSelectedMesaFree =
+      String(info?.selectedStatusKind || "").toLowerCase() === "libre";
+
+    if (isSelectedMesaFree) {
+      step.title = "Mesa libre lista para reserva";
+      step.text =
+        "Tu mesa actual ya está libre. Recuerda: solo las mesas libres se pueden reservar. Aquí te mostramos la mesa actual y la zona de reservas en Acciones rápidas.";
+      step.target = ".mts-selected-card";
+      step.highlightSelectors = ["#mesasTransReservaBox"];
+      step.blockTargetControls = true;
+      step.allowInteractionSelectors = [];
+      step.advanceOn = "click";
+      step.interactionLevel = "recommended";
+      return;
+    }
+
+    step.title = "Seleccionar mesa libre";
+    step.text =
+      "Para reservar, selecciona una mesa libre. Solo las mesas libres pueden reservarse.";
+    step.target =
+      "#mesasTransOtherTables .mts-table-btn.is-libre, #mesasContextQuickSwitch .mesas-quick-btn.is-libre, #mesasTransOtherTables .mts-table-btn, #mesasContextQuickSwitch .mesas-quick-btn";
+    step.allowInteractionSelectors = [
+      "#mesasTransOtherTables .mts-table-btn.is-libre",
+      "#mesasTransOtherTables .mts-table-btn",
+      "#mesasContextQuickSwitch .mesas-quick-btn.is-libre",
+      "#mesasContextQuickSwitch .mesas-quick-btn",
+    ];
+    step.highlightSelectors = [
+      "#mesasTransOtherTables .mts-table-btn.is-libre",
+    ];
+    step.blockTargetControls = false;
+    step.advanceOn = "click";
+    step.interactionLevel = "recommended";
   }
 
   function scheduleTutorialStepRefresh(delay = 220) {
@@ -247,27 +490,253 @@
         ?.forEach((node) => node.classList.remove("tutorial-target-highlight"));
     } catch {}
 
-    const el = tutorialHighlightState?.element || null;
-    if (el) {
+    const states = Array.isArray(tutorialHighlightState)
+      ? tutorialHighlightState
+      : tutorialHighlightState
+        ? [tutorialHighlightState]
+        : [];
+
+    states.forEach((state) => {
+      const el = state?.element || null;
+      if (!el) return;
+
       try {
         el.classList.remove("tutorial-target-highlight");
       } catch {}
 
       try {
-        el.style.outline = tutorialHighlightState.outline || "";
-        el.style.outlineOffset = tutorialHighlightState.outlineOffset || "";
-        el.style.boxShadow = tutorialHighlightState.boxShadow || "";
-        el.style.borderRadius = tutorialHighlightState.borderRadius || "";
+        el.style.outline = state.outline || "";
+        el.style.outlineOffset = state.outlineOffset || "";
+        el.style.boxShadow = state.boxShadow || "";
+        el.style.borderRadius = state.borderRadius || "";
       } catch {}
-    }
+    });
 
-    tutorialHighlightState = null;
+    tutorialHighlightState = [];
   }
 
   function getCurrentStepTarget() {
     if (!tutorialState?.active) return null;
-    const step = tutorialState.steps?.[tutorialState.stepIndex];
+    const step = getCurrentStep();
     return resolveTutorialTarget(step);
+  }
+
+  function getCurrentStep() {
+    if (!tutorialState?.active) return null;
+    return tutorialState.steps?.[tutorialState.stepIndex] || null;
+  }
+
+  function resolveTutorialTargetBySelector(rawSelector) {
+    const rawTarget = String(rawSelector || "").trim();
+    if (!rawTarget) return null;
+
+    if (rawTarget.startsWith("iframe:")) {
+      const frameSelector = rawTarget.slice(7).trim();
+      if (!frameSelector) return null;
+
+      try {
+        const doc = getMesasInlineFrameDocument();
+        if (!doc) return null;
+        return doc.querySelector(frameSelector);
+      } catch {
+        return null;
+      }
+    }
+
+    try {
+      return document.querySelector(rawTarget);
+    } catch {
+      return null;
+    }
+  }
+
+  function getCurrentStepAllowedInteractionTargets() {
+    if (!tutorialState?.active) return [];
+    const step = tutorialState.steps?.[tutorialState.stepIndex];
+    if (!step) return [];
+
+    const rawList = Array.isArray(step?.allowInteractionSelectors)
+      ? step.allowInteractionSelectors
+      : [];
+
+    const resolved = [];
+    rawList.forEach((selector) => {
+      const node = resolveTutorialTargetBySelector(selector);
+      if (node) resolved.push(node);
+    });
+
+    return resolved;
+  }
+
+  function isStepInteractive(step) {
+    const mode = String(step?.advanceOn || "")
+      .trim()
+      .toLowerCase();
+    return mode === "click" || mode === "manual";
+  }
+
+  function getStepInteractionLevel(step) {
+    const raw = String(step?.interactionLevel || "")
+      .trim()
+      .toLowerCase();
+    if (raw === "optional") return "optional";
+    return "recommended";
+  }
+
+  function getCurrentStepCompletionState() {
+    if (!tutorialState?.active) return false;
+    const key = String(tutorialState.stepIndex);
+    return !!tutorialState?.stepInteracted?.[key];
+  }
+
+  function eventMatchesManualCompletion(event, step) {
+    const mode = String(step?.interactionCompleteOn || "any")
+      .trim()
+      .toLowerCase();
+    const type = String(event?.type || "")
+      .trim()
+      .toLowerCase();
+
+    if (mode === "change") return type === "change";
+    if (mode === "input") return type === "input" || type === "change";
+    if (mode === "click") {
+      return type === "click" || type === "pointerdown" || type === "mousedown";
+    }
+
+    return (
+      type === "click" ||
+      type === "pointerdown" ||
+      type === "mousedown" ||
+      type === "change" ||
+      type === "input"
+    );
+  }
+
+  function isInteractiveControlTarget(target) {
+    const node =
+      target && typeof target.closest === "function"
+        ? target.closest(
+            "button, input, select, textarea, a, [role='button'], [data-action], .qty-btn, .mesas-quick-btn, .mts-action-btn, .mts-table-btn",
+          )
+        : null;
+    return !!node;
+  }
+
+  function isBlockedControlInteraction(target, step, currentTarget) {
+    if (!step?.blockTargetControls) return false;
+    if (!target || !currentTarget) return false;
+    if (target === currentTarget) return false;
+    if (!currentTarget.contains(target)) return false;
+    return isInteractiveControlTarget(target);
+  }
+
+  function updateCoachVisualByStep(step) {
+    if (!els?.tutorialCoachDock) return;
+
+    const isInteractive = isStepInteractive(step);
+    const isManual = String(step?.advanceOn || "") === "manual";
+    const manualDone = isManual && getCurrentStepCompletionState();
+    const interactionLevel = getStepInteractionLevel(step);
+    const isOptional = isInteractive && interactionLevel === "optional";
+    const isRecommended = isInteractive && interactionLevel !== "optional";
+
+    els.tutorialCoachDock.classList.toggle(
+      "tutorial-coach--interactive",
+      isInteractive,
+    );
+    els.tutorialCoachDock.classList.toggle("tutorial-coach--manual", isManual);
+    els.tutorialCoachDock.classList.toggle(
+      "tutorial-coach--manual-done",
+      manualDone,
+    );
+    els.tutorialCoachDock.classList.toggle(
+      "tutorial-coach--interactive-optional",
+      isOptional,
+    );
+    els.tutorialCoachDock.classList.toggle(
+      "tutorial-coach--interactive-recommended",
+      isRecommended,
+    );
+
+    els.tutorialModeBackdrop?.classList.toggle(
+      "tutorial-mode-backdrop--interactive",
+      isInteractive,
+    );
+    els.tutorialModeBackdrop?.classList.toggle(
+      "tutorial-mode-backdrop--interactive-optional",
+      isOptional,
+    );
+    els.tutorialModeBackdrop?.classList.toggle(
+      "tutorial-mode-backdrop--interactive-recommended",
+      isRecommended,
+    );
+
+    els.tutorialCoachNextBtn?.classList.toggle(
+      "tutorial-nav-btn--ready",
+      manualDone,
+    );
+
+    if (els?.tutorialCoachHint && isManual && manualDone) {
+      els.tutorialCoachHint.textContent =
+        "Acción detectada. Ya puedes continuar cuando quieras con ▶.";
+    }
+  }
+
+  function maybeMarkCurrentStepInteractionDone(event) {
+    if (!tutorialState?.active) return;
+    const step = tutorialState.steps?.[tutorialState.stepIndex];
+    if (!step || String(step?.advanceOn || "") !== "manual") return;
+    if (!eventMatchesManualCompletion(event, step)) return;
+
+    const t = event?.target || null;
+    if (!t) return;
+
+    const currentTarget = resolveTutorialTarget(step);
+    const allowedTargets = getCurrentStepAllowedInteractionTargets();
+
+    let matched = false;
+    if (currentTarget && (t === currentTarget || currentTarget.contains(t))) {
+      if (
+        step?.blockTargetControls &&
+        t !== currentTarget &&
+        isInteractiveControlTarget(t)
+      ) {
+        matched = false;
+      } else {
+        matched = true;
+      }
+    }
+    if (!matched) {
+      for (const extra of allowedTargets) {
+        if (t === extra || extra.contains(t)) {
+          matched = true;
+          break;
+        }
+      }
+    }
+    if (!matched) return;
+
+    if (!tutorialState.stepInteracted) tutorialState.stepInteracted = {};
+    tutorialState.stepInteracted[String(tutorialState.stepIndex)] = true;
+    updateCoachVisualByStep(step);
+  }
+
+  function isWithinVisibleKeyboardOverlay(target) {
+    const node =
+      target && typeof target.closest === "function"
+        ? target.closest("#numPadOverlay, #qwertyOverlay")
+        : null;
+    if (!node) return false;
+    return !node.classList.contains("hidden");
+  }
+
+  function isWithinVisiblePackOfferOverlay(target) {
+    const node =
+      target && typeof target.closest === "function"
+        ? target.closest(".pack-modal-overlay")
+        : null;
+    if (!node) return false;
+    return node.isConnected;
   }
 
   function isTutorialEscapeControl(target) {
@@ -294,11 +763,40 @@
     if (els?.tutorialHubOverlay && els.tutorialHubOverlay.contains(t))
       return true;
     if (isTutorialEscapeControl(t)) return true;
+    if (isWithinVisibleKeyboardOverlay(t)) return true;
+    if (isWithinVisiblePackOfferOverlay(t)) return true;
+
+    const step = getCurrentStep();
+    const currentTarget = getCurrentStepTarget();
+    const allowedTargets = getCurrentStepAllowedInteractionTargets();
+
+    if (!currentTarget && !allowedTargets.length) return false;
+
+    if (currentTarget && (t === currentTarget || currentTarget.contains(t))) {
+      if (isBlockedControlInteraction(t, step, currentTarget)) {
+        return false;
+      }
+      return true;
+    }
+
+    for (const extra of allowedTargets) {
+      if (t === extra || extra.contains(t)) return true;
+    }
+
+    return false;
+  }
+
+  function eventMatchesCurrentStepTarget(eventTarget, step) {
+    const t = eventTarget || null;
+    if (!t || !step) return false;
 
     const currentTarget = getCurrentStepTarget();
-    if (!currentTarget) return false;
+    if (currentTarget && (t === currentTarget || currentTarget.contains(t))) {
+      return true;
+    }
 
-    return t === currentTarget || currentTarget.contains(t);
+    const allowedTargets = getCurrentStepAllowedInteractionTargets();
+    return allowedTargets.some((node) => t === node || node.contains(t));
   }
 
   function preventIfTutorialLocked(event) {
@@ -314,7 +812,46 @@
       return;
     }
 
-    if (eventIsAllowedDuringTutorial(event.target)) return;
+    const step = getCurrentStep();
+    const currentTarget = getCurrentStepTarget();
+    const blockedControlInteraction = isBlockedControlInteraction(
+      event.target,
+      step,
+      currentTarget,
+    );
+
+    // En pasos de zona, bloquea controles internos pero permite avanzar
+    // tocando dentro del área resaltada cuando el paso es de tipo click.
+    if (blockedControlInteraction) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") {
+        event.stopImmediatePropagation();
+      }
+
+      if (
+        step?.advanceOn === "click" &&
+        String(event?.type || "").toLowerCase() === "click"
+      ) {
+        setTimeout(() => tutorialNextStep(), 0);
+      }
+      return;
+    }
+
+    if (eventIsAllowedDuringTutorial(event.target)) {
+      if (
+        step?.advanceOn === "click" &&
+        String(event?.type || "").toLowerCase() === "click" &&
+        eventMatchesCurrentStepTarget(event.target, step)
+      ) {
+        tutorialIgnoreClickAdvanceUntil = Date.now() + 350;
+        setTimeout(() => tutorialNextStep(), 0);
+        return;
+      }
+
+      maybeMarkCurrentStepInteractionDone(event);
+      return;
+    }
 
     event.preventDefault();
     event.stopPropagation();
@@ -357,28 +894,7 @@
 
   function resolveTutorialTarget(step) {
     if (!step?.target) return null;
-
-    const rawTarget = String(step.target || "").trim();
-    if (!rawTarget) return null;
-
-    if (rawTarget.startsWith("iframe:")) {
-      const frameSelector = rawTarget.slice(7).trim();
-      if (!frameSelector) return null;
-
-      try {
-        const doc = getMesasInlineFrameDocument();
-        if (!doc) return null;
-        return doc.querySelector(frameSelector);
-      } catch {
-        return null;
-      }
-    }
-
-    try {
-      return document.querySelector(rawTarget);
-    } catch {
-      return null;
-    }
+    return resolveTutorialTargetBySelector(step.target);
   }
 
   async function runTutorialStepEnterAction(step) {
@@ -393,27 +909,30 @@
     }
 
     if (action === "view-transacciones") {
+      maybeApplyMesasTutorialBaseState();
       api.setMesasInlineView?.("transacciones", { persist: false });
       return;
     }
 
     if (action === "view-mapa") {
+      maybeApplyMesasTutorialBaseState();
       api.setMesasInlineView?.("mapa", { persist: false });
       return;
     }
 
     if (action === "view-diseno") {
       if (!isAdminUser()) {
-        toast("El tutorial de diseno requiere usuario administrador.", "warn");
+        toast("El tutorial de diseño requiere usuario administrador.", "warn");
         return;
       }
+      maybeApplyMesasTutorialBaseState();
       api.setMesasInlineView?.("diseno", { persist: false });
       return;
     }
   }
 
   function applyTutorialHighlight(target) {
-    if (!target) return;
+    if (!target) return null;
 
     let outline = "";
     let outlineOffset = "";
@@ -433,13 +952,37 @@
       target.style.borderRadius = target.style.borderRadius || "10px";
     } catch {}
 
-    tutorialHighlightState = {
+    return {
       element: target,
       outline,
       outlineOffset,
       boxShadow,
       borderRadius,
     };
+  }
+
+  function applyTutorialHighlights(primaryTarget, extraSelectors = []) {
+    const nodes = [];
+    if (primaryTarget) nodes.push(primaryTarget);
+
+    if (Array.isArray(extraSelectors)) {
+      extraSelectors.forEach((selector) => {
+        const node = resolveTutorialTargetBySelector(selector);
+        if (node) nodes.push(node);
+      });
+    }
+
+    const uniqueNodes = [];
+    const seen = new Set();
+    nodes.forEach((node) => {
+      if (!node || seen.has(node)) return;
+      seen.add(node);
+      uniqueNodes.push(node);
+    });
+
+    tutorialHighlightState = uniqueNodes
+      .map((node) => applyTutorialHighlight(node))
+      .filter(Boolean);
   }
 
   function runTutorialStepAutoAction(step) {
@@ -460,6 +1003,26 @@
     }
 
     if (action === "noop") return true;
+
+    if (action === "select-free-mesa") {
+      const freeBtn = document.querySelector(
+        "#mesasTransOtherTables .mts-table-btn.is-libre",
+      );
+      const anyBtn = document.querySelector(
+        "#mesasTransOtherTables .mts-table-btn",
+      );
+      const fallbackFreeBtn = document.querySelector(
+        "#mesasContextQuickSwitch .mesas-quick-btn.is-libre",
+      );
+      const fallbackAnyBtn = document.querySelector(
+        "#mesasContextQuickSwitch .mesas-quick-btn",
+      );
+      const btn = freeBtn || anyBtn || fallbackFreeBtn || fallbackAnyBtn;
+      if (!btn || typeof btn.click !== "function") return false;
+      tutorialIgnoreClickAdvanceUntil = Date.now() + 350;
+      btn.click();
+      return true;
+    }
 
     return defaultClick();
   }
@@ -497,7 +1060,7 @@
     if (!isMesasInlineActive()) {
       steps.push({
         title: "Entrar en Mesas",
-        text: "Pulsa el boton de cambio de modo para entrar en Mesas.",
+        text: "Pulsa el botón de cambio de modo para entrar en Mesas.",
         target: ".agent-mode-switch-btn",
         advanceOn: "click",
       });
@@ -506,65 +1069,118 @@
     steps.push(
       {
         title: "Vista Transacciones",
-        text: "La pestana Transacciones es el centro del servicio: aqui seleccionas sala y mesa, anades productos y gestionas el ticket activo.",
+        text: "La pestaña Transacciones es el centro del servicio: aquí seleccionas sala y mesa, añades productos y gestionas el ticket activo.",
         target: "#mesasInlineTabTransacciones",
         advanceOn: "click",
         enterAction: "view-transacciones",
       },
       {
         title: "Zona de productos",
-        text: "En esta zona veras todos los productos disponibles para vender. Cada tarjeta representa un articulo y al pulsarlo se anade al ticket de la mesa seleccionada.",
+        text: "En esta zona verás todos los productos disponibles para vender. Cada tarjeta representa un artículo y al pulsarlo se añade al ticket de la mesa seleccionada.",
         target: "#productsGrid",
         advanceOn: "click",
         enterAction: "view-transacciones",
       },
       {
-        title: "Categorias rapidas",
-        text: "La barra de categorias te ayuda a filtrar el catalogo para ir mas rapido en horas punta (bebidas, bolleria, etc.).",
+        title: "Categorías rápidas",
+        text: "La barra de categorías te ayuda a filtrar el catálogo para ir más rápido en horas punta (bebidas, bollería, etc.). Si pulsas una categoría activa de nuevo, se deselecciona y vuelves a ver todos los productos.",
         target: ".categories-wrapper",
-        advanceOn: "click",
+        advanceOn: "manual",
+        interactionLevel: "optional",
         enterAction: "view-transacciones",
       },
       {
         title: "Panel lateral de mesa",
-        text: "En el lateral izquierdo ves la mesa seleccionada, su sala, estado y total actual. Este panel siempre te dice sobre que mesa estas trabajando.",
+        text: "En el lateral izquierdo ves la mesa seleccionada, su sala, estado y total actual. Este panel siempre te dice sobre qué mesa estás trabajando.",
         target: "#mesasTransSidebar",
         advanceOn: "click",
+        interactionLevel: "recommended",
+        blockTargetControls: true,
         enterAction: "view-transacciones",
       },
       {
         title: "Lista de otras mesas",
-        text: "Aqui aparecen las demas mesas para cambiar rapido entre ellas y revisar estado. Los estados habituales son Libre, Ocupada, Reservada y Cuenta.",
+        text: "Aquí aparecen las demás mesas para cambiar rápido entre ellas y revisar estado. Los estados habituales son Libre, Ocupada, Reservada y Cuenta.",
         target: "#mesasTransOtherTables",
-        advanceOn: "click",
+        advanceOn: "manual",
+        interactionLevel: "recommended",
         enterAction: "view-transacciones",
       },
       {
         title: "Selecciona sala",
-        text: "Este selector cambia la sala activa para mostrar solo sus mesas. Es util cuando tienes varias zonas (terraza, interior, barra).",
+        text: "Este selector cambia la sala activa para mostrar solo sus mesas. Es útil cuando tienes varias zonas (terraza, interior, barra).",
         target: "#mesasContextRoomSelect",
-        advanceOn: "click",
+        advanceOn: "manual",
+        interactionLevel: "recommended",
+        interactionCompleteOn: "change",
         enterAction: "view-transacciones",
       },
       {
         title: "Selecciona mesa",
-        text: "Despues eliges la mesa concreta. Todo lo que vendas, edites o consultes se aplicara al ticket de esta mesa.",
+        text: "Después eliges la mesa concreta. Todo lo que vendas, edites o consultes se aplicará al ticket de esta mesa.",
         target: "#mesasContextTableSelect",
-        advanceOn: "click",
+        advanceOn: "manual",
+        interactionLevel: "recommended",
+        interactionCompleteOn: "change",
         enterAction: "view-transacciones",
       },
       {
-        title: "Acciones rapidas",
-        text: "Este bloque agrupa accesos directos para operar sin perder tiempo, por ejemplo abrir tickets de la mesa o ajustar personas.",
-        target: "#mesasTransSidebar .mts-actions",
+        title: "Acciones rápidas",
+        text: "Este bloque agrupa accesos directos para operar sin perder tiempo. En este paso solo verás la zona completa; toca cualquier punto de la zona resaltada para continuar.",
+        target: "#mesasTransQuickActionsSection",
         advanceOn: "click",
+        interactionLevel: "recommended",
+        blockTargetControls: true,
         enterAction: "view-transacciones",
       },
       {
         title: "Tickets de la mesa",
-        text: "Desde este boton abres el listado de tickets/pedidos de la mesa activa para revisar, recuperar o continuar operaciones.",
+        text: "Desde este botón abres el listado de tickets/pedidos de la mesa activa para revisar, recuperar o continuar operaciones.",
         target: "#mesasTransActionTickets",
+        advanceOn: "manual",
+        interactionLevel: "optional",
+        allowInteractionSelectors: ["#parkedTicketsOverlay"],
+        enterAction: "view-transacciones",
+      },
+      {
+        title: "Comensales",
+        text: "Con Personas ajustas el número de comensales de la mesa activa.",
+        target: "#mesasTransActionPersonas",
+        advanceOn: "manual",
+        interactionLevel: "recommended",
+        allowInteractionSelectors: ["#numPadOverlay"],
+        enterAction: "view-transacciones",
+      },
+      {
+        title: "Seleccionar mesa libre",
+        text: "Para reservar, pulsa una mesa libre desde este bloque de cambio rápido para continuar.",
+        stepKey: "select-free-mesa",
+        target:
+          "#mesasTransOtherTables .mts-table-btn.is-libre, #mesasContextQuickSwitch .mesas-quick-btn.is-libre, #mesasTransOtherTables .mts-table-btn, #mesasContextQuickSwitch .mesas-quick-btn",
         advanceOn: "click",
+        interactionLevel: "recommended",
+        allowInteractionSelectors: [
+          "#mesasContextQuickSwitch .mesas-quick-btn.is-libre",
+          "#mesasContextQuickSwitch .mesas-quick-btn",
+          "#mesasTransOtherTables .mts-table-btn.is-libre",
+          "#mesasTransOtherTables .mts-table-btn",
+        ],
+        enterAction: "view-transacciones",
+      },
+      {
+        title: "Reserva de mesa",
+        text: "Con una mesa libre seleccionada, aquí puedes activar reserva y abrir el panel para editar nombre y hora.",
+        target: "#mesasTransReservaBox",
+        advanceOn: "manual",
+        interactionLevel: "recommended",
+        allowInteractionSelectors: [
+          "#mesasTransReservaToggleBtn",
+          "#mesasTransReservaEnabled",
+          "#mesasTransReservaName",
+          "#mesasTransReservaTime",
+          "#qwertyOverlay",
+          "#numPadOverlay",
+        ],
         enterAction: "view-transacciones",
       },
     );
@@ -578,7 +1194,7 @@
     if (!isMesasInlineActive()) {
       steps.push({
         title: "Entrar en Mesas",
-        text: "Pulsa el boton de cambio de modo para abrir Mesas.",
+        text: "Pulsa el botón de cambio de modo para abrir Mesas.",
         target: ".agent-mode-switch-btn",
         advanceOn: "click",
       });
@@ -586,17 +1202,20 @@
 
     steps.push(
       {
-        title: "Tab Transacciones",
-        text: "Ve a Transacciones para trabajar sobre tickets por mesa.",
+        title: "Vista Transacciones",
+        text: "Esta vista se usa para servicio en vivo: productos, mesa activa y acciones rápidas.",
         target: "#mesasInlineTabTransacciones",
-        advanceOn: "click",
+        advanceOn: "manual",
+        interactionLevel: "recommended",
         enterAction: "view-transacciones",
       },
       {
         title: "Abrir tickets",
-        text: "Pulsa Tickets para abrir la lista de pedidos de esa mesa.",
-        target: "#mesasTransActionTickets",
-        advanceOn: "click",
+        text: "Pulsa Tickets para abrir la lista de pedidos de esa mesa y revisarlos.",
+        target: "#mesasTransSidebar .mts-actions",
+        advanceOn: "manual",
+        interactionLevel: "optional",
+        allowInteractionSelectors: ["#parkedTicketsOverlay"],
       },
       {
         title: "Cerrar ventana de tickets",
@@ -606,17 +1225,17 @@
       },
       {
         title: "Vista Mapa",
-        text: "Pulsa Mapa para cambiar de contexto sin tocar datos del ticket.",
+        text: "Pulsa Mapa de Salas para ver de un vistazo el estado visual y ocupación de cada mesa.",
         target: "#mesasInlineTabMapa",
-        advanceOn: "click",
-        enterAction: "view-mapa",
+        advanceOn: "manual",
+        interactionLevel: "recommended",
       },
       {
-        title: "Vista Diseno",
-        text: "Pulsa Diseno para ubicarte en la vista de edicion del plano.",
+        title: "Vista Diseñar Salas",
+        text: "Pulsa Diseñar Salas para editar distribución, posiciones y estructura del plano.",
         target: "#mesasInlineTabDiseno",
-        advanceOn: "click",
-        enterAction: "view-diseno",
+        advanceOn: "manual",
+        interactionLevel: "recommended",
       },
     );
 
@@ -647,25 +1266,25 @@
         title: "Sala del servicio",
         text: "Selecciona una sala para filtrar las mesas visibles.",
         target: "#mesasContextRoomSelect",
-        advanceOn: "click",
+        advanceOn: "manual",
+        interactionLevel: "recommended",
+        interactionCompleteOn: "change",
       },
       {
         title: "Mesa del servicio",
         text: "Elige una mesa y revisa su ticket asociado.",
         target: "#mesasContextTableSelect",
-        advanceOn: "click",
+        advanceOn: "manual",
+        interactionLevel: "recommended",
+        interactionCompleteOn: "change",
       },
       {
         title: "Abrir tickets de mesa",
         text: "Abre Tickets para consultar pedidos de la mesa sin cobrar ni guardar cambios.",
         target: "#mesasTransActionTickets",
-        advanceOn: "click",
-      },
-      {
-        title: "Cerrar tickets",
-        text: "Cierra la ventana y vuelve a la vista principal de Mesas.",
-        target: "#parkedCloseBtn",
-        advanceOn: "click",
+        advanceOn: "manual",
+        interactionLevel: "optional",
+        allowInteractionSelectors: ["#parkedTicketsOverlay"],
       },
     );
 
@@ -686,15 +1305,15 @@
 
     steps.push(
       {
-        title: "Abrir Diseno",
-        text: "En Diseno gestionas salas y estructura del local.",
+        title: "Abrir Diseño",
+        text: "En Diseño gestionas salas y estructura del local.",
         target: "#mesasInlineTabDiseno",
         advanceOn: "click",
         enterAction: "view-diseno",
       },
       {
         title: "Crear sala",
-        text: "Este boton crea una sala nueva. Con Siguiente te llevo al control siguiente sin crear datos automaticamente.",
+        text: "Este botón crea una sala nueva. Con Siguiente te llevo al control siguiente sin crear datos automáticamente.",
         target: "iframe:#designAddRoomBtn",
         advanceOn: "click",
         advanceAction: "noop",
@@ -702,7 +1321,7 @@
       },
       {
         title: "Renombrar sala",
-        text: "Aqui renombras la sala activa. Si quieres practicar, haz clic manualmente.",
+        text: "Aquí renombras la sala activa. Si quieres practicar, haz clic manualmente.",
         target: "iframe:#designRenameRoomBtn",
         advanceOn: "click",
         advanceAction: "noop",
@@ -710,7 +1329,7 @@
       },
       {
         title: "Borrar sala",
-        text: "Este boton borra la sala activa. En tutorial solo te mostramos donde esta.",
+        text: "Este botón borra la sala activa. En tutorial solo te mostramos dónde está.",
         target: "iframe:#designDeleteRoomBtn",
         advanceOn: "click",
         advanceAction: "noop",
@@ -735,8 +1354,8 @@
 
     steps.push(
       {
-        title: "Vista Diseno",
-        text: "Abrimos Diseno para crear y ajustar mesas.",
+        title: "Vista Diseño",
+        text: "Abrimos Diseño para crear y ajustar mesas.",
         target: "#mesasInlineTabDiseno",
         advanceOn: "click",
         enterAction: "view-diseno",
@@ -757,7 +1376,7 @@
       },
       {
         title: "Panel de propiedades",
-        text: "Al seleccionar una mesa, aqui editas nombre, comensales y capacidad.",
+        text: "Al seleccionar una mesa, aquí editas nombre, comensales y capacidad.",
         target: "iframe:#designSelectionPanel",
         advanceOn: "click",
         advanceAction: "noop",
@@ -789,19 +1408,42 @@
         enterAction: "view-transacciones",
       },
       {
-        title: "Boton de reserva",
-        text: "Desde aqui abres el panel de reserva para mesa y hora.",
+        title: "Seleccionar mesa libre",
+        text: "Primero selecciona una mesa libre. Sin mesa activa no podrás crear la reserva.",
+        stepKey: "select-free-mesa",
+        target:
+          "#mesasTransOtherTables .mts-table-btn.is-libre, #mesasContextQuickSwitch .mesas-quick-btn.is-libre, #mesasTransOtherTables .mts-table-btn, #mesasContextQuickSwitch .mesas-quick-btn",
+        advanceOn: "click",
+        interactionLevel: "recommended",
+        allowInteractionSelectors: [
+          "#mesasContextQuickSwitch .mesas-quick-btn.is-libre",
+          "#mesasContextQuickSwitch .mesas-quick-btn",
+          "#mesasTransOtherTables .mts-table-btn.is-libre",
+          "#mesasTransOtherTables .mts-table-btn",
+        ],
+        enterAction: "view-transacciones",
+      },
+      {
+        title: "Botón de reserva",
+        text: "Desde aquí abres el panel de reserva para mesa y hora.",
         target: "#mesasTransReservaToggleBtn",
         advanceOn: "click",
         enterAction: "view-transacciones",
       },
       {
         title: "Panel de reserva",
-        text: "Aqui introduces nombre y hora de la reserva de forma guiada.",
+        text: "Aquí introduces nombre y hora de la reserva de forma guiada.",
         target: "#mesasTransReservaPanel",
         advanceOn: "click",
         advanceAction: "noop",
         enterAction: "view-transacciones",
+      },
+      {
+        title: "Reservar en Mapa y Diseño",
+        text: "También puedes reservar desde Mapa o Diseño: entra en una de esas vistas, selecciona una mesa libre y usa el control de reserva de la barra lateral.",
+        target: "#mesasInlineTabsRow",
+        advanceOn: "manual",
+        interactionLevel: "recommended",
       },
       {
         title: "Control de personas",
@@ -832,26 +1474,30 @@
         title: "Selector de sala",
         text: "Primero define la sala para acotar las mesas visibles.",
         target: "#mesasContextRoomSelect",
-        advanceOn: "click",
+        advanceOn: "manual",
+        interactionLevel: "recommended",
+        interactionCompleteOn: "change",
         enterAction: "view-transacciones",
       },
       {
         title: "Selector de mesa",
-        text: "Despues elige la mesa concreta sobre la que operar.",
+        text: "Después elige la mesa concreta sobre la que operar.",
         target: "#mesasContextTableSelect",
-        advanceOn: "click",
+        advanceOn: "manual",
+        interactionLevel: "recommended",
+        interactionCompleteOn: "change",
         enterAction: "view-transacciones",
       },
       {
-        title: "Cambio rapido",
-        text: "Usa este acceso para ir al siguiente contexto de forma agil.",
+        title: "Cambio rápido",
+        text: "Usa este acceso para ir al siguiente contexto de forma ágil.",
         target: "#mesasContextQuickSwitch",
-        advanceOn: "click",
+        advanceOn: "manual",
         enterAction: "view-transacciones",
       },
       {
         title: "Tarjeta de mesa actual",
-        text: "Aqui confirmas estado, sala y total de la mesa activa.",
+        text: "Aquí confirmas estado, sala y total de la mesa activa.",
         target: ".mts-selected-card",
         advanceOn: "click",
         advanceAction: "noop",
@@ -865,27 +1511,30 @@
   function getTpvTutorialBasicsSteps() {
     return [
       {
-        title: "Categorias",
-        text: "Empieza filtrando por categoria para encontrar productos rapido.",
+        title: "Categorías",
+        text: "Empieza filtrando por categoría para encontrar productos rápido.",
         target: ".categories-wrapper",
-        advanceOn: "click",
+        advanceOn: "manual",
+        interactionLevel: "optional",
       },
       {
         title: "Productos",
-        text: "Pulsa un producto para anadirlo al ticket actual.",
+        text: "Pulsa un producto para añadirlo al ticket actual.",
         target: "#productsGrid",
         advanceOn: "click",
       },
       {
         title: "Lineas del ticket",
-        text: "Aqui se reflejan cantidades, precios y lineas de venta.",
-        target: "#cartLines",
+        text: "Aquí se reflejan cantidades, precios y líneas de venta.",
+        advanceOn: "manual",
+        interactionLevel: "recommended",
+        allowInteractionSelectors: ["#numPadOverlay"],
         advanceOn: "click",
         advanceAction: "noop",
       },
       {
-        title: "Boton Cobrar",
-        text: "Cuando el pedido este listo, continua con Cobrar.",
+        title: "Botón Cobrar",
+        text: "Cuando el pedido esté listo, continúa con Cobrar.",
         target: "#payBtn",
         advanceOn: "click",
       },
@@ -896,18 +1545,18 @@
     return [
       {
         title: "Abrir Tickets",
-        text: "Pulsa Tickets para consultar el historico.",
+        text: "Pulsa Tickets para consultar el histórico.",
         target: "#ticketsListBtn",
         advanceOn: "click",
       },
       {
         title: "Buscador",
-        text: "Filtra por texto o numero para localizar tickets rapido.",
+        text: "Filtra por texto o número para localizar tickets rápido.",
         target: "#ticketsSearch",
         advanceOn: "click",
       },
       {
-        title: "Pestanas de listado",
+        title: "Pestañas de listado",
         text: "Cambia entre tickets de caja actual y otras cajas.",
         target: "#ticketsTabOther",
         advanceOn: "click",
@@ -930,20 +1579,20 @@
         advanceOn: "click",
       },
       {
-        title: "Metodos de pago",
-        text: "Selecciona el metodo de pago adecuado para el cliente.",
+        title: "Métodos de pago",
+        text: "Selecciona el método de pago adecuado para el cliente.",
         target: "#payMethodsList",
         advanceOn: "click",
       },
       {
-        title: "Numero del documento",
+        title: "Número del documento",
         text: "Completa los datos del cobro cuando corresponda.",
         target: "#payNumber",
         advanceOn: "click",
       },
       {
         title: "Cancelar y volver",
-        text: "Este boton cierra el panel sin finalizar cobro para practicar sin riesgo.",
+        text: "Este botón cierra el panel sin finalizar cobro para practicar sin riesgo.",
         target: "#payCancelBtn",
         advanceOn: "click",
       },
@@ -952,12 +1601,12 @@
 
   const tutorialCatalog = {
     tpvBasics: {
-      title: "Apertura rapida del TPV",
+      title: "Apertura rápida del TPV",
       family: "tpv",
       buildSteps: getTpvTutorialBasicsSteps,
     },
     tpvTickets: {
-      title: "Tickets y busqueda",
+      title: "Tickets y búsqueda",
       family: "tpv",
       buildSteps: getTpvTutorialTicketsSteps,
     },
@@ -982,7 +1631,7 @@
       buildSteps: getMesasTutorialServiceSteps,
     },
     mesasContext: {
-      title: "Contexto rapido: sala y mesa",
+      title: "Contexto rápido: sala y mesa",
       family: "mesas",
       buildSteps: getMesasTutorialContextSteps,
     },
@@ -1021,18 +1670,21 @@
       return;
     }
 
+    refreshDynamicSelectFreeMesaStep(step);
+
     if (runEnterAction) {
       await runTutorialStepEnterAction(step);
     }
 
     if (els.tutorialCoachTitle) {
-      const interactiveTag =
-        step?.advanceOn === "click" ? " · Interactivo" : "";
+      const interactiveTag = isStepInteractive(step) ? " · Interactivo" : "";
       els.tutorialCoachTitle.textContent = `${tutorialState.title} (${tutorialState.stepIndex + 1}/${tutorialState.steps.length}${interactiveTag})`;
     }
 
     if (els.tutorialCoachText)
       els.tutorialCoachText.textContent = step.text || "";
+
+    updateCoachVisualByStep(step);
 
     const target = resolveTutorialTarget(step);
     placeCoachForTarget(target);
@@ -1042,18 +1694,30 @@
         tutorialState.stepRetryCount[String(tutorialState.stepIndex)] = 0;
       }
 
-      applyTutorialHighlight(target);
+      applyTutorialHighlights(target, step?.highlightSelectors);
       scrollTutorialTargetIntoView(target);
 
+      // Reaplica resaltado de mesa libre si una actualización externa repinta el bloque.
+      if (step?.stepKey === "select-free-mesa") {
+        scheduleTutorialStepRefresh(900);
+      }
+
       if (els.tutorialCoachHint) {
+        const levelLabel =
+          getStepInteractionLevel(step) === "optional"
+            ? "Interacción opcional"
+            : "Interacción recomendada";
+
         els.tutorialCoachHint.textContent =
           step.advanceOn === "click"
-            ? "Paso interactivo: puedes pulsar el elemento resaltado para avanzar automatico, o usar ▶ para saltar este paso."
-            : "Continua con Siguiente.";
+            ? `${levelLabel}: puedes pulsar el elemento resaltado para avanzar automático, o usar ▶ para saltar este paso.`
+            : step.advanceOn === "manual"
+              ? `${levelLabel}: prueba los controles resaltados y avanza cuando quieras con ▶.`
+              : "Continúa con ▶.";
       }
     } else if (els.tutorialCoachHint) {
       els.tutorialCoachHint.textContent =
-        "Elemento no visible en este momento. Puedes continuar con Siguiente.";
+        "Elemento no visible en este momento. Puedes continuar con ▶.";
       if (step?.target && String(step.target).startsWith("iframe:")) {
         const retryKey = String(tutorialState.stepIndex);
         const retries =
@@ -1073,13 +1737,15 @@
 
     if (els.tutorialCoachNextBtn) {
       els.tutorialCoachNextBtn.textContent =
-        tutorialState.stepIndex >= tutorialState.steps.length - 1
-          ? "Finalizar"
-          : "Siguiente";
+        tutorialState.stepIndex >= tutorialState.steps.length - 1 ? "✓" : "▶";
     }
+
+    updateCoachVisualByStep(step);
   }
 
   function finishTutorial({ completed = false } = {}) {
+    const wasMesasTutorial =
+      String(tutorialState?.tutorialFamily || "") === "mesas";
     if (tutorialRenderRetryTimer) {
       clearTimeout(tutorialRenderRetryTimer);
       tutorialRenderRetryTimer = null;
@@ -1095,18 +1761,36 @@
       }
     }
     tutorialState = null;
+    setTutorialActiveFlag(false);
     document.body.classList.remove("tutorial-mode-active");
     els?.tutorialModeBackdrop?.classList.add("hidden");
     els?.tutorialCoachDock?.classList.add("hidden");
+    els?.tutorialCoachDock?.classList.remove(
+      "tutorial-coach--interactive",
+      "tutorial-coach--manual",
+      "tutorial-coach--manual-done",
+      "tutorial-coach--interactive-optional",
+      "tutorial-coach--interactive-recommended",
+    );
+    els?.tutorialModeBackdrop?.classList.remove(
+      "tutorial-mode-backdrop--interactive",
+      "tutorial-mode-backdrop--interactive-optional",
+      "tutorial-mode-backdrop--interactive-recommended",
+    );
+    els?.tutorialCoachNextBtn?.classList.remove("tutorial-nav-btn--ready");
     els?.tutorialResumeOverlay?.classList.add("hidden");
     pendingResumeChoice = null;
 
     api.endTutorialBlankMode?.();
     restoreDemoSnapshot();
+    restoreMesasBackupIfPending();
+    if (wasMesasTutorial) {
+      api.refreshMesasLayoutFromRemoteNow?.()?.catch?.(() => {});
+    }
     if (completed) {
       toast("Tutorial finalizado.", "ok");
     } else {
-      toast("Tutorial cerrado. Puedes reanudarlo mas tarde.", "info");
+      toast("Tutorial cerrado. Puedes reanudarlo más tarde.", "info");
     }
   }
 
@@ -1191,7 +1875,7 @@
     if (els?.tutorialMesasStatus) {
       els.tutorialMesasStatus.textContent = mesasEnabled
         ? "Disponible en este terminal."
-        : "No disponible: modulo Mesas desactivado para este cliente.";
+        : "No disponible: módulo Mesas desactivado para este cliente.";
     }
 
     if (els?.tutorialTpvStatus) {
@@ -1228,7 +1912,15 @@
       toast("Modo demo temporal activado para Mesas.", "info");
     }
 
+    if (tutorialDef.family === "mesas") {
+      saveMesasBackupBeforeTutorial();
+    }
+
     api.beginTutorialBlankMode?.();
+
+    if (tutorialDef.family === "mesas") {
+      applyMesasTutorialBaseState();
+    }
 
     const wantedStep = Math.max(0, Number(opts?.stepIndex || 0) || 0);
     const boundedStep = Math.min(wantedStep, Math.max(0, steps.length - 1));
@@ -1237,13 +1929,16 @@
     tutorialState = {
       active: true,
       tutorialId,
+      tutorialFamily: String(tutorialDef.family || ""),
       title: tutorialDef.title,
       stepIndex: boundedStep,
       steps,
       stepRetryCount: {},
+      stepInteracted: {},
     };
 
     saveTutorialProgress();
+    setTutorialActiveFlag(true);
 
     document.body.classList.add("tutorial-mode-active");
     els.tutorialModeBackdrop?.classList.remove("hidden");
@@ -1271,7 +1966,7 @@
         `Lo dejaste en el paso ${stepLabel}${total ? ` de ${total}` : ""}.\n\n` +
         "Reanudar: vuelve al paso donde te quedaste.\n" +
         "Empezar de nuevo: arranca desde el primer paso.\n" +
-        "Cancelar: cierra este aviso y no inicia ningun tutorial.";
+        "Cancelar: cierra este aviso y no inicia ningún tutorial.";
     }
 
     els.tutorialResumeOverlay?.classList.remove("hidden");
@@ -1287,7 +1982,7 @@
     if (!def) return;
 
     if (def.family === "mesas" && !isMesasModuleEnabled()) {
-      toast("El modulo Mesas no esta disponible en este terminal.", "warn");
+      toast("El módulo Mesas no está disponible en este terminal.", "warn");
       return;
     }
 
@@ -1328,7 +2023,7 @@
     if (!tutorialState?.active) return;
 
     const currentStep = tutorialState.steps[tutorialState.stepIndex];
-    if (currentStep?.advanceOn === "click") {
+    if (currentStep?.applyActionOnNext === true) {
       runTutorialStepAutoAction(currentStep);
     }
 
@@ -1338,6 +2033,9 @@
     }
 
     tutorialState.stepIndex += 1;
+    if (tutorialState?.stepInteracted) {
+      delete tutorialState.stepInteracted[String(tutorialState.stepIndex)];
+    }
     saveTutorialProgress();
     void renderTutorialStep();
   }
@@ -1346,6 +2044,9 @@
     if (!tutorialState?.active) return;
     if (tutorialState.stepIndex <= 0) return;
     tutorialState.stepIndex -= 1;
+    if (tutorialState?.stepInteracted) {
+      delete tutorialState.stepInteracted[String(tutorialState.stepIndex)];
+    }
     saveTutorialProgress();
     void renderTutorialStep();
   }
@@ -1364,9 +2065,15 @@
         if (!step || step.advanceOn !== "click") return;
 
         const target = resolveTutorialTarget(step);
-        if (!target) return;
+        const allowedTargets = getCurrentStepAllowedInteractionTargets();
 
-        if (target === e.target || target.contains(e.target)) {
+        const matchesPrimary =
+          !!target && (target === e.target || target.contains(e.target));
+        const matchesAllowed = allowedTargets.some(
+          (node) => node === e.target || node.contains(e.target),
+        );
+
+        if (matchesPrimary || matchesAllowed) {
           setTimeout(() => tutorialNextStep(), 0);
         }
       },

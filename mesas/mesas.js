@@ -9,7 +9,11 @@ const TABLES_STATE_KEY = "tpv_tables_state_v3";
 const LEGACY_TABLES_STATE_KEY = "tpv_tables_state_v2";
 const MESAS_LAYOUT_CACHE_KEY = "tpv_mesas_layout_cache_v1";
 const MESAS_LAYOUT_SYNC_QUEUE_KEY = "tpv_mesas_layout_sync_queue_v1";
+const MESAS_LOCAL_EDIT_TS_KEY = "tpv_mesas_local_edit_ts_v1";
+const TUTORIAL_BLANK_MODE_KEY = "tpv_tutorial_blank_mode_v1";
+const TUTORIAL_ACTIVE_KEY = "tpv_tutorial_active_v1";
 const MESAS_REMOTE_SYNC_POLL_MS = 8000;
+const MESAS_REMOTE_PULL_GRACE_MS = 15000;
 const DESIGN_GRID_SIZE = 20;
 const RESERVATION_MIN_TIME = "08:00";
 const RESERVATION_MAX_TIME = "23:30";
@@ -201,32 +205,72 @@ async function askConfirm(message, title = "Mesas") {
 function openVirtualKeyboardForInput(input, mode = "text") {
   try {
     const host = getHostApi();
-    if (input && typeof input.focus === "function") input.focus();
 
-    if (input?.type === "time") {
+    const resolveInput = () => {
+      if (input?.isConnected) return input;
+
+      const doc = input?.ownerDocument || document;
+      const selectors = [];
+      const id = String(input?.id || "").trim();
+      const designField = String(
+        input?.getAttribute?.("data-design-field") || "",
+      ).trim();
+      const tableInput = String(
+        input?.getAttribute?.("data-table-input") || "",
+      ).trim();
+      const tableUid = String(
+        input?.getAttribute?.("data-table-uid") || "",
+      ).trim();
+      const name = String(input?.getAttribute?.("name") || "").trim();
+
+      if (id) selectors.push(`#${id}`);
+      if (designField) selectors.push(`[data-design-field="${designField}"]`);
+      if (tableInput && tableUid) {
+        selectors.push(
+          `[data-table-input="${tableInput}"][data-table-uid="${tableUid}"]`,
+        );
+      }
+      if (name) selectors.push(`[name="${name}"]`);
+
+      for (const selector of selectors) {
+        try {
+          const found = doc.querySelector(selector);
+          if (found) return found;
+        } catch {}
+      }
+
+      return input;
+    };
+
+    const liveInput = resolveInput();
+    if (liveInput && typeof liveInput.focus === "function") liveInput.focus();
+
+    if (liveInput?.type === "time") {
       try {
-        if (typeof input.showPicker === "function") input.showPicker();
+        if (typeof liveInput.showPicker === "function") liveInput.showPicker();
       } catch {}
       return false;
     }
 
     if (mode === "number" && typeof host?.openNumPad === "function") {
-      const current = String(input?.value || "").trim();
+      const current = String(liveInput?.value || "").trim();
       host.openNumPad(
         current || "0",
         (newValue, meta = {}) => {
           if (meta?.phase !== "confirm") return;
+          const target = resolveInput();
+          if (!target) return;
           const raw = String(newValue ?? "").replace(",", ".");
-          if (input?.type === "time") {
+          if (target?.type === "time") {
             const n = Math.max(0, Number(raw) || 0);
             const hh = String(Math.floor(n / 100) % 24).padStart(2, "0");
             const mm = String(Math.floor(n % 100)).padStart(2, "0");
-            input.value = `${hh}:${mm}`;
+            target.value = `${hh}:${mm}`;
           } else {
-            input.value = String(Number(raw) || 0);
+            target.value = String(Number(raw) || 0);
           }
-          input.dispatchEvent(new Event("input", { bubbles: true }));
-          input.dispatchEvent(new Event("change", { bubbles: true }));
+          target.dispatchEvent(new Event("input", { bubbles: true }));
+          target.dispatchEvent(new Event("change", { bubbles: true }));
         },
         "",
         "qty",
@@ -237,16 +281,16 @@ function openVirtualKeyboardForInput(input, mode = "text") {
     }
 
     if (host?.TPV_QWERTY?.openForInput) {
-      if (input && typeof input.focus === "function") {
-        input.focus();
+      if (liveInput && typeof liveInput.focus === "function") {
+        liveInput.focus();
         try {
-          const len = String(input.value || "").length;
-          if (typeof input.setSelectionRange === "function") {
-            input.setSelectionRange(len, len);
+          const len = String(liveInput.value || "").length;
+          if (typeof liveInput.setSelectionRange === "function") {
+            liveInput.setSelectionRange(len, len);
           }
         } catch {}
       }
-      host.TPV_QWERTY.openForInput(input, mode);
+      host.TPV_QWERTY.openForInput(liveInput, mode);
       return true;
     }
   } catch {}
@@ -1223,6 +1267,55 @@ function getMesasLayoutScopedStorageKey() {
   return `${MESAS_LAYOUT_CACHE_KEY}::${slug}`;
 }
 
+function isTutorialBlankModeActive() {
+  try {
+    return String(localStorage.getItem(TUTORIAL_BLANK_MODE_KEY) || "") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function isTutorialPauseActive() {
+  if (isTutorialBlankModeActive()) return true;
+  try {
+    return String(localStorage.getItem(TUTORIAL_ACTIVE_KEY) || "") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function isVirtualKeyboardOpen() {
+  try {
+    const host = getHostApi();
+    const hostDoc = host?.document;
+    if (!hostDoc) return false;
+
+    const qwerty = hostDoc.getElementById?.("qwertyOverlay");
+    if (qwerty && !qwerty.classList.contains("hidden")) return true;
+
+    const numPad = hostDoc.getElementById?.("numPadOverlay");
+    if (numPad && !numPad.classList.contains("hidden")) return true;
+  } catch {}
+
+  return false;
+}
+
+function markMesasLocalEditNow() {
+  try {
+    localStorage.setItem(MESAS_LOCAL_EDIT_TS_KEY, String(Date.now()));
+  } catch {}
+}
+
+function hasRecentMesasLocalEdit() {
+  try {
+    const ts = Number(localStorage.getItem(MESAS_LOCAL_EDIT_TS_KEY) || 0) || 0;
+    if (!ts) return false;
+    return Date.now() - ts < MESAS_REMOTE_PULL_GRACE_MS;
+  } catch {
+    return false;
+  }
+}
+
 function writeTablesStateRaw(payload) {
   if (MESAS_BRIDGE?.setTablesStateRaw) {
     MESAS_BRIDGE.setTablesStateRaw(payload);
@@ -1389,6 +1482,8 @@ async function processMesasLayoutSyncQueue() {
 }
 
 function scheduleRemoteMesasStateSave(nextState) {
+  if (isTutorialPauseActive()) return;
+
   if (mesasRemoteSyncTimer) {
     clearTimeout(mesasRemoteSyncTimer);
     mesasRemoteSyncTimer = null;
@@ -1414,6 +1509,7 @@ function scheduleRemoteMesasStateSave(nextState) {
 function saveState() {
   const payload = JSON.stringify(state);
   writeTablesStateRaw(payload);
+  markMesasLocalEditNow();
   scheduleRemoteMesasStateSave(state);
   if (window.parent && window.parent !== window) {
     try {
@@ -1533,6 +1629,11 @@ function loadState() {
 }
 
 async function hydrateStateFromRemote() {
+  if (isTutorialPauseActive()) return false;
+  if (isVirtualKeyboardOpen()) return false;
+  if (hasRecentMesasLocalEdit()) return false;
+  if (mesasRemoteSyncTimer || mesasRemoteSyncInFlight) return false;
+  if (mesasRemoteQueueDrainInFlight) return false;
   if (mesasRemoteFetchInFlight) return false;
 
   try {
@@ -1556,12 +1657,14 @@ async function hydrateStateFromRemote() {
 }
 
 async function refreshMesasStateFromRemoteWithRerender() {
+  if (isTutorialPauseActive()) return false;
+  if (isVirtualKeyboardOpen()) return false;
   const changed = await hydrateStateFromRemote();
   if (!changed) return false;
 
   // Evita cerrar el contextual mientras se esta consultando/editarndo una mesa.
   if (activeMapTooltipEl && state.activeView === "mapa") return false;
-  if (state.activeView === "diseno" && dragState) return false;
+  if (state.activeView === "diseno") return false;
 
   loadState();
   ensureActiveRoomAndTable();
@@ -1575,6 +1678,8 @@ function startMesasRemoteSyncPolling() {
   if (mesasRemotePollTimer) return;
 
   mesasRemotePollTimer = setInterval(() => {
+    if (isTutorialPauseActive()) return;
+    if (isVirtualKeyboardOpen()) return;
     if (document.hidden) return;
     refreshMesasStateFromRemoteWithRerender().catch(() => {});
   }, MESAS_REMOTE_SYNC_POLL_MS);
@@ -1585,15 +1690,21 @@ function bindMesasRemoteSyncEventsOnce() {
   mesasRemoteEventsBound = true;
 
   document.addEventListener("visibilitychange", () => {
+    if (isTutorialPauseActive()) return;
+    if (isVirtualKeyboardOpen()) return;
     if (document.hidden) return;
     refreshMesasStateFromRemoteWithRerender().catch(() => {});
   });
 
   window.addEventListener("focus", () => {
+    if (isTutorialPauseActive()) return;
+    if (isVirtualKeyboardOpen()) return;
     refreshMesasStateFromRemoteWithRerender().catch(() => {});
   });
 
   window.addEventListener("online", () => {
+    if (isTutorialPauseActive()) return;
+    if (isVirtualKeyboardOpen()) return;
     processMesasLayoutSyncQueue()
       .then(() => refreshMesasStateFromRemoteWithRerender())
       .catch(() => {});
@@ -4237,6 +4348,8 @@ function bindEvents() {
   };
 
   const reloadStateFromStorage = () => {
+    if (isTutorialPauseActive()) return;
+    if (isVirtualKeyboardOpen()) return;
     if (activeMapTooltipEl && state.activeView === "mapa") return;
     if (state.activeView === "diseno" && dragState) return;
 

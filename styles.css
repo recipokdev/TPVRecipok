@@ -1539,6 +1539,17 @@ body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode)
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
 }
 
+/* Estado seleccionado robusto incluso con color de familia personalizado (inline) */
+.category-btn.active {
+  position: relative;
+  z-index: 1;
+  font-weight: 700;
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 5px rgba(17, 24, 39, 0.92),
+    0 8px 20px rgba(15, 23, 42, 0.3);
+}
+
 .category-btn-back {
   background: #ffe9d6;
   border-color: #ffc899;
@@ -7038,6 +7049,13 @@ body.theme-dark .category-btn-back:hover {
   background: #2563eb;
   border-color: #2563eb;
   color: #ffffff;
+}
+
+body.theme-dark .category-btn.active {
+  box-shadow:
+    0 0 0 2px rgba(15, 23, 42, 0.95),
+    0 0 0 5px rgba(255, 255, 255, 0.92),
+    0 8px 20px rgba(0, 0, 0, 0.42);
 }
 
 body.theme-dark .product-tile {
