@@ -252,6 +252,7 @@ const parkedViewState = {
 let parkedCounter = 0;
 // Índice del ticket aparcado actualmente cargado en el carrito
 let currentParkedTicketIndex = null;
+let showParkStockWarning = true;
 
 // ===== [02] Estado operativo: TPVs, agentes y caja =====
 let terminals = [];
@@ -451,6 +452,24 @@ const BARCODE_SCANNER_CFG = {
 let barcodeScannerBuffer = "";
 let barcodeScannerLastKeyAt = 0;
 let barcodeScannerLookupInFlight = false;
+let barcodeCatalogReady = false;
+let barcodeReadyToastAt = 0;
+const BARCODE_LOCAL_PRODUCT_BY_CODE = new Map();
+
+const PRODUCT_THUMB_DB_NAME = "tpv-product-thumbs";
+const PRODUCT_THUMB_DB_VERSION = 1;
+const PRODUCT_THUMB_STORE = "thumbs";
+const PRODUCT_THUMB_MAX_LONG_EDGE = 640;
+const PRODUCT_THUMB_WEBP_QUALITY = 0.74;
+const PRODUCT_THUMB_MAX_CACHE_BYTES = 220 * 1024 * 1024;
+const PRODUCT_THUMB_MAX_CONCURRENT_JOBS = 3;
+
+let PRODUCT_THUMB_DB_PROMISE = null;
+let productThumbTenantKey = "global";
+let productThumbActiveJobs = 0;
+const productThumbPendingJobs = [];
+const PRODUCT_THUMB_OBJECT_URL_BY_KEY = new Map();
+const PRODUCT_THUMB_IN_FLIGHT_BY_KEY = new Map();
 
 // Terminal / caja
 const terminalNameEl = document.getElementById("terminalName");
@@ -639,6 +658,8 @@ function getTpvSyncApiKey() {
 }
 
 async function confirmIfCartExceedsVisibleStock(cartSnapshot) {
+  if (!showParkStockWarning) return true;
+
   const {
     actionVerb = "aparcar",
     modalTitle = "Stock insuficiente para aparcar",
@@ -1376,6 +1397,12 @@ async function loadCustomerDisplayToggle() {
   const el = document.getElementById("customerDisplayToggle");
   if (!el || !window.TPV_CUSTOMER_CTRL?.getEnabled) return;
 
+  const canToggle = isAdminUser();
+  el.disabled = !canToggle;
+  el.title = canToggle
+    ? "Activar/desactivar pantalla cliente"
+    : "Solo usuarios ADMIN pueden cambiar este ajuste.";
+
   try {
     const r = await window.TPV_CUSTOMER_CTRL.getEnabled();
     if (r?.ok) {
@@ -1390,6 +1417,7 @@ let customerDisplayToggleBound = false;
 const OPTIONS_SHOW_PRODUCT_STOCK_KEY = "ui.showProductStockBadge";
 const OPTIONS_ENABLE_STOCK_EDIT_KEY = "ui.enableStockEdition";
 const OPTIONS_ALLOW_CLOSE_WITH_PARKED_KEY = "ui.allowCloseWithParkedTickets";
+const OPTIONS_SHOW_PARK_STOCK_WARNING_KEY = "ui.showParkStockWarning";
 const LS_ALLOW_CLOSE_WITH_PARKED_KEY = "tpv_allowCloseWithParkedTickets";
 const OPTIONS_MESAS_DINERS_FAMILY_RULES_KEY = "ui.mesasDinersFamilyRules";
 const LS_MESAS_DINERS_FAMILY_RULES_KEY = "tpv_mesasDinersFamilyRules";
@@ -1474,6 +1502,23 @@ async function loadAllowCloseWithParkedToggle() {
 
   allowCloseWithParkedTickets = !!enabled;
   if (el) el.checked = allowCloseWithParkedTickets;
+}
+
+async function loadParkStockWarningToggle() {
+  const el = document.getElementById("parkStockWarningToggle");
+  let enabled = true;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(
+      OPTIONS_SHOW_PARK_STOCK_WARNING_KEY,
+    );
+    if (cfgVal !== undefined && cfgVal !== null && cfgVal !== "") {
+      enabled = parseBoolLike(cfgVal, true);
+    }
+  } catch {}
+
+  showParkStockWarning = !!enabled;
+  if (el) el.checked = showParkStockWarning;
 }
 
 async function saveProductStockToggle(enabled) {
@@ -1926,9 +1971,23 @@ function bindMesasComandaFamilyRuleControlsOnce() {
   });
 }
 
+async function saveParkStockWarningToggle(enabled) {
+  showParkStockWarning = !!enabled;
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_SHOW_PARK_STOCK_WARNING_KEY,
+      showParkStockWarning,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar toggle de aviso de stock al aparcar:", e);
+  }
+}
+
 let productStockToggleBound = false;
 let productStockEditionToggleBound = false;
 let allowCloseWithParkedToggleBound = false;
+let parkStockWarningToggleBound = false;
 
 function bindProductStockToggleOnce() {
   if (productStockToggleBound) return;
@@ -1972,6 +2031,19 @@ function bindAllowCloseWithParkedToggleOnce() {
   });
 }
 
+function bindParkStockWarningToggleOnce() {
+  if (parkStockWarningToggleBound) return;
+  parkStockWarningToggleBound = true;
+
+  const el = document.getElementById("parkStockWarningToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+    await saveParkStockWarningToggle(wanted);
+  });
+}
+
 function bindCustomerDisplayToggleOnce() {
   if (customerDisplayToggleBound) return;
   customerDisplayToggleBound = true;
@@ -1980,6 +2052,16 @@ function bindCustomerDisplayToggleOnce() {
   if (!el) return;
 
   el.addEventListener("change", async () => {
+    if (!isAdminUser()) {
+      el.checked = false;
+      toast(
+        "Solo usuarios ADMIN pueden activar la pantalla cliente.",
+        "warn",
+        "Pantalla cliente",
+      );
+      return;
+    }
+
     const wanted = !!el.checked;
 
     try {
@@ -1987,6 +2069,13 @@ function bindCustomerDisplayToggleOnce() {
 
       if (!r?.ok) {
         el.checked = !wanted;
+        if (String(r?.error || "").toUpperCase() === "FORBIDDEN") {
+          toast(
+            "No tienes permisos para cambiar este ajuste.",
+            "warn",
+            "Pantalla cliente",
+          );
+        }
         console.error("[OPTIONS] set customer display failed:", r?.error);
         return;
       }
@@ -5822,6 +5911,7 @@ async function runBootFlow() {
     await loadAllowCloseWithParkedToggle?.();
     await loadMesasDinersFamilyRules?.();
     await loadMesasComandaFamilyRules?.();
+    await loadParkStockWarningToggle?.();
 
     // 3) Datos
     await loadDataFromApi();
@@ -6286,10 +6376,15 @@ function renderProducts() {
 
   filtered.forEach((p) => {
     const tile = document.createElement("div");
+    const imageInfo = getProductImageInfoForProduct(p);
+    const thumbUrl = getProductThumbObjectUrlSync(imageInfo);
+    const fallbackUrl = String(p.imageUrl || "").trim();
 
-    const safeImageUrl = BROKEN_PRODUCT_IMAGE_URLS.has(String(p.imageUrl || ""))
+    const safeImageUrl = BROKEN_PRODUCT_IMAGE_URLS.has(
+      String(fallbackUrl || ""),
+    )
       ? ""
-      : p.imageUrl;
+      : String(thumbUrl || "").trim();
 
     tile.className = "product-tile" + (safeImageUrl ? "" : " no-img");
     tile.dataset.productId = String(Number(p.baseProductId || p.id || 0));
@@ -6378,6 +6473,10 @@ function renderProducts() {
         const wrap = tile.querySelector(".product-img-wrapper");
         if (wrap) wrap.innerHTML = "";
       };
+    }
+
+    if (!safeImageUrl && imageInfo?.url) {
+      hydrateProductTileImage(tile, imageInfo, fallbackUrl).catch(() => {});
     }
 
     if (canEditPrices) {
@@ -7048,9 +7147,21 @@ function renderCart() {
   container.innerHTML = "";
 
   let total = 0;
+  const cartItems = Array.isArray(cart) ? cart : [];
+
+  // Índice O(1) de hijos por parent para evitar filtrar todo el carrito por línea.
+  const packChildrenByParent = new Map();
+  cartItems.forEach((line) => {
+    const parentId = String(line?.meta?.parentPackLineId || "").trim();
+    if (!parentId) return;
+    if (!packChildrenByParent.has(parentId)) {
+      packChildrenByParent.set(parentId, []);
+    }
+    packChildrenByParent.get(parentId).push(line);
+  });
 
   // ✅ UI: solo pintamos líneas NO-hijas
-  const uiLines = getVisibleCartLines(cart);
+  const uiLines = getVisibleCartLines(cartItems);
 
   uiLines.forEach((item) => {
     const unitPrice = getUnitGross(item);
@@ -7069,9 +7180,17 @@ function renderCart() {
     const lineTxt = eur(lineTotal);
 
     // ✅ Si es pack, añadimos "Incluye: ..."
-    const includesText = isPackParentLine(item)
-      ? buildPackIncludesText(item)
-      : "";
+    let includesText = "";
+    if (isPackParentLine(item)) {
+      const parentChildren =
+        packChildrenByParent.get(String(item._lineId)) || [];
+      includesText = buildPackIncludesTextFromChildren(
+        parentChildren,
+        item._lineId,
+      );
+      if (!includesText) includesText = getPackIncludesTextForParentLine(item);
+      if (includesText) includesText = "Incluye: " + includesText;
+    }
 
     row.innerHTML = `
       <div class="cart-line-name">
@@ -7115,12 +7234,22 @@ function renderCart() {
   if (totalEl) totalEl.textContent = eur(total);
 
   // ✅ Completar imageUrl para customer display (solo si no viene)
-  cart.forEach((item) => {
-    if (!item.imageUrl && item.id != null) {
-      const p = (products || []).find((x) => String(x.id) === String(item.id));
-      if (p?.imageUrl) item.imageUrl = p.imageUrl;
-    }
-  });
+  // Completa imageUrl sin O(n*m): crea índice solo si hay líneas sin imagen.
+  if (cartItems.some((item) => !item?.imageUrl && item?.id != null)) {
+    const imageByProductId = new Map();
+    (Array.isArray(products) ? products : []).forEach((p) => {
+      const id = String(Number(p?.id || 0));
+      if (!id || id === "0") return;
+      if (!p?.imageUrl) return;
+      if (!imageByProductId.has(id)) imageByProductId.set(id, p.imageUrl);
+    });
+
+    cartItems.forEach((item) => {
+      if (item?.imageUrl || item?.id == null) return;
+      const hit = imageByProductId.get(String(Number(item.id || 0)));
+      if (hit) item.imageUrl = hit;
+    });
+  }
 
   // ✅ si empieza un nuevo carrito, dejamos de mostrar el último cobrado
   // (excepto durante un cobro en curso)
@@ -9550,10 +9679,11 @@ window.addEventListener("keydown", (e) => {
     tagName === "TEXTAREA" ||
     tagName === "SELECT";
 
-  if (isEditable) return;
-
   const now = Date.now();
   const key = String(e.key || "");
+
+  // Si el foco está en un campo editable, solo atendemos secuencia de lector (dígitos + Enter).
+  if (isEditable && !/^\d$/.test(key) && key !== "Enter") return;
 
   if (/^\d$/.test(key)) {
     if (now - barcodeScannerLastKeyAt > BARCODE_SCANNER_CFG.interKeyMaxMs) {
@@ -13087,6 +13217,15 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
     throw new Error("No pude crear rectificativa.");
   }
 
+  // Sincroniza predictor también para la rectificativa (serie R)
+  updateFastTicketNumberByConfirmedCode({
+    codigo: docRect?.codigo,
+    codserie: payloadRect?.serie,
+    numero2: payloadRect?.numero2,
+    idfactura: rectId,
+    terminalId: idtpv,
+  });
+
   // Parche packs rectificativa
   try {
     const desiredRect = negateDesiredByPid(desiredBaseByPid);
@@ -13179,6 +13318,16 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
     codpago: newCod,
     codagente: codagente || undefined,
     numero2: n2New,
+  });
+
+  // Sincroniza predictor de numeracion para siguientes preimpresiones
+  // (este flujo crea un ticket nuevo real fuera del cobro normal onPay).
+  updateFastTicketNumberByConfirmedCode({
+    codigo: docNew?.codigo,
+    codserie: payloadNew?.serie,
+    numero2: payloadNew?.numero2,
+    idfactura: newId,
+    terminalId: idtpv,
   });
 
   // Log
@@ -16297,6 +16446,7 @@ async function loadDataFromApi(opts = {}) {
 
     // base de la API, tal cual (normalmente acaba en /api/3)
     apiBaseUrl = (cfg.baseUrl || "").replace(/\/+$/, "");
+    setProductThumbTenantFromApiBase(apiBaseUrl);
 
     // base para ficheros: quitamos el sufijo /api/loquesea
     filesBaseUrl = apiBaseUrl.replace(/\/api\/[^/]+$/i, "");
@@ -16579,8 +16729,11 @@ async function loadDataFromApi(opts = {}) {
       });
 
       products = combined;
+      rebuildBarcodeLocalIndex(variantesData);
     } else {
       products = [];
+      BARCODE_LOCAL_PRODUCT_BY_CODE.clear();
+      barcodeCatalogReady = false;
     }
 
     // Packs: carga normal (no forzada) para evitar reintentos agresivos.
@@ -17335,9 +17488,16 @@ function openPostPayModal({ docCode, total, cambio }) {
 
   // botones (solo hace falta setearlos una vez, pero ok si lo dejas aquí)
   if (postPayPrintBtn) {
-    setPostPayPrintEnabled(!!(window.lastTicket || lastTicket));
+    const canPrintPendingDraft = !!window.__POSTPAY_PENDING__?.printDraft;
+    setPostPayPrintEnabled(
+      !!(window.lastTicket || lastTicket || canPrintPendingDraft),
+    );
     postPayPrintBtn.onclick = async () => {
-      const t = window.lastTicket || lastTicket;
+      const t =
+        window.lastTicket ||
+        lastTicket ||
+        window.__POSTPAY_PENDING__?.printDraft ||
+        null;
       if (!t) return;
       await printTicket(t);
     };
@@ -17381,6 +17541,7 @@ function openPostPayModal({ docCode, total, cambio }) {
 const OPTIONS_AUTOPRINT_KEY = "tpv_autoPrint";
 const OPTIONS_AUTO_COMANDA_ON_SAVE_KEY = "tpv_autoComandaOnSave";
 const OPTIONS_GROUPLINES_KEY = "tpv_groupLines";
+const FAST_TICKET_NUMBER_CACHE_KEY = "tpv_fast_ticket_number_by_type_v1";
 
 const optionsBtn = document.getElementById("optionsBtn");
 const optionsOverlay = document.getElementById("optionsOverlay");
@@ -17428,6 +17589,228 @@ const PRINTER_COMANDA_REAL_KEY = "tpv_printerComandaRealName";
 
 function isLinux() {
   return window.TPV_ENV?.platform === "linux";
+}
+
+function getFastTicketNumberCache() {
+  try {
+    const raw = localStorage.getItem(FAST_TICKET_NUMBER_CACHE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function setFastTicketNumberCache(cache) {
+  try {
+    const safe = cache && typeof cache === "object" ? cache : {};
+    localStorage.setItem(FAST_TICKET_NUMBER_CACHE_KEY, JSON.stringify(safe));
+  } catch {}
+}
+
+function parseTrailingInteger(value) {
+  const s = String(value || "").trim();
+  if (!s) return null;
+  const m = s.match(/(\d+)(?!.*\d)/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeTicketCode(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase();
+}
+
+function formatTicketPrintDate(date = new Date()) {
+  const d = date instanceof Date ? date : new Date(date);
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = String(d.getFullYear());
+  return `${dd}-${mm}-${yyyy}`;
+}
+
+function formatTicketPrintTimeWithSeconds(date = new Date()) {
+  const d = date instanceof Date ? date : new Date(date);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${hh}:${mi}:${ss}`;
+}
+
+function getSalePrintTypeKey({ codserie, numero2, terminalId }) {
+  const serie = String(codserie || "S")
+    .trim()
+    .toUpperCase();
+  const n2 = String(numero2 || "").trim();
+  const term = String(terminalId || "NO_TERM").trim();
+  return `${term}::${serie}::${n2 || "_"}`;
+}
+
+function formatPredictedCode(lastCode, nextNumber, codserie) {
+  const safeNext = Math.max(1, Number(nextNumber || 1));
+  const baseSerie = String(codserie || "S")
+    .trim()
+    .toUpperCase();
+
+  const fromLast = String(lastCode || "").trim();
+  if (fromLast) {
+    const m = fromLast.match(/(\d+)(?!.*\d)/);
+    if (m) {
+      const width = m[1].length;
+      const padded = String(safeNext).padStart(width, "0");
+      return fromLast.replace(/(\d+)(?!.*\d)/, padded);
+    }
+  }
+
+  return `${baseSerie}-${safeNext}`;
+}
+
+function predictNextTicketCodeByType({ codserie, numero2, terminalId }) {
+  const typeKey = getSalePrintTypeKey({ codserie, numero2, terminalId });
+  const cache = getFastTicketNumberCache();
+  const entry = cache[typeKey] || {};
+
+  const lastNumber = Number(entry?.lastNumber || 0);
+  const nextNumber =
+    Number.isFinite(lastNumber) && lastNumber > 0 ? lastNumber + 1 : 1;
+  const code = formatPredictedCode(entry?.lastCode, nextNumber, codserie);
+
+  return {
+    typeKey,
+    nextNumber,
+    code,
+    hasHistory: Number.isFinite(lastNumber) && lastNumber > 0,
+  };
+}
+
+function hasFastTicketPredictorHistory({ codserie, numero2, terminalId }) {
+  const typeKey = getSalePrintTypeKey({ codserie, numero2, terminalId });
+  const cache = getFastTicketNumberCache();
+  const entry = cache[typeKey] || {};
+  const lastNumber = Number(entry?.lastNumber || 0);
+  return Number.isFinite(lastNumber) && lastNumber > 0;
+}
+
+function updateFastTicketNumberByConfirmedCode({
+  codigo,
+  codserie,
+  numero2,
+  idfactura,
+  terminalId,
+}) {
+  const cache = getFastTicketNumberCache();
+
+  const code = String(codigo || "").trim();
+  const trailing = parseTrailingInteger(code);
+  const fallbackId = Number(idfactura || 0);
+
+  const confirmedNumber =
+    trailing !== null ? trailing : fallbackId > 0 ? fallbackId : null;
+
+  if (confirmedNumber === null) return;
+
+  const upsertCacheKey = (key) => {
+    const prev = cache[key] || {};
+    const prevNumber = Number(prev?.lastNumber || 0);
+
+    // Nunca retroceder numeracion si llega una confirmacion antigua
+    if (Number.isFinite(prevNumber) && prevNumber > confirmedNumber) return;
+
+    cache[key] = {
+      lastNumber: confirmedNumber,
+      lastCode: code || String(confirmedNumber),
+      updatedAt: Date.now(),
+    };
+  };
+
+  // 1) clave exacta (terminal + serie + tipo/numero2)
+  const exactTypeKey = getSalePrintTypeKey({ codserie, numero2, terminalId });
+  upsertCacheKey(exactTypeKey);
+
+  // 2) clave base (terminal + serie sin tipo): usada por ventas normales
+  //    Esto evita repetir numero tras reemisiones/cambios de pago con numero2 especial.
+  const baseTypeKey = getSalePrintTypeKey({
+    codserie,
+    numero2: "",
+    terminalId,
+  });
+  upsertCacheKey(baseTypeKey);
+
+  setFastTicketNumberCache(cache);
+}
+
+function buildFastPreApiTicketDraft(ticketPayload, cartSnapshot) {
+  const serie = String(ticketPayload?.codserie || ticketPayload?.serie || "S")
+    .trim()
+    .toUpperCase();
+  const numero2 = String(ticketPayload?.numero2 || "").trim();
+  const terminalId = String(
+    ticketPayload?.idtpv || currentTerminal?.id || "",
+  ).trim();
+
+  const predicted = predictNextTicketCodeByType({
+    codserie: serie,
+    numero2,
+    terminalId,
+  });
+
+  // Primera venta de este terminal/tipo: no preimprimir hasta tener referencia real
+  if (!predicted?.hasHistory) return null;
+
+  const total = (Array.isArray(cartSnapshot) ? cartSnapshot : []).reduce(
+    (sum, item) => {
+      const unit = getUnitGross(item);
+      return sum + unit * (item?.qty || 1);
+    },
+    0,
+  );
+
+  const now = new Date();
+  const fecha = formatTicketPrintDate(now);
+  const hora = formatTicketPrintTimeWithSeconds(now);
+
+  const clientName =
+    (cartClientInput && (cartClientInput.value || "").trim()) || "Cliente";
+
+  const pagos = Array.isArray(ticketPayload?._payBreakdown)
+    ? ticketPayload._payBreakdown
+    : Array.isArray(ticketPayload?.pagos)
+      ? ticketPayload.pagos
+      : [];
+
+  const cambio = Number(ticketPayload?._payCambio ?? 0) || 0;
+
+  const cashMeta = buildCashTicketMeta({
+    pagos,
+    total: Number(total || 0),
+    cambio,
+  });
+
+  return {
+    numero: predicted.code,
+    paymentMethod: ticketPayload?.paymentMethod || "—",
+    fecha,
+    hora,
+    total: Number(total || 0),
+    terminalName: currentTerminal ? currentTerminal.name || "" : "",
+    agentName: currentAgent ? currentAgent.name || "" : "",
+    clientName,
+    company: companyInfo ? { ...companyInfo } : null,
+    lineas: Array.isArray(cartSnapshot) ? cartSnapshot : [],
+    pagos,
+    cambio,
+    cashMeta,
+    tpv_efectivo: Number(cashMeta?.cashTendered || 0),
+    tpv_cambio: Number(cambio || 0),
+    codserie: serie,
+    numero2,
+    idfactura: null,
+    idtpv: terminalId || null,
+    _fastPreApiPrint: true,
+  };
 }
 
 function getSavedPrinterReal() {
@@ -17545,6 +17928,12 @@ function refreshOptionsUI() {
   );
   if (allowCloseParkedToggle)
     allowCloseParkedToggle.checked = !!allowCloseWithParkedTickets;
+
+  const parkStockWarningToggle = document.getElementById(
+    "parkStockWarningToggle",
+  );
+  if (parkStockWarningToggle)
+    parkStockWarningToggle.checked = !!showParkStockWarning;
 
   const t = document.getElementById("priceEditModeToggle");
   if (t) {
@@ -17755,6 +18144,8 @@ async function openOptions() {
 
   bindMesasComandaFamilyRuleControlsOnce();
   await loadMesasComandaFamilyRules();
+  bindParkStockWarningToggleOnce();
+  await loadParkStockWarningToggle();
 
   bindAutostartToggleOnce();
   await loadAutostartToggle();
@@ -18502,6 +18893,10 @@ function buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot) {
     clientName,
     company: companyInfo ? { ...companyInfo } : null,
     lineas: cartSnapshot,
+    codserie:
+      factura.codserie || safePayload.codserie || safePayload.serie || null,
+    numero2: factura.numero2 || safePayload.numero2 || null,
+    idfactura: factura.idfactura || factura.id || null,
   };
 }
 
@@ -18664,6 +19059,70 @@ function calcTotalsAndTaxMap(lineas, totalsOnlyPositive) {
   }
 
   return { totalToShow, taxMap };
+}
+
+function enrichPrintableLineLabels(lineas) {
+  const rows = Array.isArray(lineas) ? lineas : [];
+  if (!rows.length) return rows;
+
+  return rows.map((row) => {
+    const r = row && typeof row === "object" ? { ...row } : row;
+    if (!r || typeof r !== "object") return r;
+
+    const mainCandidate = String(
+      r.ref ??
+        r.referencia ??
+        r.codigo ??
+        r.codarticulo ??
+        r.sku ??
+        r.name ??
+        r.nombre ??
+        "",
+    ).trim();
+
+    const descCandidate = String(
+      r.secondaryName ?? r.descripcion2 ?? r.detalle ?? r.descripcion ?? "",
+    ).trim();
+
+    // Si ya tenemos nombre o descripción útiles, no tocamos nada.
+    if (mainCandidate || descCandidate) return r;
+
+    const productId =
+      Number(r.idproducto || r.baseProductId || r.id || r.idarticulo || 0) || 0;
+
+    if (!productId || !Array.isArray(products) || !products.length) return r;
+
+    const source = products.find(
+      (p) =>
+        Number(p?.id || p?.idproducto || p?.baseProductId || 0) === productId,
+    );
+
+    if (!source) return r;
+
+    const fallbackName = String(
+      source?.referencia ||
+        source?.name ||
+        source?.nombre ||
+        source?.descripcion ||
+        "",
+    ).trim();
+    const fallbackDesc = String(
+      source?.descripcion ||
+        source?.descripcion2 ||
+        source?.secondaryName ||
+        "",
+    ).trim();
+
+    if (fallbackName && !String(r.name || r.nombre || "").trim()) {
+      r.name = fallbackName;
+    }
+
+    if (fallbackDesc && !String(r.descripcion || r.descripcion2 || "").trim()) {
+      r.descripcion = fallbackDesc;
+    }
+
+    return r;
+  });
 }
 
 function renderItemsHtml(doc, lineas) {
@@ -19377,11 +19836,19 @@ async function printTicket(ticket) {
       );
     }
 
+    // Refuerzo offline: rellena nombre/descripcion cuando faltan en líneas.
+    lineas = enrichPrintableLineLabels(lineas);
+
     // 3) Totales + IVA/Base
-    const { totalToShow, taxMap } = calcTotalsAndTaxMap(
+    const { totalToShow: computedTotalToShow, taxMap } = calcTotalsAndTaxMap(
       lineas,
       totalsOnlyPositive,
     );
+
+    const ticketTotalNumber = Number(ticket?.total);
+    const totalToShow = Number.isFinite(ticketTotalNumber)
+      ? round2(ticketTotalNumber)
+      : computedTotalToShow;
 
     if (TPV_E2E_MODE) {
       try {
@@ -21147,6 +21614,8 @@ async function onPayButtonClick() {
   let cartSnapshot = [];
   let saleLineIds = new Set();
   let saleCommitted = false;
+  let didFastAutoPrint = false;
+  let fastPreApiPrintedNumber = "";
 
   try {
     if (isPayingNow) return;
@@ -21305,6 +21774,29 @@ async function onPayButtonClick() {
       "Ventas"
     ).toString();
 
+    const hasFastPredictorHistory = hasFastTicketPredictorHistory({
+      codserie: ticketPayload?.codserie || ticketPayload?.serie,
+      numero2: ticketPayload?.numero2,
+      terminalId: ticketPayload?.idtpv || currentTerminal?.id,
+    });
+
+    // Preprint rapido: imprime antes de enviar a API usando numeracion local por serie/tipo
+    if (isAutoPrintEnabled() && hasFastPredictorHistory) {
+      try {
+        const preApiDraft = buildFastPreApiTicketDraft(
+          ticketPayload,
+          cartSnapshot,
+        );
+        if (preApiDraft) {
+          fastPreApiPrintedNumber = String(preApiDraft?.numero || "").trim();
+          await printTicket(preApiDraft);
+          didFastAutoPrint = true;
+        }
+      } catch (e) {
+        console.warn("Preprint rápido falló:", e?.message || e);
+      }
+    }
+
     const payingItemsSnapshot = buildCustomerItemsFromCart(cartSnapshot);
     customerDisplayOverride = {
       items: payingItemsSnapshot,
@@ -21434,6 +21926,31 @@ async function onPayButtonClick() {
     }
 
     const idfactura = facturaResp?.idfactura || null;
+
+    const confirmedTicketCode = String(facturaResp?.codigo || "").trim();
+    const hadFastPreprintCode = String(fastPreApiPrintedNumber || "").trim();
+    if (hadFastPreprintCode && confirmedTicketCode) {
+      const preNorm = normalizeTicketCode(hadFastPreprintCode);
+      const fsNorm = normalizeTicketCode(confirmedTicketCode);
+      if (preNorm !== fsNorm) {
+        logFeatureWarn("COBRO", "preprint-code-mismatch", {
+          requestId,
+          preprintedCode: hadFastPreprintCode,
+          confirmedCode: confirmedTicketCode,
+          codserie: ticketPayload?.codserie || ticketPayload?.serie || null,
+          numero2: ticketPayload?.numero2 || null,
+          terminalId: ticketPayload?.idtpv || currentTerminal?.id || null,
+        });
+      }
+    }
+
+    updateFastTicketNumberByConfirmedCode({
+      codigo: facturaResp?.codigo,
+      codserie: ticketPayload?.codserie || ticketPayload?.serie,
+      numero2: ticketPayload?.numero2,
+      idfactura,
+      terminalId: ticketPayload?.idtpv || currentTerminal?.id,
+    });
 
     // ✅ CLAVE: parchear cantidades de líneas gratis del pack
     if (idfactura) {
@@ -21650,7 +22167,7 @@ async function onPayButtonClick() {
       "Cobrar",
     );
 
-    if (isAutoPrintEnabled()) {
+    if (isAutoPrintEnabled() && !didFastAutoPrint) {
       try {
         await printTicket(lastTicket);
       } catch (e) {
@@ -24795,13 +25312,37 @@ async function openPayModal(total) {
 
         // post-pago inmediato
         try {
+          const pendingPayload = {
+            codserie: result.serie || "S",
+            serie: result.serie || "S",
+            numero2: result.numero || "",
+            idtpv: Number(currentTerminal?.id || 0) || null,
+            paymentMethod:
+              (Array.isArray(pagos) && pagos.length === 1
+                ? pagos?.[0]?.descripcion || pagos?.[0]?.codpago
+                : "Mixto") || "—",
+            _payBreakdown: Array.isArray(pagos) ? pagos : [],
+            _payCambio: Number(result.cambio || 0),
+          };
+
+          const canFastPrintPending = hasFastTicketPredictorHistory({
+            codserie: pendingPayload.codserie,
+            numero2: pendingPayload.numero2,
+            terminalId: pendingPayload.idtpv || currentTerminal?.id,
+          });
+
+          const pendingDraft = canFastPrintPending
+            ? buildFastPreApiTicketDraft(pendingPayload, cart)
+            : null;
+
           window.__POSTPAY_PENDING__ = {
             docCode: "Procesando…",
             total: result.total,
             cambio: result.cambio,
+            printDraft: pendingDraft,
           };
           openPostPayModal(window.__POSTPAY_PENDING__);
-          setPostPayPrintEnabled(false);
+          setPostPayPrintEnabled(!!pendingDraft);
         } catch {}
 
         cleanupBtns();
@@ -27661,9 +28202,47 @@ function resolveProductFromVariantRow(variantRow) {
   return null;
 }
 
+function rebuildBarcodeLocalIndex(variantesData = []) {
+  BARCODE_LOCAL_PRODUCT_BY_CODE.clear();
+
+  const rows = Array.isArray(variantesData) ? variantesData : [];
+  rows.forEach((row) => {
+    const barcode = normalizeBarcodeInput(
+      row?.codbarras || row?.barcode || row?.ean13 || row?.ean || "",
+    );
+    if (!barcode) return;
+
+    const product = resolveProductFromVariantRow(row);
+    const productId = Number(product?.id || 0) || 0;
+    if (!productId) return;
+
+    if (!BARCODE_LOCAL_PRODUCT_BY_CODE.has(barcode)) {
+      BARCODE_LOCAL_PRODUCT_BY_CODE.set(barcode, productId);
+    }
+  });
+
+  barcodeCatalogReady = BARCODE_LOCAL_PRODUCT_BY_CODE.size > 0;
+}
+
+function resolveBarcodeProductFromLocalIndex(barcode) {
+  const normalized = normalizeBarcodeInput(barcode);
+  if (!normalized) return null;
+
+  const productId = Number(BARCODE_LOCAL_PRODUCT_BY_CODE.get(normalized) || 0);
+  if (!productId || !Array.isArray(products) || !products.length) return null;
+
+  return products.find((p) => Number(p?.id || 0) === productId) || null;
+}
+
 async function addProductToCartByBarcode(barcode) {
   const normalized = normalizeBarcodeInput(barcode);
   if (!normalized) return false;
+
+  const localHit = resolveBarcodeProductFromLocalIndex(normalized);
+  if (localHit) {
+    await addToCart(localHit, 1);
+    return true;
+  }
 
   const variants = await fetchApiResourceWithParams("variantes", {
     "filter[codbarras]": normalized,
@@ -27691,6 +28270,14 @@ async function handleBarcodeScannerSubmit(barcode) {
 
   const normalized = normalizeBarcodeInput(barcode);
   if (!normalized || normalized.length < BARCODE_SCANNER_CFG.minLength) return;
+
+  if (!barcodeCatalogReady && (!Array.isArray(products) || !products.length)) {
+    const now = Date.now();
+    if (now - barcodeReadyToastAt > 1500) {
+      barcodeReadyToastAt = now;
+      toast("Lector de barras inicializando catálogo...", "info", "Barcode");
+    }
+  }
 
   barcodeScannerLookupInFlight = true;
   try {
@@ -28198,6 +28785,363 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
 
 // Mapa global: { [idproducto]: { idfile, url, filename, mimetype, orden } }
 let PRODUCT_IMAGES_MAP = {};
+
+function hashStringFast(input) {
+  const s = String(input || "");
+  let hash = 5381;
+  for (let i = 0; i < s.length; i += 1) {
+    hash = (hash * 33) ^ s.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function normalizeThumbTenantFromApiBase(baseUrl) {
+  const raw = String(baseUrl || "")
+    .trim()
+    .toLowerCase();
+  if (!raw) return "global";
+  return hashStringFast(raw);
+}
+
+function setProductThumbTenantFromApiBase(baseUrl) {
+  productThumbTenantKey = normalizeThumbTenantFromApiBase(baseUrl);
+}
+
+function buildProductThumbCacheKey(imageInfo) {
+  const idfile = Number(imageInfo?.idfile || 0) || 0;
+  const src = String(imageInfo?.url || "").trim();
+  const srcHash = hashStringFast(src);
+  return `${productThumbTenantKey}:${idfile || "url"}:${srcHash}`;
+}
+
+function getProductImageInfoForProduct(product) {
+  const productId = Number(product?.baseProductId || product?.id || 0) || 0;
+  if (!productId) return null;
+  return PRODUCT_IMAGES_MAP[productId] || null;
+}
+
+function runProductThumbJob(task) {
+  return new Promise((resolve, reject) => {
+    const start = () => {
+      productThumbActiveJobs += 1;
+      Promise.resolve()
+        .then(task)
+        .then(resolve, reject)
+        .finally(() => {
+          productThumbActiveJobs = Math.max(0, productThumbActiveJobs - 1);
+          const next = productThumbPendingJobs.shift();
+          if (next) next();
+        });
+    };
+
+    if (productThumbActiveJobs < PRODUCT_THUMB_MAX_CONCURRENT_JOBS) start();
+    else productThumbPendingJobs.push(start);
+  });
+}
+
+function idbRequestToPromise(req) {
+  return new Promise((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error("IndexedDB error"));
+  });
+}
+
+function idbTxDone(tx) {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error("IndexedDB tx error"));
+    tx.onabort = () => reject(tx.error || new Error("IndexedDB tx aborted"));
+  });
+}
+
+function openProductThumbDb() {
+  if (PRODUCT_THUMB_DB_PROMISE) return PRODUCT_THUMB_DB_PROMISE;
+
+  if (typeof indexedDB === "undefined") {
+    PRODUCT_THUMB_DB_PROMISE = Promise.resolve(null);
+    return PRODUCT_THUMB_DB_PROMISE;
+  }
+
+  PRODUCT_THUMB_DB_PROMISE = new Promise((resolve, reject) => {
+    const req = indexedDB.open(PRODUCT_THUMB_DB_NAME, PRODUCT_THUMB_DB_VERSION);
+
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      let store;
+
+      if (!db.objectStoreNames.contains(PRODUCT_THUMB_STORE)) {
+        store = db.createObjectStore(PRODUCT_THUMB_STORE, {
+          keyPath: "cacheKey",
+        });
+      } else {
+        store = req.transaction.objectStore(PRODUCT_THUMB_STORE);
+      }
+
+      if (!store.indexNames.contains("byTenant")) {
+        store.createIndex("byTenant", "tenant", { unique: false });
+      }
+    };
+
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () =>
+      reject(req.error || new Error("No se pudo abrir cache"));
+  }).catch((e) => {
+    console.warn("[thumb-cache] IndexedDB no disponible:", e?.message || e);
+    return null;
+  });
+
+  return PRODUCT_THUMB_DB_PROMISE;
+}
+
+async function getProductThumbRecord(cacheKey) {
+  const db = await openProductThumbDb();
+  if (!db) return null;
+
+  const tx = db.transaction(PRODUCT_THUMB_STORE, "readonly");
+  const store = tx.objectStore(PRODUCT_THUMB_STORE);
+  const record = await idbRequestToPromise(store.get(cacheKey));
+  await idbTxDone(tx);
+  return record || null;
+}
+
+async function putProductThumbRecord(record) {
+  const db = await openProductThumbDb();
+  if (!db) return;
+
+  const tx = db.transaction(PRODUCT_THUMB_STORE, "readwrite");
+  tx.objectStore(PRODUCT_THUMB_STORE).put(record);
+  await idbTxDone(tx);
+}
+
+function materializeProductThumbObjectUrl(cacheKey, blob) {
+  if (!(blob instanceof Blob)) return "";
+
+  const prev = PRODUCT_THUMB_OBJECT_URL_BY_KEY.get(cacheKey);
+  if (prev) {
+    try {
+      URL.revokeObjectURL(prev);
+    } catch {}
+  }
+
+  const objectUrl = URL.createObjectURL(blob);
+  PRODUCT_THUMB_OBJECT_URL_BY_KEY.set(cacheKey, objectUrl);
+  return objectUrl;
+}
+
+function getProductThumbObjectUrlSync(imageInfo) {
+  if (!imageInfo?.url) return "";
+  const cacheKey = buildProductThumbCacheKey(imageInfo);
+  return PRODUCT_THUMB_OBJECT_URL_BY_KEY.get(cacheKey) || "";
+}
+
+async function getProductThumbObjectUrlFromDb(cacheKey) {
+  const record = await getProductThumbRecord(cacheKey);
+  if (!record?.blob) return "";
+
+  const now = Date.now();
+  putProductThumbRecord({
+    ...record,
+    atime: now,
+    updatedAt: record.updatedAt || now,
+  }).catch(() => {});
+
+  return materializeProductThumbObjectUrl(cacheKey, record.blob);
+}
+
+async function enforceProductThumbTenantLimit(tenant) {
+  const db = await openProductThumbDb();
+  if (!db) return;
+
+  const txRead = db.transaction(PRODUCT_THUMB_STORE, "readonly");
+  const list = await idbRequestToPromise(
+    txRead.objectStore(PRODUCT_THUMB_STORE).index("byTenant").getAll(tenant),
+  );
+  await idbTxDone(txRead);
+
+  const rows = Array.isArray(list) ? list : [];
+  let total = rows.reduce((sum, row) => sum + Number(row?.size || 0), 0);
+  if (total <= PRODUCT_THUMB_MAX_CACHE_BYTES) return;
+
+  const sorted = rows
+    .slice()
+    .sort((a, b) => Number(a?.atime || 0) - Number(b?.atime || 0));
+
+  const txWrite = db.transaction(PRODUCT_THUMB_STORE, "readwrite");
+  const store = txWrite.objectStore(PRODUCT_THUMB_STORE);
+
+  for (const row of sorted) {
+    if (total <= PRODUCT_THUMB_MAX_CACHE_BYTES) break;
+    const cacheKey = String(row?.cacheKey || "");
+    if (!cacheKey) continue;
+
+    total -= Number(row?.size || 0);
+    store.delete(cacheKey);
+
+    const objUrl = PRODUCT_THUMB_OBJECT_URL_BY_KEY.get(cacheKey);
+    if (objUrl) {
+      try {
+        URL.revokeObjectURL(objUrl);
+      } catch {}
+      PRODUCT_THUMB_OBJECT_URL_BY_KEY.delete(cacheKey);
+    }
+  }
+
+  await idbTxDone(txWrite);
+}
+
+async function buildThumbnailBlobFromSourceBlob(sourceBlob) {
+  const bitmap = await createImageBitmap(sourceBlob);
+  try {
+    const srcW = Math.max(1, Number(bitmap.width || 0));
+    const srcH = Math.max(1, Number(bitmap.height || 0));
+    const longest = Math.max(srcW, srcH);
+    const scale =
+      longest > PRODUCT_THUMB_MAX_LONG_EDGE
+        ? PRODUCT_THUMB_MAX_LONG_EDGE / longest
+        : 1;
+
+    const outW = Math.max(1, Math.round(srcW * scale));
+    const outH = Math.max(1, Math.round(srcH * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+
+    const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
+    if (!ctx) return sourceBlob;
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, outW, outH);
+    ctx.drawImage(bitmap, 0, 0, outW, outH);
+
+    const encode = (quality) =>
+      new Promise((resolve) => {
+        canvas.toBlob(
+          (blob) => resolve(blob || sourceBlob),
+          "image/webp",
+          quality,
+        );
+      });
+
+    let outBlob = await encode(PRODUCT_THUMB_WEBP_QUALITY);
+
+    if (outBlob.size > 320 * 1024) {
+      outBlob = await encode(0.62);
+    }
+
+    return outBlob;
+  } finally {
+    try {
+      bitmap.close();
+    } catch {}
+  }
+}
+
+async function persistProductThumbBlob(cacheKey, imageInfo, blob) {
+  const now = Date.now();
+  await putProductThumbRecord({
+    cacheKey,
+    tenant: productThumbTenantKey,
+    idfile: Number(imageInfo?.idfile || 0) || 0,
+    sourceUrl: String(imageInfo?.url || ""),
+    mimeType: String(blob?.type || "image/webp"),
+    size: Number(blob?.size || 0),
+    updatedAt: now,
+    atime: now,
+    blob,
+  });
+
+  enforceProductThumbTenantLimit(productThumbTenantKey).catch(() => {});
+}
+
+async function ensureProductThumbObjectUrl(imageInfo) {
+  if (!imageInfo?.url) return "";
+
+  const cacheKey = buildProductThumbCacheKey(imageInfo);
+  const inMemory = PRODUCT_THUMB_OBJECT_URL_BY_KEY.get(cacheKey);
+  if (inMemory) return inMemory;
+
+  const fromDb = await getProductThumbObjectUrlFromDb(cacheKey);
+  if (fromDb) return fromDb;
+
+  if (TPV_STATE?.offline) return "";
+
+  if (PRODUCT_THUMB_IN_FLIGHT_BY_KEY.has(cacheKey)) {
+    return PRODUCT_THUMB_IN_FLIGHT_BY_KEY.get(cacheKey);
+  }
+
+  const promise = runProductThumbJob(async () => {
+    const resp = await fetch(String(imageInfo.url), {
+      cache: "force-cache",
+      credentials: "omit",
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+    const sourceBlob = await resp.blob();
+    const thumbBlob = await buildThumbnailBlobFromSourceBlob(sourceBlob);
+
+    await persistProductThumbBlob(cacheKey, imageInfo, thumbBlob);
+    return materializeProductThumbObjectUrl(cacheKey, thumbBlob);
+  })
+    .catch((e) => {
+      console.warn(
+        "[thumb-cache] No se pudo crear miniatura:",
+        e?.message || e,
+      );
+      return "";
+    })
+    .finally(() => {
+      PRODUCT_THUMB_IN_FLIGHT_BY_KEY.delete(cacheKey);
+    });
+
+  PRODUCT_THUMB_IN_FLIGHT_BY_KEY.set(cacheKey, promise);
+  return promise;
+}
+
+async function hydrateProductTileImage(tile, imageInfo, fallbackUrl = "") {
+  if (!tile || !imageInfo?.url) return;
+
+  const cacheKey = buildProductThumbCacheKey(imageInfo);
+  tile.dataset.thumbCacheKey = cacheKey;
+
+  const thumbUrl = await ensureProductThumbObjectUrl(imageInfo);
+  if (!tile.isConnected) return;
+  if (String(tile.dataset.thumbCacheKey || "") !== cacheKey) return;
+
+  const finalSrc = String(thumbUrl || fallbackUrl || "").trim();
+  if (!finalSrc) return;
+
+  const wrap = tile.querySelector(".product-img-wrapper");
+  if (!wrap) return;
+
+  if (!wrap.querySelector("img.product-img")) {
+    wrap.innerHTML = `<img src="${escapeHtml(finalSrc)}" class="product-img" loading="lazy" decoding="async">`;
+  } else {
+    const img = wrap.querySelector("img.product-img");
+    if (img) img.setAttribute("src", finalSrc);
+  }
+
+  tile.classList.remove("no-img");
+}
+
+async function clearProductImageThumbCache() {
+  PRODUCT_THUMB_IN_FLIGHT_BY_KEY.clear();
+  productThumbPendingJobs.length = 0;
+
+  PRODUCT_THUMB_OBJECT_URL_BY_KEY.forEach((url) => {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {}
+  });
+  PRODUCT_THUMB_OBJECT_URL_BY_KEY.clear();
+
+  const db = await openProductThumbDb();
+  if (!db) return;
+
+  const tx = db.transaction(PRODUCT_THUMB_STORE, "readwrite");
+  tx.objectStore(PRODUCT_THUMB_STORE).clear();
+  await idbTxDone(tx);
+}
 
 // ===== [07] API media fallback: attachedfiles =====
 async function fetchAttachedImageFiles() {
@@ -29508,6 +30452,15 @@ async function createRefundInFacturaScriptsPackAware(
     throw new Error("No pude crear la rectificativa.");
   }
 
+  // Sincroniza predictor para la serie de rectificativas.
+  updateFastTicketNumberByConfirmedCode({
+    codigo: docRect?.codigo,
+    codserie: payloadRect?.serie,
+    numero2: payloadRect?.numero2,
+    idfactura: rectId,
+    terminalId: idtpv,
+  });
+
   // =========================================================
   // 3) PATCH packs en líneas hijas gratis
   // =========================================================
@@ -30110,6 +31063,9 @@ window.addEventListener("keydown", async (e) => {
       localStorage.removeItem(API_RESOURCES_CACHE_TS_KEY);
       localStorage.removeItem(API_MISSING_RESOURCES_CACHE_KEY);
       localStorage.removeItem(API_MISSING_RESOURCES_CACHE_TS_KEY);
+    } catch {}
+    try {
+      await clearProductImageThumbCache();
     } catch {}
 
     // opcional: cualquier cache que uses
@@ -30844,12 +31800,23 @@ async function syncQueueNow() {
           const facturaSyncResp =
             resp?.doc || resp?.factura || resp?.data || resp || null;
 
+          const doc = resp?.doc || resp?.factura || resp?.data || resp || null;
+
           const idfactura =
             resp?.idfactura ||
             resp?.doc?.idfactura ||
             resp?.data?.idfactura ||
             resp?.factura?.idfactura ||
             null;
+
+          // Mantener predictor al día también con ventas sincronizadas desde cola offline.
+          updateFastTicketNumberByConfirmedCode({
+            codigo: doc?.codigo,
+            codserie: item?.payload?.serie || item?.payload?.codserie,
+            numero2: item?.payload?.numero2,
+            idfactura,
+            terminalId: item?.payload?.idtpv,
+          });
 
           // Guardar timestamp local->remoto si lo usas
           if (idfactura && item.createdAt) {

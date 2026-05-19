@@ -262,6 +262,10 @@
           >
         </span>
 
+        <span
+          id="cashInfo"
+          class="terminal-meta-item terminal-meta-value terminal-meta-cash"
+        ></span>
         <span id="agentMissingBadge" class="terminal-meta-alert"
           >⚠️ Falta agente</span
         >
@@ -2302,7 +2306,6 @@
                   <span class="slider"></span>
                 </label>
               </div>
-
               <div class="opt-row opt-row-stack">
                 <div class="opt-row-txt">
                   <div class="opt-row-title">
@@ -2327,6 +2330,20 @@
                   </button>
                 </div>
                 <div id="mesasDinersFamilyList" class="opt-chip-list"></div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Aviso de stock al aparcar</div>
+                  <div class="opt-row-sub">
+                    Muestra un aviso si la cantidad a aparcar supera el stock.
+                    Si no trabajas con stock, puedes desactivarlo.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="parkStockWarningToggle" />
+                  <span class="slider"></span>
+                </label>
               </div>
             </div>
           </section>
