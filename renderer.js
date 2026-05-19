@@ -88,6 +88,7 @@ const parkedViewState = {
 let parkedCounter = 0;
 // Índice del ticket aparcado actualmente cargado en el carrito
 let currentParkedTicketIndex = null;
+let showParkStockWarning = true;
 
 // ===== [02] Estado operativo: TPVs, agentes y caja =====
 let terminals = [];
@@ -286,6 +287,24 @@ const BARCODE_SCANNER_CFG = {
 let barcodeScannerBuffer = "";
 let barcodeScannerLastKeyAt = 0;
 let barcodeScannerLookupInFlight = false;
+let barcodeCatalogReady = false;
+let barcodeReadyToastAt = 0;
+const BARCODE_LOCAL_PRODUCT_BY_CODE = new Map();
+
+const PRODUCT_THUMB_DB_NAME = "tpv-product-thumbs";
+const PRODUCT_THUMB_DB_VERSION = 1;
+const PRODUCT_THUMB_STORE = "thumbs";
+const PRODUCT_THUMB_MAX_LONG_EDGE = 640;
+const PRODUCT_THUMB_WEBP_QUALITY = 0.74;
+const PRODUCT_THUMB_MAX_CACHE_BYTES = 220 * 1024 * 1024;
+const PRODUCT_THUMB_MAX_CONCURRENT_JOBS = 3;
+
+let PRODUCT_THUMB_DB_PROMISE = null;
+let productThumbTenantKey = "global";
+let productThumbActiveJobs = 0;
+const productThumbPendingJobs = [];
+const PRODUCT_THUMB_OBJECT_URL_BY_KEY = new Map();
+const PRODUCT_THUMB_IN_FLIGHT_BY_KEY = new Map();
 
 // Terminal / caja
 const terminalNameEl = document.getElementById("terminalName");
@@ -463,6 +482,8 @@ function getTpvSyncApiKey() {
 }
 
 async function confirmIfCartExceedsVisibleStock(cartSnapshot) {
+  if (!showParkStockWarning) return true;
+
   const requestedByProduct = new Map();
 
   (Array.isArray(cartSnapshot) ? cartSnapshot : []).forEach((it) => {
@@ -1177,6 +1198,12 @@ async function loadCustomerDisplayToggle() {
   const el = document.getElementById("customerDisplayToggle");
   if (!el || !window.TPV_CUSTOMER_CTRL?.getEnabled) return;
 
+  const canToggle = isAdminUser();
+  el.disabled = !canToggle;
+  el.title = canToggle
+    ? "Activar/desactivar pantalla cliente"
+    : "Solo usuarios ADMIN pueden cambiar este ajuste.";
+
   try {
     const r = await window.TPV_CUSTOMER_CTRL.getEnabled();
     if (r?.ok) {
@@ -1191,6 +1218,7 @@ let customerDisplayToggleBound = false;
 const OPTIONS_SHOW_PRODUCT_STOCK_KEY = "ui.showProductStockBadge";
 const OPTIONS_ENABLE_STOCK_EDIT_KEY = "ui.enableStockEdition";
 const OPTIONS_ALLOW_CLOSE_WITH_PARKED_KEY = "ui.allowCloseWithParkedTickets";
+const OPTIONS_SHOW_PARK_STOCK_WARNING_KEY = "ui.showParkStockWarning";
 const LS_ALLOW_CLOSE_WITH_PARKED_KEY = "tpv_allowCloseWithParkedTickets";
 let showProductStockBadge = false;
 let enableProductStockEdition = false;
@@ -1271,6 +1299,23 @@ async function loadAllowCloseWithParkedToggle() {
   if (el) el.checked = allowCloseWithParkedTickets;
 }
 
+async function loadParkStockWarningToggle() {
+  const el = document.getElementById("parkStockWarningToggle");
+  let enabled = true;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(
+      OPTIONS_SHOW_PARK_STOCK_WARNING_KEY,
+    );
+    if (cfgVal !== undefined && cfgVal !== null && cfgVal !== "") {
+      enabled = parseBoolLike(cfgVal, true);
+    }
+  } catch {}
+
+  showParkStockWarning = !!enabled;
+  if (el) el.checked = showParkStockWarning;
+}
+
 async function saveProductStockToggle(enabled) {
   showProductStockBadge = !!enabled;
 
@@ -1317,9 +1362,23 @@ async function saveAllowCloseWithParkedToggle(enabled) {
   }
 }
 
+async function saveParkStockWarningToggle(enabled) {
+  showParkStockWarning = !!enabled;
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_SHOW_PARK_STOCK_WARNING_KEY,
+      showParkStockWarning,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar toggle de aviso de stock al aparcar:", e);
+  }
+}
+
 let productStockToggleBound = false;
 let productStockEditionToggleBound = false;
 let allowCloseWithParkedToggleBound = false;
+let parkStockWarningToggleBound = false;
 
 function bindProductStockToggleOnce() {
   if (productStockToggleBound) return;
@@ -1363,6 +1422,19 @@ function bindAllowCloseWithParkedToggleOnce() {
   });
 }
 
+function bindParkStockWarningToggleOnce() {
+  if (parkStockWarningToggleBound) return;
+  parkStockWarningToggleBound = true;
+
+  const el = document.getElementById("parkStockWarningToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+    await saveParkStockWarningToggle(wanted);
+  });
+}
+
 function bindCustomerDisplayToggleOnce() {
   if (customerDisplayToggleBound) return;
   customerDisplayToggleBound = true;
@@ -1371,6 +1443,16 @@ function bindCustomerDisplayToggleOnce() {
   if (!el) return;
 
   el.addEventListener("change", async () => {
+    if (!isAdminUser()) {
+      el.checked = false;
+      toast(
+        "Solo usuarios ADMIN pueden activar la pantalla cliente.",
+        "warn",
+        "Pantalla cliente",
+      );
+      return;
+    }
+
     const wanted = !!el.checked;
 
     try {
@@ -1378,6 +1460,13 @@ function bindCustomerDisplayToggleOnce() {
 
       if (!r?.ok) {
         el.checked = !wanted;
+        if (String(r?.error || "").toUpperCase() === "FORBIDDEN") {
+          toast(
+            "No tienes permisos para cambiar este ajuste.",
+            "warn",
+            "Pantalla cliente",
+          );
+        }
         console.error("[OPTIONS] set customer display failed:", r?.error);
         return;
       }
@@ -3077,6 +3166,7 @@ async function runBootFlow() {
     await loadProductStockToggle?.();
     await loadProductStockEditionToggle?.();
     await loadAllowCloseWithParkedToggle?.();
+    await loadParkStockWarningToggle?.();
 
     // 3) Datos
     await loadDataFromApi();
@@ -3522,10 +3612,15 @@ function renderProducts() {
 
   filtered.forEach((p) => {
     const tile = document.createElement("div");
+    const imageInfo = getProductImageInfoForProduct(p);
+    const thumbUrl = getProductThumbObjectUrlSync(imageInfo);
+    const fallbackUrl = String(p.imageUrl || "").trim();
 
-    const safeImageUrl = BROKEN_PRODUCT_IMAGE_URLS.has(String(p.imageUrl || ""))
+    const safeImageUrl = BROKEN_PRODUCT_IMAGE_URLS.has(
+      String(fallbackUrl || ""),
+    )
       ? ""
-      : p.imageUrl;
+      : String(thumbUrl || "").trim();
 
     tile.className = "product-tile" + (safeImageUrl ? "" : " no-img");
     tile.dataset.productId = String(Number(p.baseProductId || p.id || 0));
@@ -3614,6 +3709,10 @@ function renderProducts() {
         const wrap = tile.querySelector(".product-img-wrapper");
         if (wrap) wrap.innerHTML = "";
       };
+    }
+
+    if (!safeImageUrl && imageInfo?.url) {
+      hydrateProductTileImage(tile, imageInfo, fallbackUrl).catch(() => {});
     }
 
     if (canEditPrices) {
@@ -4206,9 +4305,21 @@ function renderCart() {
   container.innerHTML = "";
 
   let total = 0;
+  const cartItems = Array.isArray(cart) ? cart : [];
+
+  // Índice O(1) de hijos por parent para evitar filtrar todo el carrito por línea.
+  const packChildrenByParent = new Map();
+  cartItems.forEach((line) => {
+    const parentId = String(line?.meta?.parentPackLineId || "").trim();
+    if (!parentId) return;
+    if (!packChildrenByParent.has(parentId)) {
+      packChildrenByParent.set(parentId, []);
+    }
+    packChildrenByParent.get(parentId).push(line);
+  });
 
   // ✅ UI: solo pintamos líneas NO-hijas
-  const uiLines = getVisibleCartLines(cart);
+  const uiLines = getVisibleCartLines(cartItems);
 
   uiLines.forEach((item) => {
     const unitPrice = getUnitGross(item);
@@ -4227,9 +4338,17 @@ function renderCart() {
     const lineTxt = eur(lineTotal);
 
     // ✅ Si es pack, añadimos "Incluye: ..."
-    const includesText = isPackParentLine(item)
-      ? buildPackIncludesText(item)
-      : "";
+    let includesText = "";
+    if (isPackParentLine(item)) {
+      const parentChildren =
+        packChildrenByParent.get(String(item._lineId)) || [];
+      includesText = buildPackIncludesTextFromChildren(
+        parentChildren,
+        item._lineId,
+      );
+      if (!includesText) includesText = getPackIncludesTextForParentLine(item);
+      if (includesText) includesText = "Incluye: " + includesText;
+    }
 
     row.innerHTML = `
       <div class="cart-line-name">
@@ -4273,12 +4392,22 @@ function renderCart() {
   if (totalEl) totalEl.textContent = eur(total);
 
   // ✅ Completar imageUrl para customer display (solo si no viene)
-  cart.forEach((item) => {
-    if (!item.imageUrl && item.id != null) {
-      const p = (products || []).find((x) => String(x.id) === String(item.id));
-      if (p?.imageUrl) item.imageUrl = p.imageUrl;
-    }
-  });
+  // Completa imageUrl sin O(n*m): crea índice solo si hay líneas sin imagen.
+  if (cartItems.some((item) => !item?.imageUrl && item?.id != null)) {
+    const imageByProductId = new Map();
+    (Array.isArray(products) ? products : []).forEach((p) => {
+      const id = String(Number(p?.id || 0));
+      if (!id || id === "0") return;
+      if (!p?.imageUrl) return;
+      if (!imageByProductId.has(id)) imageByProductId.set(id, p.imageUrl);
+    });
+
+    cartItems.forEach((item) => {
+      if (item?.imageUrl || item?.id == null) return;
+      const hit = imageByProductId.get(String(Number(item.id || 0)));
+      if (hit) item.imageUrl = hit;
+    });
+  }
 
   // ✅ si empieza un nuevo carrito, dejamos de mostrar el último cobrado
   // (excepto durante un cobro en curso)
@@ -6475,10 +6604,11 @@ window.addEventListener("keydown", (e) => {
     tagName === "TEXTAREA" ||
     tagName === "SELECT";
 
-  if (isEditable) return;
-
   const now = Date.now();
   const key = String(e.key || "");
+
+  // Si el foco está en un campo editable, solo atendemos secuencia de lector (dígitos + Enter).
+  if (isEditable && !/^\d$/.test(key) && key !== "Enter") return;
 
   if (/^\d$/.test(key)) {
     if (now - barcodeScannerLastKeyAt > BARCODE_SCANNER_CFG.interKeyMaxMs) {
@@ -12051,6 +12181,7 @@ async function loadDataFromApi(opts = {}) {
 
     // base de la API, tal cual (normalmente acaba en /api/3)
     apiBaseUrl = (cfg.baseUrl || "").replace(/\/+$/, "");
+    setProductThumbTenantFromApiBase(apiBaseUrl);
 
     // base para ficheros: quitamos el sufijo /api/loquesea
     filesBaseUrl = apiBaseUrl.replace(/\/api\/[^/]+$/i, "");
@@ -12333,8 +12464,11 @@ async function loadDataFromApi(opts = {}) {
       });
 
       products = combined;
+      rebuildBarcodeLocalIndex(variantesData);
     } else {
       products = [];
+      BARCODE_LOCAL_PRODUCT_BY_CODE.clear();
+      barcodeCatalogReady = false;
     }
 
     // Packs: carga normal (no forzada) para evitar reintentos agresivos.
@@ -13458,6 +13592,12 @@ function refreshOptionsUI() {
   if (allowCloseParkedToggle)
     allowCloseParkedToggle.checked = !!allowCloseWithParkedTickets;
 
+  const parkStockWarningToggle = document.getElementById(
+    "parkStockWarningToggle",
+  );
+  if (parkStockWarningToggle)
+    parkStockWarningToggle.checked = !!showParkStockWarning;
+
   const t = document.getElementById("priceEditModeToggle");
   if (t) {
     t.disabled = !isAdminUser();
@@ -13656,6 +13796,9 @@ async function openOptions() {
 
   bindAllowCloseWithParkedToggleOnce();
   await loadAllowCloseWithParkedToggle();
+
+  bindParkStockWarningToggleOnce();
+  await loadParkStockWarningToggle();
 
   bindAutostartToggleOnce();
   await loadAutostartToggle();
@@ -14312,6 +14455,70 @@ function calcTotalsAndTaxMap(lineas, totalsOnlyPositive) {
   }
 
   return { totalToShow, taxMap };
+}
+
+function enrichPrintableLineLabels(lineas) {
+  const rows = Array.isArray(lineas) ? lineas : [];
+  if (!rows.length) return rows;
+
+  return rows.map((row) => {
+    const r = row && typeof row === "object" ? { ...row } : row;
+    if (!r || typeof r !== "object") return r;
+
+    const mainCandidate = String(
+      r.ref ??
+        r.referencia ??
+        r.codigo ??
+        r.codarticulo ??
+        r.sku ??
+        r.name ??
+        r.nombre ??
+        "",
+    ).trim();
+
+    const descCandidate = String(
+      r.secondaryName ?? r.descripcion2 ?? r.detalle ?? r.descripcion ?? "",
+    ).trim();
+
+    // Si ya tenemos nombre o descripción útiles, no tocamos nada.
+    if (mainCandidate || descCandidate) return r;
+
+    const productId =
+      Number(r.idproducto || r.baseProductId || r.id || r.idarticulo || 0) || 0;
+
+    if (!productId || !Array.isArray(products) || !products.length) return r;
+
+    const source = products.find(
+      (p) =>
+        Number(p?.id || p?.idproducto || p?.baseProductId || 0) === productId,
+    );
+
+    if (!source) return r;
+
+    const fallbackName = String(
+      source?.referencia ||
+        source?.name ||
+        source?.nombre ||
+        source?.descripcion ||
+        "",
+    ).trim();
+    const fallbackDesc = String(
+      source?.descripcion ||
+        source?.descripcion2 ||
+        source?.secondaryName ||
+        "",
+    ).trim();
+
+    if (fallbackName && !String(r.name || r.nombre || "").trim()) {
+      r.name = fallbackName;
+    }
+
+    if (fallbackDesc && !String(r.descripcion || r.descripcion2 || "").trim()) {
+      r.descripcion = fallbackDesc;
+    }
+
+    return r;
+  });
 }
 
 function renderItemsHtml(doc, lineas) {
@@ -15015,11 +15222,19 @@ async function printTicket(ticket) {
       );
     }
 
+    // Refuerzo offline: rellena nombre/descripcion cuando faltan en líneas.
+    lineas = enrichPrintableLineLabels(lineas);
+
     // 3) Totales + IVA/Base
-    const { totalToShow, taxMap } = calcTotalsAndTaxMap(
+    const { totalToShow: computedTotalToShow, taxMap } = calcTotalsAndTaxMap(
       lineas,
       totalsOnlyPositive,
     );
+
+    const ticketTotalNumber = Number(ticket?.total);
+    const totalToShow = Number.isFinite(ticketTotalNumber)
+      ? round2(ticketTotalNumber)
+      : computedTotalToShow;
 
     if (TPV_E2E_MODE) {
       try {
@@ -20051,9 +20266,47 @@ function resolveProductFromVariantRow(variantRow) {
   return null;
 }
 
+function rebuildBarcodeLocalIndex(variantesData = []) {
+  BARCODE_LOCAL_PRODUCT_BY_CODE.clear();
+
+  const rows = Array.isArray(variantesData) ? variantesData : [];
+  rows.forEach((row) => {
+    const barcode = normalizeBarcodeInput(
+      row?.codbarras || row?.barcode || row?.ean13 || row?.ean || "",
+    );
+    if (!barcode) return;
+
+    const product = resolveProductFromVariantRow(row);
+    const productId = Number(product?.id || 0) || 0;
+    if (!productId) return;
+
+    if (!BARCODE_LOCAL_PRODUCT_BY_CODE.has(barcode)) {
+      BARCODE_LOCAL_PRODUCT_BY_CODE.set(barcode, productId);
+    }
+  });
+
+  barcodeCatalogReady = BARCODE_LOCAL_PRODUCT_BY_CODE.size > 0;
+}
+
+function resolveBarcodeProductFromLocalIndex(barcode) {
+  const normalized = normalizeBarcodeInput(barcode);
+  if (!normalized) return null;
+
+  const productId = Number(BARCODE_LOCAL_PRODUCT_BY_CODE.get(normalized) || 0);
+  if (!productId || !Array.isArray(products) || !products.length) return null;
+
+  return products.find((p) => Number(p?.id || 0) === productId) || null;
+}
+
 async function addProductToCartByBarcode(barcode) {
   const normalized = normalizeBarcodeInput(barcode);
   if (!normalized) return false;
+
+  const localHit = resolveBarcodeProductFromLocalIndex(normalized);
+  if (localHit) {
+    await addToCart(localHit, 1);
+    return true;
+  }
 
   const variants = await fetchApiResourceWithParams("variantes", {
     "filter[codbarras]": normalized,
@@ -20081,6 +20334,14 @@ async function handleBarcodeScannerSubmit(barcode) {
 
   const normalized = normalizeBarcodeInput(barcode);
   if (!normalized || normalized.length < BARCODE_SCANNER_CFG.minLength) return;
+
+  if (!barcodeCatalogReady && (!Array.isArray(products) || !products.length)) {
+    const now = Date.now();
+    if (now - barcodeReadyToastAt > 1500) {
+      barcodeReadyToastAt = now;
+      toast("Lector de barras inicializando catálogo...", "info", "Barcode");
+    }
+  }
 
   barcodeScannerLookupInFlight = true;
   try {
@@ -20588,6 +20849,363 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
 
 // Mapa global: { [idproducto]: { idfile, url, filename, mimetype, orden } }
 let PRODUCT_IMAGES_MAP = {};
+
+function hashStringFast(input) {
+  const s = String(input || "");
+  let hash = 5381;
+  for (let i = 0; i < s.length; i += 1) {
+    hash = (hash * 33) ^ s.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function normalizeThumbTenantFromApiBase(baseUrl) {
+  const raw = String(baseUrl || "")
+    .trim()
+    .toLowerCase();
+  if (!raw) return "global";
+  return hashStringFast(raw);
+}
+
+function setProductThumbTenantFromApiBase(baseUrl) {
+  productThumbTenantKey = normalizeThumbTenantFromApiBase(baseUrl);
+}
+
+function buildProductThumbCacheKey(imageInfo) {
+  const idfile = Number(imageInfo?.idfile || 0) || 0;
+  const src = String(imageInfo?.url || "").trim();
+  const srcHash = hashStringFast(src);
+  return `${productThumbTenantKey}:${idfile || "url"}:${srcHash}`;
+}
+
+function getProductImageInfoForProduct(product) {
+  const productId = Number(product?.baseProductId || product?.id || 0) || 0;
+  if (!productId) return null;
+  return PRODUCT_IMAGES_MAP[productId] || null;
+}
+
+function runProductThumbJob(task) {
+  return new Promise((resolve, reject) => {
+    const start = () => {
+      productThumbActiveJobs += 1;
+      Promise.resolve()
+        .then(task)
+        .then(resolve, reject)
+        .finally(() => {
+          productThumbActiveJobs = Math.max(0, productThumbActiveJobs - 1);
+          const next = productThumbPendingJobs.shift();
+          if (next) next();
+        });
+    };
+
+    if (productThumbActiveJobs < PRODUCT_THUMB_MAX_CONCURRENT_JOBS) start();
+    else productThumbPendingJobs.push(start);
+  });
+}
+
+function idbRequestToPromise(req) {
+  return new Promise((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error("IndexedDB error"));
+  });
+}
+
+function idbTxDone(tx) {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error("IndexedDB tx error"));
+    tx.onabort = () => reject(tx.error || new Error("IndexedDB tx aborted"));
+  });
+}
+
+function openProductThumbDb() {
+  if (PRODUCT_THUMB_DB_PROMISE) return PRODUCT_THUMB_DB_PROMISE;
+
+  if (typeof indexedDB === "undefined") {
+    PRODUCT_THUMB_DB_PROMISE = Promise.resolve(null);
+    return PRODUCT_THUMB_DB_PROMISE;
+  }
+
+  PRODUCT_THUMB_DB_PROMISE = new Promise((resolve, reject) => {
+    const req = indexedDB.open(PRODUCT_THUMB_DB_NAME, PRODUCT_THUMB_DB_VERSION);
+
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      let store;
+
+      if (!db.objectStoreNames.contains(PRODUCT_THUMB_STORE)) {
+        store = db.createObjectStore(PRODUCT_THUMB_STORE, {
+          keyPath: "cacheKey",
+        });
+      } else {
+        store = req.transaction.objectStore(PRODUCT_THUMB_STORE);
+      }
+
+      if (!store.indexNames.contains("byTenant")) {
+        store.createIndex("byTenant", "tenant", { unique: false });
+      }
+    };
+
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () =>
+      reject(req.error || new Error("No se pudo abrir cache"));
+  }).catch((e) => {
+    console.warn("[thumb-cache] IndexedDB no disponible:", e?.message || e);
+    return null;
+  });
+
+  return PRODUCT_THUMB_DB_PROMISE;
+}
+
+async function getProductThumbRecord(cacheKey) {
+  const db = await openProductThumbDb();
+  if (!db) return null;
+
+  const tx = db.transaction(PRODUCT_THUMB_STORE, "readonly");
+  const store = tx.objectStore(PRODUCT_THUMB_STORE);
+  const record = await idbRequestToPromise(store.get(cacheKey));
+  await idbTxDone(tx);
+  return record || null;
+}
+
+async function putProductThumbRecord(record) {
+  const db = await openProductThumbDb();
+  if (!db) return;
+
+  const tx = db.transaction(PRODUCT_THUMB_STORE, "readwrite");
+  tx.objectStore(PRODUCT_THUMB_STORE).put(record);
+  await idbTxDone(tx);
+}
+
+function materializeProductThumbObjectUrl(cacheKey, blob) {
+  if (!(blob instanceof Blob)) return "";
+
+  const prev = PRODUCT_THUMB_OBJECT_URL_BY_KEY.get(cacheKey);
+  if (prev) {
+    try {
+      URL.revokeObjectURL(prev);
+    } catch {}
+  }
+
+  const objectUrl = URL.createObjectURL(blob);
+  PRODUCT_THUMB_OBJECT_URL_BY_KEY.set(cacheKey, objectUrl);
+  return objectUrl;
+}
+
+function getProductThumbObjectUrlSync(imageInfo) {
+  if (!imageInfo?.url) return "";
+  const cacheKey = buildProductThumbCacheKey(imageInfo);
+  return PRODUCT_THUMB_OBJECT_URL_BY_KEY.get(cacheKey) || "";
+}
+
+async function getProductThumbObjectUrlFromDb(cacheKey) {
+  const record = await getProductThumbRecord(cacheKey);
+  if (!record?.blob) return "";
+
+  const now = Date.now();
+  putProductThumbRecord({
+    ...record,
+    atime: now,
+    updatedAt: record.updatedAt || now,
+  }).catch(() => {});
+
+  return materializeProductThumbObjectUrl(cacheKey, record.blob);
+}
+
+async function enforceProductThumbTenantLimit(tenant) {
+  const db = await openProductThumbDb();
+  if (!db) return;
+
+  const txRead = db.transaction(PRODUCT_THUMB_STORE, "readonly");
+  const list = await idbRequestToPromise(
+    txRead.objectStore(PRODUCT_THUMB_STORE).index("byTenant").getAll(tenant),
+  );
+  await idbTxDone(txRead);
+
+  const rows = Array.isArray(list) ? list : [];
+  let total = rows.reduce((sum, row) => sum + Number(row?.size || 0), 0);
+  if (total <= PRODUCT_THUMB_MAX_CACHE_BYTES) return;
+
+  const sorted = rows
+    .slice()
+    .sort((a, b) => Number(a?.atime || 0) - Number(b?.atime || 0));
+
+  const txWrite = db.transaction(PRODUCT_THUMB_STORE, "readwrite");
+  const store = txWrite.objectStore(PRODUCT_THUMB_STORE);
+
+  for (const row of sorted) {
+    if (total <= PRODUCT_THUMB_MAX_CACHE_BYTES) break;
+    const cacheKey = String(row?.cacheKey || "");
+    if (!cacheKey) continue;
+
+    total -= Number(row?.size || 0);
+    store.delete(cacheKey);
+
+    const objUrl = PRODUCT_THUMB_OBJECT_URL_BY_KEY.get(cacheKey);
+    if (objUrl) {
+      try {
+        URL.revokeObjectURL(objUrl);
+      } catch {}
+      PRODUCT_THUMB_OBJECT_URL_BY_KEY.delete(cacheKey);
+    }
+  }
+
+  await idbTxDone(txWrite);
+}
+
+async function buildThumbnailBlobFromSourceBlob(sourceBlob) {
+  const bitmap = await createImageBitmap(sourceBlob);
+  try {
+    const srcW = Math.max(1, Number(bitmap.width || 0));
+    const srcH = Math.max(1, Number(bitmap.height || 0));
+    const longest = Math.max(srcW, srcH);
+    const scale =
+      longest > PRODUCT_THUMB_MAX_LONG_EDGE
+        ? PRODUCT_THUMB_MAX_LONG_EDGE / longest
+        : 1;
+
+    const outW = Math.max(1, Math.round(srcW * scale));
+    const outH = Math.max(1, Math.round(srcH * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+
+    const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
+    if (!ctx) return sourceBlob;
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, outW, outH);
+    ctx.drawImage(bitmap, 0, 0, outW, outH);
+
+    const encode = (quality) =>
+      new Promise((resolve) => {
+        canvas.toBlob(
+          (blob) => resolve(blob || sourceBlob),
+          "image/webp",
+          quality,
+        );
+      });
+
+    let outBlob = await encode(PRODUCT_THUMB_WEBP_QUALITY);
+
+    if (outBlob.size > 320 * 1024) {
+      outBlob = await encode(0.62);
+    }
+
+    return outBlob;
+  } finally {
+    try {
+      bitmap.close();
+    } catch {}
+  }
+}
+
+async function persistProductThumbBlob(cacheKey, imageInfo, blob) {
+  const now = Date.now();
+  await putProductThumbRecord({
+    cacheKey,
+    tenant: productThumbTenantKey,
+    idfile: Number(imageInfo?.idfile || 0) || 0,
+    sourceUrl: String(imageInfo?.url || ""),
+    mimeType: String(blob?.type || "image/webp"),
+    size: Number(blob?.size || 0),
+    updatedAt: now,
+    atime: now,
+    blob,
+  });
+
+  enforceProductThumbTenantLimit(productThumbTenantKey).catch(() => {});
+}
+
+async function ensureProductThumbObjectUrl(imageInfo) {
+  if (!imageInfo?.url) return "";
+
+  const cacheKey = buildProductThumbCacheKey(imageInfo);
+  const inMemory = PRODUCT_THUMB_OBJECT_URL_BY_KEY.get(cacheKey);
+  if (inMemory) return inMemory;
+
+  const fromDb = await getProductThumbObjectUrlFromDb(cacheKey);
+  if (fromDb) return fromDb;
+
+  if (TPV_STATE?.offline) return "";
+
+  if (PRODUCT_THUMB_IN_FLIGHT_BY_KEY.has(cacheKey)) {
+    return PRODUCT_THUMB_IN_FLIGHT_BY_KEY.get(cacheKey);
+  }
+
+  const promise = runProductThumbJob(async () => {
+    const resp = await fetch(String(imageInfo.url), {
+      cache: "force-cache",
+      credentials: "omit",
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+    const sourceBlob = await resp.blob();
+    const thumbBlob = await buildThumbnailBlobFromSourceBlob(sourceBlob);
+
+    await persistProductThumbBlob(cacheKey, imageInfo, thumbBlob);
+    return materializeProductThumbObjectUrl(cacheKey, thumbBlob);
+  })
+    .catch((e) => {
+      console.warn(
+        "[thumb-cache] No se pudo crear miniatura:",
+        e?.message || e,
+      );
+      return "";
+    })
+    .finally(() => {
+      PRODUCT_THUMB_IN_FLIGHT_BY_KEY.delete(cacheKey);
+    });
+
+  PRODUCT_THUMB_IN_FLIGHT_BY_KEY.set(cacheKey, promise);
+  return promise;
+}
+
+async function hydrateProductTileImage(tile, imageInfo, fallbackUrl = "") {
+  if (!tile || !imageInfo?.url) return;
+
+  const cacheKey = buildProductThumbCacheKey(imageInfo);
+  tile.dataset.thumbCacheKey = cacheKey;
+
+  const thumbUrl = await ensureProductThumbObjectUrl(imageInfo);
+  if (!tile.isConnected) return;
+  if (String(tile.dataset.thumbCacheKey || "") !== cacheKey) return;
+
+  const finalSrc = String(thumbUrl || fallbackUrl || "").trim();
+  if (!finalSrc) return;
+
+  const wrap = tile.querySelector(".product-img-wrapper");
+  if (!wrap) return;
+
+  if (!wrap.querySelector("img.product-img")) {
+    wrap.innerHTML = `<img src="${escapeHtml(finalSrc)}" class="product-img" loading="lazy" decoding="async">`;
+  } else {
+    const img = wrap.querySelector("img.product-img");
+    if (img) img.setAttribute("src", finalSrc);
+  }
+
+  tile.classList.remove("no-img");
+}
+
+async function clearProductImageThumbCache() {
+  PRODUCT_THUMB_IN_FLIGHT_BY_KEY.clear();
+  productThumbPendingJobs.length = 0;
+
+  PRODUCT_THUMB_OBJECT_URL_BY_KEY.forEach((url) => {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {}
+  });
+  PRODUCT_THUMB_OBJECT_URL_BY_KEY.clear();
+
+  const db = await openProductThumbDb();
+  if (!db) return;
+
+  const tx = db.transaction(PRODUCT_THUMB_STORE, "readwrite");
+  tx.objectStore(PRODUCT_THUMB_STORE).clear();
+  await idbTxDone(tx);
+}
 
 // ===== [07] API media fallback: attachedfiles =====
 async function fetchAttachedImageFiles() {
@@ -22492,6 +23110,9 @@ window.addEventListener("keydown", async (e) => {
       localStorage.removeItem(API_RESOURCES_CACHE_TS_KEY);
       localStorage.removeItem(API_MISSING_RESOURCES_CACHE_KEY);
       localStorage.removeItem(API_MISSING_RESOURCES_CACHE_TS_KEY);
+    } catch {}
+    try {
+      await clearProductImageThumbCache();
     } catch {}
 
     // opcional: cualquier cache que uses
