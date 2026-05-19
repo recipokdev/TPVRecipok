@@ -83,7 +83,9 @@
       <div class="cart-terminal-row">
         <span class="terminal-meta-item">
           <span class="terminal-meta-label">Terminal</span>
-          <strong id="terminalName" class="terminal-meta-value terminal-meta-value-btn"
+          <strong
+            id="terminalName"
+            class="terminal-meta-value terminal-meta-value-btn"
             >---</strong
           >
         </span>
@@ -108,7 +110,9 @@
           class="terminal-meta-item terminal-meta-value terminal-meta-cash"
         ></span>
 
-        <span id="agentMissingBadge" class="terminal-meta-alert">⚠️ Falta agente</span>
+        <span id="agentMissingBadge" class="terminal-meta-alert"
+          >⚠️ Falta agente</span
+        >
       </div>
 
       <!-- Cliente actual -->
@@ -1765,6 +1769,19 @@
                 </div>
                 <label class="switch">
                   <input type="checkbox" id="allowCloseWithParkedToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Aviso de stock al aparcar</div>
+                  <div class="opt-row-sub">
+                    Muestra un aviso si la cantidad a aparcar supera el stock.
+                    Si no trabajas con stock, puedes desactivarlo.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="parkStockWarningToggle" />
                   <span class="slider"></span>
                 </label>
               </div>
