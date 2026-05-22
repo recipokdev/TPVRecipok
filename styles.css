@@ -1357,6 +1357,7 @@ body.session-locked .cart-terminal-row #agentName {
   gap: 8px;
   margin-bottom: 6px;
   padding: 3px 2px 0;
+  touch-action: none;
 }
 
 .kb-drag-handle {
@@ -1369,6 +1370,7 @@ body.session-locked .cart-terminal-row #agentName {
   background: #f8fafc;
   cursor: grab;
   user-select: none;
+  touch-action: none;
 }
 
 .kb-drag-handle:active {
@@ -1418,6 +1420,7 @@ body.session-locked .cart-terminal-row #agentName {
   opacity: 0.75;
   cursor: nwse-resize;
   pointer-events: auto;
+  touch-action: none;
 }
 
 .kb-floating {
@@ -2590,11 +2593,84 @@ textarea:focus {
 
 /* Aparcados overlay específico */
 #parkedTicketsOverlay .parked-modal {
-  max-width: 720px;
-  width: min(720px, 96vw);
+  max-width: 920px;
+  width: min(920px, 97vw);
 }
 #parkedTicketsOverlay .parked-modal-header h2 {
   font-size: 20px;
+}
+
+.parked-summary-text {
+  white-space: normal !important;
+}
+
+.parked-summary-wrap {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.parked-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #f8fafc;
+}
+
+.parked-summary-row strong {
+  color: #0f172a;
+}
+
+.parked-summary-products {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.parked-summary-products-title {
+  font-size: 14px;
+  font-weight: 800;
+  color: #0f172a;
+  margin-bottom: 8px;
+}
+
+.parked-summary-products-list {
+  max-height: 280px;
+  overflow-y: auto;
+  display: grid;
+  gap: 6px;
+}
+
+.parked-summary-product-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 7px 9px;
+  background: #f8fafc;
+}
+
+.parked-summary-product-name {
+  font-size: 13px;
+  color: #111827;
+}
+
+.parked-summary-product-qty {
+  color: #0f172a;
+  white-space: nowrap;
+}
+
+.parked-summary-empty {
+  font-size: 13px;
+  opacity: 0.75;
+  padding: 6px 2px;
 }
 
 #parkObsOverlay input#parkObsInput {
@@ -3093,6 +3169,18 @@ textarea:focus {
   display: flex;
   gap: 10px;
   justify-content: flex-end;
+  align-items: flex-end;
+}
+
+#paySaveBtn {
+  min-width: 160px;
+  min-height: 88px;
+  padding: 10px 14px;
+  font-size: 22px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 @media (max-width: 860px) {
@@ -3101,6 +3189,12 @@ textarea:focus {
   }
   .pay-keypad {
     grid-template-columns: repeat(3, 1fr) 60px;
+  }
+
+  #paySaveBtn {
+    min-width: 145px;
+    min-height: 78px;
+    font-size: 20px;
   }
 }
 

@@ -649,7 +649,6 @@ function stopProductsStockAutoRefresh() {
 // ===== [07] Configuracion persistida y validaciones base =====
 
 // ===== [07] Estrategia de reintentos/red + cooldown 429 =====
-const DEMO_FALLBACK_ENABLED = false;
 const API_RETRY_MS = 5000;
 const API_429_COOLDOWN_MS = 30000;
 
@@ -2290,6 +2289,109 @@ function mapFsLineToTpvPrintLine(l) {
 /* Inicio Cambiar Clientes */
 /*----------------------*/
 
+const CUSTOMER_PRINT_CACHE_KEY = "tpv.customer.print.cache.v1";
+let customerPrintCache = {};
+
+function loadCustomerPrintCache() {
+  try {
+    const raw = localStorage.getItem(CUSTOMER_PRINT_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCustomerPrintCache() {
+  try {
+    localStorage.setItem(
+      CUSTOMER_PRINT_CACHE_KEY,
+      JSON.stringify(customerPrintCache || {}),
+    );
+  } catch {}
+}
+
+function normalizeClientPrintEntry(src) {
+  const cod = String(src?.codcliente || "").trim();
+  if (!cod) return null;
+
+  const nombre = String(src?.nombre || src?.razonsocial || "").trim();
+  const razonsocial = String(src?.razonsocial || src?.nombre || "").trim();
+  const cifnif = String(src?.cifnif || src?.cif || "").trim();
+  const direccion = String(src?.direccion || "").trim();
+  const codpostal = String(src?.codpostal || "").trim();
+  const ciudad = String(src?.ciudad || "").trim();
+
+  return {
+    codcliente: cod,
+    nombre,
+    razonsocial,
+    cifnif,
+    direccion,
+    codpostal,
+    ciudad,
+    updatedAt: Date.now(),
+  };
+}
+
+function upsertCustomerPrintCache(src) {
+  const entry = normalizeClientPrintEntry(src);
+  if (!entry) return;
+  customerPrintCache[entry.codcliente] = {
+    ...(customerPrintCache[entry.codcliente] || {}),
+    ...entry,
+  };
+  saveCustomerPrintCache();
+}
+
+function getCustomerPrintCacheByCod(codcliente) {
+  const cod = String(codcliente || "").trim();
+  if (!cod) return null;
+  return customerPrintCache[cod] || null;
+}
+
+async function refreshCustomerPrintCacheByCod(codcliente) {
+  const cod = String(codcliente || "").trim();
+  if (!cod) return null;
+
+  try {
+    const rows = await fetchApiResourceWithParams("clientes", {
+      limit: 1,
+      "filter[codcliente]": cod,
+    });
+    const cli = Array.isArray(rows) && rows.length ? rows[0] : null;
+    if (cli) {
+      upsertCustomerPrintCache(cli);
+      return cli;
+    }
+  } catch {}
+
+  return null;
+}
+
+async function syncCustomerPrintCacheFromSelection(c) {
+  try {
+    const cod = String(c?.codcliente || "").trim();
+    if (!cod) return;
+
+    const selectorList =
+      typeof window.CUSTOMER_SELECTOR?.listCustomers === "function"
+        ? window.CUSTOMER_SELECTOR.listCustomers()
+        : [];
+
+    const fromList = Array.isArray(selectorList)
+      ? selectorList.find((x) => String(x?.codcliente || "").trim() === cod)
+      : null;
+
+    if (fromList?._raw) upsertCustomerPrintCache(fromList._raw);
+    else if (fromList) upsertCustomerPrintCache(fromList);
+    else upsertCustomerPrintCache(c);
+
+    // Refresco online sin bloquear UI.
+    refreshCustomerPrintCacheByCod(cod).catch(() => {});
+  } catch {}
+}
+
 function renderSelectedCustomerInCartHeader(c) {
   const input = document.getElementById("cartCustomerInput");
   const btnClear = document.getElementById("cartCustomerClear");
@@ -2300,6 +2402,8 @@ function renderSelectedCustomerInCartHeader(c) {
 
   const isDefault = !!c?.isDefault;
   if (btnClear) btnClear.style.display = isDefault ? "none" : "";
+
+  syncCustomerPrintCacheFromSelection(c).catch(() => {});
 }
 
 function bindCartCustomerUiEvents() {
@@ -2340,6 +2444,8 @@ async function initCustomerSelectorOnce() {
   const cfg = window.RECIPOK_API || {};
   const baseUrl = String(cfg.baseUrl || "").replace(/\/+$/, "");
   const apiKey = String(cfg.apiKey || "").trim();
+
+  customerPrintCache = loadCustomerPrintCache();
 
   if (!window.CUSTOMER_SELECTOR?.mount) {
     console.error(
@@ -5631,6 +5737,7 @@ function createKeyboardWindowManager({
 
   function onPointerMove(e) {
     if (!mode || e.pointerId !== pointerId) return;
+    if (e.cancelable) e.preventDefault();
     movedSincePointerDown = true;
 
     if (mode === "drag") {
@@ -5702,6 +5809,8 @@ function createKeyboardWindowManager({
     pointerId = null;
     movedSincePointerDown = false;
     overlay.releasePointerCapture?.(e.pointerId);
+    dragHandle?.releasePointerCapture?.(e.pointerId);
+    resizeHandle?.releasePointerCapture?.(e.pointerId);
   }
 
   dragHandle?.addEventListener("pointerdown", (e) => {
@@ -5720,7 +5829,7 @@ function createKeyboardWindowManager({
     startHeight = Number(saved.height ?? rect.height);
     movedSincePointerDown = false;
     suppressCloseUntil = Date.now() + 220;
-    overlay.setPointerCapture?.(pointerId);
+    e.currentTarget?.setPointerCapture?.(pointerId);
   });
 
   resizeHandle?.addEventListener("pointerdown", (e) => {
@@ -5739,7 +5848,7 @@ function createKeyboardWindowManager({
     startHeight = Number(saved.height ?? rect.height);
     movedSincePointerDown = false;
     suppressCloseUntil = Date.now() + 220;
-    overlay.setPointerCapture?.(pointerId);
+    e.currentTarget?.setPointerCapture?.(pointerId);
   });
 
   overlay.addEventListener("pointermove", onPointerMove);
@@ -7142,6 +7251,145 @@ const parkedTicketsOverlay = document.getElementById("parkedTicketsOverlay");
 const parkedTicketsList = document.getElementById("parkedTicketsList");
 const parkedCloseBtn = document.getElementById("parkedCloseBtn");
 
+function parkedNormalizeText(value) {
+  return String(value || "").trim();
+}
+
+function parkedGetItemQty(it) {
+  return Number(it?.qty ?? it?.cantidad ?? 1) || 1;
+}
+
+function parkedGetItemPrimaryName(it) {
+  const direct =
+    it?.name ?? it?.nombre ?? it?.productName ?? it?.referencia ?? "";
+  const directText = parkedNormalizeText(direct);
+  if (directText) return directText;
+
+  const fallbackId = Number(it?.idproducto ?? it?.id ?? 0) || 0;
+  return fallbackId ? String(fallbackId) : "";
+}
+
+function parkedGetItemDescription(it) {
+  return parkedNormalizeText(
+    it?.descripcion ??
+      it?.description ??
+      it?.productDescription ??
+      it?.descripcion2 ??
+      it?.secondaryName ??
+      "",
+  );
+}
+
+function parkedBuildItemDisplayName(it) {
+  const primary = parkedGetItemPrimaryName(it);
+  const desc = parkedGetItemDescription(it);
+
+  if (primary && desc && primary.toLowerCase() !== desc.toLowerCase()) {
+    return `${primary} · ${desc}`;
+  }
+
+  return primary || desc || "Producto";
+}
+
+function buildParkedSummaryStats(sourceTickets) {
+  const list = Array.isArray(sourceTickets) ? sourceTickets : [];
+  const pendingList = list.filter((t) => !t?.paid);
+
+  let linesTotal = 0;
+  let unitsTotal = 0;
+  let amountPending = 0;
+  let amountAll = 0;
+  const productsMap = new Map();
+
+  list.forEach((t) => {
+    const totalTicket = Number(t?.total || 0) || 0;
+    amountAll += totalTicket;
+  });
+
+  pendingList.forEach((t) => {
+    const totalTicket = Number(t?.total || 0) || 0;
+    amountPending += totalTicket;
+
+    const items = Array.isArray(t?.items) ? t.items : [];
+    linesTotal += items.length;
+
+    items.forEach((it) => {
+      const qty = parkedGetItemQty(it);
+      unitsTotal += qty;
+
+      const productName = parkedBuildItemDisplayName(it);
+      const productKey = productName.toLowerCase();
+      if (!productKey) return;
+
+      const prev = productsMap.get(productKey) || { name: productName, qty: 0 };
+      prev.qty += qty;
+      productsMap.set(productKey, prev);
+    });
+  });
+
+  const paidCount = list.filter((t) => !!t?.paid).length;
+  const pendingCount = Math.max(0, list.length - paidCount);
+  const products = Array.from(productsMap.values()).sort((a, b) => {
+    const byQty = Number(b.qty || 0) - Number(a.qty || 0);
+    if (byQty !== 0) return byQty;
+    return String(a.name || "").localeCompare(String(b.name || ""), "es");
+  });
+
+  return {
+    ticketsTotal: list.length,
+    pendingCount,
+    paidCount,
+    linesTotal,
+    unitsTotal,
+    productsDistinct: products.length,
+    products,
+    amountPending,
+    amountAll,
+  };
+}
+
+function buildParkedSummaryHtml(stats) {
+  const fmtQty = (value) => {
+    const n = Number(value || 0);
+    if (!Number.isFinite(n)) return "0";
+    return Number.isInteger(n) ? String(n) : n.toFixed(2);
+  };
+
+  const row = (label, value) =>
+    `<div class="parked-summary-row"><span>${escapeHtmlForModal(label)}</span><strong>${escapeHtmlForModal(String(value))}</strong></div>`;
+
+  const productsHtml = (Array.isArray(stats.products) ? stats.products : [])
+    .map(
+      (p) => `
+      <div class="parked-summary-product-row">
+        <span class="parked-summary-product-name">${escapeHtmlForModal(p?.name || "Producto")}</span>
+        <strong class="parked-summary-product-qty">x ${escapeHtmlForModal(fmtQty(p?.qty))}</strong>
+      </div>
+    `,
+    )
+    .join("");
+
+  return `
+    <div class="parked-summary-wrap">
+      ${row("Tickets sin cobrar", stats.pendingCount)}
+      ${row("Importe total aparcado", formatParkedAuditAmount(stats.amountPending))}
+      ${row("Productos distintos", stats.productsDistinct)}
+      ${row("Líneas de producto", stats.linesTotal)}
+      ${row("Unidades totales", Number(stats.unitsTotal).toFixed(2))}
+
+      <div class="parked-summary-products">
+        <div class="parked-summary-products-title">Productos aparcados</div>
+        <div class="parked-summary-products-list">
+          ${
+            productsHtml ||
+            '<div class="parked-summary-empty">No hay productos aparcados en esta vista.</div>'
+          }
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function parkedTicketMatchesSearch(t, term) {
   const q = String(term || "")
     .trim()
@@ -7149,13 +7397,7 @@ function parkedTicketMatchesSearch(t, term) {
   if (!q) return true;
 
   const itemsText = Array.isArray(t.items)
-    ? t.items
-        .map((it) =>
-          String(
-            it.name || it.nombre || it.descripcion || it.productName || "",
-          ).trim(),
-        )
-        .join(" ")
+    ? t.items.map((it) => parkedBuildItemDisplayName(it)).join(" ")
     : "";
 
   const fecha = t.createdAt ? new Date(t.createdAt) : null;
@@ -7311,6 +7553,9 @@ function ensureParkedToolbar() {
     </div>
 
     <div class="tickets-tabs" style="margin-left: 10px; display:flex; align-items:center; gap:8px;">
+      <button id="parkedSummaryBtn" type="button" class="cart-btn tickets-tab-btn" title="Resumen de aparcados">
+        Resumen
+      </button>
       <button id="parkedClearPaidBtn" type="button" class="cart-btn tickets-tab-btn" title="Limpiar historial de cobrados">
         Limpiar cobrados
       </button>
@@ -7325,6 +7570,7 @@ function ensureParkedToolbar() {
   const parkedFilterPending = document.getElementById("parkedFilterPending");
   const parkedFilterPaid = document.getElementById("parkedFilterPaid");
   const parkedKeyboardBtn = document.getElementById("parkedKeyboardBtn");
+  const parkedSummaryBtn = document.getElementById("parkedSummaryBtn");
   const parkedClearPaidBtn = document.getElementById("parkedClearPaidBtn");
 
   let timer = null;
@@ -7368,6 +7614,18 @@ function ensureParkedToolbar() {
   parkedKeyboardBtn?.addEventListener("click", () => {
     if (!parkedSearch) return;
     openQwertyForInput(parkedSearch, "text");
+  });
+
+  parkedSummaryBtn?.addEventListener("click", async () => {
+    const scoped = getScopedAllParkedTickets(parkedTickets);
+    const stats = buildParkedSummaryStats(scoped);
+    const html = buildParkedSummaryHtml(stats);
+
+    await confirmModal("Resumen de aparcados", html, {
+      isHtml: true,
+      textClassName: "parked-summary-text",
+      dialogClassName: "parked-summary-dialog",
+    });
   });
 
   parkedClearPaidBtn?.addEventListener("click", async () => {
@@ -7505,13 +7763,6 @@ function renderParkedTicketsModal() {
     return;
   }
 
-  const getItemName = (it) =>
-    (it.name || it.nombre || it.descripcion || it.productName || "Producto")
-      .toString()
-      .trim();
-
-  const getItemQty = (it) => Number(it.qty ?? it.cantidad ?? 1) || 1;
-
   filtered.forEach((t) => {
     const realIndex = parkedTickets.indexOf(t);
 
@@ -7530,7 +7781,10 @@ function renderParkedTicketsModal() {
 
     const items = Array.isArray(t.items) ? t.items : [];
     const keyOf = (it) =>
-      String(it.idproducto || it.id || getItemName(it)).toLowerCase();
+      String(
+        Number(it?.idproducto || it?.id || 0) ||
+          `${parkedGetItemPrimaryName(it)}|${parkedGetItemDescription(it)}`,
+      ).toLowerCase();
 
     const uniqueMap = new Map();
     items.forEach((it) => {
@@ -7542,7 +7796,7 @@ function renderParkedTicketsModal() {
 
     const preview = Array.from(uniqueMap.values())
       .slice(0, 8)
-      .map((it) => `${getItemQty(it)}× ${getItemName(it)}`)
+      .map((it) => `${parkedGetItemQty(it)}× ${parkedBuildItemDisplayName(it)}`)
       .join(" · ");
 
     const extra = tipos > 8 ? ` · +${tipos - 8}` : "";
@@ -12159,22 +12413,10 @@ async function loadDataFromApi(opts = {}) {
         return;
       }
 
-      if (DEMO_FALLBACK_ENABLED) {
-        categories = demoCategories.map((c) => ({ ...c, parentId: null }));
-        products = [...demoProducts];
-
-        setStatusText("Offline (demo)");
-        TPV_STATE.offline = true;
-        TPV_STATE.locked = false;
-        updateCashButtonLabel();
-        renderMainUI();
-        toast("Modo demo (sin conexión). Pulsa “Conectar” en Caja.", "info");
-      } else {
-        setStatusText("API de Recipok no configurada");
-        TPV_STATE.offline = true;
-        TPV_STATE.locked = true;
-        updateCashButtonLabel();
-      }
+      setStatusText("API de Recipok no configurada");
+      TPV_STATE.offline = true;
+      TPV_STATE.locked = true;
+      updateCashButtonLabel();
 
       return;
     }
@@ -14273,9 +14515,13 @@ function buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot) {
     return sum + unitPrice * (item.qty || 1);
   }, 0);
 
-  // ✅ FIX: sacar el nombre del cliente del input
+  const selectedCustomer = getSelectedCustomerPrintMeta();
+
+  // Fallback final: input visual del carrito.
   const clientName =
-    (cartClientInput && (cartClientInput.value || "").trim()) || "Cliente";
+    selectedCustomer.clientName ||
+    (cartClientInput && (cartClientInput.value || "").trim()) ||
+    "Cliente";
 
   return {
     numero,
@@ -14288,7 +14534,11 @@ function buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot) {
     terminalName: currentTerminal ? currentTerminal.name || "" : "",
     agentName: currentAgent ? currentAgent.name || "" : "",
 
+    codcliente: selectedCustomer.codcliente,
     clientName,
+    clientFiscalId: selectedCustomer.clientFiscalId,
+    clientAddress: selectedCustomer.clientAddress,
+    isDefaultCustomer: selectedCustomer.isDefaultCustomer,
     company: companyInfo ? { ...companyInfo } : null,
     lineas: cartSnapshot,
     codserie:
@@ -14936,6 +15186,17 @@ function buildEscposTicketBytes(ticket, lineas, totalToShow) {
   const hora = (ticket.hora || "").trim();
   if (fecha || hora) push(`Fecha: ${fecha} ${hora}\n`);
   if ((ticket.clientName || "").trim()) push(`Cliente: ${ticket.clientName}\n`);
+  const ticketSerie = String(ticket?.codserie || ticket?._raw?.codserie || "S")
+    .trim()
+    .toUpperCase();
+  if (ticketSerie === "A") {
+    const fiscal = String(ticket?.clientFiscalId || "").trim();
+    const addr = String(ticket?.clientAddress || "").trim();
+    const fiscalText = fiscal || "(sin informar)";
+    const addrText = addr || "(sin informar)";
+    push(`NIF/CIF: ${fiscalText}\n`);
+    push(`Dirección: ${addrText}\n`);
+  }
   if (term) push(`Terminal: ${term}\n`);
   if (ag) push(`Agente: ${ag}\n`);
   push("\n");
@@ -14980,6 +15241,15 @@ async function getFacturaLinesForPrint(ticket) {
   return Array.isArray(fsLines) ? fsLines : [];
 }
 
+function getInvoiceLabelBySerie(codserie) {
+  const serie = String(codserie || "S")
+    .trim()
+    .toUpperCase();
+  if (serie === "R") return "Factura Rectificativa";
+  if (serie === "A") return "Factura General";
+  return "Factura Simplificada";
+}
+
 async function getPrintableTicketMeta(ticket) {
   const raw = ticket?._raw || {};
 
@@ -15008,7 +15278,7 @@ async function getPrintableTicketMeta(ticket) {
   if (numero2.startsWith("PAYCHG|")) {
     return {
       kind: "PAYCHG_NEW",
-      label: "Factura Simplificada",
+      label: getInvoiceLabelBySerie(codserie || "S"),
       badge: "",
       isRect: false,
     };
@@ -15068,7 +15338,7 @@ async function getPrintableTicketMeta(ticket) {
       if (hasPayChangeRelation) {
         return {
           kind: "NORMAL",
-          label: "Factura Simplificada",
+          label: getInvoiceLabelBySerie(codserie || "S"),
           badge: "",
           isRect: false,
         };
@@ -15101,7 +15371,7 @@ async function getPrintableTicketMeta(ticket) {
         if (refundedTotal >= soldTotal) {
           return {
             kind: "REFUNDED",
-            label: "Factura Simplificada",
+            label: getInvoiceLabelBySerie(codserie || "S"),
             badge: "DEVUELTO",
             isRect: false,
           };
@@ -15110,7 +15380,7 @@ async function getPrintableTicketMeta(ticket) {
         if (refundedTotal > 0) {
           return {
             kind: "PARTIAL_REFUND",
-            label: "Factura Simplificada",
+            label: getInvoiceLabelBySerie(codserie || "S"),
             badge: "DEVOLUCIÓN PARCIAL",
             isRect: false,
           };
@@ -15129,7 +15399,7 @@ async function getPrintableTicketMeta(ticket) {
   // -----------------------------
   return {
     kind: "NORMAL",
-    label: "Factura Simplificada",
+    label: getInvoiceLabelBySerie(codserie || "S"),
     badge: "",
     isRect: false,
   };
@@ -15156,6 +15426,8 @@ async function printTicket(ticket) {
     const hora =
       ticket.hora ||
       now.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
+
+    await enrichTicketClientForGeneral(ticket);
 
     // 2) Tipo de ticket
     const metaPrint = await getPrintableTicketMeta(ticket);
@@ -15321,6 +15593,37 @@ async function printTicket(ticket) {
     setText(doc, "invoiceNumber", ticket.numero != null ? ticket.numero : "—");
     setText(doc, "ticketDate", `${fecha} ${hora}`);
     setText(doc, "clientName", (ticket.clientName || "").trim() || "Cliente");
+
+    const isGeneralSerie =
+      String(ticket?.codserie || ticket?._raw?.codserie || "")
+        .trim()
+        .toUpperCase() === "A";
+    const clientFiscalRow = doc.getElementById("clientFiscalRow");
+    const clientAddressRow = doc.getElementById("clientAddressRow");
+    const clientFiscalValue = String(ticket?.clientFiscalId || "").trim();
+    const clientAddressValue = String(ticket?.clientAddress || "").trim();
+    const clientFiscalText = clientFiscalValue || "(sin informar)";
+    const clientAddressText = clientAddressValue || "(sin informar)";
+
+    if (clientFiscalRow) {
+      if (isGeneralSerie) {
+        setText(doc, "clientFiscal", clientFiscalText);
+        clientFiscalRow.style.display = "block";
+      } else {
+        setText(doc, "clientFiscal", "");
+        clientFiscalRow.style.display = "none";
+      }
+    }
+
+    if (clientAddressRow) {
+      if (isGeneralSerie) {
+        setText(doc, "clientAddress", clientAddressText);
+        clientAddressRow.style.display = "block";
+      } else {
+        setText(doc, "clientAddress", "");
+        clientAddressRow.style.display = "none";
+      }
+    }
 
     const emp = ticket.company || companyInfo || null;
     const logoEl = doc.getElementById("companyLogo");
@@ -17297,6 +17600,8 @@ const payObs = document.getElementById("payObs");
 const payNumber = document.getElementById("payNumber");
 const paySerie = document.getElementById("paySerie");
 
+let PAY_SERIES_CACHE = null;
+
 let payModalState = {
   totalCents: 0,
   formas: [],
@@ -17367,6 +17672,236 @@ function centsToEuro2es(c) {
 
 function euro2(n) {
   return (Number(n) || 0).toFixed(2);
+}
+
+function normalizePaySeriesRows(rawList) {
+  const src = Array.isArray(rawList) ? rawList : [];
+  const out = [];
+  const seen = new Set();
+
+  src.forEach((row) => {
+    const cod = String(row?.codserie || "")
+      .trim()
+      .toUpperCase();
+    if (cod !== "S" && cod !== "A") return;
+    if (!cod || seen.has(cod)) return;
+
+    seen.add(cod);
+    out.push({
+      codserie: cod,
+      descripcion: String(row?.descripcion || cod).trim(),
+      tipo: String(row?.tipo || "")
+        .trim()
+        .toUpperCase(),
+    });
+  });
+
+  // Fallback seguro para TPV: simplificada y general.
+  if (!seen.has("S")) {
+    out.push({ codserie: "S", descripcion: "Simplificadas", tipo: "S" });
+    seen.add("S");
+  }
+  if (!seen.has("A")) {
+    out.push({ codserie: "A", descripcion: "General", tipo: "" });
+    seen.add("A");
+  }
+
+  return out.sort((a, b) => {
+    const pri = (x) => (x.codserie === "S" ? 0 : x.codserie === "A" ? 1 : 9);
+    const pa = pri(a);
+    const pb = pri(b);
+    if (pa !== pb) return pa - pb;
+    return String(a.descripcion || a.codserie).localeCompare(
+      String(b.descripcion || b.codserie),
+      "es",
+    );
+  });
+}
+
+function renderPaySerieOptions(seriesRows) {
+  if (!paySerie) return;
+
+  const rows = normalizePaySeriesRows(seriesRows);
+  paySerie.innerHTML = rows
+    .map((s) => {
+      const cod = String(s.codserie || "")
+        .trim()
+        .toUpperCase();
+      const label = String(s.descripcion || cod).trim() || cod;
+      return `<option value="${escapeHtml(cod)}">${escapeHtml(label)}</option>`;
+    })
+    .join("");
+
+  const hasSimplificada = rows.some((r) => r.codserie === "S");
+  paySerie.value = hasSimplificada ? "S" : rows[0]?.codserie || "S";
+}
+
+async function ensurePaySeriesLoaded() {
+  if (Array.isArray(PAY_SERIES_CACHE) && PAY_SERIES_CACHE.length) {
+    renderPaySerieOptions(PAY_SERIES_CACHE);
+    return;
+  }
+
+  try {
+    const rows = await fetchApiResource("series");
+    PAY_SERIES_CACHE = normalizePaySeriesRows(rows);
+  } catch (e) {
+    console.warn("No se pudo cargar series de facturas:", e?.message || e);
+    PAY_SERIES_CACHE = normalizePaySeriesRows([]);
+  }
+
+  renderPaySerieOptions(PAY_SERIES_CACHE);
+}
+
+function getSelectedCustomerPrintMeta() {
+  const selected = window.CUSTOMER_SELECTOR?.getSelectedCustomer?.() || null;
+  const cod = String(
+    selected?.codcliente ||
+      window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() ||
+      "",
+  )
+    .trim()
+    .toUpperCase();
+
+  const list =
+    typeof window.CUSTOMER_SELECTOR?.listCustomers === "function"
+      ? window.CUSTOMER_SELECTOR.listCustomers()
+      : [];
+
+  const full = Array.isArray(list)
+    ? list.find(
+        (c) =>
+          String(c?.codcliente || "")
+            .trim()
+            .toUpperCase() === cod,
+      ) || selected
+    : selected;
+
+  const cache = getCustomerPrintCacheByCod(
+    cod || String(full?.codcliente || "").trim(),
+  );
+  const raw = full?._raw || null;
+
+  const name = String(
+    cache?.razonsocial ||
+      cache?.nombre ||
+      full?.razonsocial ||
+      full?.nombre ||
+      selected?.nombre ||
+      "Cliente",
+  ).trim();
+
+  const fiscalId = String(
+    cache?.cifnif || full?.cifnif || full?.cif || raw?.cifnif || raw?.cif || "",
+  ).trim();
+
+  const address = [
+    String(cache?.direccion || full?.direccion || raw?.direccion || "").trim(),
+    String(cache?.codpostal || full?.codpostal || raw?.codpostal || "").trim(),
+    String(cache?.ciudad || full?.ciudad || raw?.ciudad || "").trim(),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  return {
+    codcliente: cod || String(full?.codcliente || "").trim() || "1",
+    clientName: name || "Cliente",
+    clientFiscalId: fiscalId,
+    clientAddress: address,
+    isDefaultCustomer:
+      cod === "1" ||
+      full?.isDefault === true ||
+      /^ventas\s*tickets$/i.test(String(name || "")),
+  };
+}
+
+async function fetchClienteByCodcliente(codcliente) {
+  const cod = String(codcliente || "").trim();
+  if (!cod) return null;
+
+  const cached = getCustomerPrintCacheByCod(cod);
+  if (cached) return cached;
+
+  try {
+    const rows = await fetchApiResourceWithParams("clientes", {
+      limit: 1,
+      "filter[codcliente]": cod,
+    });
+    const cli = Array.isArray(rows) && rows.length ? rows[0] : null;
+    if (cli) upsertCustomerPrintCache(cli);
+    return cli;
+  } catch (e) {
+    console.warn("No se pudo cargar cliente por codcliente:", e?.message || e);
+    return null;
+  }
+}
+
+async function enrichTicketClientForGeneral(ticket) {
+  const serie = String(ticket?.codserie || ticket?._raw?.codserie || "")
+    .trim()
+    .toUpperCase();
+  if (serie !== "A") return ticket;
+
+  const hasFiscal = !!String(ticket?.clientFiscalId || "").trim();
+  const hasAddress = !!String(ticket?.clientAddress || "").trim();
+  if (hasFiscal && hasAddress) return ticket;
+
+  let codcliente = String(
+    ticket?.codcliente || ticket?._raw?.codcliente || "",
+  ).trim();
+
+  if (!codcliente) {
+    const idfactura = Number(ticket?.idfactura || ticket?._raw?.idfactura || 0);
+    if (idfactura > 0) {
+      try {
+        const fc = await fetchFacturaClienteById(idfactura);
+        codcliente = String(fc?.codcliente || "").trim();
+        const facturaName = String(fc?.nombrecliente || "").trim();
+        const facturaFiscal = String(fc?.cifnif || "").trim();
+        const facturaAddress = [
+          String(fc?.direccion || "").trim(),
+          String(fc?.codpostal || "").trim(),
+          String(fc?.ciudad || "").trim(),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+
+        if (facturaName) ticket.clientName = facturaName;
+        if (facturaFiscal) ticket.clientFiscalId = facturaFiscal;
+        if (facturaAddress) ticket.clientAddress = facturaAddress;
+      } catch (e) {
+        console.warn(
+          "No se pudo leer factura para codcliente:",
+          e?.message || e,
+        );
+      }
+    }
+  }
+
+  if (!codcliente) return ticket;
+
+  const cli = await fetchClienteByCodcliente(codcliente);
+  if (!cli) return ticket;
+
+  const fiscal = String(cli?.cifnif || cli?.cif || "").trim();
+  const address = [
+    String(cli?.direccion || "").trim(),
+    String(cli?.codpostal || "").trim(),
+    String(cli?.ciudad || "").trim(),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  const betterName = String(cli?.razonsocial || cli?.nombre || "").trim();
+  if (betterName) ticket.clientName = betterName;
+  if (fiscal) ticket.clientFiscalId = fiscal;
+  if (address) ticket.clientAddress = address;
+  ticket.codcliente = codcliente;
+
+  return ticket;
 }
 
 function sumPagosCents() {
@@ -17771,10 +18306,13 @@ async function openPayModal(total) {
 
   renderPayMethods();
 
+  // cargar series disponibles (S/A y resto que devuelva FS)
+  await ensurePaySeriesLoaded();
+
   // limpiar extras
   if (payObs) payObs.value = "";
   if (payNumber) payNumber.value = "";
-  if (paySerie) paySerie.value = "";
+  if (paySerie && !String(paySerie.value || "").trim()) paySerie.value = "S";
 
   // QWERTY en Observaciones
   if (payObs) {
@@ -17897,6 +18435,10 @@ async function openPayModal(total) {
           });
         }
 
+        const selectedSerie = String(paySerie ? paySerie.value || "S" : "S")
+          .trim()
+          .toUpperCase();
+
         const result = {
           pagos,
           total: fromCents(totalC),
@@ -17904,7 +18446,7 @@ async function openPayModal(total) {
           cambio: fromCents(cambioC),
           observaciones: payObs ? String(payObs.value || "") : "",
           numero: payNumber ? String(payNumber.value || "") : "",
-          serie: paySerie ? String(paySerie.value || "") : "",
+          serie: selectedSerie || "S",
         };
 
         // abrir cajón inmediato si toca
