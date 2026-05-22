@@ -18875,9 +18875,45 @@ function buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot) {
     return sum + unitPrice * (item.qty || 1);
   }, 0);
 
-  // ✅ FIX: sacar el nombre del cliente del input
+  const selected = window.CUSTOMER_SELECTOR?.getSelectedCustomer?.() || null;
+  const list =
+    typeof window.CUSTOMER_SELECTOR?.listCustomers === "function"
+      ? window.CUSTOMER_SELECTOR.listCustomers()
+      : [];
+  const selectedCod = String(
+    selected?.codcliente ||
+      window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() ||
+      safePayload.codcliente ||
+      "",
+  ).trim();
+  const full = Array.isArray(list)
+    ? list.find((c) => String(c?.codcliente || "").trim() === selectedCod) ||
+      selected
+    : selected;
+  const raw = full?._raw || null;
+
   const clientName =
-    (cartClientInput && (cartClientInput.value || "").trim()) || "Cliente";
+    String(
+      full?.razonsocial ||
+        full?.nombre ||
+        raw?.razonsocial ||
+        raw?.nombre ||
+        (cartClientInput && (cartClientInput.value || "").trim()) ||
+        "Cliente",
+    ).trim() || "Cliente";
+
+  const clientFiscalId = String(
+    full?.cifnif || full?.cif || raw?.cifnif || raw?.cif || "",
+  ).trim();
+
+  const clientAddress = [
+    String(full?.direccion || raw?.direccion || "").trim(),
+    String(full?.codpostal || raw?.codpostal || "").trim(),
+    String(full?.ciudad || raw?.ciudad || "").trim(),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
 
   return {
     numero,
@@ -18890,7 +18926,10 @@ function buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot) {
     terminalName: currentTerminal ? currentTerminal.name || "" : "",
     agentName: currentAgent ? currentAgent.name || "" : "",
 
+    codcliente: selectedCod || String(safePayload.codcliente || "1").trim(),
     clientName,
+    clientFiscalId,
+    clientAddress,
     company: companyInfo ? { ...companyInfo } : null,
     lineas: cartSnapshot,
     codserie:
@@ -19540,6 +19579,15 @@ function buildEscposTicketBytes(ticket, lineas, totalToShow) {
   const hora = (ticket.hora || "").trim();
   if (fecha || hora) push(`Fecha: ${fecha} ${hora}\n`);
   if ((ticket.clientName || "").trim()) push(`Cliente: ${ticket.clientName}\n`);
+  const ticketSerie = String(ticket?.codserie || ticket?._raw?.codserie || "S")
+    .trim()
+    .toUpperCase();
+  if (ticketSerie === "A") {
+    const fiscal = String(ticket?.clientFiscalId || "").trim() || "(sin informar)";
+    const addr = String(ticket?.clientAddress || "").trim() || "(sin informar)";
+    push(`NIF/CIF: ${fiscal}\n`);
+    push(`Dirección: ${addr}\n`);
+  }
   if (term) push(`Terminal: ${term}\n`);
   if (ag) push(`Agente: ${ag}\n`);
   push("\n");
@@ -19584,6 +19632,91 @@ async function getFacturaLinesForPrint(ticket) {
   return Array.isArray(fsLines) ? fsLines : [];
 }
 
+function getInvoiceLabelBySerie(codserie) {
+  const serie = String(codserie || "S")
+    .trim()
+    .toUpperCase();
+  if (serie === "R") return "Factura Rectificativa";
+  if (serie === "A") return "Factura General";
+  return "Factura Simplificada";
+}
+
+async function fetchClienteByCodcliente(codcliente) {
+  const cod = String(codcliente || "").trim();
+  if (!cod) return null;
+
+  try {
+    const rows = await fetchApiResourceWithParams("clientes", {
+      limit: 1,
+      "filter[codcliente]": cod,
+    });
+    return Array.isArray(rows) && rows.length ? rows[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+async function enrichTicketClientForGeneral(ticket) {
+  const serie = String(ticket?.codserie || ticket?._raw?.codserie || "")
+    .trim()
+    .toUpperCase();
+  if (serie !== "A") return ticket;
+
+  const hasFiscal = !!String(ticket?.clientFiscalId || "").trim();
+  const hasAddress = !!String(ticket?.clientAddress || "").trim();
+  if (hasFiscal && hasAddress) return ticket;
+
+  let codcliente = String(ticket?.codcliente || ticket?._raw?.codcliente || "")
+    .trim();
+
+  if (!codcliente) {
+    const idfactura = Number(ticket?.idfactura || ticket?._raw?.idfactura || 0);
+    if (idfactura > 0) {
+      try {
+        const fc = await fetchFacturaClienteById(idfactura);
+        codcliente = String(fc?.codcliente || "").trim();
+        const facturaName = String(fc?.nombrecliente || "").trim();
+        const facturaFiscal = String(fc?.cifnif || "").trim();
+        const facturaAddress = [
+          String(fc?.direccion || "").trim(),
+          String(fc?.codpostal || "").trim(),
+          String(fc?.ciudad || "").trim(),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+
+        if (facturaName) ticket.clientName = facturaName;
+        if (facturaFiscal) ticket.clientFiscalId = facturaFiscal;
+        if (facturaAddress) ticket.clientAddress = facturaAddress;
+      } catch {}
+    }
+  }
+
+  if (!codcliente) return ticket;
+
+  const cli = await fetchClienteByCodcliente(codcliente);
+  if (!cli) return ticket;
+
+  const fiscal = String(cli?.cifnif || cli?.cif || "").trim();
+  const address = [
+    String(cli?.direccion || "").trim(),
+    String(cli?.codpostal || "").trim(),
+    String(cli?.ciudad || "").trim(),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  const betterName = String(cli?.razonsocial || cli?.nombre || "").trim();
+  if (betterName) ticket.clientName = betterName;
+  if (fiscal) ticket.clientFiscalId = fiscal;
+  if (address) ticket.clientAddress = address;
+  ticket.codcliente = codcliente;
+
+  return ticket;
+}
+
 async function getPrintableTicketMeta(ticket) {
   const raw = ticket?._raw || {};
 
@@ -19612,7 +19745,7 @@ async function getPrintableTicketMeta(ticket) {
   if (numero2.startsWith("PAYCHG|")) {
     return {
       kind: "PAYCHG_NEW",
-      label: "Factura Simplificada",
+      label: getInvoiceLabelBySerie(codserie || "S"),
       badge: "",
       isRect: false,
     };
@@ -19672,7 +19805,7 @@ async function getPrintableTicketMeta(ticket) {
       if (hasPayChangeRelation) {
         return {
           kind: "NORMAL",
-          label: "Factura Simplificada",
+          label: getInvoiceLabelBySerie(codserie || "S"),
           badge: "",
           isRect: false,
         };
@@ -19705,7 +19838,7 @@ async function getPrintableTicketMeta(ticket) {
         if (refundedTotal >= soldTotal) {
           return {
             kind: "REFUNDED",
-            label: "Factura Simplificada",
+            label: getInvoiceLabelBySerie(codserie || "S"),
             badge: "DEVUELTO",
             isRect: false,
           };
@@ -19714,7 +19847,7 @@ async function getPrintableTicketMeta(ticket) {
         if (refundedTotal > 0) {
           return {
             kind: "PARTIAL_REFUND",
-            label: "Factura Simplificada",
+            label: getInvoiceLabelBySerie(codserie || "S"),
             badge: "DEVOLUCIÓN PARCIAL",
             isRect: false,
           };
@@ -19733,7 +19866,7 @@ async function getPrintableTicketMeta(ticket) {
   // -----------------------------
   return {
     kind: "NORMAL",
-    label: "Factura Simplificada",
+    label: getInvoiceLabelBySerie(codserie || "S"),
     badge: "",
     isRect: false,
   };
@@ -19760,6 +19893,8 @@ async function printTicket(ticket) {
     const hora =
       ticket.hora ||
       now.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
+
+    await enrichTicketClientForGeneral(ticket);
 
     // 2) Tipo de ticket
     const baseMetaPrint = await getPrintableTicketMeta(ticket);
@@ -19935,6 +20070,37 @@ async function printTicket(ticket) {
     setText(doc, "invoiceNumber", ticket.numero != null ? ticket.numero : "—");
     setText(doc, "ticketDate", `${fecha} ${hora}`);
     setText(doc, "clientName", (ticket.clientName || "").trim() || "Cliente");
+
+    const isGeneralSerie =
+      String(ticket?.codserie || ticket?._raw?.codserie || "")
+        .trim()
+        .toUpperCase() === "A";
+    const clientFiscalRow = doc.getElementById("clientFiscalRow");
+    const clientAddressRow = doc.getElementById("clientAddressRow");
+    const clientFiscalText =
+      String(ticket?.clientFiscalId || "").trim() || "(sin informar)";
+    const clientAddressText =
+      String(ticket?.clientAddress || "").trim() || "(sin informar)";
+
+    if (clientFiscalRow) {
+      if (isGeneralSerie) {
+        setText(doc, "clientFiscal", clientFiscalText);
+        clientFiscalRow.style.display = "block";
+      } else {
+        setText(doc, "clientFiscal", "");
+        clientFiscalRow.style.display = "none";
+      }
+    }
+
+    if (clientAddressRow) {
+      if (isGeneralSerie) {
+        setText(doc, "clientAddress", clientAddressText);
+        clientAddressRow.style.display = "block";
+      } else {
+        setText(doc, "clientAddress", "");
+        clientAddressRow.style.display = "none";
+      }
+    }
 
     const emp = ticket.company || companyInfo || null;
     const logoEl = doc.getElementById("companyLogo");
@@ -25169,7 +25335,7 @@ async function openPayModal(total) {
   // limpiar extras
   if (payObs) payObs.value = "";
   if (payNumber) payNumber.value = "";
-  if (paySerie) paySerie.value = "";
+  if (paySerie) paySerie.value = "S";
 
   // QWERTY en Observaciones
   if (payObs) {
@@ -25292,6 +25458,10 @@ async function openPayModal(total) {
           });
         }
 
+        const selectedSerie = String(paySerie ? paySerie.value || "S" : "S")
+          .trim()
+          .toUpperCase();
+
         const result = {
           pagos,
           total: fromCents(totalC),
@@ -25299,7 +25469,7 @@ async function openPayModal(total) {
           cambio: fromCents(cambioC),
           observaciones: payObs ? String(payObs.value || "") : "",
           numero: payNumber ? String(payNumber.value || "") : "",
-          serie: paySerie ? String(paySerie.value || "") : "",
+          serie: selectedSerie || "S",
         };
 
         // abrir cajón inmediato si toca
