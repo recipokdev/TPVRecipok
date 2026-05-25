@@ -17604,6 +17604,14 @@ function setPostPayPrintEnabled(enabled) {
   postPayPrintBtn.style.pointerEvents = enabled ? "auto" : "none";
 }
 
+function getPostPayPrintTicketCandidate() {
+  const pending = window.__POSTPAY_PENDING__;
+  if (pending && typeof pending === "object") {
+    return pending.printDraft || null;
+  }
+  return lastTicket || null;
+}
+
 function isPostPayOpen() {
   return postPayOverlay && !postPayOverlay.classList.contains("hidden");
 }
@@ -17623,16 +17631,9 @@ function openPostPayModal({ docCode, total, cambio }) {
 
   // botones (solo hace falta setearlos una vez, pero ok si lo dejas aquí)
   if (postPayPrintBtn) {
-    const canPrintPendingDraft = !!window.__POSTPAY_PENDING__?.printDraft;
-    setPostPayPrintEnabled(
-      !!(window.lastTicket || lastTicket || canPrintPendingDraft),
-    );
+    setPostPayPrintEnabled(!!getPostPayPrintTicketCandidate());
     postPayPrintBtn.onclick = async () => {
-      const t =
-        window.lastTicket ||
-        lastTicket ||
-        window.__POSTPAY_PENDING__?.printDraft ||
-        null;
+      const t = getPostPayPrintTicketCandidate();
       if (!t) return;
       await printTicket(t);
     };
@@ -22061,6 +22062,8 @@ async function onPayButtonClick() {
     isPayingNow = true;
     refreshAgentGuardUI?.();
 
+    window.__POSTPAY_PENDING__ = null;
+
     if (!cashSession || !cashSession.open) {
       toast("Abre la caja para poder cobrar.", "warn", "Cobrar");
       return;
@@ -22270,6 +22273,9 @@ async function onPayButtonClick() {
           ticketPayload,
           payResult,
         );
+
+        // La venta ya está resuelta (offline en cola): deja de usar draft pendiente.
+        window.__POSTPAY_PENDING__ = null;
 
         lastTicket.cashMeta = cashTicketMeta;
 
@@ -22541,6 +22547,9 @@ async function onPayButtonClick() {
 
     lastTicket = buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot);
 
+    // Ya tenemos ticket confirmado de FS: deja de usar draft pendiente.
+    window.__POSTPAY_PENDING__ = null;
+
     lastTicket.cashMeta = buildCashTicketMeta({
       pagos: pagosFinal,
       total: facturaTotalFS,
@@ -22667,6 +22676,12 @@ async function onPayButtonClick() {
 
     toast(`[${errCode}] ${msg}`, "err", "Cobrar");
     setStatusText("Error al cobrar");
+
+    // Si falló el cobro, limpiar estado pendiente para no imprimir borradores o tickets previos.
+    window.__POSTPAY_PENDING__ = null;
+    if (isPostPayOpen()) {
+      setPostPayPrintEnabled(!!lastTicket);
+    }
   } finally {
     isPayingNow = false;
     refreshAgentGuardUI?.();
