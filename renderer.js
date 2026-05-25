@@ -10056,10 +10056,55 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
   const labels = getParkingLabels();
   const requestId = createRequestId("PARK");
   const mesaScope = getSelectedMesaScopeContext();
+  let effectiveMesaScope = mesaScope;
+  const forcedParkingModeRaw = String(opts?.parkingMode || "")
+    .trim()
+    .toLowerCase();
+  const forcedParkingMode =
+    forcedParkingModeRaw === PARKED_MODE_MESAS ||
+    forcedParkingModeRaw === PARKED_MODE_TPV
+      ? forcedParkingModeRaw
+      : "";
+  if (
+    !String(effectiveMesaScope?.uid || "").trim() &&
+    forcedParkingMode === PARKED_MODE_MESAS
+  ) {
+    const mesasState = loadMesasTablesStateForInline();
+    const fallbackUid = String(
+      mesasState?.selectedTableId || MESAS_CONTEXT_SELECTED_UID || "",
+    ).trim();
+
+    if (fallbackUid) {
+      const [roomId = "", tableId = ""] = fallbackUid.split("::");
+      const linked = getMesasRoomAndTableByUid(mesasState, fallbackUid);
+      effectiveMesaScope = {
+        uid: fallbackUid,
+        roomId: String(roomId || ""),
+        tableId: String(tableId || ""),
+        roomName: linked
+          ? String(linked.room?.name || linked.room?.id || roomId || "")
+          : "",
+        tableName: linked
+          ? String(linked.table?.name || linked.table?.id || tableId || "")
+          : "",
+      };
+    }
+  }
+
+  const hasMesaScope = !!String(effectiveMesaScope?.uid || "").trim();
+  const ticketParkingMode =
+    forcedParkingMode ||
+    (hasMesaScope ? PARKED_MODE_MESAS : getCurrentParkingModeScope());
+
+  if (ticketParkingMode === PARKED_MODE_MESAS && !hasMesaScope) {
+    toast("Selecciona una mesa antes de guardar el pedido.", "warn", "Pedidos");
+    return;
+  }
+
   const keepActiveMesasTicket =
     MESAS_INLINE_ACTIVE &&
     MESAS_INLINE_VIEW === "transacciones" &&
-    !!mesaScope?.uid;
+    hasMesaScope;
   const mesaAlerts = normalizeMesaTicketAlerts(opts?.mesaAlerts);
   const requestedDocType = normalizeParkedDocType(opts?.docType || "ticket");
   const openListAfterSave = opts?.openListAfterSave === true;
@@ -10169,7 +10214,14 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
   // ✅ ACTUALIZAR ticket ya cargado
   if (editingTicket) {
     const existing = editingTicket;
-    existing.parkingMode = getCurrentParkingModeScope();
+    existing.slug = String(
+      existing?.slug || getCurrentSlugForReservations() || "",
+    ).trim();
+    existing.cajaId = String(
+      existing?.cajaId || getCajaIdSafe?.() || currentTerminal?.id || "",
+    ).trim();
+    existing.parkingMode = ticketParkingMode;
+    setTicketMesasModeFlag(existing, ticketParkingMode === PARKED_MODE_MESAS);
     existing.docType = opts?.docType
       ? requestedDocType
       : getParkedTicketDocType(existing, "ticket");
@@ -10205,7 +10257,11 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
       : normalizeMesaTicketAlerts(existing?.mesaAlerts);
     existing.localRevisionAt = Date.now();
     existing.updatedAt = new Date();
-    applyMesaScopeToTicket(existing, mesaScope);
+    if (ticketParkingMode === PARKED_MODE_MESAS) {
+      applyMesaScopeToTicket(existing, effectiveMesaScope);
+    } else {
+      clearMesaScopeFromTicket(existing);
+    }
     saveParkedTicketsCache();
     linkMesaSelectionWithTicketId(existing?.id || null);
 
@@ -10304,6 +10360,8 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
 
   const localTicket = {
     id: parkedCounter,
+    slug: String(getCurrentSlugForReservations() || "").trim(),
+    cajaId: String(getCajaIdSafe?.() || currentTerminal?.id || "").trim(),
     createdAt: new Date(),
     updatedAt: null,
     localRevisionAt: Date.now(),
@@ -10316,7 +10374,9 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
       ticketName ||
       `${getParkedDocTypeTexts(requestedDocType).shortLabel} #${parkedCounter}`,
     obs: observation,
-    parkingMode: getCurrentParkingModeScope(),
+    parkingMode: ticketParkingMode,
+    modoMesas: ticketParkingMode === PARKED_MODE_MESAS ? 1 : 0,
+    modeMesas: ticketParkingMode === PARKED_MODE_MESAS ? 1 : 0,
     mesaAlerts: keepActiveMesasTicket ? mesaAlerts : [],
     paid: false,
     paidAt: null,
@@ -10324,7 +10384,11 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
     paidTicketId: null,
     fs: null,
   };
-  applyMesaScopeToTicket(localTicket, mesaScope);
+  if (ticketParkingMode === PARKED_MODE_MESAS) {
+    applyMesaScopeToTicket(localTicket, effectiveMesaScope);
+  } else {
+    clearMesaScopeFromTicket(localTicket);
+  }
 
   if (requestedDocType !== "pedido") {
     try {
@@ -10448,14 +10512,45 @@ function parkedTicketMatchesSearch(t, term) {
     .toLowerCase();
   if (!q) return true;
 
+  const getItemPrimaryName = (it) =>
+    String(
+      it?.name ||
+        it?.nombre ||
+        it?.descripcion ||
+        it?.productName ||
+        it?.referencia ||
+        "",
+    ).trim();
+
+  const getItemDescription = (it) =>
+    (() => {
+      const raw = String(
+        it?.secondaryName ||
+          it?.descripcion2 ||
+          it?.description2 ||
+          it?.description ||
+          "",
+      ).trim();
+      if (!raw) return "";
+      const compact = raw.replace(/\s+/g, "");
+      return /^-+$/.test(compact) ? "" : raw;
+    })();
+
+  const buildItemDisplayName = (it) => {
+    const primary = getItemPrimaryName(it);
+    const secondary = getItemDescription(it);
+
+    if (primary && secondary) {
+      const sameText =
+        primary.localeCompare(secondary, "es", { sensitivity: "base" }) === 0;
+      return sameText ? primary : `${primary} - ${secondary}`;
+    }
+
+    return primary || secondary || "Producto";
+  };
+
   const itemsText = Array.isArray(t.items)
-    ? t.items
-        .map((it) =>
-          String(
-            it.name || it.nombre || it.descripcion || it.productName || "",
-          ).trim(),
-        )
-        .join(" ")
+    ? t.items.map((it) => buildItemDisplayName(it)).join(" ")
     : "";
 
   const fecha = t.createdAt ? new Date(t.createdAt) : null;
@@ -11114,12 +11209,11 @@ function openParkedModal(options = {}) {
 
   if (!parkedTicketsOverlay) return;
 
-  const allGlobal = Array.isArray(parkedTickets) ? parkedTickets : [];
   const allParked = getScopedAllParkedTickets(parkedTickets);
   const pending = getScopedPendingParkedTickets(parkedTickets);
   const paid = allParked.filter((t) => !!t?.paid);
 
-  if (!allGlobal.length) {
+  if (!allParked.length) {
     toast(`No hay ${labels.itemsPlural}.`, "info", labels.featureTitle);
     return;
   }
@@ -11171,10 +11265,42 @@ function renderParkedTicketsModal() {
     return;
   }
 
-  const getItemName = (it) =>
-    (it.name || it.nombre || it.descripcion || it.productName || "Producto")
-      .toString()
-      .trim();
+  const getItemPrimaryName = (it) =>
+    String(
+      it?.name ||
+        it?.nombre ||
+        it?.descripcion ||
+        it?.productName ||
+        it?.referencia ||
+        "",
+    ).trim();
+
+  const getItemDescription = (it) =>
+    (() => {
+      const raw = String(
+        it?.secondaryName ||
+          it?.descripcion2 ||
+          it?.description2 ||
+          it?.description ||
+          "",
+      ).trim();
+      if (!raw) return "";
+      const compact = raw.replace(/\s+/g, "");
+      return /^-+$/.test(compact) ? "" : raw;
+    })();
+
+  const getItemName = (it) => {
+    const primary = getItemPrimaryName(it);
+    const secondary = getItemDescription(it);
+
+    if (primary && secondary) {
+      const sameText =
+        primary.localeCompare(secondary, "es", { sensitivity: "base" }) === 0;
+      return sameText ? primary : `${primary} - ${secondary}`;
+    }
+
+    return primary || secondary || "Producto";
+  };
 
   const getItemQty = (it) => Number(it.qty ?? it.cantidad ?? 1) || 1;
 
@@ -11265,8 +11391,11 @@ function renderParkedTicketsModal() {
     const totalTexto = t.total != null ? t.total.toFixed(2) + " €" : "—";
 
     const items = Array.isArray(t.items) ? t.items : [];
-    const keyOf = (it) =>
-      String(it.idproducto || it.id || getItemName(it)).toLowerCase();
+    const keyOf = (it) => {
+      const productId = Number(it?.idproducto || it?.id || 0);
+      if (productId > 0) return String(productId);
+      return `${getItemPrimaryName(it)}|${getItemDescription(it)}`.toLowerCase();
+    };
 
     const uniqueMap = new Map();
     items.forEach((it) => {
@@ -11314,6 +11443,8 @@ function renderParkedTicketsModal() {
       div.classList.add("parked-ticket-paid");
     }
 
+    const showMesaContext = !!MESAS_INLINE_ACTIVE;
+
     div.innerHTML = `
       <div class="pt-left">
         <div class="pt-title">
@@ -11322,7 +11453,11 @@ function renderParkedTicketsModal() {
           ${escapeHtml(titleText)}
         </div>
 
-        <div class="pt-context">Mesa: ${escapeHtml(mesaCtx.tableName || "Sin mesa")} · Sala: ${escapeHtml(mesaCtx.roomName || "Sin sala")}</div>
+        ${
+          showMesaContext
+            ? `<div class="pt-context">Mesa: ${escapeHtml(mesaCtx.tableName || "Sin mesa")} · Sala: ${escapeHtml(mesaCtx.roomName || "Sin sala")}</div>`
+            : ""
+        }
 
         ${
           obs
@@ -19583,7 +19718,8 @@ function buildEscposTicketBytes(ticket, lineas, totalToShow) {
     .trim()
     .toUpperCase();
   if (ticketSerie === "A") {
-    const fiscal = String(ticket?.clientFiscalId || "").trim() || "(sin informar)";
+    const fiscal =
+      String(ticket?.clientFiscalId || "").trim() || "(sin informar)";
     const addr = String(ticket?.clientAddress || "").trim() || "(sin informar)";
     push(`NIF/CIF: ${fiscal}\n`);
     push(`Dirección: ${addr}\n`);
@@ -19666,8 +19802,9 @@ async function enrichTicketClientForGeneral(ticket) {
   const hasAddress = !!String(ticket?.clientAddress || "").trim();
   if (hasFiscal && hasAddress) return ticket;
 
-  let codcliente = String(ticket?.codcliente || ticket?._raw?.codcliente || "")
-    .trim();
+  let codcliente = String(
+    ticket?.codcliente || ticket?._raw?.codcliente || "",
+  ).trim();
 
   if (!codcliente) {
     const idfactura = Number(ticket?.idfactura || ticket?._raw?.idfactura || 0);
@@ -20770,27 +20907,94 @@ function getCurrentParkingModeScope() {
   return MESAS_INLINE_ACTIVE ? PARKED_MODE_MESAS : PARKED_MODE_TPV;
 }
 
+function getTicketMesasModeFlag(ticket) {
+  if (!ticket || typeof ticket !== "object") return null;
+
+  const raw =
+    ticket?.modoMesas ??
+    ticket?.modeMesas ??
+    ticket?.isMesasMode ??
+    ticket?.mesasMode ??
+    null;
+
+  if (raw === null || raw === undefined || raw === "") return null;
+  if (typeof raw === "boolean") return raw;
+
+  const n = Number(raw);
+  if (Number.isFinite(n)) return n === 1;
+
+  const s = String(raw).trim().toLowerCase();
+
+  if (["1", "true", "yes", "si", "sí", "mesas"].includes(s)) {
+    return true;
+  }
+  if (["0", "false", "no", "tpv"].includes(s)) {
+    return false;
+  }
+
+  return null;
+}
+
+function setTicketMesasModeFlag(ticket, isMesas) {
+  if (!ticket || typeof ticket !== "object") return ticket;
+  const v = isMesas ? 1 : 0;
+  ticket.modoMesas = v;
+  ticket.modeMesas = v;
+  return ticket;
+}
+
+function isMesasModeTicket(ticket) {
+  const flag = getTicketMesasModeFlag(ticket);
+  if (flag !== null) return flag;
+  return inferTicketParkingMode(ticket) === PARKED_MODE_MESAS;
+}
+
+function hasTicketMesaScope(ticket) {
+  if (!ticket || typeof ticket !== "object") return false;
+
+  const uid = String(ticket?.mesaUid || "").trim();
+  const roomId = String(ticket?.mesaRoomId || "").trim();
+  const tableId = String(ticket?.mesaTableId || "").trim();
+
+  if (uid || roomId || tableId) return true;
+  return false;
+}
+
+function isTicketLinkedInMesasMap(ticket, mesasState = null) {
+  if (!ticket || typeof ticket !== "object") return false;
+
+  const ticketId = String(ticket?.id || ticket?.ticketId || "").trim();
+  if (!ticketId) return false;
+
+  const state = mesasState || loadMesasTablesStateForInline();
+  const map = state?.tableTicketMap;
+  if (!map || typeof map !== "object") return false;
+
+  return Object.values(map).some(
+    (mappedId) => String(mappedId || "").trim() === ticketId,
+  );
+}
+
 function inferTicketParkingMode(ticket) {
   if (!ticket || typeof ticket !== "object") return PARKED_MODE_TPV;
+
+  const explicitMesasFlag = getTicketMesasModeFlag(ticket);
+  if (explicitMesasFlag === true) return PARKED_MODE_MESAS;
+  if (explicitMesasFlag === false) return PARKED_MODE_TPV;
 
   const directRaw = String(
     ticket?.parkingMode || ticket?.appMode || ticket?.mode || "",
   )
     .trim()
     .toLowerCase();
+
   if (directRaw === PARKED_MODE_MESAS) return PARKED_MODE_MESAS;
+
+  if (hasTicketMesaScope(ticket)) return PARKED_MODE_MESAS;
+
+  if (isTicketLinkedInMesasMap(ticket)) return PARKED_MODE_MESAS;
+
   if (directRaw === PARKED_MODE_TPV) return PARKED_MODE_TPV;
-
-  const hasMesaScope =
-    !!String(ticket?.mesaUid || "").trim() ||
-    !!String(ticket?.mesaRoomId || "").trim() ||
-    !!String(ticket?.mesaTableId || "").trim();
-
-  if (hasMesaScope) return PARKED_MODE_MESAS;
-
-  const remembered = resolveRememberedTicketParkingMode(ticket);
-  if (remembered === PARKED_MODE_MESAS) return PARKED_MODE_MESAS;
-  if (remembered === PARKED_MODE_TPV) return PARKED_MODE_TPV;
 
   return PARKED_MODE_TPV;
 }
@@ -20799,7 +21003,9 @@ function isTicketInCurrentParkingMode(
   ticket,
   mode = getCurrentParkingModeScope(),
 ) {
-  return inferTicketParkingMode(ticket) === normalizeParkingMode(mode);
+  const normalizedMode = normalizeParkingMode(mode);
+  const mesasTicket = isMesasModeTicket(ticket);
+  return normalizedMode === PARKED_MODE_MESAS ? mesasTicket : !mesasTicket;
 }
 
 function reloadParkedTicketsForCurrentMode() {
@@ -20971,8 +21177,26 @@ function getScopedPendingParkedTickets(list = parkedTickets) {
 }
 
 function getScopedAllParkedTickets(list = parkedTickets) {
-  const source = Array.isArray(list) ? list : [];
-  if (!MESAS_INLINE_ACTIVE) return source;
+  let source = Array.isArray(list) ? list : [];
+
+  if (!MESAS_INLINE_ACTIVE) {
+    const currentCajaId = String(
+      getCajaIdSafe?.() || currentTerminal?.id || "",
+    ).trim();
+
+    source = source.filter((t) => !isMesasModeTicket(t));
+
+    if (currentCajaId) {
+      source = source.filter((t) => {
+        const ticketCajaId = String(t?.cajaId || "").trim();
+        return !ticketCajaId || ticketCajaId === currentCajaId;
+      });
+    }
+
+    return source;
+  }
+
+  source = source.filter((t) => isMesasModeTicket(t));
 
   const tableScopeValue = String(parkedViewState.tableUid || "").trim();
   if (tableScopeValue) {
@@ -21062,6 +21286,20 @@ function normalizeRemoteParkedTicket(raw) {
       ? pedidoStatus === "pagado-no-recogido" || pedidoStatus === "recogido"
       : !!raw.paid;
 
+  const rawMode = String(raw.parkingMode || raw.appMode || raw.mode || "")
+    .trim()
+    .toLowerCase();
+  const rawModoMesas =
+    raw.modoMesas ?? raw.modeMesas ?? raw.isMesasMode ?? raw.mesasMode ?? null;
+  const normalizedModoMesas =
+    rawModoMesas == null
+      ? rawMode === "mesas"
+        ? 1
+        : rawMode === "tpv"
+          ? 0
+          : null
+      : rawModoMesas;
+
   return {
     id,
     slug: String(raw.slug || "").trim(),
@@ -21091,9 +21329,9 @@ function normalizeRemoteParkedTicket(raw) {
     collectedAt: raw.collectedAt ? new Date(raw.collectedAt) : null,
     paidTicketCode: raw.paidTicketCode || null,
     paidTicketId: raw.paidTicketId || null,
-    parkingMode: String(raw.parkingMode || raw.appMode || raw.mode || "")
-      .trim()
-      .toLowerCase(),
+    modoMesas: normalizedModoMesas,
+    modeMesas: normalizedModoMesas,
+    parkingMode: rawMode,
     mesaUid:
       String(raw.mesaUid || raw.tableUid || raw.table_uid || "").trim() || null,
     mesaRoomId:
@@ -21118,7 +21356,9 @@ function normalizeRemoteParkedTicket(raw) {
 function saveParkedTicketsCache(list = parkedTickets) {
   const safe = getStorableParkedTicketsForMode(list).map((t) => ({
     ...t,
-    parkingMode: inferTicketParkingMode(t),
+    parkingMode: isMesasModeTicket(t) ? PARKED_MODE_MESAS : PARKED_MODE_TPV,
+    modoMesas: isMesasModeTicket(t) ? 1 : 0,
+    modeMesas: isMesasModeTicket(t) ? 1 : 0,
     createdAt: t?.createdAt
       ? new Date(t.createdAt).toISOString()
       : new Date().toISOString(),
@@ -21165,10 +21405,12 @@ function loadParkedTicketsCache() {
 
 function getParkedTicketSyncKey(ticket) {
   if (!ticket) return "";
+  const mode = isMesasModeTicket(ticket) ? PARKED_MODE_MESAS : PARKED_MODE_TPV;
   const slug = String(ticket.slug || "").trim();
   const cajaId = String(ticket.cajaId || "").trim();
   const id = String(ticket.id || ticket.ticketId || "").trim();
-  return `${slug}|${cajaId}|${id}`;
+  if (!id) return "";
+  return `${mode}|${slug}|${cajaId}|${id}`;
 }
 
 function getParkedTicketSyncKeyVariants(ticket) {
@@ -21179,21 +21421,13 @@ function getParkedTicketSyncKeyVariants(ticket) {
   const id = String(ticket.id || ticket.ticketId || "").trim();
   if (!id) return [];
 
-  const modeRaw = String(
-    ticket?.parkingMode || ticket?.appMode || ticket?.mode || "",
-  )
-    .trim()
-    .toLowerCase();
-  const mode =
-    modeRaw === PARKED_MODE_MESAS ? PARKED_MODE_MESAS : PARKED_MODE_TPV;
+  const mode = isMesasModeTicket(ticket) ? PARKED_MODE_MESAS : PARKED_MODE_TPV;
 
   const keys = [
     `${slug}|${cajaId}|${id}`,
     `${slug}||${id}`,
-    `|${cajaId}|${id}`,
-    `||${id}`,
-    `${mode}|${id}`,
-    `|${id}`,
+    `${mode}|${slug}|${cajaId}|${id}`,
+    `${mode}|${slug}||${id}`,
   ];
 
   return Array.from(new Set(keys.filter(Boolean)));
@@ -21354,22 +21588,59 @@ function syncParkedTicketsFromRemote(list) {
         merged.localRevisionAt = localRevTs || Date.now();
       }
 
-      merged.parkingMode = inferTicketParkingMode(merged);
+      const remoteModeCandidate = String(
+        ticket?.parkingMode || ticket?.appMode || ticket?.mode || "",
+      )
+        .trim()
+        .toLowerCase();
+      const modeProbe = {
+        ...merged,
+        parkingMode: remoteModeCandidate || merged?.parkingMode || "",
+      };
 
-      if (!String(merged?.mesaUid || "").trim() && prev?.mesaUid) {
-        merged.mesaUid = prev.mesaUid;
+      const remoteMesasFlag = getTicketMesasModeFlag(ticket);
+      const prevMesasFlag = getTicketMesasModeFlag(prev);
+
+      if (!String(modeProbe?.mesaUid || "").trim() && prev?.mesaUid) {
+        modeProbe.mesaUid = prev.mesaUid;
       }
-      if (!String(merged?.mesaRoomId || "").trim() && prev?.mesaRoomId) {
-        merged.mesaRoomId = prev.mesaRoomId;
+      if (!String(modeProbe?.mesaRoomId || "").trim() && prev?.mesaRoomId) {
+        modeProbe.mesaRoomId = prev.mesaRoomId;
       }
-      if (!String(merged?.mesaRoomName || "").trim() && prev?.mesaRoomName) {
-        merged.mesaRoomName = prev.mesaRoomName;
+      if (!String(modeProbe?.mesaTableId || "").trim() && prev?.mesaTableId) {
+        modeProbe.mesaTableId = prev.mesaTableId;
       }
-      if (!String(merged?.mesaTableId || "").trim() && prev?.mesaTableId) {
-        merged.mesaTableId = prev.mesaTableId;
+
+      let mergedIsMesas = remoteMesasFlag;
+      if (mergedIsMesas === null) mergedIsMesas = prevMesasFlag;
+      if (mergedIsMesas === null) {
+        mergedIsMesas = inferTicketParkingMode(modeProbe) === PARKED_MODE_MESAS;
       }
-      if (!String(merged?.mesaTableName || "").trim() && prev?.mesaTableName) {
-        merged.mesaTableName = prev.mesaTableName;
+
+      setTicketMesasModeFlag(merged, !!mergedIsMesas);
+      merged.parkingMode = mergedIsMesas ? PARKED_MODE_MESAS : PARKED_MODE_TPV;
+
+      if (merged.parkingMode === PARKED_MODE_MESAS) {
+        if (!String(merged?.mesaUid || "").trim() && prev?.mesaUid) {
+          merged.mesaUid = prev.mesaUid;
+        }
+        if (!String(merged?.mesaRoomId || "").trim() && prev?.mesaRoomId) {
+          merged.mesaRoomId = prev.mesaRoomId;
+        }
+        if (!String(merged?.mesaRoomName || "").trim() && prev?.mesaRoomName) {
+          merged.mesaRoomName = prev.mesaRoomName;
+        }
+        if (!String(merged?.mesaTableId || "").trim() && prev?.mesaTableId) {
+          merged.mesaTableId = prev.mesaTableId;
+        }
+        if (
+          !String(merged?.mesaTableName || "").trim() &&
+          prev?.mesaTableName
+        ) {
+          merged.mesaTableName = prev.mesaTableName;
+        }
+      } else {
+        clearMesaScopeFromTicket(merged);
       }
 
       if (!normalizeMesaTicketAlerts(merged?.mesaAlerts).length) {
@@ -21537,6 +21808,8 @@ async function apiSaveParkedReservation(ticket) {
     terminalName: String(currentTerminal?.name || ""),
     userName: String(currentAgent?.name || currentAgent?.nick || ""),
     parkingMode: inferTicketParkingMode(ticket),
+    modoMesas: isMesasModeTicket(ticket) ? 1 : 0,
+    modeMesas: isMesasModeTicket(ticket) ? 1 : 0,
     mesaUid: ticket?.mesaUid || null,
     mesaRoomId: ticket?.mesaRoomId || null,
     mesaRoomName: ticket?.mesaRoomName || null,
@@ -22941,6 +23214,7 @@ async function runMesasAutoSaveIfNeeded() {
       silentAutoSave: true,
       skipAutoPrint: true,
       skipStockConfirm: true,
+      parkingMode: PARKED_MODE_MESAS,
     });
   } catch (e) {
     console.warn("No se pudo auto-guardar pedido de mesa:", e?.message || e);
@@ -25585,6 +25859,18 @@ function getCurrentLoadedParkedTicket() {
   return ticket;
 }
 
+function clearMesaScopeFromTicket(ticket) {
+  if (!ticket || typeof ticket !== "object") return ticket;
+
+  ticket.mesaUid = null;
+  ticket.mesaRoomId = null;
+  ticket.mesaRoomName = null;
+  ticket.mesaTableId = null;
+  ticket.mesaTableName = null;
+
+  return ticket;
+}
+
 function isMesasTransaccionesMode() {
   return MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones";
 }
@@ -26011,8 +26297,8 @@ parkBtn?.addEventListener("click", async () => {
     return;
   }
 
-  // 2) (Opcional pero recomendado) exigir terminal seleccionada antes de aparcar
-  if (!currentTerminal) {
+  // 2) En mesas transacciones exigimos terminal para mantener el contexto de sala/mesa.
+  if (mesasMode && !currentTerminal) {
     toast(
       "Debes seleccionar un terminal antes de guardar.",
       "warn",
@@ -26037,7 +26323,8 @@ parkBtn?.addEventListener("click", async () => {
       : [];
     await parkCurrentCart(loadedTicket.name || "", loadedTicket.obs || "", {
       mesaAlerts,
-      openListAfterSave: !mesasMode,
+      openListAfterSave: false,
+      parkingMode: mesasMode ? PARKED_MODE_MESAS : PARKED_MODE_TPV,
     });
     return;
   }
@@ -26103,7 +26390,10 @@ parkObsOkBtn?.addEventListener("click", async () => {
     mesaAlerts,
     docType,
     skipAutoPrint: !!parkObsMetaEditMode,
-    openListAfterSave: !isMesasTransaccionesMode(),
+    openListAfterSave: false,
+    parkingMode: isMesasTransaccionesMode()
+      ? PARKED_MODE_MESAS
+      : PARKED_MODE_TPV,
   });
   parkObsMetaEditMode = false;
 });
