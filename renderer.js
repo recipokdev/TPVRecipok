@@ -88,6 +88,8 @@ const parkedViewState = {
 let parkedCounter = 0;
 // Índice del ticket aparcado actualmente cargado en el carrito
 let currentParkedTicketIndex = null;
+let PENDING_RUNTIME_PARKED_SYNC_KEY = "";
+let PENDING_RUNTIME_PARKED_TICKET_ID = 0;
 let showParkStockWarning = true;
 
 // ===== [02] Estado operativo: TPVs, agentes y caja =====
@@ -461,6 +463,8 @@ let __parkedSyncDrainInFlight = false;
 
 let __parkedReservationsRefreshTimer = null;
 let __parkedReservationsRefreshInFlight = false;
+let __sharedCajaHealthTimer = null;
+let __sharedCajaHealthInFlight = false;
 
 // Ajusta esta URL a tu API TPV real
 const TPV_SYNC_API_URL =
@@ -4005,7 +4009,10 @@ async function addToCart(product, quantity = 1) {
     );
     const packLinesForUI = rawPackLines.map((ln, idx) => {
       const ref = String(ln.reference || "").trim();
-      const baseQty = Number(ln.quantity || 1) || 1;
+      const baseQty = Math.max(
+        0.001,
+        roundQty3(parseQtyValue(ln?.quantity ?? ln?.qty, 1)),
+      );
       const prodFs = prods[idx];
       return {
         reference: ref,
@@ -4291,6 +4298,71 @@ function normalizeCartLineFromSnapshot(raw) {
   return line;
 }
 
+function buildCartRecoveryLineToken(line) {
+  if (!line || typeof line !== "object") return "";
+
+  const role = line?.meta?.isPackOffer
+    ? "P"
+    : line?.meta?.includedInPack
+      ? "C"
+      : "N";
+
+  const qty = roundQty3(getCartItemReservedQty(line));
+  const idProd = getProductBaseId(line);
+  const ref = String(
+    line?.meta?.packRef ||
+      line?.referencia ||
+      line?.name ||
+      line?.descripcion ||
+      "",
+  )
+    .trim()
+    .toLowerCase();
+
+  let extra = "";
+  if (role === "P") {
+    const packId = Number(line?.meta?.packId || 0) || 0;
+    const sel = Array.isArray(line?.meta?.packSelection)
+      ? line.meta.packSelection
+      : [];
+    const selKey = selectionKeyFromArr(sel);
+    extra = `|${packId}|${selKey}`;
+  }
+
+  return `${role}|${idProd}|${ref}|${qty}${extra}`;
+}
+
+function buildCartRecoverySignature(items) {
+  const tokens = (Array.isArray(items) ? items : [])
+    .map((line) => buildCartRecoveryLineToken(line))
+    .filter(Boolean)
+    .sort();
+
+  return tokens.join("||");
+}
+
+function tryResolvePendingParkedTicketByCartMatch() {
+  if (!Array.isArray(parkedTickets) || !parkedTickets.length) return false;
+  if (!Array.isArray(cart) || !cart.length) return false;
+
+  const cartSig = buildCartRecoverySignature(cart);
+  if (!cartSig) return false;
+
+  const idx = parkedTickets.findIndex((t) => {
+    const sig = buildCartRecoverySignature(
+      Array.isArray(t?.items) ? t.items : [],
+    );
+    return !!sig && sig === cartSig;
+  });
+
+  if (idx < 0) return false;
+
+  currentParkedTicketIndex = idx;
+  PENDING_RUNTIME_PARKED_SYNC_KEY = "";
+  PENDING_RUNTIME_PARKED_TICKET_ID = 0;
+  return true;
+}
+
 function buildRuntimeCartSnapshotPayload() {
   const safeCart = Array.isArray(cart)
     ? cart
@@ -4303,11 +4375,43 @@ function buildRuntimeCartSnapshotPayload() {
         .filter(Boolean)
     : [];
 
+  const activeParkedTicket =
+    currentParkedTicketIndex != null && Array.isArray(parkedTickets)
+      ? parkedTickets[currentParkedTicketIndex] || null
+      : null;
+
   return {
     v: 1,
     ts: Date.now(),
     items: safeCart,
+    parkedTicketSyncKey: getParkedTicketSyncKey(activeParkedTicket),
+    parkedTicketId: Number(activeParkedTicket?.id || 0) || null,
   };
+}
+
+function tryResolvePendingParkedTicketIndex() {
+  const key = String(PENDING_RUNTIME_PARKED_SYNC_KEY || "").trim();
+  if (!Array.isArray(parkedTickets) || !parkedTickets.length) return false;
+
+  const pendingId = Number(PENDING_RUNTIME_PARKED_TICKET_ID || 0) || 0;
+
+  let idx = -1;
+  if (key) {
+    idx = parkedTickets.findIndex((t) => getParkedTicketSyncKey(t) === key);
+  }
+
+  if (idx < 0 && pendingId > 0) {
+    idx = parkedTickets.findIndex((t) => Number(t?.id || 0) === pendingId);
+  }
+
+  if (idx < 0) {
+    return tryResolvePendingParkedTicketByCartMatch();
+  }
+
+  currentParkedTicketIndex = idx;
+  PENDING_RUNTIME_PARKED_SYNC_KEY = "";
+  PENDING_RUNTIME_PARKED_TICKET_ID = 0;
+  return true;
 }
 
 function scheduleRuntimeCartSnapshotCfgWrite(
@@ -4395,6 +4499,19 @@ async function restoreRuntimeCartSnapshot() {
 
     cart = restored;
 
+    const parkedSyncKey = String(parsed?.parkedTicketSyncKey || "").trim();
+    const parkedTicketId = Number(parsed?.parkedTicketId || 0) || 0;
+    PENDING_RUNTIME_PARKED_SYNC_KEY = parkedSyncKey;
+    PENDING_RUNTIME_PARKED_TICKET_ID = parkedTicketId;
+
+    if (!tryResolvePendingParkedTicketIndex()) {
+      const cachedParked = loadParkedTicketsCache();
+      if (cachedParked.length) {
+        parkedTickets = cachedParked;
+        tryResolvePendingParkedTicketIndex();
+      }
+    }
+
     // Si restauramos desde localStorage, replicamos a TPV_CFG para siguientes arranques.
     scheduleRuntimeCartSnapshotCfgWrite(parsed, { immediate: true });
 
@@ -4458,7 +4575,14 @@ function renderCart() {
 
     row.innerHTML = `
       <div class="cart-line-name">
-        <div>${item.name}</div>
+        <div class="cart-line-name-head">
+          <div>${item.name}</div>
+          ${
+            isPackParentLine(item)
+              ? `<button class="cart-line-pack-edit" data-action="pack-edit" data-lineid="${item._lineId}" title="Editar oferta" aria-label="Editar oferta">✎</button>`
+              : ""
+          }
+        </div>
 
         ${
           item.secondaryName
@@ -4534,6 +4658,13 @@ function renderCart() {
   }
 
   persistRuntimeCartSnapshot();
+
+  if (currentParkedTicketIndex == null && PENDING_RUNTIME_PARKED_SYNC_KEY) {
+    if (tryResolvePendingParkedTicketIndex()) {
+      refreshParkButtonUI();
+      refreshParkedEditingBanner();
+    }
+  }
 
   refreshParkButtonUI();
   refreshParkedEditingBanner();
@@ -6794,9 +6925,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 const cartLinesContainer = document.getElementById("cartLines");
 
 if (cartLinesContainer) {
-  cartLinesContainer.addEventListener("click", (e) => {
+  cartLinesContainer.addEventListener("click", async (e) => {
     const lineId = e.target?.closest(".cart-line")?.dataset?.lineid;
     const item = lineId ? cart.find((c) => c._lineId === lineId) : null;
+
+    const packEditBtn = e.target.closest('[data-action="pack-edit"]');
+    if (packEditBtn) {
+      if (!item || !isPackParentLine(item)) return;
+      await openPackEditModalForParentLine(item);
+      return;
+    }
 
     // ✅ Bloquear TOTAL para hijos de pack
     if (item && isPackChildLine(item)) {
@@ -7110,6 +7248,10 @@ async function parkCurrentCart(name = "", obs = "") {
     !parkedTickets[currentParkedTicketIndex].paid
   ) {
     const existing = parkedTickets[currentParkedTicketIndex];
+    const prevItems = Array.isArray(existing?.items)
+      ? existing.items.map((it) => ({ ...it }))
+      : [];
+    const reservedDelta = buildReservedQtyDeltaMap(snapshot, prevItems);
 
     existing.items = snapshot;
     existing.total = total;
@@ -7134,6 +7276,22 @@ async function parkCurrentCart(name = "", obs = "") {
           "Sin internet: actualización de aparcado guardada en cola.",
           "warn",
           "Aparcados",
+        );
+      }
+    }
+
+    if (reservedDelta.size > 0) {
+      try {
+        await syncReservedStockDeltaToFS(reservedDelta, "actualizar aparcado");
+      } catch (e) {
+        console.warn(
+          "No se pudo sincronizar stock al actualizar aparcado:",
+          e?.message || e,
+        );
+        toast(
+          "Aparcado actualizado, pero no se pudo sincronizar stock en FacturaScripts.",
+          "warn",
+          "Stock",
         );
       }
     }
@@ -7199,6 +7357,8 @@ async function parkCurrentCart(name = "", obs = "") {
   parkedTickets.push(localTicket);
   saveParkedTicketsCache();
 
+  const reservedDelta = buildReservedQtyDeltaMap(snapshot, []);
+
   try {
     await apiSaveParkedReservation(localTicket);
     await refreshRemoteParkedReservationsOnly();
@@ -7214,6 +7374,22 @@ async function parkCurrentCart(name = "", obs = "") {
         "Sin internet: ticket aparcado guardado en cola.",
         "warn",
         "Aparcados",
+      );
+    }
+  }
+
+  if (reservedDelta.size > 0) {
+    try {
+      await syncReservedStockDeltaToFS(reservedDelta, "crear aparcado");
+    } catch (e) {
+      console.warn(
+        "No se pudo sincronizar stock al crear aparcado:",
+        e?.message || e,
+      );
+      toast(
+        "Ticket aparcado, pero no se pudo sincronizar stock en FacturaScripts.",
+        "warn",
+        "Stock",
       );
     }
   }
@@ -7255,6 +7431,27 @@ function parkedNormalizeText(value) {
   return String(value || "").trim();
 }
 
+function parkedIsPlaceholderText(value) {
+  const txt = parkedNormalizeText(value).toLowerCase();
+  if (!txt) return true;
+
+  if (
+    txt === "-" ||
+    txt === "--" ||
+    txt === "---" ||
+    txt === "_" ||
+    txt === "n/a" ||
+    txt === "na" ||
+    txt === "s/d" ||
+    txt === "sin descripcion" ||
+    txt === "sin descripción"
+  ) {
+    return true;
+  }
+
+  return /^[.\-_/\\|·\s]+$/.test(txt);
+}
+
 function parkedGetItemQty(it) {
   return Number(it?.qty ?? it?.cantidad ?? 1) || 1;
 }
@@ -7263,14 +7460,14 @@ function parkedGetItemPrimaryName(it) {
   const direct =
     it?.name ?? it?.nombre ?? it?.productName ?? it?.referencia ?? "";
   const directText = parkedNormalizeText(direct);
-  if (directText) return directText;
+  if (directText && !parkedIsPlaceholderText(directText)) return directText;
 
   const fallbackId = Number(it?.idproducto ?? it?.id ?? 0) || 0;
   return fallbackId ? String(fallbackId) : "";
 }
 
 function parkedGetItemDescription(it) {
-  return parkedNormalizeText(
+  const desc = parkedNormalizeText(
     it?.descripcion ??
       it?.description ??
       it?.productDescription ??
@@ -7278,6 +7475,9 @@ function parkedGetItemDescription(it) {
       it?.secondaryName ??
       "",
   );
+
+  if (parkedIsPlaceholderText(desc)) return "";
+  return desc;
 }
 
 function parkedBuildItemDisplayName(it) {
@@ -7289,6 +7489,66 @@ function parkedBuildItemDisplayName(it) {
   }
 
   return primary || desc || "Producto";
+}
+
+function parkedBuildGroupedPreview(items) {
+  const arr = Array.isArray(items) ? items : [];
+  if (!arr.length) return "";
+
+  const byParent = new Map();
+  arr.forEach((line) => {
+    const parentId = String(line?.meta?.parentPackLineId || "").trim();
+    if (!parentId) return;
+    if (!byParent.has(parentId)) byParent.set(parentId, []);
+    byParent.get(parentId).push(line);
+  });
+
+  const chunks = [];
+
+  arr.forEach((line) => {
+    if (line?.meta?.includedInPack) return;
+
+    const qty = parkedGetItemQty(line);
+    const name = parkedBuildItemDisplayName(line);
+
+    if (line?.meta?.isPackOffer) {
+      const children = byParent.get(String(line?._lineId || "").trim()) || [];
+      let includesTxt = children
+        .map(
+          (ch) =>
+            `${fmtQty(parkedGetItemQty(ch))}x ${parkedBuildItemDisplayName(ch)}`,
+        )
+        .join(" · ");
+
+      if (!includesTxt) {
+        const selection = Array.isArray(line?.meta?.packSelection)
+          ? line.meta.packSelection
+          : [];
+
+        includesTxt = selection
+          .map((sel) => {
+            const ref = String(sel?.reference || "").trim();
+            const sq = parseQtyValue(sel?.qty, 0);
+            if (!ref || sq <= 0) return "";
+            const q = roundQty3(sq * qty);
+            return `${ref} x${fmtQty(q)}`;
+          })
+          .filter(Boolean)
+          .join(" · ");
+      }
+
+      const packTxt = includesTxt
+        ? `${fmtQty(qty)}x ${name} · Incluye: ${includesTxt}`
+        : `${fmtQty(qty)}x ${name}`;
+
+      chunks.push(packTxt);
+      return;
+    }
+
+    chunks.push(`${fmtQty(qty)}x ${name}`);
+  });
+
+  return chunks.join(" | ");
 }
 
 function buildParkedSummaryStats(sourceTickets) {
@@ -7780,26 +8040,7 @@ function renderParkedTicketsModal() {
     const totalTexto = t.total != null ? t.total.toFixed(2) + " €" : "—";
 
     const items = Array.isArray(t.items) ? t.items : [];
-    const keyOf = (it) =>
-      String(
-        Number(it?.idproducto || it?.id || 0) ||
-          `${parkedGetItemPrimaryName(it)}|${parkedGetItemDescription(it)}`,
-      ).toLowerCase();
-
-    const uniqueMap = new Map();
-    items.forEach((it) => {
-      const k = keyOf(it);
-      if (!uniqueMap.has(k)) uniqueMap.set(k, it);
-    });
-
-    const tipos = uniqueMap.size;
-
-    const preview = Array.from(uniqueMap.values())
-      .slice(0, 8)
-      .map((it) => `${parkedGetItemQty(it)}× ${parkedBuildItemDisplayName(it)}`)
-      .join(" · ");
-
-    const extra = tipos > 8 ? ` · +${tipos - 8}` : "";
+    const preview = parkedBuildGroupedPreview(items);
     const obs = (t.obs || "").trim();
 
     const paidBadge = t.paid
@@ -7835,7 +8076,7 @@ function renderParkedTicketsModal() {
       </div>
 
       <div class="pt-mid">
-        <div class="pt-items">${escapeHtml(preview + extra)}</div>
+        <div class="pt-items">${escapeHtml(preview || "Sin productos")}</div>
         ${paidSub}
       </div>
 
@@ -7872,6 +8113,23 @@ function renderParkedTicketsModal() {
               "Aparcados",
             );
           }
+        }
+
+        try {
+          const releaseDelta = buildReservedQtyDeltaMap([], t?.items || []);
+          if (releaseDelta.size > 0) {
+            await syncReservedStockDeltaToFS(releaseDelta, "eliminar aparcado");
+          }
+        } catch (e) {
+          console.warn(
+            "No se pudo sincronizar stock al eliminar aparcado:",
+            e?.message || e,
+          );
+          toast(
+            "Aparcado eliminado localmente, pero no se pudo sincronizar stock en FacturaScripts.",
+            "warn",
+            "Stock",
+          );
         }
 
         parkedTickets.splice(realIndex, 1);
@@ -8014,7 +8272,7 @@ if (parkedTicketsOverlay) {
 
 function hydrateParkedItemForCart(item) {
   const src = item && typeof item === "object" ? item : {};
-  const qty = Number(src.qty ?? src.cantidad ?? 1) || 1;
+  const qty = parseQtyValue(src.qty ?? src.cantidad, 1);
 
   const toFiniteNumberOrNull = (v) => {
     const n = Number(v);
@@ -8059,6 +8317,7 @@ function hydrateParkedItemForCart(item) {
         : Number(built?.grossPrice || built?.price || 0),
     taxRate: srcTax != null ? srcTax : Number(built?.taxRate || 0),
     codimpuesto: src.codimpuesto || built?.codimpuesto || null,
+    __parkedPrevLineId: String(src._lineId || "").trim() || null,
   };
 }
 
@@ -8085,6 +8344,31 @@ function restoreParkedCartByIndex(index) {
   }
 
   cart = (ticket.items || []).map((i) => hydrateParkedItemForCart(i));
+
+  // Reenlaza hijos de oferta al nuevo _lineId del parent tras hidratar.
+  const parentIdMap = new Map();
+  cart.forEach((line) => {
+    if (!isPackParentLine(line)) return;
+    const prevId = String(line?.__parkedPrevLineId || "").trim();
+    if (!prevId) return;
+    parentIdMap.set(prevId, line._lineId);
+  });
+
+  cart.forEach((line) => {
+    const prevParent = String(line?.meta?.parentPackLineId || "").trim();
+    if (!prevParent) return;
+
+    const mapped = parentIdMap.get(prevParent);
+    if (mapped) {
+      line.meta = line.meta || {};
+      line.meta.parentPackLineId = mapped;
+    }
+  });
+
+  cart.forEach((line) => {
+    delete line.__parkedPrevLineId;
+  });
+
   renderCart();
 
   currentParkedTicketIndex = index;
@@ -9572,6 +9856,12 @@ function isCajaOpen(remoteCaja) {
   return ff == null || String(ff).trim() === "";
 }
 
+function isSharedCashModeEnabled() {
+  const cfgVal = window.TPV_CONFIG?.sharedCashMode;
+  if (cfgVal == null) return true;
+  return !!cfgVal;
+}
+
 async function apiReadLastOpenCajaForTpv(idtpv) {
   // usa tu fetchApiResourceWithParams o apiRead con querystring
   // (esto está alineado con tu endpoint y filtros)
@@ -9582,6 +9872,90 @@ async function apiReadLastOpenCajaForTpv(idtpv) {
     limit: 1,
   });
   return Array.isArray(list) && list[0] ? list[0] : null;
+}
+
+async function apiReadLastOpenCajaGlobal() {
+  const list = await fetchApiResourceWithParams("tpvcajas", {
+    "sort[idcaja]": "DESC",
+    "filter[fechafin_null]": 1,
+    limit: 1,
+  });
+  return Array.isArray(list) && list[0] ? list[0] : null;
+}
+
+async function checkSharedCajaHealthOnce() {
+  if (!isSharedCashModeEnabled()) return true;
+  if (TPV_STATE?.offline || TPV_STATE?.locked) return true;
+  if (!cashSession?.open) return true;
+
+  const idcaja = getCajaIdSafe();
+  if (!idcaja) return true;
+
+  try {
+    const remoteCaja = await apiReadCajaById(idcaja);
+    if (remoteCaja && isCajaOpen(remoteCaja)) return true;
+
+    cashSession.open = false;
+    cashSession.remoteCajaId = null;
+    pushCustomerState();
+
+    stopProductsStockAutoRefresh?.();
+    stopParkedReservationsAutoRefresh?.();
+    stopSharedCajaHealthMonitor?.();
+
+    try {
+      localStorage.removeItem("tpv_remoteCajaId");
+    } catch {}
+
+    updateCashButtonLabel?.();
+    renderCashIdChip?.();
+    refreshAgentGuardUI?.();
+    setStatusText("Caja cerrada en otro TPV");
+
+    toast(
+      "La caja se cerró en otro TPV. Debes abrir o recuperar una caja para continuar.",
+      "warn",
+      "Caja",
+    );
+
+    setTimeout(() => {
+      maybeOpenCashOrRecover?.().catch?.(() => {});
+    }, 250);
+
+    return false;
+  } catch (e) {
+    if (!isConnectivityLikeError(e)) {
+      console.warn("Chequeo de caja compartida falló:", e?.message || e);
+    }
+    return true;
+  }
+}
+
+function startSharedCajaHealthMonitor() {
+  stopSharedCajaHealthMonitor();
+
+  if (!isSharedCashModeEnabled()) return;
+
+  checkSharedCajaHealthOnce().catch(() => {});
+
+  __sharedCajaHealthTimer = setInterval(async () => {
+    if (__sharedCajaHealthInFlight) return;
+    if (!cashSession?.open) return;
+
+    __sharedCajaHealthInFlight = true;
+    try {
+      await checkSharedCajaHealthOnce();
+    } finally {
+      __sharedCajaHealthInFlight = false;
+    }
+  }, 10000);
+}
+
+function stopSharedCajaHealthMonitor() {
+  if (__sharedCajaHealthTimer) {
+    clearInterval(__sharedCajaHealthTimer);
+    __sharedCajaHealthTimer = null;
+  }
 }
 
 async function maybeOpenCashOrRecover() {
@@ -9625,6 +9999,7 @@ async function maybeOpenCashOrRecover() {
           await refreshStockAndReservationsOnly().catch(() => {});
           startProductsStockAutoRefresh?.();
           startParkedReservationsAutoRefresh?.();
+          startSharedCajaHealthMonitor?.();
           return;
         }
 
@@ -9656,10 +10031,13 @@ async function maybeOpenCashOrRecover() {
       }
     }
 
-    // 2) Si NO hay caja guardada válida, buscar ABIERTAS en FS para este TPV
-    if (idtpv) {
+    // 2) Si NO hay caja guardada válida, buscar ABIERTAS en FS.
+    //    En modo compartido se busca globalmente, no solo por idtpv local.
+    if (idtpv || isSharedCashModeEnabled()) {
       try {
-        const resp = await apiReadLastOpenCajaForTpv(idtpv);
+        const resp = isSharedCashModeEnabled()
+          ? await apiReadLastOpenCajaGlobal()
+          : await apiReadLastOpenCajaForTpv(idtpv);
 
         // ✅ soporta: objeto o array
         const list = Array.isArray(resp) ? resp : resp ? [resp] : [];
@@ -9696,6 +10074,7 @@ async function maybeOpenCashOrRecover() {
           await refreshStockAndReservationsOnly().catch(() => {});
           startProductsStockAutoRefresh?.();
           startParkedReservationsAutoRefresh?.();
+          startSharedCajaHealthMonitor?.();
 
           // opcional: avisar si hay más de una abierta (caso raro)
           if (openOnes.length > 1) {
@@ -9714,6 +10093,7 @@ async function maybeOpenCashOrRecover() {
     // 3) No hay nada abierto → pedir apertura (solo una vez)
     cashSession.remoteCajaId = null;
     cashSession.open = false;
+    stopSharedCajaHealthMonitor?.();
     pushCustomerState();
     renderCashIdChip();
 
@@ -11041,6 +11421,7 @@ async function confirmCashOpening() {
   await refreshStockAndReservationsOnly().catch(() => {});
   startProductsStockAutoRefresh?.();
   startParkedReservationsAutoRefresh?.();
+  startSharedCajaHealthMonitor?.();
 
   logFeatureInfo("CAJA", "apertura-ok", {
     requestId,
@@ -11117,6 +11498,7 @@ async function confirmCashClosing() {
   cashSession.open = false;
   stopProductsStockAutoRefresh?.();
   stopParkedReservationsAutoRefresh?.();
+  stopSharedCajaHealthMonitor?.();
   pushCustomerState();
 
   cashSession.remoteCajaId = null;
@@ -11951,6 +12333,29 @@ async function apiOpenCashInFS() {
   if (existing) {
     cashSession.remoteCajaId = existing;
     return { ok: true, reused: true, idcaja: existing };
+  }
+
+  if (isSharedCashModeEnabled()) {
+    try {
+      const sharedOpen = await apiReadLastOpenCajaGlobal();
+      if (
+        sharedOpen &&
+        isCajaOpen(sharedOpen) &&
+        Number(sharedOpen.idcaja || 0)
+      ) {
+        const reusedId = Number(sharedOpen.idcaja || 0);
+        cashSession.remoteCajaId = reusedId;
+        try {
+          localStorage.setItem("tpv_remoteCajaId", String(reusedId));
+        } catch {}
+        return { ok: true, reused: true, idcaja: reusedId };
+      }
+    } catch (e) {
+      console.warn(
+        "No se pudo comprobar caja compartida abierta:",
+        e?.message || e,
+      );
+    }
   }
 
   const payload = {
@@ -14916,7 +15321,7 @@ function buildFsLinesFromCart(cartArr) {
       // ✅ NO mandar hijos a FS (el plugin los añade/gestiona)
       .filter((item) => !item?.meta?.includedInPack)
       .map((item) => {
-        const qty = Number(item.qty || 1) || 1;
+        const qty = parseQtyValue(item?.qty ?? item?.cantidad, 1);
 
         // Precio unitario BRUTO (IVA incl.)
         const unitGross = Number(getUnitGross(item) || 0);
@@ -16211,8 +16616,184 @@ function getProductBaseId(product) {
   );
 }
 
+function resolveProductIdByReferenceSync(reference) {
+  const ref = String(reference || "")
+    .trim()
+    .toLowerCase();
+  if (!ref) return 0;
+
+  const local = Array.isArray(products)
+    ? products.find((p) => {
+        const pRef = String(p?.referencia || p?.ref || p?.codigo || "")
+          .trim()
+          .toLowerCase();
+        return pRef === ref;
+      })
+    : null;
+
+  const localId = Number(local?.baseProductId || local?.id || 0) || 0;
+  if (localId) return localId;
+
+  const cache = PACKS_STATE?.productByRefCache;
+  if (!(cache instanceof Map)) return 0;
+
+  for (const [key, value] of cache.entries()) {
+    if (
+      String(key || "")
+        .trim()
+        .toLowerCase() !== ref
+    )
+      continue;
+    const cachedId = Number(value?.idproducto || value?.id || 0) || 0;
+    if (cachedId) return cachedId;
+  }
+
+  return 0;
+}
+
+function parseQtyValue(value, fallback = 0) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : fallback;
+  }
+
+  const raw = String(value ?? "").trim();
+  if (!raw) return fallback;
+
+  const normalized = raw.replace(",", ".");
+  const qty = Number(normalized);
+  return Number.isFinite(qty) ? qty : fallback;
+}
+
 function getCartItemReservedQty(item) {
-  return Number(item?.qty ?? item?.cantidad ?? 1) || 0;
+  return parseQtyValue(item?.qty ?? item?.cantidad, 0);
+}
+
+function roundQty3(value) {
+  return Math.round((Number(value || 0) + Number.EPSILON) * 1000) / 1000;
+}
+
+function buildReservedQtyByProductMap(items) {
+  const out = new Map();
+
+  (Array.isArray(items) ? items : []).forEach((it) => {
+    let idProd = getProductBaseId(it);
+
+    // Para hijos de pack, prioriza resolver por referencia para evitar ids inválidos
+    // heredados de líneas de plantilla (p. ej. id de packline en lugar de idproducto).
+    if (it?.meta?.includedInPack) {
+      const packRef = String(it?.meta?.packRef || it?.referencia || "").trim();
+      const byRefId = resolveProductIdByReferenceSync(packRef);
+      if (byRefId) idProd = byRefId;
+    }
+
+    if (!idProd) return;
+
+    const qty = getCartItemReservedQty(it);
+    if (!Number.isFinite(qty) || Math.abs(qty) < 0.0005) return;
+
+    const prev = Number(out.get(idProd) || 0);
+    out.set(idProd, roundQty3(prev + qty));
+  });
+
+  return out;
+}
+
+function buildReservedQtyDeltaMap(nextItems, prevItems) {
+  const nextMap = buildReservedQtyByProductMap(nextItems);
+  const prevMap = buildReservedQtyByProductMap(prevItems);
+
+  const out = new Map();
+  const keys = new Set([...nextMap.keys(), ...prevMap.keys()]);
+
+  keys.forEach((idProd) => {
+    const nextQty = Number(nextMap.get(idProd) || 0);
+    const prevQty = Number(prevMap.get(idProd) || 0);
+    const delta = roundQty3(nextQty - prevQty);
+    if (Math.abs(delta) < 0.0005) return;
+    out.set(idProd, delta);
+  });
+
+  return out;
+}
+
+function findProductByBaseId(idProd) {
+  const id = Number(idProd || 0) || 0;
+  if (!id || !Array.isArray(products)) return null;
+  return products.find((p) => getProductBaseId(p) === id) || null;
+}
+
+function applyStockQtyToLocalProductsById(idProd, qty) {
+  const baseId = Number(idProd || 0) || 0;
+  if (!baseId || !Array.isArray(products) || !products.length) return;
+
+  products = products.map((p) => {
+    if (Number(p?.baseProductId || p?.id || 0) !== baseId) return p;
+    return {
+      ...p,
+      stockfis: Number(qty),
+    };
+  });
+
+  renderProducts?.();
+  updateRenderedProductStocks?.();
+}
+
+function isReservedStockSyncedToFsEnabled() {
+  const cfgVal = window.TPV_CONFIG?.syncReservedStockToFS;
+  if (cfgVal == null) return true;
+  return !!cfgVal;
+}
+
+async function syncReservedStockDeltaToFS(deltaMap, reason = "") {
+  if (!isReservedStockSyncedToFsEnabled()) return true;
+  if (!(deltaMap instanceof Map) || deltaMap.size === 0) return true;
+  if (TPV_STATE?.offline || TPV_STATE?.locked) {
+    throw new Error("Sin conexión con FacturaScripts para sincronizar stock.");
+  }
+
+  const issues = [];
+
+  for (const [idProdRaw, deltaRaw] of deltaMap.entries()) {
+    const idProd = Number(idProdRaw || 0) || 0;
+    const delta = Number(deltaRaw || 0);
+
+    if (!idProd || !Number.isFinite(delta) || Math.abs(delta) < 0.0005) {
+      continue;
+    }
+
+    try {
+      const product = findProductByBaseId(idProd);
+      const stockRow = await fetchStockRowForProduct(
+        product || { id: idProd, baseProductId: idProd },
+      );
+
+      if (!stockRow) {
+        throw new Error(`No se encontró fila de stock para producto ${idProd}`);
+      }
+
+      const currentQty = parseQtyValue(
+        stockRow?.cantidad ?? product?.stockfis,
+        0,
+      );
+
+      // delta > 0 => se aparca más y baja stock, delta < 0 => se libera y sube stock.
+      const nextQty = roundQty3(currentQty - delta);
+
+      await updateStockRowCantidad(stockRow, nextQty);
+      applyStockQtyToLocalProductsById(idProd, nextQty);
+    } catch (e) {
+      issues.push(`${idProd}: ${e?.message || e}`);
+    }
+  }
+
+  if (issues.length) {
+    const detail = issues.slice(0, 3).join(" | ");
+    throw new Error(
+      `No se pudo sincronizar stock en FacturaScripts (${reason || "aparcados"}): ${detail}`,
+    );
+  }
+
+  return true;
 }
 
 function rebuildRemoteReservedByProductMap() {
@@ -16256,7 +16837,7 @@ function normalizeRemoteParkedTicket(raw) {
   const items = Array.isArray(raw.items)
     ? raw.items.map((it) => ({
         ...it,
-        qty: Number(it?.qty ?? it?.cantidad ?? 1) || 1,
+        qty: parseQtyValue(it?.qty ?? it?.cantidad, 1),
       }))
     : [];
 
@@ -16454,6 +17035,18 @@ function syncParkedTicketsFromRemote(list) {
       (t) => getParkedTicketSyncKey(t) === prevLoadedKey,
     );
     currentParkedTicketIndex = nextIdx >= 0 ? nextIdx : null;
+  } else if (PENDING_RUNTIME_PARKED_SYNC_KEY) {
+    if (!tryResolvePendingParkedTicketIndex()) {
+      if (!tryResolvePendingParkedTicketByCartMatch()) {
+        currentParkedTicketIndex = null;
+      }
+    }
+  } else if (PENDING_RUNTIME_PARKED_TICKET_ID) {
+    if (!tryResolvePendingParkedTicketIndex()) {
+      if (!tryResolvePendingParkedTicketByCartMatch()) {
+        currentParkedTicketIndex = null;
+      }
+    }
   } else {
     currentParkedTicketIndex = null;
   }
@@ -16491,6 +17084,13 @@ function getVisibleStockForProduct(productOrId) {
   if (!product) return 0;
 
   const realStock = Number(product.stockfis ?? 0);
+
+  // Si ya sincronizamos reservas contra FacturaScripts, stockfis ya viene descontado.
+  // Evita doble descuento visual en TPV.
+  if (isReservedStockSyncedToFsEnabled()) {
+    return realStock;
+  }
+
   const reserved = getReservedQtyForProduct(product);
 
   return realStock - reserved;
@@ -16554,6 +17154,7 @@ async function apiSaveParkedReservation(ticket) {
     fs: ticket?.fs || null,
     items: Array.isArray(ticket.items)
       ? ticket.items.map((it) => ({
+          _lineId: String(it?._lineId || "").trim() || null,
           id: Number(it?.id || 0) || null,
           baseProductId: Number(it?.baseProductId || 0) || null,
           idproducto: getProductBaseId(it),
@@ -16674,6 +17275,7 @@ async function refreshRemoteParkedReservationsOnly() {
     if (cached.length) {
       parkedTickets = cached;
       REMOTE_PARKED_RESERVATIONS = cached.filter((t) => !t.paid);
+      tryResolvePendingParkedTicketIndex();
       rebuildRemoteReservedByProductMap();
       updateRenderedProductStocks();
       updateParkedCountBadge?.();
@@ -20639,22 +21241,92 @@ function getPackIncludesTextForParentLine(parentLine) {
   if (!isPackParentLine(parentLine)) return "";
 
   const packId = Number(parentLine?.meta?.packId || 0);
+  const parentQty = Number(parentLine.qty || 0) || 0;
+
+  const selected = Array.isArray(parentLine?.meta?.packSelection)
+    ? parentLine.meta.packSelection
+    : [];
+
+  if (selected.length) {
+    return selected
+      .map((ln) => {
+        const ref = String(ln.reference || "").trim();
+        const baseQ = parseQtyValue(ln.qty, 0);
+        const q = roundQty3(baseQ * parentQty);
+        if (!ref || q <= 0) return "";
+        return `${ref} x${fmtQty(q)}`;
+      })
+      .filter(Boolean)
+      .join(" · ");
+  }
+
   if (!packId) return "";
 
   const lines = PACKS_STATE.linesByPackId.get(packId) || [];
   if (!lines.length) return "";
 
-  // Nota: aquí usamos la referencia (más fiable) y multiplicamos por qty del parent
-  const parentQty = Number(parentLine.qty || 0) || 0;
-
   return lines
     .map((ln) => {
       const ref = String(ln.reference || "").trim();
-      const baseQ = Number(ln.quantity || 1) || 1;
-      const q = baseQ * parentQty;
+      const baseQ = parseQtyValue(ln?.quantity ?? ln?.qty, 1);
+      const q = roundQty3(baseQ * parentQty);
       return `${ref} x${fmtQty(q)}`;
     })
     .join(" · ");
+}
+
+async function openPackEditModalForParentLine(parentLine) {
+  if (!isPackParentLine(parentLine)) return false;
+
+  const selection = Array.isArray(parentLine?.meta?.packSelection)
+    ? parentLine.meta.packSelection
+    : [];
+
+  const packId = Number(parentLine?.meta?.packId || 0);
+  const templateLines = packId
+    ? PACKS_STATE.linesByPackId.get(packId) || []
+    : [];
+
+  const sourceLines = templateLines.length ? templateLines : selection;
+
+  if (!sourceLines.length) {
+    toast("No hay configuracion de oferta para editar.", "warn", "Oferta");
+    return false;
+  }
+
+  const selectedQtyByRef = new Map(
+    selection.map((s) => [
+      String(s.reference || "").trim(),
+      parseQtyValue(s.qty, 1),
+    ]),
+  );
+
+  const packLines = sourceLines.map((line) => ({
+    reference: String(line.reference || "").trim(),
+    baseQty: Math.max(
+      0.001,
+      roundQty3(parseQtyValue(line.quantity ?? line.qty ?? 1, 1)),
+    ),
+    productName:
+      line.productName || line.descripcion || line.reference || "Producto",
+  }));
+
+  const result = await openPackConfigModal({
+    offerName: parentLine?.name || "Oferta",
+    offerSecondary: parentLine?.secondaryName || "",
+    packLines,
+    initialSelection: selectedQtyByRef,
+  });
+
+  if (!result) return false;
+
+  parentLine.meta = parentLine.meta || {};
+  parentLine.meta.packSelection = result;
+  parentLine.meta.packSelectionKey = selectionKeyFromArr(result);
+
+  syncSelectedPackChildrenQty(parentLine);
+  renderCart();
+  return true;
 }
 
 /**
@@ -20721,6 +21393,17 @@ function syncSelectedPackChildrenQty(parentLine) {
     if (ref && q > 0) qByRef.set(ref, q);
   }
 
+  const packId = Number(parentLine?.meta?.packId || 0);
+  const templateLines = packId
+    ? PACKS_STATE.linesByPackId.get(packId) || []
+    : [];
+  const templateByRef = new Map();
+
+  for (const ln of templateLines) {
+    const ref = String(ln.reference || "").trim();
+    if (ref && !templateByRef.has(ref)) templateByRef.set(ref, ln);
+  }
+
   const children = getPackChildren(parentLine._lineId);
   const parentQty = Number(parentLine.qty || 0) || 0;
 
@@ -20730,6 +21413,86 @@ function syncSelectedPackChildrenQty(parentLine) {
     if (!qByRef.has(ref)) {
       cart = cart.filter((x) => x._lineId !== ch._lineId);
     }
+  }
+
+  const currentChildren = getPackChildren(parentLine._lineId);
+  const childRefSet = new Set(
+    currentChildren
+      .map((ch) => String(ch?.meta?.packRef || "").trim())
+      .filter(Boolean),
+  );
+
+  // 2) crear los hijos que faltan cuando se re-activa una opción de la oferta
+  const parentIndex = cart.findIndex((x) => x._lineId === parentLine._lineId);
+  let insertAt = parentIndex >= 0 ? parentIndex + 1 : cart.length;
+
+  for (const [ref, baseQ] of qByRef.entries()) {
+    if (childRefSet.has(ref)) continue;
+
+    const tpl = templateByRef.get(ref);
+    const refKey = String(ref || "").trim();
+    const refLower = refKey.toLowerCase();
+    const localProduct = Array.isArray(products)
+      ? products.find((p) => {
+          const pRef = String(p?.referencia || p?.ref || p?.codigo || "")
+            .trim()
+            .toLowerCase();
+          return pRef === refLower;
+        })
+      : null;
+
+    const cachedFs = PACKS_STATE.productByRefCache.get(refKey) || null;
+    const resolvedId =
+      Number(
+        localProduct?.baseProductId ||
+          localProduct?.id ||
+          cachedFs?.idproducto ||
+          cachedFs?.id ||
+          0,
+      ) || null;
+
+    const productName = String(
+      localProduct?.name ||
+        localProduct?.descripcion ||
+        cachedFs?.descripcion ||
+        tpl?.productName ||
+        tpl?.descripcion ||
+        ref ||
+        "Producto",
+    );
+
+    const child = buildCartLine(
+      {
+        id: resolvedId,
+        baseProductId: resolvedId,
+        referencia: refKey,
+        name: productName,
+        descripcion: productName,
+        secondaryName: "",
+        imageUrl: null,
+        price: 0,
+        codimpuesto:
+          localProduct?.codimpuesto ||
+          cachedFs?.codimpuesto ||
+          tpl?.codimpuesto ||
+          parentLine?.codimpuesto ||
+          null,
+      },
+      roundQty3(baseQ * parentQty),
+    );
+
+    child.price = 0;
+    child.grossPrice = 0;
+    child.originalGrossPrice = 0;
+    child.grossPriceOverride = 0;
+    child.meta = {
+      includedInPack: true,
+      parentPackLineId: parentLine._lineId,
+      packRef: ref,
+    };
+
+    cart.splice(insertAt, 0, child);
+    insertAt += 1;
   }
 
   // 2) actualizar qty de los que quedan
@@ -21084,14 +21847,19 @@ function selectionKeyFromArr(arr) {
     (arr || [])
       .map((x) => ({
         reference: String(x.reference || "").trim(),
-        qty: Number(x.qty || 0),
+        qty: roundQty3(parseQtyValue(x.qty, 0)),
       }))
       .filter((x) => x.reference && x.qty > 0)
       .sort((a, b) => a.reference.localeCompare(b.reference)),
   );
 }
 
-async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
+async function openPackConfigModal({
+  offerName,
+  offerSecondary,
+  packLines,
+  initialSelection = new Map(),
+}) {
   return new Promise((resolve) => {
     document.body.classList.add("modal-locked");
 
@@ -21144,14 +21912,27 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
     list.className = "pack-modal-list";
 
     // Estado
+    const hasInitialSelection =
+      initialSelection instanceof Map
+        ? initialSelection.size > 0
+        : !!(initialSelection && Object.keys(initialSelection).length > 0);
+
     const state = packLines.map((pl) => {
-      const def = Math.max(1, Math.round(Number(pl.baseQty || 1)));
+      const def = Math.max(0.001, roundQty3(parseQtyValue(pl.baseQty, 1)));
+      const key = String(pl.reference || "").trim();
+      const selectedQty =
+        initialSelection instanceof Map
+          ? initialSelection.get(key)
+          : initialSelection?.[key];
+      const hasSelection = Number(selectedQty) > 0;
       return {
         reference: String(pl.reference || "").trim(),
         productName: pl.productName || pl.reference || "Producto",
         defaultQty: def,
-        checked: true,
-        qty: def,
+        checked: hasInitialSelection ? hasSelection : true,
+        qty: hasSelection
+          ? Math.max(0.001, roundQty3(parseQtyValue(selectedQty, def)))
+          : def,
       };
     });
 
@@ -21167,9 +21948,8 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
 
     function applyQty(i, newQty) {
       const s = state[i];
-      let q = Number(newQty);
-      if (!isFinite(q)) q = 0;
-      q = Math.max(0, Math.round(q));
+      let q = parseQtyValue(newQty, 0);
+      q = Math.max(0, roundQty3(q));
 
       if (q === 0) {
         s.qty = 0;
@@ -21320,12 +22100,12 @@ async function openPackConfigModal({ offerName, offerSecondary, packLines }) {
         openNumPad(
           String(s.qty || s.defaultQty || 1),
           (val) => {
-            let q = Number(val);
-            if (!isFinite(q)) q = 0;
-            q = Math.max(0, Math.round(q));
+            let q = parseQtyValue(val, 0);
+            q = Math.max(0, roundQty3(q));
             applyQty(i, q);
           },
           s.productName,
+          "qty",
         );
       });
 
