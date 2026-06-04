@@ -2096,6 +2096,32 @@ body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode)
   padding-right: 4px;
 }
 
+.cart-line-name-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.cart-line-pack-edit {
+  border: none;
+  background: #eef4ff;
+  color: #2f5bd3;
+  border-radius: 999px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.cart-line-pack-edit:hover {
+  background: #dbe7ff;
+}
+
 .cart-line-secondary {
   opacity: 0.8;
   font-size: 12px;
