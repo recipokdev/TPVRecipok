@@ -307,6 +307,7 @@ let productThumbActiveJobs = 0;
 const productThumbPendingJobs = [];
 const PRODUCT_THUMB_OBJECT_URL_BY_KEY = new Map();
 const PRODUCT_THUMB_IN_FLIGHT_BY_KEY = new Map();
+const PRODUCT_THUMB_FAILED_KEYS = new Set();
 
 // Terminal / caja
 const terminalNameEl = document.getElementById("terminalName");
@@ -8198,6 +8199,26 @@ async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
 
   const ticket = parkedTickets[index];
   if (!ticket) return false;
+  if (ticket.paid) return true;
+
+  const reservedItems = Array.isArray(ticket?.items) ? ticket.items : [];
+  const reservedDelta = buildReservedQtyDeltaMap([], reservedItems);
+
+  if (reservedDelta.size > 0) {
+    try {
+      await syncReservedStockDeltaToFS(reservedDelta, "cobrar aparcado");
+    } catch (e) {
+      console.warn(
+        "No se pudo sincronizar stock al cobrar aparcado:",
+        e?.message || e,
+      );
+      toast(
+        "Ticket cobrado, pero no se pudo liberar stock reservado en FacturaScripts.",
+        "warn",
+        "Stock",
+      );
+    }
+  }
 
   ticket.paid = true;
   ticket.paidAt = new Date();
@@ -13327,6 +13348,7 @@ async function refreshAllData() {
 
   try {
     setStatusText("Actualizando...");
+    resetProductImageRetryState({ clearBrokenUrls: true });
     await loadDataFromApi({ refresh: true });
     await warmupPacksData({ force: true }).catch(() => {});
     await refreshTerminalsAndAgents();
@@ -22215,6 +22237,21 @@ function buildProductThumbCacheKey(imageInfo) {
   return `${productThumbTenantKey}:${idfile || "url"}:${srcHash}`;
 }
 
+function isProductThumbFetchBlocked(imageInfo) {
+  if (!imageInfo?.url) return false;
+  const cacheKey = buildProductThumbCacheKey(imageInfo);
+  return PRODUCT_THUMB_FAILED_KEYS.has(cacheKey);
+}
+
+function resetProductImageRetryState(opts = {}) {
+  const { clearBrokenUrls = false } = opts;
+  PRODUCT_THUMB_FAILED_KEYS.clear();
+
+  if (clearBrokenUrls) {
+    BROKEN_PRODUCT_IMAGE_URLS.clear();
+  }
+}
+
 function getProductImageInfoForProduct(product) {
   const productId = Number(product?.baseProductId || product?.id || 0) || 0;
   if (!productId) return null;
@@ -22459,11 +22496,19 @@ async function ensureProductThumbObjectUrl(imageInfo) {
   if (!imageInfo?.url) return "";
 
   const cacheKey = buildProductThumbCacheKey(imageInfo);
+
+  if (PRODUCT_THUMB_FAILED_KEYS.has(cacheKey)) {
+    return "";
+  }
+
   const inMemory = PRODUCT_THUMB_OBJECT_URL_BY_KEY.get(cacheKey);
   if (inMemory) return inMemory;
 
   const fromDb = await getProductThumbObjectUrlFromDb(cacheKey);
-  if (fromDb) return fromDb;
+  if (fromDb) {
+    PRODUCT_THUMB_FAILED_KEYS.delete(cacheKey);
+    return fromDb;
+  }
 
   if (TPV_STATE?.offline) return "";
 
@@ -22482,13 +22527,18 @@ async function ensureProductThumbObjectUrl(imageInfo) {
     const thumbBlob = await buildThumbnailBlobFromSourceBlob(sourceBlob);
 
     await persistProductThumbBlob(cacheKey, imageInfo, thumbBlob);
+    PRODUCT_THUMB_FAILED_KEYS.delete(cacheKey);
     return materializeProductThumbObjectUrl(cacheKey, thumbBlob);
   })
     .catch((e) => {
-      console.warn(
-        "[thumb-cache] No se pudo crear miniatura:",
-        e?.message || e,
-      );
+      const firstFail = !PRODUCT_THUMB_FAILED_KEYS.has(cacheKey);
+      PRODUCT_THUMB_FAILED_KEYS.add(cacheKey);
+      if (firstFail) {
+        console.warn(
+          "[thumb-cache] No se pudo crear miniatura:",
+          e?.message || e,
+        );
+      }
       return "";
     })
     .finally(() => {
@@ -22502,6 +22552,10 @@ async function ensureProductThumbObjectUrl(imageInfo) {
 async function hydrateProductTileImage(tile, imageInfo, fallbackUrl = "") {
   if (!tile || !imageInfo?.url) return;
 
+  if (isProductThumbFetchBlocked(imageInfo)) {
+    return;
+  }
+
   const cacheKey = buildProductThumbCacheKey(imageInfo);
   tile.dataset.thumbCacheKey = cacheKey;
 
@@ -22509,7 +22563,9 @@ async function hydrateProductTileImage(tile, imageInfo, fallbackUrl = "") {
   if (!tile.isConnected) return;
   if (String(tile.dataset.thumbCacheKey || "") !== cacheKey) return;
 
-  const finalSrc = String(thumbUrl || fallbackUrl || "").trim();
+  const fallback = String(fallbackUrl || "").trim();
+  const safeFallback = BROKEN_PRODUCT_IMAGE_URLS.has(fallback) ? "" : fallback;
+  const finalSrc = String(thumbUrl || safeFallback || "").trim();
   if (!finalSrc) return;
 
   const wrap = tile.querySelector(".product-img-wrapper");
@@ -22528,6 +22584,7 @@ async function hydrateProductTileImage(tile, imageInfo, fallbackUrl = "") {
 async function clearProductImageThumbCache() {
   PRODUCT_THUMB_IN_FLIGHT_BY_KEY.clear();
   productThumbPendingJobs.length = 0;
+  PRODUCT_THUMB_FAILED_KEYS.clear();
 
   PRODUCT_THUMB_OBJECT_URL_BY_KEY.forEach((url) => {
     try {
