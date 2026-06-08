@@ -2264,12 +2264,12 @@ async function patchPackChildrenLinesInFacturaByDesired({
    (para que tu diseño de ticket no se rompa)
    ============================================================= */
 function mapFsLineToTpvPrintLine(l) {
-  const qty = Number(l?.cantidad ?? l?.qty ?? 0);
+  const qty = parseQtyValue(l?.cantidad ?? l?.qty, 0);
 
   // Tu ticket suele usar getUnitGross(item). Para históricos no lo tienes,
   // así que guardamos un campo unitGross “directo” si tu print lo soporta.
   // Si tu print usa otra cosa, mantenemos pvpunitario y ya.
-  const unitNet = Number(l?.pvpunitario ?? 0);
+  const unitNet = parseQtyValue(l?.pvpunitario, 0);
 
   return {
     // campos típicos TPV
@@ -15075,10 +15075,10 @@ async function getFormasPagoMap() {
 }
 
 function getTaxRateForLine(l) {
-  const direct = Number(l?.taxRate);
+  const direct = parseQtyValue(l?.taxRate, 0);
   if (isFinite(direct) && direct > 0) return direct;
 
-  const fromCode = Number(extractTaxRateFromCode(l?.codimpuesto));
+  const fromCode = parseQtyValue(extractTaxRateFromCode(l?.codimpuesto), 0);
   if (isFinite(fromCode) && fromCode > 0) return fromCode;
 
   return 0;
@@ -15086,20 +15086,19 @@ function getTaxRateForLine(l) {
 
 function getUnitGrossForPrint(l) {
   if (l && typeof l.__forceUnitGross === "number")
-    return Number(l.__forceUnitGross) || 0;
+    return parseQtyValue(l.__forceUnitGross, 0);
   if (l && l.grossPriceOverride != null)
-    return Number(l.grossPriceOverride) || 0;
-  if (typeof l.grossPrice === "number" && !isNaN(l.grossPrice))
-    return Number(l.grossPrice);
+    return parseQtyValue(l.grossPriceOverride, 0);
+  if (l?.grossPrice != null) return parseQtyValue(l.grossPrice, 0);
 
-  if (typeof l.price === "number" && !isNaN(l.price)) {
+  if (l?.price != null) {
     const tax = getTaxRateForLine(l);
-    return Number(l.price) * (1 + tax / 100);
+    return parseQtyValue(l.price, 0) * (1 + tax / 100);
   }
 
   if (typeof l.pvpunitario !== "undefined") {
     const tax = getTaxRateForLine(l);
-    return (Number(l.pvpunitario) || 0) * (1 + tax / 100);
+    return parseQtyValue(l.pvpunitario, 0) * (1 + tax / 100);
   }
 
   return 0;
@@ -15110,7 +15109,7 @@ function calcTotalsAndTaxMap(lineas, totalsOnlyPositive) {
   const taxMap = {}; // { rate: { base, iva } }
 
   for (const l of lineas || []) {
-    const qty = Number(l.qty ?? l.cantidad ?? 1) || 1;
+    const qty = parseQtyValue(l.qty ?? l.cantidad, 1);
 
     const includeInTotals = totalsOnlyPositive ? qty > 0 : true;
     if (!includeInTotals) continue;
@@ -15246,7 +15245,7 @@ function renderItemsHtml(doc, lineas) {
 
   const getQtyForPrint = (l) => {
     const q = l.qty ?? l.cantidad ?? l.quantity ?? l.cant ?? 0;
-    const n = Number(q);
+    const n = parseQtyValue(q, 0);
     return isNaN(n) ? 0 : n;
   };
 
@@ -15595,7 +15594,7 @@ function buildEscposTicketBytes(ticket, lineas, totalToShow) {
 
   const getQtyForPrint = (l) => {
     const q = l.qty ?? l.cantidad ?? l.quantity ?? l.cant ?? 0;
-    const n = Number(q);
+    const n = parseQtyValue(q, 0);
     return isNaN(n) ? 0 : n;
   };
 
@@ -23276,8 +23275,9 @@ async function imprimirFacturaHistorica(facturaRow) {
 function preparePrintableTicket(ticket) {
   const lineas0 = Array.isArray(ticket?.lineas) ? [...ticket.lineas] : [];
   if (!lineas0.length) return ticket;
+  const isFastPreApiDraft = !!ticket?._fastPreApiPrint;
 
-  const isZero = (n) => Math.abs(Number(n || 0)) < 0.00001;
+  const isZero = (n) => Math.abs(parseQtyValue(n, 0)) < 0.00001;
 
   const cleanSpecialPrefix = (s) =>
     String(s || "")
@@ -23346,7 +23346,24 @@ function preparePrintableTicket(ticket) {
   // Hijos reales de FS: 0€, no parent, y parecen pertenecer a un pack
   const realChildren = lineas0.filter((l) => {
     if (isPackParent(l)) return false;
-    if (!isZero(l?.pvpunitario)) return false;
+
+    // Si la línea ya viene marcada explícitamente como hijo, respetarla siempre.
+    if (l?.meta?.includedInPack || l?.__isPackChild) return true;
+
+    // En preimpresión rápida (snapshot de carrito), no inferir por referencia:
+    // las líneas aún no tienen shape monetario FS y se pueden falsear a 0.
+    if (isFastPreApiDraft) return false;
+
+    const hasFsMoneyShape =
+      l?.pvpunitario != null || l?.pvptotal != null || l?.idlinea != null;
+    if (!hasFsMoneyShape) return false;
+
+    const unitNet = parseQtyValue(l?.pvpunitario, 0);
+    const qty = parseQtyValue(l?.cantidad ?? l?.qty, 0);
+    const totalNet = parseQtyValue(l?.pvptotal, unitNet * qty);
+
+    // Solo tratar como hijo si realmente es una linea monetaria cero.
+    if (!isZero(unitNet) || !isZero(totalNet)) return false;
 
     const refNorm = pickRefNorm(l);
     return refNorm && allExpectedRefs.has(refNorm);
@@ -23370,6 +23387,30 @@ function preparePrintableTicket(ticket) {
     childByRef.get(refNorm).push(ch);
   }
 
+  // En preimpresión (o estados sin PACKS_STATE listo), muchos hijos vienen
+  // enlazados al padre por meta.parentPackLineId.
+  const childByParentLineId = new Map();
+  for (const ch of realChildren) {
+    const parentLineId = String(ch?.meta?.parentPackLineId || "").trim();
+    if (!parentLineId) continue;
+    if (!childByParentLineId.has(parentLineId)) {
+      childByParentLineId.set(parentLineId, []);
+    }
+    childByParentLineId.get(parentLineId).push(ch);
+  }
+
+  const getChildKey = (ch) => {
+    const lineId = String(ch?._lineId || "").trim();
+    if (lineId) return `L:${lineId}`;
+
+    const idlinea = Number(ch?.idlinea || 0);
+    if (idlinea > 0) return `I:${idlinea}`;
+
+    const refNorm = pickRefNorm(ch);
+    const qty = parseQtyValue(ch?.cantidad ?? ch?.qty, 0);
+    return `R:${refNorm}|Q:${qty}`;
+  };
+
   const byOrder = (a, b) =>
     Number(a?.orden ?? a?.idlinea ?? 0) - Number(b?.orden ?? b?.idlinea ?? 0);
 
@@ -23382,6 +23423,10 @@ function preparePrintableTicket(ticket) {
   for (const parent of parentsSorted) {
     const parentPid = Number(parent?.idproducto || 0);
     const defs = parentDefs.get(parentPid) || [];
+    const parentLineId = String(parent?._lineId || "").trim();
+    const directChildren = parentLineId
+      ? childByParentLineId.get(parentLineId) || []
+      : [];
 
     out.push({
       ...parent,
@@ -23396,9 +23441,9 @@ function preparePrintableTicket(ticket) {
       const group = childByRef.get(refNorm) || [];
 
       for (const ch of group) {
-        const chId = Number(ch?.idlinea || 0);
-        if (chId && usedChildIds.has(chId)) continue;
-        if (chId) usedChildIds.add(chId);
+        const chId = getChildKey(ch);
+        if (usedChildIds.has(chId)) continue;
+        usedChildIds.add(chId);
 
         out.push({
           ...ch,
@@ -23410,6 +23455,27 @@ function preparePrintableTicket(ticket) {
           __lineTotalOverride: 0,
         });
       }
+    }
+
+    // Fallback: si no hay defs o quedan hijos explícitos sin casar por ref,
+    // respetar igualmente los hijos enlazados por parentPackLineId.
+    for (const ch of directChildren) {
+      const chId = getChildKey(ch);
+      if (usedChildIds.has(chId)) continue;
+      usedChildIds.add(chId);
+
+      const fallbackRef = cleanSpecialPrefix(
+        ch.referencia || ch?.meta?.packRef || "",
+      );
+      out.push({
+        ...ch,
+        referencia: fallbackRef,
+        descripcion: cleanSpecialPrefix(ch.descripcion || fallbackRef || ""),
+        __isPackParent: false,
+        __isPackChild: true,
+        __forceUnitGross: 0,
+        __lineTotalOverride: 0,
+      });
     }
   }
 
