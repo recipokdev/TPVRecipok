@@ -76,6 +76,7 @@ const RUNTIME_CART_SNAPSHOT_CFG_KEY = "runtime.cartSnapshot";
 const LOGIN_LAST_USER_KEY = "tpv_last_user";
 let CART_SNAPSHOT_ARMED = false;
 let CART_SNAPSHOT_CFG_WRITE_TIMER = null;
+let PENDING_RUNTIME_UI_RESTORE = null;
 
 let lastTicket = null; // guardará el último ticket/factura creada para poder imprimirla
 
@@ -3303,6 +3304,8 @@ async function runBootFlow() {
     // 5) Caja (recupera o abre modal)
     maybeOpenCashOrRecover();
 
+    scheduleRuntimeUiRestoreAfterBoot();
+
     return true;
   } finally {
     BOOT_IN_FLIGHT = false;
@@ -4387,10 +4390,36 @@ function buildRuntimeCartSnapshotPayload() {
       ? parkedTickets[currentParkedTicketIndex] || null
       : null;
 
+  const activeEl = document.activeElement;
+  const activeElementId =
+    activeEl && typeof activeEl.id === "string" && activeEl.id.trim()
+      ? activeEl.id.trim()
+      : null;
+
+  const uiSnapshot = {
+    selectedCategory:
+      selectedCategory !== undefined && selectedCategory !== null
+        ? String(selectedCategory)
+        : null,
+    activeFamilyParentId:
+      activeFamilyParentId !== undefined && activeFamilyParentId !== null
+        ? String(activeFamilyParentId)
+        : null,
+    activeSubfamilyId:
+      activeSubfamilyId !== undefined && activeSubfamilyId !== null
+        ? String(activeSubfamilyId)
+        : null,
+    searchTerm: String(searchInput?.value ?? searchTerm ?? ""),
+    optionsOpen:
+      !!optionsOverlay && !optionsOverlay.classList.contains("hidden"),
+    focusElementId: activeElementId,
+  };
+
   return {
-    v: 1,
+    v: 2,
     ts: Date.now(),
     items: safeCart,
+    uiSnapshot,
     selectedCategory:
       selectedCategory !== undefined && selectedCategory !== null
         ? String(selectedCategory)
@@ -4510,11 +4539,30 @@ async function restoreRuntimeCartSnapshot() {
 
     cart = restored;
 
-    const restoredCategoryRaw = parsed?.selectedCategory;
-    selectedCategory =
-      restoredCategoryRaw === undefined || restoredCategoryRaw === null
-        ? null
-        : String(restoredCategoryRaw);
+    const uiSnapshot =
+      parsed?.uiSnapshot && typeof parsed.uiSnapshot === "object"
+        ? parsed.uiSnapshot
+        : null;
+
+    const normalizeIdOrNull = (value) => {
+      if (value === undefined || value === null || value === "") return null;
+      return String(value);
+    };
+
+    const restoredCategoryRaw =
+      uiSnapshot?.selectedCategory ?? parsed?.selectedCategory;
+    selectedCategory = normalizeIdOrNull(restoredCategoryRaw);
+    activeFamilyParentId = normalizeIdOrNull(uiSnapshot?.activeFamilyParentId);
+    activeSubfamilyId = normalizeIdOrNull(uiSnapshot?.activeSubfamilyId);
+
+    const restoredSearch = String(uiSnapshot?.searchTerm ?? "");
+    searchTerm = restoredSearch;
+    if (searchInput) searchInput.value = restoredSearch;
+
+    PENDING_RUNTIME_UI_RESTORE = {
+      optionsOpen: !!uiSnapshot?.optionsOpen,
+      focusElementId: normalizeIdOrNull(uiSnapshot?.focusElementId),
+    };
 
     const parkedSyncKey = String(parsed?.parkedTicketSyncKey || "").trim();
     const parkedTicketId = Number(parsed?.parkedTicketId || 0) || 0;
@@ -4540,6 +4588,74 @@ async function restoreRuntimeCartSnapshot() {
     console.warn("No se pudo restaurar snapshot de carrito:", e?.message || e);
     return false;
   }
+}
+
+function scheduleRuntimeUiRestoreAfterBoot() {
+  const pending = PENDING_RUNTIME_UI_RESTORE;
+  if (!pending || typeof pending !== "object") return;
+
+  const focusElementId = String(pending.focusElementId || "").trim();
+
+  // No reabrir automáticamente Opciones tras actualización/reinicio.
+  const wantsOptionsOpen = false;
+
+  const applyFocus = () => {
+    if (!focusElementId) return;
+
+    const optionsOpen =
+      !!optionsOverlay && !optionsOverlay.classList.contains("hidden");
+    if (!optionsOpen && /^options/i.test(focusElementId)) return;
+
+    const el = document.getElementById(focusElementId);
+    if (!el || typeof el.focus !== "function") return;
+    try {
+      el.focus();
+      if (typeof el.select === "function") el.select();
+    } catch {}
+  };
+
+  const clearPending = () => {
+    PENDING_RUNTIME_UI_RESTORE = null;
+  };
+
+  if (!wantsOptionsOpen) {
+    setTimeout(() => {
+      applyFocus();
+      clearPending();
+    }, 40);
+    return;
+  }
+
+  let retries = 0;
+  const maxRetries = 20;
+
+  const tryOpenOptions = async () => {
+    if (!PENDING_RUNTIME_UI_RESTORE) return;
+    retries += 1;
+
+    const canOpenOptions = !!(cashSession?.open && hasActiveLoginSession());
+    if (canOpenOptions) {
+      try {
+        await openOptions();
+      } catch {}
+
+      setTimeout(() => {
+        applyFocus();
+      }, 120);
+
+      clearPending();
+      return;
+    }
+
+    if (retries >= maxRetries) {
+      clearPending();
+      return;
+    }
+
+    setTimeout(tryOpenOptions, 250);
+  };
+
+  setTimeout(tryOpenOptions, 120);
 }
 
 function renderCart() {
@@ -14433,13 +14549,13 @@ function bindAutostartToggleOnce() {
 }
 
 async function openOptions() {
-  if (!cashSession?.open) {
-    toast("Debes abrir la caja para acceder a opciones.", "info", "Opciones");
-    return;
-  }
+  const cashOpen = !!cashSession?.open;
 
   const setOptionsReadOnlyMode = (readonly) => {
     optionsOverlay?.classList.toggle("options-readonly", !!readonly);
+
+    // Caja cerrada: mostrar modal mínimo (acciones del footer únicamente).
+    optionsOverlay?.classList.toggle("options-cash-closed-mode", !cashOpen);
 
     const acc = document.getElementById("optionsAccordion");
     if (acc) {
@@ -14460,8 +14576,24 @@ async function openOptions() {
       else dialog.appendChild(note);
     }
 
-    if (note) note.classList.toggle("hidden", !readonly);
+    if (note) {
+      if (!cashOpen) {
+        note.textContent =
+          "Caja cerrada: solo están disponibles Actualizar programa y Salir del programa.";
+        note.classList.remove("hidden");
+      } else {
+        note.textContent =
+          "Inicia sesión para desbloquear las opciones del TPV.";
+        note.classList.toggle("hidden", !readonly);
+      }
+    }
   };
+
+  if (!cashOpen) {
+    setOptionsReadOnlyMode(true);
+    optionsOverlay?.classList.remove("hidden");
+    return;
+  }
 
   if (!hasActiveLoginSession()) {
     setOptionsReadOnlyMode(true);

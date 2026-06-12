@@ -1921,6 +1921,19 @@ ipcMain.handle("updater:relaunchForUpdate", async () => {
     forceRelaunchForUpdate = true;
     appIsInstallingUpdate = true;
 
+    // Evitar que queden timers/reintentos vivos durante el reinicio.
+    stopPreCashUpdateRetries();
+
+    // Cerrar explícitamente la pantalla de cliente para no dejarla colgada.
+    destroyCustomerWindow();
+
+    // Forzar cierre de la principal (su guard ya permite cerrar en modo update).
+    if (mainWin && !mainWin.isDestroyed()) {
+      try {
+        mainWin.close();
+      } catch {}
+    }
+
     app.relaunch();
 
     setTimeout(() => {
@@ -1974,6 +1987,10 @@ ipcMain.handle("tpv:attemptQuit", async () => {
 });
 
 app.on("will-quit", () => {
+  // Red de seguridad: al cerrar la app, nunca dejar viva la ventana cliente.
+  try {
+    destroyCustomerWindow();
+  } catch {}
   globalShortcut.unregisterAll();
 });
 
