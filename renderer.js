@@ -4109,7 +4109,13 @@ async function addToCart(product, quantity = 1) {
     return;
   }
 
-  const existing = cart.find((c) => c.id === product.id);
+  const existing = cart.find((c) => {
+    if (Number(c?.id) !== Number(product?.id)) return false;
+    // Nunca mezclar una línea independiente con líneas de oferta.
+    if (isPackParentLine(c) || isPackChildLine(c)) return false;
+    return true;
+  });
+
   if (existing) existing.qty += quantity;
   else cart.push(buildCartLine(product, quantity));
 
@@ -4385,6 +4391,10 @@ function buildRuntimeCartSnapshotPayload() {
     v: 1,
     ts: Date.now(),
     items: safeCart,
+    selectedCategory:
+      selectedCategory !== undefined && selectedCategory !== null
+        ? String(selectedCategory)
+        : null,
     parkedTicketSyncKey: getParkedTicketSyncKey(activeParkedTicket),
     parkedTicketId: Number(activeParkedTicket?.id || 0) || null,
   };
@@ -4500,6 +4510,12 @@ async function restoreRuntimeCartSnapshot() {
 
     cart = restored;
 
+    const restoredCategoryRaw = parsed?.selectedCategory;
+    selectedCategory =
+      restoredCategoryRaw === undefined || restoredCategoryRaw === null
+        ? null
+        : String(restoredCategoryRaw);
+
     const parkedSyncKey = String(parsed?.parkedTicketSyncKey || "").trim();
     const parkedTicketId = Number(parsed?.parkedTicketId || 0) || 0;
     PENDING_RUNTIME_PARKED_SYNC_KEY = parkedSyncKey;
@@ -4515,6 +4531,9 @@ async function restoreRuntimeCartSnapshot() {
 
     // Si restauramos desde localStorage, replicamos a TPV_CFG para siguientes arranques.
     scheduleRuntimeCartSnapshotCfgWrite(parsed, { immediate: true });
+
+    renderCategories?.();
+    renderProducts?.();
 
     return true;
   } catch (e) {
@@ -5450,6 +5469,10 @@ function confirmModal(title, text, options = {}) {
     // fallback seguro si falta algo
     return Promise.resolve(window.confirm(text));
   }
+
+  okBtn.textContent = "Aceptar";
+  cancelBtn.textContent = "Cancelar";
+  cancelBtn.classList.remove("hidden");
 
   titleEl.textContent = title || "Confirmar";
   const {
@@ -14730,6 +14753,224 @@ async function handleOpenDrawerClick(btn, source = "MANUAL") {
 }
 
 const optionsQuitBtn = document.getElementById("optionsQuitBtn");
+const optionsUpdateAppBtn = document.getElementById("optionsUpdateAppBtn");
+
+let manualUpdateActionInFlight = false;
+
+function runUpdateRelaunchCountdown({ seconds = 5, targetVersion = "" } = {}) {
+  const overlay = document.getElementById("msgOverlay");
+  const titleEl = document.getElementById("msgTitle");
+  const textEl = document.getElementById("msgText");
+  const okBtn = document.getElementById("msgOkBtn");
+  const cancelBtn = document.getElementById("msgCancelBtn");
+  const midBtn = document.getElementById("msgMidBtn");
+
+  if (!overlay || !titleEl || !textEl || !okBtn || !cancelBtn) {
+    const ask = window.confirm(
+      "Nueva versión encontrada. El programa se cerrará y abrirá de nuevo para actualizar. ¿Continuar?",
+    );
+    return Promise.resolve(!!ask);
+  }
+
+  const safeSeconds = Math.max(1, Number(seconds) || 5);
+  const verTxt = String(targetVersion || "").trim();
+
+  titleEl.textContent = "Actualizar programa";
+  okBtn.textContent = "Cerrar ahora";
+  cancelBtn.textContent = "Cancelar";
+  if (midBtn) midBtn.classList.add("hidden");
+
+  overlay.classList.remove("hidden");
+  lockAppUI();
+
+  return new Promise((resolve) => {
+    let closed = false;
+    let left = safeSeconds;
+    let timer = null;
+
+    const paint = () => {
+      const verLine = verTxt ? `Versión nueva: ${verTxt}\n` : "";
+      textEl.textContent =
+        `${verLine}Cerrando el programa en ${left}s para actualizar.\n` +
+        "Puedes cancelar si quieres seguir trabajando.";
+      textEl.style.whiteSpace = "pre-line";
+    };
+
+    const cleanup = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      okBtn.onclick = null;
+      cancelBtn.onclick = null;
+      window.removeEventListener("keydown", onKey);
+      overlay.classList.add("hidden");
+      unlockAppUI();
+    };
+
+    const finish = (accept) => {
+      if (closed) return;
+      closed = true;
+      cleanup();
+      resolve(!!accept);
+    };
+
+    const onKey = (e) => {
+      if (e.key === "Escape") finish(false);
+      if (e.key === "Enter") finish(true);
+    };
+
+    window.addEventListener("keydown", onKey);
+    okBtn.onclick = () => finish(true);
+    cancelBtn.onclick = () => finish(false);
+
+    paint();
+    timer = setInterval(() => {
+      left -= 1;
+      if (left <= 0) {
+        finish(true);
+        return;
+      }
+      paint();
+    }, 1000);
+  });
+}
+
+async function startManualUpdateFlowFromOptions() {
+  if (manualUpdateActionInFlight) return;
+  manualUpdateActionInFlight = true;
+
+  try {
+    const ok = await confirmModal(
+      "Actualizar programa",
+      "Se comprobará si hay una nueva versión.\nSi existe, el TPV se cerrará y se abrirá automáticamente sin perder el estado.",
+    );
+    if (!ok) return;
+
+    closeOptions?.();
+
+    const updaterApi = window.TPV_UPDATER;
+    if (!updaterApi?.checkNow || !updaterApi?.relaunchForUpdate) {
+      showMessageModal(
+        "Actualizar programa",
+        "Esta versión no tiene disponible la API de actualización manual.",
+      );
+      return;
+    }
+
+    const check = await updaterApi.checkNow();
+
+    if (!check?.ok) {
+      const msg = String(
+        check?.message || "No se pudo comprobar si hay actualizaciones.",
+      );
+      showMessageModal("Actualizar programa", msg);
+      return;
+    }
+
+    if (!check?.updateAvailable) {
+      showMessageModal(
+        "Actualizar programa",
+        String(check?.message || "Estás en la versión más reciente."),
+      );
+      return;
+    }
+
+    if (check?.devMode) {
+      const currentV = String(check?.currentVersion || "").trim();
+      const targetV = String(check?.targetVersion || "").trim();
+      const repo = String(check?.githubRepo || "").trim();
+      const tag = String(check?.githubTag || "").trim();
+
+      const details = [
+        String(check?.message || "Simulación de actualización en npm start."),
+        currentV ? `Versión actual: ${currentV}` : "",
+        targetV ? `Versión detectada en GitHub: ${targetV}` : "",
+        repo ? `Repositorio: ${repo}` : "",
+        tag ? `Tag: ${tag}` : "",
+        check?.wouldDownload
+          ? "Resultado: en app instalada, sí se descargaría e instalaría."
+          : "Resultado: en app instalada, no descargaría actualización ahora.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      if (!check?.wouldDownload) {
+        showMessageModal("Actualizar programa (simulación)", details);
+        return;
+      }
+
+      const doSimulated = await confirmModal(
+        "Actualizar programa (simulación)",
+        `${details}\n\n¿Quieres simular ahora el cierre y reapertura para validar recuperación de estado?`,
+      );
+
+      if (!doSimulated) return;
+
+      const proceedSim = await runUpdateRelaunchCountdown({
+        seconds: 5,
+        targetVersion: targetV,
+      });
+
+      if (!proceedSim) {
+        toast(
+          "Simulación de actualización cancelada.",
+          "info",
+          "Actualizar programa",
+        );
+        return;
+      }
+
+      persistRuntimeCartSnapshot({ force: true });
+
+      const relaunchSim = await updaterApi.relaunchForUpdate();
+      if (!relaunchSim?.ok) {
+        showMessageModal(
+          "Actualizar programa (simulación)",
+          String(
+            relaunchSim?.message ||
+              "No se pudo reiniciar el programa en simulación.",
+          ),
+        );
+      }
+      return;
+    }
+
+    const proceed = await runUpdateRelaunchCountdown({
+      seconds: 5,
+      targetVersion: check?.targetVersion || "",
+    });
+
+    if (!proceed) {
+      toast("Actualización cancelada.", "info", "Actualizar programa");
+      return;
+    }
+
+    // Reutilizamos la misma persistencia ante cierre inesperado.
+    persistRuntimeCartSnapshot({ force: true });
+
+    const relaunch = await updaterApi.relaunchForUpdate();
+    if (!relaunch?.ok) {
+      showMessageModal(
+        "Actualizar programa",
+        String(relaunch?.message || "No se pudo reiniciar el programa."),
+      );
+      return;
+    }
+  } catch (e) {
+    console.warn("[UPDATE-MANUAL]", e?.message || e);
+    showMessageModal(
+      "Actualizar programa",
+      "Ha ocurrido un error al preparar la actualización.",
+    );
+  } finally {
+    manualUpdateActionInFlight = false;
+  }
+}
+
+optionsUpdateAppBtn?.addEventListener("click", () => {
+  startManualUpdateFlowFromOptions();
+});
 
 optionsQuitBtn?.addEventListener("click", async () => {
   try {
@@ -24330,14 +24571,22 @@ function showMessageModal(title, text) {
   const t = document.getElementById("msgTitle");
   const p = document.getElementById("msgText");
   const b = document.getElementById("msgOkBtn");
+  const cancelBtn = document.getElementById("msgCancelBtn");
+  const midBtn = document.getElementById("msgMidBtn");
   if (!o || !t || !p || !b) return;
 
   t.textContent = title || "Aviso";
   p.textContent = text || "";
+  p.style.whiteSpace = "pre-line";
+  if (cancelBtn) cancelBtn.classList.add("hidden");
+  if (midBtn) midBtn.classList.add("hidden");
+  b.textContent = "Aceptar";
   o.classList.remove("hidden");
+  lockAppUI();
 
   b.onclick = () => {
     o.classList.add("hidden");
+    unlockAppUI();
   };
 }
 
