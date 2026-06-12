@@ -19,6 +19,7 @@ let customerCreating = false;
 let lastCustomerState = null;
 let allowCustomerClose = false;
 let lastSecondInstanceUpdateCheckAt = 0;
+let forceRelaunchForUpdate = false;
 const scaleManager = new ScaleManager();
 const IS_E2E_BACKGROUND =
   String(process.env.TPV_E2E || "") === "1" &&
@@ -28,6 +29,11 @@ const DEFAULT_UPDATE_POLICY_URLS = {
   stable:
     "https://raw.githubusercontent.com/recipokdev/TPVRecipok/main/build/update-policy.stable.json",
   beta: "https://raw.githubusercontent.com/recipokdev/TPVRecipok/main/build/update-policy.beta.json",
+};
+
+const GITHUB_UPDATE_REPOS = {
+  stable: "recipokdev/TPVRecipok",
+  beta: "recipokdev/TPVRecipok-Beta",
 };
 
 async function triggerUpdateCheckIfSafe(reason = "manual") {
@@ -279,6 +285,12 @@ function createWindow() {
     // Si el cierre viene “permitido” (ej: app.quit controlado), dejamos pasar
     if (allowMainClose) return;
 
+    // Cierre especial para actualización manual/programática.
+    if (appIsInstallingUpdate || forceRelaunchForUpdate) {
+      allowMainClose = true;
+      return;
+    }
+
     // Si estás en pleno cambio de modo o recreando (por si vuelves a hacerlo)
     if (isRecreatingWindow) return;
 
@@ -360,6 +372,7 @@ function createWindow() {
 
 let preCashUpdateTimer = null;
 let preCashUpdateRunning = false;
+let manualUpdateCheckRunning = false;
 
 async function isCashOpenSafe() {
   if (!mainWin || mainWin.isDestroyed()) return false;
@@ -464,6 +477,138 @@ async function runUpdateCheckOncePreCash() {
     });
   } finally {
     preCashUpdateRunning = false;
+  }
+}
+
+async function runManualUpdateAvailabilityCheck() {
+  if (!app.isPackaged) {
+    const channel = readChannel();
+    const policy = await loadUpdatePolicy(channel);
+    const currentVersion = app.getVersion();
+    const probe = await fetchLatestGithubReleaseVersion(channel);
+
+    if (!probe.ok) {
+      return {
+        ok: false,
+        devMode: true,
+        updateAvailable: false,
+        reason: "dev-probe-failed",
+        message: `No se pudo consultar GitHub (${probe.error || "error desconocido"}).`,
+      };
+    }
+
+    const targetVersion = String(probe.version || "").trim();
+    const isNewer =
+      compareVersionsSemverLoose(targetVersion, currentVersion) > 0;
+    const blockedByPolicy = isTargetVersionBlocked(policy, targetVersion);
+    const wouldDownload = isNewer && !blockedByPolicy;
+
+    const message = blockedByPolicy
+      ? `Simulación npm start: GitHub tiene ${targetVersion}, pero está bloqueada por policy.`
+      : wouldDownload
+        ? `Simulación npm start: Detectada ${targetVersion}. En app instalada se descargaría e instalaría al reiniciar.`
+        : `Simulación npm start: Estás al día (${currentVersion}).`;
+
+    return {
+      ok: true,
+      devMode: true,
+      updateAvailable: wouldDownload,
+      blockedByPolicy,
+      currentVersion,
+      targetVersion,
+      wouldDownload,
+      githubRepo: probe.repo,
+      githubTag: probe.tag,
+      message,
+    };
+  }
+
+  if (manualUpdateCheckRunning || preCashUpdateRunning) {
+    return { ok: false, reason: "busy", message: "Comprobación en curso." };
+  }
+
+  manualUpdateCheckRunning = true;
+  try {
+    autoUpdater.removeAllListeners();
+
+    const channel = readChannel();
+    const policy = await loadUpdatePolicy(channel);
+    const currentVersion = app.getVersion();
+
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = false;
+    autoUpdater.allowPrerelease = channel === "beta";
+    autoUpdater.allowDowngrade = shouldAllowDowngrade(policy, currentVersion);
+
+    return await new Promise((resolve) => {
+      let finished = false;
+      const done = (payload) => {
+        if (finished) return;
+        finished = true;
+        try {
+          autoUpdater.removeAllListeners();
+        } catch {}
+        resolve(payload);
+      };
+
+      autoUpdater.once("error", (err) => {
+        done({
+          ok: false,
+          reason: "error",
+          message: err?.message || String(err),
+        });
+      });
+
+      autoUpdater.once("update-not-available", () => {
+        done({
+          ok: true,
+          updateAvailable: false,
+          currentVersion,
+          message: "Estás en la versión más reciente.",
+        });
+      });
+
+      autoUpdater.once("update-available", (info) => {
+        const targetVersion = String(info?.version || "").trim();
+        if (isTargetVersionBlocked(policy, targetVersion)) {
+          return done({
+            ok: true,
+            updateAvailable: false,
+            blockedByPolicy: true,
+            targetVersion,
+            message: `La versión ${targetVersion || "nueva"} está bloqueada por política.`,
+          });
+        }
+
+        done({
+          ok: true,
+          updateAvailable: true,
+          currentVersion,
+          targetVersion,
+          message: "Nueva versión encontrada.",
+        });
+      });
+
+      try {
+        autoUpdater.checkForUpdates();
+      } catch (err) {
+        done({
+          ok: false,
+          reason: "throw",
+          message: err?.message || String(err),
+        });
+      }
+
+      setTimeout(() => {
+        done({
+          ok: false,
+          reason: "timeout",
+          message: "No se pudo comprobar actualización a tiempo.",
+        });
+      }, 25000);
+    });
+  } finally {
+    manualUpdateCheckRunning = false;
   }
 }
 
@@ -819,6 +964,134 @@ function isTargetVersionBlocked(policy, targetVersion) {
   const target = String(targetVersion || "").trim();
   if (!target) return false;
   return policy.blockUpdateToVersions.includes(target);
+}
+
+function cleanVersionTag(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^v/i, "");
+}
+
+function parseComparableVersion(value) {
+  const src = cleanVersionTag(value);
+  if (!src) return null;
+
+  const [mainPart, prePart] = src.split("-");
+  const nums = String(mainPart || "")
+    .split(".")
+    .map((x) => Number(x));
+
+  if (!nums.length || nums.some((n) => !Number.isFinite(n) || n < 0)) {
+    return null;
+  }
+
+  while (nums.length < 3) nums.push(0);
+
+  const pre = String(prePart || "")
+    .split(".")
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+  return { nums, pre };
+}
+
+function compareVersionsSemverLoose(a, b) {
+  const va = parseComparableVersion(a);
+  const vb = parseComparableVersion(b);
+  if (!va || !vb) return 0;
+
+  for (let i = 0; i < 3; i++) {
+    const da = Number(va.nums[i] || 0);
+    const db = Number(vb.nums[i] || 0);
+    if (da > db) return 1;
+    if (da < db) return -1;
+  }
+
+  const aPre = va.pre;
+  const bPre = vb.pre;
+
+  if (!aPre.length && !bPre.length) return 0;
+  if (!aPre.length) return 1;
+  if (!bPre.length) return -1;
+
+  const len = Math.max(aPre.length, bPre.length);
+  for (let i = 0; i < len; i++) {
+    const pa = aPre[i];
+    const pb = bPre[i];
+    if (pa == null) return -1;
+    if (pb == null) return 1;
+
+    const na = Number(pa);
+    const nb = Number(pb);
+    const aNum = Number.isFinite(na) && String(na) === pa;
+    const bNum = Number.isFinite(nb) && String(nb) === pb;
+
+    if (aNum && bNum) {
+      if (na > nb) return 1;
+      if (na < nb) return -1;
+      continue;
+    }
+    if (aNum && !bNum) return -1;
+    if (!aNum && bNum) return 1;
+
+    const cmp = String(pa).localeCompare(String(pb), "en", {
+      sensitivity: "base",
+      numeric: true,
+    });
+    if (cmp > 0) return 1;
+    if (cmp < 0) return -1;
+  }
+
+  return 0;
+}
+
+async function fetchLatestGithubReleaseVersion(channel) {
+  const ch = channel === "beta" ? "beta" : "stable";
+  const repo = GITHUB_UPDATE_REPOS[ch] || GITHUB_UPDATE_REPOS.stable;
+  const url = `https://api.github.com/repos/${repo}/releases?per_page=20`;
+
+  const headers = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "TPVRecipok-Updater",
+    "Cache-Control": "no-cache",
+    Pragma: "no-cache",
+  };
+
+  const res = await httpsGetJson(url, { headers, timeoutMs: 8000 });
+  if (!res.ok || !Array.isArray(res.json)) {
+    return {
+      ok: false,
+      error: res.error || `http-${res.status || 0}`,
+      repo,
+    };
+  }
+
+  const releases = res.json.filter((r) => r && r.draft !== true);
+  if (!releases.length) {
+    return { ok: false, error: "no-releases", repo };
+  }
+
+  let pick = null;
+  if (ch === "beta") {
+    pick = releases.find((r) => r.prerelease === true) || releases[0];
+  } else {
+    pick = releases.find((r) => r.prerelease !== true) || releases[0];
+  }
+
+  const tag = String(pick?.tag_name || pick?.name || "").trim();
+  const version = cleanVersionTag(tag);
+  if (!version) {
+    return { ok: false, error: "invalid-tag", repo };
+  }
+
+  return {
+    ok: true,
+    repo,
+    tag,
+    version,
+    prerelease: !!pick?.prerelease,
+    publishedAt: pick?.published_at || "",
+  };
 }
 
 function getCompanyFromCfgForMain() {
@@ -1631,6 +1904,57 @@ ipcMain.handle("app:quit", async () => {
   return { ok: true };
 });
 
+ipcMain.handle("updater:checkManual", async () => {
+  try {
+    return await runManualUpdateAvailabilityCheck();
+  } catch (e) {
+    return {
+      ok: false,
+      reason: "exception",
+      message: e?.message || String(e),
+    };
+  }
+});
+
+ipcMain.handle("updater:relaunchForUpdate", async () => {
+  try {
+    forceRelaunchForUpdate = true;
+    appIsInstallingUpdate = true;
+
+    // Evitar que queden timers/reintentos vivos durante el reinicio.
+    stopPreCashUpdateRetries();
+
+    // Cerrar explícitamente la pantalla de cliente para no dejarla colgada.
+    destroyCustomerWindow();
+
+    // Forzar cierre de la principal (su guard ya permite cerrar en modo update).
+    if (mainWin && !mainWin.isDestroyed()) {
+      try {
+        mainWin.close();
+      } catch {}
+    }
+
+    app.relaunch();
+
+    setTimeout(() => {
+      try {
+        app.exit(0);
+      } catch {}
+    }, 20000);
+
+    app.quit();
+    return { ok: true };
+  } catch (e) {
+    forceRelaunchForUpdate = false;
+    appIsInstallingUpdate = false;
+    return {
+      ok: false,
+      reason: "relaunch-failed",
+      message: e?.message || String(e),
+    };
+  }
+});
+
 ipcMain.handle("tpv:attemptQuit", async () => {
   if (!mainWin || mainWin.isDestroyed()) return { ok: true };
 
@@ -1663,6 +1987,10 @@ ipcMain.handle("tpv:attemptQuit", async () => {
 });
 
 app.on("will-quit", () => {
+  // Red de seguridad: al cerrar la app, nunca dejar viva la ventana cliente.
+  try {
+    destroyCustomerWindow();
+  } catch {}
   globalShortcut.unregisterAll();
 });
 
@@ -1963,7 +2291,11 @@ ipcMain.handle("cfg:setAutostart", (_e, val) => {
 });
 
 ipcMain.handle("app:getVersion", () => {
-  return { ok: true, version: app.getVersion() };
+  return {
+    ok: true,
+    version: app.getVersion(),
+    packaged: !!app.isPackaged,
+  };
 });
 
 function pickCustomerDisplay() {

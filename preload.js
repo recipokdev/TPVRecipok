@@ -3,7 +3,9 @@ const { contextBridge, ipcRenderer } = require("electron");
 const { initTPVBootstrap } = require("./js/tpv/bootstrap.js");
 
 const TPV_E2E_MODE = String(process.env.TPV_E2E || "") === "1";
-const TPV_MODE = String(process.env.TPV_MODE || "").trim().toLowerCase();
+const TPV_MODE = String(process.env.TPV_MODE || "")
+  .trim()
+  .toLowerCase();
 const tpvE2EPrintJobs = [];
 
 function pushE2EPrintJob(job) {
@@ -95,6 +97,11 @@ contextBridge.exposeInMainWorld("TPV_QUEUE", {
 contextBridge.exposeInMainWorld("TPV_SYS", {
   quit: () => ipcRenderer.invoke("app:quit"),
   getVersion: () => ipcRenderer.invoke("app:getVersion"),
+});
+
+contextBridge.exposeInMainWorld("TPV_UPDATER", {
+  checkNow: () => ipcRenderer.invoke("updater:checkManual"),
+  relaunchForUpdate: () => ipcRenderer.invoke("updater:relaunchForUpdate"),
 });
 
 contextBridge.exposeInMainWorld("TPV_SETUP", {
