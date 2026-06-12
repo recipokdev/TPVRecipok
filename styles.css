@@ -6195,6 +6195,10 @@ body.theme-dark #parkObsOverlay .park-quick-flag.is-active {
   filter: grayscale(0.25);
 }
 
+.options-cash-closed-mode .opt-acc {
+  display: none;
+}
+
 .options-readonly-note {
   margin-top: 10px;
   padding: 10px 12px;

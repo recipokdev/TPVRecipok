@@ -237,6 +237,7 @@ function redoCartHistoryStep() {
     refreshCartUndoRedoUi();
   }
 }
+let PENDING_RUNTIME_UI_RESTORE = null;
 
 let lastTicket = null; // guardará el último ticket/factura creada para poder imprimirla
 
@@ -5954,6 +5955,8 @@ async function runBootFlow() {
       syncTpvCartWithSelectedMesa({ preferLinkedTicketOnEmptyDraft: true });
     }
 
+    scheduleRuntimeUiRestoreAfterBoot();
+
     return true;
   } finally {
     BOOT_IN_FLIGHT = false;
@@ -6785,7 +6788,13 @@ async function addToCart(product, quantity = 1) {
     return;
   }
 
-  const existing = cart.find((c) => c.id === product.id);
+  const existing = cart.find((c) => {
+    if (Number(c?.id) !== Number(product?.id)) return false;
+    // Nunca mezclar una línea independiente con líneas de oferta.
+    if (isPackParentLine(c) || isPackChildLine(c)) return false;
+    return true;
+  });
+
   pushCartHistoryStep(existing ? "qty-change" : "add-product");
   if (existing) existing.qty += finalQty;
   else cart.push(buildCartLine(product, finalQty));
@@ -7087,11 +7096,41 @@ function buildRuntimeCartSnapshotPayload() {
       ? parkedTickets[currentParkedTicketIndex] || null
       : null;
 
+  const activeEl = document.activeElement;
+  const activeElementId =
+    activeEl && typeof activeEl.id === "string" && activeEl.id.trim()
+      ? activeEl.id.trim()
+      : null;
+
+  const uiSnapshot = {
+    selectedCategory:
+      selectedCategory !== undefined && selectedCategory !== null
+        ? String(selectedCategory)
+        : null,
+    activeFamilyParentId:
+      activeFamilyParentId !== undefined && activeFamilyParentId !== null
+        ? String(activeFamilyParentId)
+        : null,
+    activeSubfamilyId:
+      activeSubfamilyId !== undefined && activeSubfamilyId !== null
+        ? String(activeSubfamilyId)
+        : null,
+    searchTerm: String(searchInput?.value ?? searchTerm ?? ""),
+    optionsOpen:
+      !!optionsOverlay && !optionsOverlay.classList.contains("hidden"),
+    focusElementId: activeElementId,
+  };
+
   return {
-    v: 1,
+    v: 2,
     ts: Date.now(),
     mode: getCurrentCartModeScope(),
     items: safeCart,
+    uiSnapshot,
+    selectedCategory:
+      selectedCategory !== undefined && selectedCategory !== null
+        ? String(selectedCategory)
+        : null,
     parkedTicketSyncKey: getParkedTicketSyncKey(activeParkedTicket),
     parkedTicketId: Number(activeParkedTicket?.id || 0) || null,
   };
@@ -7233,6 +7272,31 @@ async function restoreRuntimeCartSnapshot({ force = false, mode } = {}) {
 
     cart = restored;
 
+    const uiSnapshot =
+      parsed?.uiSnapshot && typeof parsed.uiSnapshot === "object"
+        ? parsed.uiSnapshot
+        : null;
+
+    const normalizeIdOrNull = (value) => {
+      if (value === undefined || value === null || value === "") return null;
+      return String(value);
+    };
+
+    const restoredCategoryRaw =
+      uiSnapshot?.selectedCategory ?? parsed?.selectedCategory;
+    selectedCategory = normalizeIdOrNull(restoredCategoryRaw);
+    activeFamilyParentId = normalizeIdOrNull(uiSnapshot?.activeFamilyParentId);
+    activeSubfamilyId = normalizeIdOrNull(uiSnapshot?.activeSubfamilyId);
+
+    const restoredSearch = String(uiSnapshot?.searchTerm ?? "");
+    searchTerm = restoredSearch;
+    if (searchInput) searchInput.value = restoredSearch;
+
+    PENDING_RUNTIME_UI_RESTORE = {
+      optionsOpen: !!uiSnapshot?.optionsOpen,
+      focusElementId: normalizeIdOrNull(uiSnapshot?.focusElementId),
+    };
+
     const parkedSyncKey = String(parsed?.parkedTicketSyncKey || "").trim();
     const parkedTicketId = Number(parsed?.parkedTicketId || 0) || 0;
     PENDING_RUNTIME_PARKED_SYNC_KEY = parkedSyncKey;
@@ -7252,11 +7316,82 @@ async function restoreRuntimeCartSnapshot({ force = false, mode } = {}) {
       mode: scopeMode,
     });
 
+    renderCategories?.();
+    renderProducts?.();
+
     return true;
   } catch (e) {
     console.warn("No se pudo restaurar snapshot de carrito:", e?.message || e);
     return false;
   }
+}
+
+function scheduleRuntimeUiRestoreAfterBoot() {
+  const pending = PENDING_RUNTIME_UI_RESTORE;
+  if (!pending || typeof pending !== "object") return;
+
+  const focusElementId = String(pending.focusElementId || "").trim();
+
+  // No reabrir automáticamente Opciones tras actualización/reinicio.
+  const wantsOptionsOpen = false;
+
+  const applyFocus = () => {
+    if (!focusElementId) return;
+
+    const optionsOpen =
+      !!optionsOverlay && !optionsOverlay.classList.contains("hidden");
+    if (!optionsOpen && /^options/i.test(focusElementId)) return;
+
+    const el = document.getElementById(focusElementId);
+    if (!el || typeof el.focus !== "function") return;
+    try {
+      el.focus();
+      if (typeof el.select === "function") el.select();
+    } catch {}
+  };
+
+  const clearPending = () => {
+    PENDING_RUNTIME_UI_RESTORE = null;
+  };
+
+  if (!wantsOptionsOpen) {
+    setTimeout(() => {
+      applyFocus();
+      clearPending();
+    }, 40);
+    return;
+  }
+
+  let retries = 0;
+  const maxRetries = 20;
+
+  const tryOpenOptions = async () => {
+    if (!PENDING_RUNTIME_UI_RESTORE) return;
+    retries += 1;
+
+    const canOpenOptions = !!(cashSession?.open && hasActiveLoginSession());
+    if (canOpenOptions) {
+      try {
+        await openOptions();
+      } catch {}
+
+      setTimeout(() => {
+        applyFocus();
+      }, 120);
+
+      clearPending();
+      return;
+    }
+
+    if (retries >= maxRetries) {
+      clearPending();
+      return;
+    }
+
+    setTimeout(tryOpenOptions, 250);
+  };
+
+  setTimeout(tryOpenOptions, 120);
 }
 
 function renderCart() {
@@ -8235,6 +8370,10 @@ function confirmModal(title, text, options = {}) {
     // fallback seguro si falta algo
     return Promise.resolve(window.confirm(text));
   }
+
+  okBtn.textContent = "Aceptar";
+  cancelBtn.textContent = "Cancelar";
+  cancelBtn.classList.remove("hidden");
 
   titleEl.textContent = title || "Confirmar";
   const {
@@ -18785,13 +18924,13 @@ function bindAutostartToggleOnce() {
 }
 
 async function openOptions() {
-  if (!cashSession?.open) {
-    toast("Debes abrir la caja para acceder a opciones.", "info", "Opciones");
-    return;
-  }
+  const cashOpen = !!cashSession?.open;
 
   const setOptionsReadOnlyMode = (readonly) => {
     optionsOverlay?.classList.toggle("options-readonly", !!readonly);
+
+    // Caja cerrada: mostrar modal mínimo (acciones del footer únicamente).
+    optionsOverlay?.classList.toggle("options-cash-closed-mode", !cashOpen);
 
     const acc = document.getElementById("optionsAccordion");
     if (acc) {
@@ -18812,8 +18951,24 @@ async function openOptions() {
       else dialog.appendChild(note);
     }
 
-    if (note) note.classList.toggle("hidden", !readonly);
+    if (note) {
+      if (!cashOpen) {
+        note.textContent =
+          "Caja cerrada: solo están disponibles Actualizar programa y Salir del programa.";
+        note.classList.remove("hidden");
+      } else {
+        note.textContent =
+          "Inicia sesión para desbloquear las opciones del TPV.";
+        note.classList.toggle("hidden", !readonly);
+      }
+    }
   };
+
+  if (!cashOpen) {
+    setOptionsReadOnlyMode(true);
+    optionsOverlay?.classList.remove("hidden");
+    return;
+  }
 
   if (!hasActiveLoginSession()) {
     setOptionsReadOnlyMode(true);
@@ -19366,6 +19521,224 @@ async function handleOpenDrawerClick(btn, source = "MANUAL") {
 }
 
 const optionsQuitBtn = document.getElementById("optionsQuitBtn");
+const optionsUpdateAppBtn = document.getElementById("optionsUpdateAppBtn");
+
+let manualUpdateActionInFlight = false;
+
+function runUpdateRelaunchCountdown({ seconds = 5, targetVersion = "" } = {}) {
+  const overlay = document.getElementById("msgOverlay");
+  const titleEl = document.getElementById("msgTitle");
+  const textEl = document.getElementById("msgText");
+  const okBtn = document.getElementById("msgOkBtn");
+  const cancelBtn = document.getElementById("msgCancelBtn");
+  const midBtn = document.getElementById("msgMidBtn");
+
+  if (!overlay || !titleEl || !textEl || !okBtn || !cancelBtn) {
+    const ask = window.confirm(
+      "Nueva versión encontrada. El programa se cerrará y abrirá de nuevo para actualizar. ¿Continuar?",
+    );
+    return Promise.resolve(!!ask);
+  }
+
+  const safeSeconds = Math.max(1, Number(seconds) || 5);
+  const verTxt = String(targetVersion || "").trim();
+
+  titleEl.textContent = "Actualizar programa";
+  okBtn.textContent = "Cerrar ahora";
+  cancelBtn.textContent = "Cancelar";
+  if (midBtn) midBtn.classList.add("hidden");
+
+  overlay.classList.remove("hidden");
+  lockAppUI();
+
+  return new Promise((resolve) => {
+    let closed = false;
+    let left = safeSeconds;
+    let timer = null;
+
+    const paint = () => {
+      const verLine = verTxt ? `Versión nueva: ${verTxt}\n` : "";
+      textEl.textContent =
+        `${verLine}Cerrando el programa en ${left}s para actualizar.\n` +
+        "Puedes cancelar si quieres seguir trabajando.";
+      textEl.style.whiteSpace = "pre-line";
+    };
+
+    const cleanup = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      okBtn.onclick = null;
+      cancelBtn.onclick = null;
+      window.removeEventListener("keydown", onKey);
+      overlay.classList.add("hidden");
+      unlockAppUI();
+    };
+
+    const finish = (accept) => {
+      if (closed) return;
+      closed = true;
+      cleanup();
+      resolve(!!accept);
+    };
+
+    const onKey = (e) => {
+      if (e.key === "Escape") finish(false);
+      if (e.key === "Enter") finish(true);
+    };
+
+    window.addEventListener("keydown", onKey);
+    okBtn.onclick = () => finish(true);
+    cancelBtn.onclick = () => finish(false);
+
+    paint();
+    timer = setInterval(() => {
+      left -= 1;
+      if (left <= 0) {
+        finish(true);
+        return;
+      }
+      paint();
+    }, 1000);
+  });
+}
+
+async function startManualUpdateFlowFromOptions() {
+  if (manualUpdateActionInFlight) return;
+  manualUpdateActionInFlight = true;
+
+  try {
+    const ok = await confirmModal(
+      "Actualizar programa",
+      "Se comprobará si hay una nueva versión.\nSi existe, el TPV se cerrará y se abrirá automáticamente sin perder el estado.",
+    );
+    if (!ok) return;
+
+    closeOptions?.();
+
+    const updaterApi = window.TPV_UPDATER;
+    if (!updaterApi?.checkNow || !updaterApi?.relaunchForUpdate) {
+      showMessageModal(
+        "Actualizar programa",
+        "Esta versión no tiene disponible la API de actualización manual.",
+      );
+      return;
+    }
+
+    const check = await updaterApi.checkNow();
+
+    if (!check?.ok) {
+      const msg = String(
+        check?.message || "No se pudo comprobar si hay actualizaciones.",
+      );
+      showMessageModal("Actualizar programa", msg);
+      return;
+    }
+
+    if (!check?.updateAvailable) {
+      showMessageModal(
+        "Actualizar programa",
+        String(check?.message || "Estás en la versión más reciente."),
+      );
+      return;
+    }
+
+    if (check?.devMode) {
+      const currentV = String(check?.currentVersion || "").trim();
+      const targetV = String(check?.targetVersion || "").trim();
+      const repo = String(check?.githubRepo || "").trim();
+      const tag = String(check?.githubTag || "").trim();
+
+      const details = [
+        String(check?.message || "Simulación de actualización en npm start."),
+        currentV ? `Versión actual: ${currentV}` : "",
+        targetV ? `Versión detectada en GitHub: ${targetV}` : "",
+        repo ? `Repositorio: ${repo}` : "",
+        tag ? `Tag: ${tag}` : "",
+        check?.wouldDownload
+          ? "Resultado: en app instalada, sí se descargaría e instalaría."
+          : "Resultado: en app instalada, no descargaría actualización ahora.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      if (!check?.wouldDownload) {
+        showMessageModal("Actualizar programa (simulación)", details);
+        return;
+      }
+
+      const doSimulated = await confirmModal(
+        "Actualizar programa (simulación)",
+        `${details}\n\n¿Quieres simular ahora el cierre y reapertura para validar recuperación de estado?`,
+      );
+
+      if (!doSimulated) return;
+
+      const proceedSim = await runUpdateRelaunchCountdown({
+        seconds: 5,
+        targetVersion: targetV,
+      });
+
+      if (!proceedSim) {
+        toast(
+          "Simulación de actualización cancelada.",
+          "info",
+          "Actualizar programa",
+        );
+        return;
+      }
+
+      persistRuntimeCartSnapshot({ force: true });
+
+      const relaunchSim = await updaterApi.relaunchForUpdate();
+      if (!relaunchSim?.ok) {
+        showMessageModal(
+          "Actualizar programa (simulación)",
+          String(
+            relaunchSim?.message ||
+              "No se pudo reiniciar el programa en simulación.",
+          ),
+        );
+      }
+      return;
+    }
+
+    const proceed = await runUpdateRelaunchCountdown({
+      seconds: 5,
+      targetVersion: check?.targetVersion || "",
+    });
+
+    if (!proceed) {
+      toast("Actualización cancelada.", "info", "Actualizar programa");
+      return;
+    }
+
+    // Reutilizamos la misma persistencia ante cierre inesperado.
+    persistRuntimeCartSnapshot({ force: true });
+
+    const relaunch = await updaterApi.relaunchForUpdate();
+    if (!relaunch?.ok) {
+      showMessageModal(
+        "Actualizar programa",
+        String(relaunch?.message || "No se pudo reiniciar el programa."),
+      );
+      return;
+    }
+  } catch (e) {
+    console.warn("[UPDATE-MANUAL]", e?.message || e);
+    showMessageModal(
+      "Actualizar programa",
+      "Ha ocurrido un error al preparar la actualización.",
+    );
+  } finally {
+    manualUpdateActionInFlight = false;
+  }
+}
+
+optionsUpdateAppBtn?.addEventListener("click", () => {
+  startManualUpdateFlowFromOptions();
+});
 
 optionsQuitBtn?.addEventListener("click", async () => {
   try {
@@ -32325,14 +32698,22 @@ function showMessageModal(title, text) {
   const t = document.getElementById("msgTitle");
   const p = document.getElementById("msgText");
   const b = document.getElementById("msgOkBtn");
+  const cancelBtn = document.getElementById("msgCancelBtn");
+  const midBtn = document.getElementById("msgMidBtn");
   if (!o || !t || !p || !b) return;
 
   t.textContent = title || "Aviso";
   p.textContent = text || "";
+  p.style.whiteSpace = "pre-line";
+  if (cancelBtn) cancelBtn.classList.add("hidden");
+  if (midBtn) midBtn.classList.add("hidden");
+  b.textContent = "Aceptar";
   o.classList.remove("hidden");
+  lockAppUI();
 
   b.onclick = () => {
     o.classList.add("hidden");
+    unlockAppUI();
   };
 }
 
