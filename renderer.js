@@ -456,6 +456,9 @@ const productsIncludeUnmanagedToggle = document.getElementById(
 const terminalMetaItemEl = document.getElementById("terminalMetaItem");
 const agentMetaItemEl = document.getElementById("agentMetaItem");
 const userMetaItemEl = document.getElementById("userMetaItem");
+const mesasTransTerminalBarEl = document.getElementById(
+  "mesasTransTerminalBar",
+);
 
 const productSortModeSelect = document.getElementById("productSortModeSelect");
 const productReorderModeToggle = document.getElementById(
@@ -1474,7 +1477,7 @@ const PRODUCT_NAME_COLLATOR = new Intl.Collator("es", {
 });
 const PRODUCT_TILE_MIN_SIZE_DEFAULT = 150;
 const PRODUCT_TILE_MIN_SIZE_MIN = 110;
-const PRODUCT_TILE_MIN_SIZE_MAX = 260;
+const PRODUCT_TILE_MIN_SIZE_MAX = 360;
 const LS_ALLOW_CLOSE_WITH_PARKED_KEY = "tpv_allowCloseWithParkedTickets";
 const OPTIONS_MESAS_DINERS_FAMILY_RULES_KEY = "ui.mesasDinersFamilyRules";
 const LS_MESAS_DINERS_FAMILY_RULES_KEY = "tpv_mesasDinersFamilyRules";
@@ -1667,10 +1670,18 @@ function clampProductTileMinSize(value) {
 }
 
 function applyProductTileMinSizeCssVar() {
+  const nextSizePx = `${clampProductTileMinSize(productTileMinSize)}px`;
   document.documentElement.style.setProperty(
     "--product-tile-min-size",
-    `${clampProductTileMinSize(productTileMinSize)}px`,
+    nextSizePx,
   );
+
+  const grid = document.getElementById("productsGrid");
+  if (grid) {
+    grid.style.setProperty("--product-tile-min-size", nextSizePx);
+    grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${nextSizePx}, ${nextSizePx}))`;
+    grid.style.justifyContent = "start";
+  }
 }
 
 function parseBoolLike(value, fallback = false) {
@@ -1914,7 +1925,23 @@ async function saveProductReorderModeSetting(enabled) {
 function applyInfoBarVisibilityUi() {
   const row = document.querySelector(".cart-terminal-row");
   const cashInfoEl = document.getElementById("cashInfo");
-  if (row) row.style.display = infoBarVisible ? "" : "none";
+  const mesasTerminalItemEl = mesasTransTerminalNameEl?.closest(
+    ".mesas-trans-meta-item",
+  );
+  const mesasAgentItemEl = mesasTransAgentNameEl?.closest(
+    ".mesas-trans-meta-item",
+  );
+  const mesasUserItemEl = mesasTransUserNameEl?.closest(
+    ".mesas-trans-meta-item",
+  );
+  const showMesasTerminal = infoBarVisible && infoBarShowTerminal;
+  const showMesasAgent = infoBarVisible && infoBarShowAgent;
+  const showMesasUser = infoBarVisible && infoBarShowUser;
+  const showAnyMesasMeta = showMesasTerminal || showMesasAgent || showMesasUser;
+  const showClassicCash = infoBarVisible && infoBarShowCash;
+  const showClassicRow = false;
+
+  if (row) row.style.display = showClassicRow ? "flex" : "none";
 
   if (terminalMetaItemEl) {
     terminalMetaItemEl.style.display =
@@ -1929,7 +1956,19 @@ function applyInfoBarVisibilityUi() {
       infoBarVisible && infoBarShowUser ? "" : "none";
   }
   if (cashInfoEl) {
-    cashInfoEl.style.display = infoBarVisible && infoBarShowCash ? "" : "none";
+    cashInfoEl.style.display = showClassicCash ? "inline-flex" : "none";
+  }
+  if (mesasTransTerminalBarEl) {
+    mesasTransTerminalBarEl.style.display = showAnyMesasMeta ? "" : "none";
+  }
+  if (mesasTerminalItemEl) {
+    mesasTerminalItemEl.style.display = showMesasTerminal ? "" : "none";
+  }
+  if (mesasAgentItemEl) {
+    mesasAgentItemEl.style.display = showMesasAgent ? "" : "none";
+  }
+  if (mesasUserItemEl) {
+    mesasUserItemEl.style.display = showMesasUser ? "" : "none";
   }
 
   if (infoBarVisibleToggle) infoBarVisibleToggle.checked = !!infoBarVisible;
@@ -1959,6 +1998,8 @@ function applyInfoBarVisibilityUi() {
     infoBarAltAgentBtn.style.display = showAltAgent ? "" : "none";
   if (infoBarAltUserBtn)
     infoBarAltUserBtn.style.display = showAltUser ? "" : "none";
+
+  updateCashButtonLabel?.();
 }
 
 async function loadInfoBarVisibilitySettings() {
@@ -6844,9 +6885,9 @@ function updateCashButtonLabel() {
 
   if (cashSession.open) {
     const cajaId = Number(cashSession?.remoteCajaId || 0) || 0;
-    cashHeaderLabel.textContent = cajaId
-      ? `Cerrar caja | ${cajaId}`
-      : "Cerrar caja";
+    const showCajaId = infoBarVisible && infoBarShowCash;
+    cashHeaderLabel.textContent =
+      showCajaId && cajaId ? `Cerrar caja | ${cajaId}` : "Cerrar caja";
   } else {
     cashHeaderLabel.textContent = "Abrir caja";
   }
@@ -7138,6 +7179,7 @@ function bindProductTileReorderEvents(tile) {
 
   tile.addEventListener("pointerdown", (ev) => {
     if (!productReorderMode || !isAdminUser()) return;
+    if (ev.target?.closest?.(".product-tile-resize-handle")) return;
 
     const sourceId = Number(tile.dataset.productId || 0);
     if (!sourceId) return;
@@ -7380,7 +7422,12 @@ function renderProducts() {
     `;
 
     const canEditPrices = isAdminUser() && isPriceEditModeEnabled();
-    const canResizeTiles = isAdminUser() && !!productTileResizeMode;
+    const canResizeTiles =
+      isAdminUser() &&
+      (!!productTileResizeMode ||
+        (MESAS_INLINE_ACTIVE &&
+          MESAS_INLINE_VIEW === "transacciones" &&
+          !!productReorderMode));
     const canReorderTiles = isAdminUser() && !!productReorderMode;
     const productForSale =
       discountPct > 0
@@ -13940,6 +13987,7 @@ function renderMainAgentBar() {
   }
 
   updateThemeButtonsUI();
+  syncMesasTransTerminalName?.();
 }
 
 // Overlay para elegir TPV / agente

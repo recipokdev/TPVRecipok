@@ -816,7 +816,14 @@ body.mesas-inline-trans-mode .category-btn {
 
 body.mesas-inline-trans-mode .products-grid {
   gap: 6px;
-  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  justify-content: start;
+  grid-template-columns: repeat(
+    auto-fill,
+    minmax(
+      var(--product-tile-min-size, 150px),
+      var(--product-tile-min-size, 150px)
+    )
+  );
 }
 
 body.mesas-inline-trans-mode .product-overlay-top,
@@ -1932,12 +1939,12 @@ body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode)
 
 .product-tile-resize-handle {
   position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 18px;
-  height: 18px;
+  right: 2px;
+  bottom: 2px;
+  width: 24px;
+  height: 24px;
   border-radius: 5px;
-  z-index: 6;
+  z-index: 8;
   cursor: nwse-resize;
   background:
     linear-gradient(
@@ -1957,6 +1964,11 @@ body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode)
     rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(30, 41, 59, 0.25);
   touch-action: none;
+}
+
+body.mesas-inline-trans-mode .product-tile-resize-handle {
+  width: 28px;
+  height: 28px;
 }
 
 /* Bordes redondeados consistentes en overlays */
