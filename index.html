@@ -81,7 +81,7 @@
 
       <!-- Info terminal / agente -->
       <div class="cart-terminal-row">
-        <span class="terminal-meta-item">
+        <span class="terminal-meta-item" id="terminalMetaItem">
           <span class="terminal-meta-label">Terminal</span>
           <strong
             id="terminalName"
@@ -90,12 +90,12 @@
           >
         </span>
 
-        <span class="terminal-meta-item">
+        <span class="terminal-meta-item" id="agentMetaItem">
           <span class="terminal-meta-label">Agente</span>
           <span id="agentName" class="agent-name terminal-meta-value">---</span>
         </span>
 
-        <span class="terminal-meta-item">
+        <span class="terminal-meta-item" id="userMetaItem">
           <span class="terminal-meta-label">Usuario</span>
           <span
             id="userName"
@@ -1489,11 +1489,14 @@
                 </label>
               </div>
 
-              <div class="opt-row">
+              <div class="opt-row opt-row-scale-help">
                 <div class="opt-row-txt">
                   <div class="opt-row-title">Puerto</div>
                   <div class="opt-row-sub">
-                    Selecciona el puerto de la báscula.
+                    Selecciona el puerto de la báscula. Si usas adaptador
+                    USB-Serial (CH340/CH341), revisa que sea el COM correcto y
+                    que ningún otro programa (PuTTY, terminal serie, etc.) lo
+                    tenga abierto.
                   </div>
                 </div>
                 <div class="opt-row-actions">
@@ -1508,12 +1511,13 @@
                 </div>
               </div>
 
-              <div class="opt-row">
+              <div class="opt-row opt-row-scale-help">
                 <div class="opt-row-txt">
                   <div class="opt-row-title">Cobrar en</div>
                   <div class="opt-row-sub">
-                    Elige si la cantidad del producto debe entrar en gramos o en
-                    kg.
+                    Define en qué unidad se añadirá al carrito. Ejemplo: si la
+                    lectura es 0,170 kg y cobras en gramos, se añadirá 170; si
+                    cobras en kg, se añadirá 0,170.
                   </div>
                 </div>
                 <div class="opt-row-actions">
@@ -1600,6 +1604,50 @@
               >
                 <div class="opt-row">
                   <div class="opt-row-txt">
+                    <div class="opt-row-title">Bits de datos</div>
+                    <div class="opt-row-sub">
+                      Normalmente 8. Algunas básculas antiguas usan 7.
+                    </div>
+                  </div>
+                  <div class="opt-row-actions">
+                    <select id="scaleDataBitsSelect" class="opt-select">
+                      <option value="8" selected>8</option>
+                      <option value="7">7</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="opt-row">
+                  <div class="opt-row-txt">
+                    <div class="opt-row-title">Paridad</div>
+                    <div class="opt-row-sub">
+                      En la mayoría de casos, sin paridad.
+                    </div>
+                  </div>
+                  <div class="opt-row-actions">
+                    <select id="scaleParitySelect" class="opt-select">
+                      <option value="none" selected>None</option>
+                      <option value="even">Even</option>
+                      <option value="odd">Odd</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="opt-row">
+                  <div class="opt-row-txt">
+                    <div class="opt-row-title">Bits de parada</div>
+                    <div class="opt-row-sub">Normalmente 1.</div>
+                  </div>
+                  <div class="opt-row-actions">
+                    <select id="scaleStopBitsSelect" class="opt-select">
+                      <option value="1" selected>1</option>
+                      <option value="2">2</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="opt-row">
+                  <div class="opt-row-txt">
                     <div class="opt-row-title">Velocidad</div>
                     <div class="opt-row-sub">
                       Normalmente 9600. Solo cámbiala si una báscula concreta no
@@ -1614,6 +1662,85 @@
                       <option value="9600" selected>9600</option>
                       <option value="19200">19200</option>
                       <option value="38400">38400</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="opt-row">
+                  <div class="opt-row-txt">
+                    <div class="opt-row-title">Modo de parser</div>
+                    <div class="opt-row-sub">
+                      Timeout funciona en la mayoría de básculas por RS232.
+                    </div>
+                  </div>
+                  <div class="opt-row-actions">
+                    <select id="scaleParserModeSelect" class="opt-select">
+                      <option value="timeout" selected>Timeout</option>
+                      <option value="delimiter">Delimitador</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="opt-row">
+                  <div class="opt-row-txt">
+                    <div class="opt-row-title">Delimitador</div>
+                    <div class="opt-row-sub">
+                      Solo aplica cuando el parser está en modo delimitador.
+                    </div>
+                  </div>
+                  <div class="opt-row-actions">
+                    <select id="scaleDelimiterSelect" class="opt-select">
+                      <option value="\r\n" selected>CRLF (\r\n)</option>
+                      <option value="\r">CR (\r)</option>
+                      <option value="\n">LF (\n)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="opt-row opt-row-scale-help">
+                  <div class="opt-row-txt">
+                    <div class="opt-row-title">Unidad de origen</div>
+                    <div class="opt-row-sub">
+                      Unidad en la que la báscula envía el número crudo.
+                      Ejemplo: si devuelve 0,100 elige kg; si devuelve 100
+                      directamente, elige g.
+                    </div>
+                  </div>
+                  <div class="opt-row-actions">
+                    <select id="scaleSourceUnitSelect" class="opt-select">
+                      <option value="g" selected>g</option>
+                      <option value="kg">kg</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="opt-row">
+                  <div class="opt-row-txt">
+                    <div class="opt-row-title">Inversión de lectura</div>
+                    <div class="opt-row-sub">
+                      Activar solo si el dato llega invertido o ilegible.
+                    </div>
+                  </div>
+                  <label class="switch">
+                    <input type="checkbox" id="scaleReverseReadingToggle" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+
+                <div class="opt-row">
+                  <div class="opt-row-txt">
+                    <div class="opt-row-title">Espera entre bytes (ms)</div>
+                    <div class="opt-row-sub">
+                      Tiempo para cerrar una trama en modo timeout.
+                    </div>
+                  </div>
+                  <div class="opt-row-actions">
+                    <select id="scaleInterByteMsSelect" class="opt-select">
+                      <option value="10">10</option>
+                      <option value="20" selected>20</option>
+                      <option value="40">40</option>
+                      <option value="80">80</option>
+                      <option value="120">120</option>
                     </select>
                   </div>
                 </div>
@@ -1723,10 +1850,12 @@
             <div class="opt-sec-b">
               <div class="opt-row">
                 <div class="opt-row-txt">
-                  <div class="opt-row-title">Modo edición de precio</div>
+                  <div class="opt-row-title">
+                    Modo edición de precio y prioridad
+                  </div>
                   <div class="opt-row-sub">
                     Muestra el icono ✎ en los productos para cambiar precio (IVA
-                    incl.).
+                    incl.) y prioridad.
                   </div>
                 </div>
                 <label class="switch">
@@ -1744,6 +1873,31 @@
                 </div>
                 <label class="switch">
                   <input type="checkbox" id="productStockToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Solo productos con stock</div>
+                  <div class="opt-row-sub">
+                    Oculta productos con stock 0 o sin stock disponible.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="productsStockOnlyToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Incluir sin control stock</div>
+                  <div class="opt-row-sub">
+                    Muestra productos que no tienen filas reales de stock en
+                    FacturaScripts.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="productsIncludeUnmanagedToggle" />
                   <span class="slider"></span>
                 </label>
               </div>
@@ -1785,6 +1939,176 @@
                   <input type="checkbox" id="parkStockWarningToggle" />
                   <span class="slider"></span>
                 </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Modo redimensionar productos</div>
+                  <div class="opt-row-sub">
+                    Muestra un asa para cambiar el tamaño de las tarjetas
+                    arrastrando. Afecta a todos los productos.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="productTileResizeModeToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Orden de productos</div>
+                  <div class="opt-row-sub">
+                    Elige cómo ordenar las tarjetas en la cuadrícula.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <select id="productSortModeSelect" class="opt-select">
+                    <option value="default">
+                      Por defecto (FacturaScripts)
+                    </option>
+                    <option value="manual">Manual (prioridad)</option>
+                    <option value="reference">Referencia</option>
+                    <option value="description">Descripción</option>
+                    <option value="id">ID de producto</option>
+                  </select>
+                </div>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Reordenar por arrastre</div>
+                  <div class="opt-row-sub">
+                    Permite arrastrar con dedo/ratón para cambiar orden manual.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="productReorderModeToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Restablecer prioridades</div>
+                  <div class="opt-row-sub">
+                    Elimina todas las prioridades manuales y vuelve al orden
+                    base.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  id="productManualOrderResetBtn"
+                  class="small-btn"
+                >
+                  Restablecer prioridades
+                </button>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Restablecer tamaño de productos
+                  </div>
+                  <div class="opt-row-sub">
+                    Vuelve al tamaño recomendado por defecto.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  id="productTileSizeResetBtn"
+                  class="small-btn"
+                >
+                  Restablecer
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section class="opt-sec" data-sec="barra-info" data-admin-only>
+            <button type="button" class="opt-sec-h">
+              <span
+                >Barra de información
+                <span class="opt-admin-pill">ADMIN</span></span
+              >
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Mostrar barra completa</div>
+                  <div class="opt-row-sub">
+                    Muestra u oculta toda la fila de
+                    terminal/agente/usuario/caja.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="infoBarVisibleToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Mostrar terminal</div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="infoBarShowTerminalToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Mostrar agente</div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="infoBarShowAgentToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Mostrar usuario</div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="infoBarShowUserToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Mostrar caja</div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="infoBarShowCashToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Acciones alternativas</div>
+                  <div class="opt-row-sub">
+                    Para usar cambios de sesión si ocultas botones de la barra.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <button
+                    type="button"
+                    id="infoBarAltTerminalBtn"
+                    class="small-btn"
+                  >
+                    Cambiar terminal
+                  </button>
+                  <button
+                    type="button"
+                    id="infoBarAltAgentBtn"
+                    class="small-btn"
+                  >
+                    Cambiar agente
+                  </button>
+                  <button
+                    type="button"
+                    id="infoBarAltUserBtn"
+                    class="small-btn"
+                  >
+                    Cambiar usuario
+                  </button>
+                </div>
               </div>
             </div>
           </section>
@@ -2080,7 +2404,7 @@
 
           <div style="margin-top: 12px">
             <div style="font-size: 12px; opacity: 0.75; margin-bottom: 6px">
-              Nuevo precio (IVA incluido)
+              Precio base (IVA incluido)
             </div>
 
             <div style="display: flex; gap: 8px; align-items: center">
@@ -2105,6 +2429,46 @@
                 ⌨
               </button>
             </div>
+          </div>
+
+          <div style="margin-top: 12px">
+            <div style="font-size: 12px; opacity: 0.75; margin-bottom: 6px">
+              Descuento (%)
+            </div>
+            <input
+              id="priceEditDiscountPctInput"
+              type="text"
+              inputmode="decimal"
+              placeholder="0"
+              style="
+                width: 95%;
+                padding: 10px;
+                border: 1px solid #ddd;
+                border-radius: 10px;
+              "
+            />
+          </div>
+
+          <div style="margin-top: 12px">
+            <div style="font-size: 12px; opacity: 0.75; margin-bottom: 6px">
+              Prioridad de orden (negativo primero, positivo después)
+            </div>
+            <input
+              id="priceEditOrderPriorityInput"
+              type="text"
+              inputmode="numeric"
+              placeholder="0"
+              style="
+                width: 95%;
+                padding: 10px;
+                border: 1px solid #ddd;
+                border-radius: 10px;
+              "
+            />
+          </div>
+
+          <div style="margin-top: 10px; font-size: 13px">
+            Precio final con descuento: <strong id="priceEditFinal">—</strong>
           </div>
 
           <div
