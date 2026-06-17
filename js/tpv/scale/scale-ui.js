@@ -3,9 +3,17 @@
     enabled: "scale.enabled",
     portPath: "scale.portPath",
     baudRate: "scale.baudRate",
+    dataBits: "scale.dataBits",
+    parity: "scale.parity",
+    stopBits: "scale.stopBits",
     chargeUnit: "scale.chargeUnit",
     decimalPlaces: "scale.decimalPlaces",
     consumeMode: "scale.consumeMode",
+    parserMode: "scale.parserMode",
+    delimiter: "scale.delimiter",
+    interByteMs: "scale.interByteMs",
+    sourceUnit: "scale.sourceUnit",
+    reverseReading: "scale.reverseReading",
   };
 
   let unsubscribeScaleState = null;
@@ -54,33 +62,60 @@
       enabled,
       portPath,
       baudRate,
+      dataBits,
+      parity,
+      stopBits,
       chargeUnit,
       decimalPlaces,
       consumeMode,
+      parserMode,
+      delimiter,
+      interByteMs,
+      sourceUnit,
+      reverseReading,
     ] = await Promise.all([
       window.TPV_CFG.get(SCALE_CFG_KEYS.enabled),
       window.TPV_CFG.get(SCALE_CFG_KEYS.portPath),
       window.TPV_CFG.get(SCALE_CFG_KEYS.baudRate),
+      window.TPV_CFG.get(SCALE_CFG_KEYS.dataBits),
+      window.TPV_CFG.get(SCALE_CFG_KEYS.parity),
+      window.TPV_CFG.get(SCALE_CFG_KEYS.stopBits),
       window.TPV_CFG.get(SCALE_CFG_KEYS.chargeUnit),
       window.TPV_CFG.get(SCALE_CFG_KEYS.decimalPlaces),
       window.TPV_CFG.get(SCALE_CFG_KEYS.consumeMode),
+      window.TPV_CFG.get(SCALE_CFG_KEYS.parserMode),
+      window.TPV_CFG.get(SCALE_CFG_KEYS.delimiter),
+      window.TPV_CFG.get(SCALE_CFG_KEYS.interByteMs),
+      window.TPV_CFG.get(SCALE_CFG_KEYS.sourceUnit),
+      window.TPV_CFG.get(SCALE_CFG_KEYS.reverseReading),
     ]);
 
     return {
       enabled: !!enabled,
       portPath: String(portPath || "").trim(),
       baudRate: Number(baudRate || 9600),
+      dataBits: Number(dataBits || 8) === 7 ? 7 : 8,
+      parity: ["none", "even", "odd", "mark", "space"].includes(
+        String(parity || "").toLowerCase(),
+      )
+        ? String(parity || "").toLowerCase()
+        : "none",
+      stopBits: Number(stopBits || 1) === 2 ? 2 : 1,
       chargeUnit: chargeUnit === "kg" ? "kg" : "g",
       decimalPlaces: Number.isFinite(Number(decimalPlaces))
         ? Number(decimalPlaces)
         : 4,
       consumeMode: consumeMode === "single" ? "single" : "continuous",
 
-      // Internos automáticos
-      parserMode: "timeout",
-      interByteMs: 20,
-      reverseReading: false,
-      sourceUnit: "g",
+      parserMode: parserMode === "delimiter" ? "delimiter" : "timeout",
+      delimiter: ["\\r\\n", "\\r", "\\n"].includes(String(delimiter || ""))
+        ? String(delimiter)
+        : "\\r\\n",
+      interByteMs: Number.isFinite(Number(interByteMs))
+        ? Math.max(5, Number(interByteMs))
+        : 20,
+      reverseReading: !!reverseReading,
+      sourceUnit: sourceUnit === "kg" ? "kg" : "g",
       conversionFactor: 1,
     };
   }
@@ -107,6 +142,33 @@
         SCALE_CFG_KEYS.consumeMode,
         cfg.consumeMode === "single" ? "single" : "continuous",
       ),
+      window.TPV_CFG.set(SCALE_CFG_KEYS.dataBits, Number(cfg.dataBits || 8)),
+      window.TPV_CFG.set(
+        SCALE_CFG_KEYS.parity,
+        ["none", "even", "odd", "mark", "space"].includes(cfg.parity)
+          ? cfg.parity
+          : "none",
+      ),
+      window.TPV_CFG.set(SCALE_CFG_KEYS.stopBits, Number(cfg.stopBits || 1)),
+      window.TPV_CFG.set(
+        SCALE_CFG_KEYS.parserMode,
+        cfg.parserMode === "delimiter" ? "delimiter" : "timeout",
+      ),
+      window.TPV_CFG.set(
+        SCALE_CFG_KEYS.delimiter,
+        ["\\r\\n", "\\r", "\\n"].includes(String(cfg.delimiter || ""))
+          ? String(cfg.delimiter)
+          : "\\r\\n",
+      ),
+      window.TPV_CFG.set(
+        SCALE_CFG_KEYS.interByteMs,
+        Number(cfg.interByteMs || 20),
+      ),
+      window.TPV_CFG.set(
+        SCALE_CFG_KEYS.sourceUnit,
+        cfg.sourceUnit === "kg" ? "kg" : "g",
+      ),
+      window.TPV_CFG.set(SCALE_CFG_KEYS.reverseReading, !!cfg.reverseReading),
     ]);
   }
 
@@ -115,6 +177,9 @@
       enabled: !!$id("scaleEnabledToggle")?.checked,
       portPath: String($id("scalePortSelect")?.value || "").trim(),
       baudRate: Number($id("scaleBaudRateSelect")?.value || 9600),
+      dataBits: Number($id("scaleDataBitsSelect")?.value || 8),
+      parity: String($id("scaleParitySelect")?.value || "none").toLowerCase(),
+      stopBits: Number($id("scaleStopBitsSelect")?.value || 1),
       chargeUnit: $id("scaleChargeUnitSelect")?.value === "kg" ? "kg" : "g",
       decimalPlaces: Number($id("scaleDecimalPlacesSelect")?.value || 4),
       consumeMode:
@@ -122,11 +187,14 @@
           ? "single"
           : "continuous",
 
-      // Internos automáticos
-      parserMode: "timeout",
-      interByteMs: 20,
-      reverseReading: false,
-      sourceUnit: "g",
+      parserMode:
+        $id("scaleParserModeSelect")?.value === "delimiter"
+          ? "delimiter"
+          : "timeout",
+      delimiter: String($id("scaleDelimiterSelect")?.value || "\\r\\n"),
+      interByteMs: Number($id("scaleInterByteMsSelect")?.value || 20),
+      reverseReading: !!$id("scaleReverseReadingToggle")?.checked,
+      sourceUnit: $id("scaleSourceUnitSelect")?.value === "kg" ? "kg" : "g",
       conversionFactor: 1,
     };
   }
@@ -134,15 +202,47 @@
   function applyConfigToForm(cfg) {
     const enabledEl = $id("scaleEnabledToggle");
     const baudEl = $id("scaleBaudRateSelect");
+    const dataBitsEl = $id("scaleDataBitsSelect");
+    const parityEl = $id("scaleParitySelect");
+    const stopBitsEl = $id("scaleStopBitsSelect");
     const chargeUnitEl = $id("scaleChargeUnitSelect");
     const decimalsEl = $id("scaleDecimalPlacesSelect");
     const modeEl = $id("scaleConsumeModeSelect");
+    const parserModeEl = $id("scaleParserModeSelect");
+    const delimiterEl = $id("scaleDelimiterSelect");
+    const sourceUnitEl = $id("scaleSourceUnitSelect");
+    const reverseReadingEl = $id("scaleReverseReadingToggle");
+    const interByteMsEl = $id("scaleInterByteMsSelect");
 
     if (enabledEl) enabledEl.checked = !!cfg.enabled;
     if (baudEl) baudEl.value = String(cfg.baudRate || 9600);
+    if (dataBitsEl) dataBitsEl.value = String(cfg.dataBits === 7 ? 7 : 8);
+    if (parityEl)
+      parityEl.value = ["none", "even", "odd", "mark", "space"].includes(
+        cfg.parity,
+      )
+        ? cfg.parity
+        : "none";
+    if (stopBitsEl) stopBitsEl.value = String(cfg.stopBits === 2 ? 2 : 1);
     if (chargeUnitEl) chargeUnitEl.value = cfg.chargeUnit === "kg" ? "kg" : "g";
     if (decimalsEl) decimalsEl.value = String(Number(cfg.decimalPlaces ?? 4));
-    if (modeEl) modeEl.value = cfg.consumeMode === "single" ? "single" : "continuous";
+    if (modeEl)
+      modeEl.value = cfg.consumeMode === "single" ? "single" : "continuous";
+    if (parserModeEl) {
+      parserModeEl.value =
+        cfg.parserMode === "delimiter" ? "delimiter" : "timeout";
+    }
+    if (delimiterEl) {
+      delimiterEl.value = ["\\r\\n", "\\r", "\\n"].includes(
+        String(cfg.delimiter || ""),
+      )
+        ? String(cfg.delimiter)
+        : "\\r\\n";
+    }
+    if (sourceUnitEl) sourceUnitEl.value = cfg.sourceUnit === "kg" ? "kg" : "g";
+    if (reverseReadingEl) reverseReadingEl.checked = !!cfg.reverseReading;
+    if (interByteMsEl)
+      interByteMsEl.value = String(Number(cfg.interByteMs || 20));
   }
 
   function updateScaleStateUi(payload) {
@@ -219,6 +319,9 @@
         enabled: false,
         portPath: cfg.portPath,
         baudRate: cfg.baudRate,
+        dataBits: cfg.dataBits,
+        parity: cfg.parity,
+        stopBits: cfg.stopBits,
         chargeUnit: cfg.chargeUnit,
         decimalPlaces: cfg.decimalPlaces,
         consumeMode: cfg.consumeMode,
@@ -247,6 +350,9 @@
       enabled: true,
       portPath: cfg.portPath,
       baudRate: cfg.baudRate,
+      dataBits: cfg.dataBits,
+      parity: cfg.parity,
+      stopBits: cfg.stopBits,
       chargeUnit: cfg.chargeUnit,
       decimalPlaces: cfg.decimalPlaces,
       consumeMode: cfg.consumeMode,
@@ -273,6 +379,9 @@
         enabled: true,
         portPath: cfg.portPath,
         baudRate: cfg.baudRate,
+        dataBits: cfg.dataBits,
+        parity: cfg.parity,
+        stopBits: cfg.stopBits,
         chargeUnit: cfg.chargeUnit,
         decimalPlaces: cfg.decimalPlaces,
         consumeMode: cfg.consumeMode,
@@ -295,9 +404,17 @@
     const enabledEl = $id("scaleEnabledToggle");
     const portEl = $id("scalePortSelect");
     const baudEl = $id("scaleBaudRateSelect");
+    const dataBitsEl = $id("scaleDataBitsSelect");
+    const parityEl = $id("scaleParitySelect");
+    const stopBitsEl = $id("scaleStopBitsSelect");
     const chargeUnitEl = $id("scaleChargeUnitSelect");
     const modeEl = $id("scaleConsumeModeSelect");
     const decimalsEl = $id("scaleDecimalPlacesSelect");
+    const parserModeEl = $id("scaleParserModeSelect");
+    const delimiterEl = $id("scaleDelimiterSelect");
+    const sourceUnitEl = $id("scaleSourceUnitSelect");
+    const reverseReadingEl = $id("scaleReverseReadingToggle");
+    const interByteMsEl = $id("scaleInterByteMsSelect");
     const refreshBtn = $id("scaleRefreshPortsBtn");
     const reconnectBtn = $id("scaleReconnectBtn");
     const advancedBtn = $id("scaleAdvancedToggleBtn");
@@ -306,9 +423,17 @@
       !enabledEl ||
       !portEl ||
       !baudEl ||
+      !dataBitsEl ||
+      !parityEl ||
+      !stopBitsEl ||
       !chargeUnitEl ||
       !modeEl ||
       !decimalsEl ||
+      !parserModeEl ||
+      !delimiterEl ||
+      !sourceUnitEl ||
+      !reverseReadingEl ||
+      !interByteMsEl ||
       !refreshBtn ||
       !reconnectBtn ||
       !advancedBtn
@@ -336,6 +461,24 @@
         if (cfgNow.enabled) await applyScaleConfigFromForm(false);
       });
 
+      dataBitsEl.addEventListener("change", async () => {
+        const cfgNow = readConfigFromForm();
+        await saveStoredScaleConfig(cfgNow);
+        if (cfgNow.enabled) await applyScaleConfigFromForm(false);
+      });
+
+      parityEl.addEventListener("change", async () => {
+        const cfgNow = readConfigFromForm();
+        await saveStoredScaleConfig(cfgNow);
+        if (cfgNow.enabled) await applyScaleConfigFromForm(false);
+      });
+
+      stopBitsEl.addEventListener("change", async () => {
+        const cfgNow = readConfigFromForm();
+        await saveStoredScaleConfig(cfgNow);
+        if (cfgNow.enabled) await applyScaleConfigFromForm(false);
+      });
+
       chargeUnitEl.addEventListener("change", async () => {
         const cfgNow = readConfigFromForm();
         await saveStoredScaleConfig(cfgNow);
@@ -349,6 +492,36 @@
       });
 
       modeEl.addEventListener("change", async () => {
+        const cfgNow = readConfigFromForm();
+        await saveStoredScaleConfig(cfgNow);
+        if (cfgNow.enabled) await applyScaleConfigFromForm(false);
+      });
+
+      parserModeEl.addEventListener("change", async () => {
+        const cfgNow = readConfigFromForm();
+        await saveStoredScaleConfig(cfgNow);
+        if (cfgNow.enabled) await applyScaleConfigFromForm(false);
+      });
+
+      delimiterEl.addEventListener("change", async () => {
+        const cfgNow = readConfigFromForm();
+        await saveStoredScaleConfig(cfgNow);
+        if (cfgNow.enabled) await applyScaleConfigFromForm(false);
+      });
+
+      sourceUnitEl.addEventListener("change", async () => {
+        const cfgNow = readConfigFromForm();
+        await saveStoredScaleConfig(cfgNow);
+        if (cfgNow.enabled) await applyScaleConfigFromForm(false);
+      });
+
+      reverseReadingEl.addEventListener("change", async () => {
+        const cfgNow = readConfigFromForm();
+        await saveStoredScaleConfig(cfgNow);
+        if (cfgNow.enabled) await applyScaleConfigFromForm(false);
+      });
+
+      interByteMsEl.addEventListener("change", async () => {
         const cfgNow = readConfigFromForm();
         await saveStoredScaleConfig(cfgNow);
         if (cfgNow.enabled) await applyScaleConfigFromForm(false);
