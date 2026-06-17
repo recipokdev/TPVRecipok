@@ -57,6 +57,8 @@ window.TPV_CONFIG = window.TPV_CONFIG || {
 // Estas son las que usará la app realmente (las podremos sobrescribir con la API)
 let categories = []; // familias (incluye raíz + hijas)
 let products = [];
+let managedStockProductIds = new Set();
+let managedStockCatalogLoaded = false;
 
 // Mapa codimpuesto -> porcentaje real de IVA
 let taxRatesByCode = {};
@@ -445,6 +447,36 @@ window.__TPV_GUARDS__ = () => {
 const searchInput = document.getElementById("searchInput");
 const searchClearBtn = document.getElementById("searchClearBtn");
 const searchKeyboardBtn = document.getElementById("searchKeyboardBtn");
+const productsStockOnlyToggle = document.getElementById(
+  "productsStockOnlyToggle",
+);
+const productsIncludeUnmanagedToggle = document.getElementById(
+  "productsIncludeUnmanagedToggle",
+);
+const terminalMetaItemEl = document.getElementById("terminalMetaItem");
+const agentMetaItemEl = document.getElementById("agentMetaItem");
+const userMetaItemEl = document.getElementById("userMetaItem");
+
+const productSortModeSelect = document.getElementById("productSortModeSelect");
+const productReorderModeToggle = document.getElementById(
+  "productReorderModeToggle",
+);
+const productManualOrderResetBtn = document.getElementById(
+  "productManualOrderResetBtn",
+);
+
+const infoBarVisibleToggle = document.getElementById("infoBarVisibleToggle");
+const infoBarShowTerminalToggle = document.getElementById(
+  "infoBarShowTerminalToggle",
+);
+const infoBarShowAgentToggle = document.getElementById(
+  "infoBarShowAgentToggle",
+);
+const infoBarShowUserToggle = document.getElementById("infoBarShowUserToggle");
+const infoBarShowCashToggle = document.getElementById("infoBarShowCashToggle");
+const infoBarAltTerminalBtn = document.getElementById("infoBarAltTerminalBtn");
+const infoBarAltAgentBtn = document.getElementById("infoBarAltAgentBtn");
+const infoBarAltUserBtn = document.getElementById("infoBarAltUserBtn");
 
 const BARCODE_SCANNER_CFG = {
   minLength: 6,
@@ -758,6 +790,7 @@ async function confirmIfCartExceedsVisibleStock(cartSnapshot) {
     }
 
     const visibleStock = getVisibleStockForProduct(idProd);
+    if (visibleStock === null) continue;
 
     if (qtyToReserve > visibleStock) {
       warnings.push({
@@ -1424,6 +1457,24 @@ const OPTIONS_SHOW_PRODUCT_STOCK_KEY = "ui.showProductStockBadge";
 const OPTIONS_ENABLE_STOCK_EDIT_KEY = "ui.enableStockEdition";
 const OPTIONS_ALLOW_CLOSE_WITH_PARKED_KEY = "ui.allowCloseWithParkedTickets";
 const OPTIONS_SHOW_PARK_STOCK_WARNING_KEY = "ui.showParkStockWarning";
+const OPTIONS_PRODUCT_TILE_SIZE_KEY = "ui.productTileMinSize";
+const OPTIONS_PRODUCT_TILE_RESIZE_MODE_KEY = "ui.productTileResizeMode";
+const OPTIONS_PRODUCT_MANUAL_ORDER_KEY = "ui.productManualOrderById";
+const OPTIONS_PRODUCT_SORT_MODE_KEY = "ui.productSortMode";
+const OPTIONS_PRODUCT_REORDER_MODE_KEY = "ui.productReorderMode";
+const OPTIONS_INFOBAR_VISIBLE_KEY = "ui.infoBarVisible";
+const OPTIONS_INFOBAR_SHOW_TERMINAL_KEY = "ui.infoBarShowTerminal";
+const OPTIONS_INFOBAR_SHOW_AGENT_KEY = "ui.infoBarShowAgent";
+const OPTIONS_INFOBAR_SHOW_USER_KEY = "ui.infoBarShowUser";
+const OPTIONS_INFOBAR_SHOW_CASH_KEY = "ui.infoBarShowCash";
+const PRODUCT_DISCOUNTS_SESSION_KEY = "tpv_productDiscountPctById_session";
+const PRODUCT_NAME_COLLATOR = new Intl.Collator("es", {
+  numeric: true,
+  sensitivity: "base",
+});
+const PRODUCT_TILE_MIN_SIZE_DEFAULT = 150;
+const PRODUCT_TILE_MIN_SIZE_MIN = 110;
+const PRODUCT_TILE_MIN_SIZE_MAX = 260;
 const LS_ALLOW_CLOSE_WITH_PARKED_KEY = "tpv_allowCloseWithParkedTickets";
 const OPTIONS_MESAS_DINERS_FAMILY_RULES_KEY = "ui.mesasDinersFamilyRules";
 const LS_MESAS_DINERS_FAMILY_RULES_KEY = "tpv_mesasDinersFamilyRules";
@@ -1434,6 +1485,193 @@ let enableProductStockEdition = false;
 let allowCloseWithParkedTickets = false;
 let mesasDinersFamilyRules = [];
 let mesasComandaFamilyRules = [];
+let productDiscountPctById = {};
+let productManualOrderById = {};
+let productTileMinSize = PRODUCT_TILE_MIN_SIZE_DEFAULT;
+let productTileResizeMode = false;
+let productsFilterStockOnly = false;
+let productsFilterIncludeUnmanaged = true;
+let productsFilterIncludeUnmanagedSnapshot = true;
+let productSortMode = "manual";
+let productReorderMode = false;
+let infoBarVisible = true;
+let infoBarShowTerminal = true;
+let infoBarShowAgent = true;
+let infoBarShowUser = true;
+let infoBarShowCash = true;
+
+const productReorderDragState = {
+  active: false,
+  sourceId: 0,
+  targetId: 0,
+  targetTile: null,
+};
+
+function clampDiscountPercent(value) {
+  const n = Number(value);
+  if (!isFinite(n)) return 0;
+  return Math.max(0, Math.min(100, Math.round(n * 100) / 100));
+}
+
+function formatDiscountPercent(value) {
+  const pct = clampDiscountPercent(value);
+  if (Number.isInteger(pct)) return String(pct);
+  return pct.toFixed(2).replace(/\.00$/, "").replace(/0$/, "");
+}
+
+function getDiscountProductId(productOrId) {
+  if (typeof productOrId === "number" || typeof productOrId === "string") {
+    return String(Number(productOrId) || 0);
+  }
+  const p = productOrId || {};
+  return String(Number(p.baseProductId || p.id || 0));
+}
+
+function getProductDiscountPercent(productOrId) {
+  const key = getDiscountProductId(productOrId);
+  if (!key || key === "0") return 0;
+  return clampDiscountPercent(productDiscountPctById?.[key] || 0);
+}
+
+function clampManualOrderPriority(value) {
+  const n = Number(value);
+  if (!isFinite(n)) return 0;
+  return Math.max(-9999, Math.min(9999, Math.round(n)));
+}
+
+function getManualOrderProductId(productOrId) {
+  return getDiscountProductId(productOrId);
+}
+
+function getProductManualOrderPriority(productOrId) {
+  const key = getManualOrderProductId(productOrId);
+  if (!key || key === "0") return 0;
+  return clampManualOrderPriority(productManualOrderById?.[key] || 0);
+}
+
+function normalizeProductSortMode(value) {
+  const v = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (["default", "manual", "reference", "description", "id"].includes(v))
+    return v;
+  return "manual";
+}
+
+function compareProductTieBreakers(a, b) {
+  if (Number(a?.baseProductId || 0) === Number(b?.baseProductId || 0)) {
+    return (
+      (Number(a?.variantOrder || 0) || 0) - (Number(b?.variantOrder || 0) || 0)
+    );
+  }
+
+  const nameCmp = PRODUCT_NAME_COLLATOR.compare(
+    String(a?.name || ""),
+    String(b?.name || ""),
+  );
+  if (nameCmp !== 0) return nameCmp;
+
+  return PRODUCT_NAME_COLLATOR.compare(
+    String(a?.secondaryName || ""),
+    String(b?.secondaryName || ""),
+  );
+}
+
+function compareProductsForDisplay(a, b) {
+  if (productSortMode === "default") {
+    const sa = Number(a?.sortKey || 0) || 0;
+    const sb = Number(b?.sortKey || 0) || 0;
+    if (sa !== sb) return sa - sb;
+
+    if (Number(a?.baseProductId || 0) === Number(b?.baseProductId || 0)) {
+      return (
+        (Number(a?.variantOrder || 0) || 0) -
+        (Number(b?.variantOrder || 0) || 0)
+      );
+    }
+
+    return String(a?.name || "").localeCompare(String(b?.name || ""), "es");
+  }
+
+  if (productSortMode === "manual") {
+    const priorityA = getProductManualOrderPriority(a);
+    const priorityB = getProductManualOrderPriority(b);
+    if (priorityA !== priorityB) return priorityA - priorityB;
+
+    const sa = Number(a?.sortKey || 0) || 0;
+    const sb = Number(b?.sortKey || 0) || 0;
+    if (sa !== sb) return sa - sb;
+
+    return compareProductTieBreakers(a, b);
+  }
+
+  if (productSortMode === "reference") {
+    const refCmp = PRODUCT_NAME_COLLATOR.compare(
+      String(a?.referencia || a?.name || ""),
+      String(b?.referencia || b?.name || ""),
+    );
+    if (refCmp !== 0) return refCmp;
+    return compareProductTieBreakers(a, b);
+  }
+
+  if (productSortMode === "description") {
+    const descCmp = PRODUCT_NAME_COLLATOR.compare(
+      String(a?.descripcion || a?.name || ""),
+      String(b?.descripcion || b?.name || ""),
+    );
+    if (descCmp !== 0) return descCmp;
+    return compareProductTieBreakers(a, b);
+  }
+
+  if (productSortMode === "id") {
+    const idCmp =
+      (Number(a?.baseProductId || a?.id || 0) || 0) -
+      (Number(b?.baseProductId || b?.id || 0) || 0);
+    if (idCmp !== 0) return idCmp;
+    return compareProductTieBreakers(a, b);
+  }
+
+  return compareProductTieBreakers(a, b);
+}
+
+function applyDiscountToNetPrice(baseNet, discountPct) {
+  const net = Number(baseNet) || 0;
+  const pct = clampDiscountPercent(discountPct);
+  const factor = 1 - pct / 100;
+  return Number((net * factor).toFixed(8));
+}
+
+function buildProductWithAppliedDiscount(product) {
+  if (!product) return product;
+
+  const pct = getProductDiscountPercent(product);
+  if (!(pct > 0)) return product;
+
+  const baseNet = Number(product.price || 0) || 0;
+  const discountedNet = applyDiscountToNetPrice(baseNet, pct);
+
+  return {
+    ...product,
+    price: discountedNet,
+    discountPctApplied: pct,
+    discountBaseNetPrice: baseNet,
+  };
+}
+
+function clampProductTileMinSize(value) {
+  const n = Math.round(Number(value) || PRODUCT_TILE_MIN_SIZE_DEFAULT);
+  return Math.max(
+    PRODUCT_TILE_MIN_SIZE_MIN,
+    Math.min(PRODUCT_TILE_MIN_SIZE_MAX, n),
+  );
+}
+
+function applyProductTileMinSizeCssVar() {
+  document.documentElement.style.setProperty(
+    "--product-tile-min-size",
+    `${clampProductTileMinSize(productTileMinSize)}px`,
+  );
+}
 
 function parseBoolLike(value, fallback = false) {
   if (typeof value === "boolean") return value;
@@ -1525,6 +1763,342 @@ async function loadParkStockWarningToggle() {
 
   showParkStockWarning = !!enabled;
   if (el) el.checked = showParkStockWarning;
+}
+
+async function loadProductDiscountConfig() {
+  let map = { ...productDiscountPctById };
+
+  try {
+    const rawStr = String(
+      sessionStorage.getItem(PRODUCT_DISCOUNTS_SESSION_KEY) || "",
+    ).trim();
+    if (!rawStr) {
+      productDiscountPctById = map;
+      return;
+    }
+
+    const raw = JSON.parse(rawStr);
+    map = {};
+    Object.entries(raw || {}).forEach(([k, v]) => {
+      const id = String(Number(k) || 0);
+      if (!id || id === "0") return;
+      const pct = clampDiscountPercent(v);
+      if (pct > 0) map[id] = pct;
+    });
+  } catch {
+    // Mantener descuentos ya cargados en memoria si falla parseo.
+  }
+
+  productDiscountPctById = map;
+}
+
+async function saveProductDiscountConfig() {
+  try {
+    sessionStorage.setItem(
+      PRODUCT_DISCOUNTS_SESSION_KEY,
+      JSON.stringify(productDiscountPctById || {}),
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar descuentos de productos:", e);
+  }
+}
+
+async function setProductDiscountPercentForProduct(productOrId, pct) {
+  const key = getDiscountProductId(productOrId);
+  if (!key || key === "0") return;
+
+  const next = clampDiscountPercent(pct);
+  if (next > 0) productDiscountPctById[key] = next;
+  else delete productDiscountPctById[key];
+
+  await saveProductDiscountConfig();
+}
+
+async function loadProductManualOrderConfig() {
+  let map = {};
+
+  try {
+    const raw = await window.TPV_CFG?.get?.(OPTIONS_PRODUCT_MANUAL_ORDER_KEY);
+    if (raw && typeof raw === "object") {
+      map = raw;
+    } else if (typeof raw === "string" && raw.trim()) {
+      map = JSON.parse(raw);
+    }
+  } catch {
+    map = {};
+  }
+
+  const normalized = {};
+  Object.entries(map || {}).forEach(([k, v]) => {
+    const id = String(Number(k) || 0);
+    if (!id || id === "0") return;
+    const priority = clampManualOrderPriority(v);
+    if (priority !== 0) normalized[id] = priority;
+  });
+
+  productManualOrderById = normalized;
+}
+
+async function saveProductManualOrderConfig() {
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_PRODUCT_MANUAL_ORDER_KEY,
+      productManualOrderById,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar prioridad manual de productos:", e);
+  }
+}
+
+async function setProductManualOrderPriorityForProduct(productOrId, priority) {
+  const key = getManualOrderProductId(productOrId);
+  if (!key || key === "0") return;
+
+  const next = clampManualOrderPriority(priority);
+  if (next !== 0) productManualOrderById[key] = next;
+  else delete productManualOrderById[key];
+
+  await saveProductManualOrderConfig();
+}
+
+async function loadProductSortModeSetting() {
+  let mode = "manual";
+  try {
+    mode = normalizeProductSortMode(
+      await window.TPV_CFG?.get?.(OPTIONS_PRODUCT_SORT_MODE_KEY),
+    );
+  } catch {
+    mode = "manual";
+  }
+
+  productSortMode = mode;
+  if (productSortModeSelect) productSortModeSelect.value = mode;
+}
+
+async function saveProductSortModeSetting(mode) {
+  productSortMode = normalizeProductSortMode(mode);
+  try {
+    await window.TPV_CFG?.set?.(OPTIONS_PRODUCT_SORT_MODE_KEY, productSortMode);
+  } catch (e) {
+    console.warn("No se pudo guardar orden de productos:", e);
+  }
+}
+
+async function loadProductReorderModeSetting() {
+  let enabled = false;
+  try {
+    enabled = parseBoolLike(
+      await window.TPV_CFG?.get?.(OPTIONS_PRODUCT_REORDER_MODE_KEY),
+      false,
+    );
+  } catch {
+    enabled = false;
+  }
+
+  productReorderMode = !!enabled;
+  if (productReorderModeToggle) productReorderModeToggle.checked = !!enabled;
+}
+
+async function saveProductReorderModeSetting(enabled) {
+  productReorderMode = !!enabled;
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_PRODUCT_REORDER_MODE_KEY,
+      productReorderMode,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar modo de reordenar:", e);
+  }
+}
+
+function applyInfoBarVisibilityUi() {
+  const row = document.querySelector(".cart-terminal-row");
+  const cashInfoEl = document.getElementById("cashInfo");
+  if (row) row.style.display = infoBarVisible ? "" : "none";
+
+  if (terminalMetaItemEl) {
+    terminalMetaItemEl.style.display =
+      infoBarVisible && infoBarShowTerminal ? "" : "none";
+  }
+  if (agentMetaItemEl) {
+    agentMetaItemEl.style.display =
+      infoBarVisible && infoBarShowAgent ? "" : "none";
+  }
+  if (userMetaItemEl) {
+    userMetaItemEl.style.display =
+      infoBarVisible && infoBarShowUser ? "" : "none";
+  }
+  if (cashInfoEl) {
+    cashInfoEl.style.display = infoBarVisible && infoBarShowCash ? "" : "none";
+  }
+
+  if (infoBarVisibleToggle) infoBarVisibleToggle.checked = !!infoBarVisible;
+  if (infoBarShowTerminalToggle) {
+    infoBarShowTerminalToggle.checked = !!infoBarShowTerminal;
+    infoBarShowTerminalToggle.disabled = !infoBarVisible;
+  }
+  if (infoBarShowAgentToggle) {
+    infoBarShowAgentToggle.checked = !!infoBarShowAgent;
+    infoBarShowAgentToggle.disabled = !infoBarVisible;
+  }
+  if (infoBarShowUserToggle) {
+    infoBarShowUserToggle.checked = !!infoBarShowUser;
+    infoBarShowUserToggle.disabled = !infoBarVisible;
+  }
+  if (infoBarShowCashToggle) {
+    infoBarShowCashToggle.checked = !!infoBarShowCash;
+    infoBarShowCashToggle.disabled = !infoBarVisible;
+  }
+
+  const showAltTerminal = !infoBarVisible || !infoBarShowTerminal;
+  const showAltAgent = !infoBarVisible || !infoBarShowAgent;
+  const showAltUser = !infoBarVisible || !infoBarShowUser;
+  if (infoBarAltTerminalBtn)
+    infoBarAltTerminalBtn.style.display = showAltTerminal ? "" : "none";
+  if (infoBarAltAgentBtn)
+    infoBarAltAgentBtn.style.display = showAltAgent ? "" : "none";
+  if (infoBarAltUserBtn)
+    infoBarAltUserBtn.style.display = showAltUser ? "" : "none";
+}
+
+async function loadInfoBarVisibilitySettings() {
+  try {
+    infoBarVisible = parseBoolLike(
+      await window.TPV_CFG?.get?.(OPTIONS_INFOBAR_VISIBLE_KEY),
+      true,
+    );
+    infoBarShowTerminal = parseBoolLike(
+      await window.TPV_CFG?.get?.(OPTIONS_INFOBAR_SHOW_TERMINAL_KEY),
+      true,
+    );
+    infoBarShowAgent = parseBoolLike(
+      await window.TPV_CFG?.get?.(OPTIONS_INFOBAR_SHOW_AGENT_KEY),
+      true,
+    );
+    infoBarShowUser = parseBoolLike(
+      await window.TPV_CFG?.get?.(OPTIONS_INFOBAR_SHOW_USER_KEY),
+      true,
+    );
+    infoBarShowCash = parseBoolLike(
+      await window.TPV_CFG?.get?.(OPTIONS_INFOBAR_SHOW_CASH_KEY),
+      true,
+    );
+  } catch {}
+
+  applyInfoBarVisibilityUi();
+}
+
+async function saveInfoBarVisibilitySettings() {
+  try {
+    await window.TPV_CFG?.set?.(OPTIONS_INFOBAR_VISIBLE_KEY, !!infoBarVisible);
+    await window.TPV_CFG?.set?.(
+      OPTIONS_INFOBAR_SHOW_TERMINAL_KEY,
+      !!infoBarShowTerminal,
+    );
+    await window.TPV_CFG?.set?.(
+      OPTIONS_INFOBAR_SHOW_AGENT_KEY,
+      !!infoBarShowAgent,
+    );
+    await window.TPV_CFG?.set?.(
+      OPTIONS_INFOBAR_SHOW_USER_KEY,
+      !!infoBarShowUser,
+    );
+    await window.TPV_CFG?.set?.(
+      OPTIONS_INFOBAR_SHOW_CASH_KEY,
+      !!infoBarShowCash,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar visibilidad de barra:", e);
+  }
+}
+
+function refreshProductStockFilterUIState() {
+  if (productsStockOnlyToggle) {
+    productsStockOnlyToggle.checked = !!productsFilterStockOnly;
+  }
+
+  const includeWrapper = productsIncludeUnmanagedToggle?.closest(
+    ".product-filter-check, .opt-row",
+  );
+
+  if (productsFilterStockOnly) {
+    productsFilterIncludeUnmanaged = false;
+    if (productsIncludeUnmanagedToggle) {
+      productsIncludeUnmanagedToggle.checked = false;
+      productsIncludeUnmanagedToggle.disabled = true;
+    }
+    includeWrapper?.classList.add("hidden");
+  } else {
+    productsFilterIncludeUnmanaged = !!productsFilterIncludeUnmanagedSnapshot;
+    if (productsIncludeUnmanagedToggle) {
+      productsIncludeUnmanagedToggle.checked = !!productsFilterIncludeUnmanaged;
+      productsIncludeUnmanagedToggle.disabled = false;
+    }
+    includeWrapper?.classList.remove("hidden");
+  }
+
+  if (productsIncludeUnmanagedToggle) {
+    productsIncludeUnmanagedToggle.checked = !!productsFilterIncludeUnmanaged;
+  }
+}
+
+async function loadProductTileSizeSetting() {
+  const raw = await window.TPV_CFG?.get?.(OPTIONS_PRODUCT_TILE_SIZE_KEY);
+  const parsed = Number(raw);
+  if (isFinite(parsed)) {
+    productTileMinSize = clampProductTileMinSize(parsed);
+  } else {
+    productTileMinSize = PRODUCT_TILE_MIN_SIZE_DEFAULT;
+  }
+
+  applyProductTileMinSizeCssVar();
+}
+
+async function saveProductTileSizeSetting() {
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_PRODUCT_TILE_SIZE_KEY,
+      clampProductTileMinSize(productTileMinSize),
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar tamaño de productos:", e);
+  }
+}
+
+async function setProductTileMinSize(nextSize, opts = {}) {
+  const { persist = true, rerender = false } = opts;
+  productTileMinSize = clampProductTileMinSize(nextSize);
+  applyProductTileMinSizeCssVar();
+  if (persist) await saveProductTileSizeSetting();
+  if (rerender) renderProducts?.();
+}
+
+async function loadProductTileResizeModeToggle() {
+  const el = document.getElementById("productTileResizeModeToggle");
+  let enabled = false;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(
+      OPTIONS_PRODUCT_TILE_RESIZE_MODE_KEY,
+    );
+    enabled = parseBoolLike(cfgVal, false);
+  } catch {}
+
+  productTileResizeMode = !!enabled;
+  if (el) el.checked = productTileResizeMode;
+}
+
+async function saveProductTileResizeModeToggle(enabled) {
+  productTileResizeMode = !!enabled;
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_PRODUCT_TILE_RESIZE_MODE_KEY,
+      productTileResizeMode,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar modo redimensionar productos:", e);
+  }
 }
 
 async function saveProductStockToggle(enabled) {
@@ -1994,6 +2568,12 @@ let productStockToggleBound = false;
 let productStockEditionToggleBound = false;
 let allowCloseWithParkedToggleBound = false;
 let parkStockWarningToggleBound = false;
+let productTileResizeModeToggleBound = false;
+let productTileSizeResetBtnBound = false;
+let productSortModeBound = false;
+let productReorderModeBound = false;
+let productManualOrderResetBtnBound = false;
+let infoBarVisibilityBound = false;
 
 function bindProductStockToggleOnce() {
   if (productStockToggleBound) return;
@@ -2047,6 +2627,196 @@ function bindParkStockWarningToggleOnce() {
   el.addEventListener("change", async () => {
     const wanted = !!el.checked;
     await saveParkStockWarningToggle(wanted);
+  });
+}
+
+function bindProductTileResizeModeToggleOnce() {
+  if (productTileResizeModeToggleBound) return;
+  productTileResizeModeToggleBound = true;
+
+  const el = document.getElementById("productTileResizeModeToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+    await saveProductTileResizeModeToggle(wanted);
+    renderProducts?.();
+  });
+}
+
+function bindProductTileSizeResetButtonOnce() {
+  if (productTileSizeResetBtnBound) return;
+  productTileSizeResetBtnBound = true;
+
+  const btn = document.getElementById("productTileSizeResetBtn");
+  if (!btn) return;
+
+  btn.addEventListener("click", async () => {
+    await setProductTileMinSize(PRODUCT_TILE_MIN_SIZE_DEFAULT, {
+      persist: true,
+      rerender: false,
+    });
+    toast?.("Tamaño de productos restablecido.", "ok", "Productos");
+  });
+}
+
+function bindProductSortModeOnce() {
+  if (productSortModeBound) return;
+  productSortModeBound = true;
+  if (!productSortModeSelect) return;
+
+  productSortModeSelect.addEventListener("change", async () => {
+    await saveProductSortModeSetting(productSortModeSelect.value);
+    renderProducts?.();
+  });
+}
+
+function bindProductReorderModeOnce() {
+  if (productReorderModeBound) return;
+  productReorderModeBound = true;
+  if (!productReorderModeToggle) return;
+
+  productReorderModeToggle.addEventListener("change", async () => {
+    if (!isAdminUser()) {
+      productReorderModeToggle.checked = false;
+      toast?.("Solo administradores.", "warn", "Productos");
+      return;
+    }
+
+    const wanted = !!productReorderModeToggle.checked;
+    await saveProductReorderModeSetting(wanted);
+    if (wanted && productSortMode !== "manual") {
+      await saveProductSortModeSetting("manual");
+      if (productSortModeSelect) productSortModeSelect.value = "manual";
+      toast?.(
+        "Reordenar usa orden manual. Se cambió automáticamente.",
+        "info",
+        "Productos",
+      );
+    }
+    renderProducts?.();
+  });
+}
+
+function bindProductManualOrderResetButtonOnce() {
+  if (productManualOrderResetBtnBound) return;
+  productManualOrderResetBtnBound = true;
+  if (!productManualOrderResetBtn) return;
+
+  productManualOrderResetBtn.addEventListener("click", async () => {
+    if (!isAdminUser()) {
+      toast?.("Solo administradores.", "warn", "Productos");
+      return;
+    }
+
+    const ok = await confirmModal(
+      "Restablecer prioridades",
+      "Se eliminarán todas las prioridades manuales de productos.\n\n¿Continuar?",
+    );
+    if (!ok) return;
+
+    productManualOrderById = {};
+    await saveProductManualOrderConfig();
+    await saveProductSortModeSetting("default");
+    if (productSortModeSelect) productSortModeSelect.value = "default";
+    renderProducts?.();
+    toast?.("Prioridades restablecidas.", "ok", "Productos");
+  });
+}
+
+function bindInfoBarVisibilityOnce() {
+  if (infoBarVisibilityBound) return;
+  infoBarVisibilityBound = true;
+
+  infoBarVisibleToggle?.addEventListener("change", async () => {
+    infoBarVisible = !!infoBarVisibleToggle.checked;
+    applyInfoBarVisibilityUi();
+    await saveInfoBarVisibilitySettings();
+  });
+
+  infoBarShowTerminalToggle?.addEventListener("change", async () => {
+    infoBarShowTerminal = !!infoBarShowTerminalToggle.checked;
+    applyInfoBarVisibilityUi();
+    await saveInfoBarVisibilitySettings();
+  });
+
+  infoBarShowAgentToggle?.addEventListener("change", async () => {
+    infoBarShowAgent = !!infoBarShowAgentToggle.checked;
+    applyInfoBarVisibilityUi();
+    await saveInfoBarVisibilitySettings();
+  });
+
+  infoBarShowUserToggle?.addEventListener("change", async () => {
+    infoBarShowUser = !!infoBarShowUserToggle.checked;
+    applyInfoBarVisibilityUi();
+    await saveInfoBarVisibilitySettings();
+  });
+
+  infoBarShowCashToggle?.addEventListener("change", async () => {
+    infoBarShowCash = !!infoBarShowCashToggle.checked;
+    applyInfoBarVisibilityUi();
+    await saveInfoBarVisibilitySettings();
+  });
+
+  infoBarAltTerminalBtn?.addEventListener("click", async () => {
+    if (TPV_LOADING) return;
+    await refreshTerminalsAndAgents();
+    showTerminalOverlay("terminalSwitch");
+  });
+
+  infoBarAltAgentBtn?.addEventListener("click", async () => {
+    if (TPV_LOADING) return;
+    if (!hasActiveLoginSession()) return;
+    await refreshTerminalsAndAgents();
+    showTerminalOverlay("agentSwitch");
+  });
+
+  infoBarAltUserBtn?.addEventListener("click", async () => {
+    if (TPV_LOADING) return;
+    await doLogoutFlow();
+  });
+}
+
+function bindProductTileResizeHandle(handle) {
+  if (!handle || handle.dataset.bound) return;
+  handle.dataset.bound = "1";
+
+  handle.addEventListener("pointerdown", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    const pointerId = ev.pointerId;
+    const startX = ev.clientX;
+    const startY = ev.clientY;
+    const startSize = clampProductTileMinSize(productTileMinSize);
+
+    try {
+      handle.setPointerCapture(pointerId);
+    } catch {}
+
+    const onPointerMove = (moveEv) => {
+      if (moveEv.pointerId !== pointerId) return;
+      const dx = moveEv.clientX - startX;
+      const dy = moveEv.clientY - startY;
+      const delta = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
+      const next = clampProductTileMinSize(startSize + delta);
+
+      setProductTileMinSize(next, { persist: false, rerender: false }).catch(
+        () => {},
+      );
+    };
+
+    const onPointerEnd = (endEv) => {
+      if (endEv.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerEnd);
+      window.removeEventListener("pointercancel", onPointerEnd);
+      saveProductTileSizeSetting().catch(() => {});
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerEnd);
+    window.addEventListener("pointercancel", onPointerEnd);
   });
 }
 
@@ -3652,7 +4422,7 @@ function renderCashIdChip() {
   const id = Number(cashSession?.remoteCajaId || 0) || 0;
   const open = !!cashSession?.open;
 
-  if (open && id) {
+  if (open && id && infoBarVisible && infoBarShowCash) {
     el.style.display = "";
     el.textContent = `Caja ${id}`;
   } else {
@@ -5918,6 +6688,13 @@ async function runBootFlow() {
     await loadMesasDinersFamilyRules?.();
     await loadMesasComandaFamilyRules?.();
     await loadParkStockWarningToggle?.();
+    await loadProductDiscountConfig?.();
+    await loadProductManualOrderConfig?.();
+    await loadProductSortModeSetting?.();
+    await loadProductReorderModeSetting?.();
+    await loadInfoBarVisibilitySettings?.();
+    await loadProductTileSizeSetting?.();
+    await loadProductTileResizeModeToggle?.();
 
     // 3) Datos
     await loadDataFromApi();
@@ -6092,10 +6869,8 @@ function syncCashClosedUiState() {
 
   const options = document.getElementById("optionsBtn");
   if (options) {
-    options.disabled = !cashOpen;
-    options.title = cashOpen
-      ? "Opciones"
-      : "Disponible solo con la caja abierta";
+    options.disabled = false;
+    options.title = "Opciones";
   }
 
   const bottomActionIds = ["clearCartBtn", "ticketsListBtn", "parkedListBtn"];
@@ -6279,8 +7054,8 @@ function renderCategories() {
 
 // ===== [08] UI venta: rejilla de productos =====
 function formatProductStock(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return "—";
+  const n = parseManagedStockValue(value);
+  if (n === null) return "—";
 
   return Number.isInteger(n)
     ? String(n)
@@ -6288,9 +7063,8 @@ function formatProductStock(value) {
 }
 
 function getProductStockClass(value) {
-  const n = Number(value);
-
-  if (!Number.isFinite(n)) return "is-unknown";
+  const n = parseManagedStockValue(value);
+  if (n === null) return "is-unknown";
   if (n < 0) return "is-zero";
   if (n === 0) return "is-zero";
   if (n <= 5) return "is-low";
@@ -6319,6 +7093,131 @@ function updateRenderedProductStocks() {
 
     badge.classList.remove("is-unknown", "is-zero", "is-low", "is-ok");
     badge.classList.add(stockClass);
+  });
+}
+
+async function saveManualOrderFromBaseIdSequence(baseIds) {
+  const seq = [];
+  const seen = new Set();
+
+  (baseIds || []).forEach((id) => {
+    const n = Number(id || 0);
+    if (!n || seen.has(n)) return;
+    seen.add(n);
+    seq.push(n);
+  });
+
+  if (!seq.length) return;
+
+  seq.forEach((id, idx) => {
+    const priority = idx * 2 - (seq.length - 1);
+    const key = String(id);
+    if (priority !== 0) productManualOrderById[key] = priority;
+    else delete productManualOrderById[key];
+  });
+
+  await saveProductManualOrderConfig();
+}
+
+function clearProductReorderTargetVisual() {
+  if (productReorderDragState.targetTile) {
+    productReorderDragState.targetTile.classList.remove("reorder-target");
+  }
+  productReorderDragState.targetTile = null;
+  productReorderDragState.targetId = 0;
+}
+
+function bindProductTileReorderEvents(tile) {
+  if (!tile || tile.dataset.reorderBound === "1") return;
+  tile.dataset.reorderBound = "1";
+
+  const resolveTileFromPoint = (clientX, clientY) => {
+    const el = document.elementFromPoint(clientX, clientY);
+    return el?.closest?.(".product-tile") || null;
+  };
+
+  tile.addEventListener("pointerdown", (ev) => {
+    if (!productReorderMode || !isAdminUser()) return;
+
+    const sourceId = Number(tile.dataset.productId || 0);
+    if (!sourceId) return;
+
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    productReorderDragState.active = true;
+    productReorderDragState.sourceId = sourceId;
+    productReorderDragState.targetId = sourceId;
+    productReorderDragState.targetTile = tile;
+
+    tile.classList.add("reorder-source", "reorder-target");
+  });
+
+  tile.addEventListener("pointermove", (ev) => {
+    if (!productReorderDragState.active) return;
+
+    const target = resolveTileFromPoint(ev.clientX, ev.clientY);
+    if (!target) return;
+
+    const targetId = Number(target.dataset.productId || 0);
+    if (!targetId) return;
+
+    if (productReorderDragState.targetTile !== target) {
+      clearProductReorderTargetVisual();
+      target.classList.add("reorder-target");
+      productReorderDragState.targetTile = target;
+      productReorderDragState.targetId = targetId;
+    }
+  });
+
+  tile.addEventListener("pointerup", async (ev) => {
+    if (!productReorderDragState.active) return;
+
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    const sourceId = Number(productReorderDragState.sourceId || 0);
+    const targetId = Number(productReorderDragState.targetId || 0);
+
+    document.querySelectorAll(".product-tile.reorder-source").forEach((el) => {
+      el.classList.remove("reorder-source");
+    });
+    clearProductReorderTargetVisual();
+
+    productReorderDragState.active = false;
+    productReorderDragState.sourceId = 0;
+
+    if (!sourceId || !targetId || sourceId === targetId) return;
+
+    const ids = Array.from(
+      document.querySelectorAll("#productsGrid .product-tile"),
+    ).map((el) => Number(el.dataset.productId || 0));
+
+    const from = ids.indexOf(sourceId);
+    const to = ids.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+
+    ids.splice(from, 1);
+    const insertAt = ids.indexOf(targetId);
+    ids.splice(insertAt < 0 ? ids.length : insertAt, 0, sourceId);
+
+    await saveManualOrderFromBaseIdSequence(ids);
+    if (productSortMode !== "manual") {
+      await saveProductSortModeSetting("manual");
+      if (productSortModeSelect) productSortModeSelect.value = "manual";
+    }
+    renderProducts?.();
+  });
+
+  tile.addEventListener("pointercancel", () => {
+    if (!productReorderDragState.active) return;
+
+    document.querySelectorAll(".product-tile.reorder-source").forEach((el) => {
+      el.classList.remove("reorder-source");
+    });
+    clearProductReorderTargetVisual();
+    productReorderDragState.active = false;
+    productReorderDragState.sourceId = 0;
   });
 }
 
@@ -6382,6 +7281,20 @@ function renderProducts() {
     });
   }
 
+  if (!productsFilterIncludeUnmanaged) {
+    filtered = filtered.filter((p) => !isProductWithoutStockControl(p));
+  }
+
+  if (productsFilterStockOnly) {
+    filtered = filtered.filter((p) => {
+      const stockValue = getVisibleStockForProduct(p);
+      if (stockValue === null) return false;
+      return Number(stockValue) > 0;
+    });
+  }
+
+  filtered.sort(compareProductsForDisplay);
+
   filtered.forEach((p) => {
     const tile = document.createElement("div");
     const imageInfo = getProductImageInfoForProduct(p);
@@ -6401,14 +7314,29 @@ function renderProducts() {
     if (isOfferPackProductById(prodId)) tile.classList.add("is-offer");
 
     const taxRate = getTaxRateForProduct(p);
+    const discountPct = getProductDiscountPercent(p);
+    const baseNetPrice = Number(p.price || 0) || 0;
+    const effectiveNetPrice = applyDiscountToNetPrice(
+      baseNetPrice,
+      discountPct,
+    );
+    const priceGrossBase =
+      (Number(baseNetPrice) || 0) * (1 + (Number(taxRate) || 0) / 100);
     const priceGross =
-      (Number(p.price || 0) || 0) * (1 + (Number(taxRate) || 0) / 100);
+      (Number(effectiveNetPrice) || 0) * (1 + (Number(taxRate) || 0) / 100);
+    const priceHtml =
+      discountPct > 0
+        ? `<div class="product-price"><span class="product-price-old">${priceGrossBase.toFixed(2)} €</span><span class="product-price-current">${priceGross.toFixed(2)} €</span></div>`
+        : `<div class="product-price">${priceGross.toFixed(2)} €</div>`;
 
     const stockValue = getVisibleStockForProduct(p);
     const stockText = formatProductStock(stockValue);
     const stockClass = getProductStockClass(stockValue);
     const canShowStockEdit =
-      isAdminUser() && enableProductStockEdition && showProductStockBadge;
+      isAdminUser() &&
+      enableProductStockEdition &&
+      showProductStockBadge &&
+      stockValue !== null;
 
     tile.innerHTML = `
       <div class="product-img-wrapper">
@@ -6419,6 +7347,8 @@ function renderProducts() {
         <div class="product-name">${p.name || ""}</div>
         ${p.secondaryName ? `<div class="product-secondary">${p.secondaryName}</div>` : ""}
       </div>
+
+      ${discountPct > 0 ? `<div class="product-discount-badge" title="Descuento aplicado">-${formatDiscountPercent(discountPct)}%</div>` : ""}
 
       <div class="product-footer">
         ${
@@ -6445,20 +7375,40 @@ function renderProducts() {
             : ""
         }
 
-        <div class="product-price">${priceGross.toFixed(2)} €</div>
+        ${priceHtml}
       </div>
     `;
 
     const canEditPrices = isAdminUser() && isPriceEditModeEnabled();
+    const canResizeTiles = isAdminUser() && !!productTileResizeMode;
+    const canReorderTiles = isAdminUser() && !!productReorderMode;
+    const productForSale =
+      discountPct > 0
+        ? {
+            ...p,
+            price: effectiveNetPrice,
+            discountPctApplied: discountPct,
+            discountBaseNetPrice: baseNetPrice,
+          }
+        : p;
 
-    tile.onclick = async () => {
-      try {
-        await addToCart(p);
-      } catch (e) {
-        console.warn("addToCart error:", e);
-        toast("No se pudo añadir al carrito.", "error");
-      }
-    };
+    if (canReorderTiles) {
+      tile.classList.add("reorder-mode");
+      bindProductTileReorderEvents(tile);
+      tile.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      };
+    } else {
+      tile.onclick = async () => {
+        try {
+          await addToCart(productForSale);
+        } catch (e) {
+          console.warn("addToCart error:", e);
+          toast("No se pudo añadir al carrito.", "error");
+        }
+      };
+    }
 
     if (canShowStockEdit) {
       const stockEditBtn = tile.querySelector(".product-stock-edit-btn");
@@ -6489,6 +7439,7 @@ function renderProducts() {
 
     if (canEditPrices) {
       tile.style.position = "relative";
+      if (discountPct > 0) tile.classList.add("has-price-edit");
 
       const editBtn = document.createElement("button");
       editBtn.type = "button";
@@ -6503,6 +7454,22 @@ function renderProducts() {
       };
 
       tile.appendChild(editBtn);
+    }
+
+    if (canResizeTiles) {
+      const resizeHandle = document.createElement("button");
+      resizeHandle.type = "button";
+      resizeHandle.className = "product-tile-resize-handle";
+      resizeHandle.title = "Arrastra para cambiar tamaño";
+      resizeHandle.ariaLabel = "Cambiar tamaño de productos";
+
+      resizeHandle.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      };
+
+      bindProductTileResizeHandle(resizeHandle);
+      tile.appendChild(resizeHandle);
     }
 
     grid.appendChild(tile);
@@ -6561,6 +7528,25 @@ if (searchClearBtn) {
   };
 }
 
+if (productsStockOnlyToggle) {
+  productsStockOnlyToggle.addEventListener("change", () => {
+    if (productsStockOnlyToggle.checked) {
+      productsFilterIncludeUnmanagedSnapshot = !!productsFilterIncludeUnmanaged;
+    }
+    productsFilterStockOnly = !!productsStockOnlyToggle.checked;
+    refreshProductStockFilterUIState();
+    renderProducts?.();
+  });
+}
+
+if (productsIncludeUnmanagedToggle) {
+  productsIncludeUnmanagedToggle.addEventListener("change", () => {
+    productsFilterIncludeUnmanaged = !!productsIncludeUnmanagedToggle.checked;
+    productsFilterIncludeUnmanagedSnapshot = !!productsFilterIncludeUnmanaged;
+    renderProducts?.();
+  });
+}
+
 // ===== [08] UI venta: carrito =====
 function makeLineId() {
   return "L" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -6597,6 +7583,8 @@ function buildCartLine(product, quantity) {
     originalNetPrice: priceNet,
     originalGrossPrice: priceGross,
     grossPriceOverride: null,
+    discountPctApplied: clampDiscountPercent(product.discountPctApplied || 0),
+    discountBaseNetPrice: Number(product.discountBaseNetPrice || priceNet),
   };
 }
 
@@ -6655,6 +7643,8 @@ async function addToCart(product, quantity = 1) {
     toast(editLockReason, "warn", "Mesa bloqueada");
     return;
   }
+
+  product = buildProductWithAppliedDiscount(product);
 
   const prodId = Number(product.baseProductId || product.id || 0);
   const requestedQty = Number(quantity || 0) || 1;
@@ -6792,6 +7782,12 @@ async function addToCart(product, quantity = 1) {
     if (Number(c?.id) !== Number(product?.id)) return false;
     // Nunca mezclar una línea independiente con líneas de oferta.
     if (isPackParentLine(c) || isPackChildLine(c)) return false;
+    const existingGross = round2(getUnitGross(c));
+    const productGross = round2(
+      (Number(product?.price || 0) || 0) *
+        (1 + (Number(getTaxRateForProduct(product)) || 0) / 100),
+    );
+    if (existingGross !== productGross) return false;
     return true;
   });
 
@@ -17300,6 +18296,7 @@ async function loadDataFromApi(opts = {}) {
       fetchApiResource("productos"),
       fetchApiResource("tpvterminales"),
       fetchApiResource("variantes"),
+      fetchApiResource("stocks"),
       fetchApiResource("empresas"),
       buildProductImagesMap().catch((e) => {
         console.warn(
@@ -17315,6 +18312,7 @@ async function loadDataFromApi(opts = {}) {
       productosRes,
       tpvTerminalesRes,
       variantesRes,
+      stocksRes,
       empresasRes,
       productImagesRes,
     ] = results;
@@ -17343,6 +18341,10 @@ async function loadDataFromApi(opts = {}) {
       variantesRes.status === "fulfilled" && Array.isArray(variantesRes.value)
         ? variantesRes.value
         : [];
+    const stocksData =
+      stocksRes.status === "fulfilled" && Array.isArray(stocksRes.value)
+        ? stocksRes.value
+        : [];
     const empresasData =
       empresasRes.status === "fulfilled" && Array.isArray(empresasRes.value)
         ? empresasRes.value
@@ -17363,6 +18365,13 @@ async function loadDataFromApi(opts = {}) {
     }
 
     PRODUCT_IMAGES_MAP = productImagesMap;
+
+    if (stocksRes.status === "fulfilled") {
+      rebuildManagedStockProductIds(stocksData);
+    } else {
+      managedStockProductIds = new Set();
+      managedStockCatalogLoaded = false;
+    }
 
     // 2) Impuestos
     taxRatesByCode = {};
@@ -17513,7 +18522,8 @@ async function loadDataFromApi(opts = {}) {
             codimpuesto: codImpuestoBase,
             taxRate: taxRateBase,
             imageUrl: imgInfoBase ? imgInfoBase.url : null,
-            stockfis: Number(base.stockfis ?? 0),
+            stockfisRaw: base.stockfis,
+            stockfis: parseManagedStockValue(base.stockfis),
           });
         });
       });
@@ -17552,22 +18562,13 @@ async function loadDataFromApi(opts = {}) {
           codimpuesto,
           taxRate,
           imageUrl: imgInfo ? imgInfo.url : null,
-          stockfis: Number(p.stockfis ?? 0),
+          stockfisRaw: p.stockfis,
+          stockfis: parseManagedStockValue(p.stockfis),
         });
       });
 
       // ---- ORDEN FINAL ----
-      combined.sort((a, b) => {
-        const sa = a.sortKey || 0;
-        const sb = b.sortKey || 0;
-        if (sa !== sb) return sa - sb;
-
-        if (a.baseProductId === b.baseProductId) {
-          return (a.variantOrder ?? 0) - (b.variantOrder ?? 0);
-        }
-
-        return a.name.localeCompare(b.name, "es");
-      });
+      combined.sort(compareProductsForDisplay);
 
       products = combined;
       rebuildBarcodeLocalIndex(variantesData);
@@ -18778,6 +19779,22 @@ function refreshOptionsUI() {
   if (parkStockWarningToggle)
     parkStockWarningToggle.checked = !!showParkStockWarning;
 
+  const tileResizeToggle = document.getElementById(
+    "productTileResizeModeToggle",
+  );
+  if (tileResizeToggle) tileResizeToggle.checked = !!productTileResizeMode;
+
+  if (productSortModeSelect) {
+    productSortModeSelect.value = normalizeProductSortMode(productSortMode);
+  }
+
+  if (productReorderModeToggle) {
+    productReorderModeToggle.disabled = !isAdminUser();
+    productReorderModeToggle.checked = isAdminUser() && !!productReorderMode;
+  }
+
+  applyInfoBarVisibilityUi?.();
+
   const t = document.getElementById("priceEditModeToggle");
   if (t) {
     t.disabled = !isAdminUser();
@@ -18980,6 +19997,11 @@ async function openOptions() {
   setOptionsReadOnlyMode(false);
 
   await loadPriceEditModeFromCfg?.();
+  await loadProductDiscountConfig?.();
+  await loadProductManualOrderConfig?.();
+  await loadProductSortModeSetting?.();
+  await loadProductReorderModeSetting?.();
+  await loadInfoBarVisibilitySettings?.();
 
   applyAdminOnlyUI?.();
   refreshOptionsUI?.();
@@ -19005,6 +20027,17 @@ async function openOptions() {
   await loadMesasComandaFamilyRules();
   bindParkStockWarningToggleOnce();
   await loadParkStockWarningToggle();
+
+  bindProductTileResizeModeToggleOnce();
+  await loadProductTileResizeModeToggle();
+
+  bindProductSortModeOnce();
+  bindProductReorderModeOnce();
+  bindProductManualOrderResetButtonOnce();
+  bindInfoBarVisibilityOnce();
+
+  bindProductTileSizeResetButtonOnce();
+  await loadProductTileSizeSetting();
 
   bindAutostartToggleOnce();
   await loadAutostartToggle();
@@ -22280,6 +23313,7 @@ function applyStockQtyToLocalProductsById(idProd, qty) {
     if (Number(p?.baseProductId || p?.id || 0) !== baseId) return p;
     return {
       ...p,
+      stockfisRaw: Number(qty),
       stockfis: Number(qty),
     };
   });
@@ -22313,8 +23347,19 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "") {
 
     try {
       const product = findProductByBaseId(idProd);
-      const stockRow = await fetchStockRowForProduct(
+      const stockRowsByReference = await fetchStockRowsByProductReference(
         product || { id: idProd, baseProductId: idProd },
+      );
+
+      // Regla operativa: si no existen filas en stocks por referencia,
+      // el producto se considera sin control de stock y se ignora.
+      if (!stockRowsByReference.length) {
+        continue;
+      }
+
+      const stockRow = pickStockRowByWarehouse(
+        stockRowsByReference,
+        getCurrentWarehouseCode(),
       );
 
       if (!stockRow) {
@@ -22837,6 +23882,41 @@ function getReservedQtyForProduct(productOrId) {
   return Number(REMOTE_RESERVED_BY_PRODUCT.get(idProd) || 0);
 }
 
+function parseManagedStockValue(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function rebuildManagedStockProductIds(stockRows) {
+  const next = new Set();
+
+  (Array.isArray(stockRows) ? stockRows : []).forEach((row) => {
+    const idProd = Number(row?.idproducto || 0);
+    if (idProd > 0) next.add(idProd);
+  });
+
+  managedStockProductIds = next;
+  managedStockCatalogLoaded = true;
+}
+
+function isProductWithoutStockControl(product) {
+  if (!product || typeof product !== "object") return false;
+
+  const baseId = Number(getProductBaseId(product) || 0);
+  if (managedStockCatalogLoaded && baseId > 0) {
+    return !managedStockProductIds.has(baseId);
+  }
+
+  const rawManaged = parseManagedStockValue(product.stockfisRaw);
+  if (rawManaged !== null) return false;
+
+  const effectiveManaged = parseManagedStockValue(product.stockfis);
+  return effectiveManaged === null;
+}
+
 function getVisibleStockForProduct(productOrId) {
   const product =
     typeof productOrId === "object"
@@ -22845,9 +23925,10 @@ function getVisibleStockForProduct(productOrId) {
         ? products.find((p) => getProductBaseId(p) === Number(productOrId))
         : null;
 
-  if (!product) return 0;
+  if (!product) return null;
 
-  const realStock = Number(product.stockfis ?? 0);
+  const realStock = parseManagedStockValue(product.stockfis);
+  if (realStock === null) return null;
 
   // Si ya sincronizamos reservas contra FacturaScripts, stockfis ya viene descontado.
   // Evita doble descuento visual en TPV.
@@ -23147,7 +24228,7 @@ async function refreshProductsStockOnly() {
     list.forEach((p, idx) => {
       const idProd = Number(p.idproducto ?? p.id ?? idx);
       if (!idProd) return;
-      stockById.set(idProd, Number(p.stockfis ?? 0));
+      stockById.set(idProd, p.stockfis);
     });
 
     if (!Array.isArray(products) || !products.length) {
@@ -23161,13 +24242,16 @@ async function refreshProductsStockOnly() {
       if (!baseId) return p;
       if (!stockById.has(baseId)) return p;
 
-      const nextStock = Number(stockById.get(baseId) ?? 0);
-      const prevStock = Number(p.stockfis ?? 0);
+      const nextRawStock = stockById.get(baseId);
+      const nextStock = parseManagedStockValue(nextRawStock);
+      const prevStock = parseManagedStockValue(p.stockfis);
+      const prevRawStock = p.stockfisRaw;
 
-      if (prevStock !== nextStock) {
+      if (prevStock !== nextStock || prevRawStock !== nextRawStock) {
         changed = true;
         return {
           ...p,
+          stockfisRaw: nextRawStock,
           stockfis: nextStock,
         };
       }
@@ -29386,27 +30470,115 @@ function getCurrentWarehouseCode() {
   ).trim();
 }
 
-async function fetchStockRowForProduct(product) {
-  const ref = String(product?.referencia || product?.name || "").trim();
-  if (!ref) return null;
-
-  const rows = await fetchApiResourceWithParams("stocks", {
-    "filter[referencia]": ref,
-    limit: 200,
-  });
-
+function pickStockRowByWarehouse(rows, warehouseCode = "") {
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) return null;
 
-  const warehouse = getCurrentWarehouseCode();
-  if (warehouse) {
+  const wanted = String(warehouseCode || "")
+    .trim()
+    .toUpperCase();
+
+  if (wanted) {
     const byWarehouse = list.find(
-      (x) => String(x?.codalmacen || "").trim() === warehouse,
+      (x) =>
+        String(x?.codalmacen || "")
+          .trim()
+          .toUpperCase() === wanted,
     );
     if (byWarehouse) return byWarehouse;
   }
 
   return list[0] || null;
+}
+
+async function fetchStockRowsByParams(params = {}) {
+  const rows = await fetchApiResourceWithParams("stocks", {
+    ...params,
+    limit: 200,
+  });
+  return Array.isArray(rows) ? rows : [];
+}
+
+function buildStockReferenceCandidates(product) {
+  const out = [];
+  const pushRef = (value) => {
+    const ref = String(value || "").trim();
+    if (!ref || ref === "-") return;
+    if (out.some((x) => x.toLowerCase() === ref.toLowerCase())) return;
+    out.push(ref);
+  };
+
+  const baseId = Number(getProductBaseId(product) || 0);
+
+  pushRef(product?.referencia);
+  pushRef(product?.name);
+  pushRef(product?.descripcion);
+
+  if (baseId > 0 && Array.isArray(products)) {
+    const canonical = products.find((p) => getProductBaseId(p) === baseId);
+    pushRef(canonical?.referencia);
+    pushRef(canonical?.name);
+    pushRef(canonical?.descripcion);
+  }
+
+  return out;
+}
+
+async function fetchStockRowsByProductReference(product) {
+  const refCandidates = buildStockReferenceCandidates(product);
+  if (!refCandidates.length) return [];
+
+  let mergedRows = [];
+  for (const ref of refCandidates) {
+    try {
+      const byRef = await fetchStockRowsByParams({
+        "filter[referencia]": ref,
+      });
+      if (byRef.length) mergedRows = mergedRows.concat(byRef);
+    } catch {
+      // Continuamos con otras referencias candidatas.
+    }
+  }
+
+  if (!mergedRows.length) return [];
+
+  const seen = new Set();
+  return mergedRows.filter((row) => {
+    const key = String(row?.idstock || "").trim();
+    if (!key) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function fetchStockRowForProduct(product) {
+  const warehouse = getCurrentWarehouseCode();
+  const baseId = Number(getProductBaseId(product) || 0);
+
+  // Estrategia 1: buscar por idproducto (más estable entre equipos).
+  if (baseId > 0) {
+    try {
+      const byProduct = await fetchStockRowsByParams({
+        "filter[idproducto]": baseId,
+      });
+      const picked = pickStockRowByWarehouse(byProduct, warehouse);
+      if (picked) return picked;
+    } catch (e) {
+      console.warn(
+        "Lookup stock por idproducto falló:",
+        e?.message || e,
+        "idproducto=",
+        baseId,
+      );
+    }
+  }
+
+  // Estrategia 2: fallback por referencias candidatas (compat legacy).
+  const list = await fetchStockRowsByProductReference(product);
+  if (!list.length) return null;
+
+  return pickStockRowByWarehouse(list, warehouse);
 }
 
 async function updateStockRowCantidad(stockRow, nextQty) {
@@ -29436,6 +30608,7 @@ function applyStockQtyToLocalProducts(product, qty) {
     if (Number(p?.baseProductId || p?.id || 0) !== baseId) return p;
     return {
       ...p,
+      stockfisRaw: Number(qty),
       stockfis: Number(qty),
     };
   });
@@ -29465,11 +30638,17 @@ async function openProductStockEditFlow(product) {
   });
 
   if (!stockRow) {
+    const localStock = parseManagedStockValue(product?.stockfis);
+    if (localStock === null) return;
+
     toast("No se encontró stock para este producto.", "warn", "Stock");
     return;
   }
 
-  const currentQty = Number(stockRow?.cantidad ?? product?.stockfis ?? 0) || 0;
+  const rowQty = parseManagedStockValue(stockRow?.cantidad);
+  const productQty = parseManagedStockValue(product?.stockfis);
+  const currentQty = rowQty ?? productQty;
+  if (currentQty === null) return;
 
   const wantedQty = await new Promise((resolve) => {
     openNumPad(
@@ -32870,12 +34049,18 @@ window.addEventListener("DOMContentLoaded", async () => {
     MESAS_MODULE_ENABLED && (localMode === "mesas" || cfgMode === "mesas");
   await setMesasInlineModeEnabled(startMesasMode, { persist: false });
 
+  await loadProductManualOrderConfig?.();
+  await loadProductSortModeSetting?.();
+  await loadProductReorderModeSetting?.();
+  await loadInfoBarVisibilitySettings?.();
   setTpvLoadingState(true);
   renderCart();
   updateSessionLockUi();
   updateCashButtonLabel();
   updateParkedCountBadge();
   refreshOptionsUI();
+  refreshProductStockFilterUIState();
+  applyInfoBarVisibilityUi?.();
 
   if (TPV_E2E_MODE) {
     try {
@@ -35146,12 +36331,97 @@ function openPriceEditForProduct(p) {
   const nameEl = document.getElementById("priceEditName");
   const curEl = document.getElementById("priceEditCurrent");
   const inp = document.getElementById("priceEditInput");
+  const discountInp = document.getElementById("priceEditDiscountPctInput");
+  const orderPriorityInp = document.getElementById(
+    "priceEditOrderPriorityInput",
+  );
+  const finalEl = document.getElementById("priceEditFinal");
   const err = document.getElementById("priceEditError");
+  const currentDiscount = getProductDiscountPercent(p);
+  const currentOrderPriority = getProductManualOrderPriority(p);
+
+  const updateDerived = () => {
+    const baseRaw = String(inp?.value ?? "")
+      .trim()
+      .replace(",", ".");
+    const baseGross = round2(Number(baseRaw));
+
+    const discountRaw = String(discountInp?.value ?? "")
+      .trim()
+      .replace(",", ".");
+    const discountPct = clampDiscountPercent(Number(discountRaw));
+
+    if (discountInp) {
+      const normalized = formatDiscountPercent(discountPct);
+      if (String(discountInp.value).trim() !== normalized) {
+        discountInp.value = normalized;
+      }
+    }
+
+    const finalGross = round2(baseGross * (1 - discountPct / 100));
+    if (finalEl) finalEl.textContent = eur2(finalGross);
+  };
 
   if (nameEl) nameEl.textContent = p.name || "Producto";
-  if (curEl) curEl.textContent = eur2(grossNow);
+  if (curEl) {
+    const currentFinal = round2(grossNow * (1 - currentDiscount / 100));
+    curEl.textContent =
+      currentDiscount > 0
+        ? `${eur2(currentFinal)} (base ${eur2(grossNow)} · -${formatDiscountPercent(currentDiscount)}%)`
+        : eur2(grossNow);
+  }
   if (inp) inp.value = grossNow.toFixed(2);
+  if (discountInp) discountInp.value = formatDiscountPercent(currentDiscount);
+  if (orderPriorityInp) orderPriorityInp.value = String(currentOrderPriority);
   if (err) err.textContent = "";
+
+  if (inp) inp.oninput = updateDerived;
+  if (discountInp) discountInp.oninput = updateDerived;
+
+  if (discountInp) {
+    const openDiscountPad = (e) => {
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
+
+      openNumPad(
+        String(
+          discountInp.value || formatDiscountPercent(currentDiscount) || "0",
+        ),
+        (val) => {
+          discountInp.value = formatDiscountPercent(val);
+          updateDerived();
+        },
+        `${p.name || "Producto"} - descuento %`,
+        "price",
+        currentDiscount,
+        null,
+      );
+    };
+
+    discountInp.onpointerdown = openDiscountPad;
+  }
+
+  if (orderPriorityInp) {
+    const openPriorityPad = (e) => {
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
+
+      openNumPad(
+        String(orderPriorityInp.value || currentOrderPriority || "0"),
+        (val) => {
+          orderPriorityInp.value = String(clampManualOrderPriority(val));
+        },
+        `${p.name || "Producto"} - prioridad`,
+        "stock",
+        currentOrderPriority,
+        null,
+      );
+    };
+
+    orderPriorityInp.onpointerdown = openPriorityPad;
+  }
+
+  updateDerived();
 
   const keypadBtn = document.getElementById("priceEditKeypadBtn");
   if (keypadBtn && inp) {
@@ -35166,6 +36436,7 @@ function openPriceEditForProduct(p) {
         String(inp.value || grossNow.toFixed(2)), // valor inicial
         (val) => {
           inp.value = formatPrice2(val);
+          updateDerived();
         }, // callback
         p.name || "Producto",
         "price",
@@ -35206,33 +36477,103 @@ async function confirmAndSaveProductPrice() {
   if (err) err.textContent = "";
 
   const inp = document.getElementById("priceEditInput");
+  const discountInp = document.getElementById("priceEditDiscountPctInput");
+  const orderPriorityInp = document.getElementById(
+    "priceEditOrderPriorityInput",
+  );
   const raw = String(inp?.value ?? "")
     .trim()
     .replace(",", ".");
-  const newGross = round2(Number(raw));
-  if (!isFinite(newGross) || newGross < 0) {
+  const baseGross = round2(Number(raw));
+  if (!isFinite(baseGross) || baseGross < 0) {
     if (err) err.textContent = "Precio no válido.";
     return;
   }
 
+  const discountRaw = String(discountInp?.value ?? "")
+    .trim()
+    .replace(",", ".");
+  const discountPct = clampDiscountPercent(Number(discountRaw));
+  const orderPriorityRaw = String(orderPriorityInp?.value ?? "")
+    .trim()
+    .replace(",", ".");
+  const orderPriority = clampManualOrderPriority(Number(orderPriorityRaw));
+  const finalGross = round2(baseGross * (1 - discountPct / 100));
+
   const taxRate = getTaxRateForProduct(p);
   const grossNow = round2(Number(p.price || 0) * (1 + taxRate / 100) || 0);
-  if (round2(newGross) === round2(grossNow)) {
-    toast?.("El precio no ha cambiado.", "info", "Productos");
+  const currentDiscount = getProductDiscountPercent(p);
+  const currentOrderPriority = getProductManualOrderPriority(p);
+  const baseChanged = round2(baseGross) !== round2(grossNow);
+  const discountChanged = round2(discountPct) !== round2(currentDiscount);
+  const orderPriorityChanged = orderPriority !== currentOrderPriority;
+
+  if (!baseChanged && !discountChanged && !orderPriorityChanged) {
+    toast?.(
+      "No hay cambios en precio base, descuento ni prioridad.",
+      "info",
+      "Productos",
+    );
+    document.getElementById("priceEditOverlay")?.classList.add("hidden");
+    return;
+  }
+
+  // Descuento rápido: temporal para la sesión actual, sin tocar FS.
+  if (!baseChanged && discountChanged) {
+    const discountKeyProductId = Number(p.baseProductId || p.id || 0);
+    await setProductDiscountPercentForProduct(
+      discountKeyProductId,
+      discountPct,
+    );
+    if (orderPriorityChanged) {
+      await setProductManualOrderPriorityForProduct(
+        discountKeyProductId,
+        orderPriority,
+      );
+    }
+    renderProducts?.();
+    toast?.(
+      orderPriorityChanged
+        ? `Descuento ${formatDiscountPercent(discountPct)}% y prioridad ${orderPriority} aplicados.`
+        : `Descuento temporal aplicado: ${formatDiscountPercent(discountPct)}%.`,
+      "ok",
+      "Productos",
+    );
+    document.getElementById("priceEditOverlay")?.classList.add("hidden");
+    return;
+  }
+
+  if (!baseChanged && !discountChanged && orderPriorityChanged) {
+    const orderKeyProductId = Number(p.baseProductId || p.id || 0);
+    await setProductManualOrderPriorityForProduct(
+      orderKeyProductId,
+      orderPriority,
+    );
+    renderProducts?.();
+    toast?.(
+      `Prioridad de orden guardada: ${orderPriority}.`,
+      "ok",
+      "Productos",
+    );
     document.getElementById("priceEditOverlay")?.classList.add("hidden");
     return;
   }
 
   const ok = await confirmModal(
-    "Actualizar precio",
+    "Actualizar precio base",
     `Vas a cambiar el precio de "${p.name}"\n\n` +
-      `De: ${grossNow.toFixed(2)} € (IVA incl.)\n` +
-      `A:  ${newGross.toFixed(2)} € (IVA incl.)\n\n` +
-      `¿Quieres actualizarlo permanentemente?`,
+      `Base: ${grossNow.toFixed(2)} € -> ${baseGross.toFixed(2)} €\n` +
+      `Descuento: ${formatDiscountPercent(currentDiscount)}% -> ${formatDiscountPercent(discountPct)}%\n` +
+      `Prioridad: ${currentOrderPriority} -> ${orderPriority}\n` +
+      `Final: ${finalGross.toFixed(2)} € (IVA incl.)\n\n` +
+      `El precio base se guardará en FacturaScripts permanentemente.\n` +
+      `El descuento y la prioridad son ajustes locales del TPV.\n\n` +
+      `¿Quieres continuar?`,
   );
   if (!ok) return;
 
-  const newNet = grossToNet(newGross, taxRate);
+  const newNet = grossToNet(baseGross, taxRate);
+  const discountKeyProductId = Number(p.baseProductId || p.id || 0);
 
   try {
     if (p.isVariant) {
@@ -35241,11 +36582,20 @@ async function confirmAndSaveProductPrice() {
       await apiUpdateProductoPrecioNet(p.baseProductId || p.id, newNet);
     }
 
+    await setProductDiscountPercentForProduct(
+      discountKeyProductId,
+      discountPct,
+    );
+    await setProductManualOrderPriorityForProduct(
+      discountKeyProductId,
+      orderPriority,
+    );
+
     // ✅ LOG solo si la API fue OK
     await logPermanentPriceChange({
       product: p,
       oldGross: grossNow,
-      newGross,
+      newGross: finalGross,
       taxRate,
     });
   } catch (e) {
@@ -35261,7 +36611,11 @@ async function confirmAndSaveProductPrice() {
   if (idx >= 0) products[idx].price = newNet;
 
   renderProducts?.();
-  toast?.("Precio actualizado ✅", "ok", "Productos");
+  toast?.(
+    "Precio base actualizado. Descuento temporal aplicado ✅",
+    "ok",
+    "Productos",
+  );
   document.getElementById("priceEditOverlay")?.classList.add("hidden");
 }
 
