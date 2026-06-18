@@ -533,7 +533,7 @@
       });
 
       reconnectBtn.addEventListener("click", async () => {
-        await applyScaleConfigFromForm(false);
+        await applyScaleConfigFromForm(true);
       });
 
       advancedBtn.addEventListener("click", () => {

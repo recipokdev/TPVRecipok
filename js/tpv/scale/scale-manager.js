@@ -35,6 +35,38 @@ class ScaleManager {
     return this.SerialPort;
   }
 
+  normalizeSerialError(err) {
+    const raw = String(err?.message || err || "").trim();
+    const msg = raw.toLowerCase();
+
+    if (!raw) return "No se pudo abrir el puerto serie.";
+
+    if (
+      msg.includes("access denied") ||
+      msg.includes("permission denied") ||
+      msg.includes("acceso denegado") ||
+      msg.includes("busy") ||
+      msg.includes("in use")
+    ) {
+      return "El puerto está en uso por otro programa (Docklight, PuTTY, etc.). Cierra ese programa e inténtalo de nuevo.";
+    }
+
+    if (
+      msg.includes("cannot find") ||
+      msg.includes("not found") ||
+      msg.includes("no such file") ||
+      msg.includes("file not found")
+    ) {
+      return "No se encuentra el puerto seleccionado. Revisa el COM y pulsa Actualizar.";
+    }
+
+    if (msg.includes("invalid serialport")) {
+      return "Configuración de puerto no válida. Revisa velocidad, bits, paridad y stop bits.";
+    }
+
+    return raw;
+  }
+
   async listPorts() {
     const SerialPort = await this.ensureSerialPortLib();
     const ports = await SerialPort.list();
@@ -179,12 +211,23 @@ class ScaleManager {
       });
     });
 
-    await new Promise((resolve, reject) => {
-      this.port.open((err) => {
-        if (err) return reject(err);
-        resolve();
+    try {
+      await new Promise((resolve, reject) => {
+        this.port.open((err) => {
+          if (err) return reject(err);
+          resolve();
+        });
       });
-    });
+    } catch (err) {
+      const normalizedError = this.normalizeSerialError(err);
+      this.setStatePatch({
+        connected: false,
+        enabled: !!this.config.enabled,
+        portPath: this.config.portPath,
+        error: normalizedError,
+      });
+      throw new Error(normalizedError);
+    }
 
     this.buffer = "";
     this.setStatePatch({
@@ -288,6 +331,11 @@ class ScaleManager {
     const grams = Number(this.state.currentGrams || 0);
     const kg = Number(this.state.currentKg || 0);
 
+    const age = Date.now() - this.state.updatedAt;
+    if (age > this.config.maxAgeMs) {
+      return { ok: false, error: "La lectura de la báscula está caducada." };
+    }
+
     if (this.config.consumeMode === "continuous") {
       return {
         ok: true,
@@ -296,11 +344,6 @@ class ScaleManager {
         raw: this.state.lastRaw,
         updatedAt: this.state.updatedAt,
       };
-    }
-
-    const age = Date.now() - this.state.updatedAt;
-    if (age > this.config.maxAgeMs) {
-      return { ok: false, error: "La lectura de la báscula está caducada." };
     }
 
     if (this.state.lockedUntilWeightChanges) {

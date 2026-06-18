@@ -21212,10 +21212,7 @@ function renderTicketsList(tickets) {
       };
     }
 
-    div.onclick = async () => {
-      if (hasRefunds && isFullyRefunded) return;
-      await openRefundForFactura(t);
-    };
+    div.onclick = () => {};
 
     mountEl.appendChild(div);
     renderRefundChildren(t, num, refunds, mountEl);
