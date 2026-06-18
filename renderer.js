@@ -1267,6 +1267,7 @@ const OPTIONS_INFOBAR_SHOW_TERMINAL_KEY = "ui.infoBarShowTerminal";
 const OPTIONS_INFOBAR_SHOW_AGENT_KEY = "ui.infoBarShowAgent";
 const OPTIONS_INFOBAR_SHOW_USER_KEY = "ui.infoBarShowUser";
 const OPTIONS_INFOBAR_SHOW_CASH_KEY = "ui.infoBarShowCash";
+const OPTIONS_SCALE_MANUAL_CAPTURE_MODE_KEY = "scale.manualCaptureMode";
 const PRODUCT_DISCOUNTS_SESSION_KEY = "tpv_productDiscountPctById_session";
 const PRODUCT_NAME_COLLATOR = new Intl.Collator("es", {
   numeric: true,
@@ -1293,6 +1294,7 @@ let infoBarShowTerminal = true;
 let infoBarShowAgent = true;
 let infoBarShowUser = true;
 let infoBarShowCash = true;
+let scaleManualCaptureMode = false;
 
 const productReorderDragState = {
   active: false,
@@ -1882,6 +1884,23 @@ async function loadProductTileResizeModeToggle() {
   if (el) el.checked = productTileResizeMode;
 }
 
+async function loadScaleManualCaptureModeToggle() {
+  const el = document.getElementById("scaleManualCaptureToggle");
+  let enabled = false;
+
+  try {
+    enabled = parseBoolLike(
+      await window.TPV_CFG?.get?.(OPTIONS_SCALE_MANUAL_CAPTURE_MODE_KEY),
+      false,
+    );
+  } catch {
+    enabled = false;
+  }
+
+  scaleManualCaptureMode = !!enabled;
+  if (el) el.checked = scaleManualCaptureMode;
+}
+
 async function saveProductTileResizeModeToggle(enabled) {
   productTileResizeMode = !!enabled;
 
@@ -1892,6 +1911,19 @@ async function saveProductTileResizeModeToggle(enabled) {
     );
   } catch (e) {
     console.warn("No se pudo guardar modo redimensionar productos:", e);
+  }
+}
+
+async function saveScaleManualCaptureModeToggle(enabled) {
+  scaleManualCaptureMode = !!enabled;
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_SCALE_MANUAL_CAPTURE_MODE_KEY,
+      scaleManualCaptureMode,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar modo manual de báscula:", e);
   }
 }
 
@@ -1959,6 +1991,7 @@ let productStockEditionToggleBound = false;
 let allowCloseWithParkedToggleBound = false;
 let parkStockWarningToggleBound = false;
 let productTileResizeModeToggleBound = false;
+let scaleManualCaptureToggleBound = false;
 let productTileSizeResetBtnBound = false;
 let productSortModeBound = false;
 let productReorderModeBound = false;
@@ -2030,6 +2063,20 @@ function bindProductTileResizeModeToggleOnce() {
   el.addEventListener("change", async () => {
     const wanted = !!el.checked;
     await saveProductTileResizeModeToggle(wanted);
+    renderProducts?.();
+  });
+}
+
+function bindScaleManualCaptureToggleOnce() {
+  if (scaleManualCaptureToggleBound) return;
+  scaleManualCaptureToggleBound = true;
+
+  const el = document.getElementById("scaleManualCaptureToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+    await saveScaleManualCaptureModeToggle(wanted);
     renderProducts?.();
   });
 }
@@ -4056,6 +4103,7 @@ async function runBootFlow() {
     await loadInfoBarVisibilitySettings?.();
     await loadProductTileSizeSetting?.();
     await loadProductTileResizeModeToggle?.();
+    await loadScaleManualCaptureModeToggle?.();
 
     // 3) Datos
     await loadDataFromApi();
@@ -4666,6 +4714,11 @@ function renderProducts() {
       (Number(baseNetPrice) || 0) * (1 + (Number(taxRate) || 0) / 100);
     const priceGross =
       (Number(effectiveNetPrice) || 0) * (1 + (Number(taxRate) || 0) / 100);
+    const canEditPrices = isAdminUser() && isPriceEditModeEnabled();
+    const canResizeTiles = isAdminUser() && !!productTileResizeMode;
+    const canReorderTiles = isAdminUser() && !!productReorderMode;
+    const showScaleCaptureBtn = !!scaleManualCaptureMode && !canReorderTiles;
+
     const priceHtml =
       discountPct > 0
         ? `<div class="product-price"><span class="product-price-old">${priceGrossBase.toFixed(2)} €</span><span class="product-price-current">${priceGross.toFixed(2)} €</span></div>`
@@ -4680,22 +4733,9 @@ function renderProducts() {
       showProductStockBadge &&
       stockValue !== null;
 
-    tile.innerHTML = `
-      <div class="product-img-wrapper">
-        ${safeImageUrl ? `<img src="${safeImageUrl}" class="product-img" loading="lazy" decoding="async">` : ""}
-      </div>
-
-      <div class="product-overlay-top">
-        <div class="product-name">${p.name || ""}</div>
-        ${p.secondaryName ? `<div class="product-secondary">${p.secondaryName}</div>` : ""}
-      </div>
-
-      ${discountPct > 0 ? `<div class="product-discount-badge" title="Descuento aplicado">-${formatDiscountPercent(discountPct)}%</div>` : ""}
-
-      <div class="product-footer">
-        ${
-          showProductStockBadge
-            ? `<div class="product-stock-wrap">
+    const footerLeftBits = [];
+    if (showProductStockBadge) {
+      footerLeftBits.push(`<div class="product-stock-wrap">
   <div
     class="product-stock-badge ${stockClass}"
     data-stock-product-id="${Number(p.baseProductId || p.id || 0)}"
@@ -4713,17 +4753,41 @@ function renderProducts() {
   >✎</button>`
       : ""
   }
-</div>`
-            : ""
-        }
+</div>`);
+    }
 
+    const footerLeftHtml = footerLeftBits.length
+      ? `<div class="product-footer-left">${footerLeftBits.join("")}</div>`
+      : "";
+    const scaleButtonHtml = showScaleCaptureBtn
+      ? `<button
+  type="button"
+  class="product-scale-btn"
+  title="Añadir con peso de báscula"
+  aria-label="Añadir con peso de báscula"
+><span class="product-scale-btn-label">kg</span></button>`
+      : "";
+
+    tile.innerHTML = `
+      <div class="product-img-wrapper">
+        ${safeImageUrl ? `<img src="${safeImageUrl}" class="product-img" loading="lazy" decoding="async">` : ""}
+      </div>
+
+      <div class="product-overlay-top">
+        <div class="product-name">${p.name || ""}</div>
+        ${p.secondaryName ? `<div class="product-secondary">${p.secondaryName}</div>` : ""}
+      </div>
+
+      ${discountPct > 0 ? `<div class="product-discount-badge" title="Descuento aplicado">-${formatDiscountPercent(discountPct)}%</div>` : ""}
+
+      ${scaleButtonHtml}
+
+      <div class="product-footer">
+        ${footerLeftHtml}
         ${priceHtml}
       </div>
     `;
 
-    const canEditPrices = isAdminUser() && isPriceEditModeEnabled();
-    const canResizeTiles = isAdminUser() && !!productTileResizeMode;
-    const canReorderTiles = isAdminUser() && !!productReorderMode;
     const productForSale =
       discountPct > 0
         ? {
@@ -4744,7 +4808,11 @@ function renderProducts() {
     } else {
       tile.onclick = async () => {
         try {
-          await addToCart(productForSale);
+          if (scaleManualCaptureMode) {
+            await addToCart(productForSale, 1, { skipScale: true });
+          } else {
+            await addToCart(productForSale);
+          }
         } catch (e) {
           console.warn("addToCart error:", e);
           toast("No se pudo añadir al carrito.", "error");
@@ -4759,6 +4827,22 @@ function renderProducts() {
           e.preventDefault();
           e.stopPropagation();
           await openProductStockEditFlow(p);
+        };
+      }
+    }
+
+    if (showScaleCaptureBtn) {
+      const scaleBtn = tile.querySelector(".product-scale-btn");
+      if (scaleBtn) {
+        scaleBtn.onclick = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          try {
+            await addToCart(productForSale, 1, { forceScale: true });
+          } catch (err) {
+            console.warn("addToCart scale button error:", err);
+            toast("No se pudo añadir con báscula.", "error", "Báscula");
+          }
         };
       }
     }
@@ -4970,7 +5054,7 @@ async function createChildrenFromSelection({
   }
 }
 
-async function addToCart(product, quantity = 1) {
+async function addToCart(product, quantity = 1, options = {}) {
   if (!hasActiveLoginSession()) {
     const okLogin = await openLoginModal();
     if (!okLogin || !hasActiveLoginSession()) {
@@ -5080,8 +5164,11 @@ async function addToCart(product, quantity = 1) {
     return;
   }
 
-  // Báscula: para productos normales
-  if (window.TPV_SCALE_CART?.resolveScaleQuantityIfNeeded) {
+  // Báscula: para productos normales.
+  // - forceScale: obliga a tomar peso (botón ⚖).
+  // - skipScale: no usa báscula (toque normal en modo manual).
+  const useScale = !!options?.forceScale || !options?.skipScale;
+  if (useScale && window.TPV_SCALE_CART?.resolveScaleQuantityIfNeeded) {
     const scaleResult =
       await window.TPV_SCALE_CART.resolveScaleQuantityIfNeeded(
         product,
@@ -15413,6 +15500,9 @@ function refreshOptionsUI() {
   );
   if (tileResizeToggle) tileResizeToggle.checked = !!productTileResizeMode;
 
+  const scaleManualToggle = document.getElementById("scaleManualCaptureToggle");
+  if (scaleManualToggle) scaleManualToggle.checked = !!scaleManualCaptureMode;
+
   if (productSortModeSelect) {
     productSortModeSelect.value = normalizeProductSortMode(productSortMode);
   }
@@ -15649,6 +15739,9 @@ async function openOptions() {
 
   bindProductTileResizeModeToggleOnce();
   await loadProductTileResizeModeToggle();
+
+  bindScaleManualCaptureToggleOnce();
+  await loadScaleManualCaptureModeToggle();
 
   bindProductSortModeOnce();
   bindProductReorderModeOnce();

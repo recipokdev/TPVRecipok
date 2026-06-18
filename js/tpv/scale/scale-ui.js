@@ -257,6 +257,12 @@
 
     const grams = Number(state.currentGrams || 0);
     const kg = Number(state.currentKg || 0);
+    const hasValidWeight =
+      !state.error && state.enabled && state.connected && grams > 0;
+
+    try {
+      document.body.classList.toggle("scale-has-weight", hasValidWeight);
+    } catch (_) {}
 
     if (state.error) {
       statusEl.textContent = `Error: ${state.error}`;

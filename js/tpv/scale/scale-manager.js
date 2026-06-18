@@ -38,6 +38,10 @@ class ScaleManager {
   normalizeSerialError(err) {
     const raw = String(err?.message || err || "").trim();
     const msg = raw.toLowerCase();
+    const codeMatch =
+      raw.match(/unknown\s+error\s+code\s*(\d+)/i) ||
+      raw.match(/\b(?:errno|code)\s*[:=]?\s*(\d+)\b/i);
+    const osCode = codeMatch ? Number(codeMatch[1]) : null;
 
     if (!raw) return "No se pudo abrir el puerto serie.";
 
@@ -62,6 +66,16 @@ class ScaleManager {
 
     if (msg.includes("invalid serialport")) {
       return "Configuración de puerto no válida. Revisa velocidad, bits, paridad y stop bits.";
+    }
+
+    if (msg.includes("setcommstate")) {
+      if (osCode === 31) {
+        return "Windows no pudo aplicar la configuración serie al puerto (SetCommState, código 31). Suele ser problema de driver/adaptador USB-Serial. Prueba otro USB, reconecta la báscula y reinstala el driver CH340/FTDI.";
+      }
+      if (osCode === 87) {
+        return "Windows rechazó la configuración serie (SetCommState, código 87). Revisa que la báscula esté en 9600, 8 bits, paridad ninguna y 1 bit de parada.";
+      }
+      return "Windows rechazó la configuración serie del puerto (SetCommState). Revisa driver del adaptador y parámetros de comunicación.";
     }
 
     return raw;
@@ -201,7 +215,7 @@ class ScaleManager {
 
     this.port.on("error", (err) => {
       this.setStatePatch({
-        error: err?.message || String(err),
+        error: this.normalizeSerialError(err),
       });
     });
 

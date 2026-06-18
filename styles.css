@@ -580,6 +580,13 @@ body {
   min-width: 0;
 }
 
+.product-footer-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .product-stock-edit-btn {
   border: 1px solid rgba(30, 41, 59, 0.2);
   background: rgba(255, 255, 255, 0.95);
@@ -599,6 +606,52 @@ body {
 .product-stock-edit-btn:hover {
   background: #dbeafe;
   border-color: #93c5fd;
+}
+
+.product-scale-btn {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 6;
+  border: 2px solid rgba(100, 116, 139, 0.55);
+  background: rgba(248, 250, 252, 0.96);
+  color: #1e293b;
+  border-radius: 10px;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  flex: 0 0 34px;
+  line-height: 1;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.16);
+}
+
+.product-scale-btn:hover {
+  background: #e2e8f0;
+  border-color: rgba(71, 85, 105, 0.75);
+}
+
+.product-scale-btn-label {
+  letter-spacing: 0.2px;
+  text-transform: lowercase;
+  font-weight: 800;
+}
+
+body.scale-has-weight .product-scale-btn {
+  border-color: rgba(5, 150, 105, 0.95);
+  background: rgba(236, 253, 245, 0.98);
+  color: #065f46;
+  box-shadow: 0 0 0 2px rgba(5, 150, 105, 0.25);
+}
+
+body.scale-has-weight .product-scale-btn:hover {
+  border-color: rgba(4, 120, 87, 0.95);
+  background: rgba(209, 250, 229, 0.98);
 }
 
 .product-stock-badge.is-ok {

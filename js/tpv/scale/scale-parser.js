@@ -11,13 +11,17 @@ function decodeEscapes(str) {
 }
 
 function normalizeScaleConfig(input = {}) {
+  const dataBits = toInt(input.dataBits, 8);
+  const stopBits = toInt(input.stopBits, 1);
+  const baudRate = Math.max(300, toInt(input.baudRate, 9600));
+
   return {
     enabled: !!input.enabled,
     portPath: String(input.portPath || "").trim(),
 
-    baudRate: toInt(input.baudRate, 9600),
-    dataBits: toInt(input.dataBits, 8),
-    stopBits: toInt(input.stopBits, 1),
+    baudRate,
+    dataBits: dataBits === 7 ? 7 : 8,
+    stopBits: stopBits === 2 ? 2 : 1,
     parity: ["none", "even", "odd", "mark", "space"].includes(input.parity)
       ? input.parity
       : "none",
