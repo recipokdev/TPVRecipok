@@ -4105,6 +4105,13 @@ async function runBootFlow() {
     await loadProductTileResizeModeToggle?.();
     await loadScaleManualCaptureModeToggle?.();
 
+    // Arranca la báscula al iniciar TPV para no depender de abrir Opciones.
+    try {
+      await window.initScaleOptionsUI?.();
+    } catch (e) {
+      console.warn("[SCALE] init on boot failed:", e?.message || e);
+    }
+
     // 3) Datos
     await loadDataFromApi();
 
