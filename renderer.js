@@ -82,7 +82,7 @@ let PENDING_RUNTIME_UI_RESTORE = null;
 
 let lastTicket = null; // guardará el último ticket/factura creada para poder imprimirla
 
-let parkedTickets = []; // cada item: { id, createdAt, items, total, clientName, obs, fs, paid, paidAt, paidTicketCode, paidTicketId }
+let parkedTickets = []; // cada item: { id, createdAt, items, total, clientName, codcliente, obs, fs, paid, paidAt, paidTicketCode, paidTicketId }
 
 const parkedViewState = {
   search: "",
@@ -91,6 +91,7 @@ const parkedViewState = {
 let parkedCounter = 0;
 // Índice del ticket aparcado actualmente cargado en el carrito
 let currentParkedTicketIndex = null;
+let preParkedCustomerSelection = null;
 let PENDING_RUNTIME_PARKED_SYNC_KEY = "";
 let PENDING_RUNTIME_PARKED_TICKET_ID = 0;
 let showParkStockWarning = true;
@@ -398,6 +399,14 @@ const sumTotalSalesEl = document.getElementById("sumTotalSales");
 
 // Cliente actual (input del carrito)
 const cartClientInput = document.querySelector(".cart-client-input");
+const cartGlobalDiscountRow = document.getElementById("cartGlobalDiscountRow");
+const cartGlobalDiscountSummary = document.getElementById(
+  "cartGlobalDiscountSummary",
+);
+const cartGlobalDiscountBtn = document.getElementById("cartGlobalDiscountBtn");
+const cartGlobalDiscountClearBtn = document.getElementById(
+  "cartGlobalDiscountClearBtn",
+);
 
 // ===== [04] Funciones auxiliares y logging de auditoria =====
 
@@ -482,6 +491,8 @@ let REMOTE_RESERVED_BY_PRODUCT = new Map();
 
 const PARKED_TICKETS_CACHE_KEY = "tpv_parked_tickets_cache_v1";
 const PARKED_SYNC_QUEUE_KEY = "tpv_parked_sync_queue_v1";
+const PARKED_DEVICE_NODE_ID_KEY = "tpv_parked_device_node_id_v1";
+const PARKED_DEVICE_SEQ_KEY = "tpv_parked_device_seq_v1";
 const TPV_USERS_CACHE_KEY = "tpv_cachedUsers_v1";
 const TPV_USERS_CACHE_TS_KEY = "tpv_cachedUsers_ts_v1";
 const TERMINAL_AGENT_CACHE_KEY = "tpv_cachedTerminalAgent_v1";
@@ -497,6 +508,7 @@ let __parkedSyncDrainInFlight = false;
 
 let __parkedReservationsRefreshTimer = null;
 let __parkedReservationsRefreshInFlight = false;
+let __parkedBurstRefreshTimers = [];
 let __sharedCajaHealthTimer = null;
 let __sharedCajaHealthInFlight = false;
 
@@ -1268,6 +1280,7 @@ const OPTIONS_INFOBAR_SHOW_AGENT_KEY = "ui.infoBarShowAgent";
 const OPTIONS_INFOBAR_SHOW_USER_KEY = "ui.infoBarShowUser";
 const OPTIONS_INFOBAR_SHOW_CASH_KEY = "ui.infoBarShowCash";
 const OPTIONS_SCALE_MANUAL_CAPTURE_MODE_KEY = "scale.manualCaptureMode";
+const OPTIONS_CART_DISCOUNT_TOOLS_KEY = "ui.cartDiscountToolsEnabled";
 const PRODUCT_DISCOUNTS_SESSION_KEY = "tpv_productDiscountPctById_session";
 const PRODUCT_NAME_COLLATOR = new Intl.Collator("es", {
   numeric: true,
@@ -1282,6 +1295,102 @@ let enableProductStockEdition = false;
 let allowCloseWithParkedTickets = false;
 let productDiscountPctById = {};
 let productManualOrderById = {};
+let customerTariffCatalog = [];
+let customerTariffByCode = {};
+let activeCustomerTariff = null;
+let activeCustomerTariffCodcliente = "";
+let tariffsLoadedOnce = false;
+let tariffOptionsBound = false;
+let tariffCustomersCache = [];
+let tariffAssignedCustomersByCode = {};
+let tariffAssignedServerCodesByCode = {};
+let tariffEditBaselineByCode = {};
+let tariffInputKeyboardBound = false;
+
+function getUniqueTariffCustomerCodes(codes = []) {
+  return Array.from(
+    new Set(
+      (Array.isArray(codes) ? codes : [])
+        .map((x) => String(x || "").trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function buildTariffCustomersFromCodes(codes = []) {
+  const unique = getUniqueTariffCustomerCodes(codes);
+  const byCode = new Map(
+    (Array.isArray(tariffCustomersCache) ? tariffCustomersCache : []).map(
+      (c) => [String(c?.codcliente || "").trim(), c],
+    ),
+  );
+
+  return unique.map((codcliente) => {
+    const found = byCode.get(codcliente);
+    return {
+      codcliente,
+      nombre: String(found?.nombre || "").trim(),
+    };
+  });
+}
+
+function captureTariffEditBaseline(codtarifa, tariff, assignedCodes = []) {
+  const cod = String(codtarifa || "").trim();
+  if (!cod || !tariff) return;
+
+  tariffEditBaselineByCode[cod] = {
+    codtarifa: cod,
+    nombre: String(tariff?.nombre || "").trim(),
+    aplicar:
+      normalizeTariffApplyMode(tariff?.aplicar) === "coste" ? "coste" : "pvp",
+    valorx: clampDiscountPercent(parseNumericLike(tariff?.valorx, 0)),
+    valory: round2(parseNumericLike(tariff?.valory, 0)),
+    mincoste: !!tariff?.mincoste,
+    maxpvp: !!tariff?.maxpvp,
+    assignedCodes: getUniqueTariffCustomerCodes(assignedCodes),
+    searchText: "",
+  };
+}
+
+function getTariffEditBaseline(codtarifa) {
+  const cod = String(codtarifa || "").trim();
+  return tariffEditBaselineByCode[cod] || null;
+}
+
+function getTariffCustomerSearchText() {
+  const input = document.getElementById("tariffCustomerSearchInput");
+  return String(input?.value || "")
+    .trim()
+    .toLowerCase();
+}
+
+function getAssignedCustomerSetForTariff(codtarifa) {
+  const cod = String(codtarifa || "").trim();
+  const list = tariffAssignedCustomersByCode[cod] || [];
+  return new Set(
+    list.map((c) => String(c?.codcliente || "").trim()).filter(Boolean),
+  );
+}
+
+function setAssignedCustomersForTariff(codtarifa, customers = []) {
+  const cod = String(codtarifa || "").trim();
+  tariffAssignedCustomersByCode[cod] = (
+    Array.isArray(customers) ? customers : []
+  )
+    .map((c) => ({
+      codcliente: String(c?.codcliente || "").trim(),
+      nombre: String(c?.nombre || "").trim(),
+    }))
+    .filter((c) => !!c.codcliente);
+}
+
+function updateTariffCustomersSelectedCount(codtarifa) {
+  const chip = document.getElementById("tariffCustomersSelectedCount");
+  if (!chip) return;
+
+  const count = getAssignedCustomerSetForTariff(codtarifa).size;
+  chip.textContent = `${count} seleccionado${count === 1 ? "" : "s"}`;
+}
 let productTileMinSize = PRODUCT_TILE_MIN_SIZE_DEFAULT;
 let productTileResizeMode = false;
 let productsFilterStockOnly = false;
@@ -1295,6 +1404,9 @@ let infoBarShowAgent = true;
 let infoBarShowUser = true;
 let infoBarShowCash = true;
 let scaleManualCaptureMode = false;
+let cartDiscountToolsEnabled = false;
+let cartGlobalDiscountPct = 0;
+let cartDiscountToolsToggleBound = false;
 
 const productReorderDragState = {
   active: false,
@@ -1313,6 +1425,86 @@ function formatDiscountPercent(value) {
   const pct = clampDiscountPercent(value);
   if (Number.isInteger(pct)) return String(pct);
   return pct.toFixed(2).replace(/\.00$/, "").replace(/0$/, "");
+}
+
+function getCartLineDiscountPercent(item) {
+  return clampDiscountPercent(parseNumericLike(item?.cartLineDiscountPct, 0));
+}
+
+function hasLockedManualUnitPrice(item) {
+  if (!item || typeof item !== "object") return false;
+  if (!isPriceModified(item)) return false;
+  return parseBoolLike(item?.manualPriceLocksAdjustments, true);
+}
+
+function getCartGlobalDiscountPercent() {
+  if (!cartDiscountToolsEnabled) return 0;
+  return clampDiscountPercent(parseNumericLike(cartGlobalDiscountPct, 0));
+}
+
+function getEffectiveCartDiscountForLine(item) {
+  const linePct = getCartLineDiscountPercent(item);
+  if (linePct > 0) return { pct: linePct, source: "line" };
+
+  const frozenGlobalPct = clampDiscountPercent(
+    parseNumericLike(item?.cartGlobalDiscountPctApplied, 0),
+  );
+  const globalPct =
+    frozenGlobalPct > 0 ? frozenGlobalPct : getCartGlobalDiscountPercent();
+  if (globalPct > 0) return { pct: globalPct, source: "global" };
+
+  return { pct: 0, source: "" };
+}
+
+function parseNumericLike(value, fallback = 0) {
+  if (typeof value === "number" && isFinite(value)) return value;
+  const raw = String(value ?? "").trim();
+  if (!raw) return fallback;
+
+  // Accept backend/localized strings like "1,25", " 2.500,50 " or "5 €".
+  let normalized = raw.replace(/\s+/g, "").replace(/[^\d,.-]/g, "");
+  if (!normalized) return fallback;
+
+  const hasComma = normalized.includes(",");
+  const hasDot = normalized.includes(".");
+  if (hasComma && hasDot) {
+    normalized = normalized.replace(/\./g, "").replace(",", ".");
+  } else if (hasComma) {
+    normalized = normalized.replace(",", ".");
+  }
+
+  const n = Number(normalized);
+  return isFinite(n) ? n : fallback;
+}
+
+function normalizeTariffCodeKey(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  if (/^\d+$/.test(raw)) return String(Number(raw));
+  return raw;
+}
+
+function formatTariffFixedAmount(value) {
+  const n = Number(value);
+  if (!isFinite(n) || n <= 0) return "0";
+  return eur(round2(n));
+}
+
+function getTariffDiscountDisplayParts(tariff) {
+  const mode = normalizeTariffApplyMode(tariff?.aplicar);
+  const isCostMode = mode === "coste";
+  const sign = isCostMode ? "+" : "-";
+  const pct = clampDiscountPercent(parseNumericLike(tariff?.valorx, 0));
+  const fix = Math.max(0, round2(parseNumericLike(tariff?.valory, 0)));
+  const parts = [];
+  if (pct > 0) parts.push(`${sign}${formatDiscountPercent(pct)}%`);
+  if (fix > 0) parts.push(`${sign}${formatTariffFixedAmount(fix)}`);
+  return { pct, fix, parts };
+}
+
+function getTariffDiscountDisplayText(tariff, fallback = "sin descuento") {
+  const { parts } = getTariffDiscountDisplayParts(tariff);
+  return parts.length ? parts.join(" y ") : fallback;
 }
 
 function getDiscountProductId(productOrId) {
@@ -1451,6 +1643,197 @@ function buildProductWithAppliedDiscount(product) {
     price: discountedNet,
     discountPctApplied: pct,
     discountBaseNetPrice: baseNet,
+  };
+}
+
+function normalizeTariffApplyMode(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeTariffRow(row) {
+  const codtarifa = String(row?.codtarifa || "").trim();
+  if (!codtarifa) return null;
+
+  return {
+    codtarifa,
+    nombre: String(row?.nombre || `Tarifa ${codtarifa}`).trim(),
+    aplicar: normalizeTariffApplyMode(row?.aplicar),
+    valorx: parseNumericLike(row?.valorx, 0),
+    valory: parseNumericLike(row?.valory, 0),
+    mincoste: !!row?.mincoste,
+    maxpvp: !!row?.maxpvp,
+    _raw: row || null,
+  };
+}
+
+function findTariffByCode(codtarifa) {
+  const code = String(codtarifa || "").trim();
+  if (!code) return null;
+
+  if (customerTariffByCode[code]) return customerTariffByCode[code];
+
+  const codeKey = normalizeTariffCodeKey(code);
+  return (
+    customerTariffCatalog.find(
+      (item) => normalizeTariffCodeKey(item?.codtarifa) === codeKey,
+    ) || null
+  );
+}
+
+function getTariffSummaryText(tariff) {
+  if (!tariff) return "Sin tarifa seleccionada.";
+
+  const discountText = getTariffDiscountDisplayText(tariff);
+  const customers =
+    tariffAssignedCustomersByCode[String(tariff.codtarifa || "")] || [];
+
+  if (customers.length) {
+    const names = customers
+      .map((c) => String(c?.nombre || "").trim())
+      .filter(Boolean);
+
+    if (names.length <= 2) {
+      return `${tariff.nombre} · Ajuste actual: ${discountText} · Cliente${names.length > 1 ? "s" : ""} "${names.join('", "')}"`;
+    }
+
+    const preview = names.slice(0, 2).join('", "');
+    const extra = names.length - 2;
+    return `${tariff.nombre} · Ajuste actual: ${discountText} · Clientes "${preview}" y ${extra} más`;
+  }
+
+  return `${tariff.nombre} · Ajuste actual: ${discountText} · Sin cliente asignado`;
+}
+
+function getUnitGrossBase(item) {
+  const v = item?.grossPriceOverride;
+  if (typeof v === "number" && isFinite(v) && v >= 0) return v;
+  if (typeof item?.grossPrice === "number" && isFinite(item.grossPrice))
+    return item.grossPrice;
+  return Number(item?.price || 0);
+}
+
+function getUnitCostGrossBase(item) {
+  const directCandidates = [
+    item?.costGrossOverride,
+    item?.costGross,
+    item?.costeGross,
+    item?.grossCost,
+  ];
+
+  for (const v of directCandidates) {
+    const n = Number(v);
+    if (isFinite(n) && n > 0) return n;
+  }
+
+  const netCandidates = [
+    item?.costNet,
+    item?.coste,
+    item?.precioCoste,
+    item?.costPrice,
+    item?.pcoste,
+    item?.cost,
+  ];
+
+  for (const v of netCandidates) {
+    const net = Number(v);
+    if (!isFinite(net) || net <= 0) continue;
+    const taxRate = Number(item?.taxRate || 0) || 0;
+    return round2(net * (1 + taxRate / 100));
+  }
+
+  return 0;
+}
+
+function getTariffAdjustedGross(baseGross, tariff, opts = {}) {
+  const base = Number(baseGross || 0);
+  if (!isFinite(base) || base <= 0 || !tariff) {
+    return {
+      applied: false,
+      finalGross: Math.max(0, base),
+      discountPct: 0,
+      discountFixed: 0,
+      mode: "pvp",
+    };
+  }
+
+  const mode = normalizeTariffApplyMode(tariff.aplicar);
+  const pct = clampDiscountPercent(parseNumericLike(tariff.valorx, 0));
+  const fix = Math.max(0, round2(parseNumericLike(tariff.valory, 0)));
+  const costGross = Number(opts?.costGross || 0);
+  const hasCostGross = isFinite(costGross) && costGross > 0;
+
+  let finalGross = base;
+  if (mode === "coste") {
+    const costBase = hasCostGross ? costGross : base;
+    finalGross = costBase * (1 + pct / 100) + fix;
+    if (tariff.mincoste && hasCostGross) {
+      finalGross = Math.max(finalGross, costGross);
+    }
+    if (tariff.maxpvp) {
+      finalGross = Math.min(finalGross, base);
+    }
+  } else {
+    finalGross = base * (1 - pct / 100) - fix;
+    if (tariff.mincoste && hasCostGross) {
+      finalGross = Math.max(finalGross, costGross);
+    }
+    if (tariff.maxpvp) {
+      finalGross = Math.min(finalGross, base);
+    }
+  }
+
+  finalGross = Math.max(0, round2(finalGross));
+
+  const applied = round2(finalGross) !== round2(base);
+  return {
+    applied,
+    finalGross,
+    discountPct: applied ? pct : 0,
+    discountFixed: applied ? fix : 0,
+    mode: mode === "coste" ? "coste" : "pvp",
+  };
+}
+
+function getCartLinePricing(item) {
+  const baseUnitGross = Number(getUnitGrossBase(item) || 0);
+  const baseCostGross = Number(getUnitCostGrossBase(item) || 0);
+  const manualPriceLocked = hasLockedManualUnitPrice(item);
+
+  const tariffResult = getTariffAdjustedGross(
+    baseUnitGross,
+    activeCustomerTariff,
+    { costGross: baseCostGross },
+  );
+  const tariffUnitGross = tariffResult.applied
+    ? tariffResult.finalGross
+    : baseUnitGross;
+  const cartDiscount = getEffectiveCartDiscountForLine(item);
+  const cartDiscountApplied = cartDiscount.pct > 0;
+  const unitGross = cartDiscountApplied
+    ? round2(tariffUnitGross * (1 - cartDiscount.pct / 100))
+    : tariffUnitGross;
+
+  const qty = Number(item?.qty || 0) || 0;
+  const baseLineTotal = round2(baseUnitGross * qty);
+  const lineTotal = round2(unitGross * qty);
+
+  return {
+    unitGross,
+    lineTotal,
+    baseUnitGross,
+    tariffUnitGross,
+    baseLineTotal,
+    tariffApplied: !!tariffResult.applied,
+    tariffDiscountPct: tariffResult.discountPct,
+    tariffDiscountFixed: tariffResult.discountFixed,
+    tariffMode: tariffResult.mode,
+    cartDiscountApplied,
+    cartDiscountPct: cartDiscount.pct,
+    cartDiscountSource: cartDiscount.source,
+    manualPriceLocked,
+    anyPricingAdjustment: !!tariffResult.applied || cartDiscountApplied,
   };
 }
 
@@ -1986,6 +2369,49 @@ async function saveParkStockWarningToggle(enabled) {
   }
 }
 
+async function loadCartDiscountToolsToggle() {
+  const el = document.getElementById("cartDiscountToolsToggle");
+  let enabled = false;
+
+  try {
+    enabled = parseBoolLike(
+      await window.TPV_CFG?.get?.(OPTIONS_CART_DISCOUNT_TOOLS_KEY),
+      false,
+    );
+  } catch {
+    enabled = false;
+  }
+
+  cartDiscountToolsEnabled = !!enabled;
+  if (el) el.checked = cartDiscountToolsEnabled;
+
+  if (!cartDiscountToolsEnabled) {
+    cartGlobalDiscountPct = 0;
+    clearAllCartLineDiscounts();
+  }
+
+  refreshCartDiscountUi?.();
+}
+
+async function saveCartDiscountToolsToggle(enabled) {
+  cartDiscountToolsEnabled = !!enabled;
+  if (!cartDiscountToolsEnabled) {
+    cartGlobalDiscountPct = 0;
+    clearAllCartLineDiscounts();
+  }
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_CART_DISCOUNT_TOOLS_KEY,
+      cartDiscountToolsEnabled,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar toggle descuentos carrito:", e);
+  }
+
+  renderCart?.();
+}
+
 let productStockToggleBound = false;
 let productStockEditionToggleBound = false;
 let allowCloseWithParkedToggleBound = false;
@@ -2037,6 +2463,770 @@ function bindAllowCloseWithParkedToggleOnce() {
   el.addEventListener("change", async () => {
     const wanted = !!el.checked;
     await saveAllowCloseWithParkedToggle(wanted);
+  });
+}
+
+function bindCartDiscountToolsToggleOnce() {
+  if (cartDiscountToolsToggleBound) return;
+  cartDiscountToolsToggleBound = true;
+
+  const el = document.getElementById("cartDiscountToolsToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+    await saveCartDiscountToolsToggle(wanted);
+  });
+}
+
+async function loadTariffCustomersCache(opts = {}) {
+  const force = !!opts?.force;
+  if (tariffCustomersCache.length && !force) return tariffCustomersCache;
+
+  try {
+    const rows = await fetchApiResourceWithParams("clientes", {
+      "sort[codcliente]": "DESC",
+      limit: 0,
+    });
+
+    tariffCustomersCache = (Array.isArray(rows) ? rows : [])
+      .filter((c) => !c?.debaja)
+      .map((c) => ({
+        codcliente: String(c?.codcliente || "").trim(),
+        nombre: String(c?.nombre || c?.razonsocial || "").trim(),
+        codtarifa: String(c?.codtarifa || "").trim(),
+      }))
+      .filter((c) => !!c.codcliente);
+  } catch (e) {
+    console.warn("No se pudieron cargar clientes para tarifas:", e);
+    tariffCustomersCache = [];
+  }
+
+  return tariffCustomersCache;
+}
+
+function getSelectedTariffCodeInOptions() {
+  const sel = document.getElementById("tariffSelect");
+  return String(sel?.value || "").trim();
+}
+
+function renderTariffSummaryInOptions(tariff) {
+  const summary = document.getElementById("tariffSummaryText");
+  if (!summary) return;
+  summary.textContent = getTariffSummaryText(tariff);
+}
+
+function renderTariffEditorFields(tariff) {
+  const nameInp = document.getElementById("tariffNameInput");
+  const formulaSel = document.getElementById("tariffFormulaSelect");
+  const valXInp = document.getElementById("tariffValorXInput");
+  const valYInp = document.getElementById("tariffValorYInput");
+  const minToggle = document.getElementById("tariffMinCosteToggle");
+  const maxToggle = document.getElementById("tariffMaxPvpToggle");
+  const saveBtn = document.getElementById("tariffSaveAllBtn");
+  const revertBtn = document.getElementById("tariffRevertBtn");
+  const deleteBtn = document.getElementById("tariffDeleteBtn");
+
+  const disabled = !tariff;
+  if (nameInp) {
+    nameInp.disabled = disabled;
+    nameInp.value = disabled ? "" : String(tariff.nombre || "").trim();
+  }
+
+  if (formulaSel) {
+    formulaSel.disabled = disabled;
+    formulaSel.value = disabled
+      ? "pvp"
+      : normalizeTariffApplyMode(tariff.aplicar) === "coste"
+        ? "coste"
+        : "pvp";
+  }
+
+  if (valXInp) {
+    valXInp.disabled = disabled;
+    valXInp.value = disabled ? "" : String(Number(tariff.valorx || 0));
+  }
+
+  if (valYInp) {
+    valYInp.disabled = disabled;
+    valYInp.value = disabled ? "" : String(Number(tariff.valory || 0));
+  }
+
+  if (minToggle) {
+    minToggle.disabled = disabled;
+    minToggle.checked = !disabled && !!tariff.mincoste;
+  }
+
+  if (maxToggle) {
+    maxToggle.disabled = disabled;
+    maxToggle.checked = !disabled && !!tariff.maxpvp;
+  }
+
+  if (saveBtn) saveBtn.disabled = disabled;
+  if (revertBtn) revertBtn.disabled = disabled;
+  if (deleteBtn) deleteBtn.disabled = disabled;
+}
+
+function renderTariffSelectOptions(selectedCod = "") {
+  const sel = document.getElementById("tariffSelect");
+  if (!sel) return;
+
+  if (!customerTariffCatalog.length) {
+    sel.innerHTML = `<option value="">(sin tarifas)</option>`;
+    sel.disabled = true;
+    renderTariffSummaryInOptions(null);
+    renderTariffEditorFields(null);
+    return;
+  }
+
+  sel.disabled = false;
+  sel.innerHTML = customerTariffCatalog
+    .map((t) => {
+      const selected =
+        String(t.codtarifa) === String(selectedCod || "") ? "selected" : "";
+      const label = `${t.codtarifa} | ${t.nombre}`;
+      return `<option value="${escapeHtml(t.codtarifa)}" ${selected}>${escapeHtml(label)}</option>`;
+    })
+    .join("");
+
+  if (!sel.value) sel.value = String(customerTariffCatalog[0]?.codtarifa || "");
+  const selectedTariff = findTariffByCode(String(sel.value || ""));
+  renderTariffSummaryInOptions(selectedTariff);
+  renderTariffEditorFields(selectedTariff || null);
+}
+
+async function renderTariffCustomerSelectForTariff(codtarifa, opts = {}) {
+  const list = document.getElementById("tariffCustomerChecklist");
+  if (!list) return;
+
+  const cod = String(codtarifa || "").trim();
+  if (!cod) {
+    list.innerHTML = `<div class="tariff-customer-check-empty">Selecciona una tarifa.</div>`;
+    delete tariffAssignedCustomersByCode[cod];
+    updateTariffCustomersSelectedCount(cod);
+    return;
+  }
+
+  const force = !!opts?.force;
+  const keepLocalSelection = opts?.keepLocalSelection !== false;
+  const skipBaselineUpdate = !!opts?.skipBaselineUpdate;
+  const customers = await loadTariffCustomersCache({ force });
+
+  let serverAssignedCodes = tariffAssignedServerCodesByCode[cod];
+  if (!Array.isArray(serverAssignedCodes) || force) {
+    try {
+      const rows = await fetchApiResourceWithParams("clientes", {
+        "filter[codtarifa]": cod,
+        limit: 0,
+      });
+      serverAssignedCodes = (Array.isArray(rows) ? rows : [])
+        .filter((x) => !x?.debaja)
+        .map((x) => String(x?.codcliente || "").trim())
+        .filter(Boolean);
+    } catch (e) {
+      console.warn("No se pudo cargar cliente de la tarifa:", e);
+      serverAssignedCodes = customers
+        .filter((c) => String(c.codtarifa || "") === cod)
+        .map((c) => String(c.codcliente || "").trim())
+        .filter(Boolean);
+    }
+    tariffAssignedServerCodesByCode[cod] =
+      getUniqueTariffCustomerCodes(serverAssignedCodes);
+  }
+
+  const search = getTariffCustomerSearchText();
+  const localAssigned = tariffAssignedCustomersByCode[cod] || [];
+  const selectedSet = new Set(
+    keepLocalSelection && Array.isArray(localAssigned) && localAssigned.length
+      ? localAssigned
+          .map((x) => String(x?.codcliente || "").trim())
+          .filter(Boolean)
+      : tariffAssignedServerCodesByCode[cod] || [],
+  );
+  if (!customers.length) {
+    list.innerHTML = `<div class="tariff-customer-check-empty">No hay clientes disponibles.</div>`;
+    setAssignedCustomersForTariff(cod, []);
+    updateTariffCustomersSelectedCount(cod);
+    renderTariffSummaryInOptions(findTariffByCode(cod));
+    return;
+  }
+
+  const visible = customers.filter((c) => {
+    if (!search) return true;
+    const hay = `${c.codcliente} ${c.nombre}`.toLowerCase();
+    return hay.includes(search);
+  });
+
+  const markedVisible = visible.filter((c) =>
+    selectedSet.has(String(c.codcliente || "").trim()),
+  );
+  const unmarkedVisible = visible.filter(
+    (c) => !selectedSet.has(String(c.codcliente || "").trim()),
+  );
+
+  const renderCustomerRow = (c) => {
+    const cc = String(c.codcliente || "").trim();
+    const label = `${c.codcliente} | ${c.nombre || "—"}`;
+    const checked = selectedSet.has(cc) ? "checked" : "";
+    return `<label class="tariff-customer-check-item"><input type="checkbox" data-role="tariff-customer-check" data-codcliente="${escapeHtml(cc)}" ${checked} /><span>${escapeHtml(label)}</span></label>`;
+  };
+
+  if (!visible.length) {
+    list.innerHTML = `<div class="tariff-customer-check-empty">Sin resultados para la búsqueda.</div>`;
+  } else {
+    const markedHtml = markedVisible.length
+      ? markedVisible.map((c) => renderCustomerRow(c)).join("")
+      : `<div class="tariff-customer-check-empty">No hay clientes marcados en este filtro.</div>`;
+
+    const unmarkedHtml = unmarkedVisible.length
+      ? unmarkedVisible.map((c) => renderCustomerRow(c)).join("")
+      : `<div class="tariff-customer-check-empty">No hay clientes sin marcar en este filtro.</div>`;
+
+    list.innerHTML = `
+      <div class="tariff-customer-check-group-title">Clientes marcados (${markedVisible.length})</div>
+      ${markedHtml}
+      <div class="tariff-customer-check-group-title">Clientes no marcados (${unmarkedVisible.length})</div>
+      ${unmarkedHtml}
+    `;
+  }
+
+  setAssignedCustomersForTariff(
+    cod,
+    customers
+      .filter((c) => selectedSet.has(String(c.codcliente || "").trim()))
+      .map((c) => ({
+        codcliente: String(c.codcliente || "").trim(),
+        nombre: String(c.nombre || "").trim(),
+      })),
+  );
+
+  updateTariffCustomersSelectedCount(cod);
+
+  if (!skipBaselineUpdate) {
+    const tariff = findTariffByCode(cod);
+    if (!getTariffEditBaseline(cod) || force) {
+      captureTariffEditBaseline(
+        cod,
+        tariff,
+        tariffAssignedServerCodesByCode[cod],
+      );
+    }
+  }
+
+  renderTariffSummaryInOptions(findTariffByCode(cod));
+}
+
+async function loadTariffManagerOptionsData(opts = {}) {
+  const force = !!opts?.force;
+  const prev = getSelectedTariffCodeInOptions();
+
+  try {
+    await ensureCustomerTariffsLoaded({ force });
+  } catch (e) {
+    console.warn("No se pudieron cargar tarifas:", e);
+  }
+
+  renderTariffSelectOptions(prev);
+
+  const codtarifa = getSelectedTariffCodeInOptions();
+  await renderTariffCustomerSelectForTariff(codtarifa, { force });
+}
+
+async function updateClienteCodtarifa(codcliente, codtarifa) {
+  const cod = String(codcliente || "").trim();
+  if (!cod) throw new Error("Cliente inválido.");
+
+  const payload = {
+    codtarifa: String(codtarifa || "").trim(),
+  };
+
+  try {
+    await apiWrite(`clientes/${encodeURIComponent(cod)}`, "PATCH", payload);
+    return;
+  } catch {
+    await apiWrite(`clientes/${encodeURIComponent(cod)}`, "PUT", payload);
+  }
+}
+
+async function updateTarifaByCode(codtarifa, payload) {
+  const cod = String(codtarifa || "").trim();
+  if (!cod) throw new Error("Tarifa inválida.");
+
+  try {
+    await apiWrite(`tarifas/${encodeURIComponent(cod)}`, "PATCH", payload);
+    return;
+  } catch {
+    await apiWrite(`tarifas/${encodeURIComponent(cod)}`, "PUT", payload);
+  }
+}
+
+function buildTariffPayloadFromOptionsForm(opts = {}) {
+  const includeName = opts?.includeName !== false;
+  const nameInp = document.getElementById("tariffNameInput");
+  const formulaSel = document.getElementById("tariffFormulaSelect");
+  const valXInp = document.getElementById("tariffValorXInput");
+  const valYInp = document.getElementById("tariffValorYInput");
+  const minToggle = document.getElementById("tariffMinCosteToggle");
+  const maxToggle = document.getElementById("tariffMaxPvpToggle");
+
+  const payload = {
+    aplicar:
+      normalizeTariffApplyMode(formulaSel?.value) === "coste" ? "coste" : "pvp",
+    valorx: clampDiscountPercent(parseNumericLike(valXInp?.value, 0)),
+    valory: round2(parseNumericLike(valYInp?.value, 0) || 0),
+    mincoste: !!minToggle?.checked,
+    maxpvp: !!maxToggle?.checked,
+  };
+
+  if (includeName) {
+    payload.nombre = String(nameInp?.value || "").trim();
+  }
+
+  return payload;
+}
+
+async function createTariffFromOptions() {
+  const input = document.getElementById("tariffCreateNameInput");
+  const btn = document.getElementById("tariffCreateBtn");
+  const name = String(input?.value || "").trim();
+
+  if (!name) {
+    toast("Escribe un nombre para la nueva tarifa.", "warn", "Tarifas");
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  try {
+    const payload = {
+      nombre: name,
+      ...buildTariffPayloadFromOptionsForm({ includeName: false }),
+    };
+
+    await apiWrite("tarifas", "POST", payload);
+    await loadTariffManagerOptionsData({ force: true });
+
+    const found = customerTariffCatalog.find(
+      (t) =>
+        String(t.nombre || "")
+          .trim()
+          .toLowerCase() === name.toLowerCase(),
+    );
+
+    const tariffSel = document.getElementById("tariffSelect");
+    if (tariffSel && found?.codtarifa) {
+      tariffSel.value = String(found.codtarifa);
+      tariffSel.dispatchEvent(new Event("change"));
+    }
+
+    if (input) input.value = "";
+    toast("Tarifa creada correctamente.", "ok", "Tarifas");
+  } catch (e) {
+    toast("No se pudo crear la tarifa: " + (e?.message || e), "err", "Tarifas");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function saveTariffAndAssignmentFromOptions() {
+  const saveBtn = document.getElementById("tariffSaveAllBtn");
+  const codtarifa = getSelectedTariffCodeInOptions();
+  const targetCustomers =
+    tariffAssignedCustomersByCode[String(codtarifa || "")] || [];
+  const targetCodes = new Set(
+    targetCustomers
+      .map((c) => String(c?.codcliente || "").trim())
+      .filter(Boolean),
+  );
+
+  if (!codtarifa) {
+    toast("Selecciona una tarifa válida.", "warn", "Tarifas");
+    return;
+  }
+
+  const payload = buildTariffPayloadFromOptionsForm({ includeName: true });
+  if (!String(payload?.nombre || "").trim()) {
+    toast("El nombre de la tarifa no puede estar vacío.", "warn", "Tarifas");
+    return;
+  }
+
+  if (saveBtn) saveBtn.disabled = true;
+  try {
+    await updateTarifaByCode(codtarifa, payload);
+
+    const currentRows = await fetchApiResourceWithParams("clientes", {
+      "filter[codtarifa]": codtarifa,
+      limit: 0,
+    });
+
+    const currentAssigned = (Array.isArray(currentRows) ? currentRows : [])
+      .filter((c) => !c?.debaja)
+      .map((c) => String(c?.codcliente || "").trim())
+      .filter(Boolean);
+
+    for (const cod of currentAssigned) {
+      if (cod && !targetCodes.has(cod)) {
+        await updateClienteCodtarifa(cod, "");
+      }
+    }
+
+    for (const cod of targetCodes) {
+      await updateClienteCodtarifa(cod, codtarifa);
+    }
+
+    tariffCustomersCache = [];
+    delete tariffAssignedServerCodesByCode[String(codtarifa || "")];
+    await loadTariffManagerOptionsData({ force: true });
+
+    await refreshActiveCustomerTariffForSelection(
+      window.CUSTOMER_SELECTOR?.getSelectedCustomer?.() || null,
+      { forceTariffs: true, forceCustomer: true },
+    );
+
+    toast("Tarifa y cliente guardados correctamente.", "ok", "Tarifas");
+  } catch (e) {
+    toast(
+      "No se pudieron guardar los cambios de tarifa: " + (e?.message || e),
+      "err",
+      "Tarifas",
+    );
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
+async function deleteTariffByCode(codtarifa) {
+  const cod = String(codtarifa || "").trim();
+  if (!cod) throw new Error("Tarifa inválida.");
+  await apiWrite(`tarifas/${encodeURIComponent(cod)}`, "DELETE");
+}
+
+async function deleteTariffFromOptions() {
+  const codtarifa = getSelectedTariffCodeInOptions();
+  const saveBtn = document.getElementById("tariffSaveAllBtn");
+  const deleteBtn = document.getElementById("tariffDeleteBtn");
+  const revertBtn = document.getElementById("tariffRevertBtn");
+
+  if (!codtarifa) {
+    toast("Selecciona una tarifa válida.", "warn", "Tarifas");
+    return;
+  }
+
+  const tariff = findTariffByCode(codtarifa);
+  const name = String(tariff?.nombre || `Tarifa ${codtarifa}`).trim();
+  const ok = window.confirm(
+    `¿Seguro que quieres borrar la tarifa "${name}"? Se desasignará de sus clientes.`,
+  );
+  if (!ok) return;
+
+  if (saveBtn) saveBtn.disabled = true;
+  if (deleteBtn) deleteBtn.disabled = true;
+  if (revertBtn) revertBtn.disabled = true;
+
+  try {
+    const currentRows = await fetchApiResourceWithParams("clientes", {
+      "filter[codtarifa]": codtarifa,
+      limit: 0,
+    });
+
+    const currentAssigned = (Array.isArray(currentRows) ? currentRows : [])
+      .filter((c) => !c?.debaja)
+      .map((c) => String(c?.codcliente || "").trim())
+      .filter(Boolean);
+
+    for (const cod of currentAssigned) {
+      await updateClienteCodtarifa(cod, "");
+    }
+
+    await deleteTariffByCode(codtarifa);
+
+    delete tariffAssignedCustomersByCode[String(codtarifa || "")];
+    delete tariffAssignedServerCodesByCode[String(codtarifa || "")];
+    delete tariffEditBaselineByCode[String(codtarifa || "")];
+
+    tariffCustomersCache = [];
+    await loadTariffManagerOptionsData({ force: true });
+
+    await refreshActiveCustomerTariffForSelection(
+      window.CUSTOMER_SELECTOR?.getSelectedCustomer?.() || null,
+      { forceTariffs: true, forceCustomer: true },
+    );
+
+    toast("Tarifa borrada correctamente.", "ok", "Tarifas");
+  } catch (e) {
+    toast(
+      "No se pudo borrar la tarifa: " + (e?.message || e),
+      "err",
+      "Tarifas",
+    );
+  } finally {
+    const selectedTariff = findTariffByCode(getSelectedTariffCodeInOptions());
+    renderTariffEditorFields(selectedTariff || null);
+  }
+}
+
+async function revertTariffOptionsChanges() {
+  const cod = getSelectedTariffCodeInOptions();
+  if (!cod) {
+    toast("Selecciona una tarifa válida.", "warn", "Tarifas");
+    return;
+  }
+
+  const baseline = getTariffEditBaseline(cod);
+  if (!baseline) {
+    await loadTariffManagerOptionsData({ force: true });
+    toast(
+      "No había estado inicial guardado. Se recargó desde la API.",
+      "warn",
+      "Tarifas",
+    );
+    return;
+  }
+
+  const nameInp = document.getElementById("tariffNameInput");
+  const formulaSel = document.getElementById("tariffFormulaSelect");
+  const valXInp = document.getElementById("tariffValorXInput");
+  const valYInp = document.getElementById("tariffValorYInput");
+  const minToggle = document.getElementById("tariffMinCosteToggle");
+  const maxToggle = document.getElementById("tariffMaxPvpToggle");
+  const searchInp = document.getElementById("tariffCustomerSearchInput");
+
+  if (nameInp) nameInp.value = String(baseline.nombre || "");
+  if (formulaSel)
+    formulaSel.value = baseline.aplicar === "coste" ? "coste" : "pvp";
+  if (valXInp) valXInp.value = String(baseline.valorx || 0);
+  if (valYInp) valYInp.value = String(baseline.valory || 0);
+  if (minToggle) minToggle.checked = !!baseline.mincoste;
+  if (maxToggle) maxToggle.checked = !!baseline.maxpvp;
+  if (searchInp) searchInp.value = String(baseline.searchText || "");
+
+  setAssignedCustomersForTariff(
+    cod,
+    buildTariffCustomersFromCodes(baseline.assignedCodes),
+  );
+  await renderTariffCustomerSelectForTariff(cod, {
+    force: false,
+    keepLocalSelection: true,
+    skipBaselineUpdate: true,
+  });
+
+  renderTariffSummaryInOptions(findTariffByCode(cod));
+  toast("Cambios revertidos al estado inicial.", "ok", "Tarifas");
+}
+
+function bindTariffInputVirtualKeyboardsOnce() {
+  if (tariffInputKeyboardBound) return;
+  tariffInputKeyboardBound = true;
+
+  const createNameInput = document.getElementById("tariffCreateNameInput");
+  const tariffNameInput = document.getElementById("tariffNameInput");
+  const valueXInput = document.getElementById("tariffValorXInput");
+  const valueYInput = document.getElementById("tariffValorYInput");
+
+  const openTariffNumPad = (inputEl, label) => {
+    if (!inputEl) return;
+
+    const raw = String(inputEl.value || "")
+      .trim()
+      .replace(",", ".");
+    const initial = raw === "" ? 0 : Number(raw);
+
+    openNumPad(
+      Number.isFinite(initial) ? initial : 0,
+      (nextValue, meta = {}) => {
+        if (meta?.phase !== "confirm") return;
+
+        const n = Number(nextValue);
+        if (!Number.isFinite(n)) return;
+
+        inputEl.value = String(round2(n));
+        inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+        inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+      },
+      label,
+      "qty",
+      null,
+      null,
+    );
+  };
+
+  const bindPointerOpen = (inputEl, openFn) => {
+    if (!inputEl || typeof openFn !== "function") return;
+
+    inputEl.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      openFn();
+    });
+  };
+
+  bindPointerOpen(createNameInput, () => {
+    window.TPV_QWERTY?.openForInput?.(createNameInput, "text");
+  });
+
+  bindPointerOpen(tariffNameInput, () => {
+    window.TPV_QWERTY?.openForInput?.(tariffNameInput, "text");
+  });
+
+  bindPointerOpen(valueXInput, () => {
+    openTariffNumPad(valueXInput, "Tarifa %");
+  });
+
+  bindPointerOpen(valueYInput, () => {
+    openTariffNumPad(valueYInput, "Tarifa €");
+  });
+}
+
+function bindTariffOptionsOnce() {
+  if (tariffOptionsBound) return;
+  tariffOptionsBound = true;
+
+  const tariffSel = document.getElementById("tariffSelect");
+  const refreshBtn = document.getElementById("tariffRefreshBtn");
+  const createBtn = document.getElementById("tariffCreateBtn");
+  const saveAllBtn = document.getElementById("tariffSaveAllBtn");
+  const revertBtn = document.getElementById("tariffRevertBtn");
+  const deleteBtn = document.getElementById("tariffDeleteBtn");
+  const customerList = document.getElementById("tariffCustomerChecklist");
+  const customerSearchInput = document.getElementById(
+    "tariffCustomerSearchInput",
+  );
+  const customerSearchKbBtn = document.getElementById(
+    "tariffCustomerSearchKeyboardBtn",
+  );
+  const selectVisibleBtn = document.getElementById(
+    "tariffCustomersSelectVisibleBtn",
+  );
+  const clearVisibleBtn = document.getElementById(
+    "tariffCustomersClearVisibleBtn",
+  );
+
+  bindTariffInputVirtualKeyboardsOnce();
+
+  tariffSel?.addEventListener("change", async () => {
+    const customerSearchInput = document.getElementById(
+      "tariffCustomerSearchInput",
+    );
+    if (customerSearchInput) customerSearchInput.value = "";
+
+    const cod = getSelectedTariffCodeInOptions();
+    const tariff = findTariffByCode(cod);
+    renderTariffSummaryInOptions(tariff);
+    renderTariffEditorFields(tariff);
+    await renderTariffCustomerSelectForTariff(cod, { force: false });
+  });
+
+  refreshBtn?.addEventListener("click", async () => {
+    await loadTariffManagerOptionsData({ force: true });
+  });
+
+  createBtn?.addEventListener("click", async () => {
+    await createTariffFromOptions();
+  });
+
+  saveAllBtn?.addEventListener("click", async () => {
+    await saveTariffAndAssignmentFromOptions();
+  });
+
+  revertBtn?.addEventListener("click", async () => {
+    await revertTariffOptionsChanges();
+  });
+
+  deleteBtn?.addEventListener("click", async () => {
+    await deleteTariffFromOptions();
+  });
+
+  customerSearchInput?.addEventListener("input", async () => {
+    const cod = getSelectedTariffCodeInOptions();
+    await renderTariffCustomerSelectForTariff(cod, {
+      force: false,
+      keepLocalSelection: true,
+      skipBaselineUpdate: true,
+    });
+  });
+
+  customerSearchInput?.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    window.TPV_QWERTY?.openForInput?.(customerSearchInput, "text");
+  });
+
+  customerSearchKbBtn?.addEventListener("click", () => {
+    if (!customerSearchInput) return;
+    window.TPV_QWERTY?.openForInput?.(customerSearchInput, "text");
+  });
+
+  selectVisibleBtn?.addEventListener("click", async () => {
+    const cod = getSelectedTariffCodeInOptions();
+    const selected = getAssignedCustomerSetForTariff(cod);
+    const checks = Array.from(
+      customerList?.querySelectorAll(
+        'input[data-role="tariff-customer-check"]',
+      ) || [],
+    );
+
+    checks.forEach((el) => {
+      const cc = String(el.getAttribute("data-codcliente") || "").trim();
+      if (cc) selected.add(cc);
+      el.checked = true;
+    });
+
+    const customers = tariffCustomersCache || [];
+    setAssignedCustomersForTariff(
+      cod,
+      customers.filter((c) => selected.has(String(c?.codcliente || "").trim())),
+    );
+    updateTariffCustomersSelectedCount(cod);
+    renderTariffSummaryInOptions(findTariffByCode(cod));
+  });
+
+  clearVisibleBtn?.addEventListener("click", async () => {
+    const cod = getSelectedTariffCodeInOptions();
+    const selected = getAssignedCustomerSetForTariff(cod);
+    const checks = Array.from(
+      customerList?.querySelectorAll(
+        'input[data-role="tariff-customer-check"]',
+      ) || [],
+    );
+
+    checks.forEach((el) => {
+      const cc = String(el.getAttribute("data-codcliente") || "").trim();
+      if (cc) selected.delete(cc);
+      el.checked = false;
+    });
+
+    const customers = tariffCustomersCache || [];
+    setAssignedCustomersForTariff(
+      cod,
+      customers.filter((c) => selected.has(String(c?.codcliente || "").trim())),
+    );
+    updateTariffCustomersSelectedCount(cod);
+    renderTariffSummaryInOptions(findTariffByCode(cod));
+  });
+
+  customerList?.addEventListener("change", () => {
+    const checks = Array.from(
+      customerList.querySelectorAll('input[data-role="tariff-customer-check"]'),
+    );
+    const cod = getSelectedTariffCodeInOptions();
+    const customers = tariffCustomersCache || [];
+
+    setAssignedCustomersForTariff(
+      cod,
+      checks
+        .filter((el) => !!el.checked)
+        .map((el) => String(el.getAttribute("data-codcliente") || "").trim())
+        .filter(Boolean)
+        .map((cc) => {
+          const found = customers.find(
+            (c) => String(c?.codcliente || "").trim() === cc,
+          );
+          return {
+            codcliente: cc,
+            nombre: String(found?.nombre || "").trim(),
+          };
+        }),
+    );
+
+    updateTariffCustomersSelectedCount(cod);
+    renderTariffSummaryInOptions(findTariffByCode(cod));
   });
 }
 
@@ -3097,6 +4287,13 @@ function mapFsLineToTpvPrintLine(l) {
 
     // para impresión / totales
     pvpunitario: unitNet, // normalmente neto en FS (según tu API)
+    pvpsindto: parseQtyValue(l?.pvpsindto, 0),
+    pvptotal: parseQtyValue(l?.pvptotal, unitNet * qty),
+    dtopor1: parseQtyValue(l?.dtopor1, 0),
+    dtopor: parseQtyValue(l?.dtopor, 0),
+    dtopor2: parseQtyValue(l?.dtopor2, 0),
+    dtopor3: parseQtyValue(l?.dtopor3, 0),
+    dtopor4: parseQtyValue(l?.dtopor4, 0),
     codimpuesto: l?.codimpuesto || "",
 
     // opcional: idproducto si lo usas en el render
@@ -3215,6 +4412,134 @@ async function syncCustomerPrintCacheFromSelection(c) {
   } catch {}
 }
 
+function renderCartCustomerTariffBadge() {
+  const badge = document.getElementById("cartCustomerTariffBadge");
+  if (!badge) return;
+
+  if (!activeCustomerTariff) {
+    badge.classList.add("hidden");
+    badge.textContent = "Tarifa";
+    badge.removeAttribute("title");
+    return;
+  }
+
+  const discountText = getTariffDiscountDisplayText(activeCustomerTariff);
+  badge.textContent = `Tarifa: ${discountText}`;
+  badge.title = `${activeCustomerTariff.nombre} (${discountText})`;
+  badge.classList.remove("hidden");
+}
+
+function setActiveCustomerTariffState(tariff, codcliente) {
+  const nextTariffCod = String(tariff?.codtarifa || "").trim();
+  const nextCustomerCod = String(codcliente || "").trim();
+  const prevTariffCod = String(activeCustomerTariff?.codtarifa || "").trim();
+
+  const changed =
+    nextTariffCod !== prevTariffCod ||
+    nextCustomerCod !== String(activeCustomerTariffCodcliente || "").trim();
+
+  activeCustomerTariff = tariff || null;
+  activeCustomerTariffCodcliente = nextCustomerCod;
+
+  renderCartCustomerTariffBadge();
+  if (changed) renderCart?.();
+}
+
+async function ensureCustomerTariffsLoaded(opts = {}) {
+  const force = !!opts?.force;
+  if (tariffsLoadedOnce && !force) return customerTariffCatalog;
+
+  const rows = await fetchApiResourceWithParams("tarifas", { limit: 0 });
+  const list = (Array.isArray(rows) ? rows : [])
+    .map((row) => normalizeTariffRow(row))
+    .filter(Boolean)
+    .sort((a, b) => Number(a.codtarifa) - Number(b.codtarifa));
+
+  customerTariffCatalog = list;
+  customerTariffByCode = list.reduce((acc, item) => {
+    acc[item.codtarifa] = item;
+    return acc;
+  }, {});
+  tariffsLoadedOnce = true;
+
+  return customerTariffCatalog;
+}
+
+function getCustomerFromSelectorByCod(codcliente) {
+  const cod = String(codcliente || "").trim();
+  if (!cod) return null;
+
+  const list =
+    typeof window.CUSTOMER_SELECTOR?.listCustomers === "function"
+      ? window.CUSTOMER_SELECTOR.listCustomers()
+      : [];
+
+  if (!Array.isArray(list) || !list.length) return null;
+
+  return (
+    list.find((item) => String(item?.codcliente || "").trim() === cod) || null
+  );
+}
+
+async function resolveCustomerTariffForCodcliente(codcliente, opts = {}) {
+  const cod = String(codcliente || "").trim();
+  if (!cod || cod === "1") return null;
+
+  const forceTariffs = !!opts?.forceTariffs;
+  const forceCustomer = !!opts?.forceCustomer;
+
+  let codtarifa = "";
+  const fromSelector = getCustomerFromSelectorByCod(cod);
+  if (fromSelector?._raw) {
+    codtarifa = String(fromSelector._raw.codtarifa || "").trim();
+  }
+
+  if (!codtarifa || forceCustomer) {
+    if (forceCustomer) {
+      const fresh = await refreshCustomerPrintCacheByCod(cod);
+      if (fresh) codtarifa = String(fresh?.codtarifa || "").trim();
+    }
+
+    const cli = await fetchClienteByCodcliente(cod);
+    if (!codtarifa) codtarifa = String(cli?.codtarifa || "").trim();
+  }
+
+  if (!codtarifa) return null;
+
+  await ensureCustomerTariffsLoaded({ force: forceTariffs });
+  let tariff = findTariffByCode(codtarifa);
+  if (tariff) return tariff;
+
+  // Last-chance refresh when client codtarifa exists but catalog map missed it.
+  await ensureCustomerTariffsLoaded({ force: true });
+  tariff = findTariffByCode(codtarifa);
+  return tariff || null;
+}
+
+async function refreshActiveCustomerTariffForSelection(c, opts = {}) {
+  const cod = String(
+    c?.codcliente ||
+      window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() ||
+      "",
+  ).trim();
+
+  if (!cod || cod === "1") {
+    setActiveCustomerTariffState(null, cod || "1");
+    return;
+  }
+
+  try {
+    const tariff = await resolveCustomerTariffForCodcliente(cod, {
+      forceTariffs: !!opts?.forceTariffs,
+      forceCustomer: !!opts?.forceCustomer,
+    });
+    setActiveCustomerTariffState(tariff, cod);
+  } catch (e) {
+    console.warn("No se pudo resolver tarifa del cliente:", e?.message || e);
+    setActiveCustomerTariffState(null, cod);
+  }
+}
+
 function renderSelectedCustomerInCartHeader(c) {
   const input = document.getElementById("cartCustomerInput");
   const btnClear = document.getElementById("cartCustomerClear");
@@ -3227,6 +4552,7 @@ function renderSelectedCustomerInCartHeader(c) {
   if (btnClear) btnClear.style.display = isDefault ? "none" : "";
 
   syncCustomerPrintCacheFromSelection(c).catch(() => {});
+  refreshActiveCustomerTariffForSelection(c).catch(() => {});
 }
 
 function bindCartCustomerUiEvents() {
@@ -3301,6 +4627,16 @@ async function initCustomerSelectorOnce() {
   // ✅ si ya hay terminal seleccionado, aplicar default YA
   if (currentTerminal?.id) {
     await applyTerminalDefaultCustomer();
+  }
+
+  if (
+    currentParkedTicketIndex != null &&
+    Array.isArray(parkedTickets) &&
+    parkedTickets[currentParkedTicketIndex]
+  ) {
+    applyCustomerSelectionForParkedTicket(
+      parkedTickets[currentParkedTicketIndex],
+    );
   }
 }
 
@@ -4095,6 +5431,7 @@ async function runBootFlow() {
     await loadProductStockToggle?.();
     await loadProductStockEditionToggle?.();
     await loadAllowCloseWithParkedToggle?.();
+    await loadCartDiscountToolsToggle?.();
     await loadParkStockWarningToggle?.();
     await loadProductDiscountConfig?.();
     await loadProductManualOrderConfig?.();
@@ -4297,7 +5634,7 @@ function syncCashClosedUiState() {
 
   const pendingCount = (
     Array.isArray(parkedTickets) ? parkedTickets : []
-  ).filter((t) => !t.paid).length;
+  ).filter((t) => !t.paid && !t?.closingInProgress).length;
   badge.textContent = String(pendingCount);
 }
 
@@ -4989,6 +6326,18 @@ function buildCartLine(product, quantity) {
   const taxRate = getTaxRateForProduct(product);
   const priceNet = product.price || 0;
   const priceGross = priceNet * (1 + taxRate / 100);
+  const costNet =
+    parseNumericLike(
+      product?.costNet ??
+        product?.coste ??
+        product?.precioCoste ??
+        product?.costPrice ??
+        product?.pcoste ??
+        product?.cost,
+      0,
+    ) || 0;
+  const costGross =
+    costNet > 0 ? round2(costNet * (1 + Number(taxRate || 0) / 100)) : 0;
 
   return {
     _lineId: makeLineId(),
@@ -5010,12 +6359,16 @@ function buildCartLine(product, quantity) {
     price: priceNet,
     taxRate,
     grossPrice: priceGross,
+    costNet,
+    costGross,
     codimpuesto: product.codimpuesto || null,
     qty: quantity,
 
     originalNetPrice: priceNet,
     originalGrossPrice: priceGross,
     grossPriceOverride: null,
+    manualPriceLocksAdjustments: false,
+    cartLineDiscountPct: 0,
     discountPctApplied: clampDiscountPercent(product.discountPctApplied || 0),
     discountBaseNetPrice: Number(product.discountBaseNetPrice || priceNet),
   };
@@ -5303,11 +6656,13 @@ function setUnitGrossOverrideSmart(item, newUnitGross) {
   if (v === original) {
     // quitar override
     item.grossPriceOverride = null;
+    item.manualPriceLocksAdjustments = false;
     // opcional: delete item.grossPriceOverride;
     return;
   }
 
   item.grossPriceOverride = v;
+  item.manualPriceLocksAdjustments = true;
 }
 
 function eur(n) {
@@ -5315,11 +6670,7 @@ function eur(n) {
 }
 
 function getUnitGross(item) {
-  const v = item?.grossPriceOverride;
-  if (typeof v === "number" && isFinite(v) && v >= 0) return v;
-  if (typeof item?.grossPrice === "number" && isFinite(item.grossPrice))
-    return item.grossPrice;
-  return Number(item?.price || 0);
+  return Number(getCartLinePricing(item).unitGross || 0);
 }
 
 function fmtQty(q) {
@@ -5387,6 +6738,9 @@ function normalizeCartLineFromSnapshot(raw) {
     "originalNetPrice",
     "originalGrossPrice",
     "grossPriceOverride",
+    "manualPriceLocksAdjustments",
+    "cartLineDiscountPct",
+    "cartGlobalDiscountPctApplied",
   ];
 
   numFields.forEach((f) => {
@@ -5458,6 +6812,7 @@ function tryResolvePendingParkedTicketByCartMatch() {
   if (idx < 0) return false;
 
   currentParkedTicketIndex = idx;
+  applyCustomerSelectionForParkedTicket(parkedTickets[idx]);
   PENDING_RUNTIME_PARKED_SYNC_KEY = "";
   PENDING_RUNTIME_PARKED_TICKET_ID = 0;
   return true;
@@ -5539,6 +6894,7 @@ function tryResolvePendingParkedTicketIndex() {
   }
 
   currentParkedTicketIndex = idx;
+  applyCustomerSelectionForParkedTicket(parkedTickets[idx]);
   PENDING_RUNTIME_PARKED_SYNC_KEY = "";
   PENDING_RUNTIME_PARKED_TICKET_ID = 0;
   return true;
@@ -5770,9 +7126,25 @@ function renderCart() {
   // ✅ UI: solo pintamos líneas NO-hijas
   const uiLines = getVisibleCartLines(cartItems);
 
+  const buildCartLineMiniLegend = (pricing) => {
+    const tags = [];
+    if (pricing?.manualPriceLocked) tags.push("Manual");
+    if (pricing?.tariffApplied) tags.push("Tarifa");
+    if (pricing?.cartDiscountApplied) {
+      tags.push(
+        pricing?.cartDiscountSource === "line"
+          ? "Dto linea (prioridad)"
+          : "Dto general",
+      );
+    }
+    if (!tags.length) return "";
+    return `<div class="cart-line-mini-legend">${tags.join(" · ")}</div>`;
+  };
+
   uiLines.forEach((item) => {
-    const unitPrice = getUnitGross(item);
-    const lineTotal = unitPrice * item.qty;
+    const pricing = getCartLinePricing(item);
+    const unitPrice = Number(pricing.unitGross || 0);
+    const lineTotal = Number(pricing.lineTotal || 0);
     total += lineTotal;
 
     const row = document.createElement("div");
@@ -5783,8 +7155,36 @@ function renderCart() {
       ? " <span class='price-mod'>MOD</span>"
       : "";
 
-    const unitTxt = eur(unitPrice) + modifiedMark;
-    const lineTxt = eur(lineTotal);
+    const pricingBadges = [];
+    if (pricing.tariffApplied) {
+      const tariffLabel =
+        pricing.tariffDiscountPct > 0 && pricing.tariffDiscountFixed > 0
+          ? `${pricing.tariffMode === "coste" ? "+" : "-"}${formatDiscountPercent(pricing.tariffDiscountPct)}% y ${pricing.tariffMode === "coste" ? "+" : "-"}${eur(pricing.tariffDiscountFixed)}`
+          : pricing.tariffDiscountPct > 0
+            ? `${pricing.tariffMode === "coste" ? "+" : "-"}${formatDiscountPercent(pricing.tariffDiscountPct)}%`
+            : pricing.tariffDiscountFixed > 0
+              ? `${pricing.tariffMode === "coste" ? "+" : "-"}${eur(pricing.tariffDiscountFixed)}`
+              : "Tarifa";
+      pricingBadges.push(
+        `<span class="cart-price-discount">${tariffLabel}</span>`,
+      );
+    }
+
+    if (pricing.cartDiscountApplied) {
+      const sourceLabel =
+        pricing.cartDiscountSource === "line" ? "Línea" : "General";
+      pricingBadges.push(
+        `<span class="cart-price-discount cart-price-discount--cart">${sourceLabel} -${formatDiscountPercent(pricing.cartDiscountPct)}%</span>`,
+      );
+    }
+
+    const unitTxt = pricing.anyPricingAdjustment
+      ? `<span class="cart-price-old">${eur(pricing.baseUnitGross)}</span><span class="cart-price-new">${eur(unitPrice)}</span>${pricingBadges.join("")}${modifiedMark}`
+      : eur(unitPrice) + modifiedMark;
+
+    const lineTxt = pricing.anyPricingAdjustment
+      ? `<span class="cart-price-old">${eur(pricing.baseLineTotal)}</span><span class="cart-price-new">${eur(lineTotal)}</span>`
+      : eur(lineTotal);
 
     // ✅ Si es pack, añadimos "Incluye: ..."
     let includesText = "";
@@ -5822,6 +7222,8 @@ function renderCart() {
             : ""
         }
 
+        ${buildCartLineMiniLegend(pricing)}
+
         <div class="cart-line-unit">${fmtQty(item.qty)} x ${unitTxt}</div>
       </div>
 
@@ -5834,9 +7236,14 @@ function renderCart() {
       </div>
 
       <div class="cart-line-total">
-        <button type="button" class="line-price-btn" data-action="price" data-lineid="${item._lineId}">
+        <button type="button" class="line-price-btn ${pricing.anyPricingAdjustment ? "has-cart-tariff" : ""}" data-action="price" data-lineid="${item._lineId}">
           ${lineTxt}
         </button>
+        ${
+          cartDiscountToolsEnabled
+            ? `<button class="line-discount-btn ${getCartLineDiscountPercent(item) > 0 ? "is-active" : ""}" data-action="line-discount" data-lineid="${item._lineId}" title="Descuento de línea">%</button>`
+            : ""
+        }
         <button class="line-delete-btn" data-lineid="${item._lineId}">✕</button>
       </div>
     `;
@@ -5880,6 +7287,7 @@ function renderCart() {
   refreshAgentGuardUI?.();
 
   if (!uiLines.length && currentParkedTicketIndex !== null) {
+    restorePreParkedCustomerSelection();
     currentParkedTicketIndex = null;
   }
 
@@ -5894,6 +7302,7 @@ function renderCart() {
 
   refreshParkButtonUI();
   refreshParkedEditingBanner();
+  refreshCartDiscountUi();
 }
 
 const LOGIN_TOKEN_KEY = "tpv_login_token";
@@ -6792,6 +8201,8 @@ const numPadOverlay = document.getElementById("numPadOverlay");
 const numPadEl = numPadOverlay?.querySelector(".num-pad");
 const numPadDisplay = document.getElementById("numPadDisplay");
 const numPadProductName = document.getElementById("numPadProductName");
+const numPadPricePreview = document.getElementById("numPadPricePreview");
+const numPadTopDiscountPct = document.getElementById("numPadTopDiscountPct");
 let numPadCurrentValue = "";
 let numPadOnConfirm = null;
 let numPadVisible = false;
@@ -6802,6 +8213,8 @@ let numPadTargetItemId = null;
 let numPadDefaultValue = "0";
 let numPadLiveValue = null;
 let numPadInitialValue = 0;
+let numPadPricePreviewEnabled = true;
+let numPadPricePreviewTopDiscountText = "";
 
 // Función común para cerrar overlays de teclados al hacer clic fuera
 function handleOverlayOutsideClick(e, padSelector, closeFn) {
@@ -7386,6 +8799,118 @@ function formatPrice2(v) {
   return (Math.round(n * 100) / 100).toFixed(2);
 }
 
+function hideNumPadPricePreview() {
+  if (!numPadPricePreview) return;
+  numPadPricePreview.classList.add("hidden");
+  numPadPricePreview.innerHTML = "";
+  numPadPricePreviewTopDiscountText = "";
+  if (numPadTopDiscountPct) {
+    numPadTopDiscountPct.classList.add("hidden");
+    numPadTopDiscountPct.textContent = "";
+  }
+}
+
+function buildNumPadPricePreviewHtml() {
+  numPadPricePreviewTopDiscountText = "";
+  if (numPadMode !== "price" || !numPadPricePreviewEnabled) return "";
+
+  const item = cart.find((c) => c._lineId === numPadTargetItemId);
+  if (!item) return "";
+
+  const nextUnitGross = evaluateNumPadCurrentValue({ silent: true });
+  if (nextUnitGross == null) return "";
+
+  const qty = Math.max(0, Number(item?.qty || 0) || 0);
+  const currentUnitGross = round2(Number(getUnitGross(item) || 0));
+  const currentLineGross = round2(currentUnitGross * qty);
+
+  const previewItem = { ...item, grossPriceOverride: round2(nextUnitGross) };
+  const previewPricing = getCartLinePricing(previewItem);
+  const previewUnitGross = round2(Number(previewPricing?.unitGross || 0));
+  const previewBaseUnitGross = round2(
+    Number(previewPricing?.baseUnitGross || previewUnitGross),
+  );
+  const previewLineGross = round2(Number(previewPricing?.lineTotal || 0));
+  const previewBaseLineGross = round2(
+    Number(previewPricing?.baseLineTotal || 0),
+  );
+
+  const hasPreviewDiscount = previewBaseUnitGross > previewUnitGross + 0.0001;
+  const discountPctRawDerived =
+    hasPreviewDiscount && previewBaseUnitGross > 0
+      ? ((previewBaseUnitGross - previewUnitGross) / previewBaseUnitGross) * 100
+      : 0;
+
+  let preferredPct = 0;
+  if (previewPricing?.cartDiscountApplied) {
+    preferredPct = clampDiscountPercent(previewPricing?.cartDiscountPct);
+  } else if (
+    previewPricing?.tariffApplied &&
+    Number(previewPricing?.tariffDiscountFixed || 0) <= 0
+  ) {
+    preferredPct = clampDiscountPercent(previewPricing?.tariffDiscountPct);
+  } else {
+    preferredPct = Math.max(0, discountPctRawDerived);
+  }
+  const discountPctDisplay =
+    preferredPct > 0.0001 ? Math.round(preferredPct * 10) / 10 : 0;
+
+  let html = "";
+
+  if (hasPreviewDiscount) {
+    if (discountPctDisplay > 0.0001) {
+      numPadPricePreviewTopDiscountText = `-${formatDiscountPercent(discountPctDisplay)}%`;
+    }
+    const unitValues = `<span class="num-pad-price-preview-old">${eur(previewBaseUnitGross)}</span><span>${eur(previewUnitGross)}</span>`;
+    html += `
+      <div class="num-pad-price-preview-row num-pad-price-preview-row--unit">
+        <span class="num-pad-price-preview-label">Unitario</span>
+        <span class="num-pad-price-preview-values">${unitValues}</span>
+      </div>
+    `;
+
+    if (qty > 1.0001) {
+      const totalValues = `<span class="num-pad-price-preview-old">${eur(previewBaseLineGross)}</span><span>${eur(previewLineGross)}</span>`;
+      html += `
+        <div class="num-pad-price-preview-row num-pad-price-preview-row--total">
+          <span class="num-pad-price-preview-label">Total x${fmtQty(qty)}</span>
+          <span class="num-pad-price-preview-values">${totalValues}</span>
+        </div>
+      `;
+    }
+  } else if (qty > 1.0001) {
+    html += `
+      <div class="num-pad-price-preview-row num-pad-price-preview-row--totalonly">
+        <span class="num-pad-price-preview-label">Total nuevo x${fmtQty(qty)}</span>
+        <span class="num-pad-price-preview-values">${eur(previewLineGross)}</span>
+      </div>
+    `;
+  }
+
+  return html;
+}
+
+function updateNumPadPricePreview() {
+  if (!numPadPricePreview) return;
+
+  const html = buildNumPadPricePreviewHtml();
+  if (!html) {
+    hideNumPadPricePreview();
+    return;
+  }
+
+  numPadPricePreview.innerHTML = html;
+  numPadPricePreview.classList.remove("hidden");
+
+  if (numPadTopDiscountPct && numPadPricePreviewTopDiscountText) {
+    numPadTopDiscountPct.textContent = numPadPricePreviewTopDiscountText;
+    numPadTopDiscountPct.classList.remove("hidden");
+  } else if (numPadTopDiscountPct) {
+    numPadTopDiscountPct.classList.add("hidden");
+    numPadTopDiscountPct.textContent = "";
+  }
+}
+
 function updateNumPadDisplay() {
   if (!numPadDisplay) return;
 
@@ -7401,8 +8926,11 @@ function updateNumPadDisplay() {
     } else {
       numPadDisplay.textContent = formatPrice2(s);
     }
+    updateNumPadPricePreview();
     return;
   }
+
+  hideNumPadPricePreview();
 
   // qty/cash (como lo tenías)
   numPadDisplay.textContent =
@@ -7475,6 +9003,7 @@ function openNumPad(
   mode = "qty",
   originalValue = null,
   targetId = null,
+  options = null,
 ) {
   numPadMode = mode;
   numPadOriginalUnitGross = originalValue;
@@ -7486,6 +9015,8 @@ function openNumPad(
   numPadOnConfirm = onConfirm;
   numPadLiveValue = null;
   numPadInitialValue = evaluateNumPadCurrentValue({ silent: true }) ?? 0;
+  numPadPricePreviewEnabled =
+    mode === "price" ? options?.showPricePreview !== false : false;
 
   if (numPadProductName) {
     numPadProductName.textContent = productName ? ` - ${productName}` : "";
@@ -7528,6 +9059,7 @@ function closeNumPad(reason = "cancel") {
   if (numPadProductName) {
     numPadProductName.textContent = "";
   }
+  hideNumPadPricePreview();
   numPadVisible = false;
   numPadOnConfirm = null;
   numPadLiveValue = null;
@@ -7873,10 +9405,11 @@ function closeQwerty(reason = "cancel") {
     if (shouldCommit) {
       qwertyTargetInput.value = qwertyCurrentValue;
     } else {
-      qwertyTargetInput.value = "";
-      qwertyCurrentValue = "";
-      qwertyCaretStart = 0;
-      qwertyCaretEnd = 0;
+      qwertyTargetInput.value = qwertyOriginalValue;
+      qwertyCurrentValue = qwertyOriginalValue;
+      const end = qwertyCurrentValue.length;
+      qwertyCaretStart = end;
+      qwertyCaretEnd = end;
     }
 
     if (qwertyTargetInput === searchInput) {
@@ -8172,6 +9705,36 @@ if (cartLinesContainer) {
       return;
     }
 
+    const lineDiscountBtn = e.target.closest('[data-action="line-discount"]');
+    if (lineDiscountBtn) {
+      if (!item) return;
+      if (!cartDiscountToolsEnabled) {
+        toast("Activa descuentos de carrito en Opciones.", "warn", "Carrito");
+        return;
+      }
+
+      const currentPct = getCartLineDiscountPercent(item);
+      const globalPct = getCartGlobalDiscountPercent();
+
+      openNumPad(
+        String(formatDiscountPercent(currentPct || globalPct || 0)),
+        (nextValue, meta = {}) => {
+          if (meta?.phase && meta.phase !== "confirm") return;
+
+          const parsed = parseNumericLike(nextValue, 0);
+          const pct = clampDiscountPercent(parsed);
+          item.cartLineDiscountPct = pct;
+          renderCart();
+        },
+        `${item.name} - descuento línea (%)`,
+        "price",
+        currentPct,
+        lineId,
+        { showPricePreview: false },
+      );
+      return;
+    }
+
     // ===== QTY (+/-/edit) =====
     const qtyBtn = e.target.closest(".qty-btn");
     if (qtyBtn) {
@@ -8247,13 +9810,34 @@ if (cartLinesContainer) {
     if (priceBtn) {
       if (!item) return;
 
-      const currentUnit = getUnitGross(item);
+      const currentOverrideRaw = item?.grossPriceOverride;
+      const hadOverride =
+        currentOverrideRaw !== null && currentOverrideRaw !== undefined;
+      const previousOverride = hadOverride ? Number(currentOverrideRaw) : null;
+
+      const editableBaseUnit = hadOverride
+        ? Number(currentOverrideRaw)
+        : Number(getOriginalUnitGross(item));
+
       const originalUnit =
         item.originalGrossPrice ?? item.grossPrice ?? item.price ?? 0;
 
       openNumPad(
-        currentUnit.toFixed(2),
-        (newUnitGross) => {
+        Number(editableBaseUnit || 0).toFixed(2),
+        (newUnitGross, meta = {}) => {
+          const phase = String(meta?.phase || "");
+
+          if (phase === "preview") return;
+
+          if (phase === "cancel") {
+            item.grossPriceOverride = previousOverride;
+            item.manualPriceLocksAdjustments = !!(
+              previousOverride !== null && previousOverride !== undefined
+            );
+            renderCart();
+            return;
+          }
+
           const v = Number(String(newUnitGross).replace(",", "."));
           if (!isFinite(v) || v < 0) return;
 
@@ -8301,6 +9885,37 @@ if (cartLinesContainer) {
     }
   });
 }
+
+cartGlobalDiscountBtn?.addEventListener("click", () => {
+  if (!cartDiscountToolsEnabled) {
+    toast("Activa descuentos de carrito en Opciones.", "warn", "Carrito");
+    return;
+  }
+
+  const current = getCartGlobalDiscountPercent();
+
+  openNumPad(
+    String(formatDiscountPercent(current || 0)),
+    (nextValue, meta = {}) => {
+      if (meta?.phase && meta.phase !== "confirm") return;
+
+      const pct = clampDiscountPercent(parseNumericLike(nextValue, 0));
+      cartGlobalDiscountPct = pct;
+      renderCart();
+    },
+    "Descuento general carrito (%)",
+    "price",
+    current,
+    null,
+  );
+});
+
+cartGlobalDiscountClearBtn?.addEventListener("click", () => {
+  if (!cartDiscountToolsEnabled) return;
+
+  cartGlobalDiscountPct = 0;
+  renderCart();
+});
 
 // ===== [06] UI base: indicador de estado =====
 function setStatusText(text) {
@@ -8362,7 +9977,7 @@ function updateParkedCountBadge() {
 
   const pendingCount = (
     Array.isArray(parkedTickets) ? parkedTickets : []
-  ).filter((t) => !t.paid).length;
+  ).filter((t) => !t.paid && !t?.closingInProgress).length;
 
   badge.textContent = String(pendingCount);
 }
@@ -8373,6 +9988,45 @@ function getCartTotal(items) {
 
     return sum + unit * (item.qty || 1);
   }, 0);
+}
+
+function clearAllCartLineDiscounts() {
+  const lines = Array.isArray(cart) ? cart : [];
+  lines.forEach((line) => {
+    if (!line || typeof line !== "object") return;
+    line.cartLineDiscountPct = 0;
+  });
+}
+
+function refreshCartDiscountUi() {
+  const enabled = !!cartDiscountToolsEnabled;
+  if (cartGlobalDiscountRow) {
+    cartGlobalDiscountRow.classList.toggle("hidden", !enabled);
+  }
+
+  if (!enabled) return;
+
+  const globalPct = getCartGlobalDiscountPercent();
+  const visibleLines = getVisibleCartLines(cart);
+  const lineCount = visibleLines.filter(
+    (line) => getCartLineDiscountPercent(line) > 0,
+  ).length;
+
+  if (cartGlobalDiscountSummary) {
+    const globalText =
+      globalPct > 0
+        ? `Descuento general: -${formatDiscountPercent(globalPct)}%`
+        : "Descuento general: sin aplicar";
+    const lineText =
+      lineCount > 0
+        ? ` · Líneas con descuento: ${lineCount}`
+        : " · Sin líneas con descuento";
+    cartGlobalDiscountSummary.textContent = `${globalText}${lineText}`;
+  }
+
+  if (cartGlobalDiscountClearBtn) {
+    cartGlobalDiscountClearBtn.disabled = globalPct <= 0 && lineCount <= 0;
+  }
 }
 
 function buildLineIdSetFromSnapshot(items) {
@@ -8462,10 +10116,16 @@ async function parkCurrentCart(name = "", obs = "") {
     return;
   }
   const total = getCartTotal(snapshot);
+  const discountSummary = buildParkedDiscountSummarySnapshot(snapshot);
 
   const clientName = cartClientInput
     ? cartClientInput.value || "Cliente"
     : "Cliente";
+  const selectedCustomerCod = String(
+    window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() ||
+      currentTerminal?.codcliente ||
+      "1",
+  ).trim();
 
   const ticketName = String(name || "").trim();
   const observation = String(obs || "").trim();
@@ -8485,7 +10145,9 @@ async function parkCurrentCart(name = "", obs = "") {
 
     existing.items = snapshot;
     existing.total = total;
+    existing.discountSummary = discountSummary;
     existing.clientName = clientName;
+    existing.codcliente = selectedCustomerCod;
     existing.name = ticketName || existing.name || `Ticket #${existing.id}`;
     existing.obs = observation;
     existing.updatedAt = new Date();
@@ -8494,8 +10156,10 @@ async function parkCurrentCart(name = "", obs = "") {
     try {
       await apiSaveParkedReservation(existing);
       await refreshRemoteParkedReservationsOnly();
+      scheduleParkedReservationsBurstRefresh("update-parked");
     } catch (e) {
       enqueueParkedSyncOperation("upsert", existing);
+      scheduleParkedReservationsBurstRefresh("queue-update-parked");
       console.warn(
         "No se pudo guardar la reserva remota al actualizar:",
         e?.message || e,
@@ -8549,16 +10213,18 @@ async function parkCurrentCart(name = "", obs = "") {
   }
 
   // ✅ CREAR ticket nuevo
-  parkedCounter += 1;
+  const nextParkedId = nextParkedTicketId();
 
   const localTicket = {
-    id: parkedCounter,
+    id: nextParkedId,
     createdAt: new Date(),
     updatedAt: null,
     items: snapshot,
     total,
+    discountSummary,
     clientName,
-    name: ticketName || `Ticket #${parkedCounter}`,
+    codcliente: selectedCustomerCod,
+    name: ticketName || `Ticket #${nextParkedId}`,
     obs: observation,
     paid: false,
     paidAt: null,
@@ -8592,8 +10258,10 @@ async function parkCurrentCart(name = "", obs = "") {
   try {
     await apiSaveParkedReservation(localTicket);
     await refreshRemoteParkedReservationsOnly();
+    scheduleParkedReservationsBurstRefresh("create-parked");
   } catch (e) {
     enqueueParkedSyncOperation("upsert", localTicket);
+    scheduleParkedReservationsBurstRefresh("queue-create-parked");
     console.warn(
       "No se pudo guardar la reserva remota al aparcar:",
       e?.message || e,
@@ -8779,6 +10447,96 @@ function parkedBuildGroupedPreview(items) {
   });
 
   return chunks.join(" | ");
+}
+
+function parkedGetDiscountSummary(items) {
+  const ticketLike =
+    items && !Array.isArray(items) && typeof items === "object" ? items : null;
+  const frozen = ticketLike?.discountSummary;
+  if (frozen && typeof frozen === "object") {
+    const base = round2(Number(frozen.baseTotal || 0));
+    const final = round2(Number(frozen.finalTotal || 0));
+    const savings = round2(Math.max(0, Number(frozen.savings || base - final)));
+    const hasDiscount = savings > 0.009 && base > final + 0.0001;
+    return {
+      hasDiscount,
+      baseTotal: base,
+      finalTotal: final,
+      savings,
+      labelsText: hasDiscount ? String(frozen.labelsText || "").trim() : "",
+    };
+  }
+
+  const sourceItems = ticketLike ? ticketLike.items : items;
+  const visibleSource = getVisibleCartLines(
+    Array.isArray(sourceItems) ? sourceItems : [],
+  );
+  if (!visibleSource.length) {
+    return {
+      hasDiscount: false,
+      baseTotal: 0,
+      finalTotal: 0,
+      savings: 0,
+      labelsText: "",
+    };
+  }
+
+  let baseTotal = 0;
+  let finalTotal = 0;
+  const labels = new Set();
+
+  visibleSource.forEach((item) => {
+    const pricing = getCartLinePricing(item);
+    const baseLine = Number(pricing?.baseLineTotal || 0);
+    const finalLine = Number(pricing?.lineTotal || 0);
+
+    baseTotal += baseLine;
+    finalTotal += finalLine;
+
+    if (baseLine <= finalLine + 0.0001) return;
+
+    if (pricing?.manualPriceLocked) {
+      labels.add("Manual");
+      return;
+    }
+
+    if (pricing?.cartDiscountApplied) {
+      labels.add(
+        pricing?.cartDiscountSource === "line" ? "Dto linea" : "Dto general",
+      );
+    }
+
+    if (pricing?.tariffApplied) {
+      labels.add("Tarifa");
+    }
+
+    if (!pricing?.cartDiscountApplied && !pricing?.tariffApplied) {
+      labels.add("Descuento");
+    }
+  });
+
+  const base = round2(baseTotal);
+  const final = round2(finalTotal);
+  const savings = round2(Math.max(0, base - final));
+
+  return {
+    hasDiscount: savings > 0.009 && base > final + 0.0001,
+    baseTotal: base,
+    finalTotal: final,
+    savings,
+    labelsText: Array.from(labels).join(" · "),
+  };
+}
+
+function buildParkedDiscountSummarySnapshot(items) {
+  const summary = parkedGetDiscountSummary(Array.isArray(items) ? items : []);
+  return {
+    hasDiscount: !!summary.hasDiscount,
+    baseTotal: round2(Number(summary.baseTotal || 0)),
+    finalTotal: round2(Number(summary.finalTotal || 0)),
+    savings: round2(Number(summary.savings || 0)),
+    labelsText: String(summary.labelsText || "").trim(),
+  };
 }
 
 function buildParkedSummaryStats(sourceTickets) {
@@ -9271,11 +11029,34 @@ function renderParkedTicketsModal() {
 
     const items = Array.isArray(t.items) ? t.items : [];
     const preview = parkedBuildGroupedPreview(items);
+    const discountSummary = parkedGetDiscountSummary(t);
+    const finalTotalValue =
+      t.total != null
+        ? round2(Number(t.total || 0))
+        : round2(Number(discountSummary.finalTotal || 0));
+    const baseTotalValue = round2(Number(discountSummary.baseTotal || 0));
+    const savingsValue = round2(Math.max(0, baseTotalValue - finalTotalValue));
+    const hasDiscountView =
+      savingsValue > 0.009 && baseTotalValue > finalTotalValue + 0.0001;
     const obs = (t.obs || "").trim();
 
     const paidBadge = t.paid
       ? `<span class="ticket-badge ticket-badge-ok">✔ COBRADO</span>`
       : `<span class="ticket-badge ticket-badge-partial">PENDIENTE</span>`;
+
+    const discountBadge = hasDiscountView
+      ? `<span class="ticket-badge ticket-badge-discount">DTO</span>`
+      : "";
+
+    const totalFinalText = `${finalTotalValue.toFixed(2)} €`;
+
+    const totalOldText = hasDiscountView
+      ? `${baseTotalValue.toFixed(2)} €`
+      : "";
+
+    const discountNote = hasDiscountView
+      ? `Ahorro ${savingsValue.toFixed(2)} €${discountSummary.labelsText ? ` · ${discountSummary.labelsText}` : ""}`
+      : "";
 
     const paidSub = t.paid
       ? `<div class="pt-items pt-items-paid">Cobrado${
@@ -9291,6 +11072,7 @@ function renderParkedTicketsModal() {
       <div class="pt-left">
         <div class="pt-title">
           ${paidBadge}
+          ${discountBadge}
           ${escapeHtml(t.name || `Ticket #${t.id}`)}
         </div>
 
@@ -9307,12 +11089,24 @@ function renderParkedTicketsModal() {
 
       <div class="pt-mid">
         <div class="pt-items">${escapeHtml(preview || "Sin productos")}</div>
+        ${
+          hasDiscountView
+            ? `<div class="pt-discount-note">${escapeHtml(discountNote)}</div>`
+            : ""
+        }
         ${paidSub}
       </div>
 
       <div class="pt-right">
         <div class="pt-right-top">
-          <div class="pt-total">${totalTexto}</div>
+          <div class="pt-total-wrap">
+            ${
+              hasDiscountView
+                ? `<div class="pt-total-old">${totalOldText}</div>`
+                : ""
+            }
+            <div class="pt-total">${totalFinalText}</div>
+          </div>
           <button type="button" class="pt-del" title="Eliminar ticket aparcado" aria-label="Eliminar">🗑</button>
         </div>
       </div>
@@ -9329,11 +11123,15 @@ function renderParkedTicketsModal() {
         );
         if (!ok) return;
 
+        let deletedRemotelySynced = false;
         try {
           await apiDeleteParkedReservation(t);
           await refreshRemoteParkedReservationsOnly();
+          scheduleParkedReservationsBurstRefresh("delete-parked");
+          deletedRemotelySynced = true;
         } catch (e) {
           enqueueParkedSyncOperation("delete", t);
+          scheduleParkedReservationsBurstRefresh("queue-delete-parked");
           console.warn("No se pudo borrar la reserva remota:", e?.message || e);
 
           if (isParkedSyncTransientError(e)) {
@@ -9362,8 +11160,10 @@ function renderParkedTicketsModal() {
           );
         }
 
-        parkedTickets.splice(realIndex, 1);
-        saveParkedTicketsCache();
+        if (!deletedRemotelySynced) {
+          parkedTickets.splice(realIndex, 1);
+          saveParkedTicketsCache();
+        }
 
         try {
           const idcaja = getCajaIdSafe();
@@ -9380,13 +11180,15 @@ function renderParkedTicketsModal() {
           );
         }
 
-        if (currentParkedTicketIndex === realIndex) {
-          currentParkedTicketIndex = null;
-        } else if (
-          currentParkedTicketIndex !== null &&
-          currentParkedTicketIndex > realIndex
-        ) {
-          currentParkedTicketIndex -= 1;
+        if (!deletedRemotelySynced) {
+          if (currentParkedTicketIndex === realIndex) {
+            currentParkedTicketIndex = null;
+          } else if (
+            currentParkedTicketIndex !== null &&
+            currentParkedTicketIndex > realIndex
+          ) {
+            currentParkedTicketIndex -= 1;
+          }
         }
 
         updateParkedCountBadge();
@@ -9422,6 +11224,89 @@ function renderParkedTicketsModal() {
   });
 }
 
+function beginParkedCheckoutLock(index) {
+  if (!Array.isArray(parkedTickets) || !parkedTickets.length) return null;
+  if (index == null || index < 0 || index >= parkedTickets.length) return null;
+
+  const ticket = parkedTickets[index];
+  if (!ticket || ticket.paid || ticket.closingInProgress) return null;
+
+  if (!String(ticket.slug || "").trim()) {
+    ticket.slug = String(getCurrentSlugForReservations() || "").trim();
+  }
+  if (!String(ticket.cajaId || "").trim()) {
+    ticket.cajaId = String(
+      ticket?.cajaId || getCajaIdSafe?.() || currentTerminal?.id || "",
+    ).trim();
+  }
+
+  ticket.closingInProgress = true;
+  ticket.closingByTerminalId = String(currentTerminal?.id || "").trim();
+  ticket.closingByTerminalName = String(currentTerminal?.name || "").trim();
+  ticket.closingByAt = new Date().toISOString();
+
+  updateParkedCountBadge?.();
+  refreshParkButtonUI?.();
+  refreshParkedEditingBanner?.();
+  if (
+    parkedTicketsOverlay &&
+    !parkedTicketsOverlay.classList.contains("hidden")
+  ) {
+    renderParkedTicketsModal?.();
+  }
+
+  syncParkedTicketClosingState(ticket, "lock");
+
+  return () => {
+    if (!ticket || ticket.paid) return;
+    ticket.closingInProgress = false;
+    ticket.closingByTerminalId = "";
+    ticket.closingByTerminalName = "";
+    ticket.closingByAt = null;
+    updateParkedCountBadge?.();
+    refreshParkButtonUI?.();
+    refreshParkedEditingBanner?.();
+    if (
+      parkedTicketsOverlay &&
+      !parkedTicketsOverlay.classList.contains("hidden")
+    ) {
+      renderParkedTicketsModal?.();
+    }
+
+    syncParkedTicketClosingState(ticket, "unlock");
+  };
+}
+
+function syncParkedTicketClosingState(ticket, reason = "") {
+  if (!ticket || ticket.paid) return;
+  if (TPV_STATE?.offline) {
+    enqueueParkedSyncOperation("upsert", ticket);
+    return;
+  }
+
+  Promise.resolve()
+    .then(() => apiSaveParkedReservation(ticket))
+    .then(() => scheduleParkedReservationsBurstRefresh(`closing-${reason}`))
+    .catch((e) => {
+      enqueueParkedSyncOperation("upsert", ticket);
+      console.warn(
+        "No se pudo sincronizar estado closingInProgress de aparcado:",
+        e?.message || e,
+      );
+      scheduleParkedReservationsBurstRefresh(`queue-closing-${reason}`);
+    });
+}
+
+function isParkedTicketLockedByAnotherTerminal(ticket) {
+  if (!ticket || !ticket.closingInProgress) return false;
+
+  const mine = String(currentTerminal?.id || "").trim();
+  const owner = String(ticket?.closingByTerminalId || "").trim();
+  if (!owner) return false;
+  if (!mine) return true;
+  return owner !== mine;
+}
+
 async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
   if (!Array.isArray(parkedTickets) || !parkedTickets.length) return false;
   if (index == null || index < 0 || index >= parkedTickets.length) return false;
@@ -9450,6 +11335,10 @@ async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
   }
 
   ticket.paid = true;
+  ticket.closingInProgress = false;
+  ticket.closingByTerminalId = "";
+  ticket.closingByTerminalName = "";
+  ticket.closingByAt = null;
   ticket.paidAt = new Date();
   ticket.paidTicketCode =
     paidInfo.codigo || paidInfo.numero || ticket.paidTicketCode || null;
@@ -9476,8 +11365,10 @@ async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
   try {
     await apiDeleteParkedReservation(ticket);
     await refreshRemoteParkedReservationsOnly();
+    scheduleParkedReservationsBurstRefresh("pay-delete-parked");
   } catch (e) {
     enqueueParkedSyncOperation("delete", ticket);
+    scheduleParkedReservationsBurstRefresh("queue-pay-delete-parked");
     console.warn(
       "No se pudo borrar la reserva remota al cobrar:",
       e?.message || e,
@@ -9571,6 +11462,116 @@ function hydrateParkedItemForCart(item) {
   };
 }
 
+function captureCurrentCustomerSelectionForParked() {
+  const selected = window.CUSTOMER_SELECTOR?.getSelectedCustomer?.() || null;
+  const cod = String(
+    selected?.codcliente ||
+      window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() ||
+      currentTerminal?.codcliente ||
+      "1",
+  ).trim();
+
+  return {
+    codcliente: cod || "1",
+    nombre: String(selected?.nombre || "").trim(),
+    isDefault: !!selected?.isDefault,
+  };
+}
+
+function applyCustomerSelectionSnapshot(snapshot) {
+  if (!snapshot || !window.CUSTOMER_SELECTOR) return false;
+
+  const defaultCod = String(currentTerminal?.codcliente || "1").trim() || "1";
+  const targetCod = String(snapshot?.codcliente || "").trim() || defaultCod;
+
+  if (snapshot?.isDefault || targetCod === defaultCod) {
+    window.CUSTOMER_SELECTOR.resetToDefault?.();
+    return true;
+  }
+
+  const customers =
+    typeof window.CUSTOMER_SELECTOR.listCustomers === "function"
+      ? window.CUSTOMER_SELECTOR.listCustomers()
+      : [];
+
+  const found = Array.isArray(customers)
+    ? customers.find((c) => String(c?.codcliente || "").trim() === targetCod)
+    : null;
+
+  const target = found || {
+    codcliente: targetCod,
+    nombre: String(snapshot?.nombre || "Cliente").trim() || "Cliente",
+  };
+
+  if (typeof window.CUSTOMER_SELECTOR.setSelected === "function") {
+    window.CUSTOMER_SELECTOR.setSelected(target);
+    return true;
+  }
+
+  return false;
+}
+
+function applyCustomerSelectionForParkedTicket(ticket) {
+  if (!ticket || !window.CUSTOMER_SELECTOR) return false;
+
+  const parkedCodcliente = String(ticket?.codcliente || "").trim();
+  const defaultCod = String(currentTerminal?.codcliente || "1").trim() || "1";
+  const customers =
+    typeof window.CUSTOMER_SELECTOR.listCustomers === "function"
+      ? window.CUSTOMER_SELECTOR.listCustomers()
+      : [];
+
+  let targetCustomer = null;
+  if (parkedCodcliente && parkedCodcliente !== defaultCod) {
+    targetCustomer = Array.isArray(customers)
+      ? customers.find(
+          (c) => String(c?.codcliente || "").trim() === parkedCodcliente,
+        )
+      : null;
+
+    if (!targetCustomer) {
+      targetCustomer = {
+        codcliente: parkedCodcliente,
+        nombre: String(ticket?.clientName || "Cliente").trim() || "Cliente",
+      };
+    }
+  } else if (!parkedCodcliente) {
+    const parkedName = String(ticket?.clientName || "")
+      .trim()
+      .toLowerCase();
+    targetCustomer = Array.isArray(customers)
+      ? customers.find(
+          (c) =>
+            String(c?.nombre || "")
+              .trim()
+              .toLowerCase() === parkedName,
+        ) || null
+      : null;
+  }
+
+  if (
+    targetCustomer &&
+    typeof window.CUSTOMER_SELECTOR.setSelected === "function"
+  ) {
+    window.CUSTOMER_SELECTOR.setSelected(targetCustomer);
+    return true;
+  }
+
+  if (parkedCodcliente === defaultCod || !targetCustomer) {
+    window.CUSTOMER_SELECTOR.resetToDefault?.();
+    return true;
+  }
+
+  return false;
+}
+
+function restorePreParkedCustomerSelection() {
+  const snapshot = preParkedCustomerSelection;
+  preParkedCustomerSelection = null;
+  if (!snapshot) return;
+  applyCustomerSelectionSnapshot(snapshot);
+}
+
 // Recuperar ticket por índice (lo usa el modal)
 function restoreParkedCartByIndex(index) {
   if (!parkedTickets || parkedTickets.length === 0) {
@@ -9592,6 +11593,12 @@ function restoreParkedCartByIndex(index) {
     );
     return;
   }
+
+  if (currentParkedTicketIndex == null) {
+    preParkedCustomerSelection = captureCurrentCustomerSelectionForParked();
+  }
+
+  applyCustomerSelectionForParkedTicket(ticket);
 
   cart = (ticket.items || []).map((i) => hydrateParkedItemForCart(i));
 
@@ -10477,6 +12484,11 @@ async function ensurePayMethodLabelsLoaded() {
 }
 
 async function getPayEditsCountForCaja(idcaja) {
+  const prefetched = arguments[1];
+  if (Array.isArray(prefetched)) {
+    return countPayChangesInFacturas(prefetched);
+  }
+
   const cid = Number(idcaja || 0);
   if (!cid) return 0;
 
@@ -11448,6 +13460,8 @@ function groupRecibosByCodpago(recibos) {
  * }
  */
 async function getFacturaPaymentBreakdown(factura) {
+  const prefetchedRecibosByFactura = arguments[1];
+
   const idfactura = Number(factura?.idfactura || 0);
   const facturaTotal = roundMoney2(factura?.total || 0);
   const facturaCodpago = normalizePayCode(factura?.codpago);
@@ -11468,11 +13482,22 @@ async function getFacturaPaymentBreakdown(factura) {
   }
 
   let recibos = [];
-  try {
-    recibos = await fetchRecibosByFactura(idfactura);
-  } catch (e) {
-    console.warn("No pude leer recibos de factura", idfactura, e?.message || e);
-    recibos = [];
+  if (
+    prefetchedRecibosByFactura &&
+    typeof prefetchedRecibosByFactura === "object"
+  ) {
+    recibos = prefetchedRecibosByFactura[String(idfactura)] || [];
+  } else {
+    try {
+      recibos = await fetchRecibosByFactura(idfactura);
+    } catch (e) {
+      console.warn(
+        "No pude leer recibos de factura",
+        idfactura,
+        e?.message || e,
+      );
+      recibos = [];
+    }
   }
 
   // Solo recibos con importe real
@@ -11510,6 +13535,17 @@ async function getFacturaPaymentBreakdown(factura) {
       },
     ],
   };
+}
+
+function buildRecibosByFacturaMap(recibos) {
+  const map = {};
+  for (const r of Array.isArray(recibos) ? recibos : []) {
+    const fid = String(r?.idfactura || "").trim();
+    if (!fid) continue;
+    if (!map[fid]) map[fid] = [];
+    map[fid].push(r);
+  }
+  return map;
 }
 
 /**
@@ -11838,10 +13874,16 @@ function buildPayMethodLabelMap(formapagos) {
 }
 
 async function hydratePaymentsByMethodForClose(idcaja) {
-  const facturas = await fetchApiResourceWithParams("facturaclientes", {
-    "filter[idcaja]": idcaja,
-    limit: 0,
-  });
+  const prefetchedFacturas = arguments[1];
+  const prefetchedRecibosByFactura = arguments[2];
+
+  const facturas =
+    Array.isArray(prefetchedFacturas) && prefetchedFacturas.length
+      ? prefetchedFacturas
+      : await fetchApiResourceWithParams("facturaclientes", {
+          "filter[idcaja]": idcaja,
+          limit: 0,
+        });
 
   const map = {};
   let totalPaymentUses = 0;
@@ -11849,7 +13891,10 @@ async function hydratePaymentsByMethodForClose(idcaja) {
   for (const f of Array.isArray(facturas) ? facturas : []) {
     if (f.tpv_venta !== true) continue;
 
-    const breakdown = await getFacturaPaymentBreakdown(f);
+    const breakdown = await getFacturaPaymentBreakdown(
+      f,
+      prefetchedRecibosByFactura,
+    );
     totalPaymentUses += Number(breakdown.paymentUses || 0);
 
     for (const line of breakdown.lines || []) {
@@ -11895,6 +13940,8 @@ async function hydratePaymentsByMethodForClose(idcaja) {
 }
 
 async function hydrateCloseTicketStatsForCaja(idcaja) {
+  const prefetchedFacturas = arguments[1];
+
   const cajaId = Number(idcaja || 0) || 0;
   if (!cajaId) {
     cashSession.numtickets = 0;
@@ -11902,10 +13949,13 @@ async function hydrateCloseTicketStatsForCaja(idcaja) {
     return { totalTickets: 0, byAgent: {} };
   }
 
-  const facturas = await fetchApiResourceWithParams("facturaclientes", {
-    "filter[idcaja]": cajaId,
-    limit: 0,
-  });
+  const facturas =
+    Array.isArray(prefetchedFacturas) && prefetchedFacturas.length
+      ? prefetchedFacturas
+      : await fetchApiResourceWithParams("facturaclientes", {
+          "filter[idcaja]": cajaId,
+          limit: 0,
+        });
 
   const validFacturas = (Array.isArray(facturas) ? facturas : []).filter(
     (f) => f.tpv_venta === true,
@@ -11944,10 +13994,16 @@ async function hydrateCloseTicketStatsForCaja(idcaja) {
 }
 
 async function buildAgentSalesSummaryForCaja(idcaja) {
-  const facturas = await fetchApiResourceWithParams("facturaclientes", {
-    "filter[idcaja]": idcaja,
-    limit: 0,
-  });
+  const prefetchedFacturas = arguments[1];
+  const prefetchedRecibosByFactura = arguments[2];
+
+  const facturas =
+    Array.isArray(prefetchedFacturas) && prefetchedFacturas.length
+      ? prefetchedFacturas
+      : await fetchApiResourceWithParams("facturaclientes", {
+          "filter[idcaja]": idcaja,
+          limit: 0,
+        });
 
   const map = {};
   const labelMap = window.__PAYMETHOD_LABELS__ || {};
@@ -11973,7 +14029,10 @@ async function buildAgentSalesSummaryForCaja(idcaja) {
     ag.total = roundMoney2(ag.total + ticketTotal);
     ag.count += 1;
 
-    const breakdown = await getFacturaPaymentBreakdown(f);
+    const breakdown = await getFacturaPaymentBreakdown(
+      f,
+      prefetchedRecibosByFactura,
+    );
     ag.paymentUses += Number(breakdown.paymentUses || 0);
 
     for (const line of breakdown.lines || []) {
@@ -12229,15 +14288,44 @@ function openCashOpenDialog(mode = "open") {
         // 3) construir resúmenes (IMPORTANTE: sin duplicar)
         const cajaId = cashSession.remoteCajaId || remoteCaja.idcaja;
 
+        const facturasCaja = await fetchApiResourceWithParams(
+          "facturaclientes",
+          {
+            "filter[idcaja]": cajaId,
+            limit: 0,
+          },
+        );
+        const facturasCajaList = Array.isArray(facturasCaja)
+          ? facturasCaja
+          : [];
+
+        const idsFacturasCaja = facturasCajaList
+          .map((f) => Number(f?.idfactura || 0))
+          .filter((n) => Number.isFinite(n) && n > 0);
+
+        const recibosCaja = idsFacturasCaja.length
+          ? await fetchRecibosByFacturasMulti(idsFacturasCaja)
+          : [];
+        const recibosByFactura = buildRecibosByFacturaMap(recibosCaja);
+
+        cashSession.closeFacturasSnapshot = facturasCajaList;
+
         // ✅ tickets reales de la caja
-        await hydrateCloseTicketStatsForCaja(cajaId);
+        await hydrateCloseTicketStatsForCaja(cajaId, facturasCajaList);
 
         // Métodos (TOTAL)
-        await hydratePaymentsByMethodForClose(cajaId);
+        await hydratePaymentsByMethodForClose(
+          cajaId,
+          facturasCajaList,
+          recibosByFactura,
+        );
 
         // Agentes + métodos por agente
-        cashSession.agentSalesSummary =
-          await buildAgentSalesSummaryForCaja(cajaId);
+        cashSession.agentSalesSummary = await buildAgentSalesSummaryForCaja(
+          cajaId,
+          facturasCajaList,
+          recibosByFactura,
+        );
 
         // 4) pintar UI en el orden correcto
         renderCashCloseTotalMeta(); // ✅ TOTAL + (Agente si solo 1)
@@ -12698,6 +14786,23 @@ async function confirmCashClosing() {
 
   const idcaja = getCajaIdSafe();
 
+  const runWithTimeout = async (promise, timeoutMs, label) => {
+    let timer = null;
+    try {
+      return await Promise.race([
+        Promise.resolve(promise),
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`${label || "Operación"} tardó demasiado`)),
+            Math.max(1000, Number(timeoutMs || 0) || 10000),
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+
   let remoteCaja = null;
   try {
     remoteCaja = idcaja
@@ -12709,8 +14814,11 @@ async function confirmCashClosing() {
 
   try {
     const report = buildCashClosePrintData(remoteCaja || {});
-    report.payEditsCount = await getPayEditsCountForCaja(idcaja);
-    await printCashCloseReport(report);
+    report.payEditsCount = await getPayEditsCountForCaja(
+      idcaja,
+      cashSession?.closeFacturasSnapshot,
+    );
+    await runWithTimeout(printCashCloseReport(report), 12000, "Impresión");
   } catch (e) {
     console.warn("No se pudo imprimir el cierre:", e?.message || e);
   }
@@ -15484,6 +17592,11 @@ function refreshOptionsUI() {
   openDrawerAlwaysToggle &&
     (openDrawerAlwaysToggle.checked = isOpenDrawerAlwaysEnabled());
 
+  const cartDiscountToggle = document.getElementById("cartDiscountToolsToggle");
+  if (cartDiscountToggle) {
+    cartDiscountToggle.checked = !!cartDiscountToolsEnabled;
+  }
+
   const stockToggle = document.getElementById("productStockToggle");
   if (stockToggle) stockToggle.checked = !!showProductStockBadge;
 
@@ -15741,6 +17854,9 @@ async function openOptions() {
   bindAllowCloseWithParkedToggleOnce();
   await loadAllowCloseWithParkedToggle();
 
+  bindCartDiscountToolsToggleOnce();
+  await loadCartDiscountToolsToggle();
+
   bindParkStockWarningToggleOnce();
   await loadParkStockWarningToggle();
 
@@ -15766,6 +17882,9 @@ async function openOptions() {
   await applyOptionsAccordionState(st);
 
   await window.initScaleOptionsUI?.();
+
+  bindTariffOptionsOnce();
+  await loadTariffManagerOptionsData({ force: false });
 
   optionsOverlay?.classList.remove("hidden");
 
@@ -16333,6 +18452,37 @@ async function createTicketInFacturaScripts(ticketPayload) {
     return { res, data, rawText };
   };
 
+  const canRetryWithoutNumero2 = (params, submit) => {
+    const n2 = String(params?.get?.("numero2") || "").trim();
+    if (!n2) return false;
+
+    // Mantener numero2 especiales de flujos internos (refund/paychg) para no romper trazabilidad.
+    if (n2.includes("|")) return false;
+
+    const status = Number(submit?.res?.status || 0);
+    if (![400, 409, 422, 500].includes(status)) return false;
+
+    const details = [
+      String(submit?.data?.message || ""),
+      typeof submit?.data?.errors === "string"
+        ? submit.data.errors
+        : JSON.stringify(submit?.data?.errors || ""),
+      String(submit?.rawText || ""),
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    return (
+      details.includes("numero2") ||
+      details.includes("duplicate") ||
+      details.includes("duplicad") ||
+      details.includes("repetid") ||
+      details.includes("ya existe") ||
+      details.includes("unique") ||
+      details.includes("constraint")
+    );
+  };
+
   let submit = await doPost(bodyParams);
 
   const isTotals422 =
@@ -16369,6 +18519,21 @@ async function createTicketInFacturaScripts(ticketPayload) {
 
       submit = await doPost(retryParams);
     }
+  }
+
+  if (!submit.res.ok && canRetryWithoutNumero2(bodyParams, submit)) {
+    const retryNoNumero2 = new URLSearchParams(bodyParams.toString());
+    retryNoNumero2.delete("numero2");
+
+    console.warn(
+      "[crearFacturaCliente] Posible conflicto de numero2. Reintentando sin numero2...",
+    );
+    console.log(
+      ">>> Enviando a crearFacturaCliente [retry-sin-numero2]:",
+      retryNoNumero2.toString(),
+    );
+
+    submit = await doPost(retryNoNumero2);
   }
 
   if (submit.res.status === 429) {
@@ -16593,6 +18758,17 @@ function getTaxRateForLine(l) {
 function getUnitGrossForPrint(l) {
   if (l && typeof l.__forceUnitGross === "number")
     return parseQtyValue(l.__forceUnitGross, 0);
+
+  // Preimpresión (snapshot carrito): calcular siempre el bruto final dinámico.
+  const hasFsMoneyShape =
+    l?.idlinea != null || typeof l?.pvpunitario !== "undefined";
+  if (!hasFsMoneyShape) {
+    try {
+      const dynamicGross = Number(getUnitGross?.(l));
+      if (isFinite(dynamicGross) && dynamicGross > 0) return dynamicGross;
+    } catch {}
+  }
+
   if (l && l.grossPriceOverride != null)
     return parseQtyValue(l.grossPriceOverride, 0);
   if (l?.grossPrice != null) return parseQtyValue(l.grossPrice, 0);
@@ -16608,6 +18784,223 @@ function getUnitGrossForPrint(l) {
   }
 
   return 0;
+}
+
+function getCatalogBaseUnitGrossForProductId(productId) {
+  const pid = Number(productId || 0);
+  if (!pid || !Array.isArray(products) || !products.length) return 0;
+
+  const product = products.find(
+    (p) => Number(getProductBaseId(p) || 0) === pid,
+  );
+  if (!product) return 0;
+
+  try {
+    const cartLike = buildCartLine(product, 1);
+    const gross = Number(cartLike?.grossPrice || cartLike?.price || 0);
+    return isFinite(gross) && gross > 0 ? gross : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function getPrintableLinePricingBreakdown(line) {
+  const qty = parseQtyValue(line?.qty ?? line?.cantidad, 0);
+  const absQty = Math.abs(qty);
+  const taxRate = getTaxRateForLine(line);
+  const taxFactor = 1 + taxRate / 100;
+
+  const finalUnitGross = parseQtyValue(getUnitGrossForPrint(line), 0);
+  let baseUnitGross = parseQtyValue(line?.__baseUnitGrossHint, NaN);
+  if (!isFinite(baseUnitGross) || baseUnitGross <= 0) {
+    baseUnitGross = finalUnitGross;
+  }
+
+  // Histórico FS: priorizar campos explícitos sin descuento / total final.
+  const totalNetNoDiscount = parseQtyValue(line?.pvpsindto, NaN);
+  const totalNetFinal = parseQtyValue(line?.pvptotal, NaN);
+  if (
+    absQty > 0 &&
+    isFinite(totalNetNoDiscount) &&
+    isFinite(totalNetFinal) &&
+    totalNetNoDiscount > totalNetFinal + 0.0001
+  ) {
+    const baseUnitNet = totalNetNoDiscount / absQty;
+    baseUnitGross = baseUnitNet * taxFactor;
+  } else {
+    const fsDiscountFields = [
+      line?.dtopor,
+      line?.dtopor1,
+      line?.dtopor2,
+      line?.dtopor3,
+      line?.dtopor4,
+    ]
+      .map((v) => parseQtyValue(v, 0))
+      .filter((v) => isFinite(v) && v > 0 && v < 100);
+
+    if (fsDiscountFields.length) {
+      const finalFactor = fsDiscountFields.reduce(
+        (acc, pct) => acc * (1 - pct / 100),
+        1,
+      );
+      if (finalFactor > 0.000001 && finalFactor < 0.999999) {
+        baseUnitGross = finalUnitGross / finalFactor;
+      }
+    }
+
+    // Carrito actual/pre-ticket: usar pricing en vivo para obtener base real.
+    if (!(baseUnitGross > finalUnitGross + 0.0001)) {
+      try {
+        const pricing = getCartLinePricing?.(line);
+        const candidate = Number(pricing?.baseUnitGross || 0);
+        if (isFinite(candidate) && candidate > 0) baseUnitGross = candidate;
+      } catch {}
+    }
+
+    if (!(baseUnitGross > finalUnitGross + 0.0001)) {
+      const catalogBase = getCatalogBaseUnitGrossForProductId(
+        line?.idproducto || line?.id || line?.baseProductId,
+      );
+      if (catalogBase > finalUnitGross + 0.0001) {
+        baseUnitGross = catalogBase;
+      }
+    }
+  }
+
+  const baseUnit = round2(baseUnitGross);
+  const finalUnit = round2(finalUnitGross);
+  const discountPerUnit = Math.max(0, round2(baseUnit - finalUnit));
+  const discountTotal = round2(discountPerUnit * absQty);
+  const hasDiscount = discountPerUnit > 0.0001;
+
+  return {
+    qty,
+    absQty,
+    baseUnitGross: baseUnit,
+    finalUnitGross: finalUnit,
+    discountPerUnit,
+    discountTotal,
+    hasDiscount,
+  };
+}
+
+function getPrintableLineDiscountType(line, pricing = null) {
+  const p = pricing || getPrintableLinePricingBreakdown(line);
+  if (!p?.hasDiscount) return "";
+
+  const hint = String(line?.__discountTypeHint || "").trim();
+  if (hint) return hint;
+
+  try {
+    const cartPricing = getCartLinePricing?.(line);
+    if (cartPricing?.manualPriceLocked) return "Manual";
+    if (cartPricing?.cartDiscountApplied) {
+      return cartPricing?.cartDiscountSource === "line"
+        ? "Dto linea"
+        : "Dto general";
+    }
+    if (cartPricing?.tariffApplied) return "Tarifa";
+  } catch {}
+
+  const fsDiscountFields = [
+    line?.dtopor,
+    line?.dtopor1,
+    line?.dtopor2,
+    line?.dtopor3,
+    line?.dtopor4,
+  ]
+    .map((v) => parseQtyValue(v, 0))
+    .filter((v) => isFinite(v) && v > 0 && v < 100);
+
+  if (fsDiscountFields.length) return "Descuento";
+  return "Descuento";
+}
+
+function calcPrintableDiscountTotal(lineas) {
+  let total = 0;
+  for (const line of Array.isArray(lineas) ? lineas : []) {
+    if (isPackChildForPrint(line)) continue;
+    const b = getPrintableLinePricingBreakdown(line);
+    total += Number(b?.discountTotal || 0);
+  }
+  return round2(total);
+}
+
+function attachPrintableDiscountHintsFromSnapshot(
+  fsMappedLines,
+  snapshotLines,
+) {
+  const fs = Array.isArray(fsMappedLines) ? fsMappedLines : [];
+  const snap = Array.isArray(snapshotLines) ? snapshotLines : [];
+  if (!fs.length || !snap.length) return fs;
+
+  const normalize = (v) =>
+    String(v || "")
+      .trim()
+      .replace(/^DEV\s*-\s*/i, "")
+      .replace(/\s+/g, " ")
+      .toUpperCase();
+
+  const available = snap
+    .map((line, idx) => ({ line, idx, used: false }))
+    .filter((x) => !isPackChildForPrint(x.line));
+
+  const out = fs.map((line) => ({ ...line }));
+
+  out.forEach((row) => {
+    const fsQty = Math.abs(parseQtyValue(row?.cantidad ?? row?.qty, 0));
+    const fsUnit = round2(Number(getUnitGrossForPrint(row) || 0));
+    const fsRef = normalize(row?.referencia);
+    const fsDesc = normalize(row?.descripcion);
+
+    let best = null;
+    let bestScore = -1;
+
+    for (const c of available) {
+      if (c.used) continue;
+      const qty = Math.abs(parseQtyValue(c.line?.qty ?? c.line?.cantidad, 0));
+      if (Math.abs(qty - fsQty) > 0.001) continue;
+
+      const unit = round2(Number(getUnitGross(c.line) || 0));
+      if (Math.abs(unit - fsUnit) > 0.02) continue;
+
+      let score = 0;
+      const snapRef = normalize(c.line?.referencia || c.line?.name);
+      const snapDesc = normalize(c.line?.descripcion || c.line?.secondaryName);
+      if (fsRef && snapRef && fsRef === snapRef) score += 2;
+      if (fsDesc && snapDesc && fsDesc === snapDesc) score += 1;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = c;
+      }
+    }
+
+    if (!best) return;
+
+    const pricing = getCartLinePricing(best.line);
+    if (
+      pricing?.anyPricingAdjustment &&
+      Number(pricing?.baseUnitGross || 0) > Number(pricing?.unitGross || 0)
+    ) {
+      row.__baseUnitGrossHint = Number(pricing.baseUnitGross || 0);
+
+      if (pricing?.manualPriceLocked) {
+        row.__discountTypeHint = "Manual";
+      } else if (pricing?.cartDiscountApplied) {
+        row.__discountTypeHint =
+          pricing?.cartDiscountSource === "line" ? "Dto linea" : "Dto general";
+      } else if (pricing?.tariffApplied) {
+        row.__discountTypeHint = "Tarifa";
+      } else {
+        row.__discountTypeHint = "Descuento";
+      }
+    }
+
+    best.used = true;
+  });
+
+  return out;
 }
 
 function calcTotalsAndTaxMap(lineas, totalsOnlyPositive) {
@@ -16760,14 +19153,10 @@ function renderItemsHtml(doc, lineas) {
   box.innerHTML = arr
     .map((l) => {
       const isChild = isPackChildForPrint(l);
+      const pricing = getPrintableLinePricingBreakdown(l);
       const qty = getQtyForPrint(l);
-
-      const unitGross =
-        l.__unitGrossOverride != null
-          ? Number(l.__unitGrossOverride || 0)
-          : l.__forceUnitGross != null
-            ? Number(l.__forceUnitGross || 0)
-            : Number(getUnitGrossForPrint(l) || 0);
+      const absQty = Math.abs(Number(pricing?.absQty || qty || 0));
+      const unitGross = Number(pricing?.finalUnitGross || 0);
 
       const lineTotal =
         l.__lineTotalOverride != null
@@ -16775,6 +19164,20 @@ function renderItemsHtml(doc, lineas) {
           : isChild
             ? 0
             : qty * unitGross;
+
+      const discountPct =
+        pricing?.hasDiscount && Number(pricing?.baseUnitGross || 0) > 0
+          ? round2(
+              ((Number(pricing.baseUnitGross || 0) -
+                Number(pricing.finalUnitGross || 0)) /
+                Number(pricing.baseUnitGross || 0)) *
+                100,
+            )
+          : 0;
+      const discountType = getPrintableLineDiscountType(l, pricing);
+      const discountLabel = discountType
+        ? `${discountType} -${formatDiscountPercent(discountPct)}%`
+        : `-${formatDiscountPercent(discountPct)}%`;
 
       const { main, desc } = pickMainAndDesc(l);
 
@@ -16797,6 +19200,11 @@ function renderItemsHtml(doc, lineas) {
             <div class="desc">${nameHtml}</div>
             <div class="ltotal">${totalHtml}</div>
           </div>
+          ${
+            !isChild && pricing?.hasDiscount
+              ? `<div class="item-sub small muted"><span class="price-old-strike">${safe(eurTicket(pricing.baseUnitGross))}</span> ${safe(eurTicket(pricing.finalUnitGross))} · ${safe(discountLabel)}</div>`
+              : ""
+          }
           ${desc ? `<div class="item-sub small muted">${safe(desc)}</div>` : ""}
         </div>
       `;
@@ -16903,6 +19311,8 @@ function eurTicket(n) {
 async function renderPayments(doc, ticket, totalToShow) {
   const map = await getFormasPagoMap();
   const pagos = Array.isArray(ticket.pagos) ? ticket.pagos : [];
+  const lineasForDiscount = Array.isArray(ticket?.lineas) ? ticket.lineas : [];
+  const discountTotal = calcPrintableDiscountTotal(lineasForDiscount);
 
   // Agrupar por descripción final (por si vienen repetidos)
   const grouped = {};
@@ -16988,22 +19398,57 @@ async function renderPayments(doc, ticket, totalToShow) {
 
   wrap.innerHTML = "";
 
-  // Total
-  const rowTotal = doc.createElement("div");
-  rowTotal.className = "row";
-  rowTotal.innerHTML = `
-    <div class="bold">Total</div>
-    <div class="bold right">${eurTicket(totalToShow)}</div>
-  `;
-  wrap.appendChild(rowTotal);
+  if (discountTotal > 0.0001) {
+    const baseTotal = round2(
+      Number(totalToShow || 0) + Number(discountTotal || 0),
+    );
+
+    const rowSubtotal = doc.createElement("div");
+    rowSubtotal.className = "row small muted";
+    rowSubtotal.innerHTML = `
+      <div>Subtotal</div>
+      <div class="right">${eurTicket(baseTotal)}</div>
+    `;
+    wrap.appendChild(rowSubtotal);
+
+    const rowDiscount = doc.createElement("div");
+    rowDiscount.className = "row small muted";
+    rowDiscount.innerHTML = `
+      <div>Descuentos aplicados</div>
+      <div class="right">-${eurTicket(discountTotal)}</div>
+    `;
+    wrap.appendChild(rowDiscount);
+
+    const rowTotal = doc.createElement("div");
+    rowTotal.className = "row";
+    rowTotal.innerHTML = `
+      <div class="bold">Total</div>
+      <div class="bold right">${eurTicket(totalToShow)}</div>
+    `;
+    wrap.appendChild(rowTotal);
+  } else {
+    const rowTotal = doc.createElement("div");
+    rowTotal.className = "row";
+    rowTotal.innerHTML = `
+      <div class="bold">Total</div>
+      <div class="bold right">${eurTicket(totalToShow)}</div>
+    `;
+    wrap.appendChild(rowTotal);
+  }
 
   // Métodos
-  Object.entries(grouped).forEach(([desc, imp]) => {
+  const paymentRows = Object.entries(grouped);
+  const singleMethodMatchesTotal =
+    paymentRows.length === 1 &&
+    Math.abs(Number(paymentRows[0]?.[1] || 0) - Number(totalToShow || 0)) <=
+      0.009;
+
+  paymentRows.forEach(([desc, imp]) => {
     const row = doc.createElement("div");
     row.className = "row small muted";
     row.innerHTML = `
       <div>${escapeHtml(desc)}</div>
-      <div class="right">${eurTicket(imp)}</div>
+      <div class="right">${singleMethodMatchesTotal ? "" : eurTicket(imp)}</div>
     `;
     wrap.appendChild(row);
   });
@@ -17135,10 +19580,11 @@ function buildEscposTicketBytes(ticket, lineas, totalToShow) {
   push("\n");
 
   for (const l of lineas || []) {
+    const pricing = getPrintableLinePricingBreakdown(l);
     const qty = getQtyForPrint(l);
     const isChild = isPackChildForPrint(l);
 
-    const unitGross = getUnitGrossForPrint(l);
+    const unitGross = Number(pricing?.finalUnitGross || 0);
     const lineGross = unitGross * qty;
 
     const { main, desc } = pickMainAndDesc(l);
@@ -17151,6 +19597,20 @@ function buildEscposTicketBytes(ticket, lineas, totalToShow) {
       // normal/parent
       push(`${qty}  ${main}\n`);
       if (desc) push(`    ${desc}\n`);
+      if (pricing?.hasDiscount) {
+        const discountPct =
+          Number(pricing?.baseUnitGross || 0) > 0
+            ? round2(
+                ((Number(pricing.baseUnitGross || 0) -
+                  Number(pricing.finalUnitGross || 0)) /
+                  Number(pricing.baseUnitGross || 0)) *
+                  100,
+              )
+            : 0;
+        push(
+          `    Desc: -${formatDiscountPercent(discountPct)}% (-${eurTicket(pricing.discountTotal)})\n`,
+        );
+      }
       push(`    ${eurTicket(lineGross)}\n`);
     }
   }
@@ -17158,6 +19618,10 @@ function buildEscposTicketBytes(ticket, lineas, totalToShow) {
   push("\n");
   hr();
   push(`TOTAL: ${eurTicket(totalToShow)}\n`);
+  const totalDiscount = calcPrintableDiscountTotal(lineas);
+  if (totalDiscount > 0.0001) {
+    push(`DESCUENTOS: -${eurTicket(totalDiscount)}\n`);
+  }
   push("\n\n");
 
   out.push(GS, 0x56, 0x42, 0x60); // cut+feed
@@ -17392,10 +19856,21 @@ async function printTicket(ticket) {
               taxRate: tax,
               __forceUnitGross: unitGross,
               recargo: Number(l.recargo || 0),
+              dtopor1: Number(l.dtopor1 || 0),
+              dtopor: Number(l.dtopor || 0),
+              dtopor2: Number(l.dtopor2 || 0),
+              dtopor3: Number(l.dtopor3 || 0),
+              dtopor4: Number(l.dtopor4 || 0),
               pvpsindto: Number(l.pvpsindto || 0),
               pvptotal: Number(l.pvptotal || 0),
             };
           });
+
+          // Si FS no trae detalle de descuento, intentar rescatarlo del snapshot local.
+          lineas = attachPrintableDiscountHintsFromSnapshot(
+            lineas,
+            Array.isArray(ticket?.lineas) ? ticket.lineas : [],
+          );
         }
       }
     } catch (e) {
@@ -18000,6 +20475,20 @@ function isProbablyNetworkError(err) {
   );
 }
 
+function isRetryableQueueSyncError(err) {
+  if (isProbablyNetworkError(err)) return true;
+
+  const msg = String(err?.message || err || "");
+  const low = msg.toLowerCase();
+
+  if (low.includes("error http 429")) return true;
+  if (low.includes("demasiadas peticiones")) return true;
+  if (/error http\s*5\d\d/i.test(msg)) return true;
+  if (low.includes("tempor") && low.includes("error")) return true;
+
+  return false;
+}
+
 function escapeHtml(str) {
   return String(str ?? "")
     .replaceAll("&", "&amp;")
@@ -18128,12 +20617,68 @@ function getParkedScopedStorageKey(baseKey) {
   return `${baseKey}::${scope}`;
 }
 
+function getParkedDeviceNodeId() {
+  const key = getParkedScopedStorageKey(PARKED_DEVICE_NODE_ID_KEY);
+
+  try {
+    const raw = Number(localStorage.getItem(key) || 0);
+    if (Number.isInteger(raw) && raw >= 1000 && raw <= 9999) {
+      return raw;
+    }
+  } catch {}
+
+  const generated = 1000 + Math.floor(Math.random() * 9000);
+  try {
+    localStorage.setItem(key, String(generated));
+  } catch {}
+
+  return generated;
+}
+
+function nextParkedTicketId() {
+  const nodeId = getParkedDeviceNodeId();
+  const seqKey = getParkedScopedStorageKey(PARKED_DEVICE_SEQ_KEY);
+
+  let seq = 0;
+  try {
+    const raw = Number(localStorage.getItem(seqKey) || 0);
+    if (Number.isInteger(raw) && raw >= 0 && raw <= 9999) {
+      seq = raw;
+    }
+  } catch {}
+
+  const usedIds = new Set(
+    (Array.isArray(parkedTickets) ? parkedTickets : [])
+      .map((t) => Number(t?.id || 0))
+      .filter((n) => Number.isFinite(n) && n > 0),
+  );
+
+  for (let i = 0; i < 10010; i += 1) {
+    seq = (seq % 9999) + 1;
+    const candidate = nodeId * 10000 + seq;
+    if (usedIds.has(candidate)) continue;
+
+    try {
+      localStorage.setItem(seqKey, String(seq));
+    } catch {}
+
+    parkedCounter = Math.max(Number(parkedCounter || 0), candidate);
+    return candidate;
+  }
+
+  const fallback = Date.now();
+  parkedCounter = Math.max(Number(parkedCounter || 0), fallback);
+  return fallback;
+}
+
 function getScopedPendingParkedTickets(list = parkedTickets) {
-  return (Array.isArray(list) ? list : []).filter((t) => !t?.paid);
+  return (Array.isArray(list) ? list : []).filter(
+    (t) => !t?.paid && !t?.closingInProgress,
+  );
 }
 
 function getScopedAllParkedTickets(list = parkedTickets) {
-  return Array.isArray(list) ? list : [];
+  return (Array.isArray(list) ? list : []).filter((t) => !t?.closingInProgress);
 }
 
 function getProductBaseId(product) {
@@ -18388,11 +20933,34 @@ function normalizeRemoteParkedTicket(raw) {
     updatedAt,
     items,
     total: Number(raw.total || 0),
+    discountSummary:
+      raw?.discountSummary && typeof raw.discountSummary === "object"
+        ? {
+            hasDiscount: !!raw.discountSummary.hasDiscount,
+            baseTotal: round2(Number(raw.discountSummary.baseTotal || 0)),
+            finalTotal: round2(Number(raw.discountSummary.finalTotal || 0)),
+            savings: round2(Number(raw.discountSummary.savings || 0)),
+            labelsText: String(raw.discountSummary.labelsText || "").trim(),
+          }
+        : null,
     clientName: String(raw.clientName || "").trim() || "Cliente",
+    codcliente:
+      String(raw.codcliente || raw.clientCodcliente || "").trim() || "",
     name:
       String(raw.ticketName || raw.name || "").trim() ||
       (id ? `Ticket #${id}` : "Ticket"),
     obs: String(raw.obs || raw.ticketObs || "").trim(),
+    closingInProgress: parseBoolLike(
+      raw?.closingInProgress ?? raw?.closing_in_progress,
+      false,
+    ),
+    closingByTerminalId: String(
+      raw?.closingByTerminalId || raw?.closing_by_terminal_id || "",
+    ).trim(),
+    closingByTerminalName: String(
+      raw?.closingByTerminalName || raw?.closing_by_terminal_name || "",
+    ).trim(),
+    closingByAt: raw?.closingByAt || raw?.closing_by_at || null,
     paid: !!raw.paid,
     paidAt: raw.paidAt ? new Date(raw.paidAt) : null,
     paidTicketCode: raw.paidTicketCode || null,
@@ -18548,6 +21116,27 @@ async function processParkedSyncQueue() {
 }
 
 function syncParkedTicketsFromRemote(list) {
+  const prevByKey = new Map(
+    (Array.isArray(parkedTickets) ? parkedTickets : []).map((t) => [
+      getParkedTicketSyncKey(t),
+      t,
+    ]),
+  );
+  const prevByIdCount = new Map();
+  (Array.isArray(parkedTickets) ? parkedTickets : []).forEach((t) => {
+    const id = Number(t?.id || 0) || 0;
+    if (!id) return;
+    prevByIdCount.set(id, Number(prevByIdCount.get(id) || 0) + 1);
+  });
+  const prevByIdUnique = new Map();
+  (Array.isArray(parkedTickets) ? parkedTickets : []).forEach((t) => {
+    const id = Number(t?.id || 0) || 0;
+    if (!id) return;
+    if (Number(prevByIdCount.get(id) || 0) === 1) {
+      prevByIdUnique.set(id, t);
+    }
+  });
+
   const prevLoadedTicket =
     currentParkedTicketIndex != null
       ? parkedTickets[currentParkedTicketIndex]
@@ -18556,6 +21145,34 @@ function syncParkedTicketsFromRemote(list) {
 
   const next = (Array.isArray(list) ? list : [])
     .map((it) => normalizeRemoteParkedTicket(it))
+    .map((t) => {
+      const key = getParkedTicketSyncKey(t);
+      const id = Number(t?.id || 0) || 0;
+      const prev = prevByKey.get(key) || prevByIdUnique.get(id) || null;
+      if (!prev) return t;
+
+      if (!String(t?.codcliente || "").trim()) {
+        t.codcliente = String(prev?.codcliente || "").trim();
+      }
+
+      if (!String(t?.clientName || "").trim()) {
+        t.clientName = String(prev?.clientName || "").trim() || "Cliente";
+      }
+
+      if (
+        (!t?.discountSummary || typeof t.discountSummary !== "object") &&
+        prev?.discountSummary &&
+        typeof prev.discountSummary === "object"
+      ) {
+        t.discountSummary = { ...prev.discountSummary };
+      }
+
+      if (!t?.paid && prev?.closingInProgress) {
+        t.closingInProgress = true;
+      }
+
+      return t;
+    })
     .filter(Boolean)
     .filter((t) => !t.paid);
 
@@ -18722,6 +21339,22 @@ async function apiSaveParkedReservation(ticket) {
     ticketName: String(ticket.name || `Ticket #${ticket.id}`),
     obs: String(ticket.obs || ""),
     clientName: String(ticket.clientName || ""),
+    codcliente: String(ticket.codcliente || "").trim(),
+    clientCodcliente: String(ticket.codcliente || "").trim(),
+    closingInProgress: !!ticket?.closingInProgress,
+    closingByTerminalId: String(ticket?.closingByTerminalId || "").trim(),
+    closingByTerminalName: String(ticket?.closingByTerminalName || "").trim(),
+    closingByAt: ticket?.closingByAt || null,
+    discountSummary:
+      ticket?.discountSummary && typeof ticket.discountSummary === "object"
+        ? {
+            hasDiscount: !!ticket.discountSummary.hasDiscount,
+            baseTotal: round2(Number(ticket.discountSummary.baseTotal || 0)),
+            finalTotal: round2(Number(ticket.discountSummary.finalTotal || 0)),
+            savings: round2(Number(ticket.discountSummary.savings || 0)),
+            labelsText: String(ticket.discountSummary.labelsText || "").trim(),
+          }
+        : null,
     total: Number(ticket.total || 0),
     terminalId: String(currentTerminal?.id || ""),
     terminalName: String(currentTerminal?.name || ""),
@@ -18750,6 +21383,14 @@ async function apiSaveParkedReservation(ticket) {
             it?.grossPriceOverride == null
               ? null
               : Number(it.grossPriceOverride),
+          manualPriceLocksAdjustments: parseBoolLike(
+            it?.manualPriceLocksAdjustments,
+            true,
+          ),
+          cartLineDiscountPct: Number(it?.cartLineDiscountPct || 0),
+          cartGlobalDiscountPctApplied: Number(
+            it?.cartGlobalDiscountPctApplied || 0,
+          ),
           imageUrl: it?.imageUrl || null,
           meta: it?.meta && typeof it.meta === "object" ? it.meta : null,
         }))
@@ -18879,6 +21520,32 @@ async function refreshStockAndReservationsOnly() {
   return true;
 }
 
+function scheduleParkedReservationsBurstRefresh(reason = "manual") {
+  if (TPV_STATE?.offline) return;
+
+  // Limpia rafagas anteriores para no acumular timers en uso intensivo.
+  (__parkedBurstRefreshTimers || []).forEach((id) => clearTimeout(id));
+  __parkedBurstRefreshTimers = [];
+
+  const runOnce = async () => {
+    if (TPV_STATE?.offline) return;
+    if (!cashSession?.open) return;
+    try {
+      await refreshRemoteParkedReservationsOnly();
+    } catch (e) {
+      console.warn(
+        `Burst refresh reservas falló (${reason}):`,
+        e?.message || e,
+      );
+    }
+  };
+
+  // inmediato + dos repeticiones cortas para converger entre 2 TPV.
+  runOnce();
+  __parkedBurstRefreshTimers.push(setTimeout(runOnce, 1200));
+  __parkedBurstRefreshTimers.push(setTimeout(runOnce, 3200));
+}
+
 function startParkedReservationsAutoRefresh() {
   stopParkedReservationsAutoRefresh();
 
@@ -18965,6 +21632,7 @@ async function onPayButtonClick() {
   let saleCommitted = false;
   let didFastAutoPrint = false;
   let fastPreApiPrintedNumber = "";
+  let releaseParkedCheckoutLock = null;
 
   try {
     if (isPayingNow) return;
@@ -19072,13 +21740,71 @@ async function onPayButtonClick() {
       ) / 100;
 
     // 2) Snapshot carrito (ANTES de enviar)
-    cartSnapshot = Array.isArray(cart) ? cart.map((i) => ({ ...i })) : [];
+    const snapshotGlobalDiscountPct = getCartGlobalDiscountPercent();
+    cartSnapshot = Array.isArray(cart)
+      ? cart.map((i) => ({
+          ...i,
+          cartGlobalDiscountPctApplied: snapshotGlobalDiscountPct,
+        }))
+      : [];
     saleLineIds = buildLineIdSetFromSnapshot(cartSnapshot);
 
-    const parkedIndexToClose =
+    let parkedIndexToClose =
       currentParkedTicketIndex !== null
         ? Number(currentParkedTicketIndex)
         : null;
+
+    const parkedTicketToClose =
+      parkedIndexToClose != null && Array.isArray(parkedTickets)
+        ? parkedTickets[parkedIndexToClose] || null
+        : null;
+    const parkedSyncKeyToClose = getParkedTicketSyncKey(parkedTicketToClose);
+    const parkedIdToClose = Number(parkedTicketToClose?.id || 0) || 0;
+
+    if (
+      parkedTicketToClose &&
+      isParkedTicketLockedByAnotherTerminal(parkedTicketToClose)
+    ) {
+      throw new Error(
+        "Ese ticket aparcado se está cobrando en otro TPV. Espera unos segundos y vuelve a intentarlo.",
+      );
+    }
+
+    releaseParkedCheckoutLock = beginParkedCheckoutLock(parkedIndexToClose);
+
+    if (parkedIndexToClose != null) {
+      await refreshRemoteParkedReservationsOnly();
+
+      let syncedIdx = -1;
+      if (parkedSyncKeyToClose) {
+        syncedIdx = (
+          Array.isArray(parkedTickets) ? parkedTickets : []
+        ).findIndex((t) => getParkedTicketSyncKey(t) === parkedSyncKeyToClose);
+      }
+      if (syncedIdx < 0 && parkedIdToClose > 0) {
+        syncedIdx = (
+          Array.isArray(parkedTickets) ? parkedTickets : []
+        ).findIndex((t) => Number(t?.id || 0) === parkedIdToClose);
+      }
+
+      if (syncedIdx < 0) {
+        throw new Error(
+          "El ticket aparcado ya no está disponible para cobrar (puede haberse cobrado o borrado en otro TPV).",
+        );
+      }
+
+      const syncedTicket = parkedTickets[syncedIdx];
+      if (!syncedTicket || syncedTicket.paid) {
+        throw new Error("El ticket aparcado ya está cobrado en otro TPV.");
+      }
+      if (isParkedTicketLockedByAnotherTerminal(syncedTicket)) {
+        throw new Error(
+          "Ese ticket aparcado se está cobrando en otro TPV. Espera unos segundos y vuelve a intentarlo.",
+        );
+      }
+
+      parkedIndexToClose = syncedIdx;
+    }
 
     // 3) Payload factura
     const ticketPayload = buildTicketPayloadFromCart();
@@ -19536,6 +22262,8 @@ async function onPayButtonClick() {
     console.error("Error al cobrar:", err);
 
     if (!saleCommitted && cartSnapshot.length) {
+      releaseParkedCheckoutLock?.();
+      releaseParkedCheckoutLock = null;
       restoreCartSnapshotWithoutDuplicates(cartSnapshot);
       renderCart();
     }
@@ -23010,9 +25738,36 @@ function buildCustomerItemsFromCart(cartArr) {
   const visible = src.filter((item) => !isPackChildLine(item));
 
   return visible.map((item) => {
-    const unitPrice = Number(getUnitGross(item) || 0);
+    const pricing = getCartLinePricing(item);
+    const unitPrice = Number(pricing?.unitGross || getUnitGross(item) || 0);
     const qty = Number(item.qty || 0);
-    const lineTotal = unitPrice * qty;
+    const lineTotal = Number(pricing?.lineTotal || unitPrice * qty);
+    const baseUnitPrice = Number(pricing?.baseUnitGross || unitPrice);
+    const baseLineTotal = Number(pricing?.baseLineTotal || lineTotal);
+    const hasDiscount = baseUnitPrice > unitPrice + 0.0001;
+
+    let discountLabel = "";
+    if (hasDiscount) {
+      if (pricing?.manualPriceLocked) {
+        discountLabel = "Manual";
+      } else if (pricing?.cartDiscountApplied) {
+        discountLabel =
+          pricing?.cartDiscountSource === "line" ? "Dto linea" : "Dto general";
+      } else if (pricing?.tariffApplied) {
+        discountLabel = "Tarifa";
+      } else {
+        discountLabel = "Descuento";
+      }
+
+      const pct =
+        baseUnitPrice > 0
+          ? round2(((baseUnitPrice - unitPrice) / baseUnitPrice) * 100)
+          : 0;
+
+      if (pct > 0.0001) {
+        discountLabel += ` -${formatDiscountPercent(pct)}%`;
+      }
+    }
 
     const baseSecondary = String(item.secondaryName || "").trim();
 
@@ -23039,6 +25794,10 @@ function buildCustomerItemsFromCart(cartArr) {
       qty,
       unitPrice,
       lineTotal,
+      baseUnitPrice,
+      baseLineTotal,
+      hasDiscount,
+      discountLabel,
       imageUrl: item.imageUrl || item.imgUrl || null,
       modified: !!isPriceModified?.(item),
     };
@@ -25153,6 +27912,71 @@ function lineGrossUnit(l) {
   return net * (1 + tax / 100);
 }
 
+function getRefundLinePricingBreakdown(l) {
+  const soldQty = Math.abs(Number(l?.cantidad || 0)) || 1;
+  const tax = Number(lineTaxRate(l) || 0);
+  const finalUnitGross = Number(lineGrossUnit(l) || 0);
+  let baseUnitGross = finalUnitGross;
+
+  const totalNetNoDiscount = Number(l?.pvpsindto);
+  const totalNetFinal = Number(l?.pvptotal);
+
+  if (
+    isFinite(totalNetNoDiscount) &&
+    isFinite(totalNetFinal) &&
+    totalNetNoDiscount > totalNetFinal + 0.0001
+  ) {
+    const unitNetBase = totalNetNoDiscount / soldQty;
+    baseUnitGross = unitNetBase * (1 + tax / 100);
+  } else {
+    const fsDiscountFields = [
+      l?.dtopor,
+      l?.dtopor1,
+      l?.dtopor2,
+      l?.dtopor3,
+      l?.dtopor4,
+    ]
+      .map((v) => Number(v || 0))
+      .filter((v) => isFinite(v) && v > 0 && v < 100);
+
+    if (fsDiscountFields.length) {
+      const finalFactor = fsDiscountFields.reduce(
+        (acc, pct) => acc * (1 - pct / 100),
+        1,
+      );
+      if (finalFactor > 0.000001 && finalFactor < 0.999999) {
+        baseUnitGross = finalUnitGross / finalFactor;
+      }
+    }
+
+    if (!(baseUnitGross > finalUnitGross + 0.0001)) {
+      const catalogBase = getCatalogBaseUnitGrossForProductId(
+        l?.idproducto || l?.id || l?.baseProductId,
+      );
+      if (catalogBase > finalUnitGross + 0.0001) {
+        baseUnitGross = catalogBase;
+      }
+    }
+  }
+
+  const baseUnit = round2(baseUnitGross);
+  const finalUnit = round2(finalUnitGross);
+  const discountPerUnit = Math.max(0, round2(baseUnit - finalUnit));
+  const hasDiscount = discountPerUnit > 0.0001;
+  const discountPct =
+    hasDiscount && baseUnit > 0
+      ? round2(((baseUnit - finalUnit) / baseUnit) * 100)
+      : 0;
+
+  return {
+    baseUnitGross: baseUnit,
+    finalUnitGross: finalUnit,
+    discountPerUnit,
+    discountPct,
+    hasDiscount,
+  };
+}
+
 let refundState = {
   factura: null,
   lineas: [],
@@ -25231,39 +28055,22 @@ function renderRefundLines() {
     return "Producto";
   };
 
-  const buildOriginalPaymentInfoInline = () => {
-    const recibos = Array.isArray(refundState.recibosOriginales)
-      ? refundState.recibosOriginales
-      : [];
+  const paymentInfoEl = document.getElementById("refundPaymentInfoInline");
+  if (paymentInfoEl) {
+    const paymentParts = formatRefundOriginalPayments(
+      Array.isArray(refundState.recibosOriginales)
+        ? refundState.recibosOriginales
+        : [],
+    ).map((p) => `${p.label}: ${eurES(p.amount)}`);
 
-    if (!recibos.length) return "";
-
-    const grouped = {};
-    recibos.forEach((r) => {
-      const code =
-        String(r?.codpago || "—")
-          .trim()
-          .toUpperCase() || "—";
-
-      const amount = Number(r?.importe || 0) || 0;
-      if (!(amount > 0)) return;
-
-      grouped[code] = (grouped[code] || 0) + amount;
-    });
-
-    const labelMap = window.__PAYMETHOD_LABELS__ || {};
-
-    const parts = Object.entries(grouped)
-      .map(([code, amount]) => {
-        const label = labelMap[code] || code;
-        return `${label}: ${eurES(amount)}`;
-      })
-      .sort((a, b) => a.localeCompare(b, "es", { sensitivity: "base" }));
-
-    return parts.join("   ");
-  };
-
-  const paymentInfoText = buildOriginalPaymentInfoInline();
+    if (paymentParts.length) {
+      paymentInfoEl.innerHTML = `Pago original: <strong>${escapeHtml(paymentParts.join("  |  "))}</strong>`;
+      paymentInfoEl.style.display = "inline-block";
+    } else {
+      paymentInfoEl.innerHTML = "";
+      paymentInfoEl.style.display = "none";
+    }
+  }
 
   refundState.lineas.forEach((l) => {
     const max = Number(
@@ -25272,17 +28079,21 @@ function renderRefundLines() {
     const id = Number(l.idlinea);
     const curr = Number(refundState.qtyByLineId[id] || 0);
 
-    const unitGross = lineGrossUnit(l);
+    const pricing = getRefundLinePricingBreakdown(l);
+    const unitGross = Number(pricing.finalUnitGross || 0);
     const tax = lineTaxRate(l);
     const displayName = getRefundLineDisplayName(l);
 
-    const paymentInfoHtml = paymentInfoText
-      ? `
-        <div style="margin-top:6px; font-size:13px; color:#475569; padding-left:4px;">
-          ${escapeHtml(paymentInfoText)}
-        </div>
-      `
-      : "";
+    const discountInfoHtml = pricing.hasDiscount
+      ? `<div style="font-size:12px; opacity:.85; margin-top:2px;">PVP: <span style="text-decoration:line-through; opacity:.72;">${eurES(pricing.baseUnitGross)}</span> → <strong>${eurES(pricing.finalUnitGross)}</strong> · Descuento -${formatDiscountPercent(pricing.discountPct)}%</div>`
+      : `<div style="font-size:12px; opacity:.8;">Precio: <strong>${eurES(unitGross)}</strong> / ud</div>`;
+
+    const lineOldTotal = pricing.hasDiscount
+      ? round2(Number(pricing.baseUnitGross || 0) * Number(curr || 0))
+      : 0;
+    const lineFinalTotal = round2(
+      Number(pricing.finalUnitGross || 0) * Number(curr || 0),
+    );
 
     const row = document.createElement("div");
     row.style.cssText =
@@ -25293,10 +28104,8 @@ function renderRefundLines() {
         <div style="font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
           ${escapeHtml(displayName)}
         </div>
-        <div style="font-size:12px; opacity:.8;">
-          Vendido: ${max} · ${eurES(unitGross)} / ud · IVA ${tax}%
-        </div>
-        ${paymentInfoHtml}
+        ${discountInfoHtml}
+        <div style="font-size:12px; opacity:.75;">Vendido: ${max} · IVA ${tax}%</div>
       </div>
 
       <div style="display:flex; align-items:center; gap:6px;">
@@ -25306,7 +28115,12 @@ function renderRefundLines() {
       </div>
 
       <div style="width:110px; text-align:right; font-weight:700;">
-        ${eurES(unitGross * curr)}
+        ${
+          pricing.hasDiscount && curr > 0
+            ? `<div style="font-size:12px; font-weight:500; opacity:.7; text-decoration:line-through;">${eurES(lineOldTotal)}</div>`
+            : ""
+        }
+        ${eurES(lineFinalTotal)}
       </div>
     `;
 
@@ -26650,6 +29464,7 @@ async function startOnlineMonitor() {
         const c = await window.TPV_QUEUE.count();
         if ((c?.pending || 0) > 0) {
           await syncQueueNow();
+          await evaluateQueueHealthAndWarn({ online: true });
         }
       }
     } catch (e) {
@@ -26737,6 +29552,114 @@ async function sendOrQueueFactura(payload) {
     } catch {}
 
     return { ok: false, queued: true, localId };
+  }
+}
+
+const SYNC_ALERT_COOLDOWN_MS = 5 * 60 * 1000;
+const QUEUE_HEALTH_CHECK_EVERY_MS = 60 * 1000;
+const QUEUE_STUCK_MIN_AGE_MIN = 10;
+const QUEUE_STUCK_MIN_ATTEMPTS = 4;
+
+let __queueHealthLastCheckAt = 0;
+const __syncAlertLastAtByKey = new Map();
+
+function notifyWorkerSyncIssue(key, message, opts = {}) {
+  const allowOffline = opts?.allowOffline === true;
+  if (!allowOffline) {
+    if (TPV_STATE?.offline) return;
+    if (isOnlineFS === false) return;
+  }
+
+  const cooldownMs = Math.max(
+    0,
+    Number(opts?.cooldownMs || SYNC_ALERT_COOLDOWN_MS),
+  );
+  const now = Date.now();
+  const last = Number(__syncAlertLastAtByKey.get(String(key)) || 0);
+  if (now - last < cooldownMs) return;
+
+  __syncAlertLastAtByKey.set(String(key), now);
+
+  const title =
+    String(opts?.title || "Sincronizacion").trim() || "Sincronizacion";
+  const text = String(message || "Problema de sincronizacion").trim();
+  if (!text) return;
+
+  toast(text, "err", title);
+  setStatusText("Atencion: revisar sincronizacion y avisar a soporte.");
+
+  if (opts?.modal) {
+    showMessageModal(
+      "Aviso de sincronizacion",
+      `${text}\n\nContacta con soporte para revisarlo.`,
+    );
+  }
+}
+
+function minutesSinceIso(isoLike) {
+  const ts = Date.parse(String(isoLike || ""));
+  if (!isFinite(ts)) return 0;
+  return Math.max(0, (Date.now() - ts) / 60000);
+}
+
+async function evaluateQueueHealthAndWarn({ online = false } = {}) {
+  if (!online) return;
+  if (!window.TPV_QUEUE?.list) return;
+
+  const now = Date.now();
+  if (now - __queueHealthLastCheckAt < QUEUE_HEALTH_CHECK_EVERY_MS) return;
+  __queueHealthLastCheckAt = now;
+
+  try {
+    const q = await window.TPV_QUEUE.list();
+    const pending = Array.isArray(q?.pending) ? q.pending : [];
+    const done = Array.isArray(q?.done) ? q.done : [];
+
+    const pendingSales = pending.filter(
+      (it) => it?.type === "CREATE_FACTURACLIENTE",
+    );
+
+    if (pendingSales.length) {
+      let oldestMinutes = 0;
+      let maxAttempts = 0;
+
+      for (const it of pendingSales) {
+        oldestMinutes = Math.max(oldestMinutes, minutesSinceIso(it?.createdAt));
+        maxAttempts = Math.max(maxAttempts, Number(it?.attempts || 0) || 0);
+      }
+
+      if (
+        oldestMinutes >= QUEUE_STUCK_MIN_AGE_MIN ||
+        maxAttempts >= QUEUE_STUCK_MIN_ATTEMPTS
+      ) {
+        notifyWorkerSyncIssue(
+          "queue-stuck",
+          `Hay ${pendingSales.length} venta(s) sin sincronizar (${Math.floor(oldestMinutes)} min en cola).`,
+          { title: "Sincronizacion" },
+        );
+      }
+    }
+
+    const recentDone = done.slice(0, 20);
+    const dropped = recentDone.filter(
+      (it) =>
+        it?.type === "CREATE_FACTURACLIENTE" &&
+        (it?.remote?.dropped === true || it?.remote?.ok === false),
+    );
+
+    if (dropped.length) {
+      const top = dropped[0];
+      const sampleErr = String(
+        top?.remote?.error || top?.lastError || "",
+      ).slice(0, 140);
+      notifyWorkerSyncIssue(
+        `queue-dropped-${String(top?.id || "x")}`,
+        `Se detecto una venta descartada en sincronizacion.${sampleErr ? ` Motivo: ${sampleErr}` : ""}`,
+        { title: "Sincronizacion", modal: true, cooldownMs: 60 * 60 * 1000 },
+      );
+    }
+  } catch (e) {
+    console.warn("No se pudo evaluar salud de cola:", e?.message || e);
   }
 }
 
@@ -26961,9 +29884,43 @@ async function syncQueueNow() {
         // =============================================================
         await window.TPV_QUEUE.done(item.id, {});
       } catch (e) {
-        // Si falla por red, marcamos error y salimos (evita bucles)
-        await window.TPV_QUEUE.error(item.id, e?.message || String(e));
-        break;
+        const errMsg = e?.message || String(e);
+
+        if (isRetryableQueueSyncError(e)) {
+          if ((Number(item?.attempts || 0) || 0) >= QUEUE_STUCK_MIN_ATTEMPTS) {
+            notifyWorkerSyncIssue(
+              "queue-retries-high",
+              `Una venta lleva varios reintentos de sincronizacion (intento ${item?.attempts || 0}).`,
+              { title: "Sincronizacion" },
+            );
+          }
+
+          // Error temporal: se reintenta y se corta el ciclo para evitar martilleo.
+          await window.TPV_QUEUE.error(item.id, errMsg);
+          break;
+        }
+
+        // Error permanente (ej. validación): no bloquea toda la cola.
+        await window.TPV_QUEUE.done(item.id, {
+          ok: false,
+          dropped: true,
+          error: errMsg,
+        });
+
+        console.warn(
+          "[syncQueueNow] Item descartado por error permanente:",
+          item?.type,
+          item?.id,
+          errMsg,
+        );
+
+        notifyWorkerSyncIssue(
+          `queue-dropped-live-${String(item?.id || "x")}`,
+          `No se pudo sincronizar una venta y se descarto para no bloquear la cola. Motivo: ${errMsg}`,
+          { title: "Sincronizacion", modal: true, cooldownMs: 60 * 60 * 1000 },
+        );
+
+        continue;
       }
     }
   } finally {

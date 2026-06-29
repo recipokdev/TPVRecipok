@@ -19,6 +19,11 @@
   let unsubscribeScaleState = null;
   let scaleUiInitialized = false;
   let scaleAdvancedOpen = false;
+  let scaleAutoRecoverTimer = null;
+  let scaleAutoRecoverInFlight = false;
+  let scaleAutoRecoverAttempt = 0;
+
+  const SCALE_AUTO_RECOVER_DELAYS_MS = [1500, 4000, 8000, 15000];
 
   function $id(id) {
     return document.getElementById(id);
@@ -55,6 +60,80 @@
 
     if (body) body.style.display = scaleAdvancedOpen ? "block" : "none";
     if (btn) btn.textContent = scaleAdvancedOpen ? "Ocultar" : "Mostrar";
+  }
+
+  function clearScaleAutoRecoverTimer() {
+    if (scaleAutoRecoverTimer) {
+      clearTimeout(scaleAutoRecoverTimer);
+      scaleAutoRecoverTimer = null;
+    }
+  }
+
+  function resetScaleAutoRecover() {
+    scaleAutoRecoverAttempt = 0;
+    clearScaleAutoRecoverTimer();
+  }
+
+  function nextScaleAutoRecoverDelayMs() {
+    const idx = Math.min(
+      scaleAutoRecoverAttempt,
+      SCALE_AUTO_RECOVER_DELAYS_MS.length - 1,
+    );
+    return SCALE_AUTO_RECOVER_DELAYS_MS[idx];
+  }
+
+  async function runScaleAutoRecover() {
+    if (scaleAutoRecoverInFlight) return;
+
+    scaleAutoRecoverInFlight = true;
+    try {
+      const portEl = $id("scalePortSelect");
+      const previousPort = String(portEl?.value || "").trim();
+
+      await refreshScalePorts(previousPort);
+
+      if (portEl) {
+        const selected = String(portEl.value || "").trim();
+        if (!selected) {
+          const available = Array.from(portEl.options || [])
+            .map((opt) => String(opt.value || "").trim())
+            .filter(Boolean);
+
+          if (available.length === 1) {
+            portEl.value = available[0];
+          }
+        }
+      }
+
+      await applyScaleConfigFromForm(false);
+    } catch (_) {
+      // Los siguientes cambios de estado volveran a intentar con backoff.
+    } finally {
+      scaleAutoRecoverAttempt += 1;
+      scaleAutoRecoverInFlight = false;
+      scaleAutoRecoverTimer = null;
+    }
+  }
+
+  function maybeScheduleScaleAutoRecover(state) {
+    if (!state?.enabled) {
+      resetScaleAutoRecover();
+      return;
+    }
+
+    if (state.connected && !state.error) {
+      resetScaleAutoRecover();
+      return;
+    }
+
+    if (scaleAutoRecoverInFlight || scaleAutoRecoverTimer) {
+      return;
+    }
+
+    const delay = nextScaleAutoRecoverDelayMs();
+    scaleAutoRecoverTimer = setTimeout(() => {
+      runScaleAutoRecover();
+    }, delay);
   }
 
   async function getStoredScaleConfig() {
@@ -283,6 +362,8 @@
     if (parserEl) parserEl.textContent = parserLabel(state.parserKind);
     if (tokenEl) tokenEl.textContent = state.lastToken || "—";
     if (rawEl) rawEl.textContent = state.lastRaw || "—";
+
+    maybeScheduleScaleAutoRecover(state);
   }
 
   async function refreshScalePorts(selectedPath = "") {
@@ -539,6 +620,7 @@
       });
 
       reconnectBtn.addEventListener("click", async () => {
+        resetScaleAutoRecover();
         await applyScaleConfigFromForm(true);
       });
 

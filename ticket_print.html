@@ -114,11 +114,15 @@
 
       /* Sub-línea: que no “rompa” raro y ahorra espacio */
       .item-sub {
-        max-width: 34ch;
-        font-size: 10px; /* 👈 ayuda a que "Oferta de diferentes productos" no se vaya a 3 líneas */
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        font-size: 10px;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+      }
+
+      .price-old-strike {
+        text-decoration: line-through;
+        opacity: 0.72;
       }
 
       /* ✅ HIJOS DE PACK: solo descripción */

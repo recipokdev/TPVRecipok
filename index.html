@@ -135,6 +135,10 @@
           title="Cambiar cliente"
         />
 
+        <span id="cartCustomerTariffBadge" class="cart-customer-tariff hidden">
+          Tarifa
+        </span>
+
         <button
           id="cartCustomerClear"
           type="button"
@@ -170,6 +174,24 @@
         <span id="totalAmount">0,00 €</span>
       </div>
 
+      <div id="cartGlobalDiscountRow" class="cart-global-discount-row hidden">
+        <span id="cartGlobalDiscountSummary"
+          >Descuento general: sin aplicar</span
+        >
+        <div class="cart-global-discount-actions">
+          <button id="cartGlobalDiscountBtn" class="small-btn" type="button">
+            Cantidad / %
+          </button>
+          <button
+            id="cartGlobalDiscountClearBtn"
+            class="small-btn"
+            type="button"
+          >
+            Quitar
+          </button>
+        </div>
+      </div>
+
       <!-- BOTONERA INFERIOR (nuevo layout) -->
       <div class="cart-action-grid">
         <!-- Izquierda -->
@@ -200,9 +222,14 @@
     <div id="numPadOverlay" class="num-pad-overlay hidden">
       <div class="num-pad">
         <div class="num-pad-title">
-          Cantidad <span id="numPadProductName"></span>
+          <span>Cantidad <span id="numPadProductName"></span></span>
+          <span
+            id="numPadTopDiscountPct"
+            class="num-pad-top-discount hidden"
+          ></span>
         </div>
         <div id="numPadDisplay" class="num-pad-display">0</div>
+        <div id="numPadPricePreview" class="num-pad-price-preview hidden"></div>
         <div class="num-pad-grid calc-grid">
           <button class="num-pad-btn" data-key="7">7</button>
           <button class="num-pad-btn" data-key="8">8</button>
@@ -1150,33 +1177,37 @@
                 flex-wrap: wrap;
               "
             >
-              <strong>Líneas</strong>
               <div
                 style="
                   display: flex;
-                  justify-content: space-between;
                   align-items: center;
-                  gap: 8px;
+                  gap: 12px;
                   flex-wrap: wrap;
+                  min-width: 0;
                 "
               >
                 <strong>Líneas</strong>
-                <div style="display: flex; gap: 8px">
-                  <button
-                    id="refundSelectAllBtn"
-                    type="button"
-                    class="cart-btn"
-                  >
-                    Todo
-                  </button>
-                  <button
-                    id="refundSelectNoneBtn"
-                    type="button"
-                    class="cart-btn"
-                  >
-                    Nada
-                  </button>
-                </div>
+                <div
+                  id="refundPaymentInfoInline"
+                  style="
+                    display: none;
+                    font-size: 13px;
+                    color: #475569;
+                    background: #f8fafc;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 10px;
+                    padding: 6px 10px;
+                  "
+                ></div>
+              </div>
+
+              <div style="display: flex; gap: 8px">
+                <button id="refundSelectAllBtn" type="button" class="cart-btn">
+                  Todo
+                </button>
+                <button id="refundSelectNoneBtn" type="button" class="cart-btn">
+                  Nada
+                </button>
               </div>
             </div>
 
@@ -1525,6 +1556,24 @@
                 </div>
               </div>
 
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Reconectar</div>
+                  <div class="opt-row-sub">
+                    Fuerza una nueva conexión con la báscula.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <button
+                    type="button"
+                    id="scaleReconnectBtn"
+                    class="small-btn"
+                  >
+                    Reconectar
+                  </button>
+                </div>
+              </div>
+
               <div class="opt-row opt-row-scale-help">
                 <div class="opt-row-txt">
                   <div class="opt-row-title">Cobrar en</div>
@@ -1761,24 +1810,6 @@
 
                 <div class="opt-row">
                   <div class="opt-row-txt">
-                    <div class="opt-row-title">Reconectar</div>
-                    <div class="opt-row-sub">
-                      Fuerza una nueva conexión con la báscula.
-                    </div>
-                  </div>
-                  <div class="opt-row-actions">
-                    <button
-                      type="button"
-                      id="scaleReconnectBtn"
-                      class="small-btn"
-                    >
-                      Reconectar
-                    </button>
-                  </div>
-                </div>
-
-                <div class="opt-row">
-                  <div class="opt-row-txt">
                     <div class="opt-row-title">Perfil detectado</div>
                     <div class="opt-row-sub" id="scaleDiagParser">—</div>
                   </div>
@@ -1827,6 +1858,21 @@
                   <span class="slider"></span>
                 </label>
               </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Descuentos manuales en carrito
+                  </div>
+                  <div class="opt-row-sub">
+                    Permite descuento por línea en el carrito y descuento
+                    general con prioridad por línea.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="cartDiscountToolsToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
               <!-- Cliente por defecto de la terminal -->
               <div class="opt-row">
                 <div class="opt-row-txt">
@@ -1849,6 +1895,196 @@
                     class="small-btn"
                   >
                     Guardar
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="opt-sec" data-sec="tarifas">
+            <button type="button" class="opt-sec-h">
+              <span>Tarifas</span>
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Tarifa activa en TPV</div>
+                  <div class="opt-row-sub">
+                    Selecciona una tarifa para editarla o asignarla.
+                  </div>
+                </div>
+
+                <div class="opt-row-actions">
+                  <select id="tariffSelect" class="opt-select"></select>
+                  <button type="button" id="tariffRefreshBtn" class="small-btn">
+                    Recargar
+                  </button>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Crear nueva tarifa</div>
+                  <div class="opt-row-sub">
+                    Crea una tarifa desde cero y quedará seleccionada.
+                  </div>
+                </div>
+
+                <div class="opt-row-actions">
+                  <input
+                    id="tariffCreateNameInput"
+                    type="text"
+                    class="opt-input"
+                    placeholder="Nombre tarifa"
+                  />
+                  <button type="button" id="tariffCreateBtn" class="small-btn">
+                    Crear tarifa
+                  </button>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Resumen de tarifa</div>
+                  <div class="opt-row-sub" id="tariffSummaryText">
+                    Selecciona una tarifa para ver sus datos.
+                  </div>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Editar tarifa seleccionada</div>
+                  <div class="opt-row-sub">
+                    Cambios directos sobre la tarifa en la API.
+                  </div>
+                </div>
+
+                <div class="opt-row-actions">
+                  <input
+                    id="tariffNameInput"
+                    type="text"
+                    class="opt-input"
+                    placeholder="Nombre tarifa"
+                  />
+                  <select id="tariffFormulaSelect" class="opt-select">
+                    <option value="pvp">Descuento</option>
+                    <option value="coste">Aumento</option>
+                  </select>
+                  <label
+                    class="opt-input-affix-wrap"
+                    title="Porcentaje de descuento"
+                  >
+                    <input
+                      id="tariffValorXInput"
+                      type="number"
+                      step="1"
+                      class="opt-input opt-input-affix"
+                      placeholder="0"
+                    />
+                    <span class="opt-input-affix-suffix">%</span>
+                  </label>
+                  <label
+                    class="opt-input-affix-wrap"
+                    title="Importe fijo en euros"
+                  >
+                    <input
+                      id="tariffValorYInput"
+                      type="number"
+                      step="1"
+                      class="opt-input opt-input-affix"
+                      placeholder="0"
+                    />
+                    <span class="opt-input-affix-suffix">€</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Restricciones de tarifa</div>
+                  <div class="opt-row-sub">
+                    Reproduce las opciones del TPV original.
+                  </div>
+                </div>
+
+                <div class="opt-row-actions">
+                  <label class="product-filter-check">
+                    <input type="checkbox" id="tariffMinCosteToggle" />
+                    <span>No vender por debajo de coste</span>
+                  </label>
+                  <label class="product-filter-check">
+                    <input type="checkbox" id="tariffMaxPvpToggle" />
+                    <span>No vender por encima de PVP</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Clientes con esta tarifa</div>
+                  <div class="opt-row-sub">
+                    Marca todos los clientes que deben usar esta tarifa.
+                  </div>
+                </div>
+
+                <div class="opt-row-actions">
+                  <input
+                    id="tariffCustomerSearchInput"
+                    type="text"
+                    class="opt-input"
+                    placeholder="Buscar cliente..."
+                  />
+                  <button
+                    type="button"
+                    id="tariffCustomerSearchKeyboardBtn"
+                    class="small-btn"
+                    title="Teclado"
+                  >
+                    ⌨
+                  </button>
+                  <button
+                    type="button"
+                    id="tariffCustomersSelectVisibleBtn"
+                    class="small-btn"
+                  >
+                    Marcar visibles
+                  </button>
+                  <button
+                    type="button"
+                    id="tariffCustomersClearVisibleBtn"
+                    class="small-btn"
+                  >
+                    Desmarcar visibles
+                  </button>
+                  <span id="tariffCustomersSelectedCount" class="opt-chip"
+                    >0 seleccionados</span
+                  >
+                  <div
+                    id="tariffCustomerChecklist"
+                    class="tariff-customer-checklist"
+                  ></div>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Guardar cambios</div>
+                  <div class="opt-row-sub">
+                    Aplica edición de tarifa y cliente asignado en un solo paso.
+                  </div>
+                </div>
+
+                <div class="opt-row-actions">
+                  <button type="button" id="tariffRevertBtn" class="small-btn">
+                    Revertir cambios
+                  </button>
+                  <button type="button" id="tariffDeleteBtn" class="small-btn">
+                    Borrar tarifa
+                  </button>
+                  <button type="button" id="tariffSaveAllBtn" class="small-btn">
+                    Guardar cambios de tarifa
                   </button>
                 </div>
               </div>

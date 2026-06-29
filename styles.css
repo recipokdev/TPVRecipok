@@ -932,6 +932,22 @@ body.scale-has-weight .product-scale-btn:hover {
   opacity: 0.7;
 }
 
+.cart-customer-tariff {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #bfdbfe;
+  background: #dbeafe;
+  color: #1e3a8a;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 .cart-client-input:disabled,
 .cart-client-icon:disabled,
 .cart-client-btn:disabled {
@@ -1005,6 +1021,40 @@ body.scale-has-weight .product-scale-btn:hover {
   opacity: 0.9;
   font-size: 12px;
   margin-top: 2px;
+}
+
+.cart-price-old {
+  text-decoration: line-through;
+  opacity: 0.65;
+  margin-right: 4px;
+}
+
+.cart-price-new {
+  font-weight: 800;
+}
+
+.cart-price-discount {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: #d1fae5;
+  color: #065f46;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.line-price-btn.has-cart-tariff {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+
+.line-price-btn.has-cart-tariff .cart-price-old {
+  font-size: 11px;
+  margin-right: 0;
 }
 
 /* Cantidad */
@@ -1622,9 +1672,28 @@ body.session-locked .cart-terminal-row #agentName {
 }
 
 .num-pad-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   font-weight: 600;
   margin-bottom: 2px;
   font-size: calc(17px * var(--kb-scale));
+}
+
+.num-pad-top-discount {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid #bbf7d0;
+  background: #dcfce7;
+  color: #0f766e;
+  font-weight: 700;
+  font-size: calc(13px * var(--kb-scale));
+}
+
+.num-pad-top-discount.hidden {
+  display: none;
 }
 
 .num-pad-display {
@@ -1636,6 +1705,59 @@ body.session-locked .cart-terminal-row #agentName {
   text-align: right;
   min-height: calc(40px * var(--kb-scale));
   background: #f8fafc;
+}
+
+.num-pad-price-preview {
+  margin-top: 6px;
+  margin-bottom: 2px;
+  padding: 8px 10px;
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #1f2937;
+  font-size: calc(14px * var(--kb-scale));
+  line-height: 1.4;
+}
+
+.num-pad-price-preview.hidden {
+  display: none;
+}
+
+.num-pad-price-preview-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.num-pad-price-preview-row + .num-pad-price-preview-row {
+  margin-top: 4px;
+}
+
+.num-pad-price-preview-label {
+  color: #334155;
+  font-weight: 600;
+}
+
+.num-pad-price-preview-values {
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.num-pad-price-preview-row--total .num-pad-price-preview-label,
+.num-pad-price-preview-row--totalonly .num-pad-price-preview-label {
+  font-weight: 700;
+}
+
+.num-pad-price-preview-row--total .num-pad-price-preview-values,
+.num-pad-price-preview-row--totalonly .num-pad-price-preview-values {
+  font-size: calc(15px * var(--kb-scale));
+}
+
+.num-pad-price-preview-old {
+  text-decoration: line-through;
+  opacity: 0.75;
+  margin-right: 6px;
 }
 
 .num-pad-grid {
@@ -2272,10 +2394,37 @@ textarea:focus {
   font-weight: 700;
 }
 
+.parked-ticket-item .pt-discount-note {
+  font-size: 12px;
+  font-weight: 700;
+  color: #92400e;
+  line-height: 1.3;
+}
+
+.pt-total-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.parked-ticket-item .pt-total-old {
+  font-size: 13px;
+  font-weight: 700;
+  opacity: 0.7;
+  text-decoration: line-through;
+}
+
 .parked-ticket-item .pt-total {
   font-weight: 900;
   font-size: 18px;
   line-height: 1;
+}
+
+.ticket-badge-discount {
+  background: #dbeafe;
+  color: #1e40af;
+  border: 1px solid #93c5fd;
 }
 
 .pt-types {
@@ -2393,6 +2542,62 @@ textarea:focus {
 
 #ticketsOverlay .parked-modal-header h2 {
   font-size: 20px;
+}
+
+.cart-global-discount-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  margin: 2px 0 8px;
+  border-radius: 10px;
+  background: #eef6ff;
+  border: 1px solid #d6e8ff;
+  color: #16325c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cart-global-discount-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.line-discount-btn {
+  border: none;
+  border-radius: 999px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  background: #dbeafe;
+  color: #1d4ed8;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 0.15s,
+    transform 0.05s;
+}
+
+.line-discount-btn:hover {
+  background: #bfdbfe;
+  transform: translateY(-1px);
+}
+
+.line-discount-btn.is-active {
+  background: #1d4ed8;
+  color: #fff;
+}
+
+.cart-price-discount.cart-price-discount--cart {
+  background: #fef3c7;
+  color: #92400e;
 }
 
 #ticketsOverlay .parked-modal-body .tickets-tools {
@@ -4175,6 +4380,126 @@ textarea:focus {
   align-items: center;
 }
 
+.opt-input {
+  min-width: 120px;
+  max-width: 150px;
+}
+
+.opt-input-affix-wrap {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  min-width: 120px;
+  max-width: 150px;
+  padding-right: 8px;
+}
+
+.opt-input-affix-wrap:focus-within {
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 2px rgba(147, 197, 253, 0.22);
+}
+
+.opt-input-affix {
+  min-width: 0;
+  max-width: none;
+  width: 100%;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  background: transparent;
+  padding-right: 6px;
+}
+
+.opt-input-affix::-webkit-outer-spin-button,
+.opt-input-affix::-webkit-inner-spin-button {
+  margin-right: 2px;
+}
+
+.opt-input-affix-suffix {
+  font-size: 12px;
+  font-weight: 800;
+  color: #475569;
+}
+
+.opt-sec[data-sec="tarifas"] .opt-row-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.opt-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tariff-customer-checklist {
+  width: min(430px, 100%);
+  max-height: 170px;
+  overflow-y: auto;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tariff-customer-check-group-title {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed #dbe3ed;
+  font-size: 11px;
+  font-weight: 800;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.tariff-customer-check-group-title:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+#tariffDeleteBtn {
+  border-color: #ef4444;
+  color: #b91c1c;
+}
+
+#tariffDeleteBtn:hover {
+  background: #fee2e2;
+  border-color: #dc2626;
+}
+
+.tariff-customer-check-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #1f2937;
+  user-select: none;
+}
+
+.tariff-customer-check-item input {
+  width: 16px;
+  height: 16px;
+}
+
+.tariff-customer-check-empty {
+  font-size: 12px;
+  color: #64748b;
+}
+
 .opt-row-scale-help {
   align-items: flex-start;
   flex-wrap: wrap;
@@ -4241,6 +4566,14 @@ textarea:focus {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+}
+
+.cart-line-mini-legend {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+  color: #6b7280;
 }
 
 .item.pack-child .desc {
@@ -5095,6 +5428,47 @@ body.theme-dark .cart-client-row {
   background: #1f2937;
 }
 
+body.theme-dark .cart-customer-tariff {
+  background: #1e3a8a;
+  border-color: #3b82f6;
+  color: #dbeafe;
+}
+
+body.theme-dark .cart-price-discount {
+  background: #134e4a;
+  color: #a7f3d0;
+}
+
+body.theme-dark .cart-price-discount.cart-price-discount--cart {
+  background: #78350f;
+  color: #fde68a;
+}
+
+body.theme-dark .cart-global-discount-row {
+  background: #1e293b;
+  border-color: #334155;
+  color: #dbeafe;
+}
+
+body.theme-dark .line-discount-btn {
+  background: #1e3a8a;
+  color: #bfdbfe;
+}
+
+body.theme-dark .line-discount-btn:hover {
+  background: #1d4ed8;
+  color: #e0e7ff;
+}
+
+body.theme-dark .line-discount-btn.is-active {
+  background: #2563eb;
+  color: #fff;
+}
+
+body.theme-dark .cart-line-mini-legend {
+  color: #94a3b8;
+}
+
 body.theme-dark .cart-lines-wrapper {
   background: #0f172a;
 }
@@ -5155,6 +5529,22 @@ body.theme-dark textarea {
   background: #1f2937;
   color: #e5e7eb;
   border-color: #4b5563;
+}
+
+body.theme-dark .num-pad-price-preview {
+  background: #0b1220;
+  border-color: #334155;
+  color: #e5e7eb;
+}
+
+body.theme-dark .num-pad-price-preview-label {
+  color: #cbd5e1;
+}
+
+body.theme-dark .num-pad-top-discount {
+  background: rgba(16, 185, 129, 0.14);
+  border-color: rgba(45, 212, 191, 0.35);
+  color: #5eead4;
 }
 
 body.theme-dark #statusBar {
@@ -5351,6 +5741,20 @@ body.theme-dark .parked-ticket-paid {
 
 body.theme-dark .parked-ticket-item .pt-items-paid {
   color: #86efac;
+}
+
+body.theme-dark .parked-ticket-item .pt-discount-note {
+  color: #fcd34d;
+}
+
+body.theme-dark .parked-ticket-item .pt-total-old {
+  color: #94a3b8;
+}
+
+body.theme-dark .ticket-badge-discount {
+  background: #1e3a8a;
+  color: #dbeafe;
+  border-color: #3b82f6;
 }
 
 body.theme-dark .parked-ticket-item .pt-sub,
