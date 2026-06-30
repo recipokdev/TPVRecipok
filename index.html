@@ -52,7 +52,15 @@
     <!-- PANEL DERECHO: CARRITO -->
     <aside class="cart-card">
       <header class="cart-card-header">
-        <div class="cart-title">🛒 <span>Carrito</span></div>
+        <div class="cart-title">
+          🛒 <span>Carrito</span>
+          <span
+            id="safeTrainingBanner"
+            class="safe-training-banner"
+            aria-live="polite"
+            >Entorno de pruebas</span
+          >
+        </div>
         <div class="cart-header-right">
           <button type="button" class="cart-header-box" id="cashHeaderBtn">
             💶 <span id="cashHeaderLabel">Abrir caja</span>
@@ -2452,6 +2460,20 @@
               </div>
             </div>
           </section>
+        </div>
+
+        <div class="opt-row">
+          <div class="opt-row-txt">
+            <div class="opt-row-title">Entorno de pruebas</div>
+            <div class="opt-row-sub">
+              Simula cobros/aparcados/impresión sin enviar datos a
+              FacturaScripts ni API. Al salir, se restaura el estado anterior.
+            </div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="safeTrainingModeToggle" />
+            <span class="slider"></span>
+          </label>
         </div>
 
         <div class="dialog-actions opt-actions">

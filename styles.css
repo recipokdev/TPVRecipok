@@ -14,6 +14,38 @@ body {
   display: none !important;
 }
 
+.safe-training-banner {
+  position: static;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  box-shadow: none;
+  pointer-events: none;
+  user-select: none;
+  line-height: 1;
+}
+
+body[data-safe-training-mode="1"] .safe-training-banner {
+  display: inline-flex;
+}
+
+@media (max-width: 900px) {
+  .safe-training-banner {
+    font-size: 10px;
+    padding: 2px 6px;
+  }
+}
+
 /* =============================================================
    1) ZONA IZQUIERDA: PRODUCTOS / FAMILIAS
    ============================================================= */
@@ -4040,6 +4072,12 @@ textarea:focus {
   border: 1px solid #22c55e;
 }
 
+.ticket-badge-sim {
+  color: #1e3a8a;
+  background: #eff6ff;
+  border: 1px solid #3b82f6;
+}
+
 /* Hijos (rectificativas) más marcados */
 .ticket-child {
   border-width: 3px !important;
@@ -5843,6 +5881,12 @@ body.theme-dark .ticket-badge-fullref {
   background: #3a0f16;
   color: #fca5a5;
   border-color: #ef4444;
+}
+
+body.theme-dark .ticket-badge-sim {
+  background: #0b2448;
+  color: #93c5fd;
+  border-color: #60a5fa;
 }
 
 body.theme-dark .cash-move-header {

@@ -158,15 +158,397 @@ const TPV_E2E_MODE =
   String(window.TPV_ENV?.mode || "").toLowerCase() === "demo" ||
   !!window.TPV_ENV?.e2e;
 const TPV_E2E_ALLOW_WRITES = !!window.TPV_ENV?.e2eAllowWrites;
+const TPV_SAFE_TRAINING_MODE_LS_KEY = "tpv_safe_training_mode";
+const TPV_SAFE_TRAINING_SNAPSHOT_LS_KEY =
+  "tpv_safe_training_runtime_snapshot_v1";
+const TPV_SAFE_TRAINING_SIM_SALE_SEQ_KEY = "tpv_safe_training_sim_sale_seq";
+const TPV_SAFE_TRAINING_SIM_REFUND_SEQ_KEY = "tpv_safe_training_sim_refund_seq";
 
-function installE2ERemoteWriteGuard(baseUrl) {
-  if (!TPV_E2E_MODE || TPV_E2E_ALLOW_WRITES) return;
-  if (typeof window.__TPV_E2E_FETCH_GUARD_INSTALLED__ !== "undefined") return;
+let safeTrainingModeEnabled = false;
+let safeTrainingRuntimeSnapshot = null;
 
-  const targetBase = String(baseUrl || "")
+function isSafeTrainingModeEnabled() {
+  return !!safeTrainingModeEnabled;
+}
+
+function shouldBlockRemoteWrites() {
+  if (TPV_E2E_MODE && !TPV_E2E_ALLOW_WRITES) return true;
+  return isSafeTrainingModeEnabled();
+}
+
+function applySafeTrainingModeUi() {
+  try {
+    if (safeTrainingModeEnabled) {
+      document.body.dataset.safeTrainingMode = "1";
+    } else {
+      delete document.body.dataset.safeTrainingMode;
+    }
+  } catch {}
+}
+
+function clonePlain(value, fallback = null) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return fallback;
+  }
+}
+
+function getLocalStorageRawValue(key) {
+  try {
+    if (!key) return null;
+    return localStorage.getItem(String(key));
+  } catch {
+    return null;
+  }
+}
+
+function setLocalStorageRawValue(key, rawValue) {
+  try {
+    if (!key) return;
+    if (rawValue == null) {
+      localStorage.removeItem(String(key));
+      return;
+    }
+    localStorage.setItem(String(key), String(rawValue));
+  } catch {}
+}
+
+function readSafeTrainingSequence(key) {
+  const n = Number(getLocalStorageRawValue(key) || 0);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+function nextSafeTrainingSequence(key) {
+  const next = readSafeTrainingSequence(key) + 1;
+  setLocalStorageRawValue(key, String(next));
+  return next;
+}
+
+function nextSafeTrainingSimSaleCode() {
+  return `SIM${nextSafeTrainingSequence(TPV_SAFE_TRAINING_SIM_SALE_SEQ_KEY)}`;
+}
+
+function nextSafeTrainingSimRefundCode() {
+  return `SIMR${nextSafeTrainingSequence(TPV_SAFE_TRAINING_SIM_REFUND_SEQ_KEY)}`;
+}
+
+function isSimulatedTicketLike(ticket) {
+  const t = ticket && typeof ticket === "object" ? ticket : {};
+  if (t._simulated === true || t.simulated === true) return true;
+  const code = String(t.codigo || t.paidTicketCode || "")
+    .trim()
+    .toUpperCase();
+  return code.startsWith("SIM");
+}
+
+function isSimulatedParkedTicket(ticket) {
+  const t = ticket && typeof ticket === "object" ? ticket : {};
+  if (t._simulated === true || t.simulated === true) return true;
+  const fsCode = String(t?.fs?.codigo || "")
+    .trim()
+    .toUpperCase();
+  return fsCode.startsWith("SIM");
+}
+
+function clearSafeTrainingSessionData() {
+  cart = [];
+  parkedTickets = [];
+  parkedCounter = 0;
+  currentParkedTicketIndex = null;
+  preParkedCustomerSelection = null;
+
+  lastTicket = null;
+  customerDisplayOverride = null;
+  customerThanksUntil = 0;
+  customerLastSale = null;
+
+  try {
+    saveParkedTicketsCache([]);
+  } catch {}
+  try {
+    saveParkedSyncQueue([]);
+  } catch {}
+
+  REMOTE_PARKED_RESERVATIONS = [];
+
+  setLocalStorageRawValue("tpv_remoteCajaId", null);
+  setLocalStorageRawValue(TPV_SAFE_TRAINING_SIM_SALE_SEQ_KEY, "0");
+  setLocalStorageRawValue(TPV_SAFE_TRAINING_SIM_REFUND_SEQ_KEY, "0");
+  setLocalStorageRawValue("tpv_offlineTickets_v1", "[]");
+  setLocalStorageRawValue("tpv_cachedTickets_v1", "[]");
+  setLocalStorageRawValue("tpv_cachedTickets_ts_v1", null);
+
+  if (typeof ticketsCache !== "undefined") ticketsCache = [];
+  if (typeof ticketsUiCache !== "undefined") ticketsUiCache = [];
+
+  if (cashSession && typeof cashSession === "object") {
+    cashSession.open = false;
+    cashSession.remoteCajaId = null;
+    cashSession.openedAt = null;
+    cashSession.openingCash = 0;
+    cashSession.cashSales = 0;
+    cashSession.cardSales = 0;
+    cashSession.totalSales = 0;
+    cashSession.ticketsCount = 0;
+    cashSession.paymentsByMethod = {};
+    cashSession.cashMovements = [];
+    cashSession.cashMovementsTotal = 0;
+    cashSession.isRecovering = false;
+  }
+
+  if (typeof cashOpenDialogShown !== "undefined") {
+    cashOpenDialogShown = false;
+  }
+
+  renderCart?.();
+  renderMainUI?.(true);
+  refreshParkButtonUI?.();
+  refreshParkedEditingBanner?.();
+  updateParkedCountBadge?.();
+  updateCashButtonLabel?.();
+  renderCashIdChip?.();
+  pushCustomerState?.();
+}
+
+function persistSafeTrainingRuntimeSnapshot(snapshot) {
+  try {
+    if (!snapshot || typeof snapshot !== "object") {
+      localStorage.removeItem(TPV_SAFE_TRAINING_SNAPSHOT_LS_KEY);
+      return;
+    }
+
+    localStorage.setItem(
+      TPV_SAFE_TRAINING_SNAPSHOT_LS_KEY,
+      JSON.stringify(snapshot),
+    );
+  } catch {}
+}
+
+function loadSafeTrainingRuntimeSnapshot() {
+  if (safeTrainingRuntimeSnapshot) return safeTrainingRuntimeSnapshot;
+
+  try {
+    const raw = localStorage.getItem(TPV_SAFE_TRAINING_SNAPSHOT_LS_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== "object") return null;
+    safeTrainingRuntimeSnapshot = parsed;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function clearSafeTrainingRuntimeSnapshot() {
+  safeTrainingRuntimeSnapshot = null;
+  persistSafeTrainingRuntimeSnapshot(null);
+}
+
+function captureSafeTrainingRuntimeSnapshot() {
+  const snapshot = {
+    capturedAt: new Date().toISOString(),
+    products: clonePlain(Array.isArray(products) ? products : [], []),
+    cart: clonePlain(Array.isArray(cart) ? cart : [], []),
+    parkedTickets: clonePlain(getScopedPendingParkedTickets(parkedTickets), []),
+    parkedCounter: Number(parkedCounter || 0) || 0,
+    currentParkedTicketIndex:
+      currentParkedTicketIndex == null
+        ? null
+        : Number(currentParkedTicketIndex),
+    preParkedCustomerSelection: clonePlain(preParkedCustomerSelection, null),
+    customerSelection: clonePlain(
+      captureCurrentCustomerSelectionForParked(),
+      null,
+    ),
+    cashSession: clonePlain(cashSession, null),
+    lastTicket: clonePlain(lastTicket, null),
+    customerDisplayOverride: clonePlain(customerDisplayOverride, null),
+    customerMode: String(customerMode || "CART"),
+    customerThanksUntil: Number(customerThanksUntil || 0) || 0,
+    customerLastSale: clonePlain(customerLastSale, null),
+    productDiscountPctById: clonePlain(productDiscountPctById, {}),
+    productManualOrderById: clonePlain(productManualOrderById, {}),
+    offlineTicketsRaw: getLocalStorageRawValue("tpv_offlineTickets_v1"),
+    ticketsCacheRaw: getLocalStorageRawValue("tpv_cachedTickets_v1"),
+    ticketsCacheTsRaw: getLocalStorageRawValue("tpv_cachedTickets_ts_v1"),
+    remoteCajaIdRaw: getLocalStorageRawValue("tpv_remoteCajaId"),
+    simSaleSeqRaw: getLocalStorageRawValue(TPV_SAFE_TRAINING_SIM_SALE_SEQ_KEY),
+    simRefundSeqRaw: getLocalStorageRawValue(
+      TPV_SAFE_TRAINING_SIM_REFUND_SEQ_KEY,
+    ),
+  };
+
+  safeTrainingRuntimeSnapshot = snapshot;
+  persistSafeTrainingRuntimeSnapshot(snapshot);
+  return snapshot;
+}
+
+function restoreSafeTrainingRuntimeSnapshot(snapshot) {
+  const src = snapshot && typeof snapshot === "object" ? snapshot : null;
+  if (!src) return false;
+
+  products = Array.isArray(src.products) ? clonePlain(src.products, []) : [];
+  cart = Array.isArray(src.cart) ? clonePlain(src.cart, []) : [];
+  parkedTickets = Array.isArray(src.parkedTickets)
+    ? src.parkedTickets
+        .map((it) => normalizeRemoteParkedTicket(it))
+        .filter(Boolean)
+        .filter((t) => !t?.paid)
+    : [];
+  parkedCounter = Number(src.parkedCounter || 0) || 0;
+  currentParkedTicketIndex =
+    src.currentParkedTicketIndex == null
+      ? null
+      : Math.max(0, Number(src.currentParkedTicketIndex) || 0);
+  if (
+    currentParkedTicketIndex != null &&
+    currentParkedTicketIndex >= parkedTickets.length
+  ) {
+    currentParkedTicketIndex = null;
+  }
+
+  preParkedCustomerSelection = src.preParkedCustomerSelection || null;
+
+  if (src.cashSession && typeof src.cashSession === "object") {
+    cashSession = { ...cashSession, ...clonePlain(src.cashSession, {}) };
+  }
+
+  lastTicket = src.lastTicket ? clonePlain(src.lastTicket, null) : null;
+  customerDisplayOverride = src.customerDisplayOverride
+    ? clonePlain(src.customerDisplayOverride, null)
+    : null;
+  customerMode = String(src.customerMode || "CART");
+  customerThanksUntil = Number(src.customerThanksUntil || 0) || 0;
+  customerLastSale = src.customerLastSale
+    ? clonePlain(src.customerLastSale, null)
+    : null;
+  productDiscountPctById =
+    src.productDiscountPctById && typeof src.productDiscountPctById === "object"
+      ? clonePlain(src.productDiscountPctById, {})
+      : {};
+  productManualOrderById =
+    src.productManualOrderById && typeof src.productManualOrderById === "object"
+      ? clonePlain(src.productManualOrderById, {})
+      : {};
+
+  setLocalStorageRawValue("tpv_offlineTickets_v1", src.offlineTicketsRaw);
+  setLocalStorageRawValue("tpv_cachedTickets_v1", src.ticketsCacheRaw);
+  setLocalStorageRawValue("tpv_cachedTickets_ts_v1", src.ticketsCacheTsRaw);
+  setLocalStorageRawValue("tpv_remoteCajaId", src.remoteCajaIdRaw);
+  setLocalStorageRawValue(
+    TPV_SAFE_TRAINING_SIM_SALE_SEQ_KEY,
+    src.simSaleSeqRaw,
+  );
+  setLocalStorageRawValue(
+    TPV_SAFE_TRAINING_SIM_REFUND_SEQ_KEY,
+    src.simRefundSeqRaw,
+  );
+
+  if (typeof ticketsCache !== "undefined") {
+    try {
+      ticketsCache = JSON.parse(src.ticketsCacheRaw || "[]");
+      if (!Array.isArray(ticketsCache)) ticketsCache = [];
+    } catch {
+      ticketsCache = [];
+    }
+  }
+
+  if (typeof ticketsUiCache !== "undefined") {
+    ticketsUiCache = [];
+  }
+
+  saveParkedTicketsCache(parkedTickets);
+  saveParkedSyncQueue([]);
+
+  if (src.customerSelection) {
+    applyCustomerSelectionSnapshot(src.customerSelection);
+  }
+
+  renderCart?.();
+  renderMainUI?.(true);
+  refreshParkButtonUI?.();
+  refreshParkedEditingBanner?.();
+  updateParkedCountBadge?.();
+  updateCashButtonLabel?.();
+  renderCashIdChip?.();
+  pushCustomerState?.();
+
+  if (
+    parkedTicketsOverlay &&
+    !parkedTicketsOverlay.classList.contains("hidden")
+  ) {
+    renderParkedTicketsModal?.();
+  }
+
+  return true;
+}
+
+async function enterSafeTrainingMode() {
+  captureSafeTrainingRuntimeSnapshot();
+  clearSafeTrainingSessionData();
+  await saveSafeTrainingModeToggle(true);
+  setStatusText?.("Entorno de pruebas activo");
+  toast(
+    "Entorno de pruebas iniciado: sesión limpia (tickets/aparcados/caja).",
+    "info",
+    "Modo pruebas",
+  );
+  return true;
+}
+
+async function exitSafeTrainingMode() {
+  const snapshot = loadSafeTrainingRuntimeSnapshot();
+  const restored = restoreSafeTrainingRuntimeSnapshot(snapshot);
+  await saveSafeTrainingModeToggle(false);
+  clearSafeTrainingRuntimeSnapshot();
+
+  if (restored) {
+    toast(
+      "Entorno de pruebas finalizado. Estado restaurado.",
+      "ok",
+      "Modo pruebas",
+    );
+  } else {
+    toast(
+      "Entorno de pruebas finalizado. No había estado previo para restaurar.",
+      "warn",
+      "Modo pruebas",
+    );
+  }
+
+  return true;
+}
+
+function isTargetRemoteWriteUrl(rawUrl) {
+  const url = String(rawUrl || "").trim();
+  if (!url) return false;
+
+  const baseFs = String(window.RECIPOK_API?.baseUrl || "")
     .trim()
     .replace(/\/+$/, "");
-  if (!targetBase) return;
+  const syncBase = String(TPV_SYNC_API_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
+
+  if (baseFs && url.startsWith(baseFs)) return true;
+  if (syncBase && url.startsWith(syncBase)) return true;
+  if (url.includes("/demo/api/")) return true;
+
+  return false;
+}
+
+function buildRemoteWriteBlockedError(method, url) {
+  const target =
+    `${String(method || "").toUpperCase()} ${String(url || "")}`.trim();
+  const err = new Error(
+    `Modo pruebas activo: escritura remota bloqueada (${target}).`,
+  );
+  err.code = "TPV_SAFE_TRAINING_WRITE_BLOCKED";
+  return err;
+}
+
+function installRemoteWriteGuard() {
+  if (window.__TPV_REMOTE_WRITE_GUARD_INSTALLED__) return;
 
   const originalFetch = window.fetch.bind(window);
   window.fetch = async (input, init = {}) => {
@@ -179,17 +561,19 @@ function installE2ERemoteWriteGuard(baseUrl) {
           : "";
 
     const isWrite = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
-    const isTarget =
-      !!url && (url.startsWith(targetBase) || url.includes("/demo/api/"));
-
-    if (isWrite && isTarget) {
-      throw new Error(`[E2E_WRITE_BLOCKED] ${method} ${url}`);
+    if (isWrite && shouldBlockRemoteWrites() && isTargetRemoteWriteUrl(url)) {
+      throw buildRemoteWriteBlockedError(method, url);
     }
 
     return originalFetch(input, init);
   };
 
-  window.__TPV_E2E_FETCH_GUARD_INSTALLED__ = true;
+  window.__TPV_REMOTE_WRITE_GUARD_INSTALLED__ = true;
+}
+
+function installE2ERemoteWriteGuard(_baseUrl) {
+  if (!TPV_E2E_MODE || TPV_E2E_ALLOW_WRITES) return;
+  installRemoteWriteGuard();
 }
 
 const TPV_DEBUG_LOGS = false;
@@ -491,8 +875,10 @@ let REMOTE_RESERVED_BY_PRODUCT = new Map();
 
 const PARKED_TICKETS_CACHE_KEY = "tpv_parked_tickets_cache_v1";
 const PARKED_SYNC_QUEUE_KEY = "tpv_parked_sync_queue_v1";
+const PARKED_PAID_HISTORY_KEY = "tpv_parked_paid_history_v1";
 const PARKED_DEVICE_NODE_ID_KEY = "tpv_parked_device_node_id_v1";
 const PARKED_DEVICE_SEQ_KEY = "tpv_parked_device_seq_v1";
+const PAID_TICKET_PARKED_ORIGIN_KEY = "tpv_paid_ticket_parked_origin_v1";
 const TPV_USERS_CACHE_KEY = "tpv_cachedUsers_v1";
 const TPV_USERS_CACHE_TS_KEY = "tpv_cachedUsers_ts_v1";
 const TERMINAL_AGENT_CACHE_KEY = "tpv_cachedTerminalAgent_v1";
@@ -1281,6 +1667,7 @@ const OPTIONS_INFOBAR_SHOW_USER_KEY = "ui.infoBarShowUser";
 const OPTIONS_INFOBAR_SHOW_CASH_KEY = "ui.infoBarShowCash";
 const OPTIONS_SCALE_MANUAL_CAPTURE_MODE_KEY = "scale.manualCaptureMode";
 const OPTIONS_CART_DISCOUNT_TOOLS_KEY = "ui.cartDiscountToolsEnabled";
+const OPTIONS_SAFE_TRAINING_MODE_KEY = "runtime.safeTrainingMode";
 const PRODUCT_DISCOUNTS_SESSION_KEY = "tpv_productDiscountPctById_session";
 const PRODUCT_NAME_COLLATOR = new Intl.Collator("es", {
   numeric: true,
@@ -1407,6 +1794,7 @@ let scaleManualCaptureMode = false;
 let cartDiscountToolsEnabled = false;
 let cartGlobalDiscountPct = 0;
 let cartDiscountToolsToggleBound = false;
+let safeTrainingModeToggleBound = false;
 
 const productReorderDragState = {
   active: false,
@@ -1972,6 +2360,7 @@ async function loadProductDiscountConfig() {
 }
 
 async function saveProductDiscountConfig() {
+  if (isSafeTrainingModeEnabled()) return;
   try {
     sessionStorage.setItem(
       PRODUCT_DISCOUNTS_SESSION_KEY,
@@ -2019,6 +2408,7 @@ async function loadProductManualOrderConfig() {
 }
 
 async function saveProductManualOrderConfig() {
+  if (isSafeTrainingModeEnabled()) return;
   try {
     await window.TPV_CFG?.set?.(
       OPTIONS_PRODUCT_MANUAL_ORDER_KEY,
@@ -2410,6 +2800,101 @@ async function saveCartDiscountToolsToggle(enabled) {
   }
 
   renderCart?.();
+}
+
+async function loadSafeTrainingModeToggle() {
+  const el = document.getElementById("safeTrainingModeToggle");
+  let enabled = false;
+  let hasCfgValue = false;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(OPTIONS_SAFE_TRAINING_MODE_KEY);
+    if (cfgVal !== undefined && cfgVal !== null && cfgVal !== "") {
+      enabled = parseBoolLike(cfgVal, false);
+      hasCfgValue = true;
+    }
+  } catch {}
+
+  if (!hasCfgValue) {
+    try {
+      const lsVal = localStorage.getItem(TPV_SAFE_TRAINING_MODE_LS_KEY);
+      if (lsVal !== null) enabled = parseBoolLike(lsVal, false);
+    } catch {}
+  }
+
+  safeTrainingModeEnabled = !!enabled;
+  applySafeTrainingModeUi();
+  if (el) el.checked = safeTrainingModeEnabled;
+}
+
+async function saveSafeTrainingModeToggle(enabled) {
+  safeTrainingModeEnabled = !!enabled;
+  applySafeTrainingModeUi();
+
+  try {
+    localStorage.setItem(
+      TPV_SAFE_TRAINING_MODE_LS_KEY,
+      safeTrainingModeEnabled ? "1" : "0",
+    );
+  } catch {}
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_SAFE_TRAINING_MODE_KEY,
+      safeTrainingModeEnabled,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar modo pruebas seguro:", e);
+  }
+
+  if (safeTrainingModeEnabled) {
+    setStatusText?.("Modo pruebas activo: sin envios a FacturaScripts/API");
+  } else {
+    setStatusText?.("Modo pruebas desactivado");
+  }
+}
+
+function bindSafeTrainingModeToggleOnce() {
+  if (safeTrainingModeToggleBound) return;
+  safeTrainingModeToggleBound = true;
+
+  const el = document.getElementById("safeTrainingModeToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+    const current = isSafeTrainingModeEnabled();
+    if (wanted === current) return;
+
+    if (wanted) {
+      const ok = await confirmModal(
+        "Entrar en entorno de pruebas",
+        "Vas a entrar en el entorno de pruebas.\n\nSe guardará el estado actual y todo funcionará en modo simulación (sin enviar datos a FacturaScripts/API).\n\n¿Continuar?",
+      );
+      if (!ok) {
+        el.checked = current;
+        return;
+      }
+
+      await enterSafeTrainingMode();
+      refreshOptionsUI?.();
+      closeOptions?.();
+      return;
+    }
+
+    const ok = await confirmModal(
+      "Salir del entorno de pruebas",
+      "Vas a salir del entorno de pruebas.\n\nSe restaurará el estado que tenías justo antes de entrar.\n\n¿Continuar?",
+    );
+    if (!ok) {
+      el.checked = current;
+      return;
+    }
+
+    await exitSafeTrainingMode();
+    refreshOptionsUI?.();
+    closeOptions?.();
+  });
 }
 
 let productStockToggleBound = false;
@@ -5003,6 +5488,19 @@ async function maybeRefreshTerminalDefaultCustomer(
   }
 }
 
+async function resetCartCustomerToTerminalDefault(reason = "post-action") {
+  preParkedCustomerSelection = null;
+
+  try {
+    await applyTerminalDefaultCustomer({
+      forceReset: true,
+      reason: `reset-cart-customer:${reason}`,
+    });
+  } catch {
+    window.CUSTOMER_SELECTOR?.resetToDefault?.();
+  }
+}
+
 /*----------------------*/
 /* Fin Cambiar Clientes */
 /*----------------------*/
@@ -6258,6 +6756,7 @@ function renderMainUI(force = false) {
     if (grid) grid.innerHTML = "";
     if (catContainer) catContainer.innerHTML = "";
     if (subCatContainer) subCatContainer.innerHTML = "";
+    mainUiRendered = false;
     renderCart?.();
     return;
   }
@@ -8174,6 +8673,22 @@ window.TPV_UI?.onGuard?.(async ({ title, text }) => {
 // ===== [09] Feedback UI: toasts =====
 
 function toast(message, type = "info", title = "") {
+  if (isSafeTrainingModeEnabled()) {
+    const t = String(type || "").toLowerCase();
+    const text =
+      `${String(title || "")} ${String(message || "")}`.toLowerCase();
+    const isApiNoise =
+      text.includes("facturascripts") ||
+      text.includes("api") ||
+      text.includes("sin internet") ||
+      text.includes("sincroniz") ||
+      text.includes("reserva remota") ||
+      text.includes("en cola") ||
+      text.includes("offline");
+
+    if ((t === "warn" || t === "err") && isApiNoise) return;
+  }
+
   const container = document.getElementById("toastContainer");
   if (!container) return;
 
@@ -10129,6 +10644,7 @@ async function parkCurrentCart(name = "", obs = "") {
 
   const ticketName = String(name || "").trim();
   const observation = String(obs || "").trim();
+  let nextDisplayNo = getNextParkedDisplayNumber();
 
   // ✅ ACTUALIZAR ticket ya cargado
   if (
@@ -10146,9 +10662,21 @@ async function parkCurrentCart(name = "", obs = "") {
     existing.items = snapshot;
     existing.total = total;
     existing.discountSummary = discountSummary;
+    existing._simulated =
+      isSafeTrainingModeEnabled() || isSimulatedParkedTicket(existing);
     existing.clientName = clientName;
     existing.codcliente = selectedCustomerCod;
-    existing.name = ticketName || existing.name || `Ticket #${existing.id}`;
+    if (!Number(existing.displayNo || 0)) {
+      const withoutCurrent = (
+        Array.isArray(parkedTickets) ? parkedTickets : []
+      ).filter((t) => t !== existing);
+      nextDisplayNo = ensureUniqueNextParkedDisplayNumber(
+        getNextParkedDisplayNumber(withoutCurrent),
+        withoutCurrent,
+      );
+      existing.displayNo = nextDisplayNo;
+    }
+    existing.name = getCanonicalParkedTicketName(existing, ticketName);
     existing.obs = observation;
     existing.updatedAt = new Date();
     saveParkedTicketsCache();
@@ -10200,6 +10728,7 @@ async function parkCurrentCart(name = "", obs = "") {
     refreshParkButtonUI();
     refreshParkedEditingBanner();
     updateParkedCountBadge();
+    await resetCartCustomerToTerminalDefault("park-update");
 
     toast("Ticket aparcado actualizado ✅", "ok", "Aparcados");
     setStatusText("Ticket aparcado actualizado.");
@@ -10213,10 +10742,20 @@ async function parkCurrentCart(name = "", obs = "") {
   }
 
   // ✅ CREAR ticket nuevo
+  try {
+    // Refresco previo para reducir al minimo colisiones de numeracion entre TPVs.
+    await refreshRemoteParkedReservationsOnly();
+  } catch {}
+
+  nextDisplayNo = ensureUniqueNextParkedDisplayNumber(
+    getNextParkedDisplayNumber(),
+  );
+
   const nextParkedId = nextParkedTicketId();
 
   const localTicket = {
     id: nextParkedId,
+    displayNo: nextDisplayNo,
     createdAt: new Date(),
     updatedAt: null,
     items: snapshot,
@@ -10224,13 +10763,17 @@ async function parkCurrentCart(name = "", obs = "") {
     discountSummary,
     clientName,
     codcliente: selectedCustomerCod,
-    name: ticketName || `Ticket #${nextParkedId}`,
+    name: getCanonicalParkedTicketName(
+      { id: nextParkedId, displayNo: nextDisplayNo, name: ticketName },
+      ticketName || `Ticket #${nextDisplayNo}`,
+    ),
     obs: observation,
     paid: false,
     paidAt: null,
     paidTicketCode: null,
     paidTicketId: null,
     fs: null,
+    _simulated: isSafeTrainingModeEnabled(),
   };
 
   try {
@@ -10300,6 +10843,7 @@ async function parkCurrentCart(name = "", obs = "") {
   refreshParkButtonUI();
   refreshParkedEditingBanner();
   updateParkedCountBadge();
+  await resetCartCustomerToTerminalDefault("park-create");
 
   toast("Ticket aparcado ✅", "ok", "Aparcados");
   setStatusText("Ticket aparcado.");
@@ -10659,6 +11203,10 @@ function parkedTicketMatchesSearch(t, term) {
   const haystack = [
     t.id || "",
     `ticket #${t.id || ""}`,
+    getParkedTicketDisplayNumber(t) || "",
+    `ticket #${getParkedTicketDisplayNumber(t) || ""}`,
+    getParkedDisplayNumberFromId(t?.id || t?.ticketId || 0) || "",
+    `ticket #${getParkedDisplayNumberFromId(t?.id || t?.ticketId || 0) || ""}`,
     t.name || "",
     t.clientName || "",
     t.obs || "",
@@ -10677,7 +11225,47 @@ function parkedTicketMatchesSearch(t, term) {
 function parkedTicketPassesFilter(t) {
   if (parkedViewState.filter === "all") return true;
   if (parkedViewState.filter === "paid") return !!t.paid;
-  return !t.paid;
+
+  if (!!t.paid) return false;
+
+  // En la vista "Sin cobrar", mostrar solo aparcados del dia actual.
+  const created = t?.createdAt ? new Date(t.createdAt) : null;
+  if (!created || Number.isNaN(created.getTime())) return false;
+
+  const now = new Date();
+  return (
+    created.getFullYear() === now.getFullYear() &&
+    created.getMonth() === now.getMonth() &&
+    created.getDate() === now.getDate()
+  );
+}
+
+function getParkedTicketSortTimeMs(t) {
+  const createdMs = t?.createdAt ? new Date(t.createdAt).getTime() : 0;
+  if (Number.isFinite(createdMs) && createdMs > 0) return createdMs;
+
+  const updatedMs = t?.updatedAt ? new Date(t.updatedAt).getTime() : 0;
+  if (Number.isFinite(updatedMs) && updatedMs > 0) return updatedMs;
+
+  return 0;
+}
+
+function compareParkedTicketsForList(a, b) {
+  const aPaid = !!a?.paid;
+  const bPaid = !!b?.paid;
+  if (aPaid !== bPaid) return aPaid ? 1 : -1;
+
+  const aTime = getParkedTicketSortTimeMs(a);
+  const bTime = getParkedTicketSortTimeMs(b);
+  if (aTime !== bTime) return bTime - aTime;
+
+  const aNo = Number(getParkedTicketDisplayNumber(a) || 0) || 0;
+  const bNo = Number(getParkedTicketDisplayNumber(b) || 0) || 0;
+  if (aNo !== bNo) return bNo - aNo;
+
+  const aName = String(a?.clientName || a?.name || "");
+  const bName = String(b?.clientName || b?.name || "");
+  return aName.localeCompare(bName, "es", { sensitivity: "base" });
 }
 
 function syncParkedSearchClearBtn() {
@@ -10732,6 +11320,7 @@ async function clearPaidParkedHistory() {
 
   parkedTickets = source.filter((t) => !t?.paid);
   saveParkedTicketsCache(parkedTickets);
+  saveParkedPaidHistory([]);
 
   if (
     currentParkedTicketIndex != null &&
@@ -10950,7 +11539,7 @@ function refreshParkedEditingBanner() {
     return;
   }
 
-  title.textContent = `Ticket Aparcado: ${t.label || `Ticket #${t.id}`}`;
+  title.textContent = `Ticket Aparcado: ${getParkedTicketDisplayLabel(t)}`;
   obs.textContent = t.obs ? `Observación: ${t.obs}` : "Sin observaciones";
 
   wrap.classList.remove("hidden");
@@ -11003,6 +11592,8 @@ function renderParkedTicketsModal() {
     return parkedTicketPassesFilter(t) && parkedTicketMatchesSearch(t, term);
   });
 
+  filtered.sort(compareParkedTicketsForList);
+
   if (!filtered.length) {
     const empty = document.createElement("div");
     empty.className = "parked-ticket-empty";
@@ -11043,6 +11634,9 @@ function renderParkedTicketsModal() {
     const paidBadge = t.paid
       ? `<span class="ticket-badge ticket-badge-ok">✔ COBRADO</span>`
       : `<span class="ticket-badge ticket-badge-partial">PENDIENTE</span>`;
+    const simBadge = isSimulatedParkedTicket(t)
+      ? `<span class="ticket-badge ticket-badge-sim">SIM</span>`
+      : "";
 
     const discountBadge = hasDiscountView
       ? `<span class="ticket-badge ticket-badge-discount">DTO</span>`
@@ -11072,8 +11666,9 @@ function renderParkedTicketsModal() {
       <div class="pt-left">
         <div class="pt-title">
           ${paidBadge}
+          ${simBadge}
           ${discountBadge}
-          ${escapeHtml(t.name || `Ticket #${t.id}`)}
+          ${escapeHtml(getParkedTicketDisplayLabel(t))}
         </div>
 
         ${
@@ -11083,7 +11678,7 @@ function renderParkedTicketsModal() {
         }
 
         <div class="pt-sub">
-          ${hora} · ${escapeHtml(t.clientName || "Cliente")} · Ticket #${t.id}
+          ${hora} · ${escapeHtml(t.clientName || "Cliente")} · ${isSimulatedParkedTicket(t) ? "SIM" : "Ticket"} #${getParkedTicketDisplayNumber(t) || "0"}
         </div>
       </div>
 
@@ -11119,7 +11714,7 @@ function renderParkedTicketsModal() {
 
         const ok = await confirmModal(
           "Eliminar ticket aparcado",
-          `¿Seguro que quieres eliminar el Ticket #${t.id}?`,
+          `¿Seguro que quieres eliminar el Ticket #${getParkedTicketDisplayNumber(t) || "0"}?`,
         );
         if (!ok) return;
 
@@ -11160,7 +11755,7 @@ function renderParkedTicketsModal() {
           );
         }
 
-        if (!deletedRemotelySynced) {
+        if (!deletedRemotelySynced || isSafeTrainingModeEnabled()) {
           parkedTickets.splice(realIndex, 1);
           saveParkedTicketsCache();
         }
@@ -11180,7 +11775,7 @@ function renderParkedTicketsModal() {
           );
         }
 
-        if (!deletedRemotelySynced) {
+        if (!deletedRemotelySynced || isSafeTrainingModeEnabled()) {
           if (currentParkedTicketIndex === realIndex) {
             currentParkedTicketIndex = null;
           } else if (
@@ -11307,6 +11902,40 @@ function isParkedTicketLockedByAnotherTerminal(ticket) {
   return owner !== mine;
 }
 
+function findPaidTwinForParkedTicket(ticket, list = parkedTickets) {
+  if (!ticket) return null;
+
+  const source = Array.isArray(list) ? list : [];
+  const ticketKey = String(getParkedTicketSyncKey(ticket) || "").trim();
+  const ticketDisplayNo =
+    Number(getParkedTicketDisplayNumber(ticket) || 0) || 0;
+  const ticketSig = buildCartRecoverySignature(
+    Array.isArray(ticket?.items) ? ticket.items : [],
+  );
+
+  return (
+    source.find((candidate) => {
+      if (!candidate || !candidate?.paid) return false;
+
+      const candidateKey = String(
+        getParkedTicketSyncKey(candidate) || "",
+      ).trim();
+      if (ticketKey && candidateKey && ticketKey === candidateKey) return true;
+
+      const candidateDisplayNo =
+        Number(getParkedTicketDisplayNumber(candidate) || 0) || 0;
+      if (!ticketDisplayNo || candidateDisplayNo !== ticketDisplayNo)
+        return false;
+
+      const candidateSig = buildCartRecoverySignature(
+        Array.isArray(candidate?.items) ? candidate.items : [],
+      );
+
+      return !!ticketSig && !!candidateSig && candidateSig === ticketSig;
+    }) || null
+  );
+}
+
 async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
   if (!Array.isArray(parkedTickets) || !parkedTickets.length) return false;
   if (index == null || index < 0 || index >= parkedTickets.length) return false;
@@ -11343,6 +11972,8 @@ async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
   ticket.paidTicketCode =
     paidInfo.codigo || paidInfo.numero || ticket.paidTicketCode || null;
   ticket.paidTicketId = paidInfo.idfactura || ticket.paidTicketId || null;
+  rememberPaidTicketParkedOrigin(ticket, paidInfo);
+  upsertParkedPaidHistory(ticket);
   saveParkedTicketsCache();
 
   const fsInfo = ticket.fs || {};
@@ -11363,20 +11994,20 @@ async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
   }
 
   try {
-    await apiDeleteParkedReservation(ticket);
+    await apiSaveParkedReservation(ticket);
     await refreshRemoteParkedReservationsOnly();
-    scheduleParkedReservationsBurstRefresh("pay-delete-parked");
+    scheduleParkedReservationsBurstRefresh("pay-mark-parked");
   } catch (e) {
-    enqueueParkedSyncOperation("delete", ticket);
-    scheduleParkedReservationsBurstRefresh("queue-pay-delete-parked");
+    enqueueParkedSyncOperation("upsert", ticket);
+    scheduleParkedReservationsBurstRefresh("queue-pay-mark-parked");
     console.warn(
-      "No se pudo borrar la reserva remota al cobrar:",
+      "No se pudo marcar como cobrada la reserva remota:",
       e?.message || e,
     );
 
     if (isParkedSyncTransientError(e)) {
       toast(
-        "Sin internet: cobro aplicado localmente y borrado en cola.",
+        "Sin internet: cobro aplicado localmente y marcado en cola.",
         "warn",
         "Aparcados",
       );
@@ -11584,6 +12215,24 @@ function restoreParkedCartByIndex(index) {
   }
 
   const ticket = parkedTickets[index];
+
+  const paidTwin = findPaidTwinForParkedTicket(ticket, parkedTickets);
+  if (paidTwin) {
+    ticket.paid = true;
+    ticket.paidAt = paidTwin?.paidAt || ticket.paidAt || new Date();
+    ticket.paidTicketCode =
+      paidTwin?.paidTicketCode || ticket.paidTicketCode || null;
+    ticket.paidTicketId = paidTwin?.paidTicketId || ticket.paidTicketId || null;
+    upsertParkedPaidHistory(ticket);
+    saveParkedTicketsCache();
+    renderParkedTicketsModal?.();
+    toast(
+      "Ese ticket aparcado ya figura como cobrado. No se puede volver a cargar.",
+      "warn",
+      "Aparcados",
+    );
+    return;
+  }
 
   if (ticket.paid) {
     toast(
@@ -13225,6 +13874,32 @@ async function maybeOpenCashOrRecover() {
   cashRecoverInFlight = true;
 
   try {
+    if (isSafeTrainingModeEnabled()) {
+      cashSession.remoteCajaId = null;
+      cashSession.open = false;
+      stopSharedCajaHealthMonitor?.();
+      pushCustomerState();
+      renderCashIdChip?.();
+
+      try {
+        localStorage.removeItem("tpv_remoteCajaId");
+      } catch {}
+
+      if (!cashOpenDialogShown) {
+        cashOpenDialogShown = true;
+        await ensureTerminalAgentDefaults();
+        refreshAgentGuardUI?.();
+        setTimeout(() => {
+          if (cashSession?.open) {
+            cashOpenDialogShown = false;
+            return;
+          }
+          openCashOpenDialog("open");
+        }, 0);
+      }
+      return;
+    }
+
     const storedIdRaw = localStorage.getItem("tpv_remoteCajaId");
     const storedId = Number(storedIdRaw || 0) || 0;
 
@@ -14772,6 +15447,7 @@ async function confirmCashOpening() {
 
 async function confirmCashClosing() {
   const requestId = createRequestId("CASHCL");
+  const trainingMode = isSafeTrainingModeEnabled();
 
   logFeatureInfo("CAJA", "cierre-inicio", {
     requestId,
@@ -14827,10 +15503,15 @@ async function confirmCashClosing() {
   try {
     await apiCloseCashInFS();
 
-    const check = idcaja ? await apiReadCajaById(idcaja) : null;
-    closedOk = !!check && !isCajaOpen(check);
+    if (trainingMode) {
+      // En entorno de pruebas no dependemos de confirmación remota.
+      closedOk = true;
+    } else {
+      const check = idcaja ? await apiReadCajaById(idcaja) : null;
+      closedOk = !!check && !isCajaOpen(check);
 
-    if (!check) closedOk = true;
+      if (!check) closedOk = true;
+    }
   } catch (e) {
     logFeatureWarn("CAJA", "cierre-fs-no-disponible", {
       requestId,
@@ -14905,6 +15586,17 @@ async function confirmCashClosing() {
   });
 
   renderCashIdChip();
+
+  if (trainingMode) {
+    const leaveTraining = await confirmModal(
+      "Cierre en entorno de pruebas",
+      "Has cerrado la caja de pruebas.\n\n¿Quieres salir del entorno de pruebas y volver al modo normal?\n\nSi pulsas Cancelar, seguirás en modo pruebas.",
+    );
+
+    if (leaveTraining) {
+      await exitSafeTrainingMode();
+    }
+  }
 
   try {
     if (cashOpenOkBtn) cashOpenOkBtn.disabled = false;
@@ -15557,6 +16249,10 @@ if (cashOpenOkBtn) {
 
 // 1) Request genérico (form-urlencoded) para POST/PUT/DELETE
 async function apiWrite(resource, method = "POST", fields = {}) {
+  if (isSafeTrainingModeEnabled()) {
+    throw buildRemoteWriteBlockedError(method, resource);
+  }
+
   const cfg = window.RECIPOK_API || {};
   if (!cfg.baseUrl || !cfg.apiKey) throw new Error("Config API no definida");
 
@@ -15603,6 +16299,7 @@ async function apiWrite(resource, method = "POST", fields = {}) {
 }
 
 async function apiCreatePresupuestoFromCart(obs = "") {
+  if (isSafeTrainingModeEnabled()) return null;
   if (TPV_STATE.offline || TPV_STATE.locked) return null;
 
   const cfg = window.RECIPOK_API || {};
@@ -15680,6 +16377,24 @@ function nowFs() {
 // 3) Abrir/cerrar caja remota (tpvcajas)
 // NOTA: si en tu FS el recurso no es "tpvcajas", lo cambiamos al real.
 async function apiOpenCashInFS() {
+  if (isSafeTrainingModeEnabled()) {
+    const existing =
+      Number(cashSession?.remoteCajaId || 0) ||
+      Number(localStorage.getItem("tpv_remoteCajaId") || 0);
+
+    if (existing > 0) {
+      cashSession.remoteCajaId = existing;
+      return { ok: true, reused: true, idcaja: existing, simulated: true };
+    }
+
+    const simulatedId = 900000000 + (Date.now() % 10000000);
+    cashSession.remoteCajaId = simulatedId;
+    try {
+      localStorage.setItem("tpv_remoteCajaId", String(simulatedId));
+    } catch {}
+    return { ok: true, idcaja: simulatedId, simulated: true };
+  }
+
   if (TPV_STATE.offline || TPV_STATE.locked) return null;
   if (!currentTerminal?.id) throw new Error("No hay terminal seleccionado");
 
@@ -15767,6 +16482,14 @@ try {
 } catch (e) {}
 
 async function apiCloseCashInFS() {
+  if (isSafeTrainingModeEnabled()) {
+    return {
+      ok: true,
+      simulated: true,
+      idcaja: Number(getCajaIdSafe?.() || 0) || null,
+    };
+  }
+
   if (TPV_STATE.offline || TPV_STATE.locked) return null;
 
   let remoteId = getCajaIdSafe();
@@ -17597,6 +18320,11 @@ function refreshOptionsUI() {
     cartDiscountToggle.checked = !!cartDiscountToolsEnabled;
   }
 
+  const safeTrainingToggle = document.getElementById("safeTrainingModeToggle");
+  if (safeTrainingToggle) {
+    safeTrainingToggle.checked = isSafeTrainingModeEnabled();
+  }
+
   const stockToggle = document.getElementById("productStockToggle");
   if (stockToggle) stockToggle.checked = !!showProductStockBadge;
 
@@ -17856,6 +18584,9 @@ async function openOptions() {
 
   bindCartDiscountToolsToggleOnce();
   await loadCartDiscountToolsToggle();
+
+  bindSafeTrainingModeToggleOnce();
+  await loadSafeTrainingModeToggle();
 
   bindParkStockWarningToggleOnce();
   await loadParkStockWarningToggle();
@@ -20671,6 +21402,100 @@ function nextParkedTicketId() {
   return fallback;
 }
 
+function getParkedDisplayNumberFromId(rawId) {
+  const id = Number(rawId || 0) || 0;
+  if (!id) return "";
+
+  const nodePart = Math.floor(id / 10000);
+  const seqPart = id % 10000;
+
+  if (nodePart >= 1000 && nodePart <= 9999 && seqPart >= 1 && seqPart <= 9999) {
+    return String(seqPart);
+  }
+
+  return String(id);
+}
+
+function parseParkedDisplayNumber(value) {
+  const n = Number(String(value || "").trim());
+  if (!Number.isInteger(n) || n <= 0) return 0;
+  return n;
+}
+
+function getParkedDisplayNumberFromLabel(label) {
+  const txt = String(label || "").trim();
+  if (!txt) return 0;
+  const m = txt.match(/^ticket\s*#\s*(\d+)$/i);
+  return m ? parseParkedDisplayNumber(m[1]) : 0;
+}
+
+function normalizeParkedDisplayNumberValue(value) {
+  const parsed = parseParkedDisplayNumber(value);
+  if (!parsed) return 0;
+
+  const normalized = getParkedDisplayNumberFromId(parsed) || String(parsed);
+  return parseParkedDisplayNumber(normalized);
+}
+
+function getNextParkedDisplayNumber(list = parkedTickets) {
+  const maxCurrent = getScopedPendingParkedTickets(list).reduce((max, t) => {
+    const n = Number(getParkedTicketDisplayNumber(t) || 0);
+    return n > max ? n : max;
+  }, 0);
+
+  return maxCurrent > 0 ? maxCurrent + 1 : 1;
+}
+
+function getParkedTicketDisplayNumber(ticket) {
+  const explicit = normalizeParkedDisplayNumberValue(
+    ticket?.displayNo ?? ticket?.displayNumber ?? ticket?.ticketDisplayNo,
+  );
+  if (explicit > 0) return String(explicit);
+
+  const fromLabel = getParkedDisplayNumberFromLabel(
+    ticket?.name || ticket?.label,
+  );
+  if (fromLabel > 0) {
+    return getParkedDisplayNumberFromId(fromLabel) || String(fromLabel);
+  }
+
+  return getParkedDisplayNumberFromId(ticket?.id || ticket?.ticketId || 0);
+}
+
+function getParkedTicketDisplayLabel(ticket) {
+  const explicit = String(ticket?.name || ticket?.label || "").trim();
+  const clientName = String(ticket?.clientName || "").trim();
+  const displayNo = getParkedTicketDisplayNumber(ticket) || "0";
+
+  if (!explicit) {
+    return clientName || `Ticket #${displayNo}`;
+  }
+
+  const m = explicit.match(/^ticket\s*#\s*(\d+)$/i);
+  if (m) {
+    if (clientName) return clientName;
+    const fromText = getParkedDisplayNumberFromId(m[1]) || displayNo;
+    return `Ticket #${fromText}`;
+  }
+
+  return explicit;
+}
+
+function getCanonicalParkedTicketName(ticket, fallbackName = "") {
+  const rawName = String(
+    ticket?.name || ticket?.label || fallbackName || "",
+  ).trim();
+  const displayNo = getParkedTicketDisplayNumber(ticket) || "0";
+
+  if (!rawName) return `Ticket #${displayNo}`;
+
+  const m = rawName.match(/^ticket\s*#\s*(\d+)$/i);
+  if (!m) return rawName;
+
+  const shortNo = getParkedDisplayNumberFromId(m[1]) || displayNo;
+  return `Ticket #${shortNo}`;
+}
+
 function getScopedPendingParkedTickets(list = parkedTickets) {
   return (Array.isArray(list) ? list : []).filter(
     (t) => !t?.paid && !t?.closingInProgress,
@@ -20679,6 +21504,105 @@ function getScopedPendingParkedTickets(list = parkedTickets) {
 
 function getScopedAllParkedTickets(list = parkedTickets) {
   return (Array.isArray(list) ? list : []).filter((t) => !t?.closingInProgress);
+}
+
+function collectUsedParkedDisplayNumbers(list = parkedTickets) {
+  const used = new Set();
+
+  getScopedAllParkedTickets(list).forEach((t) => {
+    const n = Number(getParkedTicketDisplayNumber(t) || 0) || 0;
+    if (n > 0) used.add(n);
+  });
+
+  return used;
+}
+
+function ensureUniqueNextParkedDisplayNumber(preferred, list = parkedTickets) {
+  const used = collectUsedParkedDisplayNumbers(list);
+  let candidate = Number(preferred || 0) || 1;
+  if (candidate <= 0) candidate = 1;
+
+  while (used.has(candidate)) {
+    candidate += 1;
+    if (candidate > 999999) {
+      candidate = Date.now() % 1000000;
+      if (candidate <= 0) candidate = 1;
+      break;
+    }
+  }
+
+  return candidate;
+}
+
+function getPaidTicketParkedOriginStorageKey() {
+  return getParkedScopedStorageKey(PAID_TICKET_PARKED_ORIGIN_KEY);
+}
+
+function loadPaidTicketParkedOriginMap() {
+  try {
+    const raw = localStorage.getItem(getPaidTicketParkedOriginStorageKey());
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePaidTicketParkedOriginMap(map) {
+  try {
+    const safe = map && typeof map === "object" ? map : {};
+    const entries = Object.entries(safe);
+    const trimmed =
+      entries.length > 3000
+        ? Object.fromEntries(entries.slice(entries.length - 3000))
+        : safe;
+    localStorage.setItem(
+      getPaidTicketParkedOriginStorageKey(),
+      JSON.stringify(trimmed),
+    );
+  } catch {}
+}
+
+function rememberPaidTicketParkedOrigin(ticket, paidInfo = {}) {
+  const paidId = Number(paidInfo?.idfactura || ticket?.paidTicketId || 0) || 0;
+  const paidCode = String(
+    paidInfo?.codigo || paidInfo?.numero || ticket?.paidTicketCode || "",
+  )
+    .trim()
+    .toLowerCase();
+
+  if (!paidId && !paidCode) return;
+
+  const origin = {
+    parkedDisplayNo: String(getParkedTicketDisplayNumber(ticket) || ""),
+    parkedLabel: String(getParkedTicketDisplayLabel(ticket) || "").trim(),
+    parkedClientName: String(ticket?.clientName || "").trim(),
+    parkedTicketId: Number(ticket?.id || 0) || 0,
+    paidAt: new Date().toISOString(),
+  };
+
+  const map = loadPaidTicketParkedOriginMap();
+  if (paidId > 0) map[`id:${paidId}`] = origin;
+  if (paidCode) map[`code:${paidCode}`] = origin;
+  savePaidTicketParkedOriginMap(map);
+}
+
+function getPaidTicketParkedOriginForTicketRow(ticketRow) {
+  const map = loadPaidTicketParkedOriginMap();
+
+  const paidId = Number(ticketRow?.idfactura || 0) || 0;
+  if (paidId > 0 && map[`id:${paidId}`]) {
+    return map[`id:${paidId}`];
+  }
+
+  const paidCode = String(ticketRow?.codigo || "")
+    .trim()
+    .toLowerCase();
+  if (paidCode && map[`code:${paidCode}`]) {
+    return map[`code:${paidCode}`];
+  }
+
+  return null;
 }
 
 function getProductBaseId(product) {
@@ -20818,6 +21742,7 @@ function isReservedStockSyncedToFsEnabled() {
 }
 
 async function syncReservedStockDeltaToFS(deltaMap, reason = "") {
+  if (isSafeTrainingModeEnabled()) return true;
   if (!isReservedStockSyncedToFsEnabled()) return true;
   if (!(deltaMap instanceof Map) || deltaMap.size === 0) return true;
   if (TPV_STATE?.offline || TPV_STATE?.locked) {
@@ -20887,6 +21812,8 @@ function rebuildRemoteReservedByProductMap() {
     ? REMOTE_PARKED_RESERVATIONS
     : []
   ).forEach((ticket) => {
+    if (ticket?.paid) return;
+
     const items = Array.isArray(ticket?.items) ? ticket.items : [];
 
     items.forEach((it) => {
@@ -20925,7 +21852,7 @@ function normalizeRemoteParkedTicket(raw) {
       }))
     : [];
 
-  return {
+  const normalizedTicket = {
     id,
     slug: String(raw.slug || "").trim(),
     cajaId: String(raw.cajaId || raw.cajaid || "").trim(),
@@ -20946,9 +21873,15 @@ function normalizeRemoteParkedTicket(raw) {
     clientName: String(raw.clientName || "").trim() || "Cliente",
     codcliente:
       String(raw.codcliente || raw.clientCodcliente || "").trim() || "",
-    name:
-      String(raw.ticketName || raw.name || "").trim() ||
-      (id ? `Ticket #${id}` : "Ticket"),
+    displayNo:
+      normalizeParkedDisplayNumberValue(
+        raw.displayNo ?? raw.displayNumber ?? raw.ticketDisplayNo,
+      ) ||
+      normalizeParkedDisplayNumberValue(
+        getParkedDisplayNumberFromLabel(raw.ticketName || raw.name),
+      ) ||
+      0,
+    name: String(raw.ticketName || raw.name || "").trim(),
     obs: String(raw.obs || raw.ticketObs || "").trim(),
     closingInProgress: parseBoolLike(
       raw?.closingInProgress ?? raw?.closing_in_progress,
@@ -20966,7 +21899,16 @@ function normalizeRemoteParkedTicket(raw) {
     paidTicketCode: raw.paidTicketCode || null,
     paidTicketId: raw.paidTicketId || null,
     fs: raw.fs && typeof raw.fs === "object" ? raw.fs : null,
+    _simulated: !!(raw._simulated || raw.simulated),
   };
+
+  normalizedTicket.name = getCanonicalParkedTicketName(
+    normalizedTicket,
+    normalizedTicket.name ||
+      (id ? `Ticket #${getParkedDisplayNumberFromId(id) || id}` : "Ticket"),
+  );
+
+  return normalizedTicket;
 }
 
 function saveParkedTicketsCache(list = parkedTickets) {
@@ -20990,6 +21932,67 @@ function saveParkedTicketsCache(list = parkedTickets) {
       e?.message || e,
     );
   }
+}
+
+function saveParkedPaidHistory(list) {
+  const safe = (Array.isArray(list) ? list : [])
+    .filter((t) => !!t?.paid)
+    .map((t) => ({
+      ...t,
+      createdAt: t?.createdAt
+        ? new Date(t.createdAt).toISOString()
+        : new Date().toISOString(),
+      updatedAt: t?.updatedAt ? new Date(t.updatedAt).toISOString() : null,
+      paidAt: t?.paidAt ? new Date(t.paidAt).toISOString() : null,
+    }));
+
+  try {
+    localStorage.setItem(
+      getParkedScopedStorageKey(PARKED_PAID_HISTORY_KEY),
+      JSON.stringify(safe.slice(-2000)),
+    );
+  } catch (e) {
+    console.warn(
+      "No se pudo guardar historial de aparcados cobrados:",
+      e?.message || e,
+    );
+  }
+}
+
+function loadParkedPaidHistory() {
+  try {
+    const raw = localStorage.getItem(
+      getParkedScopedStorageKey(PARKED_PAID_HISTORY_KEY),
+    );
+    const arr = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(arr)) return [];
+
+    return arr
+      .map((it) => normalizeRemoteParkedTicket(it))
+      .filter(Boolean)
+      .filter((t) => !!t?.paid);
+  } catch (e) {
+    console.warn(
+      "No se pudo leer historial de aparcados cobrados:",
+      e?.message || e,
+    );
+    return [];
+  }
+}
+
+function upsertParkedPaidHistory(ticket) {
+  if (!ticket || !ticket?.paid) return;
+
+  const key = getParkedTicketSyncKey(ticket);
+  if (!key) return;
+
+  const list = loadParkedPaidHistory();
+  const idx = list.findIndex((it) => getParkedTicketSyncKey(it) === key);
+
+  if (idx >= 0) list[idx] = { ...list[idx], ...ticket };
+  else list.push(ticket);
+
+  saveParkedPaidHistory(list);
 }
 
 function loadParkedTicketsCache() {
@@ -21066,6 +22069,8 @@ function snapshotTicketForSync(ticket) {
 }
 
 function enqueueParkedSyncOperation(op, ticket) {
+  if (isSafeTrainingModeEnabled()) return;
+
   const ticketSnapshot = snapshotTicketForSync(ticket);
   const key = getParkedTicketSyncKey(ticketSnapshot);
   if (!key) return;
@@ -21086,6 +22091,7 @@ function enqueueParkedSyncOperation(op, ticket) {
 }
 
 async function processParkedSyncQueue() {
+  if (isSafeTrainingModeEnabled()) return true;
   if (__parkedSyncDrainInFlight) return false;
   if (TPV_STATE?.offline) return false;
 
@@ -21143,7 +22149,7 @@ function syncParkedTicketsFromRemote(list) {
       : null;
   const prevLoadedKey = getParkedTicketSyncKey(prevLoadedTicket);
 
-  const next = (Array.isArray(list) ? list : [])
+  const nextRaw = (Array.isArray(list) ? list : [])
     .map((it) => normalizeRemoteParkedTicket(it))
     .map((t) => {
       const key = getParkedTicketSyncKey(t);
@@ -21157,6 +22163,10 @@ function syncParkedTicketsFromRemote(list) {
 
       if (!String(t?.clientName || "").trim()) {
         t.clientName = String(prev?.clientName || "").trim() || "Cliente";
+      }
+
+      if (!Number(t?.displayNo || 0) && Number(prev?.displayNo || 0) > 0) {
+        t.displayNo = Number(prev.displayNo);
       }
 
       if (
@@ -21173,10 +22183,52 @@ function syncParkedTicketsFromRemote(list) {
 
       return t;
     })
-    .filter(Boolean)
-    .filter((t) => !t.paid);
+    .filter(Boolean);
+
+  const mergedRaw = [...nextRaw, ...loadParkedPaidHistory()];
+
+  const dedupByKey = new Map();
+  mergedRaw.forEach((t) => {
+    const keyBySync = String(getParkedTicketSyncKey(t) || "").trim();
+    const keyById = Number(t?.id || 0) > 0 ? `id:${Number(t.id)}` : "";
+    const key = keyBySync || keyById;
+    if (!key) return;
+
+    const prev = dedupByKey.get(key);
+    if (!prev) {
+      dedupByKey.set(key, t);
+      return;
+    }
+
+    if (!!t?.paid && !prev?.paid) {
+      dedupByKey.set(key, t);
+      return;
+    }
+
+    const tsFrom = (x) => {
+      const paidAtMs = x?.paidAt ? new Date(x.paidAt).getTime() : 0;
+      const updMs = x?.updatedAt ? new Date(x.updatedAt).getTime() : 0;
+      const crtMs = x?.createdAt ? new Date(x.createdAt).getTime() : 0;
+      return Math.max(
+        Number.isFinite(paidAtMs) ? paidAtMs : 0,
+        Number.isFinite(updMs) ? updMs : 0,
+        Number.isFinite(crtMs) ? crtMs : 0,
+      );
+    };
+
+    const prevTs = tsFrom(prev);
+    const nextTs = tsFrom(t);
+    if (nextTs >= prevTs) {
+      dedupByKey.set(key, t);
+    }
+  });
+
+  const next = Array.from(dedupByKey.values()).sort(
+    compareParkedTicketsForList,
+  );
 
   parkedTickets = next;
+  saveParkedPaidHistory(next.filter((t) => !!t?.paid));
 
   const maxId = parkedTickets.reduce((m, t) => {
     const n = Number(t?.id || 0);
@@ -21289,6 +22341,12 @@ function getVisibleStockForProduct(productOrId) {
 }
 
 async function apiListParkedReservations() {
+  if (isSafeTrainingModeEnabled()) {
+    return getScopedPendingParkedTickets(parkedTickets).map((t) =>
+      snapshotTicketForSync(t),
+    );
+  }
+
   const slug = getCurrentSlugForReservations();
   if (!slug) return [];
 
@@ -21317,6 +22375,10 @@ async function apiListParkedReservations() {
 }
 
 async function apiSaveParkedReservation(ticket) {
+  if (isSafeTrainingModeEnabled()) {
+    return { ok: true, simulated: true };
+  }
+
   const slug = String(ticket?.slug || getCurrentSlugForReservations() || "");
   const cajaId = String(
     ticket?.cajaId || getCajaIdSafe?.() || currentTerminal?.id || "",
@@ -21336,7 +22398,12 @@ async function apiSaveParkedReservation(ticket) {
     slug,
     cajaId,
     ticketId: String(ticket.id),
-    ticketName: String(ticket.name || `Ticket #${ticket.id}`),
+    ticketDisplayNo:
+      Number(getParkedTicketDisplayNumber(ticket) || 0) || undefined,
+    ticketName: getCanonicalParkedTicketName(
+      ticket,
+      `Ticket #${getParkedTicketDisplayNumber(ticket) || getParkedDisplayNumberFromId(ticket.id) || ticket.id}`,
+    ),
     obs: String(ticket.obs || ""),
     clientName: String(ticket.clientName || ""),
     codcliente: String(ticket.codcliente || "").trim(),
@@ -21345,6 +22412,10 @@ async function apiSaveParkedReservation(ticket) {
     closingByTerminalId: String(ticket?.closingByTerminalId || "").trim(),
     closingByTerminalName: String(ticket?.closingByTerminalName || "").trim(),
     closingByAt: ticket?.closingByAt || null,
+    paid: !!ticket?.paid,
+    paidAt: ticket?.paidAt ? new Date(ticket.paidAt).toISOString() : null,
+    paidTicketCode: String(ticket?.paidTicketCode || "").trim() || null,
+    paidTicketId: Number(ticket?.paidTicketId || 0) || null,
     discountSummary:
       ticket?.discountSummary && typeof ticket.discountSummary === "object"
         ? {
@@ -21436,6 +22507,8 @@ async function apiSaveParkedReservation(ticket) {
 }
 
 async function apiDeleteParkedReservation(ticket) {
+  if (isSafeTrainingModeEnabled()) return true;
+
   const slug = String(ticket?.slug || getCurrentSlugForReservations() || "");
   const cajaId = String(
     ticket?.cajaId || getCajaIdSafe?.() || currentTerminal?.id || "",
@@ -21473,6 +22546,22 @@ async function apiDeleteParkedReservation(ticket) {
 }
 
 async function refreshRemoteParkedReservationsOnly() {
+  if (isSafeTrainingModeEnabled()) {
+    REMOTE_PARKED_RESERVATIONS = getScopedPendingParkedTickets(parkedTickets);
+    rebuildRemoteReservedByProductMap();
+    updateRenderedProductStocks();
+    updateParkedCountBadge?.();
+    refreshParkButtonUI?.();
+    refreshParkedEditingBanner?.();
+    if (
+      parkedTicketsOverlay &&
+      !parkedTicketsOverlay.classList.contains("hidden")
+    ) {
+      renderParkedTicketsModal?.();
+    }
+    return true;
+  }
+
   if (TPV_STATE?.offline) return false;
 
   try {
@@ -21488,8 +22577,9 @@ async function refreshRemoteParkedReservationsOnly() {
     console.warn("No se pudieron refrescar reservas remotas:", e?.message || e);
 
     const cached = loadParkedTicketsCache();
-    if (cached.length) {
-      parkedTickets = cached;
+    const paidHistory = loadParkedPaidHistory();
+    if (cached.length || paidHistory.length) {
+      parkedTickets = [...cached, ...paidHistory];
       REMOTE_PARKED_RESERVATIONS = cached.filter((t) => !t.paid);
       tryResolvePendingParkedTicketIndex();
       rebuildRemoteReservedByProductMap();
@@ -21687,7 +22777,18 @@ async function onPayButtonClick() {
     }
 
     // 1) Modal cobro
-    const payResult = await openPayModal(totalCart);
+    const preParkedIndexForPay =
+      currentParkedTicketIndex !== null
+        ? Number(currentParkedTicketIndex)
+        : null;
+    const preParkedTicketForPay =
+      preParkedIndexForPay != null && Array.isArray(parkedTickets)
+        ? parkedTickets[preParkedIndexForPay] || null
+        : null;
+
+    const payResult = await openPayModal(totalCart, {
+      initialObservaciones: String(preParkedTicketForPay?.obs || "").trim(),
+    });
     if (!payResult) {
       logFeatureInfo("COBRO", "cancelado-usuario", {
         requestId,
@@ -21797,6 +22898,23 @@ async function onPayButtonClick() {
       if (!syncedTicket || syncedTicket.paid) {
         throw new Error("El ticket aparcado ya está cobrado en otro TPV.");
       }
+
+      const paidTwin = findPaidTwinForParkedTicket(syncedTicket, parkedTickets);
+      if (paidTwin) {
+        syncedTicket.paid = true;
+        syncedTicket.paidAt =
+          paidTwin?.paidAt || syncedTicket.paidAt || new Date();
+        syncedTicket.paidTicketCode =
+          paidTwin?.paidTicketCode || syncedTicket.paidTicketCode || null;
+        syncedTicket.paidTicketId =
+          paidTwin?.paidTicketId || syncedTicket.paidTicketId || null;
+        upsertParkedPaidHistory(syncedTicket);
+        saveParkedTicketsCache();
+        throw new Error(
+          "Ese ticket aparcado ya aparece como cobrado y no se puede volver a cobrar.",
+        );
+      }
+
       if (isParkedTicketLockedByAnotherTerminal(syncedTicket)) {
         throw new Error(
           "Ese ticket aparcado se está cobrando en otro TPV. Espera unos segundos y vuelve a intentarlo.",
@@ -21971,6 +23089,7 @@ async function onPayButtonClick() {
 
       removeCartLinesByIdSet(saleLineIds);
       renderCart();
+      await resetCartCustomerToTerminalDefault("pay-offline");
       setStatusText("Venta guardada en cola (offline)");
       toast("Sin internet: venta guardada en cola ✅", "ok", "Cobrar");
       logFeatureWarn("COBRO", "offline-cola", {
@@ -22187,6 +23306,40 @@ async function onPayButtonClick() {
     lastTicket.pagos = pagosFinal;
     lastTicket.cambio = payResult.cambio || 0;
 
+    if (isSafeTrainingModeEnabled() || sendResult?.simulated) {
+      try {
+        const simulatedId = Number(facturaResp?.idfactura || 0) || null;
+        saveOfflineTicketForTicketsModal({
+          _localId:
+            (crypto?.randomUUID?.() ||
+              `${Date.now()}_${Math.random().toString(16).slice(2)}`) + "_sim",
+          idfactura: simulatedId,
+          codigo:
+            String(lastTicket?.numero || facturaResp?.codigo || "SIM") || "SIM",
+          nombrecliente: String(lastTicket?.clientName || "Ventas tickets"),
+          total: Number(facturaTotalFS || 0),
+          codpago: pagosFinal?.[0]?.codpago || ticketPayload.codpago || "—",
+          fecha: String(
+            lastTicket?.fecha || new Date().toISOString().slice(0, 10),
+          ),
+          hora: String(
+            lastTicket?.hora || new Date().toTimeString().slice(0, 8),
+          ),
+          lineas: Array.isArray(lastTicket?.lineas) ? lastTicket.lineas : [],
+          pagos: Array.isArray(pagosFinal) ? pagosFinal : [],
+          cambio: Number(lastTicket?.cambio || payResult?.cambio || 0),
+          codserie: String(
+            lastTicket?.codserie || ticketPayload?.codserie || "S",
+          ),
+          idcaja: Number(getCajaIdSafe?.() || 0) || 0,
+          _offline: true,
+          _simulated: true,
+        });
+      } catch (e) {
+        console.warn("No se pudo guardar ticket simulado en listado:", e);
+      }
+    }
+
     const printBtn = document.getElementById("printTicketBtn");
     if (printBtn) printBtn.disabled = false;
 
@@ -22212,6 +23365,7 @@ async function onPayButtonClick() {
 
     removeCartLinesByIdSet(saleLineIds);
     renderCart();
+    await resetCartCustomerToTerminalDefault("pay-online");
     refreshParkButtonUI();
     refreshParkedEditingBanner();
     setStatusText("Venta cobrada");
@@ -22400,6 +23554,8 @@ async function apiUpdateCajaAfterSale({ totalVenta, pagos }) {
     numtickets: Number(cashSession.numtickets || 0),
     nick: getLoginUser(),
   };
+
+  if (isSafeTrainingModeEnabled()) return;
 
   await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
 }
@@ -23200,7 +24356,7 @@ function bindPayKeypadOnce() {
 }
 
 // ===== [09] Modal cobrar: flujo principal =====
-async function openPayModal(total) {
+async function openPayModal(total, options = {}) {
   if (!payOverlay) throw new Error("Falta #payOverlay en index.html");
 
   // bind 1 vez (clave para evitar “se me duplica”)
@@ -23233,7 +24389,10 @@ async function openPayModal(total) {
   await ensurePaySeriesLoaded();
 
   // limpiar extras
-  if (payObs) payObs.value = "";
+  const initialObservaciones = String(
+    options?.initialObservaciones || "",
+  ).trim();
+  if (payObs) payObs.value = initialObservaciones;
   if (payNumber) payNumber.value = "";
   if (paySerie && !String(paySerie.value || "").trim()) paySerie.value = "S";
 
@@ -23655,6 +24814,20 @@ async function loadAndRenderTickets(requestId = null) {
   try {
     ticketsList.innerHTML = "Cargando…";
 
+    // ✅ En modo pruebas mostramos solo tickets locales/simulados
+    if (isSafeTrainingModeEnabled()) {
+      ticketsCache = [];
+      const merged = getAllTicketsForUI([]);
+      linkTicketsRefundRelations(merged);
+      ticketsUiCache = merged;
+      renderTicketsList(merged);
+      logFeatureInfo("TICKETS", "carga-ok-training", {
+        requestId: reqId,
+        total: merged.length,
+      });
+      return;
+    }
+
     // ✅ Online -> trae de API y guarda cache
     if (!TPV_STATE?.offline) {
       ticketsCache = await fetchUltimosTickets(60);
@@ -23804,6 +24977,126 @@ function syncTicketsToolbarUI() {
   syncTicketsSearchClearBtn();
 }
 
+function removeOfflineTicketByMatch(ticketRow) {
+  const list = loadOfflineTicketsForTicketsModal();
+  if (!Array.isArray(list) || !list.length) return false;
+
+  const code = String(ticketRow?.codigo || "").trim();
+  const targetId = String(ticketRow?.idfactura || "").trim();
+  let removed = false;
+
+  const next = list.filter((row) => {
+    if (removed) return true;
+
+    const rowCode = String(row?.codigo || "").trim();
+    const rowId = String(row?.idfactura || "").trim();
+
+    const sameCode = !!code && rowCode === code;
+    const sameId = !!targetId && rowId === targetId;
+
+    if (sameCode || sameId) {
+      removed = true;
+      return false;
+    }
+    return true;
+  });
+
+  if (!removed) return false;
+  localStorage.setItem(OFFLINE_TICKETS_KEY, JSON.stringify(next));
+  return true;
+}
+
+function markOfflineTicketFullyRefunded(ticketRow) {
+  const list = loadOfflineTicketsForTicketsModal();
+  if (!Array.isArray(list) || !list.length) return false;
+
+  const code = String(ticketRow?.codigo || "").trim();
+  const targetId = String(ticketRow?.idfactura || "").trim();
+  let changed = false;
+
+  const next = list.map((row) => {
+    const rowCode = String(row?.codigo || "").trim();
+    const rowId = String(row?.idfactura || "").trim();
+    const sameCode = !!code && rowCode === code;
+    const sameId = !!targetId && rowId === targetId;
+    if (!sameCode && !sameId) return row;
+
+    changed = true;
+    return {
+      ...row,
+      _simulated: true,
+      _hasPartialRefund: true,
+      _isFullyRefunded: true,
+      _remainingAfterRefund: 0,
+    };
+  });
+
+  if (!changed) return false;
+  localStorage.setItem(OFFLINE_TICKETS_KEY, JSON.stringify(next));
+  return true;
+}
+
+async function deleteSimulatedTicketLocal(ticketRow) {
+  const ok = await confirmModal(
+    "Eliminar ticket simulado",
+    `¿Eliminar ${ticketRow?.codigo || "ticket"} del entorno de pruebas?`,
+  );
+  if (!ok) return;
+
+  if (!removeOfflineTicketByMatch(ticketRow)) {
+    toast(
+      "No se encontró el ticket simulado para eliminar.",
+      "warn",
+      "Tickets",
+    );
+    return;
+  }
+
+  toast("Ticket simulado eliminado.", "ok", "Tickets");
+  await loadAndRenderTickets();
+}
+
+async function refundSimulatedTicketLocal(ticketRow) {
+  const totalAbs = Math.abs(Number(ticketRow?.total || 0));
+  if (!(totalAbs > 0.0001)) {
+    toast(
+      "El ticket simulado no tiene importe para devolver.",
+      "warn",
+      "Tickets",
+    );
+    return;
+  }
+
+  const ok = await confirmModal(
+    "Devolución simulada",
+    `Se marcará ${ticketRow?.codigo || "ticket"} como devuelto y se creará su abono simulado.`,
+  );
+  if (!ok) return;
+
+  const baseId = Number(ticketRow?.idfactura || 0) || 900000;
+  const refundCode = nextSafeTrainingSimRefundCode();
+  const refundId =
+    990000 + readSafeTrainingSequence(TPV_SAFE_TRAINING_SIM_REFUND_SEQ_KEY);
+
+  markOfflineTicketFullyRefunded(ticketRow);
+  saveOfflineTicketForTicketsModal({
+    codigo: refundCode,
+    idfactura: refundId,
+    idfacturarect: baseId,
+    codigorect: String(ticketRow?.codigo || ""),
+    nombrecliente: ticketRow?.nombrecliente || "Cliente",
+    total: -totalAbs,
+    codpago: String(ticketRow?.codpago || ""),
+    fecha: new Date().toISOString().slice(0, 10),
+    hora: new Date().toTimeString().slice(0, 8),
+    codserie: "R",
+    _simulated: true,
+  });
+
+  toast("Devolución simulada registrada.", "ok", "Tickets");
+  await loadAndRenderTickets();
+}
+
 function renderTicketsList(tickets) {
   if (!ticketsList) return;
 
@@ -23813,11 +25106,16 @@ function renderTicketsList(tickets) {
   const sourceList = Array.isArray(tickets) ? tickets : [];
 
   const matchesTicket = (t) => {
+    const parkedOrigin = getPaidTicketParkedOriginForTicketRow(t);
+    const parkedOriginText = parkedOrigin
+      ? `${parkedOrigin.parkedDisplayNo || ""} ${parkedOrigin.parkedLabel || ""} ${parkedOrigin.parkedClientName || ""}`
+      : "";
+
     const s = `${t.codigo || ""} ${t.nombrecliente || ""} ${t.total || ""} ${
       t.codpago || ""
     } ${t.codserie || ""} ${t.idfactura || ""} ${t.codigorect || ""} ${
       t.idcaja || t?._raw?.idcaja || ""
-    }`.toLowerCase();
+    } ${parkedOriginText}`.toLowerCase();
 
     return s.includes(term);
   };
@@ -23944,6 +25242,7 @@ function renderTicketsList(tickets) {
     const refunds = Array.isArray(t._refunds) ? t._refunds : [];
     const hasRefunds = refunds.length > 0 || !!t._hasPartialRefund;
     const isFullyRefunded = !!t._isFullyRefunded;
+    const isSimulated = isSimulatedTicketLike(t);
 
     let statusClass = "ticket-status-ok";
     let badgeHtml = `<span class="ticket-badge ticket-badge-ok">OK</span>`;
@@ -23956,6 +25255,10 @@ function renderTicketsList(tickets) {
     } else if (hasRefunds) {
       statusClass = "ticket-status-partial";
       badgeHtml = `<span class="ticket-badge ticket-badge-partial">PARCIAL</span>`;
+    }
+
+    if (isSimulated) {
+      badgeHtml += ` <span class="ticket-badge ticket-badge-sim">SIM</span>`;
     }
 
     div.classList.add(statusClass);
@@ -23980,6 +25283,30 @@ function renderTicketsList(tickets) {
         ? `<span class="ticket-id">Caja ${cajaId}</span>`
         : "";
 
+    const ticketIdText = t.idfactura
+      ? `ID ${t.idfactura}`
+      : isSimulated
+        ? "ID SIM"
+        : "ID —";
+
+    const parkedOrigin = getPaidTicketParkedOriginForTicketRow(t);
+    const parkedOriginNo = String(parkedOrigin?.parkedDisplayNo || "").trim();
+    const parkedOriginLabel = String(parkedOrigin?.parkedLabel || "").trim();
+    const parkedOriginClient = String(
+      parkedOrigin?.parkedClientName || "",
+    ).trim();
+    const parkedOriginText = parkedOrigin
+      ? parkedOriginLabel ||
+        parkedOriginClient ||
+        (parkedOriginNo ? `Ticket #${parkedOriginNo}` : "")
+      : "";
+
+    const parkedOriginHtml = parkedOrigin
+      ? `<div class="ticket-obs">Origen aparcado: ${escapeHtml(
+          parkedOriginNo ? `#${parkedOriginNo}` : "#—",
+        )}${parkedOriginText ? ` · ${escapeHtml(parkedOriginText)}` : ""}</div>`
+      : "";
+
     div.innerHTML = `
       <div class="ticket-left">
         <div class="ticket-num">
@@ -23992,10 +25319,11 @@ function renderTicketsList(tickets) {
           <span class="ticket-client">${escapeHtml(cliente)}</span>
           <span class="ticket-pay">${escapeHtml(pago)}</span>
           ${cajaHtml}
-          <span class="ticket-id">ID ${t.idfactura}</span>
+          <span class="ticket-id">${ticketIdText}</span>
         </div>
 
         ${obs ? `<div class="ticket-obs">${escapeHtml(obs)}</div>` : ""}
+        ${parkedOriginHtml}
         <div class="ticket-bot">${escapeHtml(fechaHora)}</div>
       </div>
 
@@ -24011,7 +25339,17 @@ function renderTicketsList(tickets) {
               : `<button type="button" class="ticket-btn ticket-refund" title="Devolver">↩</button>`
           }
 
-          <button type="button" class="ticket-btn ticket-payedit" title="Cambiar pago">💳</button>
+          ${
+            isSimulated
+              ? `<button type="button" class="ticket-btn ticket-delete" title="Eliminar">🗑</button>`
+              : ""
+          }
+
+          ${
+            isSimulated
+              ? ""
+              : `<button type="button" class="ticket-btn ticket-payedit" title="Cambiar pago">💳</button>`
+          }
         </div>
       </div>
     `;
@@ -24028,7 +25366,19 @@ function renderTicketsList(tickets) {
     if (refundBtn) {
       refundBtn.onclick = async (e) => {
         e.stopPropagation();
+        if (isSimulated) {
+          await refundSimulatedTicketLocal(t);
+          return;
+        }
         await openRefundForFactura(t);
+      };
+    }
+
+    const deleteBtn = div.querySelector(".ticket-delete");
+    if (deleteBtn) {
+      deleteBtn.onclick = async (e) => {
+        e.stopPropagation();
+        await deleteSimulatedTicketLocal(t);
       };
     }
 
@@ -28946,6 +30296,8 @@ async function bootstrapE2EMode() {
 
 // ===== [10] Inicializacion principal (bootstrap UI y modo E2E) =====
 window.addEventListener("DOMContentLoaded", async () => {
+  installRemoteWriteGuard();
+  await loadSafeTrainingModeToggle();
   initThemeMode();
   await initCustomerDisplayThemeMode();
   await loadProductManualOrderConfig?.();
@@ -29498,7 +30850,54 @@ async function startOnlineMonitor() {
 }
 
 // ===== [08][Z08.2] Cola offline: envio y encolado de facturas =====
+function buildSafeTrainingTicketResponse(payload = {}) {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const fecha = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const hora = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+
+  const lineas = Array.isArray(payload?.lineas) ? payload.lineas : [];
+  const total = round2(
+    lineas.reduce((sum, line) => {
+      const qty = Number(line?.cantidad ?? line?.qty ?? 1) || 0;
+      const lineTotal = Number(
+        line?.pvptotal ??
+          line?.total ??
+          (Number(line?.pvpunitario ?? line?.pvp ?? 0) || 0) * qty,
+      );
+      return sum + (isFinite(lineTotal) ? lineTotal : 0);
+    }, 0),
+  );
+
+  const code = nextSafeTrainingSimSaleCode();
+  const idfactura =
+    900000 + readSafeTrainingSequence(TPV_SAFE_TRAINING_SIM_SALE_SEQ_KEY);
+
+  return {
+    doc: {
+      idfactura,
+      codigo: code,
+      total,
+      codcliente: String(payload?.codcliente || ""),
+      fecha,
+      hora,
+      codserie: String(payload?.codserie || payload?.serie || "S").trim(),
+      numero2: String(payload?.numero2 || "").trim(),
+      _simulated: true,
+    },
+    simulated: true,
+  };
+}
+
 async function sendOrQueueFactura(payload) {
+  if (isSafeTrainingModeEnabled()) {
+    return {
+      ok: true,
+      remote: buildSafeTrainingTicketResponse(payload),
+      simulated: true,
+    };
+  }
+
   try {
     const r = await createTicketInFacturaScripts(payload);
     return { ok: true, remote: r };
@@ -29665,6 +31064,7 @@ async function evaluateQueueHealthAndWarn({ online = false } = {}) {
 
 // ===== [08][Z08.2] Cola offline: sincronizacion =====
 async function syncQueueNow() {
+  if (isSafeTrainingModeEnabled()) return true;
   if (window.__SYNCING__) return;
   window.__SYNCING__ = true;
 
@@ -31116,14 +32516,42 @@ async function confirmAndSaveProductPrice() {
       `Descuento: ${formatDiscountPercent(currentDiscount)}% -> ${formatDiscountPercent(discountPct)}%\n` +
       `Prioridad: ${currentOrderPriority} -> ${orderPriority}\n` +
       `Final: ${finalGross.toFixed(2)} € (IVA incl.)\n\n` +
-      `El precio base se guardará en FacturaScripts permanentemente.\n` +
-      `El descuento y la prioridad son ajustes locales del TPV.\n\n` +
+      (isSafeTrainingModeEnabled()
+        ? `Modo pruebas activo: los cambios se aplicarán solo en local y no se enviarán a API.\n\n`
+        : `El precio base se guardará en FacturaScripts permanentemente.\n` +
+          `El descuento y la prioridad son ajustes locales del TPV.\n\n`) +
       `¿Quieres continuar?`,
   );
   if (!ok) return;
 
   const newNet = grossToNet(baseGross, taxRate);
   const discountKeyProductId = Number(p.baseProductId || p.id || 0);
+
+  if (isSafeTrainingModeEnabled()) {
+    await setProductDiscountPercentForProduct(
+      discountKeyProductId,
+      discountPct,
+    );
+    await setProductManualOrderPriorityForProduct(
+      discountKeyProductId,
+      orderPriority,
+    );
+
+    p.price = newNet;
+    const idxLocal = (products || []).findIndex(
+      (x) => Number(x.id) === Number(p.id),
+    );
+    if (idxLocal >= 0) products[idxLocal].price = newNet;
+
+    renderProducts?.();
+    toast?.(
+      "Modo pruebas: precio/descuento/prioridad aplicados solo en local ✅",
+      "ok",
+      "Productos",
+    );
+    document.getElementById("priceEditOverlay")?.classList.add("hidden");
+    return;
+  }
 
   try {
     if (p.isVariant) {

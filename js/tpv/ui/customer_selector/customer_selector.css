@@ -19,13 +19,36 @@
 
 .csx-modal {
   background: #fff;
-  border-radius: 14px;
+  grid-template-columns: 54px 1fr 72px;
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.24);
   overflow: hidden;
   display: flex;
   flex-direction: column;
   width: min(1010px, calc(100vw - 16px));
   max-height: calc(100vh - 16px);
+
+  .csx-row-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .csx-edit {
+    border: none;
+    border-radius: 999px;
+    width: 28px;
+    height: 28px;
+    background: #2563eb;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 800;
+    cursor: pointer;
+  }
+
+  .csx-edit:hover {
+    filter: brightness(0.95);
+  }
 }
 
 .csx-head {
@@ -421,6 +444,10 @@ body.theme-dark .csx-row:hover {
 
 body.theme-dark .csx-row.csx-selected {
   background: #263244;
+}
+
+body.theme-dark .csx-edit {
+  background: #3b82f6;
 }
 
 body.theme-dark .csx-note {
