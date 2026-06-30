@@ -11545,10 +11545,21 @@ function refreshParkedEditingBanner() {
   wrap.classList.remove("hidden");
 }
 
-function openParkedModal() {
+async function openParkedModal() {
   const requestId = createRequestId("PRKMOD");
 
   if (!parkedTicketsOverlay) return;
+
+  try {
+    await refreshRemoteParkedReservationsOnly();
+  } catch (e) {
+    console.warn(
+      "No se pudo refrescar aparcados al abrir modal:",
+      e?.message || e,
+    );
+  }
+
+  reconcileParkedPaidTwins(parkedTickets);
 
   const allParked = getScopedAllParkedTickets(parkedTickets);
   const pending = getScopedPendingParkedTickets(parkedTickets);
@@ -11936,6 +11947,34 @@ function findPaidTwinForParkedTicket(ticket, list = parkedTickets) {
   );
 }
 
+function reconcileParkedPaidTwins(list = parkedTickets) {
+  const source = Array.isArray(list) ? list : [];
+  if (!source.length) return 0;
+
+  let changes = 0;
+
+  source.forEach((ticket) => {
+    if (!ticket || ticket?.paid) return;
+
+    const paidTwin = findPaidTwinForParkedTicket(ticket, source);
+    if (!paidTwin) return;
+
+    ticket.paid = true;
+    ticket.paidAt = paidTwin?.paidAt || ticket.paidAt || new Date();
+    ticket.paidTicketCode =
+      paidTwin?.paidTicketCode || ticket.paidTicketCode || null;
+    ticket.paidTicketId = paidTwin?.paidTicketId || ticket.paidTicketId || null;
+    upsertParkedPaidHistory(ticket);
+    changes += 1;
+  });
+
+  if (changes > 0) {
+    saveParkedTicketsCache(source);
+  }
+
+  return changes;
+}
+
 async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
   if (!Array.isArray(parkedTickets) || !parkedTickets.length) return false;
   if (index == null || index < 0 || index >= parkedTickets.length) return false;
@@ -11995,6 +12034,7 @@ async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
 
   try {
     await apiSaveParkedReservation(ticket);
+    await ensureRemoteParkedPaidVisibility(ticket);
     await refreshRemoteParkedReservationsOnly();
     scheduleParkedReservationsBurstRefresh("pay-mark-parked");
   } catch (e) {
@@ -22543,6 +22583,39 @@ async function apiDeleteParkedReservation(ticket) {
   }
 
   return true;
+}
+
+async function ensureRemoteParkedPaidVisibility(ticket) {
+  if (!ticket || !ticket?.paid) {
+    return { ok: true, mode: "skip" };
+  }
+
+  const list = await apiListParkedReservations();
+  const normalized = (Array.isArray(list) ? list : [])
+    .map((it) => normalizeRemoteParkedTicket(it))
+    .filter(Boolean);
+
+  const key = getParkedTicketSyncKey(ticket);
+  const byKey = key
+    ? normalized.find((it) => getParkedTicketSyncKey(it) === key)
+    : null;
+
+  const byId =
+    byKey ||
+    normalized.find((it) => Number(it?.id || 0) === Number(ticket?.id || 0));
+
+  // Backend moderno: ya soporta paid y se ve igual en todos los TPV.
+  if (byId?.paid) {
+    return { ok: true, mode: "paid" };
+  }
+
+  // Backend antiguo: si sigue pendiente, eliminar evita duplicados entre TPV.
+  if (byId && !byId?.paid) {
+    await apiDeleteParkedReservation(ticket);
+    return { ok: true, mode: "deleted-fallback" };
+  }
+
+  return { ok: true, mode: "missing" };
 }
 
 async function refreshRemoteParkedReservationsOnly() {
