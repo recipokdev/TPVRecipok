@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "versions": [
+    {
+      "version": "0.2.1",
+      "date": "2026-07-02",
+      "title": "Inicio del changelog integrado",
+      "changes": [
+        "Se agrega modal de changelog que se muestra solo la primera vez tras actualizar.",
+        "Se agrega boton en Opciones > Actualizacion automatica para abrir changelog manualmente.",
+        "Se inicia historial de cambios versionado en archivo changelog.json.",
+        "Aparcados: pestañas con contador por estado y subfiltro Hoy/Dias anteriores.",
+        "Editar precio: eliminado descuento del modal; se mantiene precio base y prioridad."
+      ]
+    }
+  ]
+}

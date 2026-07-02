@@ -87,6 +87,7 @@ let parkedTickets = []; // cada item: { id, createdAt, items, total, clientName,
 const parkedViewState = {
   search: "",
   filter: "pending", // "all" | "pending" | "paid"
+  pendingScope: "today", // "today" | "older"
 };
 let parkedCounter = 0;
 // Índice del ticket aparcado actualmente cargado en el carrito
@@ -11222,14 +11223,8 @@ function parkedTicketMatchesSearch(t, term) {
   return haystack.includes(q);
 }
 
-function parkedTicketPassesFilter(t) {
-  if (parkedViewState.filter === "all") return true;
-  if (parkedViewState.filter === "paid") return !!t.paid;
-
-  if (!!t.paid) return false;
-
-  // En la vista "Sin cobrar", mostrar solo aparcados del dia actual.
-  const created = t?.createdAt ? new Date(t.createdAt) : null;
+function isParkedTicketFromToday(ticket) {
+  const created = ticket?.createdAt ? new Date(ticket.createdAt) : null;
   if (!created || Number.isNaN(created.getTime())) return false;
 
   const now = new Date();
@@ -11238,6 +11233,24 @@ function parkedTicketPassesFilter(t) {
     created.getMonth() === now.getMonth() &&
     created.getDate() === now.getDate()
   );
+}
+
+function hasOlderPendingParkedTickets(sourceTickets) {
+  const list = Array.isArray(sourceTickets) ? sourceTickets : [];
+  return list.some((t) => !t?.paid && !isParkedTicketFromToday(t));
+}
+
+function parkedTicketPassesFilter(t) {
+  if (parkedViewState.filter === "all") return true;
+  if (parkedViewState.filter === "paid") return !!t.paid;
+
+  if (!!t?.paid) return false;
+
+  if (parkedViewState.pendingScope === "older") {
+    return !isParkedTicketFromToday(t);
+  }
+
+  return isParkedTicketFromToday(t);
 }
 
 function getParkedTicketSortTimeMs(t) {
@@ -11284,6 +11297,31 @@ function syncParkedToolbarUI() {
   const parkedFilterPending = document.getElementById("parkedFilterPending");
   const parkedFilterPaid = document.getElementById("parkedFilterPaid");
   const parkedClearPaidBtn = document.getElementById("parkedClearPaidBtn");
+  const parkedPendingScopeWrap = document.getElementById(
+    "parkedPendingScopeWrap",
+  );
+  const parkedPendingScopeToday = document.getElementById(
+    "parkedPendingScopeToday",
+  );
+  const parkedPendingScopeOlder = document.getElementById(
+    "parkedPendingScopeOlder",
+  );
+
+  const source = getScopedAllParkedTickets(parkedTickets);
+  const allCount = source.length;
+  const paidList = source.filter((t) => !!t?.paid);
+  const paidCount = paidList.length;
+  const pendingList = source.filter((t) => !t?.paid);
+  const pendingCount = pendingList.length;
+  const pendingTodayCount = pendingList.filter((t) =>
+    isParkedTicketFromToday(t),
+  ).length;
+  const pendingOlderCount = Math.max(0, pendingCount - pendingTodayCount);
+  const hasOlderPending = hasOlderPendingParkedTickets(source);
+
+  if (!hasOlderPending) {
+    parkedViewState.pendingScope = "today";
+  }
 
   if (parkedSearch) {
     parkedSearch.value = parkedViewState.search || "";
@@ -11302,11 +11340,46 @@ function syncParkedToolbarUI() {
     parkedViewState.filter === "paid",
   );
 
+  if (parkedFilterAll) {
+    parkedFilterAll.textContent = `Todos (${allCount})`;
+  }
+
+  if (parkedFilterPending) {
+    parkedFilterPending.textContent = `Sin cobrar (${pendingCount})`;
+  }
+
+  if (parkedFilterPaid) {
+    parkedFilterPaid.textContent = `Cobrados (${paidCount})`;
+  }
+
   if (parkedClearPaidBtn) {
     parkedClearPaidBtn.classList.toggle(
       "hidden",
       parkedViewState.filter !== "paid",
     );
+  }
+
+  const shouldShowPendingScope =
+    parkedViewState.filter === "pending" && hasOlderPending;
+
+  parkedPendingScopeWrap?.classList.toggle("hidden", !shouldShowPendingScope);
+
+  parkedPendingScopeToday?.classList.toggle(
+    "is-active",
+    parkedViewState.pendingScope !== "older",
+  );
+
+  parkedPendingScopeOlder?.classList.toggle(
+    "is-active",
+    parkedViewState.pendingScope === "older",
+  );
+
+  if (parkedPendingScopeToday) {
+    parkedPendingScopeToday.textContent = `Hoy (${pendingTodayCount})`;
+  }
+
+  if (parkedPendingScopeOlder) {
+    parkedPendingScopeOlder.textContent = `Dias anteriores (${pendingOlderCount})`;
   }
 
   syncParkedSearchClearBtn();
@@ -11389,6 +11462,15 @@ function ensureParkedToolbar() {
       </button>
     </div>
 
+    <div id="parkedPendingScopeWrap" class="tickets-tabs hidden" style="margin-left: 10px;">
+      <button id="parkedPendingScopeToday" type="button" class="cart-btn tickets-tab-btn">
+        Hoy
+      </button>
+      <button id="parkedPendingScopeOlder" type="button" class="cart-btn tickets-tab-btn">
+        Dias anteriores
+      </button>
+    </div>
+
     <div class="tickets-tabs" style="margin-left: 10px; display:flex; align-items:center; gap:8px;">
       <button id="parkedSummaryBtn" type="button" class="cart-btn tickets-tab-btn" title="Resumen de aparcados">
         Resumen
@@ -11406,6 +11488,12 @@ function ensureParkedToolbar() {
   const parkedFilterAll = document.getElementById("parkedFilterAll");
   const parkedFilterPending = document.getElementById("parkedFilterPending");
   const parkedFilterPaid = document.getElementById("parkedFilterPaid");
+  const parkedPendingScopeToday = document.getElementById(
+    "parkedPendingScopeToday",
+  );
+  const parkedPendingScopeOlder = document.getElementById(
+    "parkedPendingScopeOlder",
+  );
   const parkedKeyboardBtn = document.getElementById("parkedKeyboardBtn");
   const parkedSummaryBtn = document.getElementById("parkedSummaryBtn");
   const parkedClearPaidBtn = document.getElementById("parkedClearPaidBtn");
@@ -11438,12 +11526,25 @@ function ensureParkedToolbar() {
 
   parkedFilterPending?.addEventListener("click", () => {
     parkedViewState.filter = "pending";
+    parkedViewState.pendingScope = "today";
     syncParkedToolbarUI();
     renderParkedTicketsModal();
   });
 
   parkedFilterPaid?.addEventListener("click", () => {
     parkedViewState.filter = "paid";
+    syncParkedToolbarUI();
+    renderParkedTicketsModal();
+  });
+
+  parkedPendingScopeToday?.addEventListener("click", () => {
+    parkedViewState.pendingScope = "today";
+    syncParkedToolbarUI();
+    renderParkedTicketsModal();
+  });
+
+  parkedPendingScopeOlder?.addEventListener("click", () => {
+    parkedViewState.pendingScope = "older";
     syncParkedToolbarUI();
     renderParkedTicketsModal();
   });
@@ -11550,6 +11651,8 @@ async function openParkedModal() {
 
   if (!parkedTicketsOverlay) return;
 
+  startParkedReservationsAutoRefresh?.();
+
   try {
     await refreshRemoteParkedReservationsOnly();
   } catch (e) {
@@ -11608,7 +11711,14 @@ function renderParkedTicketsModal() {
   if (!filtered.length) {
     const empty = document.createElement("div");
     empty.className = "parked-ticket-empty";
-    empty.textContent = "No hay tickets aparcados en esta vista.";
+    if (parkedViewState.filter === "pending") {
+      empty.textContent =
+        parkedViewState.pendingScope === "older"
+          ? "No hay tickets sin cobrar de dias anteriores en esta vista."
+          : "No hay tickets sin cobrar de hoy en esta vista.";
+    } else {
+      empty.textContent = "No hay tickets aparcados en esta vista.";
+    }
     parkedTicketsList.appendChild(empty);
     return;
   }
@@ -11620,14 +11730,24 @@ function renderParkedTicketsModal() {
     div.className = "parked-ticket-item parked-ticket-compact";
     div.dataset.index = realIndex;
 
-    const fecha = t.createdAt ? new Date(t.createdAt) : new Date();
+    const createdDate = t?.createdAt ? new Date(t.createdAt) : null;
+    const updatedDate = t?.updatedAt ? new Date(t.updatedAt) : null;
+    const fechaValida =
+      createdDate && !Number.isNaN(createdDate.getTime())
+        ? createdDate
+        : updatedDate && !Number.isNaN(updatedDate.getTime())
+          ? updatedDate
+          : null;
 
-    const hora = fecha.toLocaleTimeString("es-ES", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-
-    const totalTexto = t.total != null ? t.total.toFixed(2) + " €" : "—";
+    const fechaHoraLabel = fechaValida
+      ? `${fechaValida.toLocaleDateString("es-ES")} ${fechaValida.toLocaleTimeString(
+          "es-ES",
+          {
+            hour: "2-digit",
+            minute: "2-digit",
+          },
+        )}`
+      : "Sin fecha";
 
     const items = Array.isArray(t.items) ? t.items : [];
     const preview = parkedBuildGroupedPreview(items);
@@ -11689,7 +11809,7 @@ function renderParkedTicketsModal() {
         }
 
         <div class="pt-sub">
-          ${hora} · ${escapeHtml(t.clientName || "Cliente")} · ${isSimulatedParkedTicket(t) ? "SIM" : "Ticket"} #${getParkedTicketDisplayNumber(t) || "0"}
+          ${fechaHoraLabel} · ${escapeHtml(t.clientName || "Cliente")} · ${isSimulatedParkedTicket(t) ? "SIM" : "Ticket"} #${getParkedTicketDisplayNumber(t) || "0"}
         </div>
       </div>
 
@@ -11731,10 +11851,13 @@ function renderParkedTicketsModal() {
 
         let deletedRemotelySynced = false;
         try {
-          await apiDeleteParkedReservation(t);
-          await refreshRemoteParkedReservationsOnly();
-          scheduleParkedReservationsBurstRefresh("delete-parked");
-          deletedRemotelySynced = true;
+          const deletedRemote = await apiDeleteParkedReservation(t);
+          deletedRemotelySynced = !!deletedRemote;
+
+          if (deletedRemotelySynced) {
+            await refreshRemoteParkedReservationsOnly();
+            scheduleParkedReservationsBurstRefresh("delete-parked");
+          }
         } catch (e) {
           enqueueParkedSyncOperation("delete", t);
           scheduleParkedReservationsBurstRefresh("queue-delete-parked");
@@ -18464,6 +18587,8 @@ async function applyOptionsAccordionState(state) {
 
     sec.dataset.open = state[key] ? "1" : "0";
   });
+
+  syncBackgroundUpdateCountdownUi();
 }
 
 function bindOptionsAccordionOnce() {
@@ -18491,6 +18616,8 @@ function bindOptionsAccordionOnce() {
     const state = await loadOptionsAccordionState();
     state[key] = !isOpen;
     await saveOptionsAccordionState(state);
+
+    syncBackgroundUpdateCountdownUi();
   });
 }
 
@@ -18648,6 +18775,9 @@ async function openOptions() {
   bindAutostartToggleOnce();
   await loadAutostartToggle();
 
+  bindBackgroundUpdateOptionsOnce();
+  refreshBackgroundUpdateOptionsUI();
+
   bindOptionsAccordionOnce();
   const st = await loadOptionsAccordionState();
   await applyOptionsAccordionState(st);
@@ -18658,6 +18788,8 @@ async function openOptions() {
   await loadTariffManagerOptionsData({ force: false });
 
   optionsOverlay?.classList.remove("hidden");
+  syncBackgroundUpdateCountdownUi();
+  refreshBackgroundUpdateCurrentVersionUi().catch(() => {});
 
   bindTerminalDefaultCustomerSave();
 
@@ -18670,6 +18802,7 @@ async function openOptions() {
 
 function closeOptions() {
   optionsOverlay?.classList.add("hidden");
+  stopBackgroundUpdateCountdownUi();
 }
 
 optionsBtn?.addEventListener("click", () => openOptions());
@@ -18911,6 +19044,610 @@ const optionsQuitBtn = document.getElementById("optionsQuitBtn");
 const optionsUpdateAppBtn = document.getElementById("optionsUpdateAppBtn");
 
 let manualUpdateActionInFlight = false;
+let backgroundUpdateCheckInFlight = false;
+let backgroundUpdateNoticeTimer = null;
+let backgroundUpdateNoticeFirstTimer = null;
+let backgroundUpdateOptionsBound = false;
+let backgroundUpdateNextCheckAt = 0;
+let backgroundUpdateCountdownUiTimer = null;
+
+const BACKGROUND_UPDATE_SNOOZE_KEY = "tpv_background_update_snooze_v1";
+const BACKGROUND_UPDATE_SETTINGS_KEY = "tpv_background_update_settings_v1";
+const CHANGELOG_LAST_SEEN_VERSION_KEY = "tpv_changelog_last_seen_version_v1";
+const CHANGELOG_SOURCE_FILE = "changelog.json";
+
+const BACKGROUND_UPDATE_DEFAULT_SETTINGS = {
+  enabled: true,
+  intervalMs: 60 * 60 * 1000,
+  firstDelayMs: 5 * 60 * 1000,
+};
+
+let backgroundUpdateSettings = loadBackgroundUpdateSettings();
+let changelogEntriesCache = null;
+
+function formatMsAsHumanCountdown(ms) {
+  const safeMs = Math.max(0, Number(ms || 0));
+  const totalSeconds = Math.ceil(safeMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`;
+  }
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+function isBackgroundUpdateSectionOpen() {
+  const overlayOpen =
+    !!optionsOverlay && !optionsOverlay.classList.contains("hidden");
+  if (!overlayOpen) return false;
+
+  const sec = document.querySelector(
+    '#optionsAccordion .opt-sec[data-sec="actualizacion"]',
+  );
+  return !!sec && sec.dataset.open === "1";
+}
+
+function setBackgroundUpdateNextCheckAt(ts) {
+  backgroundUpdateNextCheckAt = Number(ts || 0);
+}
+
+function paintBackgroundUpdateCountdownUi() {
+  const countdownEl = document.getElementById("updateNoticeCountdownText");
+  if (!countdownEl) return;
+
+  if (backgroundUpdateSettings?.enabled === false) {
+    countdownEl.textContent = "Proxima comprobacion: desactivada.";
+    return;
+  }
+
+  const nextAt = Number(backgroundUpdateNextCheckAt || 0);
+  if (!(nextAt > 0)) {
+    countdownEl.textContent = "Proxima comprobacion: pendiente...";
+    return;
+  }
+
+  const left = Math.max(0, nextAt - Date.now());
+  countdownEl.textContent =
+    left > 0
+      ? `Proxima comprobacion: en ${formatMsAsHumanCountdown(left)}.`
+      : "Proxima comprobacion: ahora...";
+}
+
+function stopBackgroundUpdateCountdownUi() {
+  if (backgroundUpdateCountdownUiTimer) {
+    clearInterval(backgroundUpdateCountdownUiTimer);
+    backgroundUpdateCountdownUiTimer = null;
+  }
+}
+
+function syncBackgroundUpdateCountdownUi() {
+  if (!isBackgroundUpdateSectionOpen()) {
+    stopBackgroundUpdateCountdownUi();
+    return;
+  }
+
+  paintBackgroundUpdateCountdownUi();
+
+  if (!backgroundUpdateCountdownUiTimer) {
+    backgroundUpdateCountdownUiTimer = setInterval(() => {
+      paintBackgroundUpdateCountdownUi();
+    }, 1000);
+  }
+}
+
+async function getCurrentAppVersionText() {
+  try {
+    const r = await window.TPV_SYS?.getVersion?.();
+    const v = String(r?.version || "").trim();
+    return r?.ok && v ? `v${v}` : "desconocida";
+  } catch {
+    return "desconocida";
+  }
+}
+
+function normalizeVersionTag(versionText) {
+  return String(versionText || "")
+    .trim()
+    .replace(/^v/i, "");
+}
+
+async function loadChangelogEntries() {
+  if (Array.isArray(changelogEntriesCache)) return changelogEntriesCache;
+
+  try {
+    const url = `${CHANGELOG_SOURCE_FILE}?_=${Date.now()}`;
+    const resp = await fetch(url, { cache: "no-store" });
+    if (!resp.ok) {
+      changelogEntriesCache = [];
+      return changelogEntriesCache;
+    }
+
+    const json = await resp.json();
+    const versions = Array.isArray(json?.versions) ? json.versions : [];
+
+    changelogEntriesCache = versions
+      .map((it) => ({
+        version: normalizeVersionTag(it?.version),
+        date: String(it?.date || "").trim(),
+        title: String(it?.title || "").trim(),
+        changes: Array.isArray(it?.changes)
+          ? it.changes.map((x) => String(x || "").trim()).filter(Boolean)
+          : [],
+      }))
+      .filter((it) => !!it.version);
+  } catch {
+    changelogEntriesCache = [];
+  }
+
+  return changelogEntriesCache;
+}
+
+function buildChangelogMessage(entries, { onlyVersion = "" } = {}) {
+  const normalizedOnly = normalizeVersionTag(onlyVersion);
+  const source = Array.isArray(entries) ? entries : [];
+  const list = normalizedOnly
+    ? source.filter((it) => normalizeVersionTag(it?.version) === normalizedOnly)
+    : source;
+
+  if (!list.length) {
+    return normalizedOnly
+      ? `No hay notas de cambios registradas para la version v${normalizedOnly}.`
+      : "No hay changelog registrado todavia.";
+  }
+
+  const chunks = list.map((it) => {
+    const v = normalizeVersionTag(it?.version);
+    const d = String(it?.date || "").trim();
+    const t = String(it?.title || "").trim();
+    const head = [`Version v${v}`, d ? `(${d})` : "", t ? `- ${t}` : ""]
+      .filter(Boolean)
+      .join(" ");
+
+    const changes = Array.isArray(it?.changes) ? it.changes : [];
+    const lines = changes.length
+      ? changes.map((c) => `- ${c}`).join("\n")
+      : "- Sin detalle de cambios.";
+
+    return `${head}\n${lines}`;
+  });
+
+  return chunks.join("\n\n");
+}
+
+async function openChangelogDialog({ onlyCurrentVersion = false } = {}) {
+  const entries = await loadChangelogEntries();
+  const currentVersion = normalizeVersionTag(await getCurrentAppVersionText());
+  const onlyVersion = onlyCurrentVersion ? currentVersion : "";
+  const text = buildChangelogMessage(entries, { onlyVersion });
+
+  showMessageModal("Changelog", text);
+}
+
+async function maybeShowChangelogAfterUpdate() {
+  const currentVersion = normalizeVersionTag(await getCurrentAppVersionText());
+  if (!currentVersion || currentVersion === "desconocida") return;
+
+  let lastSeenVersion = "";
+  try {
+    lastSeenVersion = normalizeVersionTag(
+      localStorage.getItem(CHANGELOG_LAST_SEEN_VERSION_KEY) || "",
+    );
+  } catch {}
+
+  if (lastSeenVersion === currentVersion) return;
+
+  await openChangelogDialog({ onlyCurrentVersion: true });
+
+  try {
+    localStorage.setItem(CHANGELOG_LAST_SEEN_VERSION_KEY, currentVersion);
+  } catch {}
+}
+
+async function refreshBackgroundUpdateCurrentVersionUi() {
+  const versionEl = document.getElementById("updateNoticeCurrentVersionText");
+  if (!versionEl) return;
+  const currentVersion = await getCurrentAppVersionText();
+  versionEl.textContent = `Version actual: ${currentVersion}`;
+}
+
+function normalizeBackgroundUpdateSettings(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+
+  const intervalAllowed = new Set([30, 60, 120, 240].map((m) => m * 60 * 1000));
+  const intervalCandidate = Number(src.intervalMs || 0);
+
+  return {
+    enabled: src.enabled !== false,
+    intervalMs: intervalAllowed.has(intervalCandidate)
+      ? intervalCandidate
+      : BACKGROUND_UPDATE_DEFAULT_SETTINGS.intervalMs,
+    firstDelayMs: BACKGROUND_UPDATE_DEFAULT_SETTINGS.firstDelayMs,
+  };
+}
+
+function loadBackgroundUpdateSettings() {
+  try {
+    const raw = localStorage.getItem(BACKGROUND_UPDATE_SETTINGS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return normalizeBackgroundUpdateSettings(parsed);
+  } catch {
+    return { ...BACKGROUND_UPDATE_DEFAULT_SETTINGS };
+  }
+}
+
+function saveBackgroundUpdateSettings(partial = {}) {
+  const next = normalizeBackgroundUpdateSettings({
+    ...backgroundUpdateSettings,
+    ...(partial || {}),
+  });
+
+  backgroundUpdateSettings = next;
+
+  try {
+    localStorage.setItem(BACKGROUND_UPDATE_SETTINGS_KEY, JSON.stringify(next));
+  } catch {}
+
+  return next;
+}
+
+function getBackgroundUpdateSnoozeState() {
+  try {
+    const raw = localStorage.getItem(BACKGROUND_UPDATE_SNOOZE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function setBackgroundUpdateSnooze(
+  version,
+  ms = BACKGROUND_UPDATE_DEFAULT_SETTINGS.intervalMs,
+) {
+  try {
+    const fallbackMs = Number(backgroundUpdateSettings?.intervalMs || 0);
+    const until = Date.now() + Math.max(60_000, Number(ms || fallbackMs || 0));
+    const payload = {
+      version: String(version || "").trim(),
+      until,
+      savedAt: Date.now(),
+    };
+    localStorage.setItem(BACKGROUND_UPDATE_SNOOZE_KEY, JSON.stringify(payload));
+  } catch {}
+}
+
+function isBackgroundUpdateSnoozed(version) {
+  const state = getBackgroundUpdateSnoozeState();
+  const until = Number(state?.until || 0);
+  const target = String(version || "").trim();
+  const savedVersion = String(state?.version || "").trim();
+
+  if (!(until > Date.now())) return false;
+  if (!savedVersion) return true;
+  if (!target) return true;
+  return savedVersion === target;
+}
+
+function ensureBackgroundUpdateNoticeUi() {
+  let root = document.getElementById("updatePassiveNotice");
+  if (root) return root;
+
+  if (!document.getElementById("updatePassiveNoticeStyle")) {
+    const style = document.createElement("style");
+    style.id = "updatePassiveNoticeStyle";
+    style.textContent = `
+      .update-passive-notice {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        z-index: 1200;
+        max-width: min(420px, calc(100vw - 24px));
+        background: #ffffff;
+        border: 1px solid #cfe0ff;
+        border-radius: 14px;
+        box-shadow: 0 10px 28px rgba(17, 24, 39, 0.20);
+        color: #102046;
+        padding: 12px 14px;
+        display: none;
+      }
+
+      .update-passive-notice.is-visible {
+        display: block;
+      }
+
+      .update-passive-title {
+        font-weight: 800;
+        font-size: 14px;
+        margin-bottom: 4px;
+      }
+
+      .update-passive-text {
+        font-size: 13px;
+        line-height: 1.35;
+        margin-bottom: 10px;
+      }
+
+      .update-passive-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+
+      .update-passive-btn {
+        border: 1px solid #2d5de7;
+        border-radius: 999px;
+        background: #ffffff;
+        color: #1f4fd0;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 6px 10px;
+        cursor: pointer;
+      }
+
+      .update-passive-btn.primary {
+        background: #2d5de7;
+        color: #ffffff;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  root = document.createElement("div");
+  root.id = "updatePassiveNotice";
+  root.className = "update-passive-notice";
+  root.innerHTML = `
+    <div class="update-passive-title">Nueva versión disponible</div>
+    <div class="update-passive-text" id="updatePassiveNoticeText"></div>
+    <div class="update-passive-actions">
+      <button type="button" class="update-passive-btn" id="updatePassiveNoticeLaterBtn">Más tarde</button>
+      <button type="button" class="update-passive-btn primary" id="updatePassiveNoticeNowBtn">Actualizar</button>
+    </div>
+  `;
+
+  document.body.appendChild(root);
+
+  const nowBtn = document.getElementById("updatePassiveNoticeNowBtn");
+  const laterBtn = document.getElementById("updatePassiveNoticeLaterBtn");
+
+  nowBtn?.addEventListener("click", async () => {
+    root.classList.remove("is-visible");
+    await startManualUpdateFlowFromOptions();
+  });
+
+  laterBtn?.addEventListener("click", () => {
+    const targetVersion = String(root.dataset.targetVersion || "").trim();
+    setBackgroundUpdateSnooze(targetVersion);
+    root.classList.remove("is-visible");
+    toast(
+      "Recordatorio pospuesto hasta la siguiente comprobación.",
+      "info",
+      "Actualización",
+    );
+  });
+
+  return root;
+}
+
+function showBackgroundUpdateNotice({ targetVersion = "" } = {}) {
+  const root = ensureBackgroundUpdateNoticeUi();
+  const textEl = document.getElementById("updatePassiveNoticeText");
+  const verTxt = String(targetVersion || "").trim();
+
+  root.dataset.targetVersion = verTxt;
+  if (textEl) {
+    textEl.textContent = verTxt
+      ? `Versión detectada: ${verTxt}. Puedes actualizar cuando te venga bien.`
+      : "Hay una versión nueva lista para instalar.";
+  }
+
+  root.classList.add("is-visible");
+}
+
+function hideBackgroundUpdateNotice() {
+  const root = document.getElementById("updatePassiveNotice");
+  if (!root) return;
+  root.classList.remove("is-visible");
+}
+
+async function runBackgroundUpdateAvailabilityCheck(reason = "timer") {
+  if (manualUpdateActionInFlight || backgroundUpdateCheckInFlight)
+    return { ok: false, skipped: "busy" };
+  if (!backgroundUpdateSettings?.enabled)
+    return { ok: false, skipped: "disabled" };
+
+  const updaterApi = window.TPV_UPDATER;
+  if (!updaterApi?.checkNow) return { ok: false, skipped: "api-unavailable" };
+
+  backgroundUpdateCheckInFlight = true;
+  try {
+    const check = await updaterApi.checkNow();
+    if (!check?.ok) return check;
+
+    if (check?.devMode) return check;
+
+    if (!check?.updateAvailable) {
+      hideBackgroundUpdateNotice();
+      return check;
+    }
+
+    const targetVersion = String(check?.targetVersion || "").trim();
+    if (isBackgroundUpdateSnoozed(targetVersion)) return;
+
+    showBackgroundUpdateNotice({ targetVersion });
+    console.info(
+      `[UPDATE-PASSIVE] update available (${targetVersion || "unknown"}) via ${reason}`,
+    );
+    return check;
+  } catch (e) {
+    console.warn("[UPDATE-PASSIVE] check failed:", e?.message || e);
+    return { ok: false, message: e?.message || "check-failed" };
+  } finally {
+    backgroundUpdateCheckInFlight = false;
+  }
+}
+
+function refreshBackgroundUpdateOptionsUI() {
+  const enabledToggle = document.getElementById("updateNoticeEnabledToggle");
+  const intervalSelect = document.getElementById("updateNoticeIntervalSelect");
+  const checkNowBtn = document.getElementById("updateNoticeCheckNowBtn");
+
+  if (enabledToggle) {
+    enabledToggle.checked = backgroundUpdateSettings?.enabled !== false;
+  }
+
+  if (intervalSelect) {
+    intervalSelect.value = String(
+      Number(backgroundUpdateSettings?.intervalMs || 0) ||
+        BACKGROUND_UPDATE_DEFAULT_SETTINGS.intervalMs,
+    );
+    intervalSelect.disabled = backgroundUpdateSettings?.enabled === false;
+  }
+
+  if (checkNowBtn) {
+    checkNowBtn.disabled = backgroundUpdateSettings?.enabled === false;
+  }
+
+  syncBackgroundUpdateCountdownUi();
+  refreshBackgroundUpdateCurrentVersionUi().catch(() => {});
+}
+
+function bindBackgroundUpdateOptionsOnce() {
+  if (backgroundUpdateOptionsBound) return;
+  backgroundUpdateOptionsBound = true;
+
+  const enabledToggle = document.getElementById("updateNoticeEnabledToggle");
+  const intervalSelect = document.getElementById("updateNoticeIntervalSelect");
+  const checkNowBtn = document.getElementById("updateNoticeCheckNowBtn");
+  const changelogBtn = document.getElementById("updateNoticeChangelogBtn");
+
+  enabledToggle?.addEventListener("change", () => {
+    const next = saveBackgroundUpdateSettings({
+      enabled: !!enabledToggle.checked,
+    });
+
+    if (next.enabled) {
+      startBackgroundUpdateMonitor();
+      runBackgroundUpdateAvailabilityCheck("toggle-enable").catch(() => {});
+      toast("Avisos automáticos de actualización activados.", "ok", "Opciones");
+    } else {
+      stopBackgroundUpdateMonitor();
+      hideBackgroundUpdateNotice();
+      toast(
+        "Avisos automáticos de actualización desactivados.",
+        "info",
+        "Opciones",
+      );
+    }
+
+    refreshBackgroundUpdateOptionsUI();
+  });
+
+  intervalSelect?.addEventListener("change", () => {
+    const intervalMs = Number(intervalSelect.value || 0);
+    saveBackgroundUpdateSettings({ intervalMs });
+
+    if (backgroundUpdateSettings?.enabled) {
+      startBackgroundUpdateMonitor();
+    }
+
+    refreshBackgroundUpdateOptionsUI();
+    toast("Frecuencia de aviso de actualización guardada.", "ok", "Opciones");
+  });
+
+  checkNowBtn?.addEventListener("click", async () => {
+    if (!backgroundUpdateSettings?.enabled) return;
+
+    checkNowBtn.disabled = true;
+    checkNowBtn.textContent = "Comprobando...";
+
+    try {
+      const check =
+        await runBackgroundUpdateAvailabilityCheck("options-check-now");
+      const currentVersionRaw = String(
+        check?.currentVersion || (await getCurrentAppVersionText()),
+      ).trim();
+      const currentVersion = currentVersionRaw
+        ? currentVersionRaw.replace(/^v/i, "")
+        : "?";
+
+      if (check?.ok && check?.updateAvailable) {
+        const targetVersion = String(check?.targetVersion || "").trim();
+        toast(
+          `Estas en v${currentVersion}. Hay una nueva version ${targetVersion ? `v${targetVersion}` : "disponible"}.`,
+          "info",
+          "Actualización",
+        );
+      } else if (check?.ok) {
+        toast(
+          `Estas en v${currentVersion}. Ya tienes la version mas reciente.`,
+          "ok",
+          "Actualización",
+        );
+      } else {
+        const msg = String(
+          check?.message || "No se pudo completar la comprobacion.",
+        );
+        toast(msg, "err", "Actualización");
+      }
+    } finally {
+      checkNowBtn.disabled = false;
+      checkNowBtn.textContent = "Comprobar";
+      refreshBackgroundUpdateOptionsUI();
+    }
+  });
+
+  changelogBtn?.addEventListener("click", async () => {
+    await openChangelogDialog({ onlyCurrentVersion: false });
+  });
+}
+
+function startBackgroundUpdateMonitor() {
+  stopBackgroundUpdateMonitor();
+
+  if (!backgroundUpdateSettings?.enabled) {
+    setBackgroundUpdateNextCheckAt(0);
+    syncBackgroundUpdateCountdownUi();
+    return;
+  }
+
+  const run = (reason) => {
+    runBackgroundUpdateAvailabilityCheck(reason).catch(() => {});
+  };
+
+  const firstDelayMs = Number(backgroundUpdateSettings?.firstDelayMs || 0);
+  const intervalMs = Number(backgroundUpdateSettings?.intervalMs || 0);
+
+  setBackgroundUpdateNextCheckAt(Date.now() + Math.max(1000, firstDelayMs));
+  syncBackgroundUpdateCountdownUi();
+
+  backgroundUpdateNoticeFirstTimer = setTimeout(() => {
+    setBackgroundUpdateNextCheckAt(Date.now() + Math.max(1000, intervalMs));
+    syncBackgroundUpdateCountdownUi();
+    run("first-delay");
+  }, firstDelayMs);
+
+  backgroundUpdateNoticeTimer = setInterval(() => {
+    setBackgroundUpdateNextCheckAt(Date.now() + Math.max(1000, intervalMs));
+    syncBackgroundUpdateCountdownUi();
+    run("interval");
+  }, intervalMs);
+}
+
+function stopBackgroundUpdateMonitor() {
+  if (backgroundUpdateNoticeFirstTimer) {
+    clearTimeout(backgroundUpdateNoticeFirstTimer);
+    backgroundUpdateNoticeFirstTimer = null;
+  }
+  if (backgroundUpdateNoticeTimer) {
+    clearInterval(backgroundUpdateNoticeTimer);
+    backgroundUpdateNoticeTimer = null;
+  }
+
+  setBackgroundUpdateNextCheckAt(0);
+  syncBackgroundUpdateCountdownUi();
+}
 
 function runUpdateRelaunchCountdown({ seconds = 5, targetVersion = "" } = {}) {
   const overlay = document.getElementById("msgOverlay");
@@ -22268,6 +23005,24 @@ function syncParkedTicketsFromRemote(list) {
   );
 
   parkedTickets = next;
+  const reconciledCount = reconcileParkedPaidTwins(parkedTickets);
+
+  // Persistir enlace origen aparcado -> ticket cobrado también cuando el cobro
+  // llega por sincronización de otro TPV.
+  parkedTickets.forEach((t) => {
+    if (!t?.paid) return;
+    rememberPaidTicketParkedOrigin(t, {
+      idfactura: Number(t?.paidTicketId || 0) || null,
+      codigo: String(t?.paidTicketCode || "").trim() || null,
+    });
+  });
+
+  if (reconciledCount > 0) {
+    console.info(
+      `[TPV] Reconciliados ${reconciledCount} aparcado(s) como cobrados por sincronización.`,
+    );
+  }
+
   saveParkedPaidHistory(next.filter((t) => !!t?.paid));
 
   const maxId = parkedTickets.reduce((m, t) => {
@@ -22712,7 +23467,7 @@ function scheduleParkedReservationsBurstRefresh(reason = "manual") {
 function startParkedReservationsAutoRefresh() {
   stopParkedReservationsAutoRefresh();
 
-  __parkedReservationsRefreshTimer = setInterval(async () => {
+  const runOnce = async () => {
     if (__parkedReservationsRefreshInFlight) return;
     if (TPV_STATE?.offline) return;
     if (!cashSession?.open) return;
@@ -22725,7 +23480,13 @@ function startParkedReservationsAutoRefresh() {
     } finally {
       __parkedReservationsRefreshInFlight = false;
     }
-  }, 10000);
+  };
+
+  runOnce();
+
+  __parkedReservationsRefreshTimer = setInterval(async () => {
+    await runOnce();
+  }, 4000);
 }
 
 function stopParkedReservationsAutoRefresh() {
@@ -30409,9 +31170,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   startOnlineMonitor();
 
   await bootstrapApp(); // y listo
+  startBackgroundUpdateMonitor();
+  maybeShowChangelogAfterUpdate().catch(() => {});
 });
 
 window.addEventListener("beforeunload", () => {
+  stopBackgroundUpdateMonitor();
   persistRuntimeCartSnapshot({ force: true });
 });
 
@@ -32354,13 +33118,11 @@ function openPriceEditForProduct(p) {
   const nameEl = document.getElementById("priceEditName");
   const curEl = document.getElementById("priceEditCurrent");
   const inp = document.getElementById("priceEditInput");
-  const discountInp = document.getElementById("priceEditDiscountPctInput");
   const orderPriorityInp = document.getElementById(
     "priceEditOrderPriorityInput",
   );
   const finalEl = document.getElementById("priceEditFinal");
   const err = document.getElementById("priceEditError");
-  const currentDiscount = getProductDiscountPercent(p);
   const currentOrderPriority = getProductManualOrderPriority(p);
 
   const updateDerived = () => {
@@ -32369,60 +33131,16 @@ function openPriceEditForProduct(p) {
       .replace(",", ".");
     const baseGross = round2(Number(baseRaw));
 
-    const discountRaw = String(discountInp?.value ?? "")
-      .trim()
-      .replace(",", ".");
-    const discountPct = clampDiscountPercent(Number(discountRaw));
-
-    if (discountInp) {
-      const normalized = formatDiscountPercent(discountPct);
-      if (String(discountInp.value).trim() !== normalized) {
-        discountInp.value = normalized;
-      }
-    }
-
-    const finalGross = round2(baseGross * (1 - discountPct / 100));
-    if (finalEl) finalEl.textContent = eur2(finalGross);
+    if (finalEl) finalEl.textContent = eur2(baseGross);
   };
 
   if (nameEl) nameEl.textContent = p.name || "Producto";
-  if (curEl) {
-    const currentFinal = round2(grossNow * (1 - currentDiscount / 100));
-    curEl.textContent =
-      currentDiscount > 0
-        ? `${eur2(currentFinal)} (base ${eur2(grossNow)} · -${formatDiscountPercent(currentDiscount)}%)`
-        : eur2(grossNow);
-  }
+  if (curEl) curEl.textContent = eur2(grossNow);
   if (inp) inp.value = grossNow.toFixed(2);
-  if (discountInp) discountInp.value = formatDiscountPercent(currentDiscount);
   if (orderPriorityInp) orderPriorityInp.value = String(currentOrderPriority);
   if (err) err.textContent = "";
 
   if (inp) inp.oninput = updateDerived;
-  if (discountInp) discountInp.oninput = updateDerived;
-
-  if (discountInp) {
-    const openDiscountPad = (e) => {
-      e?.preventDefault?.();
-      e?.stopPropagation?.();
-
-      openNumPad(
-        String(
-          discountInp.value || formatDiscountPercent(currentDiscount) || "0",
-        ),
-        (val) => {
-          discountInp.value = formatDiscountPercent(val);
-          updateDerived();
-        },
-        `${p.name || "Producto"} - descuento %`,
-        "price",
-        currentDiscount,
-        null,
-      );
-    };
-
-    discountInp.onpointerdown = openDiscountPad;
-  }
 
   if (orderPriorityInp) {
     const openPriorityPad = (e) => {
@@ -32500,7 +33218,6 @@ async function confirmAndSaveProductPrice() {
   if (err) err.textContent = "";
 
   const inp = document.getElementById("priceEditInput");
-  const discountInp = document.getElementById("priceEditDiscountPctInput");
   const orderPriorityInp = document.getElementById(
     "priceEditOrderPriorityInput",
   );
@@ -32513,60 +33230,24 @@ async function confirmAndSaveProductPrice() {
     return;
   }
 
-  const discountRaw = String(discountInp?.value ?? "")
-    .trim()
-    .replace(",", ".");
-  const discountPct = clampDiscountPercent(Number(discountRaw));
   const orderPriorityRaw = String(orderPriorityInp?.value ?? "")
     .trim()
     .replace(",", ".");
   const orderPriority = clampManualOrderPriority(Number(orderPriorityRaw));
-  const finalGross = round2(baseGross * (1 - discountPct / 100));
 
   const taxRate = getTaxRateForProduct(p);
   const grossNow = round2(Number(p.price || 0) * (1 + taxRate / 100) || 0);
-  const currentDiscount = getProductDiscountPercent(p);
   const currentOrderPriority = getProductManualOrderPriority(p);
   const baseChanged = round2(baseGross) !== round2(grossNow);
-  const discountChanged = round2(discountPct) !== round2(currentDiscount);
   const orderPriorityChanged = orderPriority !== currentOrderPriority;
 
-  if (!baseChanged && !discountChanged && !orderPriorityChanged) {
-    toast?.(
-      "No hay cambios en precio base, descuento ni prioridad.",
-      "info",
-      "Productos",
-    );
+  if (!baseChanged && !orderPriorityChanged) {
+    toast?.("No hay cambios en precio base ni prioridad.", "info", "Productos");
     document.getElementById("priceEditOverlay")?.classList.add("hidden");
     return;
   }
 
-  // Descuento rápido: temporal para la sesión actual, sin tocar FS.
-  if (!baseChanged && discountChanged) {
-    const discountKeyProductId = Number(p.baseProductId || p.id || 0);
-    await setProductDiscountPercentForProduct(
-      discountKeyProductId,
-      discountPct,
-    );
-    if (orderPriorityChanged) {
-      await setProductManualOrderPriorityForProduct(
-        discountKeyProductId,
-        orderPriority,
-      );
-    }
-    renderProducts?.();
-    toast?.(
-      orderPriorityChanged
-        ? `Descuento ${formatDiscountPercent(discountPct)}% y prioridad ${orderPriority} aplicados.`
-        : `Descuento temporal aplicado: ${formatDiscountPercent(discountPct)}%.`,
-      "ok",
-      "Productos",
-    );
-    document.getElementById("priceEditOverlay")?.classList.add("hidden");
-    return;
-  }
-
-  if (!baseChanged && !discountChanged && orderPriorityChanged) {
+  if (!baseChanged && orderPriorityChanged) {
     const orderKeyProductId = Number(p.baseProductId || p.id || 0);
     await setProductManualOrderPriorityForProduct(
       orderKeyProductId,
@@ -32586,29 +33267,22 @@ async function confirmAndSaveProductPrice() {
     "Actualizar precio base",
     `Vas a cambiar el precio de "${p.name}"\n\n` +
       `Base: ${grossNow.toFixed(2)} € -> ${baseGross.toFixed(2)} €\n` +
-      `Descuento: ${formatDiscountPercent(currentDiscount)}% -> ${formatDiscountPercent(discountPct)}%\n` +
       `Prioridad: ${currentOrderPriority} -> ${orderPriority}\n` +
-      `Final: ${finalGross.toFixed(2)} € (IVA incl.)\n\n` +
+      `Final: ${baseGross.toFixed(2)} € (IVA incl.)\n\n` +
       (isSafeTrainingModeEnabled()
         ? `Modo pruebas activo: los cambios se aplicarán solo en local y no se enviarán a API.\n\n`
         : `El precio base se guardará en FacturaScripts permanentemente.\n` +
-          `El descuento y la prioridad son ajustes locales del TPV.\n\n`) +
+          `La prioridad es un ajuste local del TPV.\n\n`) +
       `¿Quieres continuar?`,
   );
   if (!ok) return;
 
   const newNet = grossToNet(baseGross, taxRate);
-  const discountKeyProductId = Number(p.baseProductId || p.id || 0);
+  const keyProductId = Number(p.baseProductId || p.id || 0);
 
   if (isSafeTrainingModeEnabled()) {
-    await setProductDiscountPercentForProduct(
-      discountKeyProductId,
-      discountPct,
-    );
-    await setProductManualOrderPriorityForProduct(
-      discountKeyProductId,
-      orderPriority,
-    );
+    await setProductDiscountPercentForProduct(keyProductId, 0);
+    await setProductManualOrderPriorityForProduct(keyProductId, orderPriority);
 
     p.price = newNet;
     const idxLocal = (products || []).findIndex(
@@ -32618,7 +33292,7 @@ async function confirmAndSaveProductPrice() {
 
     renderProducts?.();
     toast?.(
-      "Modo pruebas: precio/descuento/prioridad aplicados solo en local ✅",
+      "Modo pruebas: precio/prioridad aplicados solo en local ✅",
       "ok",
       "Productos",
     );
@@ -32633,20 +33307,14 @@ async function confirmAndSaveProductPrice() {
       await apiUpdateProductoPrecioNet(p.baseProductId || p.id, newNet);
     }
 
-    await setProductDiscountPercentForProduct(
-      discountKeyProductId,
-      discountPct,
-    );
-    await setProductManualOrderPriorityForProduct(
-      discountKeyProductId,
-      orderPriority,
-    );
+    await setProductDiscountPercentForProduct(keyProductId, 0);
+    await setProductManualOrderPriorityForProduct(keyProductId, orderPriority);
 
     // ✅ LOG solo si la API fue OK
     await logPermanentPriceChange({
       product: p,
       oldGross: grossNow,
-      newGross: finalGross,
+      newGross: baseGross,
       taxRate,
     });
   } catch (e) {
@@ -32662,11 +33330,7 @@ async function confirmAndSaveProductPrice() {
   if (idx >= 0) products[idx].price = newNet;
 
   renderProducts?.();
-  toast?.(
-    "Precio base actualizado. Descuento temporal aplicado ✅",
-    "ok",
-    "Productos",
-  );
+  toast?.("Precio base actualizado ✅", "ok", "Productos");
   document.getElementById("priceEditOverlay")?.classList.add("hidden");
 }
 

@@ -1415,6 +1415,91 @@
         </div>
 
         <div class="opt-acc" id="optionsAccordion">
+          <!-- ACTUALIZACION -->
+          <section class="opt-sec" data-sec="actualizacion">
+            <button type="button" class="opt-sec-h">
+              <span>Actualización automática</span>
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Mostrar avisos de actualización
+                  </div>
+                  <div class="opt-row-sub">
+                    Comprueba en segundo plano si hay versión nueva y muestra un
+                    aviso no intrusivo.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="updateNoticeEnabledToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Frecuencia de comprobación</div>
+                  <div class="opt-row-sub">
+                    Intervalo entre revisiones automáticas de versión.
+                  </div>
+                  <div class="opt-row-sub" id="updateNoticeCountdownText">
+                    Próxima comprobación: --
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <select id="updateNoticeIntervalSelect" class="opt-select">
+                    <option value="1800000">Cada 30 minutos</option>
+                    <option value="3600000">Cada 1 hora</option>
+                    <option value="7200000">Cada 2 horas</option>
+                    <option value="14400000">Cada 4 horas</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Comprobar ahora</div>
+                  <div class="opt-row-sub">
+                    Lanza una revisión manual sin cerrar el TPV.
+                  </div>
+                  <div class="opt-row-sub" id="updateNoticeCurrentVersionText">
+                    Versión actual: --
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <button
+                    type="button"
+                    id="updateNoticeCheckNowBtn"
+                    class="small-btn"
+                  >
+                    Comprobar
+                  </button>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Changelog</div>
+                  <div class="opt-row-sub">
+                    Consulta notas de cambios por version desde que se activo el
+                    historial.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <button
+                    type="button"
+                    id="updateNoticeChangelogBtn"
+                    class="small-btn"
+                  >
+                    Ver changelog
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
           <!-- CAJA -->
           <section class="opt-sec" data-sec="caja">
             <button type="button" class="opt-sec-h">
@@ -2705,24 +2790,6 @@
 
           <div style="margin-top: 12px">
             <div style="font-size: 12px; opacity: 0.75; margin-bottom: 6px">
-              Descuento (%)
-            </div>
-            <input
-              id="priceEditDiscountPctInput"
-              type="text"
-              inputmode="decimal"
-              placeholder="0"
-              style="
-                width: 95%;
-                padding: 10px;
-                border: 1px solid #ddd;
-                border-radius: 10px;
-              "
-            />
-          </div>
-
-          <div style="margin-top: 12px">
-            <div style="font-size: 12px; opacity: 0.75; margin-bottom: 6px">
               Prioridad de orden (negativo primero, positivo después)
             </div>
             <input
@@ -2740,7 +2807,7 @@
           </div>
 
           <div style="margin-top: 10px; font-size: 13px">
-            Precio final con descuento: <strong id="priceEditFinal">—</strong>
+            Precio final (IVA incl.): <strong id="priceEditFinal">—</strong>
           </div>
 
           <div
