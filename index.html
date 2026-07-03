@@ -2998,15 +2998,6 @@
           autocomplete="off"
         />
 
-        <div id="parkDocTypeWrap" class="park-doc-type-wrap">
-          <label class="park-doc-type-toggle" for="parkDocTypePedido">
-            <input id="parkDocTypePedido" type="checkbox" />
-            <span
-              >Guardar como pedido TPV (entrega pendiente, no inmediato)</span
-            >
-          </label>
-        </div>
-
         <div id="parkQuickFlagsWrap" class="park-quick-flags hidden">
           <div class="park-quick-flags-title">Avisos rapidos de mesa</div>
           <div id="parkQuickFlagsList" class="park-quick-flags-list"></div>
@@ -3088,24 +3079,6 @@
 
           <div style="margin-top: 12px">
             <div style="font-size: 12px; opacity: 0.75; margin-bottom: 6px">
-              Descuento (%)
-            </div>
-            <input
-              id="priceEditDiscountPctInput"
-              type="text"
-              inputmode="decimal"
-              placeholder="0"
-              style="
-                width: 95%;
-                padding: 10px;
-                border: 1px solid #ddd;
-                border-radius: 10px;
-              "
-            />
-          </div>
-
-          <div style="margin-top: 12px">
-            <div style="font-size: 12px; opacity: 0.75; margin-bottom: 6px">
               Prioridad de orden (negativo primero, positivo después)
             </div>
             <input
@@ -3123,7 +3096,7 @@
           </div>
 
           <div style="margin-top: 10px; font-size: 13px">
-            Precio final con descuento: <strong id="priceEditFinal">—</strong>
+            Precio final: <strong id="priceEditFinal">—</strong>
           </div>
 
           <div

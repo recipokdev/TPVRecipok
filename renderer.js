@@ -248,11 +248,13 @@ let parkedTickets = []; // cada item: { id, createdAt, items, total, clientName,
 const parkedViewState = {
   search: "",
   filter: "pending", // "all" | "pending" | "paid"
-  docType: "all", // "all" | "ticket" | "pedido"
+  pendingScope: "today", // "today" | "older"
+  docType: "ticket", // "ticket"
   scope: "global", // "global" | <roomId>
   tableUid: null, // null | <roomId::tableId>
 };
 let parkedCounter = 0;
+let parkedClearPaidInFlight = false;
 // Índice del ticket aparcado actualmente cargado en el carrito
 let currentParkedTicketIndex = null;
 let PENDING_RUNTIME_PARKED_SYNC_KEY = "";
@@ -947,6 +949,7 @@ function triggerApi429Cooldown(source = "api", retryAfterHeader = "") {
       lock: false,
       scheduleRetry: false,
       showOverlay: false,
+      markOffline: false,
     },
   );
 
@@ -997,12 +1000,17 @@ function enterApiRetryMode(
   message = "Sin conexión con Recipok. Reintentando...",
   opts = {},
 ) {
-  const { lock = false, scheduleRetry = false, showOverlay = true } = opts;
+  const {
+    lock = false,
+    scheduleRetry = false,
+    showOverlay = true,
+    markOffline = true,
+  } = opts;
 
   setStatusText(message);
 
-  TPV_STATE.offline = true;
-  TPV_STATE.locked = !!lock;
+  TPV_STATE.offline = !!markOffline;
+  TPV_STATE.locked = markOffline ? !!lock : false;
   TPV_STATE.apiRecovering = true;
   updateCashButtonLabel();
 
@@ -11697,11 +11705,14 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
   }
 
   // ✅ CREAR ticket nuevo
-  parkedCounter = getNextSuggestedParkTicketId();
+  const nextDisplayNo = getNextSuggestedParkTicketDisplayNo();
+  const nextTicketId = getNextSuggestedParkTicketId();
+  parkedCounter = nextDisplayNo;
   saveParkedGlobalCounter(parkedCounter);
 
   const localTicket = {
-    id: parkedCounter,
+    id: nextTicketId,
+    displayNo: nextDisplayNo,
     slug: String(getCurrentSlugForReservations() || "").trim(),
     cajaId: String(getCajaIdSafe?.() || currentTerminal?.id || "").trim(),
     createdAt: new Date(),
@@ -11714,7 +11725,7 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
     pedidoStatus: requestedDocType === "pedido" ? "pendiente" : undefined,
     name:
       ticketName ||
-      `${getParkedDocTypeTexts(requestedDocType).shortLabel} #${parkedCounter}`,
+      `${getParkedDocTypeTexts(requestedDocType).shortLabel} #${nextDisplayNo}`,
     obs: observation,
     parkingMode: ticketParkingMode,
     modoMesas: ticketParkingMode === PARKED_MODE_MESAS ? 1 : 0,
@@ -12172,29 +12183,102 @@ function parkedTicketMatchesSearch(t, term) {
   return haystack.includes(q);
 }
 
-function parkedTicketPassesFilter(t) {
-  const ticketDocType = getParkedTicketDocType(t, "ticket");
-  if (parkedViewState.docType === "ticket" && ticketDocType !== "ticket") {
-    return false;
-  }
-  if (parkedViewState.docType === "pedido" && ticketDocType !== "pedido") {
-    return false;
-  }
+function parkedTicketPassesFilter(t, options = {}) {
+  const ignorePendingScope = !!options?.ignorePendingScope;
+  if (isPedidoTpvTicket(t)) return false;
 
-  if (ticketDocType === "pedido") {
-    const pedidoStatus = getPedidoTpvStatus(t);
-    if (parkedViewState.filter === "all") return true;
-    if (parkedViewState.filter === "paid") {
-      return (
-        pedidoStatus === "pagado-no-recogido" || pedidoStatus === "recogido"
-      );
+  if (parkedViewState.filter === "all") {
+    if (ignorePendingScope) return true;
+    if (parkedViewState.pendingScope === "older") {
+      return !isParkedTicketFromToday(t);
     }
-    return pedidoStatus === "pendiente";
+    return isParkedTicketFromToday(t);
+  }
+  if (parkedViewState.filter === "paid") return !!t.paid;
+
+  if (!!t?.paid) return false;
+  if (ignorePendingScope) return true;
+  if (parkedViewState.pendingScope === "older") {
+    return !isParkedTicketFromToday(t);
+  }
+  return isParkedTicketFromToday(t);
+}
+
+function isParkedTicketFromToday(t) {
+  const createdDate = t?.createdAt ? new Date(t.createdAt) : null;
+  const updatedDate = t?.updatedAt ? new Date(t.updatedAt) : null;
+  const refDate =
+    createdDate && !Number.isNaN(createdDate.getTime())
+      ? createdDate
+      : updatedDate && !Number.isNaN(updatedDate.getTime())
+        ? updatedDate
+        : null;
+
+  if (!refDate) return true;
+
+  const now = new Date();
+  return (
+    refDate.getFullYear() === now.getFullYear() &&
+    refDate.getMonth() === now.getMonth() &&
+    refDate.getDate() === now.getDate()
+  );
+}
+
+function getParkedTicketSortTimeMs(t) {
+  const createdMs = t?.createdAt ? new Date(t.createdAt).getTime() : 0;
+  if (Number.isFinite(createdMs) && createdMs > 0) return createdMs;
+
+  const updatedMs = t?.updatedAt ? new Date(t.updatedAt).getTime() : 0;
+  if (Number.isFinite(updatedMs) && updatedMs > 0) return updatedMs;
+
+  return 0;
+}
+
+function getParkedTicketDisplayNumber(ticket) {
+  const MAX_SAFE_DISPLAY_NO = 9999;
+  const explicit = Number(
+    ticket?.displayNo ?? ticket?.displayNumber ?? ticket?.ticketDisplayNo ?? 0,
+  );
+  if (
+    Number.isFinite(explicit) &&
+    explicit > 0 &&
+    explicit <= MAX_SAFE_DISPLAY_NO
+  ) {
+    return String(Math.floor(explicit));
   }
 
-  if (parkedViewState.filter === "all") return true;
-  if (parkedViewState.filter === "paid") return !!t.paid;
-  return !t.paid;
+  const label = String(ticket?.name || ticket?.label || "").trim();
+  const m = label.match(/#\s*(\d{1,4})\b/);
+  if (m) {
+    const fromLabel = Number(m[1] || 0);
+    if (
+      Number.isFinite(fromLabel) &&
+      fromLabel > 0 &&
+      fromLabel <= MAX_SAFE_DISPLAY_NO
+    ) {
+      return String(Math.floor(fromLabel));
+    }
+  }
+
+  return "";
+}
+
+function compareParkedTicketsForList(a, b) {
+  const aPaid = !!a?.paid;
+  const bPaid = !!b?.paid;
+  if (aPaid !== bPaid) return aPaid ? 1 : -1;
+
+  const aTime = getParkedTicketSortTimeMs(a);
+  const bTime = getParkedTicketSortTimeMs(b);
+  if (aTime !== bTime) return bTime - aTime;
+
+  const aNo = Number(getParkedTicketDisplayNumber(a) || 0) || 0;
+  const bNo = Number(getParkedTicketDisplayNumber(b) || 0) || 0;
+  if (aNo !== bNo) return bNo - aNo;
+
+  const aName = String(a?.clientName || a?.name || "");
+  const bName = String(b?.clientName || b?.name || "");
+  return aName.localeCompare(bName, "es", { sensitivity: "base" });
 }
 
 function syncParkedSearchClearBtn() {
@@ -12213,9 +12297,19 @@ function syncParkedToolbarUI() {
   const parkedFilterAll = document.getElementById("parkedFilterAll");
   const parkedFilterPending = document.getElementById("parkedFilterPending");
   const parkedFilterPaid = document.getElementById("parkedFilterPaid");
+  const parkedPendingScopeWrap = document.getElementById(
+    "parkedPendingScopeWrap",
+  );
+  const parkedPendingScopeToday = document.getElementById(
+    "parkedPendingScopeToday",
+  );
+  const parkedPendingScopeOlder = document.getElementById(
+    "parkedPendingScopeOlder",
+  );
   const parkedTypeAll = document.getElementById("parkedTypeAll");
   const parkedTypeTicket = document.getElementById("parkedTypeTicket");
   const parkedTypePedido = document.getElementById("parkedTypePedido");
+  const parkedSummaryBtn = document.getElementById("parkedSummaryBtn");
   const parkedClearPaidBtn = document.getElementById("parkedClearPaidBtn");
   const parkedFilterTabs = document.getElementById("parkedFilterTabs");
   const parkedDocTypeTabs = document.getElementById("parkedDocTypeTabs");
@@ -12225,12 +12319,31 @@ function syncParkedToolbarUI() {
 
   if (mesaScoped) {
     parkedViewState.filter = "all";
-    parkedViewState.docType = "all";
+    parkedViewState.docType = "ticket";
   }
 
   if (parkedSearch) {
     parkedSearch.value = parkedViewState.search || "";
     parkedSearch.placeholder = labels.searchPlaceholder;
+  }
+
+  const source = getScopedAllParkedTickets(parkedTickets);
+  const docTypeFiltered = source.filter((t) => !isPedidoTpvTicket(t));
+  const isPendingByTicketType = (t) => !t?.paid;
+
+  const allCount = docTypeFiltered.length;
+  const pendingList = docTypeFiltered.filter((t) => isPendingByTicketType(t));
+  const paidList = docTypeFiltered.filter((t) => !isPendingByTicketType(t));
+  const pendingCount = pendingList.length;
+  const paidCount = paidList.length;
+  const pendingTodayCount = pendingList.filter((t) =>
+    isParkedTicketFromToday(t),
+  ).length;
+  const pendingOlderCount = Math.max(0, pendingCount - pendingTodayCount);
+  const hasOlderPending = pendingOlderCount > 0;
+
+  if (!hasOlderPending) {
+    parkedViewState.pendingScope = "today";
   }
 
   parkedFilterAll?.classList.toggle(
@@ -12246,31 +12359,72 @@ function syncParkedToolbarUI() {
     parkedViewState.filter === "paid",
   );
 
-  parkedTypeAll?.classList.toggle(
-    "is-active",
-    parkedViewState.docType === "all",
-  );
-  parkedTypeTicket?.classList.toggle(
-    "is-active",
-    parkedViewState.docType === "ticket",
-  );
-  parkedTypePedido?.classList.toggle(
-    "is-active",
-    parkedViewState.docType === "pedido",
-  );
+  if (parkedFilterAll) {
+    parkedFilterAll.textContent = `Todos (${allCount})`;
+  }
+
+  if (parkedFilterPending) {
+    parkedFilterPending.textContent = `Sin cobrar (${pendingCount})`;
+  }
+
+  if (parkedFilterPaid) {
+    parkedFilterPaid.textContent = `Cobrados (${paidCount})`;
+  }
 
   if (parkedFilterTabs) {
     parkedFilterTabs.classList.toggle("hidden", mesaScoped);
   }
   if (parkedDocTypeTabs) {
-    parkedDocTypeTabs.classList.toggle("hidden", mesaScoped);
+    parkedDocTypeTabs.classList.add("hidden");
   }
 
+  const showClearPaidInLowerRow =
+    !mesaScoped && parkedViewState.filter === "paid";
+  if (parkedSummaryBtn) {
+    parkedSummaryBtn.classList.toggle("hidden", !showClearPaidInLowerRow);
+  }
   if (parkedClearPaidBtn) {
-    parkedClearPaidBtn.classList.toggle(
-      "hidden",
-      mesaScoped || parkedViewState.filter !== "paid",
-    );
+    parkedClearPaidBtn.classList.toggle("hidden", !showClearPaidInLowerRow);
+    parkedClearPaidBtn.disabled =
+      parkedClearPaidInFlight || !showClearPaidInLowerRow;
+    parkedClearPaidBtn.textContent = parkedClearPaidInFlight
+      ? "Borrando..."
+      : "Limpiar cobrados";
+  }
+
+  const allTodayCount = docTypeFiltered.filter((t) =>
+    isParkedTicketFromToday(t),
+  ).length;
+  const allOlderCount = Math.max(0, docTypeFiltered.length - allTodayCount);
+  const hasOlderByCurrentFilter =
+    parkedViewState.filter === "all" ? allOlderCount > 0 : hasOlderPending;
+  const scopeTodayCount =
+    parkedViewState.filter === "all" ? allTodayCount : pendingTodayCount;
+  const scopeOlderCount =
+    parkedViewState.filter === "all" ? allOlderCount : pendingOlderCount;
+
+  const shouldShowPendingScope =
+    !mesaScoped &&
+    (showClearPaidInLowerRow ||
+      (parkedViewState.filter !== "paid" && hasOlderByCurrentFilter));
+  parkedPendingScopeWrap?.classList.toggle("hidden", !shouldShowPendingScope);
+  parkedPendingScopeToday?.classList.toggle("hidden", showClearPaidInLowerRow);
+  parkedPendingScopeOlder?.classList.toggle("hidden", showClearPaidInLowerRow);
+  parkedPendingScopeToday?.classList.toggle(
+    "is-active",
+    parkedViewState.pendingScope !== "older",
+  );
+  parkedPendingScopeOlder?.classList.toggle(
+    "is-active",
+    parkedViewState.pendingScope === "older",
+  );
+
+  if (parkedPendingScopeToday) {
+    parkedPendingScopeToday.textContent = `Hoy (${scopeTodayCount})`;
+  }
+
+  if (parkedPendingScopeOlder) {
+    parkedPendingScopeOlder.textContent = `Dias anteriores (${scopeOlderCount})`;
   }
 
   const mesasScopeEnabled = !!MESAS_INLINE_ACTIVE && !mesaScoped;
@@ -12319,10 +12473,38 @@ async function clearPaidParkedHistory() {
   const source = Array.isArray(parkedTickets) ? parkedTickets : [];
   const removedPaid = source.filter((t) => !!t?.paid && !isPedidoTpvTicket(t));
 
-  if (!removedPaid.length) return;
+  if (!removedPaid.length) {
+    return { removedCount: 0, queuedCount: 0 };
+  }
 
   parkedTickets = source.filter((t) => !(!!t?.paid && !isPedidoTpvTicket(t)));
   saveParkedTicketsCache(parkedTickets);
+
+  REMOTE_PARKED_RESERVATIONS = (
+    Array.isArray(REMOTE_PARKED_RESERVATIONS) ? REMOTE_PARKED_RESERVATIONS : []
+  ).filter((t) => !(!!t?.paid && !isPedidoTpvTicket(t)));
+
+  updateParkedCountBadge?.();
+  refreshParkButtonUI?.();
+  refreshParkedEditingBanner?.();
+  renderParkedTicketsModal?.();
+
+  let queuedCount = 0;
+
+  await Promise.allSettled(
+    removedPaid.map(async (ticket) => {
+      try {
+        await apiDeleteParkedReservation(ticket);
+      } catch (e) {
+        queuedCount += 1;
+        enqueueParkedSyncOperation("delete", ticket);
+        console.warn(
+          "No se pudo borrar la reserva remota al limpiar cobrados:",
+          e?.message || e,
+        );
+      }
+    }),
+  );
 
   if (
     currentParkedTicketIndex != null &&
@@ -12332,10 +12514,7 @@ async function clearPaidParkedHistory() {
     currentParkedTicketIndex = null;
   }
 
-  updateParkedCountBadge?.();
-  refreshParkButtonUI?.();
-  refreshParkedEditingBanner?.();
-  renderParkedTicketsModal?.();
+  return { removedCount: removedPaid.length, queuedCount };
 }
 
 async function setPedidoTpvStatusByIndex(index, nextStatus) {
@@ -12439,23 +12618,22 @@ function ensureParkedToolbar() {
       </button>
     </div>
 
-    <div id="parkedDocTypeTabs" class="tickets-tabs" style="margin-left: 10px;">
-      <button id="parkedTypeAll" type="button" class="cart-btn tickets-tab-btn">
-        Ticket + Pedido
+    <div id="parkedPendingScopeWrap" class="tickets-tabs hidden" style="margin: 6px 0 0 0; flex-basis: 100%; padding-left: 10px;">
+      <button id="parkedPendingScopeToday" type="button" class="cart-btn tickets-tab-btn" style="font-size: 13px; padding: 6px 12px;">
+        Hoy
       </button>
-      <button id="parkedTypeTicket" type="button" class="cart-btn tickets-tab-btn">
-        Tickets
+      <button id="parkedPendingScopeOlder" type="button" class="cart-btn tickets-tab-btn" style="font-size: 13px; padding: 6px 12px;">
+        Dias anteriores
       </button>
-      <button id="parkedTypePedido" type="button" class="cart-btn tickets-tab-btn">
-        Pedidos TPV
+      <button id="parkedSummaryBtn" type="button" class="cart-btn tickets-tab-btn hidden" style="font-size: 13px; padding: 6px 12px;" title="Resumen de aparcados">
+        Resumen
       </button>
-    </div>
-
-    <div class="tickets-tabs" style="margin-left: 10px; display:flex; align-items:center; gap:8px;">
-      <button id="parkedClearPaidBtn" type="button" class="cart-btn tickets-tab-btn" title="Limpiar historial de cobrados">
+      <button id="parkedClearPaidBtn" type="button" class="cart-btn tickets-tab-btn hidden" style="font-size: 13px; padding: 6px 12px;" title="Limpiar historial de cobrados">
         Limpiar cobrados
       </button>
     </div>
+
+    <div id="parkedDocTypeTabs" class="tickets-tabs hidden" style="margin-left: 10px;"></div>
 
     <div id="parkedScopeWrap" class="tickets-scope-wrap hidden" style="margin-left: 10px;">
       <label for="parkedScopeSelect">Vista</label>
@@ -12470,10 +12648,14 @@ function ensureParkedToolbar() {
   const parkedFilterAll = document.getElementById("parkedFilterAll");
   const parkedFilterPending = document.getElementById("parkedFilterPending");
   const parkedFilterPaid = document.getElementById("parkedFilterPaid");
-  const parkedTypeAll = document.getElementById("parkedTypeAll");
-  const parkedTypeTicket = document.getElementById("parkedTypeTicket");
-  const parkedTypePedido = document.getElementById("parkedTypePedido");
+  const parkedPendingScopeToday = document.getElementById(
+    "parkedPendingScopeToday",
+  );
+  const parkedPendingScopeOlder = document.getElementById(
+    "parkedPendingScopeOlder",
+  );
   const parkedKeyboardBtn = document.getElementById("parkedKeyboardBtn");
+  const parkedSummaryBtn = document.getElementById("parkedSummaryBtn");
   const parkedClearPaidBtn = document.getElementById("parkedClearPaidBtn");
   const parkedScopeSelect = document.getElementById("parkedScopeSelect");
 
@@ -12509,26 +12691,20 @@ function ensureParkedToolbar() {
     renderParkedTicketsModal();
   });
 
+  parkedPendingScopeToday?.addEventListener("click", () => {
+    parkedViewState.pendingScope = "today";
+    syncParkedToolbarUI();
+    renderParkedTicketsModal();
+  });
+
+  parkedPendingScopeOlder?.addEventListener("click", () => {
+    parkedViewState.pendingScope = "older";
+    syncParkedToolbarUI();
+    renderParkedTicketsModal();
+  });
+
   parkedFilterPaid?.addEventListener("click", () => {
     parkedViewState.filter = "paid";
-    syncParkedToolbarUI();
-    renderParkedTicketsModal();
-  });
-
-  parkedTypeAll?.addEventListener("click", () => {
-    parkedViewState.docType = "all";
-    syncParkedToolbarUI();
-    renderParkedTicketsModal();
-  });
-
-  parkedTypeTicket?.addEventListener("click", () => {
-    parkedViewState.docType = "ticket";
-    syncParkedToolbarUI();
-    renderParkedTicketsModal();
-  });
-
-  parkedTypePedido?.addEventListener("click", () => {
-    parkedViewState.docType = "pedido";
     syncParkedToolbarUI();
     renderParkedTicketsModal();
   });
@@ -12544,14 +12720,30 @@ function ensureParkedToolbar() {
     openQwertyForInput(parkedSearch, "text");
   });
 
+  parkedSummaryBtn?.addEventListener("click", async () => {
+    const scoped = getScopedAllParkedTickets(parkedTickets).filter(
+      (t) => !isPedidoTpvTicket(t),
+    );
+    const stats = buildParkedSummaryStats(scoped);
+    const html = buildParkedSummaryHtml(stats);
+
+    await confirmModal("Resumen de aparcados", html, {
+      isHtml: true,
+      textClassName: "parked-summary-text",
+      dialogClassName: "parked-summary-dialog",
+    });
+  });
+
   parkedClearPaidBtn?.addEventListener("click", async () => {
+    if (parkedClearPaidInFlight) return;
+
     const hasPaid = (Array.isArray(parkedTickets) ? parkedTickets : []).some(
       (t) => !!t?.paid && !isPedidoTpvTicket(t),
     );
 
     if (!hasPaid) {
       toast(
-        "No hay tickets cobrados para limpiar. Los pedidos TPV no se borran desde aqui.",
+        "No hay tickets cobrados para limpiar.",
         "info",
         labels.featureTitle,
       );
@@ -12560,12 +12752,28 @@ function ensureParkedToolbar() {
 
     const ok = await confirmModal(
       "Limpiar cobrados",
-      `Se eliminara el historial local de ${labels.itemsPlural} cobrados. ¿Continuar?`,
+      `Se eliminara el historial de ${labels.itemsPlural} cobrados de esta vista. ¿Continuar?`,
     );
     if (!ok) return;
 
-    await clearPaidParkedHistory();
-    toast("Historial de cobrados limpiado.", "ok", labels.featureTitle);
+    parkedClearPaidInFlight = true;
+    syncParkedToolbarUI();
+
+    try {
+      const result = await clearPaidParkedHistory();
+      if (result?.queuedCount > 0) {
+        toast(
+          "Cobrados borrados localmente; algunos se sincronizaran cuando vuelva la conexion.",
+          "warn",
+          labels.featureTitle,
+        );
+      } else {
+        toast("Historial de cobrados limpiado.", "ok", labels.featureTitle);
+      }
+    } finally {
+      parkedClearPaidInFlight = false;
+      syncParkedToolbarUI();
+    }
   });
 
   syncParkedToolbarUI();
@@ -12720,6 +12928,7 @@ function refreshParkedEditingBanner() {
     0,
     Math.round(Number(mesasState?.tableMeta?.[mesaUid]?.diners ?? 0) || 0),
   );
+  const showMesaMeta = isMesasTransaccionesMode() && isMesasModeTicket(t);
 
   const openedAt = new Date(t?.createdAt || t?.updatedAt || Date.now());
   const openedHour = Number.isNaN(openedAt.getTime())
@@ -12732,14 +12941,16 @@ function refreshParkedEditingBanner() {
     ? `Ticket #${String(t?.id || "").trim()}`
     : `${docTypeTexts.shortLabel}: ${bannerTicketName}${splitSuffix}`;
 
-  mesaMeta.innerHTML = `
+  mesaMeta.innerHTML = showMesaMeta
+    ? `
     <div class="peb-mesa-main">Mesa ${escapeHtml(mesaName)} <span class="peb-ticket-inline">${escapeHtml(ticketLabel)}</span></div>
     <div class="peb-mesa-sub">${escapeHtml(roomName)}${diners > 0 ? ` · Comensales: ${escapeHtml(String(diners))}` : ""}</div>
     <div class="peb-mesa-badges">
       <span class="peb-chip is-${escapeHtml(mesaStatus.kind)}">${escapeHtml(mesaStatus.text)}</span>
       <span class="peb-chip">${escapeHtml(openedHour)}</span>
     </div>
-  `;
+  `
+    : "";
 
   const activeFlags = normalizeMesaTicketAlerts(t?.mesaAlerts);
   const splitObsInfo = parseSplitInfoFromObs(t?.obs);
@@ -12787,7 +12998,7 @@ function openParkedModal(options = {}) {
   parkedViewState.tableUid = forcedTableUid || null;
   if (forcedTableUid) {
     parkedViewState.filter = "all";
-    parkedViewState.docType = "all";
+    parkedViewState.docType = "ticket";
   }
 
   if (!parkedTicketsOverlay) return;
@@ -12832,18 +13043,41 @@ function renderParkedTicketsModal() {
   const term = String(parkedViewState.search || "")
     .trim()
     .toLowerCase();
+  const ignorePendingScope = term.length > 0;
 
   const source = getScopedAllParkedTickets(parkedTickets);
 
   const filtered = source.filter((t) => {
-    return parkedTicketPassesFilter(t) && parkedTicketMatchesSearch(t, term);
+    return (
+      parkedTicketPassesFilter(t, { ignorePendingScope }) &&
+      parkedTicketMatchesSearch(t, term)
+    );
   });
+
+  filtered.sort(compareParkedTicketsForList);
 
   if (!filtered.length) {
     const labels = getParkingLabels();
     const empty = document.createElement("div");
     empty.className = "parked-ticket-empty";
-    empty.textContent = `No hay ${labels.itemsPlural} en esta vista.`;
+    if (term) {
+      empty.textContent = "No hay resultados para esa busqueda en esta vista.";
+      parkedTicketsList.appendChild(empty);
+      return;
+    }
+    if (
+      parkedViewState.filter === "pending" ||
+      parkedViewState.filter === "all"
+    ) {
+      const prefix =
+        parkedViewState.filter === "all" ? "tickets" : "tickets sin cobrar";
+      empty.textContent =
+        parkedViewState.pendingScope === "older"
+          ? `No hay ${prefix} de dias anteriores en esta vista.`
+          : `No hay ${prefix} de hoy en esta vista.`;
+    } else {
+      empty.textContent = `No hay ${labels.itemsPlural} en esta vista.`;
+    }
     parkedTicketsList.appendChild(empty);
     return;
   }
@@ -12955,21 +13189,36 @@ function renderParkedTicketsModal() {
     const labels = getParkingLabels();
     const realIndex = parkedTickets.indexOf(t);
     const mesaCtx = getTicketMesaContext(t);
-    const docTypeTexts = getParkedDocTypeTexts(getParkedTicketDocType(t));
-    const titleText =
-      String(t.name || `${docTypeTexts.shortLabel} #${t.id}`).trim() ||
-      `${docTypeTexts.shortLabel} #${t.id}`;
+    const displayNo = getParkedTicketDisplayNumber(t);
+    const displaySuffix = displayNo ? ` #${displayNo}` : "";
+    const rawName = String(t.name || "").trim();
+    const hasLegacyHugeNo = /^ticket\s*#\s*\d{5,}$/i.test(rawName);
+    const titleText = hasLegacyHugeNo
+      ? `Ticket${displaySuffix}`.trim() || "Ticket"
+      : String(rawName || `Ticket${displaySuffix}`).trim() || "Ticket";
 
     const div = document.createElement("div");
     div.className = "parked-ticket-item parked-ticket-compact";
     div.dataset.index = realIndex;
 
-    const fecha = t.createdAt ? new Date(t.createdAt) : new Date();
+    const createdDate = t?.createdAt ? new Date(t.createdAt) : null;
+    const updatedDate = t?.updatedAt ? new Date(t.updatedAt) : null;
+    const fechaValida =
+      createdDate && !Number.isNaN(createdDate.getTime())
+        ? createdDate
+        : updatedDate && !Number.isNaN(updatedDate.getTime())
+          ? updatedDate
+          : null;
 
-    const hora = fecha.toLocaleTimeString("es-ES", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    const fechaHoraLabel = fechaValida
+      ? `${fechaValida.toLocaleDateString("es-ES")} ${fechaValida.toLocaleTimeString(
+          "es-ES",
+          {
+            hour: "2-digit",
+            minute: "2-digit",
+          },
+        )}`
+      : "Sin fecha";
 
     const totalTexto = t.total != null ? t.total.toFixed(2) + " €" : "—";
 
@@ -12977,17 +13226,14 @@ function renderParkedTicketsModal() {
     const preview = parkedBuildGroupedPreview(items);
     const splitObsInfo = parseSplitInfoFromObs(t?.obs);
     const obs = String(splitObsInfo?.cleanObs || t?.obs || "").trim();
-    const pedidoMeta = getPedidoTpvStatusMeta(t);
     const alerts = normalizeMesaTicketAlerts(t?.mesaAlerts);
     const alertsText = alerts
       .map((key) => getMesaTicketAlertLabel(key))
       .join(" · ");
 
-    const paidBadge = isPedidoTpvTicket(t)
-      ? `<span class="ticket-badge ${pedidoMeta.badgeClass}">${escapeHtml(pedidoMeta.text)}</span>`
-      : t.paid
-        ? `<span class="ticket-badge ticket-badge-ok">✔ COBRADO</span>`
-        : `<span class="ticket-badge ticket-badge-partial">PENDIENTE</span>`;
+    const paidBadge = t.paid
+      ? '<span class="ticket-badge ticket-badge-ok">✔ COBRADO</span>'
+      : '<span class="ticket-badge ticket-badge-partial">PENDIENTE</span>';
 
     const paidSub = t.paid
       ? `<div class="pt-items pt-items-paid">Cobrado${
@@ -12995,25 +13241,19 @@ function renderParkedTicketsModal() {
         }</div>`
       : "";
 
-    const pedidoActionsHtml = isPedidoTpvTicket(t)
-      ? pedidoMeta.isPending
-        ? '<div class="pt-pedido-actions"><button type="button" class="pt-action pt-action-pay" data-pedido-action="pay">Cobrar pedido</button></div>'
-        : pedidoMeta.isPaidNotCollected
-          ? '<div class="pt-pedido-actions"><button type="button" class="pt-action pt-action-pick" data-pedido-action="pickup">Marcar recogido</button></div>'
-          : '<div class="pt-pedido-actions"><span class="pt-picked-label">Pedido entregado</span></div>'
-      : "";
+    const pedidoActionsHtml = "";
 
     if (t.paid) {
       div.classList.add("parked-ticket-paid");
     }
 
-    const showMesaContext = !!MESAS_INLINE_ACTIVE;
+    const showMesaContext =
+      isMesasTransaccionesMode() && isMesasModeTicket(t);
 
     div.innerHTML = `
       <div class="pt-left">
         <div class="pt-title">
           ${paidBadge}
-          ${docTypeTexts.badgeHtml}
           ${escapeHtml(titleText)}
         </div>
 
@@ -13036,7 +13276,7 @@ function renderParkedTicketsModal() {
         }
 
         <div class="pt-sub">
-          ${hora} · ${escapeHtml(t.clientName || "Cliente")} · ${escapeHtml(docTypeTexts.shortLabel)} #${t.id}
+          ${fechaHoraLabel} · ${escapeHtml(t.clientName || "Cliente")} · Ticket${displaySuffix}
         </div>
       </div>
 
@@ -13048,7 +13288,7 @@ function renderParkedTicketsModal() {
       <div class="pt-right">
         <div class="pt-right-top">
           <div class="pt-total">${totalTexto}</div>
-          <button type="button" class="pt-print" title="Imprimir ${docTypeTexts.shortLabel}" aria-label="Imprimir">🖨</button>
+          <button type="button" class="pt-print" title="Imprimir Ticket" aria-label="Imprimir">🖨</button>
           <button type="button" class="pt-del" title="Eliminar ${labels.item}" aria-label="Eliminar">🗑</button>
         </div>
         ${pedidoActionsHtml}
@@ -13060,12 +13300,10 @@ function renderParkedTicketsModal() {
       printBtn.onclick = async (e) => {
         e.stopPropagation();
         try {
-          const draft = isPedidoTpvTicket(t)
-            ? buildPedidoPrintDraft(t)
-            : buildParkedTicketPrintDraft(t);
+          const draft = buildParkedTicketPrintDraft(t);
           await printTicket(draft);
           toast(
-            `${docTypeTexts.shortLabel} #${t.id} enviado a impresora.`,
+            `Ticket${displaySuffix} enviado a impresora.`,
             "ok",
             "Impresion",
           );
@@ -13079,77 +13317,60 @@ function renderParkedTicketsModal() {
     if (delBtn) {
       delBtn.onclick = async (e) => {
         e.stopPropagation();
+        if (delBtn.disabled) return;
 
         const ok = await confirmModal(
           `Eliminar ${labels.item}`,
-          `¿Seguro que quieres eliminar ${docTypeTexts.shortLabel} #${t.id}?`,
+          `¿Seguro que quieres eliminar Ticket${displaySuffix}?`,
         );
         if (!ok) return;
 
-        try {
-          await apiDeleteParkedReservation(t);
-          await refreshRemoteParkedReservationsOnly();
-        } catch (e) {
-          enqueueParkedSyncOperation("delete", t);
-          console.warn("No se pudo borrar la reserva remota:", e?.message || e);
+        delBtn.disabled = true;
+        delBtn.textContent = "...";
+        delBtn.title = "Borrando...";
+        if (printBtn) {
+          printBtn.disabled = true;
+        }
 
-          if (isParkedSyncTransientError(e)) {
-            toast(
-              `Sin internet: borrado de ${labels.item} guardado en cola.`,
-              "warn",
-              labels.featureTitle,
+        const ticketKey = getParkedTicketSyncKey(t);
+        const findIndexByKey = () => {
+          if (ticketKey) {
+            const byKey = parkedTickets.findIndex(
+              (x) => getParkedTicketSyncKey(x) === ticketKey,
             );
+            if (byKey >= 0) return byKey;
           }
+          return parkedTickets.findIndex((x) => x === t);
+        };
+
+        const currentIndex = findIndexByKey();
+        if (currentIndex < 0) {
+          renderParkedTicketsModal();
+          return;
         }
 
-        try {
-          const releaseDelta = buildReservedQtyDeltaMap([], t?.items || []);
-          if (releaseDelta.size > 0) {
-            await syncReservedStockDeltaToFS(releaseDelta, "eliminar aparcado");
-          }
-        } catch (e) {
-          console.warn(
-            "No se pudo sincronizar stock al eliminar aparcado:",
-            e?.message || e,
-          );
-          toast(
-            "Aparcado eliminado localmente, pero no se pudo sincronizar stock en FacturaScripts.",
-            "warn",
-            "Stock",
-          );
-        }
-
-        parkedTickets.splice(realIndex, 1);
+        const removedTicket = parkedTickets[currentIndex];
+        parkedTickets.splice(currentIndex, 1);
         saveParkedTicketsCache();
+        REMOTE_PARKED_RESERVATIONS = (
+          Array.isArray(REMOTE_PARKED_RESERVATIONS)
+            ? REMOTE_PARKED_RESERVATIONS
+            : []
+        ).filter((x) => {
+          const key = getParkedTicketSyncKey(x);
+          return ticketKey ? key !== ticketKey : x !== removedTicket;
+        });
 
-        const skipSplitIncident = shouldSkipSplitIncidentLog(t);
-        if (!skipSplitIncident) {
-          try {
-            const idcaja = getCajaIdSafe();
-            if (idcaja) {
-              await appendCajaAutoLogLineForId(
-                idcaja,
-                buildParkedManualDeleteLogLine(t),
-              );
-            }
-          } catch (e) {
-            console.warn(
-              "No se pudo registrar el borrado del ticket aparcado en la caja:",
-              e?.message || e,
-            );
-          }
-        }
-
-        if (currentParkedTicketIndex === realIndex) {
+        if (currentParkedTicketIndex === currentIndex) {
           currentParkedTicketIndex = null;
         } else if (
           currentParkedTicketIndex !== null &&
-          currentParkedTicketIndex > realIndex
+          currentParkedTicketIndex > currentIndex
         ) {
           currentParkedTicketIndex -= 1;
         }
 
-        unlinkMesaTicketByTicketId(t?.id || null, t);
+        unlinkMesaTicketByTicketId(removedTicket?.id || null, removedTicket);
 
         updateParkedCountBadge();
         refreshParkButtonUI();
@@ -13162,69 +13383,78 @@ function renderParkedTicketsModal() {
             "info",
             labels.featureTitle,
           );
-          return;
+        } else {
+          renderParkedTicketsModal();
+          toast(`${labels.itemCap} eliminado.`, "ok", labels.featureTitle);
         }
 
-        renderParkedTicketsModal();
-        toast(`${labels.itemCap} eliminado.`, "ok", labels.featureTitle);
-      };
-    }
+        void (async () => {
+          try {
+            await apiDeleteParkedReservation(removedTicket);
+          } catch (e) {
+            enqueueParkedSyncOperation("delete", removedTicket);
+            console.warn(
+              "No se pudo borrar la reserva remota:",
+              e?.message || e,
+            );
 
-    const pedidoActionBtn = div.querySelector("button[data-pedido-action]");
-    if (pedidoActionBtn) {
-      pedidoActionBtn.onclick = async (e) => {
-        e.stopPropagation();
-        const action = String(
-          pedidoActionBtn.dataset.pedidoAction || "",
-        ).trim();
+            if (isParkedSyncTransientError(e)) {
+              toast(
+                `Sin internet: borrado de ${labels.item} guardado en cola.`,
+                "warn",
+                labels.featureTitle,
+              );
+            }
+          }
 
-        if (action === "pay") {
-          const ok = await confirmModal(
-            "Cobrar pedido TPV",
-            `¿Marcar ${docTypeTexts.shortLabel} #${t.id} como pagado y pendiente de recogida?`,
-          );
-          if (!ok) return;
-
-          const changed = await setPedidoTpvStatusByIndex(
-            realIndex,
-            "pagado-no-recogido",
-          );
-          if (changed) {
+          try {
+            const releaseDelta = buildReservedQtyDeltaMap(
+              [],
+              removedTicket?.items || [],
+            );
+            if (releaseDelta.size > 0) {
+              await syncReservedStockDeltaToFS(
+                releaseDelta,
+                "eliminar aparcado",
+              );
+            }
+          } catch (e) {
+            console.warn(
+              "No se pudo sincronizar stock al eliminar aparcado:",
+              e?.message || e,
+            );
             toast(
-              `Pedido #${t.id} marcado como pagado (no recogido).`,
-              "ok",
-              "Pedidos TPV",
+              "Aparcado eliminado localmente, pero no se pudo sincronizar stock en FacturaScripts.",
+              "warn",
+              "Stock",
             );
           }
-          return;
-        }
 
-        if (action === "pickup") {
-          const ok = await confirmModal(
-            "Recoger pedido TPV",
-            `¿Marcar ${docTypeTexts.shortLabel} #${t.id} como recogido?`,
-          );
-          if (!ok) return;
-
-          const changed = await setPedidoTpvStatusByIndex(
-            realIndex,
-            "recogido",
-          );
-          if (changed) {
-            toast(
-              `Pedido #${t.id} marcado como recogido.`,
-              "ok",
-              "Pedidos TPV",
-            );
+          const skipSplitIncident = shouldSkipSplitIncidentLog(removedTicket);
+          if (!skipSplitIncident) {
+            try {
+              const idcaja = getCajaIdSafe();
+              if (idcaja) {
+                await appendCajaAutoLogLineForId(
+                  idcaja,
+                  buildParkedManualDeleteLogLine(removedTicket),
+                );
+              }
+            } catch (e) {
+              console.warn(
+                "No se pudo registrar el borrado del ticket aparcado en la caja:",
+                e?.message || e,
+              );
+            }
           }
-        }
+        })();
       };
     }
 
     div.onclick = () => {
       if (t.paid) {
         toast(
-          `Ese ${docTypeTexts.shortLabel} ya está cobrado. No se puede volver a cargar.`,
+          "Ese ticket ya está cobrado. No se puede volver a cargar.",
           "warn",
           labels.featureTitle,
         );
@@ -23270,18 +23500,21 @@ function getParkedGlobalCounterStorageKey() {
 }
 
 function loadParkedGlobalCounter() {
+  const MAX_SAFE_DISPLAY_NO = 9999;
   try {
     const raw = localStorage.getItem(getParkedGlobalCounterStorageKey());
     const n = Number(raw || 0);
-    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+    if (!Number.isFinite(n) || n <= 0 || n > MAX_SAFE_DISPLAY_NO) return 0;
+    return Math.floor(n);
   } catch {
     return 0;
   }
 }
 
 function saveParkedGlobalCounter(value) {
+  const MAX_SAFE_DISPLAY_NO = 9999;
   const n = Number(value || 0);
-  if (!Number.isFinite(n) || n <= 0) return;
+  if (!Number.isFinite(n) || n <= 0 || n > MAX_SAFE_DISPLAY_NO) return;
   try {
     localStorage.setItem(
       getParkedGlobalCounterStorageKey(),
@@ -23355,7 +23588,7 @@ function resolveRememberedTicketParkingMode(ticket) {
 }
 
 function getCurrentParkingModeScope() {
-  return MESAS_INLINE_ACTIVE ? PARKED_MODE_MESAS : PARKED_MODE_TPV;
+  return isMesasTransaccionesMode() ? PARKED_MODE_MESAS : PARKED_MODE_TPV;
 }
 
 function getTicketMesasModeFlag(ticket) {
@@ -23941,6 +24174,12 @@ function normalizeRemoteParkedTicket(raw) {
 
   return {
     id,
+    displayNo: (() => {
+      const n = Number(
+        raw.displayNo ?? raw.displayNumber ?? raw.ticketDisplayNo ?? 0,
+      );
+      return Number.isFinite(n) && n > 0 && n <= 9999 ? Math.floor(n) : null;
+    })(),
     slug: String(raw.slug || "").trim(),
     cajaId: String(raw.cajaId || raw.cajaid || "").trim(),
     createdAt,
@@ -23952,9 +24191,18 @@ function normalizeRemoteParkedTicket(raw) {
     pedidoStatus,
     name:
       String(raw.ticketName || raw.name || "").trim() ||
-      (id
-        ? `${getParkedDocTypeTexts(raw.docType || raw.documentType || "ticket").shortLabel} #${id}`
-        : "Ticket"),
+      (() => {
+        const displayNo = Number(
+          raw.displayNo ?? raw.displayNumber ?? raw.ticketDisplayNo ?? 0,
+        );
+        if (Number.isFinite(displayNo) && displayNo > 0 && displayNo <= 9999) {
+          return `${getParkedDocTypeTexts(raw.docType || raw.documentType || "ticket").shortLabel} #${Math.floor(displayNo)}`;
+        }
+        if (id && id <= 9999) {
+          return `${getParkedDocTypeTexts(raw.docType || raw.documentType || "ticket").shortLabel} #${id}`;
+        }
+        return "Ticket";
+      })(),
     obs: String(raw.obs || raw.ticketObs || "").trim(),
     splitGroupId: String(raw.splitGroupId || "").trim() || null,
     splitPart: Number(raw.splitPart || 0) || null,
@@ -28523,8 +28771,6 @@ const parkNameKeyboardBtn = document.getElementById("parkNameKeyboardBtn");
 const parkObsTargetInfo = document.getElementById("parkObsTargetInfo");
 const parkQuickFlagsWrap = document.getElementById("parkQuickFlagsWrap");
 const parkQuickFlagsList = document.getElementById("parkQuickFlagsList");
-const parkDocTypeWrap = document.getElementById("parkDocTypeWrap");
-const parkDocTypePedido = document.getElementById("parkDocTypePedido");
 
 const MESA_QUICK_ALERT_PRESETS = [
   { key: "ninos", label: "Ninos" },
@@ -28535,7 +28781,6 @@ const MESA_QUICK_ALERT_PRESETS = [
 ];
 
 let parkModalMesaAlerts = [];
-let parkModalDocType = "ticket";
 
 function normalizeMesaTicketAlerts(alerts) {
   const allowed = new Set(
@@ -28694,7 +28939,7 @@ function getPedidoTpvStatusMeta(ticket) {
 }
 
 function getParkingLabels() {
-  const mesasMode = !!MESAS_INLINE_ACTIVE;
+  const mesasMode = isMesasTransaccionesMode();
 
   return {
     mesasMode,
@@ -28746,17 +28991,46 @@ function renderParkQuickFlags() {
 }
 
 function getNextSuggestedParkTicketName() {
-  return `Ticket #${getNextSuggestedParkTicketId()}`;
+  return `Ticket #${getNextSuggestedParkTicketDisplayNo()}`;
+}
+
+function getNextSuggestedParkTicketDisplayNo() {
+  const MAX_SAFE_DISPLAY_NO = 9999;
+  const pendingTickets = getScopedPendingParkedTickets(parkedTickets).filter(
+    (t) => !isPedidoTpvTicket(t),
+  );
+
+  if (!pendingTickets.length) return 1;
+
+  const maxDisplayNo = pendingTickets.reduce((max, ticket) => {
+    const n = Number(getParkedTicketDisplayNumber(ticket) || 0) || 0;
+    if (!Number.isFinite(n) || n <= 0 || n > MAX_SAFE_DISPLAY_NO) return max;
+    return n > max ? n : max;
+  }, 0);
+
+  const globalCounter = loadParkedGlobalCounter();
+  const basis = Math.max(
+    Number(parkedCounter || 0),
+    maxDisplayNo,
+    globalCounter,
+  );
+  if (basis <= 0) return 1;
+
+  return Math.min(MAX_SAFE_DISPLAY_NO, basis + 1);
 }
 
 function getNextSuggestedParkTicketId() {
-  const maxId = (Array.isArray(parkedTickets) ? parkedTickets : []).reduce(
-    (max, ticket) => Math.max(max, Number(ticket?.id || 0) || 0),
-    0,
+  const pendingTickets = getScopedPendingParkedTickets(parkedTickets).filter(
+    (t) => !isPedidoTpvTicket(t),
   );
 
-  const globalCounter = loadParkedGlobalCounter();
-  const basis = Math.max(Number(parkedCounter || 0), maxId, globalCounter);
+  const maxTicketId = pendingTickets.reduce((max, ticket) => {
+    const n = Number(ticket?.id || ticket?.ticketId || 0);
+    if (!Number.isFinite(n) || n <= 0) return max;
+    return Math.max(max, Math.floor(n));
+  }, 0);
+
+  const basis = Math.max(maxTicketId, Number(parkedCounter || 0));
   if (basis <= 0) return 1;
 
   return basis + 1;
@@ -28773,11 +29047,6 @@ function getParkModalTargetText() {
   }
 
   return "Destino: TPV general (sin mesa)";
-}
-
-function getParkModalDocTypeFromUI() {
-  const input = document.getElementById("parkDocTypePedido");
-  return input?.checked ? "pedido" : "ticket";
 }
 
 function buildPedidoPrintDraft(ticket) {
@@ -28915,7 +29184,6 @@ function openParkObsModal() {
     parkObsTargetInfo.classList.toggle("hidden", !mesasMode);
   }
 
-  if (parkDocTypeWrap) parkDocTypeWrap.classList.toggle("hidden", mesasMode);
   if (parkQuickFlagsWrap)
     parkQuickFlagsWrap.classList.toggle("hidden", !mesasMode);
 
@@ -28929,25 +29197,17 @@ function openParkObsModal() {
     parkModalMesaAlerts = mesasMode
       ? normalizeMesaTicketAlerts(t?.mesaAlerts)
       : [];
-    parkModalDocType = getParkedTicketDocType(t, "ticket");
   } else {
     nameInput.value = getNextSuggestedParkTicketName();
     obsInput.value = "";
     parkModalMesaAlerts = [];
-    parkModalDocType = "ticket";
-  }
-
-  if (parkDocTypePedido) {
-    parkDocTypePedido.checked = parkModalDocType === "pedido";
   }
 
   if (titleEl) {
     titleEl.textContent = loadedTicket
       ? labels.mesasMode
         ? "Editar pedido de mesa"
-        : parkModalDocType === "pedido"
-          ? "Editar pedido de venta"
-          : "Editar ticket aparcado"
+        : "Editar ticket aparcado"
       : labels.actionTitle;
   }
 
@@ -28956,9 +29216,7 @@ function openParkObsModal() {
       ? "Actualizar"
       : mesasMode
         ? "Guardar"
-        : parkModalDocType === "pedido"
-          ? "Guardar pedido"
-          : "Aparcar";
+        : "Aparcar";
   }
 
   if (mesasMode) renderParkQuickFlags();
@@ -28971,21 +29229,6 @@ let parkObsMetaEditMode = false;
 
 function closeParkObsModal() {
   parkObsOverlay.classList.add("hidden");
-}
-
-function refreshParkDocTypeActionLabel() {
-  if (!parkObsOkBtn) return;
-  const loadedTicket = getCurrentLoadedParkedTicket();
-  if (loadedTicket) {
-    parkObsOkBtn.textContent = "Actualizar";
-    return;
-  }
-  if (isMesasTransaccionesMode()) {
-    parkObsOkBtn.textContent = "Guardar";
-    return;
-  }
-  parkObsOkBtn.textContent =
-    getParkModalDocTypeFromUI() === "pedido" ? "Guardar pedido" : "Aparcar";
 }
 
 parkBtn?.addEventListener("click", async () => {
@@ -29076,25 +29319,15 @@ parkObsOkBtn?.addEventListener("click", async () => {
   const mesaAlerts = isMesasTransaccionesMode()
     ? normalizeMesaTicketAlerts(parkModalMesaAlerts)
     : [];
-  const docType = isMesasTransaccionesMode()
-    ? "ticket"
-    : getParkModalDocTypeFromUI();
+  const docType = "ticket";
 
   if (isMesasTransaccionesMode() && !cashSession?.open) {
     toast("Abre la caja para guardar pedidos de mesa.", "warn", "Pedidos");
     return;
   }
 
-  if (
-    !isMesasTransaccionesMode() &&
-    docType === "ticket" &&
-    !cashSession?.open
-  ) {
-    toast(
-      "Para aparcar tickets debes abrir la caja. Si quieres dejarlo para dias, guardalo como Pedido.",
-      "warn",
-      "Aparcados",
-    );
+  if (!isMesasTransaccionesMode() && !cashSession?.open) {
+    toast("Para aparcar tickets debes abrir la caja.", "warn", "Aparcados");
     return;
   }
 
@@ -29109,11 +29342,6 @@ parkObsOkBtn?.addEventListener("click", async () => {
       : PARKED_MODE_TPV,
   });
   parkObsMetaEditMode = false;
-});
-
-parkDocTypePedido?.addEventListener("change", () => {
-  parkModalDocType = parkDocTypePedido.checked ? "pedido" : "ticket";
-  refreshParkDocTypeActionLabel();
 });
 
 parkNameKeyboardBtn?.addEventListener("click", () => {
@@ -36810,13 +37038,11 @@ function openPriceEditForProduct(p) {
   const nameEl = document.getElementById("priceEditName");
   const curEl = document.getElementById("priceEditCurrent");
   const inp = document.getElementById("priceEditInput");
-  const discountInp = document.getElementById("priceEditDiscountPctInput");
   const orderPriorityInp = document.getElementById(
     "priceEditOrderPriorityInput",
   );
   const finalEl = document.getElementById("priceEditFinal");
   const err = document.getElementById("priceEditError");
-  const currentDiscount = getProductDiscountPercent(p);
   const currentOrderPriority = getProductManualOrderPriority(p);
 
   const updateDerived = () => {
@@ -36824,61 +37050,18 @@ function openPriceEditForProduct(p) {
       .trim()
       .replace(",", ".");
     const baseGross = round2(Number(baseRaw));
-
-    const discountRaw = String(discountInp?.value ?? "")
-      .trim()
-      .replace(",", ".");
-    const discountPct = clampDiscountPercent(Number(discountRaw));
-
-    if (discountInp) {
-      const normalized = formatDiscountPercent(discountPct);
-      if (String(discountInp.value).trim() !== normalized) {
-        discountInp.value = normalized;
-      }
-    }
-
-    const finalGross = round2(baseGross * (1 - discountPct / 100));
-    if (finalEl) finalEl.textContent = eur2(finalGross);
+    if (finalEl) finalEl.textContent = eur2(baseGross);
   };
 
   if (nameEl) nameEl.textContent = p.name || "Producto";
   if (curEl) {
-    const currentFinal = round2(grossNow * (1 - currentDiscount / 100));
-    curEl.textContent =
-      currentDiscount > 0
-        ? `${eur2(currentFinal)} (base ${eur2(grossNow)} · -${formatDiscountPercent(currentDiscount)}%)`
-        : eur2(grossNow);
+    curEl.textContent = eur2(grossNow);
   }
   if (inp) inp.value = grossNow.toFixed(2);
-  if (discountInp) discountInp.value = formatDiscountPercent(currentDiscount);
   if (orderPriorityInp) orderPriorityInp.value = String(currentOrderPriority);
   if (err) err.textContent = "";
 
   if (inp) inp.oninput = updateDerived;
-  if (discountInp) discountInp.oninput = updateDerived;
-
-  if (discountInp) {
-    const openDiscountPad = (e) => {
-      e?.preventDefault?.();
-      e?.stopPropagation?.();
-
-      openNumPad(
-        String(
-          discountInp.value || formatDiscountPercent(currentDiscount) || "0",
-        ),
-        (val) => {
-          discountInp.value = formatDiscountPercent(val);
-          updateDerived();
-        },
-        `${p.name || "Producto"} - descuento %`,
-        "price",
-        currentDiscount,
-        null,
-      );
-    };
-
-    discountInp.onpointerdown = openDiscountPad;
-  }
 
   if (orderPriorityInp) {
     const openPriorityPad = (e) => {
@@ -36956,7 +37139,6 @@ async function confirmAndSaveProductPrice() {
   if (err) err.textContent = "";
 
   const inp = document.getElementById("priceEditInput");
-  const discountInp = document.getElementById("priceEditDiscountPctInput");
   const orderPriorityInp = document.getElementById(
     "priceEditOrderPriorityInput",
   );
@@ -36969,60 +37151,25 @@ async function confirmAndSaveProductPrice() {
     return;
   }
 
-  const discountRaw = String(discountInp?.value ?? "")
-    .trim()
-    .replace(",", ".");
-  const discountPct = clampDiscountPercent(Number(discountRaw));
   const orderPriorityRaw = String(orderPriorityInp?.value ?? "")
     .trim()
     .replace(",", ".");
   const orderPriority = clampManualOrderPriority(Number(orderPriorityRaw));
-  const finalGross = round2(baseGross * (1 - discountPct / 100));
+  const finalGross = baseGross;
 
   const taxRate = getTaxRateForProduct(p);
   const grossNow = round2(Number(p.price || 0) * (1 + taxRate / 100) || 0);
-  const currentDiscount = getProductDiscountPercent(p);
   const currentOrderPriority = getProductManualOrderPriority(p);
   const baseChanged = round2(baseGross) !== round2(grossNow);
-  const discountChanged = round2(discountPct) !== round2(currentDiscount);
   const orderPriorityChanged = orderPriority !== currentOrderPriority;
 
-  if (!baseChanged && !discountChanged && !orderPriorityChanged) {
-    toast?.(
-      "No hay cambios en precio base, descuento ni prioridad.",
-      "info",
-      "Productos",
-    );
+  if (!baseChanged && !orderPriorityChanged) {
+    toast?.("No hay cambios en precio base ni prioridad.", "info", "Productos");
     document.getElementById("priceEditOverlay")?.classList.add("hidden");
     return;
   }
 
-  // Descuento rápido: temporal para la sesión actual, sin tocar FS.
-  if (!baseChanged && discountChanged) {
-    const discountKeyProductId = Number(p.baseProductId || p.id || 0);
-    await setProductDiscountPercentForProduct(
-      discountKeyProductId,
-      discountPct,
-    );
-    if (orderPriorityChanged) {
-      await setProductManualOrderPriorityForProduct(
-        discountKeyProductId,
-        orderPriority,
-      );
-    }
-    renderProducts?.();
-    toast?.(
-      orderPriorityChanged
-        ? `Descuento ${formatDiscountPercent(discountPct)}% y prioridad ${orderPriority} aplicados.`
-        : `Descuento temporal aplicado: ${formatDiscountPercent(discountPct)}%.`,
-      "ok",
-      "Productos",
-    );
-    document.getElementById("priceEditOverlay")?.classList.add("hidden");
-    return;
-  }
-
-  if (!baseChanged && !discountChanged && orderPriorityChanged) {
+  if (!baseChanged && orderPriorityChanged) {
     const orderKeyProductId = Number(p.baseProductId || p.id || 0);
     await setProductManualOrderPriorityForProduct(
       orderKeyProductId,
@@ -37042,17 +37189,16 @@ async function confirmAndSaveProductPrice() {
     "Actualizar precio base",
     `Vas a cambiar el precio de "${p.name}"\n\n` +
       `Base: ${grossNow.toFixed(2)} € -> ${baseGross.toFixed(2)} €\n` +
-      `Descuento: ${formatDiscountPercent(currentDiscount)}% -> ${formatDiscountPercent(discountPct)}%\n` +
       `Prioridad: ${currentOrderPriority} -> ${orderPriority}\n` +
       `Final: ${finalGross.toFixed(2)} € (IVA incl.)\n\n` +
       `El precio base se guardará en FacturaScripts permanentemente.\n` +
-      `El descuento y la prioridad son ajustes locales del TPV.\n\n` +
+      `La prioridad es un ajuste local del TPV.\n\n` +
       `¿Quieres continuar?`,
   );
   if (!ok) return;
 
   const newNet = grossToNet(baseGross, taxRate);
-  const discountKeyProductId = Number(p.baseProductId || p.id || 0);
+  const orderKeyProductId = Number(p.baseProductId || p.id || 0);
 
   try {
     if (p.isVariant) {
@@ -37061,12 +37207,8 @@ async function confirmAndSaveProductPrice() {
       await apiUpdateProductoPrecioNet(p.baseProductId || p.id, newNet);
     }
 
-    await setProductDiscountPercentForProduct(
-      discountKeyProductId,
-      discountPct,
-    );
     await setProductManualOrderPriorityForProduct(
-      discountKeyProductId,
+      orderKeyProductId,
       orderPriority,
     );
 
@@ -37090,11 +37232,7 @@ async function confirmAndSaveProductPrice() {
   if (idx >= 0) products[idx].price = newNet;
 
   renderProducts?.();
-  toast?.(
-    "Precio base actualizado. Descuento temporal aplicado ✅",
-    "ok",
-    "Productos",
-  );
+  toast?.("Precio base actualizado correctamente ✅", "ok", "Productos");
   document.getElementById("priceEditOverlay")?.classList.add("hidden");
 }
 
