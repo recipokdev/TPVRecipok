@@ -20090,6 +20090,9 @@ async function openOptions() {
   bindAutostartToggleOnce();
   await loadAutostartToggle();
 
+  bindBackgroundUpdateOptionsOnce();
+  refreshBackgroundUpdateOptionsUI();
+
   bindOptionsAccordionOnce();
   const st = await loadOptionsAccordionState();
   await applyOptionsAccordionState(st);
@@ -20605,6 +20608,432 @@ const optionsQuitBtn = document.getElementById("optionsQuitBtn");
 const optionsUpdateAppBtn = document.getElementById("optionsUpdateAppBtn");
 
 let manualUpdateActionInFlight = false;
+let backgroundUpdateCheckInFlight = false;
+let backgroundUpdateNoticeTimer = null;
+let backgroundUpdateNoticeFirstTimer = null;
+let backgroundUpdateOptionsBound = false;
+let backgroundUpdateNextCheckAt = 0;
+let backgroundUpdateCountdownUiTimer = null;
+
+const BACKGROUND_UPDATE_SETTINGS_KEY = "tpv_background_update_settings_v1";
+const CHANGELOG_LAST_SEEN_VERSION_KEY = "tpv_changelog_last_seen_version_v1";
+const CHANGELOG_SOURCE_FILE = "changelog.json";
+
+const BACKGROUND_UPDATE_DEFAULT_SETTINGS = {
+  enabled: true,
+  intervalMs: 60 * 60 * 1000,
+  firstDelayMs: 5 * 60 * 1000,
+};
+
+let backgroundUpdateSettings = loadBackgroundUpdateSettings();
+let changelogEntriesCache = null;
+
+function formatMsAsHumanCountdown(ms) {
+  const safeMs = Math.max(0, Number(ms || 0));
+  const totalSeconds = Math.ceil(safeMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}h ${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`;
+  }
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+function isBackgroundUpdateSectionOpen() {
+  const overlayOpen =
+    !!optionsOverlay && !optionsOverlay.classList.contains("hidden");
+  if (!overlayOpen) return false;
+
+  const sec = document.querySelector(
+    '#optionsAccordion .opt-sec[data-sec="actualizacion"]',
+  );
+  return !!sec && sec.dataset.open === "1";
+}
+
+function setBackgroundUpdateNextCheckAt(ts) {
+  backgroundUpdateNextCheckAt = Number(ts || 0);
+}
+
+function paintBackgroundUpdateCountdownUi() {
+  const countdownEl = document.getElementById("updateNoticeCountdownText");
+  if (!countdownEl) return;
+
+  if (backgroundUpdateSettings?.enabled === false) {
+    countdownEl.textContent = "Proxima comprobacion: desactivada.";
+    return;
+  }
+
+  const nextAt = Number(backgroundUpdateNextCheckAt || 0);
+  if (!(nextAt > 0)) {
+    countdownEl.textContent = "Proxima comprobacion: pendiente...";
+    return;
+  }
+
+  const left = Math.max(0, nextAt - Date.now());
+  countdownEl.textContent =
+    left > 0
+      ? `Proxima comprobacion: en ${formatMsAsHumanCountdown(left)}.`
+      : "Proxima comprobacion: ahora...";
+}
+
+function stopBackgroundUpdateCountdownUi() {
+  if (backgroundUpdateCountdownUiTimer) {
+    clearInterval(backgroundUpdateCountdownUiTimer);
+    backgroundUpdateCountdownUiTimer = null;
+  }
+}
+
+function syncBackgroundUpdateCountdownUi() {
+  if (!isBackgroundUpdateSectionOpen()) {
+    stopBackgroundUpdateCountdownUi();
+    return;
+  }
+
+  paintBackgroundUpdateCountdownUi();
+
+  if (!backgroundUpdateCountdownUiTimer) {
+    backgroundUpdateCountdownUiTimer = setInterval(() => {
+      paintBackgroundUpdateCountdownUi();
+    }, 1000);
+  }
+}
+
+async function getCurrentAppVersionText() {
+  try {
+    const r = await window.TPV_SYS?.getVersion?.();
+    const v = String(r?.version || "").trim();
+    return r?.ok && v ? `v${v}` : "desconocida";
+  } catch {
+    return "desconocida";
+  }
+}
+
+function normalizeVersionTag(versionText) {
+  return String(versionText || "")
+    .trim()
+    .replace(/^v/i, "");
+}
+
+async function loadChangelogEntries() {
+  if (Array.isArray(changelogEntriesCache)) return changelogEntriesCache;
+
+  try {
+    const url = `${CHANGELOG_SOURCE_FILE}?_=${Date.now()}`;
+    const resp = await fetch(url, { cache: "no-store" });
+    if (!resp.ok) {
+      changelogEntriesCache = [];
+      return changelogEntriesCache;
+    }
+
+    const json = await resp.json();
+    const versions = Array.isArray(json?.versions) ? json.versions : [];
+    changelogEntriesCache = versions
+      .map((it) => ({
+        version: normalizeVersionTag(it?.version),
+        date: String(it?.date || "").trim(),
+        title: String(it?.title || "").trim(),
+        changes: Array.isArray(it?.changes)
+          ? it.changes.map((x) => String(x || "").trim()).filter(Boolean)
+          : [],
+      }))
+      .filter((it) => !!it.version);
+  } catch {
+    changelogEntriesCache = [];
+  }
+
+  return changelogEntriesCache;
+}
+
+function buildChangelogMessage(entries, { onlyVersion = "" } = {}) {
+  const normalizedOnly = normalizeVersionTag(onlyVersion);
+  const source = Array.isArray(entries) ? entries : [];
+  const list = normalizedOnly
+    ? source.filter((it) => normalizeVersionTag(it?.version) === normalizedOnly)
+    : source;
+
+  if (!list.length) {
+    return normalizedOnly
+      ? `No hay notas de cambios registradas para la version v${normalizedOnly}.`
+      : "No hay changelog registrado todavia.";
+  }
+
+  return list
+    .map((it) => {
+      const v = normalizeVersionTag(it?.version);
+      const d = String(it?.date || "").trim();
+      const t = String(it?.title || "").trim();
+      const head = [`Version v${v}`, d ? `(${d})` : "", t ? `- ${t}` : ""]
+        .filter(Boolean)
+        .join(" ");
+      const changes = Array.isArray(it?.changes) ? it.changes : [];
+      const lines = changes.length
+        ? changes.map((c) => `- ${c}`).join("\n")
+        : "- Sin detalle de cambios.";
+      return `${head}\n${lines}`;
+    })
+    .join("\n\n");
+}
+
+async function openChangelogDialog({ onlyCurrentVersion = false } = {}) {
+  const entries = await loadChangelogEntries();
+  const currentVersion = normalizeVersionTag(await getCurrentAppVersionText());
+  const onlyVersion = onlyCurrentVersion ? currentVersion : "";
+  const text = buildChangelogMessage(entries, { onlyVersion });
+  showMessageModal("Changelog", text);
+}
+
+async function maybeShowChangelogAfterUpdate() {
+  const currentVersion = normalizeVersionTag(await getCurrentAppVersionText());
+  if (!currentVersion || currentVersion === "desconocida") return;
+
+  let lastSeenVersion = "";
+  try {
+    lastSeenVersion = normalizeVersionTag(
+      localStorage.getItem(CHANGELOG_LAST_SEEN_VERSION_KEY) || "",
+    );
+  } catch {}
+
+  if (lastSeenVersion === currentVersion) return;
+
+  await openChangelogDialog({ onlyCurrentVersion: true });
+
+  try {
+    localStorage.setItem(CHANGELOG_LAST_SEEN_VERSION_KEY, currentVersion);
+  } catch {}
+}
+
+function normalizeBackgroundUpdateSettings(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const intervalAllowed = new Set([30, 60, 120, 240].map((m) => m * 60 * 1000));
+  const intervalCandidate = Number(src.intervalMs || 0);
+  return {
+    enabled: src.enabled !== false,
+    intervalMs: intervalAllowed.has(intervalCandidate)
+      ? intervalCandidate
+      : BACKGROUND_UPDATE_DEFAULT_SETTINGS.intervalMs,
+    firstDelayMs: BACKGROUND_UPDATE_DEFAULT_SETTINGS.firstDelayMs,
+  };
+}
+
+function loadBackgroundUpdateSettings() {
+  try {
+    const raw = localStorage.getItem(BACKGROUND_UPDATE_SETTINGS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return normalizeBackgroundUpdateSettings(parsed);
+  } catch {
+    return { ...BACKGROUND_UPDATE_DEFAULT_SETTINGS };
+  }
+}
+
+function saveBackgroundUpdateSettings(partial = {}) {
+  const next = normalizeBackgroundUpdateSettings({
+    ...backgroundUpdateSettings,
+    ...(partial || {}),
+  });
+  backgroundUpdateSettings = next;
+  try {
+    localStorage.setItem(BACKGROUND_UPDATE_SETTINGS_KEY, JSON.stringify(next));
+  } catch {}
+  return next;
+}
+
+async function refreshBackgroundUpdateCurrentVersionUi() {
+  const versionEl = document.getElementById("updateNoticeCurrentVersionText");
+  if (!versionEl) return;
+  const currentVersion = await getCurrentAppVersionText();
+  versionEl.textContent = `Version actual: ${currentVersion}`;
+}
+
+async function runBackgroundUpdateAvailabilityCheck(reason = "timer") {
+  if (manualUpdateActionInFlight || backgroundUpdateCheckInFlight) {
+    return { ok: false, skipped: "busy" };
+  }
+  if (!backgroundUpdateSettings?.enabled) {
+    return { ok: false, skipped: "disabled" };
+  }
+
+  const updaterApi = window.TPV_UPDATER;
+  if (!updaterApi?.checkNow) return { ok: false, skipped: "api-unavailable" };
+
+  backgroundUpdateCheckInFlight = true;
+  try {
+    const check = await updaterApi.checkNow();
+    if (!check?.ok) return check;
+    if (check?.devMode) return check;
+    if (check?.updateAvailable) {
+      const targetVersion = String(check?.targetVersion || "").trim();
+      console.info(
+        `[UPDATE-PASSIVE] update available (${targetVersion || "unknown"}) via ${reason}`,
+      );
+    }
+    return check;
+  } catch (e) {
+    console.warn("[UPDATE-PASSIVE] check failed:", e?.message || e);
+    return { ok: false, message: e?.message || "check-failed" };
+  } finally {
+    backgroundUpdateCheckInFlight = false;
+  }
+}
+
+function refreshBackgroundUpdateOptionsUI() {
+  const enabledToggle = document.getElementById("updateNoticeEnabledToggle");
+  const intervalSelect = document.getElementById("updateNoticeIntervalSelect");
+  const checkNowBtn = document.getElementById("updateNoticeCheckNowBtn");
+
+  if (enabledToggle) {
+    enabledToggle.checked = backgroundUpdateSettings?.enabled !== false;
+  }
+
+  if (intervalSelect) {
+    intervalSelect.value = String(
+      Number(backgroundUpdateSettings?.intervalMs || 0) ||
+        BACKGROUND_UPDATE_DEFAULT_SETTINGS.intervalMs,
+    );
+    intervalSelect.disabled = backgroundUpdateSettings?.enabled === false;
+  }
+
+  if (checkNowBtn) {
+    checkNowBtn.disabled = backgroundUpdateSettings?.enabled === false;
+  }
+
+  syncBackgroundUpdateCountdownUi();
+  refreshBackgroundUpdateCurrentVersionUi().catch(() => {});
+}
+
+function bindBackgroundUpdateOptionsOnce() {
+  if (backgroundUpdateOptionsBound) return;
+  backgroundUpdateOptionsBound = true;
+
+  const enabledToggle = document.getElementById("updateNoticeEnabledToggle");
+  const intervalSelect = document.getElementById("updateNoticeIntervalSelect");
+  const checkNowBtn = document.getElementById("updateNoticeCheckNowBtn");
+  const changelogBtn = document.getElementById("updateNoticeChangelogBtn");
+
+  enabledToggle?.addEventListener("change", () => {
+    const next = saveBackgroundUpdateSettings({
+      enabled: !!enabledToggle.checked,
+    });
+
+    if (next.enabled) {
+      startBackgroundUpdateMonitor();
+      runBackgroundUpdateAvailabilityCheck("toggle-enable").catch(() => {});
+      toast("Avisos automaticos de actualizacion activados.", "ok", "Opciones");
+    } else {
+      stopBackgroundUpdateMonitor();
+      toast(
+        "Avisos automaticos de actualizacion desactivados.",
+        "info",
+        "Opciones",
+      );
+    }
+
+    refreshBackgroundUpdateOptionsUI();
+  });
+
+  intervalSelect?.addEventListener("change", () => {
+    const intervalMs = Number(intervalSelect.value || 0);
+    saveBackgroundUpdateSettings({ intervalMs });
+
+    if (backgroundUpdateSettings?.enabled) {
+      startBackgroundUpdateMonitor();
+    }
+
+    refreshBackgroundUpdateOptionsUI();
+    toast("Frecuencia de aviso guardada.", "ok", "Opciones");
+  });
+
+  checkNowBtn?.addEventListener("click", async () => {
+    if (!backgroundUpdateSettings?.enabled) return;
+
+    checkNowBtn.disabled = true;
+    checkNowBtn.textContent = "Comprobando...";
+
+    try {
+      const check =
+        await runBackgroundUpdateAvailabilityCheck("options-check-now");
+      const currentVersionRaw = String(
+        check?.currentVersion || (await getCurrentAppVersionText()),
+      ).trim();
+      const currentVersion = currentVersionRaw
+        ? currentVersionRaw.replace(/^v/i, "")
+        : "?";
+
+      if (check?.ok && check?.updateAvailable) {
+        const targetVersion = String(check?.targetVersion || "").trim();
+        toast(
+          `Estas en v${currentVersion}. Hay una nueva version ${targetVersion ? `v${targetVersion}` : "disponible"}.`,
+          "info",
+          "Actualizacion",
+        );
+      } else if (check?.ok) {
+        toast(
+          `Estas en v${currentVersion}. Ya tienes la version mas reciente.`,
+          "ok",
+          "Actualizacion",
+        );
+      } else {
+        const msg = String(
+          check?.message || "No se pudo completar la comprobacion.",
+        );
+        toast(msg, "err", "Actualizacion");
+      }
+    } finally {
+      checkNowBtn.disabled = false;
+      checkNowBtn.textContent = "Comprobar";
+      refreshBackgroundUpdateOptionsUI();
+    }
+  });
+
+  changelogBtn?.addEventListener("click", async () => {
+    await openChangelogDialog({ onlyCurrentVersion: false });
+  });
+}
+
+function startBackgroundUpdateMonitor() {
+  stopBackgroundUpdateMonitor();
+
+  if (!backgroundUpdateSettings?.enabled) {
+    setBackgroundUpdateNextCheckAt(0);
+    syncBackgroundUpdateCountdownUi();
+    return;
+  }
+
+  const run = (reason) => {
+    runBackgroundUpdateAvailabilityCheck(reason).catch(() => {});
+  };
+
+  const firstDelayMs = Number(backgroundUpdateSettings?.firstDelayMs || 0);
+  const intervalMs = Number(backgroundUpdateSettings?.intervalMs || 0);
+
+  setBackgroundUpdateNextCheckAt(Date.now() + Math.max(1000, firstDelayMs));
+  syncBackgroundUpdateCountdownUi();
+
+  backgroundUpdateNoticeFirstTimer = setTimeout(() => {
+    setBackgroundUpdateNextCheckAt(Date.now() + Math.max(1000, intervalMs));
+    syncBackgroundUpdateCountdownUi();
+    run("first-delay");
+  }, firstDelayMs);
+
+  backgroundUpdateNoticeTimer = setInterval(() => {
+    setBackgroundUpdateNextCheckAt(Date.now() + Math.max(1000, intervalMs));
+    syncBackgroundUpdateCountdownUi();
+    run("interval");
+  }, intervalMs);
+}
+
+function stopBackgroundUpdateMonitor() {
+  if (backgroundUpdateNoticeFirstTimer) {
+    clearTimeout(backgroundUpdateNoticeFirstTimer);
+    backgroundUpdateNoticeFirstTimer = null;
+  }
+  if (backgroundUpdateNoticeTimer) {
+    clearInterval(backgroundUpdateNoticeTimer);
+    backgroundUpdateNoticeTimer = null;
+  }
+  setBackgroundUpdateNextCheckAt(0);
+  syncBackgroundUpdateCountdownUi();
+}
 
 function runUpdateRelaunchCountdown({ seconds = 5, targetVersion = "" } = {}) {
   const overlay = document.getElementById("msgOverlay");
@@ -34133,6 +34562,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   startOnlineMonitor();
 
   await bootstrapApp(); // y listo
+  startBackgroundUpdateMonitor();
+  maybeShowChangelogAfterUpdate().catch(() => {});
 });
 
 window.addEventListener("beforeunload", () => {

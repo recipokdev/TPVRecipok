@@ -51,9 +51,7 @@ async function triggerUpdateCheckIfSafe(reason = "manual") {
 
 function readChannel() {
   try {
-    const p = app.isPackaged
-      ? path.join(process.resourcesPath, "channel.json")
-      : path.join(__dirname, "build", "channel-stable.json"); // en dev, stable
+    const p = resolveChannelConfigPath();
     const data = JSON.parse(fs.readFileSync(p, "utf8"));
     return data.channel === "beta" ? "beta" : "stable";
   } catch {
@@ -63,9 +61,7 @@ function readChannel() {
 
 function readChannelConfig() {
   try {
-    const p = app.isPackaged
-      ? path.join(process.resourcesPath, "channel.json")
-      : path.join(__dirname, "build", "channel-stable.json");
+    const p = resolveChannelConfigPath();
     const data = JSON.parse(fs.readFileSync(p, "utf8"));
     const channel = data.channel === "beta" ? "beta" : "stable";
     const updatePolicyUrl = String(data.updatePolicyUrl || "").trim();
@@ -73,6 +69,29 @@ function readChannelConfig() {
   } catch {
     return { channel: "stable", updatePolicyUrl: "" };
   }
+}
+
+function resolveChannelConfigPath() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, "channel.json");
+  }
+
+  const forced = String(process.env.TPV_CHANNEL || "")
+    .trim()
+    .toLowerCase();
+  if (forced === "beta" || forced === "stable") {
+    return path.join(__dirname, "build", `channel-${forced}.json`);
+  }
+
+  let version = "";
+  try {
+    version = String(app.getVersion() || "")
+      .trim()
+      .toLowerCase();
+  } catch {}
+
+  const inferred = version.includes("-beta") ? "beta" : "stable";
+  return path.join(__dirname, "build", `channel-${inferred}.json`);
 }
 
 function getChannelSafe() {
