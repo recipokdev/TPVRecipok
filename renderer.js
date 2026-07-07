@@ -12041,11 +12041,7 @@ function findPaidTwinForParkedTicket(ticket, list = parkedTickets) {
 
   const source = Array.isArray(list) ? list : [];
   const ticketKey = String(getParkedTicketSyncKey(ticket) || "").trim();
-  const ticketDisplayNo =
-    Number(getParkedTicketDisplayNumber(ticket) || 0) || 0;
-  const ticketSig = buildCartRecoverySignature(
-    Array.isArray(ticket?.items) ? ticket.items : [],
-  );
+  if (!ticketKey) return null;
 
   return (
     source.find((candidate) => {
@@ -12054,18 +12050,7 @@ function findPaidTwinForParkedTicket(ticket, list = parkedTickets) {
       const candidateKey = String(
         getParkedTicketSyncKey(candidate) || "",
       ).trim();
-      if (ticketKey && candidateKey && ticketKey === candidateKey) return true;
-
-      const candidateDisplayNo =
-        Number(getParkedTicketDisplayNumber(candidate) || 0) || 0;
-      if (!ticketDisplayNo || candidateDisplayNo !== ticketDisplayNo)
-        return false;
-
-      const candidateSig = buildCartRecoverySignature(
-        Array.isArray(candidate?.items) ? candidate.items : [],
-      );
-
-      return !!ticketSig && !!candidateSig && candidateSig === ticketSig;
+      return candidateKey === ticketKey;
     }) || null
   );
 }
@@ -22793,9 +22778,8 @@ function loadParkedTicketsCache() {
 function getParkedTicketSyncKey(ticket) {
   if (!ticket) return "";
   const slug = String(ticket.slug || "").trim();
-  const cajaId = String(ticket.cajaId || "").trim();
   const id = String(ticket.id || ticket.ticketId || "").trim();
-  return `${slug}|${cajaId}|${id}`;
+  return `${slug}|${id}`;
 }
 
 function isParkedSyncTransientError(err) {
@@ -22929,8 +22913,8 @@ function syncParkedTicketsFromRemote(list) {
   const nextRaw = (Array.isArray(list) ? list : [])
     .map((it) => normalizeRemoteParkedTicket(it))
     .map((t) => {
-      const key = getParkedTicketSyncKey(t);
       const id = Number(t?.id || 0) || 0;
+      const key = getParkedTicketSyncKey(t);
       const prev = prevByKey.get(key) || prevByIdUnique.get(id) || null;
       if (!prev) return t;
 
