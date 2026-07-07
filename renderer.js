@@ -8376,9 +8376,15 @@ function setMesasInlineView(view, { persist = true } = {}) {
   }
 }
 
-async function setMesasInlineModeEnabled(enabled, { persist = true } = {}) {
+async function setMesasInlineModeEnabled(
+  enabled,
+  { persist = true, saveOutgoingSnapshot = true } = {},
+) {
   // Guarda el carrito del modo saliente antes de cambiar el contexto.
-  persistRuntimeCartSnapshot({ force: true });
+  // En bootstrap inicial se desactiva para no pisar un snapshot válido con carrito vacío.
+  if (saveOutgoingSnapshot) {
+    persistRuntimeCartSnapshot({ force: true });
+  }
 
   const next = !!enabled;
   MESAS_INLINE_ACTIVE = next;
@@ -12480,6 +12486,7 @@ function buildNumPadPricePreviewHtml() {
 
   const previewItem = { ...item, grossPriceOverride: round2(nextUnitGross) };
   const previewPricing = getCartLinePricing(previewItem);
+  const previewPriceModified = isPriceModified(previewItem);
   const previewUnitGross = round2(Number(previewPricing?.unitGross || 0));
   const previewBaseUnitGross = round2(
     Number(previewPricing?.baseUnitGross || previewUnitGross),
@@ -12515,6 +12522,11 @@ function buildNumPadPricePreviewHtml() {
     if (discountPctDisplay > 0.0001) {
       numPadPricePreviewTopDiscountText = `-${formatDiscountPercent(discountPctDisplay)}%`;
     }
+    if (previewPriceModified) {
+      numPadPricePreviewTopDiscountText = numPadPricePreviewTopDiscountText
+        ? `${numPadPricePreviewTopDiscountText} · MOD`
+        : "MOD";
+    }
     const unitValues = `<span class="num-pad-price-preview-old">${eur(previewBaseUnitGross)}</span><span>${eur(previewUnitGross)}</span>`;
     html += `
       <div class="num-pad-price-preview-row num-pad-price-preview-row--unit">
@@ -12532,7 +12544,13 @@ function buildNumPadPricePreviewHtml() {
         </div>
       `;
     }
-  } else if (qty > 1.0001) {
+  } else {
+    if (previewPriceModified) {
+      numPadPricePreviewTopDiscountText = "MOD";
+    }
+  }
+
+  if (!hasPreviewDiscount && qty > 1.0001) {
     html += `
       <div class="num-pad-price-preview-row num-pad-price-preview-row--totalonly">
         <span class="num-pad-price-preview-label">Total nuevo x${fmtQty(qty)}</span>
@@ -38888,7 +38906,10 @@ window.addEventListener("DOMContentLoaded", async () => {
     .toLowerCase();
   const startMesasMode =
     MESAS_MODULE_ENABLED && (localMode === "mesas" || cfgMode === "mesas");
-  await setMesasInlineModeEnabled(startMesasMode, { persist: false });
+  await setMesasInlineModeEnabled(startMesasMode, {
+    persist: false,
+    saveOutgoingSnapshot: false,
+  });
 
   await loadProductManualOrderConfig?.();
   await loadProductSortModeSetting?.();
