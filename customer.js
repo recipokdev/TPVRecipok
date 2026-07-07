@@ -291,7 +291,11 @@ function renderItems(items) {
 
     const unit = document.createElement("div");
     unit.className = "unit";
-    unit.textContent = `${eur(it.unitPrice)} / ud`;
+    if (it.hasDiscount) {
+      unit.innerHTML = `<span class="price-old-inline">${eur(it.baseUnitPrice)}</span> <span class="price-new-inline">${eur(it.unitPrice)}</span>`;
+    } else {
+      unit.textContent = `${eur(it.unitPrice)} / ud`;
+    }
 
     meta.appendChild(qty);
     meta.appendChild(unit);
@@ -309,7 +313,11 @@ function renderItems(items) {
 
     const lineTotal = document.createElement("div");
     lineTotal.className = "lineTotal";
-    lineTotal.textContent = eur(it.lineTotal);
+    if (it.hasDiscount) {
+      lineTotal.innerHTML = `<div class="lineTotal-old">${eur(it.baseLineTotal)}</div><div class="lineTotal-new">${eur(it.lineTotal)}</div>`;
+    } else {
+      lineTotal.textContent = eur(it.lineTotal);
+    }
 
     row.appendChild(img);
     row.appendChild(info);

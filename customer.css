@@ -394,6 +394,17 @@ body.theme-light .row {
   opacity: 0.85;
 }
 
+.price-old-inline {
+  text-decoration: line-through;
+  opacity: 0.7;
+  margin-right: 6px;
+}
+
+.price-new-inline {
+  font-weight: 900;
+  opacity: 1;
+}
+
 .badge {
   margin-left: 6px;
   font-size: 12px;
@@ -411,6 +422,20 @@ body.theme-light .row {
   min-width: var(--lineTotal-minw);
   text-align: right;
   letter-spacing: 0.2px;
+}
+
+.lineTotal-old {
+  font-size: calc(var(--lineTotal-size) - 3px);
+  text-decoration: line-through;
+  opacity: 0.7;
+  font-weight: 700;
+  line-height: 1.05;
+}
+
+.lineTotal-new {
+  font-size: var(--lineTotal-size);
+  font-weight: 950;
+  line-height: 1.1;
 }
 
 /* ===== Footer: TOTAL a la derecha ===== */

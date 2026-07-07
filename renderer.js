@@ -6563,31 +6563,13 @@ function pushCustomerState() {
       return;
     }
 
-    // Items "internos" (para total y lógica) = carrito tal cual
-    const cartItemsInternal = (Array.isArray(cart) ? cart : []).map((item) => {
-      const unitPrice = Number(getUnitGross(item) || 0);
-      const qty = Number(item.qty || 0);
-      const lineTotal = unitPrice * qty;
+    // ✅ Items VISIBLES para pantalla cliente (oculta hijos + “Incluye”)
+    const cartItemsVisible = buildCustomerItemsFromCart(cart);
 
-      return {
-        lineId: item._lineId,
-        name: item.name || "",
-        secondaryName: item.secondaryName || "",
-        qty,
-        unitPrice,
-        lineTotal,
-        imageUrl: item.imageUrl || item.imgUrl || null,
-        modified: !!isPriceModified?.(item),
-      };
-    });
-
-    const cartTotal = cartItemsInternal.reduce(
+    const cartTotal = cartItemsVisible.reduce(
       (a, it) => a + Number(it.lineTotal || 0),
       0,
     );
-
-    // ✅ Items VISIBLES para pantalla cliente (oculta hijos + “Incluye”)
-    const cartItemsVisible = buildCustomerItemsFromCart(cart);
 
     // ✅ LÓGICA CLAVE (igual que la tuya):
     let itemsToShow = cartItemsVisible;
@@ -6604,7 +6586,7 @@ function pushCustomerState() {
 
     // Si carrito vacío pero existe override, mostramos override (pero filtrado)
     else if (
-      cartItemsInternal.length === 0 &&
+      cartItemsVisible.length === 0 &&
       customerDisplayOverride?.items?.length
     ) {
       // Por si el override venía sin filtrar (ej. versiones viejas)
@@ -35716,9 +35698,36 @@ function buildCustomerItemsFromCart(cartArr) {
   const visible = src.filter((item) => !isPackChildLine(item));
 
   return visible.map((item) => {
-    const unitPrice = Number(getUnitGross(item) || 0);
+    const pricing = getCartLinePricing(item);
+    const unitPrice = Number(pricing?.unitGross || getUnitGross(item) || 0);
     const qty = Number(item.qty || 0);
-    const lineTotal = unitPrice * qty;
+    const lineTotal = Number(pricing?.lineTotal || unitPrice * qty);
+    const baseUnitPrice = Number(pricing?.baseUnitGross || unitPrice);
+    const baseLineTotal = Number(pricing?.baseLineTotal || lineTotal);
+    const hasDiscount = baseUnitPrice > unitPrice + 0.0001;
+
+    let discountLabel = "";
+    if (hasDiscount) {
+      if (pricing?.manualPriceLocked) {
+        discountLabel = "Manual";
+      } else if (pricing?.cartDiscountApplied) {
+        discountLabel =
+          pricing?.cartDiscountSource === "line" ? "Dto linea" : "Dto general";
+      } else if (pricing?.tariffApplied) {
+        discountLabel = "Tarifa";
+      } else {
+        discountLabel = "Descuento";
+      }
+
+      const pct =
+        baseUnitPrice > 0
+          ? round2(((baseUnitPrice - unitPrice) / baseUnitPrice) * 100)
+          : 0;
+
+      if (pct > 0.0001) {
+        discountLabel += ` -${formatDiscountPercent(pct)}%`;
+      }
+    }
 
     const baseSecondary = String(item.secondaryName || "").trim();
 
@@ -35745,6 +35754,10 @@ function buildCustomerItemsFromCart(cartArr) {
       qty,
       unitPrice,
       lineTotal,
+      baseUnitPrice,
+      baseLineTotal,
+      hasDiscount,
+      discountLabel,
       imageUrl: item.imageUrl || item.imgUrl || null,
       modified: !!isPriceModified?.(item),
     };
