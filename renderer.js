@@ -10413,6 +10413,7 @@ function buildRuntimeCartSnapshotPayload() {
     ts: Date.now(),
     mode: getCurrentCartModeScope(),
     items: safeCart,
+    cartGlobalDiscountPct: getCartGlobalDiscountPercent(),
     uiSnapshot,
     selectedCategory:
       selectedCategory !== undefined && selectedCategory !== null
@@ -10558,6 +10559,9 @@ async function restoreRuntimeCartSnapshot({ force = false, mode } = {}) {
     if (!restored.length) return false;
 
     cart = restored;
+    cartGlobalDiscountPct = clampDiscountPercent(
+      parseNumericLike(parsed?.cartGlobalDiscountPct, 0),
+    );
 
     const uiSnapshot =
       parsed?.uiSnapshot && typeof parsed.uiSnapshot === "object"
@@ -10707,11 +10711,6 @@ function renderCart() {
     const tags = [];
     if (pricing?.manualPriceLocked) tags.push("Manual");
     if (pricing?.tariffApplied) tags.push("Tarifa");
-    if (pricing?.cartDiscountApplied) {
-      if (pricing?.cartDiscountSource === "line") {
-        tags.push("Dto linea (prioridad)");
-      }
-    }
     if (!tags.length) return "";
     return `<div class="cart-line-mini-legend">${tags.join(" · ")}</div>`;
   };
