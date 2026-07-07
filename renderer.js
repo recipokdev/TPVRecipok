@@ -2538,6 +2538,9 @@ async function loadCartDiscountToolsToggle() {
   if (el) el.checked = cartDiscountToolsEnabled;
   if (!cartDiscountToolsEnabled) cartGlobalDiscountPct = 0;
   refreshCartDiscountUi();
+  // Al hidratar opciones en boot, puede haber carrito ya pintado con estado previo.
+  // Re-render forzado para aplicar (o retirar) descuento global inmediatamente.
+  renderCart();
 }
 
 async function saveCartDiscountToolsToggle(enabled) {
