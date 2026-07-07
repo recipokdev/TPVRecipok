@@ -8962,6 +8962,7 @@ async function runBootFlow() {
     await loadProductStockToggle?.();
     await loadProductStockEditionToggle?.();
     await loadAllowCloseWithParkedToggle?.();
+    await loadCartDiscountToolsToggle?.();
     await loadMesasDinersFamilyRules?.();
     await loadMesasComandaFamilyRules?.();
     await loadParkStockWarningToggle?.();
