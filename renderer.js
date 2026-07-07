@@ -22778,8 +22778,9 @@ function loadParkedTicketsCache() {
 function getParkedTicketSyncKey(ticket) {
   if (!ticket) return "";
   const slug = String(ticket.slug || "").trim();
+  const cajaId = String(ticket.cajaId || "").trim();
   const id = String(ticket.id || ticket.ticketId || "").trim();
-  return `${slug}|${id}`;
+  return `${slug}|${cajaId}|${id}`;
 }
 
 function isParkedSyncTransientError(err) {
