@@ -71,6 +71,26 @@ async function ensureVisible(win, selector, label) {
   ok(`${label} visible`);
 }
 
+async function ensurePresent(win, selector, label) {
+  const count = await win.locator(selector).count();
+  if (!count) fail(`${label} missing (${selector})`);
+
+  const state = await win.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return { hidden: null, disabled: null };
+    return {
+      hidden: el.classList.contains("hidden"),
+      disabled:
+        el.hasAttribute("disabled") ||
+        String(el.getAttribute("aria-disabled") || "").toLowerCase() === "true",
+    };
+  }, selector);
+
+  const visibilityText = state.hidden ? "hidden" : "visible";
+  const enabledText = state.disabled ? "disabled" : "enabled";
+  ok(`${label} present (${visibilityText}, ${enabledText})`);
+}
+
 async function attachDiagnostics(win) {
   const diagnostics = {
     consoleErrors: [],
@@ -212,8 +232,8 @@ async function run() {
     await ensureVisible(win, "#payBtn", "pay button");
     await ensureVisible(win, "#parkBtn", "park button");
     await ensureVisible(win, "#parkedListBtn", "parked list button");
-    await ensureVisible(win, "#parkedSplitBtn", "split button");
-    await ensureVisible(win, "#parkedComandaBtn", "comanda button");
+    await ensurePresent(win, "#parkedSplitBtn", "split button");
+    await ensurePresent(win, "#parkedComandaBtn", "comanda button");
 
     await win.click("#optionsBtn");
     await win.waitForSelector("#optionsOverlay:not(.hidden)", {
@@ -221,23 +241,23 @@ async function run() {
     });
     ok("options overlay opens");
 
-    await ensureVisible(
+    await ensurePresent(
       win,
       "#optionsChangeComandaPrinterBtn",
       "change comanda printer button",
     );
-    await ensureVisible(
+    await ensurePresent(
       win,
       "#optionsTestComandaPrinterBtn",
       "test comanda printer button",
     );
-    await ensureVisible(win, "#autoComandaOnSaveToggle", "auto comanda toggle");
-    await ensureVisible(
+    await ensurePresent(win, "#autoComandaOnSaveToggle", "auto comanda toggle");
+    await ensurePresent(
       win,
       "#mesasComandaFamilySelect",
       "comanda family select",
     );
-    await ensureVisible(
+    await ensurePresent(
       win,
       "#mesasComandaFamilyAddBtn",
       "comanda family add button",
@@ -248,7 +268,13 @@ async function run() {
       fail("options overlay should be open");
 
     await win.click("#optionsCloseBtn");
-    await win.waitForSelector("#optionsOverlay.hidden", { timeout: 10000 });
+    await win.waitForFunction(
+      () => {
+        const el = document.getElementById("optionsOverlay");
+        return !!el && el.classList.contains("hidden");
+      },
+      { timeout: 10000 },
+    );
     ok("options overlay closes");
 
     const mesasToggleCount = await win

@@ -108,12 +108,34 @@
 
 .csx-row {
   display: grid;
-  grid-template-columns: 54px 1fr 34px;
+  grid-template-columns: 54px 1fr auto;
   align-items: center;
   gap: 10px;
   padding: 9px 8px;
   border-radius: 10px;
   cursor: pointer;
+}
+
+.csx-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.csx-edit {
+  border: none;
+  border-radius: 999px;
+  width: 28px;
+  height: 28px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.csx-edit:hover {
+  filter: brightness(0.95);
 }
 
 .csx-row:hover {
@@ -421,6 +443,10 @@ body.theme-dark .csx-row:hover {
 
 body.theme-dark .csx-row.csx-selected {
   background: #263244;
+}
+
+body.theme-dark .csx-edit {
+  background: #1e40af;
 }
 
 body.theme-dark .csx-note {

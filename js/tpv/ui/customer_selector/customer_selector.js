@@ -65,6 +65,8 @@
     _debug: false,
     _activeInput: null,
     _kbCaps: false,
+    _createMode: "create",
+    _editingCustomerCod: "",
 
     _els: {
       overlay: null,
@@ -78,6 +80,7 @@
       openSearchKeyboardBtn: null,
       backToListBtn: null,
       createCloseBtns: [],
+      createTitle: null,
       createForm: null,
       saveNewBtn: null,
       createError: null,
@@ -180,6 +183,60 @@
       }
 
       return data;
+    },
+
+    async _updateForm(resource, cod, payload) {
+      const cfg = this._cfg || {};
+      const baseUrl = String(cfg.baseUrl || "").replace(/\/+$/, "");
+      if (!baseUrl) throw new Error("API no configurada.");
+
+      const safeCode = encodeURIComponent(String(cod || "").trim());
+      if (!safeCode) throw new Error("Código inválido.");
+
+      const body = new URLSearchParams();
+      Object.entries(payload || {}).forEach(([key, value]) => {
+        if (value === undefined || value === null) return;
+        body.append(key, String(value));
+      });
+
+      const send = async (method) => {
+        const res = await fetch(`${baseUrl}/${resource}/${safeCode}`, {
+          method,
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+            Token: cfg.apiKey,
+          },
+          body: body.toString(),
+        });
+
+        if (res.status === 429) {
+          throw new Error(
+            "La API ha devuelto 429 (demasiadas peticiones). Espera unos minutos.",
+          );
+        }
+
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new Error(
+            data?.message ||
+              data?.error ||
+              `${res.status} ${res.statusText || ""}`,
+          );
+        }
+
+        if (data && data.status === "error") {
+          throw new Error(data.message || "Error API");
+        }
+
+        return data;
+      };
+
+      try {
+        return await send("PATCH");
+      } catch {
+        return send("PUT");
+      }
     },
 
     async _deleteCustomerByCode(codcliente) {
@@ -421,6 +478,9 @@
         overlay.querySelectorAll("[data-csx-close-create]"),
       );
       this._els.createForm = overlay.querySelector(".csx-create-form");
+      this._els.createTitle = overlay.querySelector(
+        ".csx-create-head .csx-title",
+      );
       this._els.saveNewBtn = overlay.querySelector("[data-csx-save-create]");
       this._els.createError = overlay.querySelector("[data-csx-create-error]");
       this._els.keyboard = overlay.querySelector("[data-csx-keyboard]");
@@ -510,6 +570,18 @@
       this._els.listModal.classList.add("csx-hidden");
       this._setCreateError("");
 
+      const isEdit = this._createMode === "edit";
+      if (this._els.createTitle) {
+        this._els.createTitle.textContent = isEdit
+          ? "Editar cliente"
+          : "Nuevo cliente";
+      }
+      if (this._els.saveNewBtn) {
+        this._els.saveNewBtn.textContent = isEdit
+          ? "Guardar cambios"
+          : "Guardar";
+      }
+
       const first = this._els.createForm.querySelector(
         '[data-csx-field="nombre"]',
       );
@@ -580,6 +652,7 @@
             .filter(Boolean)
             .join(" · ");
           const canDelete = this._canDeleteCustomer(code);
+          const canEdit = !!code;
 
           return `
             <div class="csx-row ${isSelected ? "csx-selected" : ""}" data-cod="${this._escape(code)}">
@@ -588,11 +661,31 @@
                 <div class="csx-name">${this._escape(customer.nombre || "—")}</div>
                 ${sub ? `<div class="csx-sub">${this._escape(sub)}</div>` : ""}
               </div>
-              ${canDelete ? `<button type="button" class="csx-del" data-csx-del="${this._escape(code)}" title="Borrar cliente">✖</button>` : `<span class="csx-del-placeholder"></span>`}
+              <div class="csx-row-actions">
+                ${canEdit ? `<button type="button" class="csx-edit" data-csx-edit="${this._escape(code)}" title="Editar cliente">✎</button>` : `<span class="csx-del-placeholder"></span>`}
+                ${canDelete ? `<button type="button" class="csx-del" data-csx-del="${this._escape(code)}" title="Borrar cliente">✖</button>` : `<span class="csx-del-placeholder"></span>`}
+              </div>
             </div>
           `;
         })
         .join("");
+
+      body.querySelectorAll("[data-csx-edit]").forEach((button) => {
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          const cod = button.getAttribute("data-csx-edit") || "";
+          if (!cod) return;
+
+          const customer = (this._customers || []).find(
+            (item) => String(item.codcliente) === String(cod),
+          );
+          if (!customer) return;
+
+          this.openEdit(customer);
+        });
+      });
 
       body.querySelectorAll(".csx-row").forEach((row) => {
         row.addEventListener("click", () => {
@@ -710,7 +803,98 @@
       return payload;
     },
 
+    _setCreateFormValue(name, value) {
+      const input = this._els.createForm?.querySelector(
+        `[data-csx-field="${name}"]`,
+      );
+      if (!input) return;
+      input.value = String(value ?? "");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    },
+
+    _fillCreateFormForCustomer(customer) {
+      const raw =
+        customer?._raw && typeof customer._raw === "object"
+          ? customer._raw
+          : customer || {};
+
+      this._setCreateFormValue("nombre", raw?.nombre || customer?.nombre || "");
+      this._setCreateFormValue(
+        "razonsocial",
+        raw?.razonsocial || customer?.razonsocial || "",
+      );
+      this._setCreateFormValue(
+        "personafisica",
+        String(raw?.personafisica ?? "1"),
+      );
+      this._setCreateFormValue("tipoidfiscal", raw?.tipoidfiscal || "NIF");
+      this._setCreateFormValue("cifnif", raw?.cifnif || customer?.cifnif || "");
+      this._setCreateFormValue("cif", raw?.cif || "");
+      this._setCreateFormValue("direccion", raw?.direccion || "");
+      this._setCreateFormValue("apartado", raw?.apartado || "");
+      this._setCreateFormValue("codpostal", raw?.codpostal || "");
+      this._setCreateFormValue("ciudad", raw?.ciudad || "");
+      this._setCreateFormValue("provincia", raw?.provincia || "");
+      this._setCreateFormValue("pais", raw?.pais || "España");
+      this._setCreateFormValue("telefono1", raw?.telefono1 || "");
+      this._setCreateFormValue("email", raw?.email || "");
+    },
+
+    async _saveEditedCustomer() {
+      const cod = String(this._editingCustomerCod || "").trim();
+      if (!cod) throw new Error("Cliente inválido para editar.");
+
+      const data = this._getCreateData();
+      if (!data.razonsocial && !data.nombre) {
+        throw new Error("Debes indicar razón social o nombre.");
+      }
+
+      const selectedCodBefore = String(
+        this.getSelectedCustomerCodcliente() || "",
+      );
+      const payload = this._buildCreatePayload(data);
+
+      this._setCreateError("");
+      this._els.saveNewBtn.disabled = true;
+
+      try {
+        await this._updateForm("clientes", cod, payload);
+        this._customers = await this._loadCustomers();
+
+        const refreshed = this._customers.find(
+          (customer) => String(customer.codcliente) === cod,
+        );
+
+        if (selectedCodBefore === cod && refreshed) {
+          this._selected = refreshed;
+          this._emitChange();
+        }
+
+        if (String(this._defaultCod) === cod) {
+          this._defaultCustomer = {
+            codcliente: String(cod),
+            nombre: String(
+              refreshed?.nombre || payload.nombre || "Ventas tickets",
+            ),
+          };
+          if (!this._selected) this._emitChange();
+        }
+
+        if (typeof window.toast === "function") {
+          window.toast("Cliente actualizado ✅", "ok", "Clientes");
+        }
+
+        this.close();
+      } finally {
+        this._els.saveNewBtn.disabled = false;
+      }
+    },
+
     async _saveNewCustomer() {
+      if (this._createMode === "edit") {
+        return this._saveEditedCustomer();
+      }
+
       const data = this._getCreateData();
       if (!data.razonsocial && !data.nombre) {
         throw new Error("Debes indicar razón social o nombre.");
@@ -827,6 +1011,9 @@
     _resetCreateForm() {
       if (!this._els.createForm) return;
 
+      this._createMode = "create";
+      this._editingCustomerCod = "";
+
       this._els.createForm.reset();
 
       const fiscalType = this._els.createForm.querySelector(
@@ -918,7 +1105,26 @@
     openCreate() {
       this._ensureModalDom();
       this._els.overlay.classList.add("csx-open");
+      this._createMode = "create";
+      this._editingCustomerCod = "";
       this._resetCreateForm();
+      this._showCreateMode();
+    },
+
+    openEdit(customerObj) {
+      this._ensureModalDom();
+
+      const cod = String(customerObj?.codcliente || "").trim();
+      if (!cod) return;
+
+      this._createMode = "edit";
+      this._editingCustomerCod = cod;
+
+      this._els.overlay.classList.add("csx-open");
+      this._resetCreateForm();
+      this._createMode = "edit";
+      this._editingCustomerCod = cod;
+      this._fillCreateFormForCustomer(customerObj);
       this._showCreateMode();
     },
 

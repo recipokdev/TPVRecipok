@@ -161,6 +161,19 @@
         ></iframe>
       </div>
 
+      <div
+        id="productReorderModeNotice"
+        class="product-reorder-mode-notice hidden"
+      >
+        <div class="product-reorder-mode-notice-title">
+          Modo reordenar productos activo
+        </div>
+        <div class="product-reorder-mode-notice-text">
+          No puedes añadir productos al carrito mientras esté activo el modo de
+          arrastrar por prioridad.
+        </div>
+      </div>
+
       <div class="products-grid" id="productsGrid"></div>
       <div id="statusBar" class="status-bar">
         <div class="status-online-group">
@@ -205,6 +218,16 @@
         </div>
       </div>
     </div>
+
+    <button
+      type="button"
+      id="cartWidthDragHandle"
+      class="cart-width-drag-handle hidden"
+      title="Arrastra para cambiar el ancho del carrito"
+      aria-label="Arrastrar ancho del carrito"
+    >
+      ⋮⋮
+    </button>
 
     <!-- PANEL DERECHO: CARRITO -->
     <aside class="cart-card">
@@ -311,6 +334,15 @@
           style="display: none"
         >
           ✖
+        </button>
+
+        <button
+          id="cartCustomerEdit"
+          type="button"
+          class="cart-client-btn cart-client-btn--edit hidden"
+          title="Editar cliente"
+        >
+          ✎
         </button>
 
         <button
@@ -2460,7 +2492,9 @@
               </div>
               <div class="opt-row">
                 <div class="opt-row-txt">
-                  <div class="opt-row-title">Descuentos manuales en carrito</div>
+                  <div class="opt-row-title">
+                    Descuentos manuales en carrito
+                  </div>
                   <div class="opt-row-sub">
                     Permite descuento por línea en el carrito y descuento
                     general con prioridad por línea.
@@ -2468,6 +2502,19 @@
                 </div>
                 <label class="switch">
                   <input type="checkbox" id="cartDiscountToolsToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Alargar carrito</div>
+                  <div class="opt-row-sub">
+                    Muestra un asa junto al carrito para arrastrar su ancho
+                    horizontalmente.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="cartWidthControlsToggle" />
                   <span class="slider"></span>
                 </label>
               </div>

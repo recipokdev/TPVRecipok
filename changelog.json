@@ -2,6 +2,15 @@
   "schema": 1,
   "versions": [
     {
+      "version": "0.2.1-beta.1",
+      "date": "2026-07-06",
+      "title": "Sincronizacion aparcados multi-TPV",
+      "changes": [
+        "Aparcados TPV: en modo caja compartida ya no se filtran por caja local, para ver tickets/aparcados/cobrados entre TPVs de la misma empresa.",
+        "Aparcados cobrados borrados: se mantiene una marca local para evitar que reaparezcan tras reiniciar cuando hay desajustes temporales de sincronizacion."
+      ]
+    },
+    {
       "version": "0.2.1",
       "date": "2026-07-02",
       "title": "Inicio del changelog integrado",

@@ -100,6 +100,26 @@ function getRuntimeCartSnapshotCfgKey(mode = getCurrentCartModeScope()) {
   return `${RUNTIME_CART_SNAPSHOT_CFG_KEY}.${scope === "mesas" ? "mesas" : "tpv"}`;
 }
 
+function getLocalStorageRawValue(key) {
+  try {
+    if (!key) return null;
+    return localStorage.getItem(String(key));
+  } catch {
+    return null;
+  }
+}
+
+function setLocalStorageRawValue(key, rawValue) {
+  try {
+    if (!key) return;
+    if (rawValue == null) {
+      localStorage.removeItem(String(key));
+      return;
+    }
+    localStorage.setItem(String(key), String(rawValue));
+  } catch {}
+}
+
 function getCurrentCartHistoryScopeKey() {
   if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
     const state = loadMesasTablesStateForInline();
@@ -323,15 +343,42 @@ const TPV_E2E_MODE =
   String(window.TPV_ENV?.mode || "").toLowerCase() === "demo" ||
   !!window.TPV_ENV?.e2e;
 const TPV_E2E_ALLOW_WRITES = !!window.TPV_ENV?.e2eAllowWrites;
+const TPV_SAFE_TRAINING_MODE_LS_KEY = "tpv_safe_training_mode";
+const TPV_SAFE_TRAINING_SNAPSHOT_LS_KEY =
+  "tpv_safe_training_runtime_snapshot_v1";
+const TPV_SAFE_TRAINING_SIM_SALE_SEQ_KEY = "tpv_safe_training_sim_sale_seq";
+const TPV_SAFE_TRAINING_SIM_REFUND_SEQ_KEY = "tpv_safe_training_sim_refund_seq";
 
-function installE2ERemoteWriteGuard(baseUrl) {
-  if (!TPV_E2E_MODE || TPV_E2E_ALLOW_WRITES) return;
-  if (typeof window.__TPV_E2E_FETCH_GUARD_INSTALLED__ !== "undefined") return;
+function isTargetRemoteWriteUrl(rawUrl) {
+  const url = String(rawUrl || "").trim();
+  if (!url) return false;
 
-  const targetBase = String(baseUrl || "")
+  const baseFs = String(window.RECIPOK_API?.baseUrl || "")
     .trim()
     .replace(/\/+$/, "");
-  if (!targetBase) return;
+  const syncBase = String(TPV_SYNC_API_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
+
+  if (baseFs && url.startsWith(baseFs)) return true;
+  if (syncBase && url.startsWith(syncBase)) return true;
+  if (url.includes("/demo/api/")) return true;
+
+  return false;
+}
+
+function buildRemoteWriteBlockedError(method, url) {
+  const target =
+    `${String(method || "").toUpperCase()} ${String(url || "")}`.trim();
+  const err = new Error(
+    `Modo pruebas activo: escritura remota bloqueada (${target}).`,
+  );
+  err.code = "TPV_SAFE_TRAINING_WRITE_BLOCKED";
+  return err;
+}
+
+function installRemoteWriteGuard() {
+  if (window.__TPV_REMOTE_WRITE_GUARD_INSTALLED__) return;
 
   const originalFetch = window.fetch.bind(window);
   window.fetch = async (input, init = {}) => {
@@ -344,17 +391,19 @@ function installE2ERemoteWriteGuard(baseUrl) {
           : "";
 
     const isWrite = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
-    const isTarget =
-      !!url && (url.startsWith(targetBase) || url.includes("/demo/api/"));
-
-    if (isWrite && isTarget) {
-      throw new Error(`[E2E_WRITE_BLOCKED] ${method} ${url}`);
+    if (isWrite && shouldBlockRemoteWrites() && isTargetRemoteWriteUrl(url)) {
+      throw buildRemoteWriteBlockedError(method, url);
     }
 
     return originalFetch(input, init);
   };
 
-  window.__TPV_E2E_FETCH_GUARD_INSTALLED__ = true;
+  window.__TPV_REMOTE_WRITE_GUARD_INSTALLED__ = true;
+}
+
+function installE2ERemoteWriteGuard(_baseUrl) {
+  if (!TPV_E2E_MODE || TPV_E2E_ALLOW_WRITES) return;
+  installRemoteWriteGuard();
 }
 
 const TPV_DEBUG_LOGS = false;
@@ -468,6 +517,13 @@ const productReorderModeToggle = document.getElementById(
 );
 const productManualOrderResetBtn = document.getElementById(
   "productManualOrderResetBtn",
+);
+const cartWidthControlsToggle = document.getElementById(
+  "cartWidthControlsToggle",
+);
+const cartWidthDragHandle = document.getElementById("cartWidthDragHandle");
+const productReorderModeNoticeEl = document.getElementById(
+  "productReorderModeNotice",
 );
 
 const infoBarVisibleToggle = document.getElementById("infoBarVisibleToggle");
@@ -659,6 +715,11 @@ const PARKED_TICKETS_CACHE_KEY = "tpv_parked_tickets_cache_v1";
 const PARKED_SYNC_QUEUE_KEY = "tpv_parked_sync_queue_v1";
 const PARKED_MODE_REGISTRY_KEY = "tpv_parked_mode_registry_v1";
 const PARKED_GLOBAL_COUNTER_KEY = "tpv_parked_global_counter_v1";
+const PARKED_PAID_TOMBSTONES_KEY = "tpv_parked_paid_tombstones_v1";
+const PARKED_PAID_HISTORY_KEY = "tpv_parked_paid_history_v1";
+const PARKED_DEVICE_NODE_ID_KEY = "tpv_parked_device_node_id_v1";
+const PARKED_DEVICE_SEQ_KEY = "tpv_parked_device_seq_v1";
+const PAID_TICKET_PARKED_ORIGIN_KEY = "tpv_paid_ticket_parked_origin_v1";
 const PARKED_MODE_TPV = "tpv";
 const PARKED_MODE_MESAS = "mesas";
 const TPV_USERS_CACHE_KEY = "tpv_cachedUsers_v1";
@@ -677,6 +738,7 @@ let __parkedSyncDrainInFlight = false;
 
 let __parkedReservationsRefreshTimer = null;
 let __parkedReservationsRefreshInFlight = false;
+let __parkedBurstRefreshTimers = [];
 const PARKED_LOCAL_PREFER_MS = 120000;
 let __sharedCajaHealthTimer = null;
 let __sharedCajaHealthInFlight = false;
@@ -1470,6 +1532,7 @@ const OPTIONS_ALLOW_CLOSE_WITH_PARKED_KEY = "ui.allowCloseWithParkedTickets";
 const OPTIONS_SHOW_PARK_STOCK_WARNING_KEY = "ui.showParkStockWarning";
 const OPTIONS_PRODUCT_TILE_SIZE_KEY = "ui.productTileMinSize";
 const OPTIONS_PRODUCT_TILE_RESIZE_MODE_KEY = "ui.productTileResizeMode";
+const OPTIONS_SCALE_MANUAL_CAPTURE_MODE_KEY = "scale.manualCaptureMode";
 const OPTIONS_PRODUCT_MANUAL_ORDER_KEY = "ui.productManualOrderById";
 const OPTIONS_PRODUCT_SORT_MODE_KEY = "ui.productSortMode";
 const OPTIONS_PRODUCT_REORDER_MODE_KEY = "ui.productReorderMode";
@@ -1486,11 +1549,17 @@ const PRODUCT_NAME_COLLATOR = new Intl.Collator("es", {
 const PRODUCT_TILE_MIN_SIZE_DEFAULT = 150;
 const PRODUCT_TILE_MIN_SIZE_MIN = 110;
 const PRODUCT_TILE_MIN_SIZE_MAX = 360;
+const CART_PANEL_WIDTH_PX_MIN = 280;
+const CART_PANEL_WIDTH_PX_MAX = 520;
 const LS_ALLOW_CLOSE_WITH_PARKED_KEY = "tpv_allowCloseWithParkedTickets";
 const OPTIONS_MESAS_DINERS_FAMILY_RULES_KEY = "ui.mesasDinersFamilyRules";
 const LS_MESAS_DINERS_FAMILY_RULES_KEY = "tpv_mesasDinersFamilyRules";
 const OPTIONS_MESAS_COMANDA_FAMILY_RULES_KEY = "ui.mesasComandaFamilyRules";
 const LS_MESAS_COMANDA_FAMILY_RULES_KEY = "tpv_mesasComandaFamilyRules";
+const OPTIONS_CART_DISCOUNT_TOOLS_KEY = "ui.cartDiscountToolsEnabled";
+const OPTIONS_CART_WIDTH_CONTROLS_KEY = "ui.cartWidthControlsEnabled";
+const OPTIONS_CART_PANEL_WIDTH_KEY = "ui.cartPanelWidthPx";
+const OPTIONS_SAFE_TRAINING_MODE_KEY = "runtime.safeTrainingMode";
 let showProductStockBadge = false;
 let enableProductStockEdition = false;
 let allowCloseWithParkedTickets = false;
@@ -1498,8 +1567,20 @@ let mesasDinersFamilyRules = [];
 let mesasComandaFamilyRules = [];
 let productDiscountPctById = {};
 let productManualOrderById = {};
+let customerTariffCatalog = [];
+let customerTariffByCode = {};
+let activeCustomerTariff = null;
+let activeCustomerTariffCodcliente = "";
+let tariffsLoadedOnce = false;
+let tariffOptionsBound = false;
+let tariffCustomersCache = [];
+let tariffAssignedCustomersByCode = {};
+let tariffAssignedServerCodesByCode = {};
+let tariffEditBaselineByCode = {};
+let tariffInputKeyboardBound = false;
 let productTileMinSize = PRODUCT_TILE_MIN_SIZE_DEFAULT;
 let productTileResizeMode = false;
+let scaleManualCaptureMode = false;
 let productsFilterStockOnly = false;
 let productsFilterIncludeUnmanaged = true;
 let productsFilterIncludeUnmanagedSnapshot = true;
@@ -1510,6 +1591,21 @@ let infoBarShowTerminal = true;
 let infoBarShowAgent = true;
 let infoBarShowUser = true;
 let infoBarShowCash = true;
+let cartDiscountToolsEnabled = false;
+let cartGlobalDiscountPct = 0;
+let cartWidthControlsEnabled = false;
+let cartPanelWidthPx = 0;
+let cartDiscountToolsToggleBound = false;
+let cartWidthControlsToggleBound = false;
+let cartWidthDragHandleBound = false;
+let cartWidthDragActive = false;
+let cartWidthDragStartX = 0;
+let cartWidthDragStartWidth = 0;
+let productReorderWarnToastAt = 0;
+let safeTrainingModeEnabled = false;
+let safeTrainingModeToggleBound = false;
+let safeTrainingRuntimeSnapshot = null;
+let cartGlobalDiscountUiBound = false;
 
 const productReorderDragState = {
   active: false,
@@ -1517,6 +1613,292 @@ const productReorderDragState = {
   targetId: 0,
   targetTile: null,
 };
+
+function isSafeTrainingModeEnabled() {
+  return !!safeTrainingModeEnabled;
+}
+
+function shouldBlockRemoteWrites() {
+  if (TPV_E2E_MODE && !TPV_E2E_ALLOW_WRITES) return true;
+  return isSafeTrainingModeEnabled();
+}
+
+function clonePlain(value, fallback = null) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return fallback;
+  }
+}
+
+function readSafeTrainingSequence(key) {
+  const n = Number(getLocalStorageRawValue(key) || 0);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+function nextSafeTrainingSequence(key) {
+  const next = readSafeTrainingSequence(key) + 1;
+  setLocalStorageRawValue(key, String(next));
+  return next;
+}
+
+function nextSafeTrainingSimSaleCode() {
+  return `SIM${nextSafeTrainingSequence(TPV_SAFE_TRAINING_SIM_SALE_SEQ_KEY)}`;
+}
+
+function nextSafeTrainingSimRefundCode() {
+  return `SIMR${nextSafeTrainingSequence(TPV_SAFE_TRAINING_SIM_REFUND_SEQ_KEY)}`;
+}
+
+function isSimulatedTicketLike(ticket) {
+  const t = ticket && typeof ticket === "object" ? ticket : {};
+  if (t._simulated === true || t.simulated === true) return true;
+  const code = String(t.codigo || t.paidTicketCode || "")
+    .trim()
+    .toUpperCase();
+  return code.startsWith("SIM");
+}
+
+function isSimulatedParkedTicket(ticket) {
+  const t = ticket && typeof ticket === "object" ? ticket : {};
+  if (t._simulated === true || t.simulated === true) return true;
+  const fsCode = String(t?.fs?.codigo || "")
+    .trim()
+    .toUpperCase();
+  return fsCode.startsWith("SIM");
+}
+
+function persistSafeTrainingRuntimeSnapshot(snapshot) {
+  try {
+    if (!snapshot || typeof snapshot !== "object") {
+      localStorage.removeItem(TPV_SAFE_TRAINING_SNAPSHOT_LS_KEY);
+      return;
+    }
+
+    localStorage.setItem(
+      TPV_SAFE_TRAINING_SNAPSHOT_LS_KEY,
+      JSON.stringify(snapshot),
+    );
+  } catch {}
+}
+
+function loadSafeTrainingRuntimeSnapshot() {
+  if (safeTrainingRuntimeSnapshot) return safeTrainingRuntimeSnapshot;
+
+  try {
+    const raw = localStorage.getItem(TPV_SAFE_TRAINING_SNAPSHOT_LS_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== "object") return null;
+    safeTrainingRuntimeSnapshot = parsed;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function clearSafeTrainingRuntimeSnapshot() {
+  safeTrainingRuntimeSnapshot = null;
+  persistSafeTrainingRuntimeSnapshot(null);
+}
+
+function clearSafeTrainingSessionData() {
+  cart = [];
+  parkedTickets = [];
+  parkedCounter = 0;
+  currentParkedTicketIndex = null;
+  preParkedCustomerSelection = null;
+
+  lastTicket = null;
+  customerDisplayOverride = null;
+  customerThanksUntil = 0;
+  customerLastSale = null;
+
+  try {
+    saveParkedTicketsCache([]);
+  } catch {}
+  try {
+    saveParkedSyncQueue([]);
+  } catch {}
+
+  REMOTE_PARKED_RESERVATIONS = [];
+
+  setLocalStorageRawValue("tpv_remoteCajaId", null);
+  setLocalStorageRawValue(TPV_SAFE_TRAINING_SIM_SALE_SEQ_KEY, "0");
+  setLocalStorageRawValue(TPV_SAFE_TRAINING_SIM_REFUND_SEQ_KEY, "0");
+  setLocalStorageRawValue("tpv_offlineTickets_v1", "[]");
+  setLocalStorageRawValue("tpv_cachedTickets_v1", "[]");
+  setLocalStorageRawValue("tpv_cachedTickets_ts_v1", null);
+
+  if (typeof ticketsCache !== "undefined") ticketsCache = [];
+  if (typeof ticketsUiCache !== "undefined") ticketsUiCache = [];
+
+  if (cashSession && typeof cashSession === "object") {
+    cashSession.open = false;
+    cashSession.remoteCajaId = null;
+    cashSession.openedAt = null;
+    cashSession.openingCash = 0;
+    cashSession.cashSales = 0;
+    cashSession.cardSales = 0;
+    cashSession.totalSales = 0;
+    cashSession.ticketsCount = 0;
+    cashSession.paymentsByMethod = {};
+    cashSession.cashMovements = [];
+    cashSession.cashMovementsTotal = 0;
+    cashSession.isRecovering = false;
+  }
+
+  if (typeof cashOpenDialogShown !== "undefined") {
+    cashOpenDialogShown = false;
+  }
+
+  renderCart?.();
+  renderMainUI?.(true);
+  refreshParkButtonUI?.();
+  refreshParkedEditingBanner?.();
+  updateParkedCountBadge?.();
+  updateCashButtonLabel?.();
+  renderCashIdChip?.();
+  pushCustomerState?.();
+}
+
+function captureSafeTrainingRuntimeSnapshot() {
+  const snapshot = {
+    capturedAt: new Date().toISOString(),
+    products: clonePlain(Array.isArray(products) ? products : [], []),
+    cart: clonePlain(Array.isArray(cart) ? cart : [], []),
+    parkedTickets: clonePlain(getScopedPendingParkedTickets(parkedTickets), []),
+    parkedCounter: Number(parkedCounter || 0) || 0,
+    currentParkedTicketIndex:
+      currentParkedTicketIndex == null
+        ? null
+        : Number(currentParkedTicketIndex),
+    preParkedCustomerSelection: clonePlain(preParkedCustomerSelection, null),
+    customerSelection: clonePlain(
+      captureCurrentCustomerSelectionForParked(),
+      null,
+    ),
+    cashSession: clonePlain(cashSession, null),
+    lastTicket: clonePlain(lastTicket, null),
+    customerDisplayOverride: clonePlain(customerDisplayOverride, null),
+    customerMode: String(customerMode || "CART"),
+    customerThanksUntil: Number(customerThanksUntil || 0) || 0,
+    customerLastSale: clonePlain(customerLastSale, null),
+    productDiscountPctById: clonePlain(productDiscountPctById, {}),
+    productManualOrderById: clonePlain(productManualOrderById, {}),
+    offlineTicketsRaw: getLocalStorageRawValue("tpv_offlineTickets_v1"),
+    ticketsCacheRaw: getLocalStorageRawValue("tpv_cachedTickets_v1"),
+    ticketsCacheTsRaw: getLocalStorageRawValue("tpv_cachedTickets_ts_v1"),
+    remoteCajaIdRaw: getLocalStorageRawValue("tpv_remoteCajaId"),
+    simSaleSeqRaw: getLocalStorageRawValue(TPV_SAFE_TRAINING_SIM_SALE_SEQ_KEY),
+    simRefundSeqRaw: getLocalStorageRawValue(
+      TPV_SAFE_TRAINING_SIM_REFUND_SEQ_KEY,
+    ),
+  };
+
+  safeTrainingRuntimeSnapshot = snapshot;
+  persistSafeTrainingRuntimeSnapshot(snapshot);
+  return snapshot;
+}
+
+function restoreSafeTrainingRuntimeSnapshot(snapshot) {
+  const src = snapshot && typeof snapshot === "object" ? snapshot : null;
+  if (!src) return false;
+
+  products = Array.isArray(src.products) ? clonePlain(src.products, []) : [];
+  cart = Array.isArray(src.cart) ? clonePlain(src.cart, []) : [];
+  parkedTickets = Array.isArray(src.parkedTickets)
+    ? src.parkedTickets
+        .map((it) => normalizeRemoteParkedTicket(it))
+        .filter(Boolean)
+        .filter((t) => !t?.paid)
+    : [];
+  parkedCounter = Number(src.parkedCounter || 0) || 0;
+  currentParkedTicketIndex =
+    src.currentParkedTicketIndex == null
+      ? null
+      : Math.max(0, Number(src.currentParkedTicketIndex) || 0);
+  if (
+    currentParkedTicketIndex != null &&
+    currentParkedTicketIndex >= parkedTickets.length
+  ) {
+    currentParkedTicketIndex = null;
+  }
+
+  preParkedCustomerSelection = src.preParkedCustomerSelection || null;
+
+  if (src.cashSession && typeof src.cashSession === "object") {
+    cashSession = { ...cashSession, ...clonePlain(src.cashSession, {}) };
+  }
+
+  lastTicket = src.lastTicket ? clonePlain(src.lastTicket, null) : null;
+  customerDisplayOverride = src.customerDisplayOverride
+    ? clonePlain(src.customerDisplayOverride, null)
+    : null;
+  customerMode = String(src.customerMode || "CART");
+  customerThanksUntil = Number(src.customerThanksUntil || 0) || 0;
+  customerLastSale = src.customerLastSale
+    ? clonePlain(src.customerLastSale, null)
+    : null;
+  productDiscountPctById =
+    src.productDiscountPctById && typeof src.productDiscountPctById === "object"
+      ? clonePlain(src.productDiscountPctById, {})
+      : {};
+  productManualOrderById =
+    src.productManualOrderById && typeof src.productManualOrderById === "object"
+      ? clonePlain(src.productManualOrderById, {})
+      : {};
+
+  setLocalStorageRawValue("tpv_offlineTickets_v1", src.offlineTicketsRaw);
+  setLocalStorageRawValue("tpv_cachedTickets_v1", src.ticketsCacheRaw);
+  setLocalStorageRawValue("tpv_cachedTickets_ts_v1", src.ticketsCacheTsRaw);
+  setLocalStorageRawValue("tpv_remoteCajaId", src.remoteCajaIdRaw);
+  setLocalStorageRawValue(
+    TPV_SAFE_TRAINING_SIM_SALE_SEQ_KEY,
+    src.simSaleSeqRaw,
+  );
+  setLocalStorageRawValue(
+    TPV_SAFE_TRAINING_SIM_REFUND_SEQ_KEY,
+    src.simRefundSeqRaw,
+  );
+
+  if (typeof ticketsCache !== "undefined") {
+    try {
+      ticketsCache = JSON.parse(src.ticketsCacheRaw || "[]");
+      if (!Array.isArray(ticketsCache)) ticketsCache = [];
+    } catch {
+      ticketsCache = [];
+    }
+  }
+
+  if (typeof ticketsUiCache !== "undefined") {
+    ticketsUiCache = [];
+  }
+
+  saveParkedTicketsCache(parkedTickets);
+  saveParkedSyncQueue([]);
+
+  if (src.customerSelection) {
+    applyCustomerSelectionSnapshot(src.customerSelection);
+  }
+
+  renderCart?.();
+  renderMainUI?.(true);
+  refreshParkButtonUI?.();
+  refreshParkedEditingBanner?.();
+  updateParkedCountBadge?.();
+  updateCashButtonLabel?.();
+  renderCashIdChip?.();
+  pushCustomerState?.();
+
+  if (
+    parkedTicketsOverlay &&
+    !parkedTicketsOverlay.classList.contains("hidden")
+  ) {
+    renderParkedTicketsModal?.();
+  }
+
+  return true;
+}
 
 function clampDiscountPercent(value) {
   const n = Number(value);
@@ -1528,6 +1910,339 @@ function formatDiscountPercent(value) {
   const pct = clampDiscountPercent(value);
   if (Number.isInteger(pct)) return String(pct);
   return pct.toFixed(2).replace(/\.00$/, "").replace(/0$/, "");
+}
+
+function getCartLineDiscountPercent(item) {
+  return clampDiscountPercent(parseNumericLike(item?.cartLineDiscountPct, 0));
+}
+
+function hasLockedManualUnitPrice(item) {
+  if (!item || typeof item !== "object") return false;
+  if (!isPriceModified(item)) return false;
+  return parseBoolLike(item?.manualPriceLocksAdjustments, true);
+}
+
+function getEffectiveCartDiscountForLine(item) {
+  const linePct = getCartLineDiscountPercent(item);
+  if (linePct > 0) return { pct: linePct, source: "line" };
+
+  const frozenGlobalPct = clampDiscountPercent(
+    parseNumericLike(item?.cartGlobalDiscountPctApplied, 0),
+  );
+  const globalPct =
+    frozenGlobalPct > 0 ? frozenGlobalPct : getCartGlobalDiscountPercent();
+  if (globalPct > 0) return { pct: globalPct, source: "global" };
+
+  return { pct: 0, source: "" };
+}
+
+function getUniqueTariffCustomerCodes(codes = []) {
+  return Array.from(
+    new Set(
+      (Array.isArray(codes) ? codes : [])
+        .map((x) => String(x || "").trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function buildTariffCustomersFromCodes(codes = []) {
+  const unique = getUniqueTariffCustomerCodes(codes);
+  const byCode = new Map(
+    (Array.isArray(tariffCustomersCache) ? tariffCustomersCache : []).map(
+      (c) => [String(c?.codcliente || "").trim(), c],
+    ),
+  );
+
+  return unique.map((codcliente) => {
+    const found = byCode.get(codcliente);
+    return {
+      codcliente,
+      nombre: String(found?.nombre || "").trim(),
+    };
+  });
+}
+
+function captureTariffEditBaseline(codtarifa, tariff, assignedCodes = []) {
+  const cod = String(codtarifa || "").trim();
+  if (!cod || !tariff) return;
+
+  tariffEditBaselineByCode[cod] = {
+    codtarifa: cod,
+    nombre: String(tariff?.nombre || "").trim(),
+    aplicar:
+      normalizeTariffApplyMode(tariff?.aplicar) === "coste" ? "coste" : "pvp",
+    valorx: clampDiscountPercent(parseNumericLike(tariff?.valorx, 0)),
+    valory: round2(parseNumericLike(tariff?.valory, 0)),
+    mincoste: !!tariff?.mincoste,
+    maxpvp: !!tariff?.maxpvp,
+    assignedCodes: getUniqueTariffCustomerCodes(assignedCodes),
+    searchText: "",
+  };
+}
+
+function getTariffEditBaseline(codtarifa) {
+  const cod = String(codtarifa || "").trim();
+  return tariffEditBaselineByCode[cod] || null;
+}
+
+function getTariffCustomerSearchText() {
+  const input = document.getElementById("tariffCustomerSearchInput");
+  return String(input?.value || "")
+    .trim()
+    .toLowerCase();
+}
+
+function getAssignedCustomerSetForTariff(codtarifa) {
+  const cod = String(codtarifa || "").trim();
+  const list = tariffAssignedCustomersByCode[cod] || [];
+  return new Set(
+    list.map((c) => String(c?.codcliente || "").trim()).filter(Boolean),
+  );
+}
+
+function setAssignedCustomersForTariff(codtarifa, customers = []) {
+  const cod = String(codtarifa || "").trim();
+  tariffAssignedCustomersByCode[cod] = (
+    Array.isArray(customers) ? customers : []
+  )
+    .map((c) => ({
+      codcliente: String(c?.codcliente || "").trim(),
+      nombre: String(c?.nombre || "").trim(),
+    }))
+    .filter((c) => !!c.codcliente);
+}
+
+function updateTariffCustomersSelectedCount(codtarifa) {
+  const chip = document.getElementById("tariffCustomersSelectedCount");
+  if (!chip) return;
+
+  const count = getAssignedCustomerSetForTariff(codtarifa).size;
+  chip.textContent = `${count} seleccionado${count === 1 ? "" : "s"}`;
+}
+
+function normalizeTariffCodeKey(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  if (/^\d+$/.test(raw)) return String(Number(raw));
+  return raw;
+}
+
+function formatTariffFixedAmount(value) {
+  const n = Number(value);
+  if (!isFinite(n) || n <= 0) return "0";
+  return eur(round2(n));
+}
+
+function getTariffDiscountDisplayParts(tariff) {
+  const mode = normalizeTariffApplyMode(tariff?.aplicar);
+  const isCostMode = mode === "coste";
+  const sign = isCostMode ? "+" : "-";
+  const pct = clampDiscountPercent(parseNumericLike(tariff?.valorx, 0));
+  const fix = Math.max(0, round2(parseNumericLike(tariff?.valory, 0)));
+  const parts = [];
+  if (pct > 0) parts.push(`${sign}${formatDiscountPercent(pct)}%`);
+  if (fix > 0) parts.push(`${sign}${formatTariffFixedAmount(fix)}`);
+  return { pct, fix, parts };
+}
+
+function getTariffDiscountDisplayText(tariff, fallback = "sin descuento") {
+  const { parts } = getTariffDiscountDisplayParts(tariff);
+  return parts.length ? parts.join(" y ") : fallback;
+}
+
+function normalizeTariffApplyMode(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeTariffRow(row) {
+  const codtarifa = String(row?.codtarifa || "").trim();
+  if (!codtarifa) return null;
+
+  return {
+    codtarifa,
+    nombre: String(row?.nombre || `Tarifa ${codtarifa}`).trim(),
+    aplicar: normalizeTariffApplyMode(row?.aplicar),
+    valorx: parseNumericLike(row?.valorx, 0),
+    valory: parseNumericLike(row?.valory, 0),
+    mincoste: !!row?.mincoste,
+    maxpvp: !!row?.maxpvp,
+    _raw: row || null,
+  };
+}
+
+function findTariffByCode(codtarifa) {
+  const code = String(codtarifa || "").trim();
+  if (!code) return null;
+
+  if (customerTariffByCode[code]) return customerTariffByCode[code];
+
+  const codeKey = normalizeTariffCodeKey(code);
+  return (
+    customerTariffCatalog.find(
+      (item) => normalizeTariffCodeKey(item?.codtarifa) === codeKey,
+    ) || null
+  );
+}
+
+function getTariffSummaryText(tariff) {
+  if (!tariff) return "Sin tarifa seleccionada.";
+
+  const discountText = getTariffDiscountDisplayText(tariff);
+  const customers =
+    tariffAssignedCustomersByCode[String(tariff.codtarifa || "")] || [];
+
+  if (customers.length) {
+    const names = customers
+      .map((c) => String(c?.nombre || "").trim())
+      .filter(Boolean);
+
+    if (names.length <= 2) {
+      return `${tariff.nombre} · Ajuste actual: ${discountText} · Cliente${names.length > 1 ? "s" : ""} "${names.join('", "')}"`;
+    }
+
+    const preview = names.slice(0, 2).join('", "');
+    const extra = names.length - 2;
+    return `${tariff.nombre} · Ajuste actual: ${discountText} · Clientes "${preview}" y ${extra} más`;
+  }
+
+  return `${tariff.nombre} · Ajuste actual: ${discountText} · Sin cliente asignado`;
+}
+
+function getUnitGrossBase(item) {
+  const v = item?.grossPriceOverride;
+  if (typeof v === "number" && isFinite(v) && v >= 0) return v;
+  if (typeof item?.grossPrice === "number" && isFinite(item.grossPrice)) {
+    return item.grossPrice;
+  }
+  return Number(item?.price || 0);
+}
+
+function getUnitCostGrossBase(item) {
+  const directCandidates = [
+    item?.costGrossOverride,
+    item?.costGross,
+    item?.costeGross,
+    item?.grossCost,
+  ];
+
+  for (const v of directCandidates) {
+    const n = Number(v);
+    if (isFinite(n) && n > 0) return n;
+  }
+
+  const netCandidates = [
+    item?.costNet,
+    item?.coste,
+    item?.precioCoste,
+    item?.costPrice,
+    item?.pcoste,
+    item?.cost,
+  ];
+
+  for (const v of netCandidates) {
+    const net = Number(v);
+    if (!isFinite(net) || net <= 0) continue;
+    const taxRate = Number(item?.taxRate || 0) || 0;
+    return round2(net * (1 + taxRate / 100));
+  }
+
+  return 0;
+}
+
+function getTariffAdjustedGross(baseGross, tariff, opts = {}) {
+  const base = Number(baseGross || 0);
+  if (!isFinite(base) || base <= 0 || !tariff) {
+    return {
+      applied: false,
+      finalGross: Math.max(0, base),
+      discountPct: 0,
+      discountFixed: 0,
+      mode: "pvp",
+    };
+  }
+
+  const mode = normalizeTariffApplyMode(tariff.aplicar);
+  const pct = clampDiscountPercent(parseNumericLike(tariff.valorx, 0));
+  const fix = Math.max(0, round2(parseNumericLike(tariff.valory, 0)));
+  const costGross = Number(opts?.costGross || 0);
+  const hasCostGross = isFinite(costGross) && costGross > 0;
+
+  let finalGross = base;
+  if (mode === "coste") {
+    const costBase = hasCostGross ? costGross : base;
+    finalGross = costBase * (1 + pct / 100) + fix;
+    if (tariff.mincoste && hasCostGross) {
+      finalGross = Math.max(finalGross, costGross);
+    }
+    if (tariff.maxpvp) {
+      finalGross = Math.min(finalGross, base);
+    }
+  } else {
+    finalGross = base * (1 - pct / 100) - fix;
+    if (tariff.mincoste && hasCostGross) {
+      finalGross = Math.max(finalGross, costGross);
+    }
+    if (tariff.maxpvp) {
+      finalGross = Math.min(finalGross, base);
+    }
+  }
+
+  finalGross = Math.max(0, round2(finalGross));
+
+  const applied = round2(finalGross) !== round2(base);
+  return {
+    applied,
+    finalGross,
+    discountPct: applied ? pct : 0,
+    discountFixed: applied ? fix : 0,
+    mode: mode === "coste" ? "coste" : "pvp",
+  };
+}
+
+function getCartLinePricing(item) {
+  const baseUnitGross = Number(getUnitGrossBase(item) || 0);
+  const baseCostGross = Number(getUnitCostGrossBase(item) || 0);
+  const manualPriceLocked = hasLockedManualUnitPrice(item);
+
+  const tariffResult = getTariffAdjustedGross(
+    baseUnitGross,
+    activeCustomerTariff,
+    {
+      costGross: baseCostGross,
+    },
+  );
+  const tariffUnitGross = tariffResult.applied
+    ? tariffResult.finalGross
+    : baseUnitGross;
+  const cartDiscount = getEffectiveCartDiscountForLine(item);
+  const cartDiscountApplied = cartDiscount.pct > 0;
+  const unitGross = cartDiscountApplied
+    ? round2(tariffUnitGross * (1 - cartDiscount.pct / 100))
+    : tariffUnitGross;
+
+  const qty = Number(item?.qty || 0) || 0;
+  const baseLineTotal = round2(baseUnitGross * qty);
+  const lineTotal = round2(unitGross * qty);
+
+  return {
+    unitGross,
+    lineTotal,
+    baseUnitGross,
+    tariffUnitGross,
+    baseLineTotal,
+    tariffApplied: !!tariffResult.applied,
+    tariffDiscountPct: tariffResult.discountPct,
+    tariffDiscountFixed: tariffResult.discountFixed,
+    tariffMode: tariffResult.mode,
+    cartDiscountApplied,
+    cartDiscountPct: cartDiscount.pct,
+    cartDiscountSource: cartDiscount.source,
+    manualPriceLocked,
+    anyPricingAdjustment: !!tariffResult.applied || cartDiscountApplied,
+  };
 }
 
 function getDiscountProductId(productOrId) {
@@ -1701,6 +2416,1189 @@ function parseBoolLike(value, fallback = false) {
     if (normalized === "false" || normalized === "0") return false;
   }
   return fallback;
+}
+
+function parseNumericLike(value, fallback = 0) {
+  if (typeof value === "number" && isFinite(value)) return value;
+  const raw = String(value ?? "").trim();
+  if (!raw) return fallback;
+
+  let normalized = raw.replace(/\s+/g, "").replace(/[^\d,.-]/g, "");
+  if (!normalized) return fallback;
+
+  const hasComma = normalized.includes(",");
+  const hasDot = normalized.includes(".");
+  if (hasComma && hasDot) {
+    normalized = normalized.replace(/\./g, "").replace(",", ".");
+  } else if (hasComma) {
+    normalized = normalized.replace(",", ".");
+  }
+
+  const n = Number(normalized);
+  return isFinite(n) ? n : fallback;
+}
+
+function applySafeTrainingModeUi() {
+  const banner = document.getElementById("safeTrainingBanner");
+  if (banner) {
+    banner.classList.toggle("hidden", !safeTrainingModeEnabled);
+  }
+
+  if (safeTrainingModeEnabled) {
+    document.body.dataset.safeTrainingMode = "1";
+  } else {
+    delete document.body.dataset.safeTrainingMode;
+  }
+}
+
+function getCartGlobalDiscountPercent() {
+  if (!cartDiscountToolsEnabled) return 0;
+  return clampDiscountPercent(parseNumericLike(cartGlobalDiscountPct, 0));
+}
+
+function refreshCartDiscountUi() {
+  const row = document.getElementById("cartGlobalDiscountRow");
+  const summary = document.getElementById("cartGlobalDiscountSummary");
+  const clearBtn = document.getElementById("cartGlobalDiscountClearBtn");
+  const pct = getCartGlobalDiscountPercent();
+  const visibleLines = getVisibleCartLines(cart);
+  const lineCount = visibleLines.filter(
+    (line) =>
+      clampDiscountPercent(parseNumericLike(line?.cartLineDiscountPct, 0)) > 0,
+  ).length;
+
+  if (row) row.classList.toggle("hidden", !cartDiscountToolsEnabled);
+  if (summary) {
+    const globalText =
+      pct > 0
+        ? `Descuento general: -${formatDiscountPercent(pct)}%`
+        : "Descuento general: sin aplicar";
+    const lineText =
+      lineCount > 0
+        ? ` · Lineas con descuento: ${lineCount}`
+        : " · Sin lineas con descuento";
+    summary.textContent = `${globalText}${lineText}`;
+  }
+  if (clearBtn) clearBtn.disabled = pct <= 0 && lineCount <= 0;
+}
+
+function bindCartGlobalDiscountButtonsOnce() {
+  if (cartGlobalDiscountUiBound) return;
+  cartGlobalDiscountUiBound = true;
+
+  const setBtn = document.getElementById("cartGlobalDiscountBtn");
+  const clearBtn = document.getElementById("cartGlobalDiscountClearBtn");
+
+  setBtn?.addEventListener("click", () => {
+    if (!cartDiscountToolsEnabled) {
+      toast("Activa descuentos de carrito en Opciones.", "warn", "Carrito");
+      return;
+    }
+
+    if (typeof openNumPad !== "function") {
+      toast("No se pudo abrir el teclado numerico.", "warn", "Carrito");
+      return;
+    }
+
+    const current = getCartGlobalDiscountPercent();
+    openNumPad(
+      String(formatDiscountPercent(current || 0)),
+      (nextValue, meta = {}) => {
+        if (meta?.phase && meta.phase !== "confirm") return;
+        const next = clampDiscountPercent(parseNumericLike(nextValue, 0));
+        cartGlobalDiscountPct = next;
+        renderCart();
+      },
+      "Descuento general carrito (%)",
+      "price",
+      current,
+      null,
+    );
+  });
+
+  clearBtn?.addEventListener("click", () => {
+    if (!cartDiscountToolsEnabled) return;
+    cartGlobalDiscountPct = 0;
+    renderCart();
+  });
+}
+
+async function loadCartDiscountToolsToggle() {
+  const el = document.getElementById("cartDiscountToolsToggle");
+  let enabled = false;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(OPTIONS_CART_DISCOUNT_TOOLS_KEY);
+    if (cfgVal !== undefined && cfgVal !== null && cfgVal !== "") {
+      enabled = parseBoolLike(cfgVal, false);
+    }
+  } catch {}
+
+  cartDiscountToolsEnabled = !!enabled;
+  if (el) el.checked = cartDiscountToolsEnabled;
+  if (!cartDiscountToolsEnabled) cartGlobalDiscountPct = 0;
+  refreshCartDiscountUi();
+}
+
+async function saveCartDiscountToolsToggle(enabled) {
+  cartDiscountToolsEnabled = !!enabled;
+  if (!cartDiscountToolsEnabled) cartGlobalDiscountPct = 0;
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_CART_DISCOUNT_TOOLS_KEY,
+      cartDiscountToolsEnabled,
+    );
+  } catch {}
+
+  refreshCartDiscountUi();
+  renderCart();
+}
+
+function bindCartDiscountToolsToggleOnce() {
+  if (cartDiscountToolsToggleBound) return;
+  cartDiscountToolsToggleBound = true;
+
+  const el = document.getElementById("cartDiscountToolsToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    await saveCartDiscountToolsToggle(!!el.checked);
+  });
+}
+
+function clampCartPanelWidthPx(value) {
+  const n = Number(value);
+  if (!isFinite(n) || n <= 0) return 0;
+  return Math.max(
+    CART_PANEL_WIDTH_PX_MIN,
+    Math.min(CART_PANEL_WIDTH_PX_MAX, Math.round(n)),
+  );
+}
+
+function isCartPanelWidthAdjustableInCurrentLayout() {
+  return !(
+    document.body.classList.contains("mesas-inline-trans-mode") ||
+    document.body.classList.contains("mesas-inline-full-mode")
+  );
+}
+
+function applyCartPanelWidth() {
+  const card = document.querySelector(".cart-card");
+  if (!card) return;
+
+  if (!isCartPanelWidthAdjustableInCurrentLayout()) {
+    card.style.removeProperty("flex-basis");
+    card.style.removeProperty("width");
+    card.style.removeProperty("min-width");
+    card.style.removeProperty("max-width");
+    refreshCartWidthControlsUi();
+    return;
+  }
+
+  const px = clampCartPanelWidthPx(cartPanelWidthPx);
+  if (px > 0) {
+    const exact = `${px}px`;
+    card.style.flexBasis = exact;
+    card.style.width = exact;
+    card.style.minWidth = exact;
+    card.style.maxWidth = exact;
+  } else {
+    card.style.removeProperty("flex-basis");
+    card.style.removeProperty("width");
+    card.style.removeProperty("min-width");
+    card.style.removeProperty("max-width");
+  }
+
+  refreshCartWidthControlsUi();
+}
+
+function refreshCartWidthControlsUi() {
+  const canShow =
+    !!cartWidthControlsEnabled && isCartPanelWidthAdjustableInCurrentLayout();
+
+  if (!cartWidthDragHandle) return;
+  cartWidthDragHandle.classList.toggle("hidden", !canShow);
+  cartWidthDragHandle.classList.toggle("is-disabled", !canShow);
+  if (!canShow) {
+    cartWidthDragHandle.classList.remove("is-dragging");
+  }
+}
+
+async function loadCartPanelWidthSetting() {
+  let stored = 0;
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(OPTIONS_CART_PANEL_WIDTH_KEY);
+    stored = clampCartPanelWidthPx(Number(cfgVal || 0));
+  } catch {}
+
+  cartPanelWidthPx = stored;
+  applyCartPanelWidth();
+}
+
+async function saveCartPanelWidthSetting() {
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_CART_PANEL_WIDTH_KEY,
+      clampCartPanelWidthPx(cartPanelWidthPx),
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar ancho del carrito:", e);
+  }
+}
+
+async function setCartPanelWidthPx(nextWidth, opts = {}) {
+  const { persist = true } = opts;
+  cartPanelWidthPx = clampCartPanelWidthPx(nextWidth);
+  applyCartPanelWidth();
+  if (persist) await saveCartPanelWidthSetting();
+}
+
+async function loadCartWidthControlsToggle() {
+  let enabled = false;
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(OPTIONS_CART_WIDTH_CONTROLS_KEY);
+    enabled = parseBoolLike(cfgVal, false);
+  } catch {}
+
+  cartWidthControlsEnabled = !!enabled;
+  if (cartWidthControlsToggle) {
+    cartWidthControlsToggle.checked = cartWidthControlsEnabled;
+  }
+  refreshCartWidthControlsUi();
+}
+
+async function saveCartWidthControlsToggle(enabled) {
+  cartWidthControlsEnabled = !!enabled;
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_CART_WIDTH_CONTROLS_KEY,
+      cartWidthControlsEnabled,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar controles de ancho del carrito:", e);
+  }
+
+  refreshCartWidthControlsUi();
+}
+
+function bindCartWidthControlsToggleOnce() {
+  if (cartWidthControlsToggleBound) return;
+  cartWidthControlsToggleBound = true;
+  if (!cartWidthControlsToggle) return;
+
+  cartWidthControlsToggle.addEventListener("change", async () => {
+    await saveCartWidthControlsToggle(!!cartWidthControlsToggle.checked);
+  });
+}
+
+function bindCartWidthDragHandleOnce() {
+  if (cartWidthDragHandleBound) return;
+  cartWidthDragHandleBound = true;
+  if (!cartWidthDragHandle) return;
+
+  const stopDrag = async () => {
+    if (!cartWidthDragActive) return;
+    cartWidthDragActive = false;
+    cartWidthDragHandle.classList.remove("is-dragging");
+    document.body.classList.remove("cart-width-dragging");
+    await saveCartPanelWidthSetting();
+  };
+
+  cartWidthDragHandle.addEventListener("pointerdown", (ev) => {
+    if (
+      !cartWidthControlsEnabled ||
+      !isCartPanelWidthAdjustableInCurrentLayout()
+    )
+      return;
+
+    const card = document.querySelector(".cart-card");
+    if (!card) return;
+
+    ev.preventDefault();
+    const measured = Number(card.getBoundingClientRect?.().width || 0);
+    cartWidthDragStartWidth = clampCartPanelWidthPx(
+      measured || cartPanelWidthPx,
+    );
+    if (cartWidthDragStartWidth <= 0) {
+      cartWidthDragStartWidth = CART_PANEL_WIDTH_PX_MIN;
+    }
+
+    cartWidthDragStartX = Number(ev.clientX || 0);
+    cartWidthDragActive = true;
+    cartWidthDragHandle.classList.add("is-dragging");
+    document.body.classList.add("cart-width-dragging");
+
+    try {
+      cartWidthDragHandle.setPointerCapture(ev.pointerId);
+    } catch {}
+  });
+
+  cartWidthDragHandle.addEventListener("pointermove", (ev) => {
+    if (!cartWidthDragActive) return;
+    const deltaX = Number(ev.clientX || 0) - cartWidthDragStartX;
+    const nextWidth = cartWidthDragStartWidth - deltaX;
+    cartPanelWidthPx = clampCartPanelWidthPx(nextWidth);
+    applyCartPanelWidth();
+  });
+
+  cartWidthDragHandle.addEventListener("pointerup", () => {
+    stopDrag();
+  });
+
+  cartWidthDragHandle.addEventListener("pointercancel", () => {
+    stopDrag();
+  });
+}
+
+async function loadTariffCustomersCache(opts = {}) {
+  const force = !!opts?.force;
+  if (tariffCustomersCache.length && !force) return tariffCustomersCache;
+
+  try {
+    const rows = await fetchApiResourceWithParams("clientes", {
+      "sort[codcliente]": "DESC",
+      limit: 0,
+    });
+
+    tariffCustomersCache = (Array.isArray(rows) ? rows : [])
+      .filter((c) => !c?.debaja)
+      .map((c) => ({
+        codcliente: String(c?.codcliente || "").trim(),
+        nombre: String(c?.nombre || c?.razonsocial || "").trim(),
+        codtarifa: String(c?.codtarifa || "").trim(),
+      }))
+      .filter((c) => !!c.codcliente);
+  } catch (e) {
+    console.warn("No se pudieron cargar clientes para tarifas:", e);
+    tariffCustomersCache = [];
+  }
+
+  return tariffCustomersCache;
+}
+
+function getSelectedTariffCodeInOptions() {
+  const sel = document.getElementById("tariffSelect");
+  return String(sel?.value || "").trim();
+}
+
+function renderTariffSummaryInOptions(tariff) {
+  const summary = document.getElementById("tariffSummaryText");
+  if (!summary) return;
+  summary.textContent = getTariffSummaryText(tariff);
+}
+
+function renderTariffEditorFields(tariff) {
+  const nameInp = document.getElementById("tariffNameInput");
+  const formulaSel = document.getElementById("tariffFormulaSelect");
+  const valXInp = document.getElementById("tariffValorXInput");
+  const valYInp = document.getElementById("tariffValorYInput");
+  const minToggle = document.getElementById("tariffMinCosteToggle");
+  const maxToggle = document.getElementById("tariffMaxPvpToggle");
+  const saveBtn = document.getElementById("tariffSaveAllBtn");
+  const revertBtn = document.getElementById("tariffRevertBtn");
+  const deleteBtn = document.getElementById("tariffDeleteBtn");
+
+  const disabled = !tariff;
+  if (nameInp) {
+    nameInp.disabled = disabled;
+    nameInp.value = disabled ? "" : String(tariff.nombre || "").trim();
+  }
+
+  if (formulaSel) {
+    formulaSel.disabled = disabled;
+    formulaSel.value = disabled
+      ? "pvp"
+      : normalizeTariffApplyMode(tariff.aplicar) === "coste"
+        ? "coste"
+        : "pvp";
+  }
+
+  if (valXInp) {
+    valXInp.disabled = disabled;
+    valXInp.value = disabled ? "" : String(Number(tariff.valorx || 0));
+  }
+
+  if (valYInp) {
+    valYInp.disabled = disabled;
+    valYInp.value = disabled ? "" : String(Number(tariff.valory || 0));
+  }
+
+  if (minToggle) {
+    minToggle.disabled = disabled;
+    minToggle.checked = !disabled && !!tariff.mincoste;
+  }
+
+  if (maxToggle) {
+    maxToggle.disabled = disabled;
+    maxToggle.checked = !disabled && !!tariff.maxpvp;
+  }
+
+  if (saveBtn) saveBtn.disabled = disabled;
+  if (revertBtn) revertBtn.disabled = disabled;
+  if (deleteBtn) deleteBtn.disabled = disabled;
+}
+
+function renderTariffSelectOptions(selectedCod = "") {
+  const sel = document.getElementById("tariffSelect");
+  if (!sel) return;
+
+  if (!customerTariffCatalog.length) {
+    sel.innerHTML = `<option value="">(sin tarifas)</option>`;
+    sel.disabled = true;
+    renderTariffSummaryInOptions(null);
+    renderTariffEditorFields(null);
+    return;
+  }
+
+  sel.disabled = false;
+  sel.innerHTML = customerTariffCatalog
+    .map((t) => {
+      const selected =
+        String(t.codtarifa) === String(selectedCod || "") ? "selected" : "";
+      const label = `${t.codtarifa} | ${t.nombre}`;
+      return `<option value="${escapeHtml(t.codtarifa)}" ${selected}>${escapeHtml(label)}</option>`;
+    })
+    .join("");
+
+  if (!sel.value) sel.value = String(customerTariffCatalog[0]?.codtarifa || "");
+  const selectedTariff = findTariffByCode(String(sel.value || ""));
+  renderTariffSummaryInOptions(selectedTariff);
+  renderTariffEditorFields(selectedTariff || null);
+}
+
+async function renderTariffCustomerSelectForTariff(codtarifa, opts = {}) {
+  const list = document.getElementById("tariffCustomerChecklist");
+  if (!list) return;
+
+  const cod = String(codtarifa || "").trim();
+  if (!cod) {
+    list.innerHTML = `<div class="tariff-customer-check-empty">Selecciona una tarifa.</div>`;
+    delete tariffAssignedCustomersByCode[cod];
+    updateTariffCustomersSelectedCount(cod);
+    return;
+  }
+
+  const force = !!opts?.force;
+  const keepLocalSelection = opts?.keepLocalSelection !== false;
+  const skipBaselineUpdate = !!opts?.skipBaselineUpdate;
+  const customers = await loadTariffCustomersCache({ force });
+
+  let serverAssignedCodes = tariffAssignedServerCodesByCode[cod];
+  if (!Array.isArray(serverAssignedCodes) || force) {
+    try {
+      const rows = await fetchApiResourceWithParams("clientes", {
+        "filter[codtarifa]": cod,
+        limit: 0,
+      });
+      serverAssignedCodes = (Array.isArray(rows) ? rows : [])
+        .filter((x) => !x?.debaja)
+        .map((x) => String(x?.codcliente || "").trim())
+        .filter(Boolean);
+    } catch (e) {
+      console.warn("No se pudo cargar cliente de la tarifa:", e);
+      serverAssignedCodes = customers
+        .filter((c) => String(c.codtarifa || "") === cod)
+        .map((c) => String(c.codcliente || "").trim())
+        .filter(Boolean);
+    }
+    tariffAssignedServerCodesByCode[cod] =
+      getUniqueTariffCustomerCodes(serverAssignedCodes);
+  }
+
+  const search = getTariffCustomerSearchText();
+  const localAssigned = tariffAssignedCustomersByCode[cod] || [];
+  const selectedSet = new Set(
+    keepLocalSelection && Array.isArray(localAssigned) && localAssigned.length
+      ? localAssigned
+          .map((x) => String(x?.codcliente || "").trim())
+          .filter(Boolean)
+      : tariffAssignedServerCodesByCode[cod] || [],
+  );
+
+  if (!customers.length) {
+    list.innerHTML = `<div class="tariff-customer-check-empty">No hay clientes disponibles.</div>`;
+    setAssignedCustomersForTariff(cod, []);
+    updateTariffCustomersSelectedCount(cod);
+    renderTariffSummaryInOptions(findTariffByCode(cod));
+    return;
+  }
+
+  const visible = customers.filter((c) => {
+    if (!search) return true;
+    const hay = `${c.codcliente} ${c.nombre}`.toLowerCase();
+    return hay.includes(search);
+  });
+
+  const markedVisible = visible.filter((c) =>
+    selectedSet.has(String(c.codcliente || "").trim()),
+  );
+  const unmarkedVisible = visible.filter(
+    (c) => !selectedSet.has(String(c.codcliente || "").trim()),
+  );
+
+  const renderCustomerRow = (c) => {
+    const cc = String(c.codcliente || "").trim();
+    const label = `${c.codcliente} | ${c.nombre || "-"}`;
+    const checked = selectedSet.has(cc) ? "checked" : "";
+    return `<label class="tariff-customer-check-item"><input type="checkbox" data-role="tariff-customer-check" data-codcliente="${escapeHtml(cc)}" ${checked} /><span>${escapeHtml(label)}</span></label>`;
+  };
+
+  if (!visible.length) {
+    list.innerHTML = `<div class="tariff-customer-check-empty">Sin resultados para la búsqueda.</div>`;
+  } else {
+    const markedHtml = markedVisible.length
+      ? markedVisible.map((c) => renderCustomerRow(c)).join("")
+      : `<div class="tariff-customer-check-empty">No hay clientes marcados en este filtro.</div>`;
+
+    const unmarkedHtml = unmarkedVisible.length
+      ? unmarkedVisible.map((c) => renderCustomerRow(c)).join("")
+      : `<div class="tariff-customer-check-empty">No hay clientes sin marcar en este filtro.</div>`;
+
+    list.innerHTML = `
+      <div class="tariff-customer-check-group-title">Clientes marcados (${markedVisible.length})</div>
+      ${markedHtml}
+      <div class="tariff-customer-check-group-title">Clientes no marcados (${unmarkedVisible.length})</div>
+      ${unmarkedHtml}
+    `;
+  }
+
+  setAssignedCustomersForTariff(
+    cod,
+    customers
+      .filter((c) => selectedSet.has(String(c.codcliente || "").trim()))
+      .map((c) => ({
+        codcliente: String(c.codcliente || "").trim(),
+        nombre: String(c.nombre || "").trim(),
+      })),
+  );
+
+  updateTariffCustomersSelectedCount(cod);
+
+  if (!skipBaselineUpdate) {
+    const tariff = findTariffByCode(cod);
+    if (!getTariffEditBaseline(cod) || force) {
+      captureTariffEditBaseline(
+        cod,
+        tariff,
+        tariffAssignedServerCodesByCode[cod],
+      );
+    }
+  }
+
+  renderTariffSummaryInOptions(findTariffByCode(cod));
+}
+
+async function loadTariffManagerOptionsData(opts = {}) {
+  const force = !!opts?.force;
+  const prev = getSelectedTariffCodeInOptions();
+
+  try {
+    await ensureCustomerTariffsLoaded({ force });
+  } catch (e) {
+    console.warn("No se pudieron cargar tarifas:", e);
+  }
+
+  renderTariffSelectOptions(prev);
+
+  const codtarifa = getSelectedTariffCodeInOptions();
+  await renderTariffCustomerSelectForTariff(codtarifa, { force });
+}
+
+async function updateClienteCodtarifa(codcliente, codtarifa) {
+  const cod = String(codcliente || "").trim();
+  if (!cod) throw new Error("Cliente inválido.");
+
+  const payload = {
+    codtarifa: String(codtarifa || "").trim(),
+  };
+
+  try {
+    await apiWrite(`clientes/${encodeURIComponent(cod)}`, "PATCH", payload);
+    return;
+  } catch {
+    await apiWrite(`clientes/${encodeURIComponent(cod)}`, "PUT", payload);
+  }
+}
+
+async function updateTarifaByCode(codtarifa, payload) {
+  const cod = String(codtarifa || "").trim();
+  if (!cod) throw new Error("Tarifa inválida.");
+
+  try {
+    await apiWrite(`tarifas/${encodeURIComponent(cod)}`, "PATCH", payload);
+    return;
+  } catch {
+    await apiWrite(`tarifas/${encodeURIComponent(cod)}`, "PUT", payload);
+  }
+}
+
+function buildTariffPayloadFromOptionsForm(opts = {}) {
+  const includeName = opts?.includeName !== false;
+  const nameInp = document.getElementById("tariffNameInput");
+  const formulaSel = document.getElementById("tariffFormulaSelect");
+  const valXInp = document.getElementById("tariffValorXInput");
+  const valYInp = document.getElementById("tariffValorYInput");
+  const minToggle = document.getElementById("tariffMinCosteToggle");
+  const maxToggle = document.getElementById("tariffMaxPvpToggle");
+
+  const payload = {
+    aplicar:
+      normalizeTariffApplyMode(formulaSel?.value) === "coste" ? "coste" : "pvp",
+    valorx: clampDiscountPercent(parseNumericLike(valXInp?.value, 0)),
+    valory: round2(parseNumericLike(valYInp?.value, 0) || 0),
+    mincoste: !!minToggle?.checked,
+    maxpvp: !!maxToggle?.checked,
+  };
+
+  if (includeName) {
+    payload.nombre = String(nameInp?.value || "").trim();
+  }
+
+  return payload;
+}
+
+async function createTariffFromOptions() {
+  const input = document.getElementById("tariffCreateNameInput");
+  const btn = document.getElementById("tariffCreateBtn");
+  const name = String(input?.value || "").trim();
+
+  if (!name) {
+    toast("Escribe un nombre para la nueva tarifa.", "warn", "Tarifas");
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  try {
+    const payload = {
+      nombre: name,
+      ...buildTariffPayloadFromOptionsForm({ includeName: false }),
+    };
+
+    await apiWrite("tarifas", "POST", payload);
+    await loadTariffManagerOptionsData({ force: true });
+
+    const found = customerTariffCatalog.find(
+      (t) =>
+        String(t.nombre || "")
+          .trim()
+          .toLowerCase() === name.toLowerCase(),
+    );
+
+    const tariffSel = document.getElementById("tariffSelect");
+    if (tariffSel && found?.codtarifa) {
+      tariffSel.value = String(found.codtarifa);
+      tariffSel.dispatchEvent(new Event("change"));
+    }
+
+    if (input) input.value = "";
+    toast("Tarifa creada correctamente.", "ok", "Tarifas");
+  } catch (e) {
+    toast("No se pudo crear la tarifa: " + (e?.message || e), "err", "Tarifas");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function saveTariffAndAssignmentFromOptions() {
+  const saveBtn = document.getElementById("tariffSaveAllBtn");
+  const codtarifa = getSelectedTariffCodeInOptions();
+  const targetCustomers =
+    tariffAssignedCustomersByCode[String(codtarifa || "")] || [];
+  const targetCodes = new Set(
+    targetCustomers
+      .map((c) => String(c?.codcliente || "").trim())
+      .filter(Boolean),
+  );
+
+  if (!codtarifa) {
+    toast("Selecciona una tarifa válida.", "warn", "Tarifas");
+    return;
+  }
+
+  const payload = buildTariffPayloadFromOptionsForm({ includeName: true });
+  if (!String(payload?.nombre || "").trim()) {
+    toast("El nombre de la tarifa no puede estar vacío.", "warn", "Tarifas");
+    return;
+  }
+
+  if (saveBtn) saveBtn.disabled = true;
+  try {
+    await updateTarifaByCode(codtarifa, payload);
+
+    const currentRows = await fetchApiResourceWithParams("clientes", {
+      "filter[codtarifa]": codtarifa,
+      limit: 0,
+    });
+
+    const currentAssigned = (Array.isArray(currentRows) ? currentRows : [])
+      .filter((c) => !c?.debaja)
+      .map((c) => String(c?.codcliente || "").trim())
+      .filter(Boolean);
+
+    for (const cod of currentAssigned) {
+      if (cod && !targetCodes.has(cod)) {
+        await updateClienteCodtarifa(cod, "");
+      }
+    }
+
+    for (const cod of targetCodes) {
+      await updateClienteCodtarifa(cod, codtarifa);
+    }
+
+    tariffCustomersCache = [];
+    delete tariffAssignedServerCodesByCode[String(codtarifa || "")];
+    await loadTariffManagerOptionsData({ force: true });
+
+    await refreshActiveCustomerTariffForSelection(
+      window.CUSTOMER_SELECTOR?.getSelectedCustomer?.() || null,
+      { forceTariffs: true, forceCustomer: true },
+    );
+
+    toast("Tarifa y cliente guardados correctamente.", "ok", "Tarifas");
+  } catch (e) {
+    toast(
+      "No se pudieron guardar los cambios de tarifa: " + (e?.message || e),
+      "err",
+      "Tarifas",
+    );
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
+async function deleteTariffByCode(codtarifa) {
+  const cod = String(codtarifa || "").trim();
+  if (!cod) throw new Error("Tarifa inválida.");
+  await apiWrite(`tarifas/${encodeURIComponent(cod)}`, "DELETE");
+}
+
+async function deleteTariffFromOptions() {
+  const codtarifa = getSelectedTariffCodeInOptions();
+  const saveBtn = document.getElementById("tariffSaveAllBtn");
+  const deleteBtn = document.getElementById("tariffDeleteBtn");
+  const revertBtn = document.getElementById("tariffRevertBtn");
+
+  if (!codtarifa) {
+    toast("Selecciona una tarifa válida.", "warn", "Tarifas");
+    return;
+  }
+
+  const tariff = findTariffByCode(codtarifa);
+  const name = String(tariff?.nombre || `Tarifa ${codtarifa}`).trim();
+  const ok = window.confirm(
+    `¿Seguro que quieres borrar la tarifa "${name}"? Se desasignará de sus clientes.`,
+  );
+  if (!ok) return;
+
+  if (saveBtn) saveBtn.disabled = true;
+  if (deleteBtn) deleteBtn.disabled = true;
+  if (revertBtn) revertBtn.disabled = true;
+
+  try {
+    const currentRows = await fetchApiResourceWithParams("clientes", {
+      "filter[codtarifa]": codtarifa,
+      limit: 0,
+    });
+
+    const currentAssigned = (Array.isArray(currentRows) ? currentRows : [])
+      .filter((c) => !c?.debaja)
+      .map((c) => String(c?.codcliente || "").trim())
+      .filter(Boolean);
+
+    for (const cod of currentAssigned) {
+      await updateClienteCodtarifa(cod, "");
+    }
+
+    await deleteTariffByCode(codtarifa);
+
+    delete tariffAssignedCustomersByCode[String(codtarifa || "")];
+    delete tariffAssignedServerCodesByCode[String(codtarifa || "")];
+    delete tariffEditBaselineByCode[String(codtarifa || "")];
+
+    tariffCustomersCache = [];
+    await loadTariffManagerOptionsData({ force: true });
+
+    await refreshActiveCustomerTariffForSelection(
+      window.CUSTOMER_SELECTOR?.getSelectedCustomer?.() || null,
+      { forceTariffs: true, forceCustomer: true },
+    );
+
+    toast("Tarifa borrada correctamente.", "ok", "Tarifas");
+  } catch (e) {
+    toast(
+      "No se pudo borrar la tarifa: " + (e?.message || e),
+      "err",
+      "Tarifas",
+    );
+  } finally {
+    const selectedTariff = findTariffByCode(getSelectedTariffCodeInOptions());
+    renderTariffEditorFields(selectedTariff || null);
+  }
+}
+
+async function revertTariffOptionsChanges() {
+  const cod = getSelectedTariffCodeInOptions();
+  if (!cod) {
+    toast("Selecciona una tarifa válida.", "warn", "Tarifas");
+    return;
+  }
+
+  const baseline = getTariffEditBaseline(cod);
+  if (!baseline) {
+    await loadTariffManagerOptionsData({ force: true });
+    toast(
+      "No había estado inicial guardado. Se recargó desde la API.",
+      "warn",
+      "Tarifas",
+    );
+    return;
+  }
+
+  const nameInp = document.getElementById("tariffNameInput");
+  const formulaSel = document.getElementById("tariffFormulaSelect");
+  const valXInp = document.getElementById("tariffValorXInput");
+  const valYInp = document.getElementById("tariffValorYInput");
+  const minToggle = document.getElementById("tariffMinCosteToggle");
+  const maxToggle = document.getElementById("tariffMaxPvpToggle");
+  const searchInp = document.getElementById("tariffCustomerSearchInput");
+
+  if (nameInp) nameInp.value = String(baseline.nombre || "");
+  if (formulaSel)
+    formulaSel.value = baseline.aplicar === "coste" ? "coste" : "pvp";
+  if (valXInp) valXInp.value = String(baseline.valorx || 0);
+  if (valYInp) valYInp.value = String(baseline.valory || 0);
+  if (minToggle) minToggle.checked = !!baseline.mincoste;
+  if (maxToggle) maxToggle.checked = !!baseline.maxpvp;
+  if (searchInp) searchInp.value = String(baseline.searchText || "");
+
+  setAssignedCustomersForTariff(
+    cod,
+    buildTariffCustomersFromCodes(baseline.assignedCodes),
+  );
+  await renderTariffCustomerSelectForTariff(cod, {
+    force: false,
+    keepLocalSelection: true,
+    skipBaselineUpdate: true,
+  });
+
+  renderTariffSummaryInOptions(findTariffByCode(cod));
+  toast("Cambios revertidos al estado inicial.", "ok", "Tarifas");
+}
+
+function bindTariffInputVirtualKeyboardsOnce() {
+  if (tariffInputKeyboardBound) return;
+  tariffInputKeyboardBound = true;
+
+  const createNameInput = document.getElementById("tariffCreateNameInput");
+  const tariffNameInput = document.getElementById("tariffNameInput");
+  const valueXInput = document.getElementById("tariffValorXInput");
+  const valueYInput = document.getElementById("tariffValorYInput");
+
+  const openTariffNumPad = (inputEl, label) => {
+    if (!inputEl) return;
+
+    const raw = String(inputEl.value || "")
+      .trim()
+      .replace(",", ".");
+    const initial = raw === "" ? 0 : Number(raw);
+
+    openNumPad(
+      Number.isFinite(initial) ? initial : 0,
+      (nextValue, meta = {}) => {
+        if (meta?.phase !== "confirm") return;
+
+        const n = Number(nextValue);
+        if (!Number.isFinite(n)) return;
+
+        inputEl.value = String(round2(n));
+        inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+        inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+      },
+      label,
+      "qty",
+      null,
+      null,
+    );
+  };
+
+  const bindPointerOpen = (inputEl, openFn) => {
+    if (!inputEl || typeof openFn !== "function") return;
+
+    inputEl.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      openFn();
+    });
+  };
+
+  bindPointerOpen(createNameInput, () => {
+    window.TPV_QWERTY?.openForInput?.(createNameInput, "text");
+  });
+
+  bindPointerOpen(tariffNameInput, () => {
+    window.TPV_QWERTY?.openForInput?.(tariffNameInput, "text");
+  });
+
+  bindPointerOpen(valueXInput, () => {
+    openTariffNumPad(valueXInput, "Tarifa %");
+  });
+
+  bindPointerOpen(valueYInput, () => {
+    openTariffNumPad(valueYInput, "Tarifa EUR");
+  });
+}
+
+function bindTariffOptionsOnce() {
+  if (tariffOptionsBound) return;
+  tariffOptionsBound = true;
+
+  const tariffSel = document.getElementById("tariffSelect");
+  const refreshBtn = document.getElementById("tariffRefreshBtn");
+  const createBtn = document.getElementById("tariffCreateBtn");
+  const saveAllBtn = document.getElementById("tariffSaveAllBtn");
+  const revertBtn = document.getElementById("tariffRevertBtn");
+  const deleteBtn = document.getElementById("tariffDeleteBtn");
+  const customerList = document.getElementById("tariffCustomerChecklist");
+  const customerSearchInput = document.getElementById(
+    "tariffCustomerSearchInput",
+  );
+  const customerSearchKbBtn = document.getElementById(
+    "tariffCustomerSearchKeyboardBtn",
+  );
+  const selectVisibleBtn = document.getElementById(
+    "tariffCustomersSelectVisibleBtn",
+  );
+  const clearVisibleBtn = document.getElementById(
+    "tariffCustomersClearVisibleBtn",
+  );
+
+  bindTariffInputVirtualKeyboardsOnce();
+
+  tariffSel?.addEventListener("change", async () => {
+    const searchInput = document.getElementById("tariffCustomerSearchInput");
+    if (searchInput) searchInput.value = "";
+
+    const cod = getSelectedTariffCodeInOptions();
+    const tariff = findTariffByCode(cod);
+    renderTariffSummaryInOptions(tariff);
+    renderTariffEditorFields(tariff);
+    await renderTariffCustomerSelectForTariff(cod, { force: false });
+  });
+
+  refreshBtn?.addEventListener("click", async () => {
+    await loadTariffManagerOptionsData({ force: true });
+  });
+
+  createBtn?.addEventListener("click", async () => {
+    await createTariffFromOptions();
+  });
+
+  saveAllBtn?.addEventListener("click", async () => {
+    await saveTariffAndAssignmentFromOptions();
+  });
+
+  revertBtn?.addEventListener("click", async () => {
+    await revertTariffOptionsChanges();
+  });
+
+  deleteBtn?.addEventListener("click", async () => {
+    await deleteTariffFromOptions();
+  });
+
+  customerSearchInput?.addEventListener("input", async () => {
+    const cod = getSelectedTariffCodeInOptions();
+    await renderTariffCustomerSelectForTariff(cod, {
+      force: false,
+      keepLocalSelection: true,
+      skipBaselineUpdate: true,
+    });
+  });
+
+  customerSearchInput?.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    window.TPV_QWERTY?.openForInput?.(customerSearchInput, "text");
+  });
+
+  customerSearchKbBtn?.addEventListener("click", () => {
+    if (!customerSearchInput) return;
+    window.TPV_QWERTY?.openForInput?.(customerSearchInput, "text");
+  });
+
+  selectVisibleBtn?.addEventListener("click", async () => {
+    const cod = getSelectedTariffCodeInOptions();
+    const selected = getAssignedCustomerSetForTariff(cod);
+    const checks = Array.from(
+      customerList?.querySelectorAll(
+        'input[data-role="tariff-customer-check"]',
+      ) || [],
+    );
+
+    checks.forEach((el) => {
+      const cc = String(el.getAttribute("data-codcliente") || "").trim();
+      if (cc) selected.add(cc);
+      el.checked = true;
+    });
+
+    const customers = tariffCustomersCache || [];
+    setAssignedCustomersForTariff(
+      cod,
+      customers.filter((c) => selected.has(String(c?.codcliente || "").trim())),
+    );
+    updateTariffCustomersSelectedCount(cod);
+    renderTariffSummaryInOptions(findTariffByCode(cod));
+  });
+
+  clearVisibleBtn?.addEventListener("click", async () => {
+    const cod = getSelectedTariffCodeInOptions();
+    const selected = getAssignedCustomerSetForTariff(cod);
+    const checks = Array.from(
+      customerList?.querySelectorAll(
+        'input[data-role="tariff-customer-check"]',
+      ) || [],
+    );
+
+    checks.forEach((el) => {
+      const cc = String(el.getAttribute("data-codcliente") || "").trim();
+      if (cc) selected.delete(cc);
+      el.checked = false;
+    });
+
+    const customers = tariffCustomersCache || [];
+    setAssignedCustomersForTariff(
+      cod,
+      customers.filter((c) => selected.has(String(c?.codcliente || "").trim())),
+    );
+    updateTariffCustomersSelectedCount(cod);
+    renderTariffSummaryInOptions(findTariffByCode(cod));
+  });
+
+  customerList?.addEventListener("change", () => {
+    const checks = Array.from(
+      customerList.querySelectorAll('input[data-role="tariff-customer-check"]'),
+    );
+    const cod = getSelectedTariffCodeInOptions();
+    const customers = tariffCustomersCache || [];
+
+    setAssignedCustomersForTariff(
+      cod,
+      checks
+        .filter((el) => !!el.checked)
+        .map((el) => String(el.getAttribute("data-codcliente") || "").trim())
+        .filter(Boolean)
+        .map((cc) => {
+          const found = customers.find(
+            (c) => String(c?.codcliente || "").trim() === cc,
+          );
+          return {
+            codcliente: cc,
+            nombre: String(found?.nombre || "").trim(),
+          };
+        }),
+    );
+
+    updateTariffCustomersSelectedCount(cod);
+    renderTariffSummaryInOptions(findTariffByCode(cod));
+  });
+}
+
+async function loadSafeTrainingModeToggle() {
+  const el = document.getElementById("safeTrainingModeToggle");
+  let enabled = false;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(OPTIONS_SAFE_TRAINING_MODE_KEY);
+    if (cfgVal !== undefined && cfgVal !== null && cfgVal !== "") {
+      enabled = parseBoolLike(cfgVal, false);
+    }
+  } catch {}
+
+  safeTrainingModeEnabled = !!enabled;
+  applySafeTrainingModeUi();
+  if (el) el.checked = safeTrainingModeEnabled;
+}
+
+async function saveSafeTrainingModeToggle(enabled) {
+  safeTrainingModeEnabled = !!enabled;
+  applySafeTrainingModeUi();
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_SAFE_TRAINING_MODE_KEY,
+      safeTrainingModeEnabled,
+    );
+  } catch {}
+}
+
+async function enterSafeTrainingMode() {
+  safeTrainingRuntimeSnapshot = {
+    cart: JSON.parse(JSON.stringify(Array.isArray(cart) ? cart : [])),
+    currentParkedTicketIndex:
+      currentParkedTicketIndex != null
+        ? Number(currentParkedTicketIndex)
+        : null,
+  };
+
+  await saveSafeTrainingModeToggle(true);
+  cart = [];
+  currentParkedTicketIndex = null;
+  renderCart();
+  refreshParkButtonUI?.();
+  refreshParkedEditingBanner?.();
+}
+
+async function exitSafeTrainingMode() {
+  const snap = safeTrainingRuntimeSnapshot;
+  await saveSafeTrainingModeToggle(false);
+
+  if (!snap) return;
+  cart = JSON.parse(JSON.stringify(Array.isArray(snap.cart) ? snap.cart : []));
+  currentParkedTicketIndex =
+    snap.currentParkedTicketIndex != null
+      ? Number(snap.currentParkedTicketIndex)
+      : null;
+  safeTrainingRuntimeSnapshot = null;
+  renderCart();
+  refreshParkButtonUI?.();
+  refreshParkedEditingBanner?.();
+}
+
+function bindSafeTrainingModeToggleOnce() {
+  if (safeTrainingModeToggleBound) return;
+  safeTrainingModeToggleBound = true;
+
+  const el = document.getElementById("safeTrainingModeToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+    const current = !!safeTrainingModeEnabled;
+    if (wanted === current) return;
+
+    if (wanted) {
+      const ok = await confirmModal(
+        "Entorno de pruebas",
+        "Se activará modo pruebas: no se enviarán cambios reales mientras esté activo. ¿Continuar?",
+      );
+      if (!ok) {
+        el.checked = current;
+        return;
+      }
+      await enterSafeTrainingMode();
+      return;
+    }
+
+    const ok = await confirmModal(
+      "Salir de entorno de pruebas",
+      "Se restaurará el estado anterior guardado. ¿Continuar?",
+    );
+    if (!ok) {
+      el.checked = current;
+      return;
+    }
+
+    await exitSafeTrainingMode();
+  });
 }
 
 async function loadProductStockToggle() {
@@ -2137,6 +4035,21 @@ async function loadProductTileResizeModeToggle() {
   if (el) el.checked = productTileResizeMode;
 }
 
+async function loadScaleManualCaptureModeToggle() {
+  const el = document.getElementById("scaleManualCaptureToggle");
+  let enabled = false;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(
+      OPTIONS_SCALE_MANUAL_CAPTURE_MODE_KEY,
+    );
+    enabled = parseBoolLike(cfgVal, false);
+  } catch {}
+
+  scaleManualCaptureMode = !!enabled;
+  if (el) el.checked = scaleManualCaptureMode;
+}
+
 async function saveProductTileResizeModeToggle(enabled) {
   productTileResizeMode = !!enabled;
 
@@ -2147,6 +4060,19 @@ async function saveProductTileResizeModeToggle(enabled) {
     );
   } catch (e) {
     console.warn("No se pudo guardar modo redimensionar productos:", e);
+  }
+}
+
+async function saveScaleManualCaptureModeToggle(enabled) {
+  scaleManualCaptureMode = !!enabled;
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_SCALE_MANUAL_CAPTURE_MODE_KEY,
+      scaleManualCaptureMode,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar captura manual de bascula:", e);
   }
 }
 
@@ -2618,6 +4544,7 @@ let productStockEditionToggleBound = false;
 let allowCloseWithParkedToggleBound = false;
 let parkStockWarningToggleBound = false;
 let productTileResizeModeToggleBound = false;
+let scaleManualCaptureToggleBound = false;
 let productTileSizeResetBtnBound = false;
 let productSortModeBound = false;
 let productReorderModeBound = false;
@@ -2689,6 +4616,20 @@ function bindProductTileResizeModeToggleOnce() {
   el.addEventListener("change", async () => {
     const wanted = !!el.checked;
     await saveProductTileResizeModeToggle(wanted);
+    renderProducts?.();
+  });
+}
+
+function bindScaleManualCaptureToggleOnce() {
+  if (scaleManualCaptureToggleBound) return;
+  scaleManualCaptureToggleBound = true;
+
+  const el = document.getElementById("scaleManualCaptureToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+    await saveScaleManualCaptureModeToggle(wanted);
     renderProducts?.();
   });
 }
@@ -3818,9 +5759,114 @@ function mapFsLineToTpvPrintLine(l) {
 /* Inicio Cambiar Clientes */
 /*----------------------*/
 
+const CUSTOMER_PRINT_CACHE_KEY = "tpv.customer.print.cache.v1";
+let customerPrintCache = {};
+
+function loadCustomerPrintCache() {
+  try {
+    const raw = localStorage.getItem(CUSTOMER_PRINT_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCustomerPrintCache() {
+  try {
+    localStorage.setItem(
+      CUSTOMER_PRINT_CACHE_KEY,
+      JSON.stringify(customerPrintCache || {}),
+    );
+  } catch {}
+}
+
+customerPrintCache = loadCustomerPrintCache();
+
+function normalizeClientPrintEntry(src) {
+  const cod = String(src?.codcliente || "").trim();
+  if (!cod) return null;
+
+  const nombre = String(src?.nombre || src?.razonsocial || "").trim();
+  const razonsocial = String(src?.razonsocial || src?.nombre || "").trim();
+  const cifnif = String(src?.cifnif || src?.cif || "").trim();
+  const direccion = String(src?.direccion || "").trim();
+  const codpostal = String(src?.codpostal || "").trim();
+  const ciudad = String(src?.ciudad || "").trim();
+
+  return {
+    codcliente: cod,
+    nombre,
+    razonsocial,
+    cifnif,
+    direccion,
+    codpostal,
+    ciudad,
+    updatedAt: Date.now(),
+  };
+}
+
+function upsertCustomerPrintCache(src) {
+  const entry = normalizeClientPrintEntry(src);
+  if (!entry) return;
+  customerPrintCache[entry.codcliente] = {
+    ...(customerPrintCache[entry.codcliente] || {}),
+    ...entry,
+  };
+  saveCustomerPrintCache();
+}
+
+function getCustomerPrintCacheByCod(codcliente) {
+  const cod = String(codcliente || "").trim();
+  if (!cod) return null;
+  return customerPrintCache[cod] || null;
+}
+
+async function refreshCustomerPrintCacheByCod(codcliente) {
+  const cod = String(codcliente || "").trim();
+  if (!cod) return null;
+
+  try {
+    const rows = await fetchApiResourceWithParams("clientes", {
+      limit: 1,
+      "filter[codcliente]": cod,
+    });
+    const cli = Array.isArray(rows) && rows.length ? rows[0] : null;
+    if (cli) {
+      upsertCustomerPrintCache(cli);
+      return cli;
+    }
+  } catch {}
+
+  return null;
+}
+
+async function syncCustomerPrintCacheFromSelection(c) {
+  try {
+    const cod = String(c?.codcliente || "").trim();
+    if (!cod) return;
+
+    const selectorList =
+      typeof window.CUSTOMER_SELECTOR?.listCustomers === "function"
+        ? window.CUSTOMER_SELECTOR.listCustomers()
+        : [];
+
+    const fromList = Array.isArray(selectorList)
+      ? selectorList.find((x) => String(x?.codcliente || "").trim() === cod)
+      : null;
+
+    if (fromList?._raw) upsertCustomerPrintCache(fromList._raw);
+    else if (fromList) upsertCustomerPrintCache(fromList);
+    else upsertCustomerPrintCache(c);
+
+    refreshCustomerPrintCacheByCod(cod).catch(() => {});
+  } catch {}
+}
+
 function renderSelectedCustomerInCartHeader(c) {
   const input = document.getElementById("cartCustomerInput");
   const btnClear = document.getElementById("cartCustomerClear");
+  const btnEdit = document.getElementById("cartCustomerEdit");
 
   const nom = String(c?.nombre || "Ventas tickets");
 
@@ -3828,12 +5874,137 @@ function renderSelectedCustomerInCartHeader(c) {
 
   const isDefault = !!c?.isDefault;
   if (btnClear) btnClear.style.display = isDefault ? "none" : "";
+  if (btnEdit) btnEdit.classList.toggle("hidden", isDefault);
+
+  refreshActiveCustomerTariffForSelection(c).catch(() => {});
+}
+
+function renderCartCustomerTariffBadge() {
+  const badge = document.getElementById("cartCustomerTariffBadge");
+  if (!badge) return;
+
+  if (!activeCustomerTariff) {
+    badge.classList.add("hidden");
+    badge.textContent = "Tarifa";
+    badge.removeAttribute("title");
+    return;
+  }
+
+  const discountText = getTariffDiscountDisplayText(activeCustomerTariff);
+  badge.textContent = `Tarifa: ${discountText}`;
+  badge.title = `${activeCustomerTariff.nombre} (${discountText})`;
+  badge.classList.remove("hidden");
+}
+
+function setActiveCustomerTariffState(tariff, codcliente) {
+  const nextTariffCod = String(tariff?.codtarifa || "").trim();
+  const nextCustomerCod = String(codcliente || "").trim();
+  const prevTariffCod = String(activeCustomerTariff?.codtarifa || "").trim();
+
+  const changed =
+    nextTariffCod !== prevTariffCod ||
+    nextCustomerCod !== String(activeCustomerTariffCodcliente || "").trim();
+
+  activeCustomerTariff = tariff || null;
+  activeCustomerTariffCodcliente = nextCustomerCod;
+
+  renderCartCustomerTariffBadge();
+  if (changed) renderCart?.();
+}
+
+async function ensureCustomerTariffsLoaded(opts = {}) {
+  const force = !!opts?.force;
+  if (tariffsLoadedOnce && !force) return customerTariffCatalog;
+
+  const rows = await fetchApiResourceWithParams("tarifas", { limit: 0 });
+  const list = (Array.isArray(rows) ? rows : [])
+    .map((row) => normalizeTariffRow(row))
+    .filter(Boolean)
+    .sort((a, b) => Number(a.codtarifa) - Number(b.codtarifa));
+
+  customerTariffCatalog = list;
+  customerTariffByCode = list.reduce((acc, item) => {
+    acc[item.codtarifa] = item;
+    return acc;
+  }, {});
+  tariffsLoadedOnce = true;
+
+  return customerTariffCatalog;
+}
+
+function getCustomerFromSelectorByCod(codcliente) {
+  const cod = String(codcliente || "").trim();
+  if (!cod) return null;
+
+  const list =
+    typeof window.CUSTOMER_SELECTOR?.listCustomers === "function"
+      ? window.CUSTOMER_SELECTOR.listCustomers()
+      : [];
+
+  if (!Array.isArray(list) || !list.length) return null;
+  return (
+    list.find((item) => String(item?.codcliente || "").trim() === cod) || null
+  );
+}
+
+async function resolveCustomerTariffForCodcliente(codcliente, opts = {}) {
+  const cod = String(codcliente || "").trim();
+  if (!cod || cod === "1") return null;
+
+  const forceTariffs = !!opts?.forceTariffs;
+  const forceCustomer = !!opts?.forceCustomer;
+
+  let codtarifa = "";
+  const fromSelector = getCustomerFromSelectorByCod(cod);
+  if (fromSelector?._raw) {
+    codtarifa = String(fromSelector._raw.codtarifa || "").trim();
+  }
+
+  if (!codtarifa || forceCustomer) {
+    const cli = await fetchClienteByCodcliente(cod);
+    if (!codtarifa) codtarifa = String(cli?.codtarifa || "").trim();
+  }
+
+  if (!codtarifa) return null;
+
+  await ensureCustomerTariffsLoaded({ force: forceTariffs });
+  let tariff = findTariffByCode(codtarifa);
+  if (tariff) return tariff;
+
+  await ensureCustomerTariffsLoaded({ force: true });
+  tariff = findTariffByCode(codtarifa);
+  return tariff || null;
+}
+
+async function refreshActiveCustomerTariffForSelection(c, opts = {}) {
+  const cod = String(
+    c?.codcliente ||
+      window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() ||
+      "",
+  ).trim();
+
+  if (!cod || cod === "1") {
+    setActiveCustomerTariffState(null, cod || "1");
+    return;
+  }
+
+  try {
+    const tariff = await resolveCustomerTariffForCodcliente(cod, {
+      forceTariffs: !!opts?.forceTariffs,
+      forceCustomer: !!opts?.forceCustomer,
+    });
+    setActiveCustomerTariffState(tariff, cod);
+  } catch (e) {
+    console.warn("No se pudo resolver tarifa del cliente:", e?.message || e);
+    setActiveCustomerTariffState(null, cod);
+  }
 }
 
 function bindCartCustomerUiEvents() {
   const input = document.getElementById("cartCustomerInput");
   const btnList = document.getElementById("cartCustomerListBtn");
   const btnOpen = document.getElementById("cartCustomerOpen");
+  const btnEdit = document.getElementById("cartCustomerEdit");
   const btnClear = document.getElementById("cartCustomerClear");
 
   const openList = () => {
@@ -3844,10 +6015,32 @@ function bindCartCustomerUiEvents() {
     if (TPV_LOADING) return;
     window.CUSTOMER_SELECTOR?.openCreate?.();
   };
+  const openEdit = () => {
+    if (TPV_LOADING) return;
+
+    const selected = window.CUSTOMER_SELECTOR?.getSelectedCustomer?.() || null;
+    const cod = String(selected?.codcliente || "").trim();
+    if (!cod || selected?.isDefault) {
+      toast?.("Selecciona un cliente para editar.", "warn", "Clientes");
+      window.CUSTOMER_SELECTOR?.open?.();
+      return;
+    }
+
+    const list =
+      typeof window.CUSTOMER_SELECTOR?.listCustomers === "function"
+        ? window.CUSTOMER_SELECTOR.listCustomers()
+        : [];
+    const full = Array.isArray(list)
+      ? list.find((item) => String(item?.codcliente || "").trim() === cod)
+      : null;
+
+    window.CUSTOMER_SELECTOR?.openEdit?.(full || selected);
+  };
 
   if (input) input.addEventListener("click", openList);
   if (btnList) btnList.addEventListener("click", openList);
   if (btnOpen) btnOpen.addEventListener("click", openCreate);
+  if (btnEdit) btnEdit.addEventListener("click", openEdit);
 
   if (btnClear) {
     btnClear.addEventListener("click", () => {
@@ -4263,6 +6456,19 @@ async function maybeRefreshTerminalDefaultCustomer(
     return { ok: false, error: e?.message || String(e) };
   } finally {
     __TDC__.inFlight = false;
+  }
+}
+
+async function resetCartCustomerToTerminalDefault(reason = "post-action") {
+  preParkedCustomerSelection = null;
+
+  try {
+    await applyTerminalDefaultCustomer({
+      forceReset: true,
+      reason: `reset-cart-customer:${reason}`,
+    });
+  } catch {
+    window.CUSTOMER_SELECTOR?.resetToDefault?.();
   }
 }
 
@@ -6519,6 +8725,7 @@ function syncCustomerControlsLoadingState() {
   const input = document.getElementById("cartCustomerInput");
   const btnList = document.getElementById("cartCustomerListBtn");
   const btnOpen = document.getElementById("cartCustomerOpen");
+  const btnEdit = document.getElementById("cartCustomerEdit");
   const btnClear = document.getElementById("cartCustomerClear");
   const row = document.querySelector(".cart-client-row");
 
@@ -6538,6 +8745,10 @@ function syncCustomerControlsLoadingState() {
   if (btnOpen) {
     btnOpen.disabled = TPV_LOADING;
     btnOpen.title = title;
+  }
+  if (btnEdit) {
+    btnEdit.disabled = TPV_LOADING;
+    btnEdit.title = title;
   }
   if (btnClear) {
     btnClear.disabled = TPV_LOADING;
@@ -6744,6 +8955,8 @@ async function runBootFlow() {
     await loadInfoBarVisibilitySettings?.();
     await loadProductTileSizeSetting?.();
     await loadProductTileResizeModeToggle?.();
+    await loadCartPanelWidthSetting?.();
+    await loadCartWidthControlsToggle?.();
 
     // 3) Datos
     await loadDataFromApi();
@@ -7271,6 +9484,25 @@ function bindProductTileReorderEvents(tile) {
   });
 }
 
+function refreshProductReorderModeNotice() {
+  if (!productReorderModeNoticeEl) return;
+
+  const visible = !!productReorderMode && isAdminUser();
+  productReorderModeNoticeEl.classList.toggle("hidden", !visible);
+}
+
+function notifyReorderModeCartAddBlocked() {
+  const now = Date.now();
+  if (now - productReorderWarnToastAt < 1200) return;
+  productReorderWarnToastAt = now;
+
+  toast(
+    "Modo arrastrar por prioridad activo: desactivalo en Opciones para poder anadir productos al carrito.",
+    "warn",
+    "Productos",
+  );
+}
+
 function renderProducts() {
   debugTrace("[TRACE] renderProducts()");
 
@@ -7278,6 +9510,7 @@ function renderProducts() {
   if (!grid) return;
 
   grid.innerHTML = "";
+  refreshProductReorderModeNotice();
 
   const term = (searchTerm || "").trim().toLowerCase();
 
@@ -7453,6 +9686,7 @@ function renderProducts() {
       tile.onclick = (e) => {
         e.preventDefault();
         e.stopPropagation();
+        notifyReorderModeCartAddBlocked();
       };
     } else {
       tile.onclick = async () => {
@@ -7533,6 +9767,7 @@ function renderProducts() {
 
 function renderMainUI(force = false) {
   debugLog("[TRACE] renderMainUI cashSession.open=", cashSession?.open);
+  applyCartPanelWidth();
 
   syncCashClosedUiState();
 
@@ -7543,6 +9778,7 @@ function renderMainUI(force = false) {
     if (grid) grid.innerHTML = "";
     if (catContainer) catContainer.innerHTML = "";
     if (subCatContainer) subCatContainer.innerHTML = "";
+    productReorderModeNoticeEl?.classList.add("hidden");
     renderCart?.();
     return;
   }
@@ -8467,9 +10703,23 @@ function renderCart() {
   // ✅ UI: solo pintamos líneas NO-hijas
   const uiLines = getVisibleCartLines(cartItems);
 
+  const buildCartLineMiniLegend = (pricing) => {
+    const tags = [];
+    if (pricing?.manualPriceLocked) tags.push("Manual");
+    if (pricing?.tariffApplied) tags.push("Tarifa");
+    if (pricing?.cartDiscountApplied) {
+      if (pricing?.cartDiscountSource === "line") {
+        tags.push("Dto linea (prioridad)");
+      }
+    }
+    if (!tags.length) return "";
+    return `<div class="cart-line-mini-legend">${tags.join(" · ")}</div>`;
+  };
+
   uiLines.forEach((item) => {
-    const unitPrice = getUnitGross(item);
-    const lineTotal = unitPrice * item.qty;
+    const pricing = getCartLinePricing(item);
+    const unitPrice = Number(pricing.unitGross || 0);
+    const lineTotal = Number(pricing.lineTotal || 0);
     total += lineTotal;
 
     const row = document.createElement("div");
@@ -8480,8 +10730,36 @@ function renderCart() {
       ? " <span class='price-mod'>MOD</span>"
       : "";
 
-    const unitTxt = eur(unitPrice) + modifiedMark;
-    const lineTxt = eur(lineTotal);
+    const pricingBadges = [];
+    if (pricing.tariffApplied) {
+      const tariffLabel =
+        pricing.tariffDiscountPct > 0 && pricing.tariffDiscountFixed > 0
+          ? `${pricing.tariffMode === "coste" ? "+" : "-"}${formatDiscountPercent(pricing.tariffDiscountPct)}% y ${pricing.tariffMode === "coste" ? "+" : "-"}${eur(pricing.tariffDiscountFixed)}`
+          : pricing.tariffDiscountPct > 0
+            ? `${pricing.tariffMode === "coste" ? "+" : "-"}${formatDiscountPercent(pricing.tariffDiscountPct)}%`
+            : pricing.tariffDiscountFixed > 0
+              ? `${pricing.tariffMode === "coste" ? "+" : "-"}${eur(pricing.tariffDiscountFixed)}`
+              : "Tarifa";
+      pricingBadges.push(
+        `<span class="cart-price-discount">${tariffLabel}</span>`,
+      );
+    }
+
+    if (pricing.cartDiscountApplied) {
+      const sourceLabel =
+        pricing.cartDiscountSource === "line" ? "Linea" : "General";
+      pricingBadges.push(
+        `<span class="cart-price-discount cart-price-discount--cart">${sourceLabel} -${formatDiscountPercent(pricing.cartDiscountPct)}%</span>`,
+      );
+    }
+
+    const unitTxt = pricing.anyPricingAdjustment
+      ? `<span class="cart-price-old">${eur(pricing.baseUnitGross)}</span><span class="cart-price-new">${eur(unitPrice)}</span>${pricingBadges.join("")}${modifiedMark}`
+      : eur(unitPrice) + modifiedMark;
+
+    const lineTxt = pricing.anyPricingAdjustment
+      ? `<span class="cart-price-old">${eur(pricing.baseLineTotal)}</span><span class="cart-price-new">${eur(lineTotal)}</span>`
+      : eur(lineTotal);
 
     // ✅ Si es pack, añadimos "Incluye: ..."
     let includesText = "";
@@ -8519,6 +10797,8 @@ function renderCart() {
             : ""
         }
 
+        ${buildCartLineMiniLegend(pricing)}
+
         <div class="cart-line-unit">${fmtQty(item.qty)} x ${unitTxt}</div>
       </div>
 
@@ -8531,9 +10811,14 @@ function renderCart() {
       </div>
 
       <div class="cart-line-total">
-        <button type="button" class="line-price-btn" data-action="price" data-lineid="${item._lineId}">
+        <button type="button" class="line-price-btn ${pricing.anyPricingAdjustment ? "has-cart-tariff" : ""}" data-action="price" data-lineid="${item._lineId}">
           ${lineTxt}
         </button>
+        ${
+          cartDiscountToolsEnabled
+            ? `<button class="line-discount-btn ${getCartLineDiscountPercent(item) > 0 ? "is-active" : ""}" data-action="line-discount" data-lineid="${item._lineId}" title="Descuento de linea">%</button>`
+            : ""
+        }
         <button class="line-delete-btn" data-lineid="${item._lineId}">✕</button>
       </div>
     `;
@@ -8543,6 +10828,7 @@ function renderCart() {
 
   const totalEl = document.getElementById("totalAmount");
   if (totalEl) totalEl.textContent = eur(total);
+  refreshCartDiscountUi();
 
   // ✅ Completar imageUrl para customer display (solo si no viene)
   // Completa imageUrl sin O(n*m): crea índice solo si hay líneas sin imagen.
@@ -9548,6 +11834,8 @@ let numPadTargetItemId = null;
 let numPadDefaultValue = "0";
 let numPadLiveValue = null;
 let numPadInitialValue = 0;
+let numPadPricePreviewEnabled = true;
+let numPadPricePreviewTopDiscountText = "";
 
 // Función común para cerrar overlays de teclados al hacer clic fuera
 function handleOverlayOutsideClick(e, padSelector, closeFn) {
@@ -10149,6 +12437,120 @@ function formatPrice2(v) {
   return (Math.round(n * 100) / 100).toFixed(2);
 }
 
+function hideNumPadPricePreview() {
+  const numPadPricePreview = document.getElementById("numPadPricePreview");
+  const numPadTopDiscountPct = document.getElementById("numPadTopDiscountPct");
+  if (!numPadPricePreview) return;
+  numPadPricePreview.classList.add("hidden");
+  numPadPricePreview.innerHTML = "";
+  numPadPricePreviewTopDiscountText = "";
+  if (numPadTopDiscountPct) {
+    numPadTopDiscountPct.classList.add("hidden");
+    numPadTopDiscountPct.textContent = "";
+  }
+}
+
+function buildNumPadPricePreviewHtml() {
+  numPadPricePreviewTopDiscountText = "";
+  if (numPadMode !== "price" || !numPadPricePreviewEnabled) return "";
+
+  const item = cart.find((c) => c._lineId === numPadTargetItemId);
+  if (!item) return "";
+
+  const nextUnitGross = evaluateNumPadCurrentValue({ silent: true });
+  if (nextUnitGross == null) return "";
+
+  const qty = Math.max(0, Number(item?.qty || 0) || 0);
+
+  const previewItem = { ...item, grossPriceOverride: round2(nextUnitGross) };
+  const previewPricing = getCartLinePricing(previewItem);
+  const previewUnitGross = round2(Number(previewPricing?.unitGross || 0));
+  const previewBaseUnitGross = round2(
+    Number(previewPricing?.baseUnitGross || previewUnitGross),
+  );
+  const previewLineGross = round2(Number(previewPricing?.lineTotal || 0));
+  const previewBaseLineGross = round2(
+    Number(previewPricing?.baseLineTotal || 0),
+  );
+
+  const hasPreviewDiscount = previewBaseUnitGross > previewUnitGross + 0.0001;
+  const discountPctRawDerived =
+    hasPreviewDiscount && previewBaseUnitGross > 0
+      ? ((previewBaseUnitGross - previewUnitGross) / previewBaseUnitGross) * 100
+      : 0;
+
+  let preferredPct = 0;
+  if (previewPricing?.cartDiscountApplied) {
+    preferredPct = clampDiscountPercent(previewPricing?.cartDiscountPct);
+  } else if (
+    previewPricing?.tariffApplied &&
+    Number(previewPricing?.tariffDiscountFixed || 0) <= 0
+  ) {
+    preferredPct = clampDiscountPercent(previewPricing?.tariffDiscountPct);
+  } else {
+    preferredPct = Math.max(0, discountPctRawDerived);
+  }
+  const discountPctDisplay =
+    preferredPct > 0.0001 ? Math.round(preferredPct * 10) / 10 : 0;
+
+  let html = "";
+
+  if (hasPreviewDiscount) {
+    if (discountPctDisplay > 0.0001) {
+      numPadPricePreviewTopDiscountText = `-${formatDiscountPercent(discountPctDisplay)}%`;
+    }
+    const unitValues = `<span class="num-pad-price-preview-old">${eur(previewBaseUnitGross)}</span><span>${eur(previewUnitGross)}</span>`;
+    html += `
+      <div class="num-pad-price-preview-row num-pad-price-preview-row--unit">
+        <span class="num-pad-price-preview-label">Unitario</span>
+        <span class="num-pad-price-preview-values">${unitValues}</span>
+      </div>
+    `;
+
+    if (qty > 1.0001) {
+      const totalValues = `<span class="num-pad-price-preview-old">${eur(previewBaseLineGross)}</span><span>${eur(previewLineGross)}</span>`;
+      html += `
+        <div class="num-pad-price-preview-row num-pad-price-preview-row--total">
+          <span class="num-pad-price-preview-label">Total x${fmtQty(qty)}</span>
+          <span class="num-pad-price-preview-values">${totalValues}</span>
+        </div>
+      `;
+    }
+  } else if (qty > 1.0001) {
+    html += `
+      <div class="num-pad-price-preview-row num-pad-price-preview-row--totalonly">
+        <span class="num-pad-price-preview-label">Total nuevo x${fmtQty(qty)}</span>
+        <span class="num-pad-price-preview-values">${eur(previewLineGross)}</span>
+      </div>
+    `;
+  }
+
+  return html;
+}
+
+function updateNumPadPricePreview() {
+  const numPadPricePreview = document.getElementById("numPadPricePreview");
+  const numPadTopDiscountPct = document.getElementById("numPadTopDiscountPct");
+  if (!numPadPricePreview) return;
+
+  const html = buildNumPadPricePreviewHtml();
+  if (!html) {
+    hideNumPadPricePreview();
+    return;
+  }
+
+  numPadPricePreview.innerHTML = html;
+  numPadPricePreview.classList.remove("hidden");
+
+  if (numPadTopDiscountPct && numPadPricePreviewTopDiscountText) {
+    numPadTopDiscountPct.textContent = numPadPricePreviewTopDiscountText;
+    numPadTopDiscountPct.classList.remove("hidden");
+  } else if (numPadTopDiscountPct) {
+    numPadTopDiscountPct.classList.add("hidden");
+    numPadTopDiscountPct.textContent = "";
+  }
+}
+
 function updateNumPadDisplay() {
   if (!numPadDisplay) return;
 
@@ -10164,8 +12566,11 @@ function updateNumPadDisplay() {
     } else {
       numPadDisplay.textContent = formatPrice2(s);
     }
+    updateNumPadPricePreview();
     return;
   }
+
+  hideNumPadPricePreview();
 
   // qty/cash (como lo tenías)
   numPadDisplay.textContent =
@@ -11104,6 +13509,36 @@ if (cartLinesContainer) {
       return;
     }
 
+    const lineDiscountBtn = e.target.closest('[data-action="line-discount"]');
+    if (lineDiscountBtn) {
+      if (!item) return;
+      if (!cartDiscountToolsEnabled) {
+        toast("Activa descuentos de carrito en Opciones.", "warn", "Carrito");
+        return;
+      }
+
+      const currentPct = getCartLineDiscountPercent(item);
+      const globalPct = getCartGlobalDiscountPercent();
+
+      openNumPad(
+        String(formatDiscountPercent(currentPct || globalPct || 0)),
+        (nextValue, meta = {}) => {
+          if (meta?.phase && meta.phase !== "confirm") return;
+
+          const parsed = parseNumericLike(nextValue, 0);
+          const pct = clampDiscountPercent(parsed);
+          item.cartLineDiscountPct = pct;
+          renderCart();
+        },
+        `${item.name} - descuento linea (%)`,
+        "price",
+        currentPct,
+        lineId,
+        { showPricePreview: false },
+      );
+      return;
+    }
+
     // ===== QTY (+/-/edit) =====
     const qtyBtn = e.target.closest(".qty-btn");
     if (qtyBtn) {
@@ -11185,18 +13620,38 @@ if (cartLinesContainer) {
         return;
       }
 
-      const currentUnit = getUnitGross(item);
+      const currentOverrideRaw = item?.grossPriceOverride;
+      const hadOverride =
+        currentOverrideRaw !== null && currentOverrideRaw !== undefined;
+      const previousOverride = hadOverride ? Number(currentOverrideRaw) : null;
+
+      const editableBaseUnit = hadOverride
+        ? Number(currentOverrideRaw)
+        : Number(getOriginalUnitGross(item));
+
       const originalUnit =
         item.originalGrossPrice ?? item.grossPrice ?? item.price ?? 0;
 
       openNumPad(
-        currentUnit.toFixed(2),
-        (newUnitGross) => {
+        Number(editableBaseUnit || 0).toFixed(2),
+        (newUnitGross, meta = {}) => {
+          const phase = String(meta?.phase || "");
+
+          if (phase === "preview") return;
+
+          if (phase === "cancel") {
+            item.grossPriceOverride = previousOverride;
+            item.manualPriceLocksAdjustments = !!(
+              previousOverride !== null && previousOverride !== undefined
+            );
+            renderCart();
+            return;
+          }
+
           const v = Number(String(newUnitGross).replace(",", "."));
           if (!isFinite(v) || v < 0) return;
 
           const rounded = Math.round(v * 100) / 100;
-          pushCartHistoryStep("price-change");
           setUnitGrossOverrideSmart(item, rounded);
           renderCart();
         },
@@ -11308,12 +13763,173 @@ function updateParkedCountBadge() {
   badge.textContent = String(pendingCount);
 }
 
+function beginParkedCheckoutLock(index) {
+  if (!Array.isArray(parkedTickets) || !parkedTickets.length) return null;
+  if (index == null || index < 0 || index >= parkedTickets.length) return null;
+
+  const ticket = parkedTickets[index];
+  if (!ticket || ticket.paid || ticket.closingInProgress) return null;
+
+  if (!String(ticket.slug || "").trim()) {
+    ticket.slug = String(getCurrentSlugForReservations() || "").trim();
+  }
+  if (!String(ticket.cajaId || "").trim()) {
+    ticket.cajaId = String(
+      ticket?.cajaId || getCajaIdSafe?.() || currentTerminal?.id || "",
+    ).trim();
+  }
+
+  ticket.closingInProgress = true;
+  ticket.closingByTerminalId = String(currentTerminal?.id || "").trim();
+  ticket.closingByTerminalName = String(currentTerminal?.name || "").trim();
+  ticket.closingByAt = new Date().toISOString();
+
+  updateParkedCountBadge?.();
+  refreshParkButtonUI?.();
+  refreshParkedEditingBanner?.();
+  if (
+    parkedTicketsOverlay &&
+    !parkedTicketsOverlay.classList.contains("hidden")
+  ) {
+    renderParkedTicketsModal?.();
+  }
+
+  syncParkedTicketClosingState(ticket, "lock");
+
+  return () => {
+    if (!ticket || ticket.paid) return;
+    ticket.closingInProgress = false;
+    ticket.closingByTerminalId = "";
+    ticket.closingByTerminalName = "";
+    ticket.closingByAt = null;
+    updateParkedCountBadge?.();
+    refreshParkButtonUI?.();
+    refreshParkedEditingBanner?.();
+    if (
+      parkedTicketsOverlay &&
+      !parkedTicketsOverlay.classList.contains("hidden")
+    ) {
+      renderParkedTicketsModal?.();
+    }
+
+    syncParkedTicketClosingState(ticket, "unlock");
+  };
+}
+
+function syncParkedTicketClosingState(ticket, reason = "") {
+  if (!ticket || ticket.paid) return;
+  if (TPV_STATE?.offline) {
+    enqueueParkedSyncOperation("upsert", ticket);
+    return;
+  }
+
+  Promise.resolve()
+    .then(() => apiSaveParkedReservation(ticket))
+    .then(() => {
+      if (typeof scheduleParkedReservationsBurstRefresh === "function") {
+        scheduleParkedReservationsBurstRefresh(`closing-${reason}`);
+      }
+    })
+    .catch((e) => {
+      enqueueParkedSyncOperation("upsert", ticket);
+      console.warn(
+        "No se pudo sincronizar estado closingInProgress de aparcado:",
+        e?.message || e,
+      );
+      if (typeof scheduleParkedReservationsBurstRefresh === "function") {
+        scheduleParkedReservationsBurstRefresh(`queue-closing-${reason}`);
+      }
+    });
+}
+
+function isParkedTicketLockedByAnotherTerminal(ticket) {
+  if (!ticket || !ticket.closingInProgress) return false;
+
+  const mine = String(currentTerminal?.id || "").trim();
+  const owner = String(ticket?.closingByTerminalId || "").trim();
+  if (!owner) return false;
+  if (!mine) return true;
+  return owner !== mine;
+}
+
+function findPaidTwinForParkedTicket(ticket, list = parkedTickets) {
+  if (!ticket) return null;
+
+  const source = Array.isArray(list) ? list : [];
+  const ticketKey = String(getParkedTicketSyncKey(ticket) || "").trim();
+  const ticketDisplayNo =
+    Number(getParkedTicketDisplayNumber(ticket) || 0) || 0;
+  const ticketSig = buildCartRecoverySignature(
+    Array.isArray(ticket?.items) ? ticket.items : [],
+  );
+
+  return (
+    source.find((candidate) => {
+      if (!candidate || !candidate?.paid) return false;
+
+      const candidateKey = String(
+        getParkedTicketSyncKey(candidate) || "",
+      ).trim();
+      if (ticketKey && candidateKey && ticketKey === candidateKey) return true;
+
+      const candidateDisplayNo =
+        Number(getParkedTicketDisplayNumber(candidate) || 0) || 0;
+      if (!ticketDisplayNo || candidateDisplayNo !== ticketDisplayNo)
+        return false;
+
+      const candidateSig = buildCartRecoverySignature(
+        Array.isArray(candidate?.items) ? candidate.items : [],
+      );
+
+      return !!ticketSig && !!candidateSig && candidateSig === ticketSig;
+    }) || null
+  );
+}
+
+function reconcileParkedPaidTwins(list = parkedTickets) {
+  const source = Array.isArray(list) ? list : [];
+  if (!source.length) return 0;
+
+  let changes = 0;
+
+  source.forEach((ticket) => {
+    if (!ticket || ticket?.paid) return;
+
+    const paidTwin = findPaidTwinForParkedTicket(ticket, source);
+    if (!paidTwin) return;
+
+    ticket.paid = true;
+    ticket.paidAt = paidTwin?.paidAt || ticket.paidAt || new Date();
+    ticket.paidTicketCode =
+      paidTwin?.paidTicketCode || ticket.paidTicketCode || null;
+    ticket.paidTicketId = paidTwin?.paidTicketId || ticket.paidTicketId || null;
+    upsertParkedPaidHistory(ticket);
+    changes += 1;
+  });
+
+  if (changes > 0) {
+    saveParkedTicketsCache(source);
+  }
+
+  return changes;
+}
+
 function getCartTotal(items) {
   return (items || []).reduce((sum, item) => {
     const unit = getUnitGross(item);
+    const pct = getCartGlobalDiscountPercent();
+    const effectiveUnit = pct > 0 ? round2(unit * (1 - pct / 100)) : unit;
 
-    return sum + unit * (item.qty || 1);
+    return sum + effectiveUnit * (item.qty || 1);
   }, 0);
+}
+
+function clearAllCartLineDiscounts() {
+  const lines = Array.isArray(cart) ? cart : [];
+  lines.forEach((line) => {
+    if (!line || typeof line !== "object") return;
+    line.cartLineDiscountPct = 0;
+  });
 }
 
 function buildLineIdSetFromSnapshot(items) {
@@ -12001,6 +14617,96 @@ function parkedBuildGroupedPreview(items) {
   return chunks.join(" | ");
 }
 
+function parkedGetDiscountSummary(items) {
+  const ticketLike =
+    items && !Array.isArray(items) && typeof items === "object" ? items : null;
+  const frozen = ticketLike?.discountSummary;
+  if (frozen && typeof frozen === "object") {
+    const base = round2(Number(frozen.baseTotal || 0));
+    const final = round2(Number(frozen.finalTotal || 0));
+    const savings = round2(Math.max(0, Number(frozen.savings || base - final)));
+    const hasDiscount = savings > 0.009 && base > final + 0.0001;
+    return {
+      hasDiscount,
+      baseTotal: base,
+      finalTotal: final,
+      savings,
+      labelsText: hasDiscount ? String(frozen.labelsText || "").trim() : "",
+    };
+  }
+
+  const sourceItems = ticketLike ? ticketLike.items : items;
+  const visibleSource = getVisibleCartLines(
+    Array.isArray(sourceItems) ? sourceItems : [],
+  );
+  if (!visibleSource.length) {
+    return {
+      hasDiscount: false,
+      baseTotal: 0,
+      finalTotal: 0,
+      savings: 0,
+      labelsText: "",
+    };
+  }
+
+  let baseTotal = 0;
+  let finalTotal = 0;
+  const labels = new Set();
+
+  visibleSource.forEach((item) => {
+    const pricing = getCartLinePricing(item);
+    const baseLine = Number(pricing?.baseLineTotal || 0);
+    const finalLine = Number(pricing?.lineTotal || 0);
+
+    baseTotal += baseLine;
+    finalTotal += finalLine;
+
+    if (baseLine <= finalLine + 0.0001) return;
+
+    if (pricing?.manualPriceLocked) {
+      labels.add("Manual");
+      return;
+    }
+
+    if (pricing?.cartDiscountApplied) {
+      labels.add(
+        pricing?.cartDiscountSource === "line" ? "Dto linea" : "Dto general",
+      );
+    }
+
+    if (pricing?.tariffApplied) {
+      labels.add("Tarifa");
+    }
+
+    if (!pricing?.cartDiscountApplied && !pricing?.tariffApplied) {
+      labels.add("Descuento");
+    }
+  });
+
+  const base = round2(baseTotal);
+  const final = round2(finalTotal);
+  const savings = round2(Math.max(0, base - final));
+
+  return {
+    hasDiscount: savings > 0.009 && base > final + 0.0001,
+    baseTotal: base,
+    finalTotal: final,
+    savings,
+    labelsText: Array.from(labels).join(" · "),
+  };
+}
+
+function buildParkedDiscountSummarySnapshot(items) {
+  const summary = parkedGetDiscountSummary(Array.isArray(items) ? items : []);
+  return {
+    hasDiscount: !!summary.hasDiscount,
+    baseTotal: round2(Number(summary.baseTotal || 0)),
+    finalTotal: round2(Number(summary.finalTotal || 0)),
+    savings: round2(Number(summary.savings || 0)),
+    labelsText: String(summary.labelsText || "").trim(),
+  };
+}
+
 function buildParkedSummaryStats(sourceTickets) {
   const list = Array.isArray(sourceTickets) ? sourceTickets : [];
   const pendingList = list.filter((t) => !t?.paid);
@@ -12224,6 +14930,58 @@ function isParkedTicketFromToday(t) {
   );
 }
 
+function hasOlderPendingParkedTickets(sourceTickets) {
+  const list = Array.isArray(sourceTickets) ? sourceTickets : [];
+  return list.some((t) => !t?.paid && !isParkedTicketFromToday(t));
+}
+
+const SYNC_ALERT_COOLDOWN_MS = 5 * 60 * 1000;
+const QUEUE_HEALTH_CHECK_EVERY_MS = 60 * 1000;
+const QUEUE_STUCK_MIN_AGE_MIN = 10;
+const QUEUE_STUCK_MIN_ATTEMPTS = 4;
+
+let __queueHealthLastCheckAt = 0;
+const __syncAlertLastAtByKey = new Map();
+
+function notifyWorkerSyncIssue(key, message, opts = {}) {
+  const allowOffline = opts?.allowOffline === true;
+  if (!allowOffline) {
+    if (TPV_STATE?.offline) return;
+    if (isOnlineFS === false) return;
+  }
+
+  const cooldownMs = Math.max(
+    0,
+    Number(opts?.cooldownMs || SYNC_ALERT_COOLDOWN_MS),
+  );
+  const now = Date.now();
+  const last = Number(__syncAlertLastAtByKey.get(String(key)) || 0);
+  if (now - last < cooldownMs) return;
+
+  __syncAlertLastAtByKey.set(String(key), now);
+
+  const title =
+    String(opts?.title || "Sincronizacion").trim() || "Sincronizacion";
+  const text = String(message || "Problema de sincronizacion").trim();
+  if (!text) return;
+
+  toast(text, "err", title);
+  setStatusText("Atencion: revisar sincronizacion y avisar a soporte.");
+
+  if (opts?.modal) {
+    showMessageModal(
+      "Aviso de sincronizacion",
+      `${text}\n\nContacta con soporte para revisarlo.`,
+    );
+  }
+}
+
+function minutesSinceIso(isoLike) {
+  const ts = Date.parse(String(isoLike || ""));
+  if (!isFinite(ts)) return 0;
+  return Math.max(0, (Date.now() - ts) / 60000);
+}
+
 function getParkedTicketSortTimeMs(t) {
   const createdMs = t?.createdAt ? new Date(t.createdAt).getTime() : 0;
   if (Number.isFinite(createdMs) && createdMs > 0) return createdMs;
@@ -12261,6 +15019,112 @@ function getParkedTicketDisplayNumber(ticket) {
   }
 
   return "";
+}
+
+function getParkedDisplayNumberFromId(rawId) {
+  const id = Number(rawId || 0) || 0;
+  if (!id) return "";
+
+  const nodePart = Math.floor(id / 10000);
+  const seqPart = id % 10000;
+
+  if (nodePart >= 1000 && nodePart <= 9999 && seqPart >= 1 && seqPart <= 9999) {
+    return String(seqPart);
+  }
+
+  return String(id);
+}
+
+function parseParkedDisplayNumber(value) {
+  const n = Number(String(value || "").trim());
+  if (!Number.isInteger(n) || n <= 0) return 0;
+  return n;
+}
+
+function getParkedDisplayNumberFromLabel(label) {
+  const txt = String(label || "").trim();
+  if (!txt) return 0;
+  const m = txt.match(/^ticket\s*#\s*(\d+)$/i);
+  return m ? parseParkedDisplayNumber(m[1]) : 0;
+}
+
+function normalizeParkedDisplayNumberValue(value) {
+  const parsed = parseParkedDisplayNumber(value);
+  if (!parsed) return 0;
+
+  const normalized = getParkedDisplayNumberFromId(parsed) || String(parsed);
+  return parseParkedDisplayNumber(normalized);
+}
+
+function getNextParkedDisplayNumber(list = parkedTickets) {
+  const maxCurrent = getScopedPendingParkedTickets(list).reduce((max, t) => {
+    const n = Number(getParkedTicketDisplayNumber(t) || 0);
+    return n > max ? n : max;
+  }, 0);
+
+  return maxCurrent > 0 ? maxCurrent + 1 : 1;
+}
+
+function getParkedTicketDisplayLabel(ticket) {
+  const explicit = String(ticket?.name || ticket?.label || "").trim();
+  const clientName = String(ticket?.clientName || "").trim();
+  const displayNo = getParkedTicketDisplayNumber(ticket) || "0";
+
+  if (!explicit) {
+    return clientName || `Ticket #${displayNo}`;
+  }
+
+  const m = explicit.match(/^ticket\s*#\s*(\d+)$/i);
+  if (m) {
+    if (clientName) return clientName;
+    const fromText = getParkedDisplayNumberFromId(m[1]) || displayNo;
+    return `Ticket #${fromText}`;
+  }
+
+  return explicit;
+}
+
+function getCanonicalParkedTicketName(ticket, fallbackName = "") {
+  const rawName = String(
+    ticket?.name || ticket?.label || fallbackName || "",
+  ).trim();
+  const displayNo = getParkedTicketDisplayNumber(ticket) || "0";
+
+  if (!rawName) return `Ticket #${displayNo}`;
+
+  const m = rawName.match(/^ticket\s*#\s*(\d+)$/i);
+  if (!m) return rawName;
+
+  const shortNo = getParkedDisplayNumberFromId(m[1]) || displayNo;
+  return `Ticket #${shortNo}`;
+}
+
+function collectUsedParkedDisplayNumbers(list = parkedTickets) {
+  const used = new Set();
+
+  getScopedAllParkedTickets(list).forEach((t) => {
+    const n = Number(getParkedTicketDisplayNumber(t) || 0) || 0;
+    if (n > 0) used.add(n);
+  });
+
+  return used;
+}
+
+function ensureUniqueNextParkedDisplayNumber(preferred, list = parkedTickets) {
+  const used = collectUsedParkedDisplayNumbers(list);
+  let candidate = Number(preferred || 0) || 1;
+  if (candidate <= 0) candidate = 1;
+
+  while (used.has(candidate)) {
+    candidate += 1;
+    if (candidate > 999999) {
+      candidate = Date.now() % 1000000;
+      if (candidate <= 0) candidate = 1;
+      break;
+    }
+  }
+
+  return candidate;
 }
 
 function compareParkedTicketsForList(a, b) {
@@ -12476,6 +15340,10 @@ async function clearPaidParkedHistory() {
   if (!removedPaid.length) {
     return { removedCount: 0, queuedCount: 0 };
   }
+
+  removedPaid.forEach((ticket) => {
+    markParkedPaidTicketAsDeleted(ticket);
+  });
 
   parkedTickets = source.filter((t) => !(!!t?.paid && !isPedidoTpvTicket(t)));
   saveParkedTicketsCache(parkedTickets);
@@ -12841,12 +15709,23 @@ function refreshParkedEditingBanner() {
   const setActionButtonsDisabled = (disabled) => {
     const splitBtnEl = document.getElementById("parkedSplitBtn");
     const comandaBtnEl = document.getElementById("parkedComandaBtn");
+    const metaBtnEl = document.getElementById("parkedEditingMetaBtn");
     const undoBtnEl = document.getElementById("parkedUndoBtn");
     const redoBtnEl = document.getElementById("parkedRedoBtn");
     if (splitBtnEl) splitBtnEl.disabled = !!disabled;
     if (comandaBtnEl) comandaBtnEl.disabled = !!disabled;
+    if (metaBtnEl) metaBtnEl.disabled = !!disabled;
     if (undoBtnEl) undoBtnEl.disabled = !!disabled;
     if (redoBtnEl) redoBtnEl.disabled = !!disabled;
+  };
+
+  const setActionButtonsVisible = (visible) => {
+    const splitBtnEl = document.getElementById("parkedSplitBtn");
+    const comandaBtnEl = document.getElementById("parkedComandaBtn");
+    const metaBtnEl = document.getElementById("parkedEditingMetaBtn");
+    if (splitBtnEl) splitBtnEl.classList.toggle("hidden", !visible);
+    if (comandaBtnEl) comandaBtnEl.classList.toggle("hidden", !visible);
+    if (metaBtnEl) metaBtnEl.classList.toggle("hidden", !visible);
   };
 
   if (!cashSession?.open) {
@@ -12859,6 +15738,7 @@ function refreshParkedEditingBanner() {
     if (splitPrevBtn) splitPrevBtn.disabled = true;
     if (splitNextBtn) splitNextBtn.disabled = true;
     if (titleWrap) titleWrap.classList.add("hidden");
+    setActionButtonsVisible(false);
     setActionButtonsDisabled(true);
     refreshCartUndoRedoUi();
     return;
@@ -12884,6 +15764,7 @@ function refreshParkedEditingBanner() {
     if (splitPrevBtn) splitPrevBtn.disabled = true;
     if (splitNextBtn) splitNextBtn.disabled = true;
     if (titleWrap) titleWrap.classList.add("hidden");
+    setActionButtonsVisible(false);
     setActionButtonsDisabled(true);
     refreshCartUndoRedoUi();
     return;
@@ -12908,9 +15789,9 @@ function refreshParkedEditingBanner() {
     : "";
   title.textContent = navState.enabled
     ? `${docTypeTexts.shortLabel}: Parte ${navState.part}/${navState.total}`
-    : "";
+    : `${docTypeTexts.shortLabel}: ${bannerTicketName}${splitSuffix}`;
   if (titleWrap) {
-    titleWrap.classList.toggle("hidden", !navState.enabled);
+    titleWrap.classList.remove("hidden");
   }
 
   const mesasState = loadMesasTablesStateForInline();
@@ -12931,6 +15812,9 @@ function refreshParkedEditingBanner() {
   const showMesaMeta = isMesasTransaccionesMode() && isMesasModeTicket(t);
 
   const openedAt = new Date(t?.createdAt || t?.updatedAt || Date.now());
+  const openedDate = Number.isNaN(openedAt.getTime())
+    ? "--/--/----"
+    : openedAt.toLocaleDateString("es-ES");
   const openedHour = Number.isNaN(openedAt.getTime())
     ? "--:--"
     : openedAt.toLocaleTimeString("es-ES", {
@@ -12950,7 +15834,10 @@ function refreshParkedEditingBanner() {
       <span class="peb-chip">${escapeHtml(openedHour)}</span>
     </div>
   `
-    : "";
+    : `
+    <div class="peb-mesa-main">${escapeHtml(ticketLabel)}</div>
+    <div class="peb-mesa-sub">${escapeHtml(String(t?.clientName || "Cliente"))} · ${escapeHtml(openedDate)} ${escapeHtml(openedHour)}</div>
+  `;
 
   const activeFlags = normalizeMesaTicketAlerts(t?.mesaAlerts);
   const splitObsInfo = parseSplitInfoFromObs(t?.obs);
@@ -12983,7 +15870,9 @@ function refreshParkedEditingBanner() {
     splitNextBtn.disabled = !navState.enabled || navState.nextIndex < 0;
   }
 
-  setActionButtonsDisabled(false);
+  const showParkingActions = isMesasTransaccionesMode() && isMesasModeTicket(t);
+  setActionButtonsVisible(showParkingActions);
+  setActionButtonsDisabled(!showParkingActions);
   wrap.classList.remove("hidden");
   refreshPreprintButtonUI?.();
   refreshCartUndoRedoUi();
@@ -13247,8 +16136,7 @@ function renderParkedTicketsModal() {
       div.classList.add("parked-ticket-paid");
     }
 
-    const showMesaContext =
-      isMesasTransaccionesMode() && isMesasModeTicket(t);
+    const showMesaContext = isMesasTransaccionesMode() && isMesasModeTicket(t);
 
     div.innerHTML = `
       <div class="pt-left">
@@ -13350,6 +16238,9 @@ function renderParkedTicketsModal() {
         }
 
         const removedTicket = parkedTickets[currentIndex];
+        if (removedTicket?.paid && !isPedidoTpvTicket(removedTicket)) {
+          markParkedPaidTicketAsDeleted(removedTicket);
+        }
         parkedTickets.splice(currentIndex, 1);
         saveParkedTicketsCache();
         REMOTE_PARKED_RESERVATIONS = (
@@ -13858,6 +16749,116 @@ function hydrateParkedItemForCart(item) {
   };
 }
 
+function applyCustomerSelectionForParkedTicket(ticket) {
+  if (!ticket || !window.CUSTOMER_SELECTOR) return false;
+
+  const parkedCodcliente = String(ticket?.codcliente || "").trim();
+  const defaultCod = String(currentTerminal?.codcliente || "1").trim() || "1";
+  const customers =
+    typeof window.CUSTOMER_SELECTOR.listCustomers === "function"
+      ? window.CUSTOMER_SELECTOR.listCustomers()
+      : [];
+
+  let targetCustomer = null;
+  if (parkedCodcliente && parkedCodcliente !== defaultCod) {
+    targetCustomer = Array.isArray(customers)
+      ? customers.find(
+          (c) => String(c?.codcliente || "").trim() === parkedCodcliente,
+        )
+      : null;
+
+    if (!targetCustomer) {
+      targetCustomer = {
+        codcliente: parkedCodcliente,
+        nombre: String(ticket?.clientName || "Cliente").trim() || "Cliente",
+      };
+    }
+  } else if (!parkedCodcliente) {
+    const parkedName = String(ticket?.clientName || "")
+      .trim()
+      .toLowerCase();
+    targetCustomer = Array.isArray(customers)
+      ? customers.find(
+          (c) =>
+            String(c?.nombre || "")
+              .trim()
+              .toLowerCase() === parkedName,
+        ) || null
+      : null;
+  }
+
+  if (
+    targetCustomer &&
+    typeof window.CUSTOMER_SELECTOR.setSelected === "function"
+  ) {
+    window.CUSTOMER_SELECTOR.setSelected(targetCustomer);
+    return true;
+  }
+
+  if (parkedCodcliente === defaultCod || !targetCustomer) {
+    window.CUSTOMER_SELECTOR.resetToDefault?.();
+    return true;
+  }
+
+  return false;
+}
+
+function captureCurrentCustomerSelectionForParked() {
+  const selected = window.CUSTOMER_SELECTOR?.getSelectedCustomer?.() || null;
+  const cod = String(
+    selected?.codcliente ||
+      window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() ||
+      currentTerminal?.codcliente ||
+      "1",
+  ).trim();
+
+  return {
+    codcliente: cod || "1",
+    nombre: String(selected?.nombre || "").trim(),
+    isDefault: !!selected?.isDefault,
+  };
+}
+
+function applyCustomerSelectionSnapshot(snapshot) {
+  if (!snapshot || !window.CUSTOMER_SELECTOR) return false;
+
+  const defaultCod = String(currentTerminal?.codcliente || "1").trim() || "1";
+  const targetCod = String(snapshot?.codcliente || "").trim() || defaultCod;
+
+  if (snapshot?.isDefault || targetCod === defaultCod) {
+    window.CUSTOMER_SELECTOR.resetToDefault?.();
+    return true;
+  }
+
+  const customers =
+    typeof window.CUSTOMER_SELECTOR.listCustomers === "function"
+      ? window.CUSTOMER_SELECTOR.listCustomers()
+      : [];
+
+  const found = Array.isArray(customers)
+    ? customers.find((c) => String(c?.codcliente || "").trim() === targetCod)
+    : null;
+
+  const target = found || {
+    codcliente: targetCod,
+    nombre: String(snapshot?.nombre || "Cliente").trim() || "Cliente",
+  };
+
+  if (typeof window.CUSTOMER_SELECTOR.setSelected === "function") {
+    window.CUSTOMER_SELECTOR.setSelected(target);
+    return true;
+  }
+
+  return false;
+}
+
+function restorePreParkedCustomerSelection() {
+  const snapshot = preParkedCustomerSelection;
+  preParkedCustomerSelection = null;
+  if (!snapshot) return;
+  applyCustomerSelectionSnapshot(snapshot);
+}
+
 // Recuperar ticket por índice (lo usa el modal)
 function restoreParkedCartByIndex(index) {
   const labels = getParkingLabels();
@@ -13871,6 +16872,8 @@ function restoreParkedCartByIndex(index) {
   }
 
   const ticket = parkedTickets[index];
+
+  applyCustomerSelectionForParkedTicket(ticket);
 
   if (ticket.paid) {
     toast(
@@ -15890,6 +18893,17 @@ async function getFacturaPaymentBreakdown(factura) {
       },
     ],
   };
+}
+
+function buildRecibosByFacturaMap(recibos) {
+  const map = {};
+  for (const r of Array.isArray(recibos) ? recibos : []) {
+    const fid = String(r?.idfactura || "").trim();
+    if (!fid) continue;
+    if (!map[fid]) map[fid] = [];
+    map[fid].push(r);
+  }
+  return map;
 }
 
 /**
@@ -20062,6 +23076,9 @@ function refreshOptionsUI() {
   );
   if (tileResizeToggle) tileResizeToggle.checked = !!productTileResizeMode;
 
+  const scaleManualToggle = document.getElementById("scaleManualCaptureToggle");
+  if (scaleManualToggle) scaleManualToggle.checked = !!scaleManualCaptureMode;
+
   if (productSortModeSelect) {
     productSortModeSelect.value = normalizeProductSortMode(productSortMode);
   }
@@ -20309,6 +23326,17 @@ async function openOptions() {
   bindProductTileResizeModeToggleOnce();
   await loadProductTileResizeModeToggle();
 
+  bindScaleManualCaptureToggleOnce();
+  await loadScaleManualCaptureModeToggle();
+
+  bindCartDiscountToolsToggleOnce();
+  await loadCartDiscountToolsToggle();
+  bindSafeTrainingModeToggleOnce();
+  await loadSafeTrainingModeToggle();
+  bindCartGlobalDiscountButtonsOnce();
+  bindTariffOptionsOnce();
+  await loadTariffManagerOptionsData();
+
   bindProductSortModeOnce();
   bindProductReorderModeOnce();
   bindProductManualOrderResetButtonOnce();
@@ -20316,6 +23344,10 @@ async function openOptions() {
 
   bindProductTileSizeResetButtonOnce();
   await loadProductTileSizeSetting();
+  bindCartWidthControlsToggleOnce();
+  bindCartWidthDragHandleOnce();
+  await loadCartPanelWidthSetting();
+  await loadCartWidthControlsToggle();
 
   bindAutostartToggleOnce();
   await loadAutostartToggle();
@@ -20846,6 +23878,7 @@ let backgroundUpdateNextCheckAt = 0;
 let backgroundUpdateCountdownUiTimer = null;
 
 const BACKGROUND_UPDATE_SETTINGS_KEY = "tpv_background_update_settings_v1";
+const BACKGROUND_UPDATE_SNOOZE_KEY = "tpv_background_update_snooze_v1";
 const CHANGELOG_LAST_SEEN_VERSION_KEY = "tpv_changelog_last_seen_version_v1";
 const CHANGELOG_SOURCE_FILE = "changelog.json";
 
@@ -21068,6 +24101,165 @@ function saveBackgroundUpdateSettings(partial = {}) {
   return next;
 }
 
+function getBackgroundUpdateSnoozeState() {
+  try {
+    const raw = localStorage.getItem(BACKGROUND_UPDATE_SNOOZE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function setBackgroundUpdateSnooze(
+  version,
+  ms = BACKGROUND_UPDATE_DEFAULT_SETTINGS.intervalMs,
+) {
+  try {
+    const fallbackMs = Number(backgroundUpdateSettings?.intervalMs || 0);
+    const until = Date.now() + Math.max(60000, Number(ms || fallbackMs || 0));
+    const payload = {
+      version: String(version || "").trim(),
+      until,
+      savedAt: Date.now(),
+    };
+    localStorage.setItem(BACKGROUND_UPDATE_SNOOZE_KEY, JSON.stringify(payload));
+  } catch {}
+}
+
+function isBackgroundUpdateSnoozed(version) {
+  const state = getBackgroundUpdateSnoozeState();
+  const until = Number(state?.until || 0);
+  const target = String(version || "").trim();
+  const savedVersion = String(state?.version || "").trim();
+
+  if (!(until > Date.now())) return false;
+  if (!savedVersion) return true;
+  if (!target) return true;
+  return savedVersion === target;
+}
+
+function ensureBackgroundUpdateNoticeUi() {
+  let root = document.getElementById("updatePassiveNotice");
+  if (root) return root;
+
+  if (!document.getElementById("updatePassiveNoticeStyle")) {
+    const style = document.createElement("style");
+    style.id = "updatePassiveNoticeStyle";
+    style.textContent = `
+      .update-passive-notice {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        z-index: 1200;
+        max-width: min(420px, calc(100vw - 24px));
+        background: #ffffff;
+        border: 1px solid #cfe0ff;
+        border-radius: 14px;
+        box-shadow: 0 10px 28px rgba(17, 24, 39, 0.20);
+        color: #102046;
+        padding: 12px 14px;
+        display: none;
+      }
+
+      .update-passive-notice.is-visible {
+        display: block;
+      }
+
+      .update-passive-title {
+        font-weight: 800;
+        font-size: 14px;
+        margin-bottom: 4px;
+      }
+
+      .update-passive-text {
+        font-size: 13px;
+        line-height: 1.35;
+        margin-bottom: 10px;
+      }
+
+      .update-passive-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+
+      .update-passive-btn {
+        border: 1px solid #2d5de7;
+        border-radius: 999px;
+        background: #ffffff;
+        color: #1f4fd0;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 6px 10px;
+        cursor: pointer;
+      }
+
+      .update-passive-btn.primary {
+        background: #2d5de7;
+        color: #ffffff;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  root = document.createElement("div");
+  root.id = "updatePassiveNotice";
+  root.className = "update-passive-notice";
+  root.innerHTML = `
+    <div class="update-passive-title">Nueva version disponible</div>
+    <div class="update-passive-text" id="updatePassiveNoticeText"></div>
+    <div class="update-passive-actions">
+      <button type="button" class="update-passive-btn" id="updatePassiveNoticeLaterBtn">Mas tarde</button>
+      <button type="button" class="update-passive-btn primary" id="updatePassiveNoticeNowBtn">Actualizar</button>
+    </div>
+  `;
+
+  document.body.appendChild(root);
+
+  const nowBtn = document.getElementById("updatePassiveNoticeNowBtn");
+  const laterBtn = document.getElementById("updatePassiveNoticeLaterBtn");
+
+  nowBtn?.addEventListener("click", async () => {
+    root.classList.remove("is-visible");
+    await startManualUpdateFlowFromOptions();
+  });
+
+  laterBtn?.addEventListener("click", () => {
+    const targetVersion = String(root.dataset.targetVersion || "").trim();
+    setBackgroundUpdateSnooze(targetVersion);
+    root.classList.remove("is-visible");
+    toast(
+      "Recordatorio pospuesto hasta la siguiente comprobacion.",
+      "info",
+      "Actualizacion",
+    );
+  });
+
+  return root;
+}
+
+function showBackgroundUpdateNotice({ targetVersion = "" } = {}) {
+  const root = ensureBackgroundUpdateNoticeUi();
+  const textEl = document.getElementById("updatePassiveNoticeText");
+  const verTxt = String(targetVersion || "").trim();
+
+  root.dataset.targetVersion = verTxt;
+  if (textEl) {
+    textEl.textContent = verTxt
+      ? `Version detectada: ${verTxt}. Puedes actualizar cuando te venga bien.`
+      : "Hay una version nueva lista para instalar.";
+  }
+
+  root.classList.add("is-visible");
+}
+
+function hideBackgroundUpdateNotice() {
+  const root = document.getElementById("updatePassiveNotice");
+  if (!root) return;
+  root.classList.remove("is-visible");
+}
+
 async function refreshBackgroundUpdateCurrentVersionUi() {
   const versionEl = document.getElementById("updateNoticeCurrentVersionText");
   if (!versionEl) return;
@@ -21091,12 +24283,19 @@ async function runBackgroundUpdateAvailabilityCheck(reason = "timer") {
     const check = await updaterApi.checkNow();
     if (!check?.ok) return check;
     if (check?.devMode) return check;
-    if (check?.updateAvailable) {
-      const targetVersion = String(check?.targetVersion || "").trim();
-      console.info(
-        `[UPDATE-PASSIVE] update available (${targetVersion || "unknown"}) via ${reason}`,
-      );
+
+    if (!check?.updateAvailable) {
+      hideBackgroundUpdateNotice();
+      return check;
     }
+
+    const targetVersion = String(check?.targetVersion || "").trim();
+    if (isBackgroundUpdateSnoozed(targetVersion)) return;
+
+    showBackgroundUpdateNotice({ targetVersion });
+    console.info(
+      `[UPDATE-PASSIVE] update available (${targetVersion || "unknown"}) via ${reason}`,
+    );
     return check;
   } catch (e) {
     console.warn("[UPDATE-PASSIVE] check failed:", e?.message || e);
@@ -21884,6 +25083,221 @@ function getUnitGrossForPrint(l) {
   }
 
   return 0;
+}
+
+function getCatalogBaseUnitGrossForProductId(productId) {
+  const pid = Number(productId || 0);
+  if (!pid || !Array.isArray(products) || !products.length) return 0;
+
+  const product = products.find(
+    (p) => Number(getProductBaseId(p) || 0) === pid,
+  );
+  if (!product) return 0;
+
+  try {
+    const cartLike = buildCartLine(product, 1);
+    const gross = Number(cartLike?.grossPrice || cartLike?.price || 0);
+    return isFinite(gross) && gross > 0 ? gross : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function getPrintableLinePricingBreakdown(line) {
+  const qty = parseQtyValue(line?.qty ?? line?.cantidad, 0);
+  const absQty = Math.abs(qty);
+  const taxRate = getTaxRateForLine(line);
+  const taxFactor = 1 + taxRate / 100;
+
+  const finalUnitGross = parseQtyValue(getUnitGrossForPrint(line), 0);
+  let baseUnitGross = parseQtyValue(line?.__baseUnitGrossHint, NaN);
+  if (!isFinite(baseUnitGross) || baseUnitGross <= 0) {
+    baseUnitGross = finalUnitGross;
+  }
+
+  const totalNetNoDiscount = parseQtyValue(line?.pvpsindto, NaN);
+  const totalNetFinal = parseQtyValue(line?.pvptotal, NaN);
+  if (
+    absQty > 0 &&
+    isFinite(totalNetNoDiscount) &&
+    isFinite(totalNetFinal) &&
+    totalNetNoDiscount > totalNetFinal + 0.0001
+  ) {
+    const baseUnitNet = totalNetNoDiscount / absQty;
+    baseUnitGross = baseUnitNet * taxFactor;
+  } else {
+    const fsDiscountFields = [
+      line?.dtopor,
+      line?.dtopor1,
+      line?.dtopor2,
+      line?.dtopor3,
+      line?.dtopor4,
+    ]
+      .map((v) => parseQtyValue(v, 0))
+      .filter((v) => isFinite(v) && v > 0 && v < 100);
+
+    if (fsDiscountFields.length) {
+      const finalFactor = fsDiscountFields.reduce(
+        (acc, pct) => acc * (1 - pct / 100),
+        1,
+      );
+      if (finalFactor > 0.000001 && finalFactor < 0.999999) {
+        baseUnitGross = finalUnitGross / finalFactor;
+      }
+    }
+
+    if (!(baseUnitGross > finalUnitGross + 0.0001)) {
+      try {
+        const pricing = getCartLinePricing?.(line);
+        const candidate = Number(pricing?.baseUnitGross || 0);
+        if (isFinite(candidate) && candidate > 0) baseUnitGross = candidate;
+      } catch {}
+    }
+
+    if (!(baseUnitGross > finalUnitGross + 0.0001)) {
+      const catalogBase = getCatalogBaseUnitGrossForProductId(
+        line?.idproducto || line?.id || line?.baseProductId,
+      );
+      if (catalogBase > finalUnitGross + 0.0001) {
+        baseUnitGross = catalogBase;
+      }
+    }
+  }
+
+  const baseUnit = round2(baseUnitGross);
+  const finalUnit = round2(finalUnitGross);
+  const discountPerUnit = Math.max(0, round2(baseUnit - finalUnit));
+  const discountTotal = round2(discountPerUnit * absQty);
+  const hasDiscount = discountPerUnit > 0.0001;
+
+  return {
+    qty,
+    absQty,
+    baseUnitGross: baseUnit,
+    finalUnitGross: finalUnit,
+    discountPerUnit,
+    discountTotal,
+    hasDiscount,
+  };
+}
+
+function getPrintableLineDiscountType(line, pricing = null) {
+  const p = pricing || getPrintableLinePricingBreakdown(line);
+  if (!p?.hasDiscount) return "";
+
+  const hint = String(line?.__discountTypeHint || "").trim();
+  if (hint) return hint;
+
+  try {
+    const cartPricing = getCartLinePricing?.(line);
+    if (cartPricing?.manualPriceLocked) return "Manual";
+    if (cartPricing?.cartDiscountApplied) {
+      return cartPricing?.cartDiscountSource === "line"
+        ? "Dto linea"
+        : "Dto general";
+    }
+    if (cartPricing?.tariffApplied) return "Tarifa";
+  } catch {}
+
+  const fsDiscountFields = [
+    line?.dtopor,
+    line?.dtopor1,
+    line?.dtopor2,
+    line?.dtopor3,
+    line?.dtopor4,
+  ]
+    .map((v) => parseQtyValue(v, 0))
+    .filter((v) => isFinite(v) && v > 0 && v < 100);
+
+  if (fsDiscountFields.length) return "Descuento";
+  return "Descuento";
+}
+
+function calcPrintableDiscountTotal(lineas) {
+  let total = 0;
+  for (const line of Array.isArray(lineas) ? lineas : []) {
+    if (isPackChildForPrint(line)) continue;
+    const b = getPrintableLinePricingBreakdown(line);
+    total += Number(b?.discountTotal || 0);
+  }
+  return round2(total);
+}
+
+function attachPrintableDiscountHintsFromSnapshot(
+  fsMappedLines,
+  snapshotLines,
+) {
+  const fs = Array.isArray(fsMappedLines) ? fsMappedLines : [];
+  const snap = Array.isArray(snapshotLines) ? snapshotLines : [];
+  if (!fs.length || !snap.length) return fs;
+
+  const normalize = (v) =>
+    String(v || "")
+      .trim()
+      .replace(/^DEV\s*-\s*/i, "")
+      .replace(/\s+/g, " ")
+      .toUpperCase();
+
+  const available = snap
+    .map((line, idx) => ({ line, idx, used: false }))
+    .filter((x) => !isPackChildForPrint(x.line));
+
+  const out = fs.map((line) => ({ ...line }));
+
+  out.forEach((row) => {
+    const fsQty = Math.abs(parseQtyValue(row?.cantidad ?? row?.qty, 0));
+    const fsUnit = round2(Number(getUnitGrossForPrint(row) || 0));
+    const fsRef = normalize(row?.referencia);
+    const fsDesc = normalize(row?.descripcion);
+
+    let best = null;
+    let bestScore = -1;
+
+    for (const c of available) {
+      if (c.used) continue;
+      const qty = Math.abs(parseQtyValue(c.line?.qty ?? c.line?.cantidad, 0));
+      if (Math.abs(qty - fsQty) > 0.001) continue;
+
+      const unit = round2(Number(getUnitGross(c.line) || 0));
+      if (Math.abs(unit - fsUnit) > 0.02) continue;
+
+      let score = 0;
+      const snapRef = normalize(c.line?.referencia || c.line?.name);
+      const snapDesc = normalize(c.line?.descripcion || c.line?.secondaryName);
+      if (fsRef && snapRef && fsRef === snapRef) score += 2;
+      if (fsDesc && snapDesc && fsDesc === snapDesc) score += 1;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = c;
+      }
+    }
+
+    if (!best) return;
+
+    const pricing = getCartLinePricing(best.line);
+    if (
+      pricing?.anyPricingAdjustment &&
+      Number(pricing?.baseUnitGross || 0) > Number(pricing?.unitGross || 0)
+    ) {
+      row.__baseUnitGrossHint = Number(pricing.baseUnitGross || 0);
+
+      if (pricing?.manualPriceLocked) {
+        row.__discountTypeHint = "Manual";
+      } else if (pricing?.cartDiscountApplied) {
+        row.__discountTypeHint =
+          pricing?.cartDiscountSource === "line" ? "Dto linea" : "Dto general";
+      } else if (pricing?.tariffApplied) {
+        row.__discountTypeHint = "Tarifa";
+      } else {
+        row.__discountTypeHint = "Descuento";
+      }
+    }
+
+    best.used = true;
+  });
+
+  return out;
 }
 
 function calcTotalsAndTaxMap(lineas, totalsOnlyPositive) {
@@ -23364,6 +26778,20 @@ function isProbablyNetworkError(err) {
   );
 }
 
+function isRetryableQueueSyncError(err) {
+  if (isProbablyNetworkError(err)) return true;
+
+  const msg = String(err?.message || err || "");
+  const low = msg.toLowerCase();
+
+  if (low.includes("error http 429")) return true;
+  if (low.includes("demasiadas peticiones")) return true;
+  if (/error http\s*5\d\d/i.test(msg)) return true;
+  if (low.includes("tempor") && low.includes("error")) return true;
+
+  return false;
+}
+
 function escapeHtml(str) {
   return String(str ?? "")
     .replaceAll("&", "&amp;")
@@ -23497,6 +26925,197 @@ function getParkedGlobalCounterStorageKey() {
   const slug = String(getCurrentSlugForReservations() || "").trim();
   const scope = slug || "default";
   return `${PARKED_GLOBAL_COUNTER_KEY}::${scope}`;
+}
+
+function getParkedPaidTombstonesStorageKey() {
+  return getParkedScopedStorageKey(PARKED_PAID_TOMBSTONES_KEY);
+}
+
+function getPaidTicketParkedOriginStorageKey() {
+  return getParkedScopedStorageKey(PAID_TICKET_PARKED_ORIGIN_KEY);
+}
+
+function loadPaidTicketParkedOriginMap() {
+  try {
+    const raw = localStorage.getItem(getPaidTicketParkedOriginStorageKey());
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePaidTicketParkedOriginMap(map) {
+  try {
+    const safe = map && typeof map === "object" ? map : {};
+    const entries = Object.entries(safe);
+    const trimmed =
+      entries.length > 3000
+        ? Object.fromEntries(entries.slice(entries.length - 3000))
+        : safe;
+    localStorage.setItem(
+      getPaidTicketParkedOriginStorageKey(),
+      JSON.stringify(trimmed),
+    );
+  } catch {}
+}
+
+function rememberPaidTicketParkedOrigin(ticket, paidInfo = {}) {
+  const paidId = Number(paidInfo?.idfactura || ticket?.paidTicketId || 0) || 0;
+  const paidCode = String(
+    paidInfo?.codigo || paidInfo?.numero || ticket?.paidTicketCode || "",
+  )
+    .trim()
+    .toLowerCase();
+
+  if (!paidId && !paidCode) return;
+
+  const origin = {
+    parkedDisplayNo: String(getParkedTicketDisplayNumber(ticket) || ""),
+    parkedLabel: String(getParkedTicketDisplayLabel(ticket) || "").trim(),
+    parkedClientName: String(ticket?.clientName || "").trim(),
+    parkedTicketId: Number(ticket?.id || 0) || 0,
+    paidAt: new Date().toISOString(),
+  };
+
+  const map = loadPaidTicketParkedOriginMap();
+  if (paidId > 0) map[`id:${paidId}`] = origin;
+  if (paidCode) map[`code:${paidCode}`] = origin;
+  savePaidTicketParkedOriginMap(map);
+}
+
+function getPaidTicketParkedOriginForTicketRow(ticketRow) {
+  const map = loadPaidTicketParkedOriginMap();
+
+  const paidId = Number(ticketRow?.idfactura || 0) || 0;
+  if (paidId > 0 && map[`id:${paidId}`]) {
+    return map[`id:${paidId}`];
+  }
+
+  const paidCode = String(ticketRow?.codigo || "")
+    .trim()
+    .toLowerCase();
+  if (paidCode && map[`code:${paidCode}`]) {
+    return map[`code:${paidCode}`];
+  }
+
+  return null;
+}
+
+function getParkedDeviceNodeId() {
+  const key = getParkedScopedStorageKey(PARKED_DEVICE_NODE_ID_KEY);
+
+  try {
+    const raw = Number(localStorage.getItem(key) || 0);
+    if (Number.isInteger(raw) && raw >= 1000 && raw <= 9999) {
+      return raw;
+    }
+  } catch {}
+
+  const generated = 1000 + Math.floor(Math.random() * 9000);
+  try {
+    localStorage.setItem(key, String(generated));
+  } catch {}
+
+  return generated;
+}
+
+function nextParkedTicketId() {
+  const nodeId = getParkedDeviceNodeId();
+  const seqKey = getParkedScopedStorageKey(PARKED_DEVICE_SEQ_KEY);
+
+  let seq = 0;
+  try {
+    const raw = Number(localStorage.getItem(seqKey) || 0);
+    if (Number.isInteger(raw) && raw >= 0 && raw <= 9999) {
+      seq = raw;
+    }
+  } catch {}
+
+  const usedIds = new Set(
+    (Array.isArray(parkedTickets) ? parkedTickets : [])
+      .map((t) => Number(t?.id || 0))
+      .filter((n) => Number.isFinite(n) && n > 0),
+  );
+
+  for (let i = 0; i < 10010; i += 1) {
+    seq = (seq % 9999) + 1;
+    const candidate = nodeId * 10000 + seq;
+    if (usedIds.has(candidate)) continue;
+
+    try {
+      localStorage.setItem(seqKey, String(seq));
+    } catch {}
+
+    parkedCounter = Math.max(Number(parkedCounter || 0), candidate);
+    return candidate;
+  }
+
+  const fallback = Date.now();
+  parkedCounter = Math.max(Number(parkedCounter || 0), fallback);
+  return fallback;
+}
+
+function loadParkedPaidTombstones() {
+  try {
+    const raw = localStorage.getItem(getParkedPaidTombstonesStorageKey());
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr)
+      ? arr.map((x) => String(x || "").trim()).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveParkedPaidTombstones(keys) {
+  const safe = Array.from(
+    new Set(
+      (Array.isArray(keys) ? keys : [])
+        .map((x) => String(x || "").trim())
+        .filter(Boolean),
+    ),
+  ).slice(-5000);
+
+  try {
+    localStorage.setItem(
+      getParkedPaidTombstonesStorageKey(),
+      JSON.stringify(safe),
+    );
+  } catch {}
+}
+
+function isParkedPaidTombstoned(ticket) {
+  if (!ticket || !ticket?.paid) return false;
+  const key = getParkedTicketSyncKey(ticket);
+  if (!key) return false;
+  return new Set(loadParkedPaidTombstones()).has(key);
+}
+
+function markParkedPaidTicketAsDeleted(ticket) {
+  if (!ticket || !ticket?.paid) return;
+  const key = getParkedTicketSyncKey(ticket);
+  if (!key) return;
+
+  const keys = loadParkedPaidTombstones();
+  keys.push(key);
+  saveParkedPaidTombstones(keys);
+}
+
+function purgeParkedPaidTombstonesByTickets(tickets) {
+  const list = Array.isArray(tickets) ? tickets : [];
+  if (!list.length) return;
+
+  const toDrop = new Set(
+    list
+      .map((ticket) => getParkedTicketSyncKey(ticket))
+      .map((x) => String(x || "").trim())
+      .filter(Boolean),
+  );
+  if (!toDrop.size) return;
+
+  const keys = loadParkedPaidTombstones().filter((k) => !toDrop.has(k));
+  saveParkedPaidTombstones(keys);
 }
 
 function loadParkedGlobalCounter() {
@@ -23864,13 +27483,16 @@ function getScopedAllParkedTickets(list = parkedTickets) {
   let source = Array.isArray(list) ? list : [];
 
   if (!MESAS_INLINE_ACTIVE) {
+    const sharedCashMode = isSharedCashModeEnabled();
     const currentCajaId = String(
       getCajaIdSafe?.() || currentTerminal?.id || "",
     ).trim();
 
     source = source.filter((t) => !isMesasModeTicket(t));
 
-    if (currentCajaId) {
+    // En caja compartida, los aparcados/cobrados deben ser visibles entre
+    // TPVs de la misma empresa, aunque provengan de otra cajaId.
+    if (currentCajaId && !sharedCashMode) {
       source = source.filter((t) => {
         const ticketCajaId = String(t?.cajaId || "").trim();
         return !ticketCajaId || ticketCajaId === currentCajaId;
@@ -24272,6 +27894,67 @@ function saveParkedTicketsCache(list = parkedTickets) {
   }
 }
 
+function saveParkedPaidHistory(list) {
+  const safe = (Array.isArray(list) ? list : [])
+    .filter((t) => !!t?.paid)
+    .map((t) => ({
+      ...t,
+      createdAt: t?.createdAt
+        ? new Date(t.createdAt).toISOString()
+        : new Date().toISOString(),
+      updatedAt: t?.updatedAt ? new Date(t.updatedAt).toISOString() : null,
+      paidAt: t?.paidAt ? new Date(t.paidAt).toISOString() : null,
+    }));
+
+  try {
+    localStorage.setItem(
+      getParkedScopedStorageKey(PARKED_PAID_HISTORY_KEY),
+      JSON.stringify(safe.slice(-2000)),
+    );
+  } catch (e) {
+    console.warn(
+      "No se pudo guardar historial de aparcados cobrados:",
+      e?.message || e,
+    );
+  }
+}
+
+function loadParkedPaidHistory() {
+  try {
+    const raw = localStorage.getItem(
+      getParkedScopedStorageKey(PARKED_PAID_HISTORY_KEY),
+    );
+    const arr = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(arr)) return [];
+
+    return arr
+      .map((it) => normalizeRemoteParkedTicket(it))
+      .filter(Boolean)
+      .filter((t) => !!t?.paid);
+  } catch (e) {
+    console.warn(
+      "No se pudo leer historial de aparcados cobrados:",
+      e?.message || e,
+    );
+    return [];
+  }
+}
+
+function upsertParkedPaidHistory(ticket) {
+  if (!ticket || !ticket?.paid) return;
+
+  const key = getParkedTicketSyncKey(ticket);
+  if (!key) return;
+
+  const list = loadParkedPaidHistory();
+  const idx = list.findIndex((it) => getParkedTicketSyncKey(it) === key);
+
+  if (idx >= 0) list[idx] = { ...list[idx], ...ticket };
+  else list.push(ticket);
+
+  saveParkedPaidHistory(list);
+}
+
 function loadParkedTicketsCache() {
   try {
     const raw = localStorage.getItem(
@@ -24283,6 +27966,7 @@ function loadParkedTicketsCache() {
     return arr
       .map((it) => normalizeRemoteParkedTicket(it))
       .filter(Boolean)
+      .filter((t) => !isParkedPaidTombstoned(t))
       .filter((t) => isTicketInCurrentParkingMode(t));
   } catch (e) {
     console.warn("No se pudo leer cache local de aparcados:", e?.message || e);
@@ -24437,6 +28121,7 @@ function syncParkedTicketsFromRemote(list) {
   const nextPending = (Array.isArray(list) ? list : [])
     .map((it) => normalizeRemoteParkedTicket(it))
     .filter(Boolean)
+    .filter((t) => !isParkedPaidTombstoned(t))
     .filter((t) => !t.paid)
     .map((ticket) => {
       const prev = getParkedTicketSyncKeyVariants(ticket)
@@ -24544,6 +28229,7 @@ function syncParkedTicketsFromRemote(list) {
 
   const preservedPaid = previousTickets
     .filter((t) => !!t?.paid)
+    .filter((t) => !isParkedPaidTombstoned(t))
     .filter((t) => isTicketInCurrentParkingMode(t))
     .filter((t) => {
       const key = getParkedTicketSyncKey(t);
@@ -24552,15 +28238,29 @@ function syncParkedTicketsFromRemote(list) {
 
   const next = [...nextPending, ...preservedPaid];
 
+  purgeParkedPaidTombstonesByTickets(nextPending);
+
   parkedTickets = next;
 
-  const maxId = parkedTickets.reduce((m, t) => {
-    const n = Number(t?.id || 0);
-    return n > m ? n : m;
+  const MAX_SAFE_DISPLAY_NO = 9999;
+  const normalizeDisplayCounter = (value) => {
+    const n = Number(value || 0);
+    if (!Number.isFinite(n) || n <= 0 || n > MAX_SAFE_DISPLAY_NO) return 0;
+    return Math.floor(n);
+  };
+
+  const maxDisplayNo = parkedTickets.reduce((max, ticket) => {
+    const n = Number(getParkedTicketDisplayNumber(ticket) || 0) || 0;
+    if (!Number.isFinite(n) || n <= 0 || n > MAX_SAFE_DISPLAY_NO) return max;
+    return n > max ? n : max;
   }, 0);
 
-  parkedCounter = Math.max(Number(parkedCounter || 0), maxId);
-  saveParkedGlobalCounter(parkedCounter);
+  parkedCounter = Math.max(
+    normalizeDisplayCounter(parkedCounter),
+    normalizeDisplayCounter(loadParkedGlobalCounter()),
+    normalizeDisplayCounter(maxDisplayNo),
+  );
+  if (parkedCounter > 0) saveParkedGlobalCounter(parkedCounter);
   saveParkedTicketsCache(parkedTickets);
 
   if (prevLoadedKey) {
@@ -24865,6 +28565,37 @@ async function apiDeleteParkedReservation(ticket) {
   return true;
 }
 
+async function ensureRemoteParkedPaidVisibility(ticket) {
+  if (!ticket || !ticket?.paid) {
+    return { ok: true, mode: "skip" };
+  }
+
+  const list = await apiListParkedReservations();
+  const normalized = (Array.isArray(list) ? list : [])
+    .map((it) => normalizeRemoteParkedTicket(it))
+    .filter(Boolean);
+
+  const key = getParkedTicketSyncKey(ticket);
+  const byKey = key
+    ? normalized.find((it) => getParkedTicketSyncKey(it) === key)
+    : null;
+
+  const byId =
+    byKey ||
+    normalized.find((it) => Number(it?.id || 0) === Number(ticket?.id || 0));
+
+  if (byId?.paid) {
+    return { ok: true, mode: "paid" };
+  }
+
+  if (byId && !byId?.paid) {
+    await apiDeleteParkedReservation(ticket);
+    return { ok: true, mode: "deleted-fallback" };
+  }
+
+  return { ok: true, mode: "missing" };
+}
+
 async function refreshRemoteParkedReservationsOnly() {
   if (isTutorialGlobalPauseActive()) return false;
   if (isMesasDesignViewActive()) return false;
@@ -24914,6 +28645,30 @@ async function refreshStockAndReservationsOnly() {
 
   updateRenderedProductStocks();
   return true;
+}
+
+function scheduleParkedReservationsBurstRefresh(reason = "manual") {
+  if (TPV_STATE?.offline) return;
+
+  (__parkedBurstRefreshTimers || []).forEach((id) => clearTimeout(id));
+  __parkedBurstRefreshTimers = [];
+
+  const runOnce = async () => {
+    if (TPV_STATE?.offline) return;
+    if (!cashSession?.open) return;
+    try {
+      await refreshRemoteParkedReservationsOnly();
+    } catch (e) {
+      console.warn(
+        `Burst refresh reservas fallo (${reason}):`,
+        e?.message || e,
+      );
+    }
+  };
+
+  runOnce();
+  __parkedBurstRefreshTimers.push(setTimeout(runOnce, 1200));
+  __parkedBurstRefreshTimers.push(setTimeout(runOnce, 3200));
 }
 
 function startParkedReservationsAutoRefresh() {
@@ -27212,12 +30967,6 @@ async function confirmSplitTicket() {
   });
 
   if (splitTickets.length) {
-    const maxCreatedId = splitTickets.reduce(
-      (max, t) => Math.max(max, Number(t?.id || 0)),
-      0,
-    );
-    parkedCounter = Math.max(Number(parkedCounter || 0), maxCreatedId);
-    saveParkedGlobalCounter(parkedCounter);
     parkedTickets.push(...splitTickets);
   }
 
@@ -28092,6 +31841,7 @@ let payModalState = {
   values: {}, // seguimos guardando strings en inputs
   selectedCodpago: null,
 };
+let PAY_SERIES_CACHE = [];
 
 // utilidades € (sin romper tus eur())
 function toCents(v) {
@@ -28156,6 +31906,147 @@ function centsToEuro2es(c) {
 
 function euro2(n) {
   return (Number(n) || 0).toFixed(2);
+}
+
+function normalizePaySeriesRows(rawList) {
+  const src = Array.isArray(rawList) ? rawList : [];
+  const out = [];
+  const seen = new Set();
+
+  src.forEach((row) => {
+    const cod = String(row?.codserie || "")
+      .trim()
+      .toUpperCase();
+    if (cod !== "S" && cod !== "A") return;
+    if (!cod || seen.has(cod)) return;
+
+    seen.add(cod);
+    out.push({
+      codserie: cod,
+      descripcion: String(row?.descripcion || cod).trim(),
+      tipo: String(row?.tipo || "")
+        .trim()
+        .toUpperCase(),
+    });
+  });
+
+  if (!seen.has("S")) {
+    out.push({ codserie: "S", descripcion: "Simplificadas", tipo: "S" });
+    seen.add("S");
+  }
+  if (!seen.has("A")) {
+    out.push({ codserie: "A", descripcion: "General", tipo: "" });
+    seen.add("A");
+  }
+
+  return out.sort((a, b) => {
+    const pri = (x) => (x.codserie === "S" ? 0 : x.codserie === "A" ? 1 : 9);
+    const pa = pri(a);
+    const pb = pri(b);
+    if (pa !== pb) return pa - pb;
+    return String(a.descripcion || a.codserie).localeCompare(
+      String(b.descripcion || b.codserie),
+      "es",
+    );
+  });
+}
+
+function renderPaySerieOptions(seriesRows) {
+  if (!paySerie) return;
+
+  const rows = normalizePaySeriesRows(seriesRows);
+  paySerie.innerHTML = rows
+    .map((s) => {
+      const cod = String(s.codserie || "")
+        .trim()
+        .toUpperCase();
+      const label = String(s.descripcion || cod).trim() || cod;
+      return `<option value="${escapeHtml(cod)}">${escapeHtml(label)}</option>`;
+    })
+    .join("");
+
+  const hasSimplificada = rows.some((r) => r.codserie === "S");
+  paySerie.value = hasSimplificada ? "S" : rows[0]?.codserie || "S";
+}
+
+async function ensurePaySeriesLoaded() {
+  if (Array.isArray(PAY_SERIES_CACHE) && PAY_SERIES_CACHE.length) {
+    renderPaySerieOptions(PAY_SERIES_CACHE);
+    return;
+  }
+
+  try {
+    const rows = await fetchApiResource("series");
+    PAY_SERIES_CACHE = normalizePaySeriesRows(rows);
+  } catch (e) {
+    console.warn("No se pudo cargar series de facturas:", e?.message || e);
+    PAY_SERIES_CACHE = normalizePaySeriesRows([]);
+  }
+
+  renderPaySerieOptions(PAY_SERIES_CACHE);
+}
+
+function getSelectedCustomerPrintMeta() {
+  const selected = window.CUSTOMER_SELECTOR?.getSelectedCustomer?.() || null;
+  const cod = String(
+    selected?.codcliente ||
+      window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() ||
+      "",
+  )
+    .trim()
+    .toUpperCase();
+
+  const list =
+    typeof window.CUSTOMER_SELECTOR?.listCustomers === "function"
+      ? window.CUSTOMER_SELECTOR.listCustomers()
+      : [];
+
+  const full = Array.isArray(list)
+    ? list.find(
+        (c) =>
+          String(c?.codcliente || "")
+            .trim()
+            .toUpperCase() === cod,
+      ) || selected
+    : selected;
+
+  const cache = getCustomerPrintCacheByCod(
+    cod || String(full?.codcliente || "").trim(),
+  );
+  const raw = full?._raw || null;
+
+  const name = String(
+    cache?.razonsocial ||
+      cache?.nombre ||
+      full?.razonsocial ||
+      full?.nombre ||
+      selected?.nombre ||
+      "Cliente",
+  ).trim();
+
+  const fiscalId = String(
+    cache?.cifnif || full?.cifnif || full?.cif || raw?.cifnif || raw?.cif || "",
+  ).trim();
+
+  const address = [
+    String(cache?.direccion || full?.direccion || raw?.direccion || "").trim(),
+    String(cache?.codpostal || full?.codpostal || raw?.codpostal || "").trim(),
+    String(cache?.ciudad || full?.ciudad || raw?.ciudad || "").trim(),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  return {
+    codcliente: cod || String(full?.codcliente || "").trim() || "1",
+    clientName: name || "Cliente",
+    clientFiscalId: fiscalId,
+    clientAddress: address,
+    isDefaultCustomer:
+      cod === "1" ||
+      full?.isDefault === true ||
+      /^ventas\s*tickets$/i.test(String(name || "")),
+  };
 }
 
 function sumPagosCents() {
@@ -28564,6 +32455,8 @@ async function openPayModal(total) {
       { codpago: "CONT", descripcion: "Efectivo", imprimir: true },
     ];
   }
+
+  await ensurePaySeriesLoaded();
 
   renderPayMethods();
 
@@ -29002,21 +32895,56 @@ function getNextSuggestedParkTicketDisplayNo() {
 
   if (!pendingTickets.length) return 1;
 
+  const usedDisplayNos = new Set();
+  pendingTickets.forEach((ticket) => {
+    const n = Number(getParkedTicketDisplayNumber(ticket) || 0) || 0;
+    if (Number.isFinite(n) && n > 0 && n <= MAX_SAFE_DISPLAY_NO) {
+      usedDisplayNos.add(Math.floor(n));
+    }
+  });
+
+  if (usedDisplayNos.size >= MAX_SAFE_DISPLAY_NO) {
+    return MAX_SAFE_DISPLAY_NO;
+  }
+
   const maxDisplayNo = pendingTickets.reduce((max, ticket) => {
     const n = Number(getParkedTicketDisplayNumber(ticket) || 0) || 0;
     if (!Number.isFinite(n) || n <= 0 || n > MAX_SAFE_DISPLAY_NO) return max;
     return n > max ? n : max;
   }, 0);
 
+  const toValidBasis = (value) => {
+    const n = Number(value || 0);
+    if (!Number.isFinite(n) || n <= 0 || n >= MAX_SAFE_DISPLAY_NO) return 0;
+    return Math.floor(n);
+  };
+
   const globalCounter = loadParkedGlobalCounter();
   const basis = Math.max(
-    Number(parkedCounter || 0),
-    maxDisplayNo,
-    globalCounter,
+    toValidBasis(parkedCounter),
+    toValidBasis(maxDisplayNo),
+    toValidBasis(globalCounter),
   );
-  if (basis <= 0) return 1;
+  if (basis <= 0) {
+    for (let candidate = 1; candidate <= MAX_SAFE_DISPLAY_NO; candidate += 1) {
+      if (!usedDisplayNos.has(candidate)) return candidate;
+    }
+    return 1;
+  }
 
-  return Math.min(MAX_SAFE_DISPLAY_NO, basis + 1);
+  for (
+    let candidate = basis + 1;
+    candidate <= MAX_SAFE_DISPLAY_NO;
+    candidate += 1
+  ) {
+    if (!usedDisplayNos.has(candidate)) return candidate;
+  }
+
+  for (let candidate = 1; candidate <= basis; candidate += 1) {
+    if (!usedDisplayNos.has(candidate)) return candidate;
+  }
+
+  return 1;
 }
 
 function getNextSuggestedParkTicketId() {
@@ -29670,6 +33598,126 @@ function syncTicketsToolbarUI() {
 
   syncTicketsExtraActionsUI();
   syncTicketsSearchClearBtn();
+}
+
+function removeOfflineTicketByMatch(ticketRow) {
+  const list = loadOfflineTicketsForTicketsModal();
+  if (!Array.isArray(list) || !list.length) return false;
+
+  const code = String(ticketRow?.codigo || "").trim();
+  const targetId = String(ticketRow?.idfactura || "").trim();
+  let removed = false;
+
+  const next = list.filter((row) => {
+    if (removed) return true;
+
+    const rowCode = String(row?.codigo || "").trim();
+    const rowId = String(row?.idfactura || "").trim();
+
+    const sameCode = !!code && rowCode === code;
+    const sameId = !!targetId && rowId === targetId;
+
+    if (sameCode || sameId) {
+      removed = true;
+      return false;
+    }
+    return true;
+  });
+
+  if (!removed) return false;
+  localStorage.setItem(OFFLINE_TICKETS_KEY, JSON.stringify(next));
+  return true;
+}
+
+function markOfflineTicketFullyRefunded(ticketRow) {
+  const list = loadOfflineTicketsForTicketsModal();
+  if (!Array.isArray(list) || !list.length) return false;
+
+  const code = String(ticketRow?.codigo || "").trim();
+  const targetId = String(ticketRow?.idfactura || "").trim();
+  let changed = false;
+
+  const next = list.map((row) => {
+    const rowCode = String(row?.codigo || "").trim();
+    const rowId = String(row?.idfactura || "").trim();
+    const sameCode = !!code && rowCode === code;
+    const sameId = !!targetId && rowId === targetId;
+    if (!sameCode && !sameId) return row;
+
+    changed = true;
+    return {
+      ...row,
+      _simulated: true,
+      _hasPartialRefund: true,
+      _isFullyRefunded: true,
+      _remainingAfterRefund: 0,
+    };
+  });
+
+  if (!changed) return false;
+  localStorage.setItem(OFFLINE_TICKETS_KEY, JSON.stringify(next));
+  return true;
+}
+
+async function deleteSimulatedTicketLocal(ticketRow) {
+  const ok = await confirmModal(
+    "Eliminar ticket simulado",
+    `¿Eliminar ${ticketRow?.codigo || "ticket"} del entorno de pruebas?`,
+  );
+  if (!ok) return;
+
+  if (!removeOfflineTicketByMatch(ticketRow)) {
+    toast(
+      "No se encontró el ticket simulado para eliminar.",
+      "warn",
+      "Tickets",
+    );
+    return;
+  }
+
+  toast("Ticket simulado eliminado.", "ok", "Tickets");
+  await loadAndRenderTickets();
+}
+
+async function refundSimulatedTicketLocal(ticketRow) {
+  const totalAbs = Math.abs(Number(ticketRow?.total || 0));
+  if (!(totalAbs > 0.0001)) {
+    toast(
+      "El ticket simulado no tiene importe para devolver.",
+      "warn",
+      "Tickets",
+    );
+    return;
+  }
+
+  const ok = await confirmModal(
+    "Devolución simulada",
+    `Se marcará ${ticketRow?.codigo || "ticket"} como devuelto y se creará su abono simulado.`,
+  );
+  if (!ok) return;
+
+  const baseId = Number(ticketRow?.idfactura || 0) || 900000;
+  const refundCode = nextSafeTrainingSimRefundCode();
+  const refundId =
+    990000 + readSafeTrainingSequence(TPV_SAFE_TRAINING_SIM_REFUND_SEQ_KEY);
+
+  markOfflineTicketFullyRefunded(ticketRow);
+  saveOfflineTicketForTicketsModal({
+    codigo: refundCode,
+    idfactura: refundId,
+    idfacturarect: baseId,
+    codigorect: String(ticketRow?.codigo || ""),
+    nombrecliente: ticketRow?.nombrecliente || "Cliente",
+    total: -totalAbs,
+    codpago: String(ticketRow?.codpago || ""),
+    fecha: new Date().toISOString().slice(0, 10),
+    hora: new Date().toTimeString().slice(0, 8),
+    codserie: "R",
+    _simulated: true,
+  });
+
+  toast("Devolución simulada registrada.", "ok", "Tickets");
+  await loadAndRenderTickets();
 }
 
 function renderTicketsList(tickets) {
@@ -30402,6 +34450,13 @@ async function bootstrapApp() {
   } catch (e) {
     console.warn("No se pudieron precargar tickets:", e?.message || e);
   }
+
+  bindCartDiscountToolsToggleOnce();
+  bindSafeTrainingModeToggleOnce();
+  bindCartGlobalDiscountButtonsOnce();
+  await loadCartDiscountToolsToggle();
+  await loadSafeTrainingModeToggle();
+  refreshCartDiscountUi();
 
   return true;
 }
@@ -33756,6 +37811,71 @@ function lineGrossUnit(l) {
   return net * (1 + tax / 100);
 }
 
+function getRefundLinePricingBreakdown(l) {
+  const soldQty = Math.abs(Number(l?.cantidad || 0)) || 1;
+  const tax = Number(lineTaxRate(l) || 0);
+  const finalUnitGross = Number(lineGrossUnit(l) || 0);
+  let baseUnitGross = finalUnitGross;
+
+  const totalNetNoDiscount = Number(l?.pvpsindto);
+  const totalNetFinal = Number(l?.pvptotal);
+
+  if (
+    isFinite(totalNetNoDiscount) &&
+    isFinite(totalNetFinal) &&
+    totalNetNoDiscount > totalNetFinal + 0.0001
+  ) {
+    const unitNetBase = totalNetNoDiscount / soldQty;
+    baseUnitGross = unitNetBase * (1 + tax / 100);
+  } else {
+    const fsDiscountFields = [
+      l?.dtopor,
+      l?.dtopor1,
+      l?.dtopor2,
+      l?.dtopor3,
+      l?.dtopor4,
+    ]
+      .map((v) => Number(v || 0))
+      .filter((v) => isFinite(v) && v > 0 && v < 100);
+
+    if (fsDiscountFields.length) {
+      const finalFactor = fsDiscountFields.reduce(
+        (acc, pct) => acc * (1 - pct / 100),
+        1,
+      );
+      if (finalFactor > 0.000001 && finalFactor < 0.999999) {
+        baseUnitGross = finalUnitGross / finalFactor;
+      }
+    }
+
+    if (!(baseUnitGross > finalUnitGross + 0.0001)) {
+      const catalogBase = getCatalogBaseUnitGrossForProductId(
+        l?.idproducto || l?.id || l?.baseProductId,
+      );
+      if (catalogBase > finalUnitGross + 0.0001) {
+        baseUnitGross = catalogBase;
+      }
+    }
+  }
+
+  const baseUnit = round2(baseUnitGross);
+  const finalUnit = round2(finalUnitGross);
+  const discountPerUnit = Math.max(0, round2(baseUnit - finalUnit));
+  const hasDiscount = discountPerUnit > 0.0001;
+  const discountPct =
+    hasDiscount && baseUnit > 0
+      ? round2(((baseUnit - finalUnit) / baseUnit) * 100)
+      : 0;
+
+  return {
+    baseUnitGross: baseUnit,
+    finalUnitGross: finalUnit,
+    discountPerUnit,
+    discountPct,
+    hasDiscount,
+  };
+}
+
 let refundState = {
   factura: null,
   lineas: [],
@@ -35332,7 +39452,54 @@ async function startOnlineMonitor() {
 }
 
 // ===== [08][Z08.2] Cola offline: envio y encolado de facturas =====
+function buildSafeTrainingTicketResponse(payload = {}) {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const fecha = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const hora = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+
+  const lineas = Array.isArray(payload?.lineas) ? payload.lineas : [];
+  const total = round2(
+    lineas.reduce((sum, line) => {
+      const qty = Number(line?.cantidad ?? line?.qty ?? 1) || 0;
+      const lineTotal = Number(
+        line?.pvptotal ??
+          line?.total ??
+          (Number(line?.pvpunitario ?? line?.pvp ?? 0) || 0) * qty,
+      );
+      return sum + (isFinite(lineTotal) ? lineTotal : 0);
+    }, 0),
+  );
+
+  const code = nextSafeTrainingSimSaleCode();
+  const idfactura =
+    900000 + readSafeTrainingSequence(TPV_SAFE_TRAINING_SIM_SALE_SEQ_KEY);
+
+  return {
+    doc: {
+      idfactura,
+      codigo: code,
+      total,
+      codcliente: String(payload?.codcliente || ""),
+      fecha,
+      hora,
+      codserie: String(payload?.codserie || payload?.serie || "S").trim(),
+      numero2: String(payload?.numero2 || "").trim(),
+      _simulated: true,
+    },
+    simulated: true,
+  };
+}
+
 async function sendOrQueueFactura(payload) {
+  if (isSafeTrainingModeEnabled()) {
+    return {
+      ok: true,
+      remote: buildSafeTrainingTicketResponse(payload),
+      simulated: true,
+    };
+  }
+
   try {
     const r = await createTicketInFacturaScripts(payload);
     return { ok: true, remote: r };
@@ -35507,6 +39674,67 @@ async function enqueueTpvcajaCloseSync(remoteId, body, opts = {}) {
       e?.message || e,
     );
     return false;
+  }
+}
+
+async function evaluateQueueHealthAndWarn({ online = false } = {}) {
+  if (!online) return;
+  if (!window.TPV_QUEUE?.list) return;
+
+  const now = Date.now();
+  if (now - __queueHealthLastCheckAt < QUEUE_HEALTH_CHECK_EVERY_MS) return;
+  __queueHealthLastCheckAt = now;
+
+  try {
+    const q = await window.TPV_QUEUE.list();
+    const pending = Array.isArray(q?.pending) ? q.pending : [];
+    const done = Array.isArray(q?.done) ? q.done : [];
+
+    const pendingSales = pending.filter(
+      (it) => it?.type === "CREATE_FACTURACLIENTE",
+    );
+
+    if (pendingSales.length) {
+      let oldestMinutes = 0;
+      let maxAttempts = 0;
+
+      for (const it of pendingSales) {
+        oldestMinutes = Math.max(oldestMinutes, minutesSinceIso(it?.createdAt));
+        maxAttempts = Math.max(maxAttempts, Number(it?.attempts || 0) || 0);
+      }
+
+      if (
+        oldestMinutes >= QUEUE_STUCK_MIN_AGE_MIN ||
+        maxAttempts >= QUEUE_STUCK_MIN_ATTEMPTS
+      ) {
+        notifyWorkerSyncIssue(
+          "queue-stuck",
+          `Hay ${pendingSales.length} venta(s) sin sincronizar (${Math.floor(oldestMinutes)} min en cola).`,
+          { title: "Sincronizacion" },
+        );
+      }
+    }
+
+    const recentDone = done.slice(0, 20);
+    const dropped = recentDone.filter(
+      (it) =>
+        it?.type === "CREATE_FACTURACLIENTE" &&
+        (it?.remote?.dropped === true || it?.remote?.ok === false),
+    );
+
+    if (dropped.length) {
+      const top = dropped[0];
+      const sampleErr = String(
+        top?.remote?.error || top?.lastError || "",
+      ).slice(0, 140);
+      notifyWorkerSyncIssue(
+        `queue-dropped-${String(top?.id || "x")}`,
+        `Se detecto una venta descartada en sincronizacion.${sampleErr ? ` Motivo: ${sampleErr}` : ""}`,
+        { title: "Sincronizacion", modal: true, cooldownMs: 60 * 60 * 1000 },
+      );
+    }
+  } catch (e) {
+    console.warn("No se pudo evaluar salud de cola:", e?.message || e);
   }
 }
 
