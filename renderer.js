@@ -8961,15 +8961,28 @@ async function runBootFlow() {
     // 3) Datos
     await loadDataFromApi();
 
-    // En modo Mesas (transacciones), no mostrar snapshot previo al arrancar.
-    // El carrito debe hidratarse desde la mesa seleccionada/ticket vinculado.
+    let restoredCartAtBoot = false;
     if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
-      cart = [];
-      currentParkedTicketIndex = null;
-      renderCart();
+      restoredCartAtBoot = await restoreRuntimeCartSnapshot({
+        force: true,
+        mode: "mesas",
+      });
+
+      if (restoredCartAtBoot) {
+        renderCart();
+        toast(
+          "Carrito recuperado tras cierre inesperado.",
+          "info",
+          "Recuperación",
+        );
+      } else {
+        cart = [];
+        currentParkedTicketIndex = null;
+        renderCart();
+      }
     } else {
-      const restoredCart = await restoreRuntimeCartSnapshot();
-      if (restoredCart) {
+      restoredCartAtBoot = await restoreRuntimeCartSnapshot();
+      if (restoredCartAtBoot) {
         renderCart();
         toast(
           "Carrito recuperado tras cierre inesperado.",
@@ -8991,7 +9004,11 @@ async function runBootFlow() {
     maybeOpenCashOrRecover();
 
     if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
-      syncTpvCartWithSelectedMesa({ preferLinkedTicketOnEmptyDraft: true });
+      const mesasState = loadMesasTablesStateForInline();
+      const hasSelectedMesa = !!String(mesasState?.selectedTableId || "").trim();
+      if (hasSelectedMesa || !restoredCartAtBoot) {
+        syncTpvCartWithSelectedMesa({ preferLinkedTicketOnEmptyDraft: true });
+      }
     }
 
     scheduleRuntimeUiRestoreAfterBoot();
