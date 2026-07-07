@@ -14720,9 +14720,17 @@ function buildParkedDiscountSummarySnapshot(items) {
   };
 }
 
-function buildParkedSummaryStats(sourceTickets) {
+function buildParkedSummaryStats(sourceTickets, mode = "pending") {
   const list = Array.isArray(sourceTickets) ? sourceTickets : [];
-  const pendingList = list.filter((t) => !t?.paid);
+  const normalizedMode = String(mode || "pending")
+    .trim()
+    .toLowerCase();
+  const includePaid = normalizedMode === "paid" || normalizedMode === "all";
+  const includePending = normalizedMode !== "paid";
+  const scopedList = list.filter((t) => {
+    if (t?.paid) return includePaid;
+    return includePending;
+  });
 
   let linesTotal = 0;
   let unitsTotal = 0;
@@ -14730,12 +14738,12 @@ function buildParkedSummaryStats(sourceTickets) {
   let amountAll = 0;
   const productsMap = new Map();
 
-  list.forEach((t) => {
+  scopedList.forEach((t) => {
     const totalTicket = Number(t?.total || 0) || 0;
     amountAll += totalTicket;
   });
 
-  pendingList.forEach((t) => {
+  scopedList.forEach((t) => {
     const totalTicket = Number(t?.total || 0) || 0;
     amountPending += totalTicket;
 
@@ -14756,8 +14764,8 @@ function buildParkedSummaryStats(sourceTickets) {
     });
   });
 
-  const paidCount = list.filter((t) => !!t?.paid).length;
-  const pendingCount = Math.max(0, list.length - paidCount);
+  const paidCount = scopedList.filter((t) => !!t?.paid).length;
+  const pendingCount = Math.max(0, scopedList.length - paidCount);
   const products = Array.from(productsMap.values()).sort((a, b) => {
     const byQty = Number(b.qty || 0) - Number(a.qty || 0);
     if (byQty !== 0) return byQty;
@@ -14765,7 +14773,7 @@ function buildParkedSummaryStats(sourceTickets) {
   });
 
   return {
-    ticketsTotal: list.length,
+    ticketsTotal: scopedList.length,
     pendingCount,
     paidCount,
     linesTotal,
@@ -14777,7 +14785,35 @@ function buildParkedSummaryStats(sourceTickets) {
   };
 }
 
-function buildParkedSummaryHtml(stats) {
+function buildParkedSummaryHtml(stats, mode = "pending") {
+  const normalizedMode = String(mode || "pending")
+    .trim()
+    .toLowerCase();
+  const ticketsLabel =
+    normalizedMode === "paid"
+      ? "Tickets cobrados"
+      : normalizedMode === "all"
+        ? "Tickets totales"
+        : "Tickets sin cobrar";
+  const amountLabel =
+    normalizedMode === "paid"
+      ? "Importe total cobrado"
+      : normalizedMode === "all"
+        ? "Importe total"
+        : "Importe total aparcado";
+  const productsLabel =
+    normalizedMode === "paid"
+      ? "Productos cobrados"
+      : normalizedMode === "all"
+        ? "Productos"
+        : "Productos aparcados";
+  const emptyLabel =
+    normalizedMode === "paid"
+      ? "No hay productos cobrados en esta vista."
+      : normalizedMode === "all"
+        ? "No hay productos en esta vista."
+        : "No hay productos aparcados en esta vista.";
+
   const fmtQty = (value) => {
     const n = Number(value || 0);
     if (!Number.isFinite(n)) return "0";
@@ -14800,18 +14836,18 @@ function buildParkedSummaryHtml(stats) {
 
   return `
     <div class="parked-summary-wrap">
-      ${row("Tickets sin cobrar", stats.pendingCount)}
-      ${row("Importe total aparcado", formatParkedAuditAmount(stats.amountPending))}
+      ${row(ticketsLabel, stats.ticketsTotal)}
+      ${row(amountLabel, formatParkedAuditAmount(stats.amountPending))}
       ${row("Productos distintos", stats.productsDistinct)}
       ${row("Líneas de producto", stats.linesTotal)}
       ${row("Unidades totales", Number(stats.unitsTotal).toFixed(2))}
 
       <div class="parked-summary-products">
-        <div class="parked-summary-products-title">Productos aparcados</div>
+        <div class="parked-summary-products-title">${escapeHtmlForModal(productsLabel)}</div>
         <div class="parked-summary-products-list">
           ${
             productsHtml ||
-            '<div class="parked-summary-empty">No hay productos aparcados en esta vista.</div>'
+            `<div class="parked-summary-empty">${escapeHtmlForModal(emptyLabel)}</div>`
           }
         </div>
       </div>
@@ -15609,8 +15645,15 @@ function ensureParkedToolbar() {
     const scoped = scopedBase.filter((t) =>
       parkedTicketPassesFilter(t, { ignorePendingScope: true }),
     );
-    const stats = buildParkedSummaryStats(scoped);
-    const html = buildParkedSummaryHtml(stats);
+    const summaryMode =
+      parkedViewState.filter === "paid"
+        ? "paid"
+        : parkedViewState.filter === "all"
+          ? "all"
+          : "pending";
+
+    const stats = buildParkedSummaryStats(scoped, summaryMode);
+    const html = buildParkedSummaryHtml(stats, summaryMode);
 
     const titleSuffix =
       parkedViewState.filter === "paid"
@@ -16585,10 +16628,16 @@ async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
   }
 
   ticket.paid = true;
+  ticket.closingInProgress = false;
+  ticket.closingByTerminalId = "";
+  ticket.closingByTerminalName = "";
+  ticket.closingByAt = null;
   ticket.paidAt = new Date();
   ticket.paidTicketCode =
     paidInfo.codigo || paidInfo.numero || ticket.paidTicketCode || null;
   ticket.paidTicketId = paidInfo.idfactura || ticket.paidTicketId || null;
+  rememberPaidTicketParkedOrigin(ticket, paidInfo);
+  upsertParkedPaidHistory(ticket);
   saveParkedTicketsCache();
   unlinkMesaTicketByTicketId(ticket?.id || null, ticket);
 
@@ -16610,18 +16659,21 @@ async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
   }
 
   try {
-    await apiDeleteParkedReservation(ticket);
+    await apiSaveParkedReservation(ticket);
+    await ensureRemoteParkedPaidVisibility(ticket);
     await refreshRemoteParkedReservationsOnly();
+    scheduleParkedReservationsBurstRefresh("pay-mark-parked");
   } catch (e) {
-    enqueueParkedSyncOperation("delete", ticket);
+    enqueueParkedSyncOperation("upsert", ticket);
+    scheduleParkedReservationsBurstRefresh("queue-pay-mark-parked");
     console.warn(
-      "No se pudo borrar la reserva remota al cobrar:",
+      "No se pudo marcar como cobrada la reserva remota:",
       e?.message || e,
     );
 
     if (isParkedSyncTransientError(e)) {
       toast(
-        "Sin internet: cobro aplicado localmente y borrado en cola.",
+        "Sin internet: cobro aplicado localmente y marcado en cola.",
         "warn",
         labels.featureTitle,
       );
@@ -26942,7 +26994,21 @@ function getParkedScopedStorageKey(baseKey) {
   const slug = String(getCurrentSlugForReservations() || "").trim();
   const scope = slug || "default";
   const modeScope = getCurrentParkingModeScope();
-  return `${baseKey}::${scope}::${modeScope}`;
+  const legacyKey = `${baseKey}::${scope}`;
+  const modeKey = `${baseKey}::${scope}::${modeScope}`;
+
+  if (modeScope !== PARKED_MODE_MESAS) {
+    try {
+      const legacyRaw = localStorage.getItem(legacyKey);
+      const modeRaw = localStorage.getItem(modeKey);
+      if ((legacyRaw == null || legacyRaw === "") && modeRaw != null) {
+        localStorage.setItem(legacyKey, modeRaw);
+      }
+    } catch {}
+    return legacyKey;
+  }
+
+  return modeKey;
 }
 
 function getParkedGlobalCounterStorageKey() {
@@ -28239,14 +28305,40 @@ function syncParkedTicketsFromRemote(list) {
     nextPending.map((t) => getParkedTicketSyncKey(t)).filter(Boolean),
   );
 
-  const preservedPaid = previousTickets
+  const preservedPaidByKey = new Map();
+  const preservedPaidCandidates = [
+    ...previousTickets,
+    ...loadParkedPaidHistory(),
+  ]
     .filter((t) => !!t?.paid)
     .filter((t) => !isParkedPaidTombstoned(t))
-    .filter((t) => isTicketInCurrentParkingMode(t))
-    .filter((t) => {
-      const key = getParkedTicketSyncKey(t);
-      return key ? !nextByKey.has(key) : true;
-    });
+    .filter((t) => isTicketInCurrentParkingMode(t));
+
+  preservedPaidCandidates.forEach((t) => {
+    const key = getParkedTicketSyncKey(t);
+    if (!key || nextByKey.has(key)) return;
+
+    const prev = preservedPaidByKey.get(key);
+    if (!prev) {
+      preservedPaidByKey.set(key, t);
+      return;
+    }
+
+    const prevTs = Math.max(
+      Number(new Date(prev?.paidAt || 0).getTime()) || 0,
+      Number(new Date(prev?.updatedAt || prev?.createdAt || 0).getTime()) || 0,
+    );
+    const nextTs = Math.max(
+      Number(new Date(t?.paidAt || 0).getTime()) || 0,
+      Number(new Date(t?.updatedAt || t?.createdAt || 0).getTime()) || 0,
+    );
+
+    if (nextTs >= prevTs) {
+      preservedPaidByKey.set(key, t);
+    }
+  });
+
+  const preservedPaid = Array.from(preservedPaidByKey.values());
 
   const next = [...nextPending, ...preservedPaid];
 
