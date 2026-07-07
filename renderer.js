@@ -11084,9 +11084,17 @@ function buildParkedDiscountSummarySnapshot(items) {
   };
 }
 
-function buildParkedSummaryStats(sourceTickets) {
+function buildParkedSummaryStats(sourceTickets, mode = "pending") {
   const list = Array.isArray(sourceTickets) ? sourceTickets : [];
-  const pendingList = list.filter((t) => !t?.paid);
+  const normalizedMode = String(mode || "pending")
+    .trim()
+    .toLowerCase();
+  const includePaid = normalizedMode === "paid" || normalizedMode === "all";
+  const includePending = normalizedMode !== "paid";
+  const scopedList = list.filter((t) => {
+    if (t?.paid) return includePaid;
+    return includePending;
+  });
 
   let linesTotal = 0;
   let unitsTotal = 0;
@@ -11094,12 +11102,12 @@ function buildParkedSummaryStats(sourceTickets) {
   let amountAll = 0;
   const productsMap = new Map();
 
-  list.forEach((t) => {
+  scopedList.forEach((t) => {
     const totalTicket = Number(t?.total || 0) || 0;
     amountAll += totalTicket;
   });
 
-  pendingList.forEach((t) => {
+  scopedList.forEach((t) => {
     const totalTicket = Number(t?.total || 0) || 0;
     amountPending += totalTicket;
 
@@ -11120,8 +11128,8 @@ function buildParkedSummaryStats(sourceTickets) {
     });
   });
 
-  const paidCount = list.filter((t) => !!t?.paid).length;
-  const pendingCount = Math.max(0, list.length - paidCount);
+  const paidCount = scopedList.filter((t) => !!t?.paid).length;
+  const pendingCount = Math.max(0, scopedList.length - paidCount);
   const products = Array.from(productsMap.values()).sort((a, b) => {
     const byQty = Number(b.qty || 0) - Number(a.qty || 0);
     if (byQty !== 0) return byQty;
@@ -11129,7 +11137,7 @@ function buildParkedSummaryStats(sourceTickets) {
   });
 
   return {
-    ticketsTotal: list.length,
+    ticketsTotal: scopedList.length,
     pendingCount,
     paidCount,
     linesTotal,
@@ -11141,7 +11149,35 @@ function buildParkedSummaryStats(sourceTickets) {
   };
 }
 
-function buildParkedSummaryHtml(stats) {
+function buildParkedSummaryHtml(stats, mode = "pending") {
+  const normalizedMode = String(mode || "pending")
+    .trim()
+    .toLowerCase();
+  const ticketsLabel =
+    normalizedMode === "paid"
+      ? "Tickets cobrados"
+      : normalizedMode === "all"
+        ? "Tickets totales"
+        : "Tickets sin cobrar";
+  const amountLabel =
+    normalizedMode === "paid"
+      ? "Importe total cobrado"
+      : normalizedMode === "all"
+        ? "Importe total"
+        : "Importe total aparcado";
+  const productsLabel =
+    normalizedMode === "paid"
+      ? "Productos cobrados"
+      : normalizedMode === "all"
+        ? "Productos"
+        : "Productos aparcados";
+  const emptyLabel =
+    normalizedMode === "paid"
+      ? "No hay productos cobrados en esta vista."
+      : normalizedMode === "all"
+        ? "No hay productos en esta vista."
+        : "No hay productos aparcados en esta vista.";
+
   const fmtQty = (value) => {
     const n = Number(value || 0);
     if (!Number.isFinite(n)) return "0";
@@ -11164,18 +11200,18 @@ function buildParkedSummaryHtml(stats) {
 
   return `
     <div class="parked-summary-wrap">
-      ${row("Tickets sin cobrar", stats.pendingCount)}
-      ${row("Importe total aparcado", formatParkedAuditAmount(stats.amountPending))}
+      ${row(ticketsLabel, stats.ticketsTotal)}
+      ${row(amountLabel, formatParkedAuditAmount(stats.amountPending))}
       ${row("Productos distintos", stats.productsDistinct)}
       ${row("Líneas de producto", stats.linesTotal)}
       ${row("Unidades totales", Number(stats.unitsTotal).toFixed(2))}
 
       <div class="parked-summary-products">
-        <div class="parked-summary-products-title">Productos aparcados</div>
+        <div class="parked-summary-products-title">${escapeHtmlForModal(productsLabel)}</div>
         <div class="parked-summary-products-list">
           ${
             productsHtml ||
-            '<div class="parked-summary-empty">No hay productos aparcados en esta vista.</div>'
+            `<div class="parked-summary-empty">${escapeHtmlForModal(emptyLabel)}</div>`
           }
         </div>
       </div>
@@ -11555,9 +11591,21 @@ function ensureParkedToolbar() {
   });
 
   parkedSummaryBtn?.addEventListener("click", async () => {
-    const scoped = getScopedAllParkedTickets(parkedTickets);
-    const stats = buildParkedSummaryStats(scoped);
-    const html = buildParkedSummaryHtml(stats);
+    const scopedBase = getScopedAllParkedTickets(parkedTickets).filter(
+      (t) => !isPedidoTpvTicket(t),
+    );
+    const scoped = scopedBase.filter((t) =>
+      parkedTicketPassesFilter(t, { ignorePendingScope: true }),
+    );
+    const summaryMode =
+      parkedViewState.filter === "paid"
+        ? "paid"
+        : parkedViewState.filter === "all"
+          ? "all"
+          : "pending";
+
+    const stats = buildParkedSummaryStats(scoped, summaryMode);
+    const html = buildParkedSummaryHtml(stats, summaryMode);
 
     await confirmModal("Resumen de aparcados", html, {
       isHtml: true,
