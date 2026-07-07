@@ -8378,7 +8378,11 @@ function setMesasInlineView(view, { persist = true } = {}) {
 
 async function setMesasInlineModeEnabled(
   enabled,
-  { persist = true, saveOutgoingSnapshot = true } = {},
+  {
+    persist = true,
+    saveOutgoingSnapshot = true,
+    restoreIncomingSnapshot = true,
+  } = {},
 ) {
   // Guarda el carrito del modo saliente antes de cambiar el contexto.
   // En bootstrap inicial se desactiva para no pisar un snapshot válido con carrito vacío.
@@ -8404,17 +8408,21 @@ async function setMesasInlineModeEnabled(
     document.body.classList.remove("mesas-inline-trans-mode");
     if (persist) await persistAppMode("tpv");
 
-    const restoredTpvCart = await restoreRuntimeCartSnapshot({
-      force: true,
-      mode: "tpv",
-    });
-
-    currentParkedTicketIndex = null;
-    if (!restoredTpvCart) {
-      cart = [];
+    let restoredTpvCart = false;
+    if (restoreIncomingSnapshot) {
+      restoredTpvCart = await restoreRuntimeCartSnapshot({
+        force: true,
+        mode: "tpv",
+      });
     }
 
-    renderCart();
+    currentParkedTicketIndex = null;
+    if (restoreIncomingSnapshot) {
+      if (!restoredTpvCart) {
+        cart = [];
+      }
+      renderCart();
+    }
     refreshParkButtonUI?.();
     refreshParkedEditingBanner?.();
   } else {
@@ -9011,7 +9019,9 @@ async function runBootFlow() {
 
     if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
       const mesasState = loadMesasTablesStateForInline();
-      const hasSelectedMesa = !!String(mesasState?.selectedTableId || "").trim();
+      const hasSelectedMesa = !!String(
+        mesasState?.selectedTableId || "",
+      ).trim();
       if (hasSelectedMesa || !restoredCartAtBoot) {
         syncTpvCartWithSelectedMesa({ preferLinkedTicketOnEmptyDraft: true });
       }
@@ -38909,6 +38919,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   await setMesasInlineModeEnabled(startMesasMode, {
     persist: false,
     saveOutgoingSnapshot: false,
+    restoreIncomingSnapshot: false,
   });
 
   await loadProductManualOrderConfig?.();
