@@ -15255,10 +15255,11 @@ function syncParkedToolbarUI() {
     parkedDocTypeTabs.classList.add("hidden");
   }
 
+  const showSummaryInLowerRow = !mesaScoped;
   const showClearPaidInLowerRow =
     !mesaScoped && parkedViewState.filter === "paid";
   if (parkedSummaryBtn) {
-    parkedSummaryBtn.classList.toggle("hidden", !showClearPaidInLowerRow);
+    parkedSummaryBtn.classList.toggle("hidden", !showSummaryInLowerRow);
   }
   if (parkedClearPaidBtn) {
     parkedClearPaidBtn.classList.toggle("hidden", !showClearPaidInLowerRow);
@@ -15282,7 +15283,7 @@ function syncParkedToolbarUI() {
 
   const shouldShowPendingScope =
     !mesaScoped &&
-    (showClearPaidInLowerRow ||
+    (showSummaryInLowerRow ||
       (parkedViewState.filter !== "paid" && hasOlderByCurrentFilter));
   parkedPendingScopeWrap?.classList.toggle("hidden", !shouldShowPendingScope);
   parkedPendingScopeToday?.classList.toggle("hidden", showClearPaidInLowerRow);
@@ -15602,13 +15603,23 @@ function ensureParkedToolbar() {
   });
 
   parkedSummaryBtn?.addEventListener("click", async () => {
-    const scoped = getScopedAllParkedTickets(parkedTickets).filter(
+    const scopedBase = getScopedAllParkedTickets(parkedTickets).filter(
       (t) => !isPedidoTpvTicket(t),
+    );
+    const scoped = scopedBase.filter((t) =>
+      parkedTicketPassesFilter(t, { ignorePendingScope: true }),
     );
     const stats = buildParkedSummaryStats(scoped);
     const html = buildParkedSummaryHtml(stats);
 
-    await confirmModal("Resumen de aparcados", html, {
+    const titleSuffix =
+      parkedViewState.filter === "paid"
+        ? "cobrados"
+        : parkedViewState.filter === "pending"
+          ? "sin cobrar"
+          : "todos";
+
+    await confirmModal(`Resumen de aparcados (${titleSuffix})`, html, {
       isHtml: true,
       textClassName: "parked-summary-text",
       dialogClassName: "parked-summary-dialog",
@@ -27493,25 +27504,13 @@ function getScopedPendingParkedTickets(list = parkedTickets) {
 }
 
 function getScopedAllParkedTickets(list = parkedTickets) {
-  let source = Array.isArray(list) ? list : [];
+  let source = (Array.isArray(list) ? list : []).filter(
+    (t) => !t?.closingInProgress,
+  );
 
   if (!MESAS_INLINE_ACTIVE) {
-    const sharedCashMode = isSharedCashModeEnabled();
-    const currentCajaId = String(
-      getCajaIdSafe?.() || currentTerminal?.id || "",
-    ).trim();
-
-    source = source.filter((t) => !isMesasModeTicket(t));
-
-    // En caja compartida, los aparcados/cobrados deben ser visibles entre
-    // TPVs de la misma empresa, aunque provengan de otra cajaId.
-    if (currentCajaId && !sharedCashMode) {
-      source = source.filter((t) => {
-        const ticketCajaId = String(t?.cajaId || "").trim();
-        return !ticketCajaId || ticketCajaId === currentCajaId;
-      });
-    }
-
+    // Compatibilidad con mezcla de versiones (0.2.1 y 0.2.1-beta.1):
+    // fuera de Mesas no segmentar por modo/caja para mantener visibilidad compartida.
     return source;
   }
 
