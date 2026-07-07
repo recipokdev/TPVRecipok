@@ -33759,11 +33759,16 @@ function renderTicketsList(tickets) {
   const sourceList = Array.isArray(tickets) ? tickets : [];
 
   const matchesTicket = (t) => {
+    const parkedOrigin = getPaidTicketParkedOriginForTicketRow(t);
+    const parkedOriginText = parkedOrigin
+      ? `${parkedOrigin.parkedDisplayNo || ""} ${parkedOrigin.parkedLabel || ""} ${parkedOrigin.parkedClientName || ""}`
+      : "";
+
     const s = `${t.codigo || ""} ${t.nombrecliente || ""} ${t.total || ""} ${
       t.codpago || ""
     } ${t.codserie || ""} ${t.idfactura || ""} ${t.codigorect || ""} ${
       t.idcaja || t?._raw?.idcaja || ""
-    }`.toLowerCase();
+    } ${parkedOriginText}`.toLowerCase();
 
     return s.includes(term);
   };
@@ -33894,7 +33899,24 @@ function renderTicketsList(tickets) {
     let statusClass = "ticket-status-ok";
     let badgeHtml = `<span class="ticket-badge ticket-badge-ok">OK</span>`;
 
-    if (obs) div.classList.add("ticket-has-obs");
+    const parkedOrigin = getPaidTicketParkedOriginForTicketRow(t);
+    const parkedOriginNo = String(parkedOrigin?.parkedDisplayNo || "").trim();
+    const parkedOriginLabel = String(parkedOrigin?.parkedLabel || "").trim();
+    const parkedOriginClient = String(
+      parkedOrigin?.parkedClientName || "",
+    ).trim();
+    const parkedOriginText = parkedOrigin
+      ? parkedOriginLabel ||
+        parkedOriginClient ||
+        (parkedOriginNo ? `Ticket #${parkedOriginNo}` : "")
+      : "";
+    const parkedOriginHtml = parkedOrigin
+      ? `<div class="ticket-obs">Origen aparcado: ${escapeHtml(
+          parkedOriginNo ? `#${parkedOriginNo}` : "#-",
+        )}${parkedOriginText ? ` - ${escapeHtml(parkedOriginText)}` : ""}</div>`
+      : "";
+
+    if (obs || parkedOrigin) div.classList.add("ticket-has-obs");
 
     if (hasRefunds && isFullyRefunded) {
       statusClass = "ticket-status-fullref";
@@ -33942,6 +33964,7 @@ function renderTicketsList(tickets) {
         </div>
 
         ${obs ? `<div class="ticket-obs">${escapeHtml(obs)}</div>` : ""}
+        ${parkedOriginHtml}
         <div class="ticket-bot">${escapeHtml(fechaHora)}</div>
       </div>
 
