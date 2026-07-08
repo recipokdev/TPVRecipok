@@ -13886,15 +13886,17 @@ function findPaidTwinForParkedTicket(ticket, list = parkedTickets) {
   if (!ticket) return null;
 
   const source = Array.isArray(list) ? list : [];
-  const ticketKeys = new Set(getParkedTicketSyncKeyVariants(ticket));
-  if (!ticketKeys.size) return null;
+  const ticketKey = String(getParkedTicketSyncKey(ticket) || "").trim();
+  if (!ticketKey) return null;
 
   return (
     source.find((candidate) => {
       if (!candidate || !candidate?.paid) return false;
 
-      const candidateKeys = getParkedTicketSyncKeyVariants(candidate);
-      return candidateKeys.some((key) => ticketKeys.has(key));
+      const candidateKey = String(
+        getParkedTicketSyncKey(candidate) || "",
+      ).trim();
+      return candidateKey === ticketKey;
     }) || null
   );
 }
