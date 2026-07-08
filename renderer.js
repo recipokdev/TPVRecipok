@@ -11461,59 +11461,65 @@ function ensureParkedToolbar() {
   toolbar.id = "parkedToolbar";
   toolbar.className = "tickets-tools";
   toolbar.innerHTML = `
-    <div class="tickets-search-wrap">
-      <input
-        id="parkedSearch"
-        type="text"
-        placeholder="Buscar ticket aparcado..."
-        autocomplete="off"
-      />
-      <button
-      id="parkedKeyboardBtn"
-      type="button"
-      class="cart-btn"
-      title="Teclado"
-    >
-      ⌨
-    </button>
-      <button
-        id="parkedSearchClearBtn"
-        type="button"
-        class="tickets-search-clear hidden"
-        title="Limpiar búsqueda"
-      >
-        ✕
-      </button>
-    </div>
+    <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:10px; width:100%; flex-wrap:wrap;">
+      <div style="display:flex; flex-direction:column; gap:8px; min-width:250px;">
+        <div class="tickets-search-wrap" style="margin-left:0;">
+          <input
+            id="parkedSearch"
+            type="text"
+            placeholder="Buscar ticket aparcado..."
+            autocomplete="off"
+          />
+          <button
+            id="parkedKeyboardBtn"
+            type="button"
+            class="cart-btn"
+            title="Teclado"
+          >
+            ⌨
+          </button>
+          <button
+            id="parkedSearchClearBtn"
+            type="button"
+            class="tickets-search-clear hidden"
+            title="Limpiar búsqueda"
+          >
+            ✕
+          </button>
+        </div>
 
-    <div class="tickets-tabs" style="margin-left: 10px;">
-      <button id="parkedFilterAll" type="button" class="cart-btn tickets-tab-btn">
-        Todos
-      </button>
-      <button id="parkedFilterPending" type="button" class="cart-btn tickets-tab-btn">
-        Sin cobrar
-      </button>
-      <button id="parkedFilterPaid" type="button" class="cart-btn tickets-tab-btn">
-        Cobrados
-      </button>
-    </div>
+        <div class="tickets-tabs" style="margin-left:0; display:flex; align-items:center; gap:8px;">
+          <button id="parkedSummaryBtn" type="button" class="cart-btn tickets-tab-btn" title="Resumen de aparcados">
+            Resumen
+          </button>
+          <button id="parkedClearPaidBtn" type="button" class="cart-btn tickets-tab-btn" title="Limpiar historial de cobrados">
+            Limpiar cobrados
+          </button>
+        </div>
+      </div>
 
-    <div id="parkedPendingScopeWrap" class="tickets-tabs hidden" style="margin-left: 10px;">
-      <button id="parkedPendingScopeToday" type="button" class="cart-btn tickets-tab-btn">
-        Hoy
-      </button>
-      <button id="parkedPendingScopeOlder" type="button" class="cart-btn tickets-tab-btn">
-        Dias anteriores
-      </button>
-    </div>
+      <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
+        <div class="tickets-tabs" style="margin-left:0;">
+          <button id="parkedFilterAll" type="button" class="cart-btn tickets-tab-btn">
+            Todos
+          </button>
+          <button id="parkedFilterPending" type="button" class="cart-btn tickets-tab-btn">
+            Sin cobrar
+          </button>
+          <button id="parkedFilterPaid" type="button" class="cart-btn tickets-tab-btn">
+            Cobrados
+          </button>
+        </div>
 
-    <div class="tickets-tabs" style="margin-left: 10px; display:flex; align-items:center; gap:8px;">
-      <button id="parkedSummaryBtn" type="button" class="cart-btn tickets-tab-btn" title="Resumen de aparcados">
-        Resumen
-      </button>
-      <button id="parkedClearPaidBtn" type="button" class="cart-btn tickets-tab-btn" title="Limpiar historial de cobrados">
-        Limpiar cobrados
-      </button>
+        <div id="parkedPendingScopeWrap" class="tickets-tabs hidden" style="margin-left:0;">
+          <button id="parkedPendingScopeToday" type="button" class="cart-btn tickets-tab-btn">
+            Hoy
+          </button>
+          <button id="parkedPendingScopeOlder" type="button" class="cart-btn tickets-tab-btn">
+            Dias anteriores
+          </button>
+        </div>
+      </div>
     </div>
   `;
 
@@ -11591,10 +11597,7 @@ function ensureParkedToolbar() {
   });
 
   parkedSummaryBtn?.addEventListener("click", async () => {
-    const scopedBase = getScopedAllParkedTickets(parkedTickets).filter(
-      (t) => !isPedidoTpvTicket(t),
-    );
-    const scoped = scopedBase.filter((t) =>
+    const scoped = getScopedAllParkedTickets(parkedTickets).filter((t) =>
       parkedTicketPassesFilter(t, { ignorePendingScope: true }),
     );
     const summaryMode =
