@@ -13901,34 +13901,6 @@ function findPaidTwinForParkedTicket(ticket, list = parkedTickets) {
   );
 }
 
-function reconcileParkedPaidTwins(list = parkedTickets) {
-  const source = Array.isArray(list) ? list : [];
-  if (!source.length) return 0;
-
-  let changes = 0;
-
-  source.forEach((ticket) => {
-    if (!ticket || ticket?.paid) return;
-
-    const paidTwin = findPaidTwinForParkedTicket(ticket, source);
-    if (!paidTwin) return;
-
-    ticket.paid = true;
-    ticket.paidAt = paidTwin?.paidAt || ticket.paidAt || new Date();
-    ticket.paidTicketCode =
-      paidTwin?.paidTicketCode || ticket.paidTicketCode || null;
-    ticket.paidTicketId = paidTwin?.paidTicketId || ticket.paidTicketId || null;
-    upsertParkedPaidHistory(ticket);
-    changes += 1;
-  });
-
-  if (changes > 0) {
-    saveParkedTicketsCache(source);
-  }
-
-  return changes;
-}
-
 function getCartTotal(items) {
   return (items || []).reduce((sum, item) => {
     const unit = getUnitGross(item);
@@ -13937,14 +13909,6 @@ function getCartTotal(items) {
 
     return sum + effectiveUnit * (item.qty || 1);
   }, 0);
-}
-
-function clearAllCartLineDiscounts() {
-  const lines = Array.isArray(cart) ? cart : [];
-  lines.forEach((line) => {
-    if (!line || typeof line !== "object") return;
-    line.cartLineDiscountPct = 0;
-  });
 }
 
 function buildLineIdSetFromSnapshot(items) {
