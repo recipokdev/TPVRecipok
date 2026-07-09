@@ -2650,13 +2650,6 @@ async function saveCartPanelWidthSetting() {
   }
 }
 
-async function setCartPanelWidthPx(nextWidth, opts = {}) {
-  const { persist = true } = opts;
-  cartPanelWidthPx = clampCartPanelWidthPx(nextWidth);
-  applyCartPanelWidth();
-  if (persist) await saveCartPanelWidthSetting();
-}
-
 async function loadCartWidthControlsToggle() {
   let enabled = false;
   try {
@@ -5842,28 +5835,6 @@ async function refreshCustomerPrintCacheByCod(codcliente) {
   } catch {}
 
   return null;
-}
-
-async function syncCustomerPrintCacheFromSelection(c) {
-  try {
-    const cod = String(c?.codcliente || "").trim();
-    if (!cod) return;
-
-    const selectorList =
-      typeof window.CUSTOMER_SELECTOR?.listCustomers === "function"
-        ? window.CUSTOMER_SELECTOR.listCustomers()
-        : [];
-
-    const fromList = Array.isArray(selectorList)
-      ? selectorList.find((x) => String(x?.codcliente || "").trim() === cod)
-      : null;
-
-    if (fromList?._raw) upsertCustomerPrintCache(fromList._raw);
-    else if (fromList) upsertCustomerPrintCache(fromList);
-    else upsertCustomerPrintCache(c);
-
-    refreshCustomerPrintCacheByCod(cod).catch(() => {});
-  } catch {}
 }
 
 function renderSelectedCustomerInCartHeader(c) {
@@ -13882,25 +13853,6 @@ function isParkedTicketLockedByAnotherTerminal(ticket) {
   return owner !== mine;
 }
 
-function findPaidTwinForParkedTicket(ticket, list = parkedTickets) {
-  if (!ticket) return null;
-
-  const source = Array.isArray(list) ? list : [];
-  const ticketKey = String(getParkedTicketSyncKey(ticket) || "").trim();
-  if (!ticketKey) return null;
-
-  return (
-    source.find((candidate) => {
-      if (!candidate || !candidate?.paid) return false;
-
-      const candidateKey = String(
-        getParkedTicketSyncKey(candidate) || "",
-      ).trim();
-      return candidateKey === ticketKey;
-    }) || null
-  );
-}
-
 function getCartTotal(items) {
   return (items || []).reduce((sum, item) => {
     const unit = getUnitGross(item);
@@ -14945,11 +14897,6 @@ function isParkedTicketFromToday(t) {
   );
 }
 
-function hasOlderPendingParkedTickets(sourceTickets) {
-  const list = Array.isArray(sourceTickets) ? sourceTickets : [];
-  return list.some((t) => !t?.paid && !isParkedTicketFromToday(t));
-}
-
 const SYNC_ALERT_COOLDOWN_MS = 5 * 60 * 1000;
 const QUEUE_HEALTH_CHECK_EVERY_MS = 60 * 1000;
 const QUEUE_STUCK_MIN_AGE_MIN = 10;
@@ -15056,30 +15003,6 @@ function parseParkedDisplayNumber(value) {
   return n;
 }
 
-function getParkedDisplayNumberFromLabel(label) {
-  const txt = String(label || "").trim();
-  if (!txt) return 0;
-  const m = txt.match(/^ticket\s*#\s*(\d+)$/i);
-  return m ? parseParkedDisplayNumber(m[1]) : 0;
-}
-
-function normalizeParkedDisplayNumberValue(value) {
-  const parsed = parseParkedDisplayNumber(value);
-  if (!parsed) return 0;
-
-  const normalized = getParkedDisplayNumberFromId(parsed) || String(parsed);
-  return parseParkedDisplayNumber(normalized);
-}
-
-function getNextParkedDisplayNumber(list = parkedTickets) {
-  const maxCurrent = getScopedPendingParkedTickets(list).reduce((max, t) => {
-    const n = Number(getParkedTicketDisplayNumber(t) || 0);
-    return n > max ? n : max;
-  }, 0);
-
-  return maxCurrent > 0 ? maxCurrent + 1 : 1;
-}
-
 function getParkedTicketDisplayLabel(ticket) {
   const explicit = String(ticket?.name || ticket?.label || "").trim();
   const clientName = String(ticket?.clientName || "").trim();
@@ -15099,21 +15022,6 @@ function getParkedTicketDisplayLabel(ticket) {
   return explicit;
 }
 
-function getCanonicalParkedTicketName(ticket, fallbackName = "") {
-  const rawName = String(
-    ticket?.name || ticket?.label || fallbackName || "",
-  ).trim();
-  const displayNo = getParkedTicketDisplayNumber(ticket) || "0";
-
-  if (!rawName) return `Ticket #${displayNo}`;
-
-  const m = rawName.match(/^ticket\s*#\s*(\d+)$/i);
-  if (!m) return rawName;
-
-  const shortNo = getParkedDisplayNumberFromId(m[1]) || displayNo;
-  return `Ticket #${shortNo}`;
-}
-
 function collectUsedParkedDisplayNumbers(list = parkedTickets) {
   const used = new Set();
 
@@ -15123,23 +15031,6 @@ function collectUsedParkedDisplayNumbers(list = parkedTickets) {
   });
 
   return used;
-}
-
-function ensureUniqueNextParkedDisplayNumber(preferred, list = parkedTickets) {
-  const used = collectUsedParkedDisplayNumbers(list);
-  let candidate = Number(preferred || 0) || 1;
-  if (candidate <= 0) candidate = 1;
-
-  while (used.has(candidate)) {
-    candidate += 1;
-    if (candidate > 999999) {
-      candidate = Date.now() % 1000000;
-      if (candidate <= 0) candidate = 1;
-      break;
-    }
-  }
-
-  return candidate;
 }
 
 function compareParkedTicketsForList(a, b) {
@@ -27074,42 +26965,6 @@ function getParkedDeviceNodeId() {
   } catch {}
 
   return generated;
-}
-
-function nextParkedTicketId() {
-  const nodeId = getParkedDeviceNodeId();
-  const seqKey = getParkedScopedStorageKey(PARKED_DEVICE_SEQ_KEY);
-
-  let seq = 0;
-  try {
-    const raw = Number(localStorage.getItem(seqKey) || 0);
-    if (Number.isInteger(raw) && raw >= 0 && raw <= 9999) {
-      seq = raw;
-    }
-  } catch {}
-
-  const usedIds = new Set(
-    (Array.isArray(parkedTickets) ? parkedTickets : [])
-      .map((t) => Number(t?.id || 0))
-      .filter((n) => Number.isFinite(n) && n > 0),
-  );
-
-  for (let i = 0; i < 10010; i += 1) {
-    seq = (seq % 9999) + 1;
-    const candidate = nodeId * 10000 + seq;
-    if (usedIds.has(candidate)) continue;
-
-    try {
-      localStorage.setItem(seqKey, String(seq));
-    } catch {}
-
-    parkedCounter = Math.max(Number(parkedCounter || 0), candidate);
-    return candidate;
-  }
-
-  const fallback = Date.now();
-  parkedCounter = Math.max(Number(parkedCounter || 0), fallback);
-  return fallback;
 }
 
 function loadParkedPaidTombstones() {
