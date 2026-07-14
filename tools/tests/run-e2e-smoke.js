@@ -1211,65 +1211,88 @@ async function runSaleAndPrintAssertions(win) {
 
   await addProductByIndex(win, lineSpecs[0].index, 1);
 
-  await win.click("#parkBtn");
+  const canClickParkUpdate = await win.evaluate(() => {
+    const btn = document.getElementById("parkBtn");
+    if (!btn) return false;
+    const hidden = btn.classList.contains("hidden");
+    return !hidden && !btn.disabled;
+  });
 
-  await win.waitForFunction(
-    () => {
-      const totalEl = document.getElementById("totalAmount");
-      const raw = String(totalEl?.textContent || "")
-        .replace(/[^0-9,.-]/g, "")
-        .replace(/\./g, "")
-        .replace(",", ".");
-      const total = Number(raw);
-      return Number.isFinite(total) && total <= 0.001;
-    },
-    { timeout: 25000 },
-  );
-  ok("Parked ticket updated");
+  if (canClickParkUpdate) {
+    await win.click("#parkBtn");
+
+    await win.waitForFunction(
+      () => {
+        const totalEl = document.getElementById("totalAmount");
+        const raw = String(totalEl?.textContent || "")
+          .replace(/[^0-9,.-]/g, "")
+          .replace(/\./g, "")
+          .replace(",", ".");
+        const total = Number(raw);
+        return Number.isFinite(total) && total <= 0.001;
+      },
+      { timeout: 25000 },
+    );
+    ok("Parked ticket updated (manual)");
+  } else {
+    // En modo autosave el botón Actualizar queda sustituido por PreImpr.
+    await win.waitForTimeout(1400);
+    ok("Parked ticket updated (autosave)");
+  }
 
   await win.click("#parkedListBtn");
   await win.waitForSelector("#parkedTicketsOverlay:not(.hidden)", {
     timeout: 10000,
   });
 
-  const parkedSnapshotAfterUpdate = await win.evaluate(() => {
-    const parsePrice = (txt) => {
-      let s = String(txt || "")
-        .replace(/[^0-9,.-]/g, "")
-        .trim();
-      if (!s) return 0;
+  const readParkedSnapshotAfterUpdate = async () => {
+    return await win.evaluate(() => {
+      const parsePrice = (txt) => {
+        let s = String(txt || "")
+          .replace(/[^0-9,.-]/g, "")
+          .trim();
+        if (!s) return 0;
 
-      const lastComma = s.lastIndexOf(",");
-      const lastDot = s.lastIndexOf(".");
+        const lastComma = s.lastIndexOf(",");
+        const lastDot = s.lastIndexOf(".");
 
-      if (lastComma >= 0 && lastDot >= 0) {
-        if (lastComma > lastDot) {
-          s = s.replace(/\./g, "").replace(/,/g, ".");
-        } else {
-          s = s.replace(/,/g, "");
+        if (lastComma >= 0 && lastDot >= 0) {
+          if (lastComma > lastDot) {
+            s = s.replace(/\./g, "").replace(/,/g, ".");
+          } else {
+            s = s.replace(/,/g, "");
+          }
+        } else if (lastComma >= 0) {
+          s = s.replace(/,/g, ".");
         }
-      } else if (lastComma >= 0) {
-        s = s.replace(/,/g, ".");
-      }
 
-      const v = Number(s);
-      return Number.isFinite(v) ? v : 0;
-    };
+        const v = Number(s);
+        return Number.isFinite(v) ? v : 0;
+      };
 
-    const obs = document.querySelector(
-      "#parkedTicketsList .parked-ticket-item .pt-obs",
-    );
-    const total = document.querySelector(
-      "#parkedTicketsList .parked-ticket-item .pt-total",
-    );
-    return {
-      obs: String(obs?.textContent || "").toLowerCase(),
-      total: parsePrice(total?.textContent || ""),
-    };
-  });
+      const obs = document.querySelector(
+        "#parkedTicketsList .parked-ticket-item .pt-obs",
+      );
+      const total = document.querySelector(
+        "#parkedTicketsList .parked-ticket-item .pt-total",
+      );
+      return {
+        obs: String(obs?.textContent || "").toLowerCase(),
+        total: parsePrice(total?.textContent || ""),
+      };
+    });
+  };
 
+  let parkedSnapshotAfterUpdate = await readParkedSnapshotAfterUpdate();
   const expectedUpdatedTotal =
     expectedTotal + Number(lineSpecs[0].unitPrice || 0);
+  if (
+    !almostEqual(parkedSnapshotAfterUpdate.total, expectedUpdatedTotal, 0.02)
+  ) {
+    await win.waitForTimeout(1200);
+    parkedSnapshotAfterUpdate = await readParkedSnapshotAfterUpdate();
+  }
+
   if (
     !almostEqual(parkedSnapshotAfterUpdate.total, expectedUpdatedTotal, 0.02)
   ) {

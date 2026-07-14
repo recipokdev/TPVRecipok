@@ -1,6 +1,6 @@
 {
   "name": "tpvrecipok",
-  "version": "0.2.1-beta.1",
+  "version": "0.2.1",
   "description": "",
   "main": "main.js",
   "scripts": {
@@ -13,6 +13,7 @@
     "test:e2e:tx": "node tools/tests/run-e2e-smoke.js",
     "test:e2e:safe": "node tools/tests/run-e2e-safe-checks.js",
     "test:e2e:mesas": "node tools/tests/run-e2e-mesas-mode.js",
+    "test:e2e:allmodes": "npm run test:e2e:tx && npm run test:e2e:mesas",
     "hooks:install": "git config core.hooksPath .githooks",
     "test:e2e:demo": "node tools/tests/run-e2e-demo.js",
     "test:e2e:demo:resilience": "set TPV_E2E_RUN_RESILIENCE=1&& node tools/tests/run-e2e-demo.js",

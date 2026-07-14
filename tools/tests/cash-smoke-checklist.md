@@ -48,6 +48,28 @@ Use this checklist before every publish.
 - With empty cart, verify "Aparcar" is blocked and does not create parked ticket.
 - Open "Aparcados" and verify parked ticket can be recovered into cart.
 
+## Mesas/TPV Mode Switch and Parked Context
+
+- In TPV mode, recover one parked ticket and confirm button shows "Actualizar".
+- Switch to Mesas mode and recover/open a mesas parked ticket.
+- Switch back to TPV mode and verify the TPV parked ticket remains opened (not only cart lines).
+- In TPV mode, verify "Editar" is visible for loaded parked ticket and allows updating name/observations.
+
+## Parked Discounts Recovery
+
+- Create parked ticket with global discount only (e.g. 50%) and recover it.
+- Open global discount numpad, set to `0`, confirm total and line prices remove global discount.
+- Create parked ticket with line discount only and recover it.
+- Verify line discount can still be edited/removed independently.
+- Create parked ticket with mixed discounts (global + line) and verify both behave consistently after recover.
+
+## Parked Sync Incidents (Multi-TPV)
+
+- Force one conflict scenario (remote newer or remote paid) and verify:
+  - "Incidencias sync" button appears in Aparcados toolbar.
+  - Mini-log line under toolbar shows latest incident and pending queue count.
+  - Detail modal opens and can clear incident history.
+
 ## Refresh
 
 - Change TPV-agent mapping in backend.

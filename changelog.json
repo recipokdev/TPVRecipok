@@ -3,11 +3,25 @@
   "versions": [
     {
       "version": "0.2.1-beta.1",
-      "date": "2026-07-06",
+      "date": "2026-07-09",
       "title": "Sincronizacion aparcados multi-TPV",
       "changes": [
         "Aparcados TPV: en modo caja compartida ya no se filtran por caja local, para ver tickets/aparcados/cobrados entre TPVs de la misma empresa.",
-        "Aparcados cobrados borrados: se mantiene una marca local para evitar que reaparezcan tras reiniciar cuando hay desajustes temporales de sincronizacion."
+        "Aparcados cobrados borrados: se mantiene una marca local para evitar que reaparezcan tras reiniciar cuando hay desajustes temporales de sincronizacion.",
+        "Modo Mesas: se conserva codcliente al guardar/actualizar/recibir aparcados para no perder descuentos por tarifa al restaurar tickets.",
+        "Impresion de tickets: paridad de descuentos por linea (precio anterior tachado, precio final y tipo/porcentaje de descuento).",
+        "Offline multi-TPV: cola de aparcados con guardia de conflictos para no sobrescribir cambios remotos mas recientes al reconectar.",
+        "Aparcados: nueva bandeja de incidencias de sincronizacion en el modal para revisar conflictos detectados y limpiarlos.",
+        "Apertura/recuperacion de caja: warmup adicional de reservas aparcadas al iniciar sesion de caja para convergencia mas rapida entre TPVs.",
+        "Cambio de modo TPV <-> Mesas: al restaurar snapshot ahora recupera tambien el ticket aparcado activo (no solo las lineas del carrito).",
+        "Modo normal (sin Mesas): el boton Editar de aparcados queda disponible para actualizar nombre/observaciones sin mostrar campos de mesa, preservando el modo original del ticket.",
+        "Aparcados con descuento general: al cargar ticket restaurado ya se puede modificar/quitar el descuento general correctamente (antes quedaba congelado por linea aunque el editor mostrase 0).",
+        "Aparcados: mini-log visible de incidencias de sincronizacion (ultimo conflicto + cola pendiente) en la barra del modal.",
+        "Testing: nuevo comando npm run test:e2e:allmodes (TPV + Mesas) y checklist manual ampliado para cambios de modo y descuentos en aparcados.",
+        "Cambio rapido Mesas <-> TPV: antes de cambiar de modo se fuerza flush de autoguardado para no perder descuentos/ediciones recientes.",
+        "Salida de Mesas a TPV: se mantiene el enlace del ticket aparcado restaurado (evita carrito con lineas sueltas sin ticket activo).",
+        "TPV normal: tickets aparcados abiertos pasan a autoguardado en segundo plano, sin depender del boton Actualizar para persistir cambios.",
+        "PreImpr y deshacer/rehacer: disponibles tambien en modo TPV con ticket abierto, incluyendo cambios de descuento general y descuento por linea en el historial."
       ]
     },
     {

@@ -137,6 +137,29 @@ function cloneCartForHistory(source = cart) {
   }
 }
 
+function normalizeCartHistorySnapshot(snapshot) {
+  const sourceItems = Array.isArray(snapshot)
+    ? snapshot
+    : Array.isArray(snapshot?.items)
+      ? snapshot.items
+      : [];
+  const sourceGlobalDiscountPct = Array.isArray(snapshot)
+    ? getCartGlobalDiscountPercent()
+    : snapshot?.cartGlobalDiscountPct;
+
+  return {
+    items: cloneCartForHistory(sourceItems),
+    cartGlobalDiscountPct: clampDiscountPercent(
+      parseNumericLike(sourceGlobalDiscountPct, 0),
+    ),
+  };
+}
+
+function serializeCartHistorySnapshot(snapshot) {
+  const normalized = normalizeCartHistorySnapshot(snapshot);
+  return JSON.stringify(normalized);
+}
+
 function getOrCreateCartHistoryBucket(
   scopeKey = getCurrentCartHistoryScopeKey(),
 ) {
@@ -155,8 +178,11 @@ function pushCartHistoryStep(reason = "change") {
 
   const scopeKey = getCurrentCartHistoryScopeKey();
   const bucket = getOrCreateCartHistoryBucket(scopeKey);
-  const snapshot = cloneCartForHistory(cart);
-  const hash = JSON.stringify(snapshot);
+  const snapshot = normalizeCartHistorySnapshot({
+    items: cart,
+    cartGlobalDiscountPct: getCartGlobalDiscountPercent(),
+  });
+  const hash = serializeCartHistorySnapshot(snapshot);
   const last = bucket.undo[bucket.undo.length - 1];
   if (last && last.hash === hash) return;
 
@@ -180,7 +206,7 @@ function refreshCartUndoRedoUi() {
   if (!undoBtn || !redoBtn) return;
 
   const loaded = getCurrentLoadedParkedTicket();
-  const visible = isMesasTransaccionesMode() && !!loaded && !loaded?.paid;
+  const visible = !!loaded && !loaded?.paid;
   undoBtn.classList.toggle("hidden", !visible);
   redoBtn.classList.toggle("hidden", !visible);
 
@@ -201,7 +227,11 @@ function refreshCartUndoRedoUi() {
 }
 
 function applyCartHistorySnapshot(snapshot) {
-  cart = cloneCartForHistory(snapshot);
+  const normalized = normalizeCartHistorySnapshot(snapshot);
+  cart = cloneCartForHistory(normalized.items);
+  cartGlobalDiscountPct = clampDiscountPercent(
+    parseNumericLike(normalized.cartGlobalDiscountPct, 0),
+  );
   if (isMesasTransaccionesMode()) {
     const state = loadMesasTablesStateForInline();
     const uid = String(state?.selectedTableId || "").trim();
@@ -216,8 +246,11 @@ function undoCartHistoryStep() {
   const bucket = getOrCreateCartHistoryBucket(getCurrentCartHistoryScopeKey());
   if (!bucket.undo.length) return;
 
-  const currentSnapshot = cloneCartForHistory(cart);
-  const currentHash = JSON.stringify(currentSnapshot);
+  const currentSnapshot = normalizeCartHistorySnapshot({
+    items: cart,
+    cartGlobalDiscountPct: getCartGlobalDiscountPercent(),
+  });
+  const currentHash = serializeCartHistorySnapshot(currentSnapshot);
   bucket.redo.push({
     at: Date.now(),
     reason: "redo-base",
@@ -240,8 +273,11 @@ function redoCartHistoryStep() {
   const bucket = getOrCreateCartHistoryBucket(getCurrentCartHistoryScopeKey());
   if (!bucket.redo.length) return;
 
-  const currentSnapshot = cloneCartForHistory(cart);
-  const currentHash = JSON.stringify(currentSnapshot);
+  const currentSnapshot = normalizeCartHistorySnapshot({
+    items: cart,
+    cartGlobalDiscountPct: getCartGlobalDiscountPercent(),
+  });
+  const currentHash = serializeCartHistorySnapshot(currentSnapshot);
   bucket.undo.push({
     at: Date.now(),
     reason: "undo-base",
@@ -616,6 +652,7 @@ const cashMoveErrorEl = document.getElementById("cashMoveError");
 const cashMoveCancelBtn = document.getElementById("cashMoveCancelBtn");
 const cashMoveSaveBtn = document.getElementById("cashMoveSaveBtn");
 const cashMoveCloseX = document.getElementById("cashMoveCloseX");
+let cashMoveSaveInFlight = false;
 
 // Resumen de caja (label principal + resumen extendido de cierre)
 const cashCloseSummary = document.getElementById("cashCloseSummary");
@@ -715,11 +752,15 @@ const PARKED_TICKETS_CACHE_KEY = "tpv_parked_tickets_cache_v1";
 const PARKED_SYNC_QUEUE_KEY = "tpv_parked_sync_queue_v1";
 const PARKED_MODE_REGISTRY_KEY = "tpv_parked_mode_registry_v1";
 const PARKED_GLOBAL_COUNTER_KEY = "tpv_parked_global_counter_v1";
+const PARKED_GLOBAL_ID_COUNTER_KEY = "tpv_parked_global_id_counter_v1";
 const PARKED_PAID_TOMBSTONES_KEY = "tpv_parked_paid_tombstones_v1";
 const PARKED_PAID_HISTORY_KEY = "tpv_parked_paid_history_v1";
+const PARKED_SYNC_CONFLICTS_KEY = "tpv_parked_sync_conflicts_v1";
 const PARKED_DEVICE_NODE_ID_KEY = "tpv_parked_device_node_id_v1";
 const PARKED_DEVICE_SEQ_KEY = "tpv_parked_device_seq_v1";
 const PAID_TICKET_PARKED_ORIGIN_KEY = "tpv_paid_ticket_parked_origin_v1";
+const PARKED_LEGACY_METADATA_MIGRATION_KEY =
+  "tpv_parked_legacy_metadata_migration_v1";
 const PARKED_MODE_TPV = "tpv";
 const PARKED_MODE_MESAS = "mesas";
 const TPV_USERS_CACHE_KEY = "tpv_cachedUsers_v1";
@@ -735,6 +776,7 @@ const API_MISSING_RESOURCES_CACHE_KEY = "tpv_api_missing_resources_cache_v1";
 const API_MISSING_RESOURCES_CACHE_TS_KEY = "tpv_api_missing_resources_ts_v1";
 
 let __parkedSyncDrainInFlight = false;
+let __parkedLegacyMetadataMigrationTried = false;
 
 let __parkedReservationsRefreshTimer = null;
 let __parkedReservationsRefreshInFlight = false;
@@ -1936,6 +1978,45 @@ function getEffectiveCartDiscountForLine(item) {
   return { pct: 0, source: "" };
 }
 
+function clearFrozenGlobalDiscountFromCartLines(lines = cart) {
+  const target = Array.isArray(lines) ? lines : [];
+  target.forEach((line) => {
+    if (!line || typeof line !== "object") return;
+
+    // Las líneas con descuento propio conservan su porcentaje.
+    const linePct = getCartLineDiscountPercent(line);
+    if (linePct > 0) return;
+
+    if (
+      Object.prototype.hasOwnProperty.call(line, "cartGlobalDiscountPctApplied")
+    ) {
+      delete line.cartGlobalDiscountPctApplied;
+    }
+  });
+}
+
+function freezeGlobalDiscountOnLines(
+  lines,
+  globalPct = getCartGlobalDiscountPercent(),
+) {
+  const src = Array.isArray(lines) ? lines : [];
+  const pct = clampDiscountPercent(parseNumericLike(globalPct, 0));
+
+  return src.map((line) => {
+    if (!line || typeof line !== "object") return line;
+    const out = { ...line };
+
+    const linePct = clampDiscountPercent(
+      parseNumericLike(out?.cartLineDiscountPct, 0),
+    );
+    if (linePct <= 0 && pct > 0) {
+      out.cartGlobalDiscountPctApplied = pct;
+    }
+
+    return out;
+  });
+}
+
 function getUniqueTariffCustomerCodes(codes = []) {
   return Array.from(
     new Set(
@@ -2505,8 +2586,24 @@ function bindCartGlobalDiscountButtonsOnce() {
       String(formatDiscountPercent(current || 0)),
       (nextValue, meta = {}) => {
         if (meta?.phase && meta.phase !== "confirm") return;
+        const current = getCartGlobalDiscountPercent();
         const next = clampDiscountPercent(parseNumericLike(nextValue, 0));
+        const hasFrozenGlobalLines = cart.some(
+          (line) =>
+            line &&
+            typeof line === "object" &&
+            Object.prototype.hasOwnProperty.call(
+              line,
+              "cartGlobalDiscountPctApplied",
+            ),
+        );
+        if (next === current && !hasFrozenGlobalLines) return;
+
+        pushCartHistoryStep("cart-global-discount");
         cartGlobalDiscountPct = next;
+        // Si venimos de un aparcado restaurado, quitamos congelados heredados
+        // para que el descuento general editable mande en tiempo real.
+        clearFrozenGlobalDiscountFromCartLines(cart);
         renderCart();
       },
       "Descuento general carrito (%)",
@@ -2518,7 +2615,21 @@ function bindCartGlobalDiscountButtonsOnce() {
 
   clearBtn?.addEventListener("click", () => {
     if (!cartDiscountToolsEnabled) return;
+    const current = getCartGlobalDiscountPercent();
+    const hasFrozenGlobalLines = cart.some(
+      (line) =>
+        line &&
+        typeof line === "object" &&
+        Object.prototype.hasOwnProperty.call(
+          line,
+          "cartGlobalDiscountPctApplied",
+        ),
+    );
+    if (current <= 0 && !hasFrozenGlobalLines) return;
+
+    pushCartHistoryStep("cart-global-discount-clear");
     cartGlobalDiscountPct = 0;
+    clearFrozenGlobalDiscountFromCartLines(cart);
     renderCart();
   });
 }
@@ -5346,11 +5457,21 @@ function updatePayButtonEnabledState() {
   const btn = document.getElementById("payBtn");
   if (!btn) return;
 
-  btn.textContent = isPayingNow ? "Cobrando..." : "Cobrar";
+  btn.textContent = isPayingNow
+    ? "Cobrando..."
+    : isParkingNow
+      ? "Guardando..."
+      : "Cobrar";
 
   if (isPayingNow) {
     btn.disabled = true;
     btn.title = "Hay un cobro en curso. Espera a que termine.";
+    return;
+  }
+
+  if (isParkingNow) {
+    btn.disabled = true;
+    btn.title = "Hay un guardado de aparcado en curso. Espera a que termine.";
     return;
   }
 
@@ -6669,6 +6790,9 @@ let MESAS_LINKED_TICKET_ENSURE_GUARD = false;
 let MESAS_AUTO_SAVE_TIMER = null;
 let MESAS_AUTO_SAVE_IN_FLIGHT = false;
 let MESAS_AUTO_SAVE_RERUN = false;
+let TPV_AUTO_SAVE_TIMER = null;
+let TPV_AUTO_SAVE_IN_FLIGHT = false;
+let TPV_AUTO_SAVE_RERUN = false;
 let MESAS_LAYOUT_SYNC_TIMER = null;
 let MESAS_LAYOUT_SYNC_IN_FLIGHT = false;
 let MESAS_LAYOUT_REMOTE_POLL_TIMER = null;
@@ -7356,6 +7480,12 @@ function normalizeTicketLinesForCompare(lines) {
     name: String(it?.name || it?.nombre || it?.descripcion || "").trim(),
     qty: Number(it?.qty ?? it?.cantidad ?? 1) || 1,
     price: Number(it?.price ?? it?.grossPrice ?? 0) || 0,
+    cartLineDiscountPct: clampDiscountPercent(
+      parseNumericLike(it?.cartLineDiscountPct, 0),
+    ),
+    cartGlobalDiscountPctApplied: clampDiscountPercent(
+      parseNumericLike(it?.cartGlobalDiscountPctApplied, 0),
+    ),
     taxRate: Number(it?.taxRate ?? 0) || 0,
     codimpuesto: String(it?.codimpuesto || "").trim(),
   }));
@@ -7363,6 +7493,12 @@ function normalizeTicketLinesForCompare(lines) {
 
 function hasUnsavedChangesForLoadedParkedTicket(ticket) {
   if (!ticket || ticket?.paid) return false;
+
+  const currentGlobalPct = getCartGlobalDiscountPercent();
+  const savedGlobalPct = clampDiscountPercent(
+    parseNumericLike(ticket?.cartGlobalDiscountPct, 0),
+  );
+  if (currentGlobalPct !== savedGlobalPct) return true;
 
   const current = JSON.stringify(normalizeTicketLinesForCompare(cart));
   const saved = JSON.stringify(normalizeTicketLinesForCompare(ticket?.items));
@@ -7589,6 +7725,12 @@ function setSelectedMesaDinersCount(nextDiners) {
 
   if (!mesasState.tableMeta || typeof mesasState.tableMeta !== "object") {
     mesasState.tableMeta = {};
+  }
+  if (
+    !mesasState.tableTicketMap ||
+    typeof mesasState.tableTicketMap !== "object"
+  ) {
+    mesasState.tableTicketMap = {};
   }
 
   const prevMeta =
@@ -8340,6 +8482,8 @@ async function setMesasInlineModeEnabled(
     restoreIncomingSnapshot = true,
   } = {},
 ) {
+  await flushPendingParkedAutoSaveBeforeModeSwitch();
+
   // Guarda el carrito del modo saliente antes de cambiar el contexto.
   // En bootstrap inicial se desactiva para no pisar un snapshot válido con carrito vacío.
   if (saveOutgoingSnapshot) {
@@ -8372,7 +8516,6 @@ async function setMesasInlineModeEnabled(
       });
     }
 
-    currentParkedTicketIndex = null;
     if (restoreIncomingSnapshot) {
       if (!restoredTpvCart) {
         cart = [];
@@ -8649,6 +8792,23 @@ function bindMesasInlineEventsOnce() {
         { tableUid: uid },
         { preferLinkedTicketOnEmptyDraft: true, preserveReturnView: true },
       );
+
+      if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+        const mesasState = loadMesasTablesStateForInline();
+        const pendingTicket = getMesasPendingTicketByUid(mesasState, uid);
+        if (pendingTicket && currentParkedTicketIndex == null) {
+          const pendingIdx = (
+            Array.isArray(parkedTickets) ? parkedTickets : []
+          ).findIndex(
+            (t) =>
+              String(t?.id || "") === String(pendingTicket?.id || "") &&
+              !t?.paid,
+          );
+          if (pendingIdx >= 0) {
+            restoreParkedCartByIndex(pendingIdx);
+          }
+        }
+      }
 
       if (preferredAction === "charge") {
         const payBtn = document.getElementById("payBtn");
@@ -10241,26 +10401,6 @@ function buildPackIncludesTextFromChildren(cartArr, parentLineId) {
   return parts.join(" · ");
 }
 
-function buildPackIncludesText(parentLine) {
-  try {
-    if (!isPackParentLine(parentLine)) return "";
-
-    const children = getPackChildren(parentLine._lineId);
-    if (!children.length) return "";
-
-    // Texto compacto: "Incluye: Prod x1 · Prod2 x2"
-    const parts = children.map((ch) => {
-      const name = String(ch?.name || ch?.meta?.packRef || "Producto").trim();
-      const q = fmtQty(ch?.qty ?? 0);
-      return `${name} x${q}`;
-    });
-
-    return "Incluye: " + parts.join(" · ");
-  } catch {
-    return "";
-  }
-}
-
 function normalizeCartLineFromSnapshot(raw) {
   if (!raw || typeof raw !== "object") return null;
 
@@ -10342,6 +10482,8 @@ function tryResolvePendingParkedTicketByCartMatch() {
   if (!cartSig) return false;
 
   const idx = parkedTickets.findIndex((t) => {
+    if (t?.paid) return false;
+    if (!isTicketInCurrentParkingMode(t)) return false;
     const sig = buildCartRecoverySignature(
       Array.isArray(t?.items) ? t.items : [],
     );
@@ -10422,11 +10564,21 @@ function tryResolvePendingParkedTicketIndex() {
 
   let idx = -1;
   if (key) {
-    idx = parkedTickets.findIndex((t) => getParkedTicketSyncKey(t) === key);
+    idx = parkedTickets.findIndex(
+      (t) =>
+        !t?.paid &&
+        isTicketInCurrentParkingMode(t) &&
+        getParkedTicketSyncKey(t) === key,
+    );
   }
 
   if (idx < 0 && pendingId > 0) {
-    idx = parkedTickets.findIndex((t) => Number(t?.id || 0) === pendingId);
+    idx = parkedTickets.findIndex(
+      (t) =>
+        !t?.paid &&
+        isTicketInCurrentParkingMode(t) &&
+        Number(t?.id || 0) === pendingId,
+    );
   }
 
   if (idx < 0) {
@@ -10437,6 +10589,72 @@ function tryResolvePendingParkedTicketIndex() {
   PENDING_RUNTIME_PARKED_SYNC_KEY = "";
   PENDING_RUNTIME_PARKED_TICKET_ID = 0;
   return true;
+}
+
+function resolveUnpaidParkedTicketIndexForCheckout({
+  preferredIndex = null,
+  syncKey = "",
+  ticketId = 0,
+  cartItems = null,
+} = {}) {
+  if (!Array.isArray(parkedTickets) || !parkedTickets.length) return null;
+
+  const idxCandidate = Number(preferredIndex);
+  if (Number.isFinite(idxCandidate) && idxCandidate >= 0) {
+    const t = parkedTickets[idxCandidate];
+    if (t && !t?.paid && isTicketInCurrentParkingMode(t)) {
+      return idxCandidate;
+    }
+  }
+
+  const key = String(syncKey || "").trim();
+  if (key) {
+    const byKey = parkedTickets.findIndex(
+      (t) =>
+        !!t &&
+        !t?.paid &&
+        isTicketInCurrentParkingMode(t) &&
+        getParkedTicketSyncKey(t) === key,
+    );
+    if (byKey >= 0) return byKey;
+  }
+
+  const idNum = Number(ticketId || 0) || 0;
+  if (idNum > 0) {
+    const byId = parkedTickets.findIndex(
+      (t) =>
+        !!t &&
+        !t?.paid &&
+        isTicketInCurrentParkingMode(t) &&
+        Number(t?.id || 0) === idNum,
+    );
+    if (byId >= 0) return byId;
+  }
+
+  // En flujo de cobro no adivinar por firma de carrito si no hay referencia
+  // explícita a un aparcado cargado (evita falsos positivos con carritos parecidos).
+  const hasExplicitHint =
+    (Number.isFinite(idxCandidate) && idxCandidate >= 0) || !!key || idNum > 0;
+  if (!hasExplicitHint) {
+    return null;
+  }
+
+  const signature = buildCartRecoverySignature(
+    Array.isArray(cartItems) ? cartItems : cart,
+  );
+  if (signature) {
+    const byCart = parkedTickets.findIndex((t) => {
+      if (!t || t?.paid) return false;
+      if (!isTicketInCurrentParkingMode(t)) return false;
+      const sig = buildCartRecoverySignature(
+        Array.isArray(t?.items) ? t.items : [],
+      );
+      return !!sig && sig === signature;
+    });
+    if (byCart >= 0) return byCart;
+  }
+
+  return null;
 }
 
 function scheduleRuntimeCartSnapshotCfgWrite(
@@ -10680,7 +10898,6 @@ function renderCart() {
   if (!container) return;
   container.innerHTML = "";
 
-  let total = 0;
   const cartItems = Array.isArray(cart) ? cart : [];
 
   // Índice O(1) de hijos por parent para evitar filtrar todo el carrito por línea.
@@ -10709,7 +10926,6 @@ function renderCart() {
     const pricing = getCartLinePricing(item);
     const unitPrice = Number(pricing.unitGross || 0);
     const lineTotal = Number(pricing.lineTotal || 0);
-    total += lineTotal;
 
     const row = document.createElement("div");
     row.className = "cart-line";
@@ -10816,7 +11032,7 @@ function renderCart() {
   });
 
   const totalEl = document.getElementById("totalAmount");
-  if (totalEl) totalEl.textContent = eur(total);
+  if (totalEl) totalEl.textContent = eur(getCartTotal(cartItems));
   refreshCartDiscountUi();
 
   // ✅ Completar imageUrl para customer display (solo si no viene)
@@ -10890,6 +11106,7 @@ function renderCart() {
 
   persistRuntimeCartSnapshot();
   scheduleMesasAutoSave();
+  scheduleTpvAutoSave();
 
   if (currentParkedTicketIndex == null && PENDING_RUNTIME_PARKED_SYNC_KEY) {
     if (tryResolvePendingParkedTicketIndex()) {
@@ -12441,17 +12658,27 @@ function hideNumPadPricePreview() {
 
 function buildNumPadPricePreviewHtml() {
   numPadPricePreviewTopDiscountText = "";
-  if (numPadMode !== "price" || !numPadPricePreviewEnabled) return "";
+  if (
+    (numPadMode !== "price" && numPadMode !== "discount") ||
+    !numPadPricePreviewEnabled
+  ) {
+    return "";
+  }
 
   const item = cart.find((c) => c._lineId === numPadTargetItemId);
   if (!item) return "";
 
-  const nextUnitGross = evaluateNumPadCurrentValue({ silent: true });
-  if (nextUnitGross == null) return "";
+  const nextValue = evaluateNumPadCurrentValue({ silent: true });
+  if (nextValue == null) return "";
 
   const qty = Math.max(0, Number(item?.qty || 0) || 0);
 
-  const previewItem = { ...item, grossPriceOverride: round2(nextUnitGross) };
+  const previewItem = { ...item };
+  if (numPadMode === "discount") {
+    previewItem.cartLineDiscountPct = clampDiscountPercent(nextValue);
+  } else {
+    previewItem.grossPriceOverride = round2(nextValue);
+  }
   const previewPricing = getCartLinePricing(previewItem);
   const previewPriceModified = isPriceModified(previewItem);
   const previewUnitGross = round2(Number(previewPricing?.unitGross || 0));
@@ -12470,7 +12697,9 @@ function buildNumPadPricePreviewHtml() {
       : 0;
 
   let preferredPct = 0;
-  if (previewPricing?.cartDiscountApplied) {
+  if (numPadMode === "discount") {
+    preferredPct = clampDiscountPercent(nextValue);
+  } else if (previewPricing?.cartDiscountApplied) {
     preferredPct = clampDiscountPercent(previewPricing?.cartDiscountPct);
   } else if (
     previewPricing?.tariffApplied &&
@@ -12555,7 +12784,7 @@ function updateNumPadPricePreview() {
 function updateNumPadDisplay() {
   if (!numPadDisplay) return;
 
-  if (numPadMode === "price") {
+  if (numPadMode === "price" || numPadMode === "discount") {
     // Si el usuario está escribiendo una expresión (contiene operadores),
     // mostramos tal cual para no romper la edición
     const s = String(numPadCurrentValue ?? "").trim();
@@ -12609,6 +12838,10 @@ function evaluateNumPadCurrentValue({ silent = true } = {}) {
     return Math.round(nextValue * 100) / 100;
   }
 
+  if (numPadMode === "discount") {
+    return clampDiscountPercent(nextValue);
+  }
+
   if (numPadMode === "cash") {
     if (nextValue < 0) nextValue = 0;
     return Math.round(nextValue * 100) / 100;
@@ -12644,10 +12877,13 @@ function openNumPad(
   mode = "qty",
   originalValue = null,
   targetId = null,
+  options = {},
 ) {
+  const opts = options && typeof options === "object" ? options : {};
   numPadMode = mode;
   numPadOriginalUnitGross = originalValue;
   numPadTargetItemId = targetId;
+  numPadPricePreviewEnabled = opts.showPricePreview === false ? false : true;
 
   numPadCurrentValue = initialValue != null ? String(initialValue) : "";
   numPadDefaultValue = numPadCurrentValue === "" ? "0" : numPadCurrentValue; // ✅
@@ -12698,6 +12934,7 @@ function closeNumPad(reason = "cancel") {
     numPadProductName.textContent = "";
   }
   numPadVisible = false;
+  numPadPricePreviewEnabled = true;
   numPadOnConfirm = null;
   numPadLiveValue = null;
   numPadInitialValue = 0;
@@ -13528,14 +13765,18 @@ if (cartLinesContainer) {
 
           const parsed = parseNumericLike(nextValue, 0);
           const pct = clampDiscountPercent(parsed);
+          const currentPct = getCartLineDiscountPercent(item);
+          if (pct === currentPct) return;
+
+          pushCartHistoryStep("line-discount-change");
           item.cartLineDiscountPct = pct;
           renderCart();
         },
         `${item.name} - descuento linea (%)`,
-        "price",
+        "discount",
         currentPct,
         lineId,
-        { showPricePreview: false },
+        { showPricePreview: true },
       );
       return;
     }
@@ -13854,13 +14095,17 @@ function isParkedTicketLockedByAnotherTerminal(ticket) {
 }
 
 function getCartTotal(items) {
-  return (items || []).reduce((sum, item) => {
-    const unit = getUnitGross(item);
-    const pct = getCartGlobalDiscountPercent();
-    const effectiveUnit = pct > 0 ? round2(unit * (1 - pct / 100)) : unit;
+  return round2(
+    (items || []).reduce((sum, item) => {
+      if (!item || typeof item !== "object") return sum;
 
-    return sum + effectiveUnit * (item.qty || 1);
-  }, 0);
+      const pricing = getCartLinePricing(item);
+      const lineTotal = Number(pricing?.lineTotal || 0);
+
+      if (!Number.isFinite(lineTotal)) return sum;
+      return sum + lineTotal;
+    }, 0),
+  );
 }
 
 function buildLineIdSetFromSnapshot(items) {
@@ -13929,236 +14174,472 @@ function registerPaymentsForCurrentSession(pagos) {
 }
 
 async function parkCurrentCart(name = "", obs = "", opts = {}) {
-  const labels = getParkingLabels();
-  const requestId = createRequestId("PARK");
-  const mesaScope = getSelectedMesaScopeContext();
-  let effectiveMesaScope = mesaScope;
-  const forcedParkingModeRaw = String(opts?.parkingMode || "")
-    .trim()
-    .toLowerCase();
-  const forcedParkingMode =
-    forcedParkingModeRaw === PARKED_MODE_MESAS ||
-    forcedParkingModeRaw === PARKED_MODE_TPV
-      ? forcedParkingModeRaw
-      : "";
-  if (
-    !String(effectiveMesaScope?.uid || "").trim() &&
-    forcedParkingMode === PARKED_MODE_MESAS
-  ) {
-    const mesasState = loadMesasTablesStateForInline();
-    const fallbackUid = String(
-      mesasState?.selectedTableId || MESAS_CONTEXT_SELECTED_UID || "",
-    ).trim();
+  if (isParkingNow) return;
+  isParkingNow = true;
+  refreshParkButtonUI?.();
+  refreshAgentGuardUI?.();
 
-    if (fallbackUid) {
-      const [roomId = "", tableId = ""] = fallbackUid.split("::");
-      const linked = getMesasRoomAndTableByUid(mesasState, fallbackUid);
-      effectiveMesaScope = {
-        uid: fallbackUid,
-        roomId: String(roomId || ""),
-        tableId: String(tableId || ""),
-        roomName: linked
-          ? String(linked.room?.name || linked.room?.id || roomId || "")
-          : "",
-        tableName: linked
-          ? String(linked.table?.name || linked.table?.id || tableId || "")
-          : "",
-      };
-    }
-  }
+  try {
+    const labels = getParkingLabels();
+    const requestId = createRequestId("PARK");
+    const mesaScope = getSelectedMesaScopeContext();
+    let effectiveMesaScope = mesaScope;
+    const forcedParkingModeRaw = String(opts?.parkingMode || "")
+      .trim()
+      .toLowerCase();
+    const forcedParkingMode =
+      forcedParkingModeRaw === PARKED_MODE_MESAS ||
+      forcedParkingModeRaw === PARKED_MODE_TPV
+        ? forcedParkingModeRaw
+        : "";
+    if (
+      !String(effectiveMesaScope?.uid || "").trim() &&
+      forcedParkingMode === PARKED_MODE_MESAS
+    ) {
+      const mesasState = loadMesasTablesStateForInline();
+      const fallbackUid = String(
+        mesasState?.selectedTableId || MESAS_CONTEXT_SELECTED_UID || "",
+      ).trim();
 
-  const hasMesaScope = !!String(effectiveMesaScope?.uid || "").trim();
-  const ticketParkingMode =
-    forcedParkingMode ||
-    (hasMesaScope ? PARKED_MODE_MESAS : getCurrentParkingModeScope());
-
-  if (ticketParkingMode === PARKED_MODE_MESAS && !hasMesaScope) {
-    toast("Selecciona una mesa antes de guardar el pedido.", "warn", "Pedidos");
-    return;
-  }
-
-  const keepActiveMesasTicket =
-    MESAS_INLINE_ACTIVE &&
-    MESAS_INLINE_VIEW === "transacciones" &&
-    hasMesaScope;
-  const mesaAlerts = normalizeMesaTicketAlerts(opts?.mesaAlerts);
-  const requestedDocType = normalizeParkedDocType(opts?.docType || "ticket");
-  const openListAfterSave = opts?.openListAfterSave === true;
-  const silentAutoSave = opts?.silentAutoSave === true;
-  const skipAutoPrint = opts?.skipAutoPrint === true;
-  const skipStockConfirm = opts?.skipStockConfirm === true;
-
-  logFeatureInfo("APARCAR", "inicio", {
-    requestId,
-    cartLines: Array.isArray(cart) ? cart.length : 0,
-    editing: currentParkedTicketIndex !== null,
-  });
-
-  const snapshot = cart.map((item) => ({ ...item }));
-  const hasSnapshotLines = snapshot.length > 0;
-  if (!hasSnapshotLines) {
-    const loadedTicket = getCurrentLoadedParkedTicket();
-    if (!loadedTicket) {
-      logFeatureWarn("APARCAR", "cancelado-carrito-vacio", { requestId });
-      toast("No hay productos para guardar.", "warn", labels.actionTitle);
-      return;
-    }
-  }
-
-  let editingIndex =
-    currentParkedTicketIndex !== null ? Number(currentParkedTicketIndex) : null;
-
-  if (
-    editingIndex === null &&
-    MESAS_INLINE_ACTIVE &&
-    MESAS_INLINE_VIEW === "transacciones"
-  ) {
-    const mesasState = loadMesasTablesStateForInline();
-    const selectedUid = String(mesasState?.selectedTableId || "").trim();
-    const linkedTicketId = selectedUid
-      ? mesasState?.tableTicketMap?.[selectedUid]
-      : null;
-
-    if (linkedTicketId) {
-      const linkedIdx = (
-        Array.isArray(parkedTickets) ? parkedTickets : []
-      ).findIndex(
-        (t) => String(t?.id || "") === String(linkedTicketId) && !t?.paid,
-      );
-      if (linkedIdx >= 0) editingIndex = linkedIdx;
-    }
-
-    if (editingIndex === null && selectedUid) {
-      const scopedIdx = (
-        Array.isArray(parkedTickets) ? parkedTickets : []
-      ).findIndex(
-        (t) => !t?.paid && resolveTicketMesaUid(t, mesasState) === selectedUid,
-      );
-
-      if (scopedIdx >= 0) {
-        editingIndex = scopedIdx;
-        if (
-          !mesasState.tableTicketMap ||
-          typeof mesasState.tableTicketMap !== "object"
-        ) {
-          mesasState.tableTicketMap = {};
-        }
-        mesasState.tableTicketMap[selectedUid] = parkedTickets[scopedIdx]?.id;
-        saveMesasTablesStateForInline(mesasState);
+      if (fallbackUid) {
+        const [roomId = "", tableId = ""] = fallbackUid.split("::");
+        const linked = getMesasRoomAndTableByUid(mesasState, fallbackUid);
+        effectiveMesaScope = {
+          uid: fallbackUid,
+          roomId: String(roomId || ""),
+          tableId: String(tableId || ""),
+          roomName: linked
+            ? String(linked.room?.name || linked.room?.id || roomId || "")
+            : "",
+          tableName: linked
+            ? String(linked.table?.name || linked.table?.id || tableId || "")
+            : "",
+        };
       }
     }
-  }
 
-  const editingTicket =
-    editingIndex !== null &&
-    Array.isArray(parkedTickets) &&
-    parkedTickets[editingIndex] &&
-    !parkedTickets[editingIndex].paid
-      ? parkedTickets[editingIndex]
-      : null;
+    const hasMesaScope = !!String(effectiveMesaScope?.uid || "").trim();
+    const ticketParkingMode =
+      forcedParkingMode ||
+      (hasMesaScope ? PARKED_MODE_MESAS : getCurrentParkingModeScope());
 
-  if (hasSnapshotLines && !skipStockConfirm) {
-    const isEditing = !!editingTicket;
-    const canContinue = await confirmIfCartExceedsVisibleStock(snapshot, {
-      actionVerb: isEditing
-        ? "actualizar"
-        : keepActiveMesasTicket
-          ? "guardar"
-          : "aparcar",
-      modalTitle: isEditing
-        ? "Stock insuficiente para actualizar"
-        : keepActiveMesasTicket
-          ? "Stock insuficiente para guardar"
-          : "Stock insuficiente para aparcar",
-      baselineItems: isEditing ? editingTicket.items : null,
+    if (ticketParkingMode === PARKED_MODE_MESAS && !hasMesaScope) {
+      toast(
+        "Selecciona una mesa antes de guardar el pedido.",
+        "warn",
+        "Pedidos",
+      );
+      return;
+    }
+
+    const keepActiveMesasTicket =
+      MESAS_INLINE_ACTIVE &&
+      MESAS_INLINE_VIEW === "transacciones" &&
+      hasMesaScope;
+    const mesaAlerts = normalizeMesaTicketAlerts(opts?.mesaAlerts);
+    const requestedDocType = normalizeParkedDocType(opts?.docType || "ticket");
+    const openListAfterSave = opts?.openListAfterSave === true;
+    const silentAutoSave = opts?.silentAutoSave === true;
+    const keepLoadedTicketOpen = opts?.keepLoadedTicketOpen === true;
+    const skipAutoPrint = opts?.skipAutoPrint === true;
+    const skipStockConfirm = opts?.skipStockConfirm === true;
+
+    logFeatureInfo("APARCAR", "inicio", {
+      requestId,
+      cartLines: Array.isArray(cart) ? cart.length : 0,
+      editing: currentParkedTicketIndex !== null,
     });
-    if (!canContinue) {
-      logFeatureWarn("APARCAR", "cancelado-stock", { requestId });
+
+    const currentGlobalDiscountPct = getCartGlobalDiscountPercent();
+    const snapshot = freezeGlobalDiscountOnLines(
+      cart,
+      currentGlobalDiscountPct,
+    );
+    const hasSnapshotLines = snapshot.length > 0;
+    if (!hasSnapshotLines) {
+      const loadedTicket = getCurrentLoadedParkedTicket();
+      if (!loadedTicket) {
+        logFeatureWarn("APARCAR", "cancelado-carrito-vacio", { requestId });
+        toast("No hay productos para guardar.", "warn", labels.actionTitle);
+        return;
+      }
+    }
+
+    let editingIndex =
+      currentParkedTicketIndex !== null
+        ? Number(currentParkedTicketIndex)
+        : null;
+
+    if (
+      editingIndex === null &&
+      MESAS_INLINE_ACTIVE &&
+      MESAS_INLINE_VIEW === "transacciones"
+    ) {
+      const mesasState = loadMesasTablesStateForInline();
+      const selectedUid = String(mesasState?.selectedTableId || "").trim();
+      const linkedTicketId = selectedUid
+        ? mesasState?.tableTicketMap?.[selectedUid]
+        : null;
+
+      if (linkedTicketId) {
+        const linkedIdx = (
+          Array.isArray(parkedTickets) ? parkedTickets : []
+        ).findIndex(
+          (t) => String(t?.id || "") === String(linkedTicketId) && !t?.paid,
+        );
+        if (linkedIdx >= 0) editingIndex = linkedIdx;
+      }
+
+      if (editingIndex === null && selectedUid) {
+        const scopedIdx = (
+          Array.isArray(parkedTickets) ? parkedTickets : []
+        ).findIndex(
+          (t) =>
+            !t?.paid && resolveTicketMesaUid(t, mesasState) === selectedUid,
+        );
+
+        if (scopedIdx >= 0) {
+          editingIndex = scopedIdx;
+          if (
+            !mesasState.tableTicketMap ||
+            typeof mesasState.tableTicketMap !== "object"
+          ) {
+            mesasState.tableTicketMap = {};
+          }
+          mesasState.tableTicketMap[selectedUid] = parkedTickets[scopedIdx]?.id;
+          saveMesasTablesStateForInline(mesasState);
+        }
+      }
+    }
+
+    const editingTicket =
+      editingIndex !== null &&
+      Array.isArray(parkedTickets) &&
+      parkedTickets[editingIndex] &&
+      !parkedTickets[editingIndex].paid
+        ? parkedTickets[editingIndex]
+        : null;
+
+    if (hasSnapshotLines && !skipStockConfirm) {
+      const isEditing = !!editingTicket;
+      const canContinue = await confirmIfCartExceedsVisibleStock(snapshot, {
+        actionVerb: isEditing
+          ? "actualizar"
+          : keepActiveMesasTicket
+            ? "guardar"
+            : "aparcar",
+        modalTitle: isEditing
+          ? "Stock insuficiente para actualizar"
+          : keepActiveMesasTicket
+            ? "Stock insuficiente para guardar"
+            : "Stock insuficiente para aparcar",
+        baselineItems: isEditing ? editingTicket.items : null,
+      });
+      if (!canContinue) {
+        logFeatureWarn("APARCAR", "cancelado-stock", { requestId });
+        return;
+      }
+    }
+
+    const total = hasSnapshotLines ? getCartTotal(snapshot) : 0;
+    const discountSummary = hasSnapshotLines
+      ? buildParkedDiscountSummarySnapshot(snapshot)
+      : null;
+
+    const clientName = cartClientInput
+      ? cartClientInput.value || "Cliente"
+      : "Cliente";
+    const selectedCustomerCod =
+      String(
+        window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() ||
+          window.CUSTOMER_SELECTOR?.getSelectedCustomer?.()?.codcliente ||
+          currentTerminal?.codcliente ||
+          "1",
+      ).trim() || "1";
+
+    const ticketName = String(name || "").trim();
+    const observation = String(obs || "").trim();
+
+    // ✅ ACTUALIZAR ticket ya cargado
+    if (editingTicket) {
+      const existing = editingTicket;
+      const prevItems = Array.isArray(existing?.items)
+        ? existing.items.map((it) => ({ ...it }))
+        : [];
+      const reservedDelta = buildReservedQtyDeltaMap(snapshot, prevItems);
+
+      existing.slug = String(
+        existing?.slug || getCurrentSlugForReservations() || "",
+      ).trim();
+      existing.cajaId = String(
+        existing?.cajaId || getCajaIdSafe?.() || currentTerminal?.id || "",
+      ).trim();
+      existing.parkingMode = ticketParkingMode;
+      setTicketMesasModeFlag(existing, ticketParkingMode === PARKED_MODE_MESAS);
+      existing.docType = opts?.docType
+        ? requestedDocType
+        : getParkedTicketDocType(existing, "ticket");
+      const existingDocText = getParkedDocTypeTexts(existing.docType);
+
+      if (hasSnapshotLines) {
+        existing.items = snapshot;
+        existing.total = total;
+        existing.discountSummary = discountSummary;
+        existing.cartGlobalDiscountPct = currentGlobalDiscountPct;
+      }
+      existing.codcliente = selectedCustomerCod;
+      existing.clientName = clientName;
+      existing.name =
+        ticketName ||
+        existing.name ||
+        `${existingDocText.shortLabel} #${existing.id}`;
+      existing.obs = observation;
+      if (existing.docType === "pedido") {
+        existing.pedidoStatus = normalizePedidoTpvStatus(
+          existing?.pedidoStatus,
+          "pendiente",
+        );
+        if (existing.pedidoStatus === "pendiente") {
+          existing.paid = false;
+          existing.paidAt = null;
+          existing.paidTicketCode = null;
+          existing.paidTicketId = null;
+        }
+      } else {
+        delete existing.pedidoStatus;
+        delete existing.collectedAt;
+      }
+      existing.mesaAlerts = keepActiveMesasTicket
+        ? mesaAlerts
+        : normalizeMesaTicketAlerts(existing?.mesaAlerts);
+      existing.localRevisionAt = Date.now();
+      existing.updatedAt = new Date();
+      if (ticketParkingMode === PARKED_MODE_MESAS) {
+        applyMesaScopeToTicket(existing, effectiveMesaScope);
+      } else {
+        clearMesaScopeFromTicket(existing);
+      }
+      saveParkedTicketsCache();
+      linkMesaSelectionWithTicketId(existing?.id || null);
+
+      try {
+        await apiSaveParkedReservation(existing);
+        await refreshRemoteParkedReservationsOnly();
+      } catch (e) {
+        enqueueParkedSyncOperation("upsert", existing);
+        console.warn(
+          "No se pudo guardar la reserva remota al actualizar:",
+          e?.message || e,
+        );
+
+        if (isParkedSyncTransientError(e)) {
+          toast(
+            `Sin internet: actualizacion de ${labels.item} guardada en cola.`,
+            "warn",
+            labels.featureTitle,
+          );
+        }
+      }
+
+      if (reservedDelta.size > 0) {
+        try {
+          await syncReservedStockDeltaToFS(
+            reservedDelta,
+            "actualizar aparcado",
+          );
+        } catch (e) {
+          console.warn(
+            "No se pudo sincronizar stock al actualizar aparcado:",
+            e?.message || e,
+          );
+          toast(
+            "Aparcado actualizado, pero no se pudo sincronizar stock en FacturaScripts.",
+            "warn",
+            "Stock",
+          );
+        }
+      }
+
+      // opcional: si quieres actualizar presupuesto remoto más adelante, aquí irá
+
+      if (keepActiveMesasTicket || keepLoadedTicketOpen) {
+        const idx = (
+          Array.isArray(parkedTickets) ? parkedTickets : []
+        ).findIndex(
+          (t) => String(t?.id || "") === String(existing?.id || "") && !t?.paid,
+        );
+        const fallbackIdx =
+          editingIndex !== null &&
+          Array.isArray(parkedTickets) &&
+          parkedTickets[editingIndex] &&
+          !parkedTickets[editingIndex].paid
+            ? editingIndex
+            : null;
+
+        currentParkedTicketIndex =
+          idx >= 0 ? idx : fallbackIdx !== null ? fallbackIdx : null;
+
+        // En autosave no reinyectamos snapshot en el carrito para evitar
+        // rebobinar cambios rápidos (ej. qty 2->5 que vuelve a 3 por guardado previo).
+        if (!silentAutoSave) {
+          cart = hasSnapshotLines ? snapshot.map((it) => ({ ...it })) : [];
+          renderCart();
+        }
+
+        if (currentParkedTicketIndex === null) {
+          PENDING_RUNTIME_PARKED_SYNC_KEY = String(
+            getParkedTicketSyncKey(existing) || "",
+          ).trim();
+          PENDING_RUNTIME_PARKED_TICKET_ID = Number(existing?.id || 0) || 0;
+
+          if (keepActiveMesasTicket) {
+            syncTpvCartWithSelectedMesa();
+          } else {
+            tryResolvePendingParkedTicketIndex();
+          }
+        }
+      } else {
+        // TPV normal: limpiar carrito tras aparcar/actualizar
+        cart = [];
+        renderCart();
+        currentParkedTicketIndex = null;
+      }
+
+      refreshParkButtonUI();
+      refreshParkedEditingBanner();
+      updateParkedCountBadge();
+
+      if (!silentAutoSave) {
+        const okMsg = hasSnapshotLines
+          ? `${labels.itemCap} actualizado ✅`
+          : `Datos del ${labels.item} actualizados ✅`;
+        toast(okMsg, "ok", labels.featureTitle);
+        setStatusText(
+          hasSnapshotLines
+            ? `${labels.itemCap} actualizado.`
+            : `Datos del ${labels.item} actualizados.`,
+        );
+      }
+
+      if (
+        keepActiveMesasTicket &&
+        (MESAS_RETURN_TO_VIEW_AFTER_PARK === "mapa" ||
+          MESAS_RETURN_TO_VIEW_AFTER_PARK === "diseno")
+      ) {
+        const targetView = MESAS_RETURN_TO_VIEW_AFTER_PARK;
+        MESAS_RETURN_TO_VIEW_AFTER_PARK = "";
+        setMesasInlineView(targetView, { persist: false });
+      }
+
+      logFeatureInfo("APARCAR", "actualizado", {
+        requestId,
+        id: existing?.id || null,
+        total: Number(total || 0),
+        lineas: snapshot.length,
+      });
+
+      if (!skipAutoPrint) {
+        maybeAutoPrintComandaOnSave(existing).catch((e) => {
+          console.warn(
+            "No se pudo auto-imprimir comanda al actualizar:",
+            e?.message || e,
+          );
+        });
+        await maybeAutoPrintPedidoOnSave(existing).catch((e) => {
+          console.warn(
+            "No se pudo auto-imprimir pedido al actualizar:",
+            e?.message || e,
+          );
+        });
+      }
+      if (!keepActiveMesasTicket && openListAfterSave) {
+        focusParkedListOnPendingToday();
+        openParkedModal();
+      }
       return;
     }
-  }
 
-  const total = hasSnapshotLines ? getCartTotal(snapshot) : 0;
+    // ✅ CREAR ticket nuevo
+    const nextDisplayNo = getNextSuggestedParkTicketDisplayNo();
+    const nextTicketId = getNextSuggestedParkTicketId();
+    parkedCounter = nextDisplayNo;
+    saveParkedGlobalCounter(parkedCounter);
+    saveParkedGlobalIdCounter(nextTicketId);
 
-  const clientName = cartClientInput
-    ? cartClientInput.value || "Cliente"
-    : "Cliente";
-
-  const ticketName = String(name || "").trim();
-  const observation = String(obs || "").trim();
-
-  // ✅ ACTUALIZAR ticket ya cargado
-  if (editingTicket) {
-    const existing = editingTicket;
-    const prevItems = Array.isArray(existing?.items)
-      ? existing.items.map((it) => ({ ...it }))
-      : [];
-    const reservedDelta = buildReservedQtyDeltaMap(snapshot, prevItems);
-
-    existing.slug = String(
-      existing?.slug || getCurrentSlugForReservations() || "",
-    ).trim();
-    existing.cajaId = String(
-      existing?.cajaId || getCajaIdSafe?.() || currentTerminal?.id || "",
-    ).trim();
-    existing.parkingMode = ticketParkingMode;
-    setTicketMesasModeFlag(existing, ticketParkingMode === PARKED_MODE_MESAS);
-    existing.docType = opts?.docType
-      ? requestedDocType
-      : getParkedTicketDocType(existing, "ticket");
-    const existingDocText = getParkedDocTypeTexts(existing.docType);
-
-    if (hasSnapshotLines) {
-      existing.items = snapshot;
-      existing.total = total;
-    }
-    existing.clientName = clientName;
-    existing.name =
-      ticketName ||
-      existing.name ||
-      `${existingDocText.shortLabel} #${existing.id}`;
-    existing.obs = observation;
-    if (existing.docType === "pedido") {
-      existing.pedidoStatus = normalizePedidoTpvStatus(
-        existing?.pedidoStatus,
-        "pendiente",
-      );
-      if (existing.pedidoStatus === "pendiente") {
-        existing.paid = false;
-        existing.paidAt = null;
-        existing.paidTicketCode = null;
-        existing.paidTicketId = null;
-      }
-    } else {
-      delete existing.pedidoStatus;
-      delete existing.collectedAt;
-    }
-    existing.mesaAlerts = keepActiveMesasTicket
-      ? mesaAlerts
-      : normalizeMesaTicketAlerts(existing?.mesaAlerts);
-    existing.localRevisionAt = Date.now();
-    existing.updatedAt = new Date();
+    const localTicket = {
+      id: nextTicketId,
+      displayNo: nextDisplayNo,
+      slug: String(getCurrentSlugForReservations() || "").trim(),
+      cajaId: String(getCajaIdSafe?.() || currentTerminal?.id || "").trim(),
+      createdAt: new Date(),
+      updatedAt: null,
+      localRevisionAt: Date.now(),
+      items: snapshot,
+      total,
+      codcliente: selectedCustomerCod,
+      discountSummary,
+      cartGlobalDiscountPct: currentGlobalDiscountPct,
+      clientName,
+      docType: requestedDocType,
+      pedidoStatus: requestedDocType === "pedido" ? "pendiente" : undefined,
+      name:
+        ticketName ||
+        `${getParkedDocTypeTexts(requestedDocType).shortLabel} #${nextDisplayNo}`,
+      obs: observation,
+      parkingMode: ticketParkingMode,
+      modoMesas: ticketParkingMode === PARKED_MODE_MESAS ? 1 : 0,
+      modeMesas: ticketParkingMode === PARKED_MODE_MESAS ? 1 : 0,
+      mesaAlerts: keepActiveMesasTicket ? mesaAlerts : [],
+      paid: false,
+      paidAt: null,
+      paidTicketCode: null,
+      paidTicketId: null,
+      fs: null,
+    };
     if (ticketParkingMode === PARKED_MODE_MESAS) {
-      applyMesaScopeToTicket(existing, effectiveMesaScope);
+      applyMesaScopeToTicket(localTicket, effectiveMesaScope);
     } else {
-      clearMesaScopeFromTicket(existing);
+      clearMesaScopeFromTicket(localTicket);
     }
+
+    if (requestedDocType !== "pedido") {
+      try {
+        const remote = await apiCreatePresupuestoFromCart(observation);
+        if (remote && (remote.doc || remote.data)) {
+          const doc = remote.doc || remote.data;
+          localTicket.fs = {
+            idpresupuesto: doc.idpresupuesto ?? doc.id ?? null,
+            codigo: doc.codigo ?? null,
+          };
+        }
+      } catch (e) {
+        // Si FS falla, mantenemos el aparcado local/remoto de reservas para no perder operativa.
+        console.warn(
+          "No se pudo crear presupuesto en FS al aparcar:",
+          e?.message || e,
+        );
+      }
+    }
+
+    parkedTickets.push(localTicket);
     saveParkedTicketsCache();
-    linkMesaSelectionWithTicketId(existing?.id || null);
+    linkMesaSelectionWithTicketId(localTicket?.id || null);
+
+    const reservedDelta = buildReservedQtyDeltaMap(snapshot, []);
 
     try {
-      await apiSaveParkedReservation(existing);
+      await apiSaveParkedReservation(localTicket);
       await refreshRemoteParkedReservationsOnly();
     } catch (e) {
-      enqueueParkedSyncOperation("upsert", existing);
+      enqueueParkedSyncOperation("upsert", localTicket);
       console.warn(
-        "No se pudo guardar la reserva remota al actualizar:",
+        "No se pudo guardar la reserva remota al aparcar:",
         e?.message || e,
       );
 
       if (isParkedSyncTransientError(e)) {
         toast(
-          `Sin internet: actualizacion de ${labels.item} guardada en cola.`,
+          `Sin internet: ${labels.item} guardado en cola.`,
           "warn",
           labels.featureTitle,
         );
@@ -14167,32 +14648,31 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
 
     if (reservedDelta.size > 0) {
       try {
-        await syncReservedStockDeltaToFS(reservedDelta, "actualizar aparcado");
+        await syncReservedStockDeltaToFS(reservedDelta, "crear aparcado");
       } catch (e) {
         console.warn(
-          "No se pudo sincronizar stock al actualizar aparcado:",
+          "No se pudo sincronizar stock al crear aparcado:",
           e?.message || e,
         );
         toast(
-          "Aparcado actualizado, pero no se pudo sincronizar stock en FacturaScripts.",
+          "Ticket aparcado, pero no se pudo sincronizar stock en FacturaScripts.",
           "warn",
           "Stock",
         );
       }
     }
 
-    // opcional: si quieres actualizar presupuesto remoto más adelante, aquí irá
-
     if (keepActiveMesasTicket) {
       const idx = (Array.isArray(parkedTickets) ? parkedTickets : []).findIndex(
-        (t) => String(t?.id || "") === String(existing?.id || "") && !t?.paid,
+        (t) =>
+          String(t?.id || "") === String(localTicket?.id || "") && !t?.paid,
       );
       currentParkedTicketIndex = idx >= 0 ? idx : null;
-      cart = hasSnapshotLines ? snapshot.map((it) => ({ ...it })) : [];
+      cart = snapshot.map((it) => ({ ...it }));
       renderCart();
       if (currentParkedTicketIndex === null) syncTpvCartWithSelectedMesa();
     } else {
-      // TPV normal: limpiar carrito tras aparcar/actualizar
+      // TPV normal: limpiar carrito tras aparcar
       cart = [];
       renderCart();
       currentParkedTicketIndex = null;
@@ -14203,15 +14683,16 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
     updateParkedCountBadge();
 
     if (!silentAutoSave) {
-      const okMsg = hasSnapshotLines
-        ? `${labels.itemCap} actualizado ✅`
-        : `Datos del ${labels.item} actualizados ✅`;
-      toast(okMsg, "ok", labels.featureTitle);
-      setStatusText(
-        hasSnapshotLines
-          ? `${labels.itemCap} actualizado.`
-          : `Datos del ${labels.item} actualizados.`,
-      );
+      toast(`${labels.itemCap} ✅`, "ok", labels.featureTitle);
+      setStatusText(`${labels.itemCap}.`);
+    }
+
+    focusParkedListOnPendingToday();
+    if (
+      parkedTicketsOverlay &&
+      !parkedTicketsOverlay.classList.contains("hidden")
+    ) {
+      renderParkedTicketsModal();
     }
 
     if (
@@ -14224,23 +14705,23 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
       setMesasInlineView(targetView, { persist: false });
     }
 
-    logFeatureInfo("APARCAR", "actualizado", {
+    logFeatureInfo("APARCAR", "creado", {
       requestId,
-      id: existing?.id || null,
+      id: localTicket?.id || null,
       total: Number(total || 0),
       lineas: snapshot.length,
     });
 
     if (!skipAutoPrint) {
-      maybeAutoPrintComandaOnSave(existing).catch((e) => {
+      maybeAutoPrintComandaOnSave(localTicket).catch((e) => {
         console.warn(
-          "No se pudo auto-imprimir comanda al actualizar:",
+          "No se pudo auto-imprimir comanda al guardar:",
           e?.message || e,
         );
       });
-      await maybeAutoPrintPedidoOnSave(existing).catch((e) => {
+      await maybeAutoPrintPedidoOnSave(localTicket).catch((e) => {
         console.warn(
-          "No se pudo auto-imprimir pedido al actualizar:",
+          "No se pudo auto-imprimir pedido al guardar:",
           e?.message || e,
         );
       });
@@ -14248,165 +14729,10 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
     if (!keepActiveMesasTicket && openListAfterSave) {
       openParkedModal();
     }
-    return;
-  }
-
-  // ✅ CREAR ticket nuevo
-  const nextDisplayNo = getNextSuggestedParkTicketDisplayNo();
-  const nextTicketId = getNextSuggestedParkTicketId();
-  parkedCounter = nextDisplayNo;
-  saveParkedGlobalCounter(parkedCounter);
-
-  const localTicket = {
-    id: nextTicketId,
-    displayNo: nextDisplayNo,
-    slug: String(getCurrentSlugForReservations() || "").trim(),
-    cajaId: String(getCajaIdSafe?.() || currentTerminal?.id || "").trim(),
-    createdAt: new Date(),
-    updatedAt: null,
-    localRevisionAt: Date.now(),
-    items: snapshot,
-    total,
-    clientName,
-    docType: requestedDocType,
-    pedidoStatus: requestedDocType === "pedido" ? "pendiente" : undefined,
-    name:
-      ticketName ||
-      `${getParkedDocTypeTexts(requestedDocType).shortLabel} #${nextDisplayNo}`,
-    obs: observation,
-    parkingMode: ticketParkingMode,
-    modoMesas: ticketParkingMode === PARKED_MODE_MESAS ? 1 : 0,
-    modeMesas: ticketParkingMode === PARKED_MODE_MESAS ? 1 : 0,
-    mesaAlerts: keepActiveMesasTicket ? mesaAlerts : [],
-    paid: false,
-    paidAt: null,
-    paidTicketCode: null,
-    paidTicketId: null,
-    fs: null,
-  };
-  if (ticketParkingMode === PARKED_MODE_MESAS) {
-    applyMesaScopeToTicket(localTicket, effectiveMesaScope);
-  } else {
-    clearMesaScopeFromTicket(localTicket);
-  }
-
-  if (requestedDocType !== "pedido") {
-    try {
-      const remote = await apiCreatePresupuestoFromCart(observation);
-      if (remote && (remote.doc || remote.data)) {
-        const doc = remote.doc || remote.data;
-        localTicket.fs = {
-          idpresupuesto: doc.idpresupuesto ?? doc.id ?? null,
-          codigo: doc.codigo ?? null,
-        };
-      }
-    } catch (e) {
-      // Si FS falla, mantenemos el aparcado local/remoto de reservas para no perder operativa.
-      console.warn(
-        "No se pudo crear presupuesto en FS al aparcar:",
-        e?.message || e,
-      );
-    }
-  }
-
-  parkedTickets.push(localTicket);
-  saveParkedTicketsCache();
-  linkMesaSelectionWithTicketId(localTicket?.id || null);
-
-  const reservedDelta = buildReservedQtyDeltaMap(snapshot, []);
-
-  try {
-    await apiSaveParkedReservation(localTicket);
-    await refreshRemoteParkedReservationsOnly();
-  } catch (e) {
-    enqueueParkedSyncOperation("upsert", localTicket);
-    console.warn(
-      "No se pudo guardar la reserva remota al aparcar:",
-      e?.message || e,
-    );
-
-    if (isParkedSyncTransientError(e)) {
-      toast(
-        `Sin internet: ${labels.item} guardado en cola.`,
-        "warn",
-        labels.featureTitle,
-      );
-    }
-  }
-
-  if (reservedDelta.size > 0) {
-    try {
-      await syncReservedStockDeltaToFS(reservedDelta, "crear aparcado");
-    } catch (e) {
-      console.warn(
-        "No se pudo sincronizar stock al crear aparcado:",
-        e?.message || e,
-      );
-      toast(
-        "Ticket aparcado, pero no se pudo sincronizar stock en FacturaScripts.",
-        "warn",
-        "Stock",
-      );
-    }
-  }
-
-  if (keepActiveMesasTicket) {
-    const idx = (Array.isArray(parkedTickets) ? parkedTickets : []).findIndex(
-      (t) => String(t?.id || "") === String(localTicket?.id || "") && !t?.paid,
-    );
-    currentParkedTicketIndex = idx >= 0 ? idx : null;
-    cart = snapshot.map((it) => ({ ...it }));
-    renderCart();
-    if (currentParkedTicketIndex === null) syncTpvCartWithSelectedMesa();
-  } else {
-    // TPV normal: limpiar carrito tras aparcar
-    cart = [];
-    renderCart();
-    currentParkedTicketIndex = null;
-  }
-
-  refreshParkButtonUI();
-  refreshParkedEditingBanner();
-  updateParkedCountBadge();
-
-  if (!silentAutoSave) {
-    toast(`${labels.itemCap} ✅`, "ok", labels.featureTitle);
-    setStatusText(`${labels.itemCap}.`);
-  }
-
-  if (
-    keepActiveMesasTicket &&
-    (MESAS_RETURN_TO_VIEW_AFTER_PARK === "mapa" ||
-      MESAS_RETURN_TO_VIEW_AFTER_PARK === "diseno")
-  ) {
-    const targetView = MESAS_RETURN_TO_VIEW_AFTER_PARK;
-    MESAS_RETURN_TO_VIEW_AFTER_PARK = "";
-    setMesasInlineView(targetView, { persist: false });
-  }
-
-  logFeatureInfo("APARCAR", "creado", {
-    requestId,
-    id: localTicket?.id || null,
-    total: Number(total || 0),
-    lineas: snapshot.length,
-  });
-
-  if (!skipAutoPrint) {
-    maybeAutoPrintComandaOnSave(localTicket).catch((e) => {
-      console.warn(
-        "No se pudo auto-imprimir comanda al guardar:",
-        e?.message || e,
-      );
-    });
-    await maybeAutoPrintPedidoOnSave(localTicket).catch((e) => {
-      console.warn(
-        "No se pudo auto-imprimir pedido al guardar:",
-        e?.message || e,
-      );
-    });
-  }
-  if (!keepActiveMesasTicket && openListAfterSave) {
-    openParkedModal();
+  } finally {
+    isParkingNow = false;
+    refreshParkButtonUI?.();
+    refreshAgentGuardUI?.();
   }
 }
 
@@ -15079,8 +15405,14 @@ function syncParkedToolbarUI() {
   const parkedTypeAll = document.getElementById("parkedTypeAll");
   const parkedTypeTicket = document.getElementById("parkedTypeTicket");
   const parkedTypePedido = document.getElementById("parkedTypePedido");
+  const parkedSyncConflictsBtn = document.getElementById(
+    "parkedSyncConflictsBtn",
+  );
   const parkedSummaryBtn = document.getElementById("parkedSummaryBtn");
   const parkedClearPaidBtn = document.getElementById("parkedClearPaidBtn");
+  const parkedSyncConflictsMiniLog = document.getElementById(
+    "parkedSyncConflictsMiniLog",
+  );
   const parkedFilterTabs = document.getElementById("parkedFilterTabs");
   const parkedDocTypeTabs = document.getElementById("parkedDocTypeTabs");
   const parkedScopeWrap = document.getElementById("parkedScopeWrap");
@@ -15151,6 +15483,20 @@ function syncParkedToolbarUI() {
   const showSummaryInLowerRow = !mesaScoped;
   const showClearPaidInLowerRow =
     !mesaScoped && parkedViewState.filter === "paid";
+  const syncConflicts = loadParkedSyncConflicts();
+  const syncConflictCount = syncConflicts.length;
+  if (parkedSyncConflictsBtn) {
+    const showConflicts = !mesaScoped && syncConflictCount > 0;
+    parkedSyncConflictsBtn.classList.toggle("hidden", !showConflicts);
+    parkedSyncConflictsBtn.textContent = `Incidencias sync (${syncConflictCount})`;
+  }
+  if (parkedSyncConflictsMiniLog) {
+    const showMiniLog = !mesaScoped && syncConflictCount > 0;
+    parkedSyncConflictsMiniLog.classList.toggle("hidden", !showMiniLog);
+    parkedSyncConflictsMiniLog.textContent = showMiniLog
+      ? buildParkedSyncConflictsMiniLog(syncConflicts)
+      : "";
+  }
   if (parkedSummaryBtn) {
     parkedSummaryBtn.classList.toggle("hidden", !showSummaryInLowerRow);
   }
@@ -15289,54 +15635,15 @@ async function clearPaidParkedHistory() {
     currentParkedTicketIndex = null;
   }
 
+  const pendingAfterClear = getScopedPendingParkedTickets(parkedTickets).filter(
+    (t) => !isPedidoTpvTicket(t),
+  ).length;
+  if (pendingAfterClear === 0) {
+    parkedCounter = 0;
+    resetParkedGlobalCounter();
+  }
+
   return { removedCount: removedPaid.length, queuedCount };
-}
-
-async function setPedidoTpvStatusByIndex(index, nextStatus) {
-  if (!Array.isArray(parkedTickets) || !parkedTickets.length) return false;
-  if (index == null || index < 0 || index >= parkedTickets.length) return false;
-
-  const ticket = parkedTickets[index];
-  if (!ticket || !isPedidoTpvTicket(ticket)) return false;
-
-  const status = normalizePedidoTpvStatus(nextStatus, "pendiente");
-  ticket.pedidoStatus = status;
-
-  if (status === "pendiente") {
-    ticket.paid = false;
-    ticket.paidAt = null;
-    ticket.paidTicketCode = null;
-    ticket.paidTicketId = null;
-  } else {
-    ticket.paid = true;
-    if (!ticket.paidAt) ticket.paidAt = new Date();
-    if (!ticket.paidTicketCode) ticket.paidTicketCode = `PED-${ticket.id}`;
-  }
-
-  if (status === "recogido") {
-    ticket.collectedAt = new Date();
-  }
-
-  ticket.localRevisionAt = Date.now();
-  ticket.updatedAt = new Date();
-  saveParkedTicketsCache(parkedTickets);
-
-  try {
-    await apiSaveParkedReservation(ticket);
-    await refreshRemoteParkedReservationsOnly();
-  } catch (e) {
-    enqueueParkedSyncOperation("upsert", ticket);
-    console.warn(
-      "No se pudo sincronizar estado de pedido TPV:",
-      e?.message || e,
-    );
-  }
-
-  updateParkedCountBadge?.();
-  refreshParkButtonUI?.();
-  refreshParkedEditingBanner?.();
-  renderParkedTicketsModal?.();
-  return true;
 }
 
 function ensureParkedToolbar() {
@@ -15400,6 +15707,9 @@ function ensureParkedToolbar() {
       <button id="parkedPendingScopeOlder" type="button" class="cart-btn tickets-tab-btn" style="font-size: 13px; padding: 6px 12px;">
         Dias anteriores
       </button>
+      <button id="parkedSyncConflictsBtn" type="button" class="cart-btn tickets-tab-btn hidden" style="font-size: 13px; padding: 6px 12px;" title="Incidencias de sincronizacion entre TPVs">
+        Incidencias sync
+      </button>
       <button id="parkedSummaryBtn" type="button" class="cart-btn tickets-tab-btn hidden" style="font-size: 13px; padding: 6px 12px;" title="Resumen de aparcados">
         Resumen
       </button>
@@ -15407,6 +15717,8 @@ function ensureParkedToolbar() {
         Limpiar cobrados
       </button>
     </div>
+
+    <div id="parkedSyncConflictsMiniLog" class="hidden" style="flex-basis: 100%; margin: 6px 0 0 10px; font-size: 12px; color: #7a2e00; background: #fff3e8; border: 1px solid #ffd4ad; border-radius: 8px; padding: 6px 10px;"></div>
 
     <div id="parkedDocTypeTabs" class="tickets-tabs hidden" style="margin-left: 10px;"></div>
 
@@ -15428,6 +15740,9 @@ function ensureParkedToolbar() {
   );
   const parkedPendingScopeOlder = document.getElementById(
     "parkedPendingScopeOlder",
+  );
+  const parkedSyncConflictsBtn = document.getElementById(
+    "parkedSyncConflictsBtn",
   );
   const parkedKeyboardBtn = document.getElementById("parkedKeyboardBtn");
   const parkedSummaryBtn = document.getElementById("parkedSummaryBtn");
@@ -15476,6 +15791,10 @@ function ensureParkedToolbar() {
     parkedViewState.pendingScope = "older";
     syncParkedToolbarUI();
     renderParkedTicketsModal();
+  });
+
+  parkedSyncConflictsBtn?.addEventListener("click", async () => {
+    await openParkedSyncConflictsModal();
   });
 
   parkedFilterPaid?.addEventListener("click", () => {
@@ -15586,14 +15905,18 @@ function refreshParkButtonUI() {
     MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones";
 
   const hasCartLines = hasVisibleCartLines();
-  parkBtn.disabled = !hasCartLines;
+  parkBtn.disabled = isParkingNow || !hasCartLines;
 
-  parkBtn.textContent = hasLoadedParkedTicket
-    ? "Actualizar"
-    : mesasTransMode
-      ? "Guardar"
-      : "Aparcar";
-  if (!hasCartLines) {
+  parkBtn.textContent = isParkingNow
+    ? "Guardando..."
+    : hasLoadedParkedTicket
+      ? "Actualizar"
+      : mesasTransMode
+        ? "Guardar"
+        : "Aparcar";
+  if (isParkingNow) {
+    parkBtn.title = "Hay un guardado de aparcado en curso. Espera por favor.";
+  } else if (!hasCartLines) {
     parkBtn.title = mesasTransMode
       ? "Añade productos al carrito para guardar el pedido"
       : "Añade productos al carrito para aparcar";
@@ -15606,6 +15929,25 @@ function refreshParkButtonUI() {
         ? "Guardar pedido de mesa"
         : labels.actionTitle;
   }
+
+  refreshClearCartButtonUi();
+}
+
+function refreshClearCartButtonUi() {
+  const btn = document.getElementById("clearCartBtn");
+  if (!btn) return;
+
+  const loaded = getCurrentLoadedParkedTicket();
+  const hasLoadedOpenTicket = !!loaded && !loaded?.paid;
+
+  btn.disabled = isParkingNow;
+
+  btn.textContent = hasLoadedOpenTicket ? "Salir" : "Vaciar";
+  btn.title = isParkingNow
+    ? "Hay un guardado de aparcado en curso. Espera por favor."
+    : hasLoadedOpenTicket
+      ? "Salir del ticket actual (vacía carrito y cierra vínculo)"
+      : "Vaciar carrito";
 }
 
 function hasLoadedOpenTicketForMesasTrans() {
@@ -15630,26 +15972,42 @@ function refreshParkedEditingBanner() {
 
   if (!wrap || !title || !mesaMeta || !obs || !flags) return;
 
-  const setActionButtonsDisabled = (disabled) => {
+  const setActionButtonsDisabled = ({
+    split = false,
+    comanda = false,
+    meta = false,
+    del = false,
+    undo = false,
+    redo = false,
+  } = {}) => {
     const splitBtnEl = document.getElementById("parkedSplitBtn");
     const comandaBtnEl = document.getElementById("parkedComandaBtn");
     const metaBtnEl = document.getElementById("parkedEditingMetaBtn");
+    const delBtnEl = document.getElementById("parkedDeleteBtn");
     const undoBtnEl = document.getElementById("parkedUndoBtn");
     const redoBtnEl = document.getElementById("parkedRedoBtn");
-    if (splitBtnEl) splitBtnEl.disabled = !!disabled;
-    if (comandaBtnEl) comandaBtnEl.disabled = !!disabled;
-    if (metaBtnEl) metaBtnEl.disabled = !!disabled;
-    if (undoBtnEl) undoBtnEl.disabled = !!disabled;
-    if (redoBtnEl) redoBtnEl.disabled = !!disabled;
+    if (splitBtnEl) splitBtnEl.disabled = !!split;
+    if (comandaBtnEl) comandaBtnEl.disabled = !!comanda;
+    if (metaBtnEl) metaBtnEl.disabled = !!meta;
+    if (delBtnEl) delBtnEl.disabled = !!del;
+    if (undoBtnEl) undoBtnEl.disabled = !!undo;
+    if (redoBtnEl) redoBtnEl.disabled = !!redo;
   };
 
-  const setActionButtonsVisible = (visible) => {
+  const setActionButtonsVisible = ({
+    split = false,
+    comanda = false,
+    meta = false,
+    del = false,
+  } = {}) => {
     const splitBtnEl = document.getElementById("parkedSplitBtn");
     const comandaBtnEl = document.getElementById("parkedComandaBtn");
     const metaBtnEl = document.getElementById("parkedEditingMetaBtn");
-    if (splitBtnEl) splitBtnEl.classList.toggle("hidden", !visible);
-    if (comandaBtnEl) comandaBtnEl.classList.toggle("hidden", !visible);
-    if (metaBtnEl) metaBtnEl.classList.toggle("hidden", !visible);
+    const delBtnEl = document.getElementById("parkedDeleteBtn");
+    if (splitBtnEl) splitBtnEl.classList.toggle("hidden", !split);
+    if (comandaBtnEl) comandaBtnEl.classList.toggle("hidden", !comanda);
+    if (metaBtnEl) metaBtnEl.classList.toggle("hidden", !meta);
+    if (delBtnEl) delBtnEl.classList.toggle("hidden", !del);
   };
 
   if (!cashSession?.open) {
@@ -15662,8 +16020,15 @@ function refreshParkedEditingBanner() {
     if (splitPrevBtn) splitPrevBtn.disabled = true;
     if (splitNextBtn) splitNextBtn.disabled = true;
     if (titleWrap) titleWrap.classList.add("hidden");
-    setActionButtonsVisible(false);
-    setActionButtonsDisabled(true);
+    setActionButtonsVisible({});
+    setActionButtonsDisabled({
+      split: true,
+      comanda: true,
+      meta: true,
+      del: true,
+      undo: true,
+      redo: true,
+    });
     refreshCartUndoRedoUi();
     return;
   }
@@ -15688,8 +16053,15 @@ function refreshParkedEditingBanner() {
     if (splitPrevBtn) splitPrevBtn.disabled = true;
     if (splitNextBtn) splitNextBtn.disabled = true;
     if (titleWrap) titleWrap.classList.add("hidden");
-    setActionButtonsVisible(false);
-    setActionButtonsDisabled(true);
+    setActionButtonsVisible({});
+    setActionButtonsDisabled({
+      split: true,
+      comanda: true,
+      meta: true,
+      del: true,
+      undo: true,
+      redo: true,
+    });
     refreshCartUndoRedoUi();
     return;
   }
@@ -15697,8 +16069,10 @@ function refreshParkedEditingBanner() {
   const labels = getParkingLabels();
 
   const navState = getCurrentSplitNavigationState(t);
+  const bannerDisplayNo =
+    getParkedTicketDisplayNumber(t) || getParkedDisplayNumberFromId(t?.id);
   const bannerTicketName = String(
-    t.name || t.label || `${labels.shortRefLabel} #${t.id}`,
+    t.name || t.label || `${labels.shortRefLabel} #${bannerDisplayNo || "0"}`,
   );
   const docTypeTexts = getParkedDocTypeTexts(getParkedTicketDocType(t));
   const hasPartAlreadyInName = navState.enabled
@@ -15745,8 +16119,10 @@ function refreshParkedEditingBanner() {
         hour: "2-digit",
         minute: "2-digit",
       });
-  const ticketLabel = String(t?.id || "").trim()
-    ? `Ticket #${String(t?.id || "").trim()}`
+  const ticketDisplayNo =
+    getParkedTicketDisplayNumber(t) || getParkedDisplayNumberFromId(t?.id);
+  const ticketLabel = ticketDisplayNo
+    ? `Ticket #${ticketDisplayNo}`
     : `${docTypeTexts.shortLabel}: ${bannerTicketName}${splitSuffix}`;
 
   mesaMeta.innerHTML = showMesaMeta
@@ -15794,9 +16170,22 @@ function refreshParkedEditingBanner() {
     splitNextBtn.disabled = !navState.enabled || navState.nextIndex < 0;
   }
 
-  const showParkingActions = isMesasTransaccionesMode() && isMesasModeTicket(t);
-  setActionButtonsVisible(showParkingActions);
-  setActionButtonsDisabled(!showParkingActions);
+  const showMesasActions = isMesasTransaccionesMode() && isMesasModeTicket(t);
+  const showDeleteAction = !showMesasActions;
+  setActionButtonsVisible({
+    split: showMesasActions,
+    comanda: showMesasActions,
+    meta: true,
+    del: showDeleteAction,
+  });
+  setActionButtonsDisabled({
+    split: !showMesasActions,
+    comanda: !showMesasActions,
+    meta: false,
+    del: !showDeleteAction,
+    undo: false,
+    redo: false,
+  });
   wrap.classList.remove("hidden");
   refreshPreprintButtonUI?.();
   refreshCartUndoRedoUi();
@@ -15820,11 +16209,6 @@ function openParkedModal(options = {}) {
   const pending = getScopedPendingParkedTickets(parkedTickets);
   const paid = allParked.filter((t) => !!t?.paid);
 
-  if (!allParked.length) {
-    toast(`No hay ${labels.itemsPlural}.`, "info", labels.featureTitle);
-    return;
-  }
-
   const parkedModalTitle = document.getElementById("parkedModalTitle");
   if (parkedModalTitle) {
     parkedModalTitle.textContent = String(modalOpts.title || labels.listTitle);
@@ -15842,9 +16226,156 @@ function openParkedModal(options = {}) {
   });
 }
 
+async function deleteParkedTicketByIndex(
+  index,
+  { confirm = true, clearCartAfterDelete = false } = {},
+) {
+  const labels = getParkingLabels();
+  if (!Array.isArray(parkedTickets) || !parkedTickets.length) return false;
+
+  const idx = Number(index);
+  if (!Number.isInteger(idx) || idx < 0 || idx >= parkedTickets.length) {
+    return false;
+  }
+
+  const ticket = parkedTickets[idx];
+  if (!ticket) return false;
+
+  const displayNo =
+    getParkedTicketDisplayNumber(ticket) ||
+    getParkedDisplayNumberFromId(ticket?.id);
+  const displaySuffix = displayNo ? ` #${displayNo}` : "";
+
+  if (confirm) {
+    const ok = await confirmModal(
+      `Eliminar ${labels.item}`,
+      `¿Seguro que quieres eliminar Ticket${displaySuffix}? Esta acción no se puede deshacer.`,
+    );
+    if (!ok) return false;
+  }
+
+  const removedTicket = parkedTickets[idx];
+  const ticketKey = getParkedTicketSyncKey(removedTicket);
+
+  if (removedTicket?.paid && !isPedidoTpvTicket(removedTicket)) {
+    markParkedPaidTicketAsDeleted(removedTicket);
+  }
+
+  parkedTickets.splice(idx, 1);
+  saveParkedTicketsCache();
+  REMOTE_PARKED_RESERVATIONS = (
+    Array.isArray(REMOTE_PARKED_RESERVATIONS) ? REMOTE_PARKED_RESERVATIONS : []
+  ).filter((x) => {
+    const key = getParkedTicketSyncKey(x);
+    return ticketKey ? key !== ticketKey : x !== removedTicket;
+  });
+
+  if (currentParkedTicketIndex === idx) {
+    currentParkedTicketIndex = null;
+  } else if (
+    currentParkedTicketIndex !== null &&
+    currentParkedTicketIndex > idx
+  ) {
+    currentParkedTicketIndex -= 1;
+  }
+
+  unlinkMesaTicketByTicketId(removedTicket?.id || null, removedTicket);
+
+  if (clearCartAfterDelete) {
+    cart = [];
+    renderCart();
+    currentParkedTicketIndex = null;
+    if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+      clearCurrentMesaDraft();
+      renderMesasTransContextBar();
+    }
+  }
+
+  updateParkedCountBadge();
+  refreshParkButtonUI();
+  refreshParkedEditingBanner();
+
+  if (
+    parkedTicketsOverlay &&
+    !parkedTicketsOverlay.classList.contains("hidden")
+  ) {
+    if (!parkedTickets.length) {
+      closeParkedModal();
+      toast(`No quedan ${labels.itemsPlural}.`, "info", labels.featureTitle);
+    } else {
+      renderParkedTicketsModal();
+      toast(`${labels.itemCap} eliminado.`, "ok", labels.featureTitle);
+    }
+  } else {
+    toast(`${labels.itemCap} eliminado.`, "ok", labels.featureTitle);
+  }
+
+  void (async () => {
+    try {
+      await apiDeleteParkedReservation(removedTicket);
+    } catch (e) {
+      enqueueParkedSyncOperation("delete", removedTicket);
+      console.warn("No se pudo borrar la reserva remota:", e?.message || e);
+
+      if (isParkedSyncTransientError(e)) {
+        toast(
+          `Sin internet: borrado de ${labels.item} guardado en cola.`,
+          "warn",
+          labels.featureTitle,
+        );
+      }
+    }
+
+    try {
+      const releaseDelta = buildReservedQtyDeltaMap(
+        [],
+        removedTicket?.items || [],
+      );
+      if (releaseDelta.size > 0) {
+        await syncReservedStockDeltaToFS(releaseDelta, "eliminar aparcado");
+      }
+    } catch (e) {
+      console.warn(
+        "No se pudo sincronizar stock al eliminar aparcado:",
+        e?.message || e,
+      );
+      toast(
+        "Aparcado eliminado localmente, pero no se pudo sincronizar stock en FacturaScripts.",
+        "warn",
+        "Stock",
+      );
+    }
+
+    const skipSplitIncident = shouldSkipSplitIncidentLog(removedTicket);
+    if (!skipSplitIncident) {
+      try {
+        const idcaja = getCajaIdSafe();
+        if (idcaja) {
+          await appendCajaAutoLogLineForId(
+            idcaja,
+            buildParkedManualDeleteLogLine(removedTicket),
+          );
+        }
+      } catch (e) {
+        console.warn(
+          "No se pudo registrar el borrado del ticket aparcado en la caja:",
+          e?.message || e,
+        );
+      }
+    }
+  })();
+
+  return true;
+}
+
 function closeParkedModal() {
   if (!parkedTicketsOverlay) return;
   parkedTicketsOverlay.classList.add("hidden");
+}
+
+function focusParkedListOnPendingToday() {
+  parkedViewState.filter = "pending";
+  parkedViewState.pendingScope = "today";
 }
 
 function renderParkedTicketsModal() {
@@ -16112,8 +16643,19 @@ function renderParkedTicketsModal() {
       printBtn.onclick = async (e) => {
         e.stopPropagation();
         try {
-          const draft = buildParkedTicketPrintDraft(t);
-          await printTicket(draft);
+          if (t?.paid) {
+            const paidRef = await resolvePaidParkedFacturaRef(t);
+            if (paidRef?.idfactura) {
+              await imprimirFacturaHistorica(paidRef.row || t);
+            } else {
+              const draftPaid = buildParkedTicketPrintDraft(t);
+              draftPaid.paymentMethod = "Ticket cobrado";
+              await printTicket(draftPaid);
+            }
+          } else {
+            const draft = buildParkedTicketPrintDraft(t);
+            await printTicket(draft);
+          }
           toast(
             `Ticket${displaySuffix} enviado a impresora.`,
             "ok",
@@ -16130,12 +16672,6 @@ function renderParkedTicketsModal() {
       delBtn.onclick = async (e) => {
         e.stopPropagation();
         if (delBtn.disabled) return;
-
-        const ok = await confirmModal(
-          `Eliminar ${labels.item}`,
-          `¿Seguro que quieres eliminar Ticket${displaySuffix}?`,
-        );
-        if (!ok) return;
 
         delBtn.disabled = true;
         delBtn.textContent = "...";
@@ -16161,118 +16697,24 @@ function renderParkedTicketsModal() {
           return;
         }
 
-        const removedTicket = parkedTickets[currentIndex];
-        if (removedTicket?.paid && !isPedidoTpvTicket(removedTicket)) {
-          markParkedPaidTicketAsDeleted(removedTicket);
-        }
-        parkedTickets.splice(currentIndex, 1);
-        saveParkedTicketsCache();
-        REMOTE_PARKED_RESERVATIONS = (
-          Array.isArray(REMOTE_PARKED_RESERVATIONS)
-            ? REMOTE_PARKED_RESERVATIONS
-            : []
-        ).filter((x) => {
-          const key = getParkedTicketSyncKey(x);
-          return ticketKey ? key !== ticketKey : x !== removedTicket;
+        const deleted = await deleteParkedTicketByIndex(currentIndex, {
+          confirm: true,
         });
-
-        if (currentParkedTicketIndex === currentIndex) {
-          currentParkedTicketIndex = null;
-        } else if (
-          currentParkedTicketIndex !== null &&
-          currentParkedTicketIndex > currentIndex
-        ) {
-          currentParkedTicketIndex -= 1;
+        if (!deleted) {
+          delBtn.disabled = false;
+          delBtn.textContent = "🗑";
+          delBtn.title = `Eliminar ${labels.item}`;
+          if (printBtn) printBtn.disabled = false;
         }
-
-        unlinkMesaTicketByTicketId(removedTicket?.id || null, removedTicket);
-
-        updateParkedCountBadge();
-        refreshParkButtonUI();
-        refreshParkedEditingBanner();
-
-        if (!parkedTickets.length) {
-          closeParkedModal();
-          toast(
-            `No quedan ${labels.itemsPlural}.`,
-            "info",
-            labels.featureTitle,
-          );
-        } else {
-          renderParkedTicketsModal();
-          toast(`${labels.itemCap} eliminado.`, "ok", labels.featureTitle);
-        }
-
-        void (async () => {
-          try {
-            await apiDeleteParkedReservation(removedTicket);
-          } catch (e) {
-            enqueueParkedSyncOperation("delete", removedTicket);
-            console.warn(
-              "No se pudo borrar la reserva remota:",
-              e?.message || e,
-            );
-
-            if (isParkedSyncTransientError(e)) {
-              toast(
-                `Sin internet: borrado de ${labels.item} guardado en cola.`,
-                "warn",
-                labels.featureTitle,
-              );
-            }
-          }
-
-          try {
-            const releaseDelta = buildReservedQtyDeltaMap(
-              [],
-              removedTicket?.items || [],
-            );
-            if (releaseDelta.size > 0) {
-              await syncReservedStockDeltaToFS(
-                releaseDelta,
-                "eliminar aparcado",
-              );
-            }
-          } catch (e) {
-            console.warn(
-              "No se pudo sincronizar stock al eliminar aparcado:",
-              e?.message || e,
-            );
-            toast(
-              "Aparcado eliminado localmente, pero no se pudo sincronizar stock en FacturaScripts.",
-              "warn",
-              "Stock",
-            );
-          }
-
-          const skipSplitIncident = shouldSkipSplitIncidentLog(removedTicket);
-          if (!skipSplitIncident) {
-            try {
-              const idcaja = getCajaIdSafe();
-              if (idcaja) {
-                await appendCajaAutoLogLineForId(
-                  idcaja,
-                  buildParkedManualDeleteLogLine(removedTicket),
-                );
-              }
-            } catch (e) {
-              console.warn(
-                "No se pudo registrar el borrado del ticket aparcado en la caja:",
-                e?.message || e,
-              );
-            }
-          }
-        })();
       };
     }
 
     div.onclick = () => {
       if (t.paid) {
-        toast(
-          "Ese ticket ya está cobrado. No se puede volver a cargar.",
-          "warn",
-          labels.featureTitle,
-        );
+        openInfoForPaidParkedTicket(t).catch((err) => {
+          console.warn("No se pudo abrir info de ticket cobrado:", err);
+          toast("No se pudo abrir el ticket cobrado.", "err", "Tickets");
+        });
         return;
       }
 
@@ -16584,6 +17026,9 @@ async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
     tryResumePendingSplitSession();
   }
 
+  PENDING_RUNTIME_PARKED_SYNC_KEY = "";
+  PENDING_RUNTIME_PARKED_TICKET_ID = 0;
+
   return true;
 }
 
@@ -16861,6 +17306,22 @@ function restoreParkedCartByIndex(index) {
   }
 
   cart = (ticket.items || []).map((i) => hydrateParkedItemForCart(i));
+
+  const explicitGlobalPct = clampDiscountPercent(
+    parseNumericLike(ticket?.cartGlobalDiscountPct, 0),
+  );
+  const inferredFrozenPct = cart.reduce((maxPct, line) => {
+    const p = clampDiscountPercent(
+      parseNumericLike(line?.cartGlobalDiscountPctApplied, 0),
+    );
+    return p > maxPct ? p : maxPct;
+  }, 0);
+  cartGlobalDiscountPct =
+    explicitGlobalPct > 0 ? explicitGlobalPct : inferredFrozenPct;
+
+  // Al cargar un aparcado mantenemos el valor global, pero liberamos el
+  // "congelado" por línea para que editar/quitar descuento general funcione.
+  clearFrozenGlobalDiscountFromCartLines(cart);
 
   // Reenlaza hijos de oferta al nuevo _lineId del parent tras hidratar.
   const parentIdMap = new Map();
@@ -18381,6 +18842,100 @@ function renderPayMethodsSummary() {
   });
 }
 
+function renderMixedTicketsSummary() {
+  const root = document.getElementById("cashCloseSummary");
+  if (!root) return;
+
+  let box = document.getElementById("cashMixedTicketsSummary");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "cashMixedTicketsSummary";
+    box.className = "cash-agent-card";
+    box.style.marginTop = "10px";
+
+    const agentSummary = document.getElementById("agentSalesSummary");
+    if (agentSummary && agentSummary.parentElement === root) {
+      root.insertBefore(box, agentSummary);
+    } else {
+      root.appendChild(box);
+    }
+  }
+
+  const facturas = Array.isArray(cashSession.closeFacturasSnapshot)
+    ? cashSession.closeFacturasSnapshot
+    : [];
+  const recibosByFactura =
+    cashSession.closeRecibosByFacturaSnapshot &&
+    typeof cashSession.closeRecibosByFacturaSnapshot === "object"
+      ? cashSession.closeRecibosByFacturaSnapshot
+      : {};
+
+  const mixedRows = [];
+
+  for (const f of facturas) {
+    if (f?.tpv_venta !== true) continue;
+
+    const idfactura = String(Number(f?.idfactura || 0) || "").trim();
+    if (!idfactura) continue;
+
+    const recibos = Array.isArray(recibosByFactura[idfactura])
+      ? recibosByFactura[idfactura]
+      : [];
+    const grouped = groupRecibosByCodpago(
+      recibos.filter((r) => roundMoney2(r?.importe || 0) !== 0),
+    ).filter((x) => Math.abs(Number(x?.importe || 0)) > 0.00001);
+
+    if (grouped.length <= 1) continue;
+
+    grouped.sort((a, b) =>
+      String(a?.codpago || "").localeCompare(String(b?.codpago || ""), "es", {
+        sensitivity: "base",
+      }),
+    );
+
+    mixedRows.push({
+      ticketCode: String(f?.codigo || `#${idfactura}`).trim(),
+      ticketTotal: Number(f?.total || 0),
+      breakdown: grouped.map((g) => ({
+        code: normalizePayCode(g?.codpago),
+        amount: Number(g?.importe || 0),
+      })),
+    });
+  }
+
+  if (!mixedRows.length) {
+    box.style.display = "none";
+    box.innerHTML = "";
+    return;
+  }
+
+  const labelMap = window.__PAYMETHOD_LABELS__ || {};
+
+  box.style.display = "block";
+  box.innerHTML = `
+    <div class="cash-agent-title">Tickets mixtos (${mixedRows.length})</div>
+    <div class="cash-agent-methods">
+      ${mixedRows
+        .map((row) => {
+          const parts = row.breakdown
+            .map((b) => {
+              const lbl = labelMap[b.code] || b.code;
+              return `${escapeHtml(lbl)}: ${escapeHtml(eur(b.amount))}`;
+            })
+            .join(" · ");
+
+          return `
+            <div class="cash-agent-method">
+              <div class="cash-agent-method-label">${escapeHtml(row.ticketCode)} · Total: ${escapeHtml(eur(row.ticketTotal))}</div>
+              <div class="cash-agent-method-amount" style="text-align:left; width:100%;">${parts}</div>
+            </div>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
 function cashResetUIForOpening() {
   // Inputs a 0
   document
@@ -18565,6 +19120,7 @@ async function maybeOpenCashOrRecover() {
           await refreshStockAndReservationsOnly().catch(() => {});
           startProductsStockAutoRefresh?.();
           startParkedReservationsAutoRefresh?.();
+          scheduleParkedReservationsBurstRefresh?.("recover-cash-warmup");
           startSharedCajaHealthMonitor?.();
           return;
         }
@@ -18640,6 +19196,7 @@ async function maybeOpenCashOrRecover() {
           await refreshStockAndReservationsOnly().catch(() => {});
           startProductsStockAutoRefresh?.();
           startParkedReservationsAutoRefresh?.();
+          scheduleParkedReservationsBurstRefresh?.("recover-cash-warmup");
           startSharedCajaHealthMonitor?.();
 
           // opcional: avisar si hay más de una abierta (caso raro)
@@ -18723,7 +19280,16 @@ function normalizePayCode(code) {
 }
 
 function roundMoney2(n) {
-  return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+  const raw =
+    typeof parseNumericLike === "function"
+      ? parseNumericLike(n, 0)
+      : Number(
+          String(n ?? "")
+            .trim()
+            .replace(".", "")
+            .replace(",", "."),
+        ) || 0;
+  return Math.round((Number(raw || 0) + Number.EPSILON) * 100) / 100;
 }
 
 function groupRecibosByCodpago(recibos) {
@@ -18763,7 +19329,7 @@ function groupRecibosByCodpago(recibos) {
  *   lines: [{ codpago, importe, count }]
  * }
  */
-async function getFacturaPaymentBreakdown(factura) {
+async function getFacturaPaymentBreakdown(factura, recibosByFactura = null) {
   const idfactura = Number(factura?.idfactura || 0);
   const facturaTotal = roundMoney2(factura?.total || 0);
   const facturaCodpago = normalizePayCode(factura?.codpago);
@@ -18783,33 +19349,92 @@ async function getFacturaPaymentBreakdown(factura) {
     };
   }
 
-  let recibos = [];
-  try {
-    recibos = await fetchRecibosByFactura(idfactura);
-  } catch (e) {
-    console.warn("No pude leer recibos de factura", idfactura, e?.message || e);
-    recibos = [];
-  }
+  const buildBreakdownFromRecibos = (sourceRecibos) => {
+    const recibosValidos = (
+      Array.isArray(sourceRecibos) ? sourceRecibos : []
+    ).filter((r) => roundMoney2(r?.importe || 0) !== 0);
 
-  // Solo recibos con importe real
-  const recibosValidos = (Array.isArray(recibos) ? recibos : []).filter(
-    (r) => roundMoney2(r?.importe || 0) !== 0,
-  );
+    if (!recibosValidos.length) return null;
 
-  if (recibosValidos.length) {
     const grouped = groupRecibosByCodpago(recibosValidos);
     const totalRecibos = roundMoney2(
       grouped.reduce((s, g) => s + Number(g.importe || 0), 0),
     );
+    const diff = roundMoney2(facturaTotal - totalRecibos);
 
-    // Si cuadra razonablemente, usamos recibos como fuente de verdad
-    if (Math.abs(totalRecibos - facturaTotal) <= 0.05) {
+    // Si cuadra razonablemente, usamos recibos como fuente de verdad.
+    if (Math.abs(diff) <= 0.05) {
       return {
         ticketTotal: facturaTotal,
         ticketCount: 1,
         paymentUses: grouped.reduce((s, g) => s + Number(g.count || 0), 0),
         lines: grouped,
       };
+    }
+
+    // Si hay recibos pero no cuadran exacto, mantenemos el mix y ajustamos
+    // la diferencia al método principal para no perder trazabilidad de métodos.
+    const adjusted = grouped.map((g) => ({ ...g }));
+    let target = adjusted.find(
+      (g) => normalizePayCode(g.codpago) === facturaCodpago,
+    );
+    if (!target) {
+      target = {
+        codpago: facturaCodpago,
+        importe: 0,
+        count: 1,
+      };
+      adjusted.push(target);
+    }
+    target.importe = roundMoney2(Number(target.importe || 0) + diff);
+
+    return {
+      ticketTotal: facturaTotal,
+      ticketCount: 1,
+      paymentUses: adjusted.reduce((s, g) => s + Number(g.count || 0), 0),
+      lines: adjusted.filter((g) => Math.abs(roundMoney2(g?.importe || 0)) > 0),
+    };
+  };
+
+  let recibos = [];
+  const recibosPrefetched =
+    recibosByFactura && typeof recibosByFactura === "object"
+      ? recibosByFactura[String(idfactura)]
+      : null;
+
+  if (Array.isArray(recibosPrefetched)) {
+    recibos = recibosPrefetched;
+  } else {
+    try {
+      recibos = await fetchRecibosByFactura(idfactura);
+    } catch (e) {
+      console.warn(
+        "No pude leer recibos de factura",
+        idfactura,
+        e?.message || e,
+      );
+      recibos = [];
+    }
+  }
+
+  const fromCurrent = buildBreakdownFromRecibos(recibos);
+  if (fromCurrent) {
+    return fromCurrent;
+  }
+
+  // Prefetch defensivo: si el mapa venía incompleto para esta factura,
+  // reintenta lectura directa antes de caer al fallback único.
+  if (Array.isArray(recibosPrefetched)) {
+    try {
+      const directRecibos = await fetchRecibosByFactura(idfactura);
+      const fromDirect = buildBreakdownFromRecibos(directRecibos);
+      if (fromDirect) return fromDirect;
+    } catch (e) {
+      console.warn(
+        "No pude reintentar recibos directos de factura",
+        idfactura,
+        e?.message || e,
+      );
     }
   }
 
@@ -19164,11 +19789,17 @@ function buildPayMethodLabelMap(formapagos) {
   return m;
 }
 
-async function hydratePaymentsByMethodForClose(idcaja) {
-  const facturas = await fetchApiResourceWithParams("facturaclientes", {
-    "filter[idcaja]": idcaja,
-    limit: 0,
-  });
+async function hydratePaymentsByMethodForClose(
+  idcaja,
+  facturasInput = null,
+  recibosByFactura = null,
+) {
+  const facturas = Array.isArray(facturasInput)
+    ? facturasInput
+    : await fetchApiResourceWithParams("facturaclientes", {
+        "filter[idcaja]": idcaja,
+        limit: 0,
+      });
 
   const map = {};
   let totalPaymentUses = 0;
@@ -19176,7 +19807,7 @@ async function hydratePaymentsByMethodForClose(idcaja) {
   for (const f of Array.isArray(facturas) ? facturas : []) {
     if (f.tpv_venta !== true) continue;
 
-    const breakdown = await getFacturaPaymentBreakdown(f);
+    const breakdown = await getFacturaPaymentBreakdown(f, recibosByFactura);
     totalPaymentUses += Number(breakdown.paymentUses || 0);
 
     for (const line of breakdown.lines || []) {
@@ -19270,11 +19901,17 @@ async function hydrateCloseTicketStatsForCaja(idcaja) {
   };
 }
 
-async function buildAgentSalesSummaryForCaja(idcaja) {
-  const facturas = await fetchApiResourceWithParams("facturaclientes", {
-    "filter[idcaja]": idcaja,
-    limit: 0,
-  });
+async function buildAgentSalesSummaryForCaja(
+  idcaja,
+  facturasInput = null,
+  recibosByFactura = null,
+) {
+  const facturas = Array.isArray(facturasInput)
+    ? facturasInput
+    : await fetchApiResourceWithParams("facturaclientes", {
+        "filter[idcaja]": idcaja,
+        limit: 0,
+      });
 
   const map = {};
   const labelMap = window.__PAYMETHOD_LABELS__ || {};
@@ -19300,7 +19937,7 @@ async function buildAgentSalesSummaryForCaja(idcaja) {
     ag.total = roundMoney2(ag.total + ticketTotal);
     ag.count += 1;
 
-    const breakdown = await getFacturaPaymentBreakdown(f);
+    const breakdown = await getFacturaPaymentBreakdown(f, recibosByFactura);
     ag.paymentUses += Number(breakdown.paymentUses || 0);
 
     for (const line of breakdown.lines || []) {
@@ -19556,19 +20193,50 @@ function openCashOpenDialog(mode = "open") {
         // 3) construir resúmenes (IMPORTANTE: sin duplicar)
         const cajaId = cashSession.remoteCajaId || remoteCaja.idcaja;
 
+        const facturasCaja = await fetchApiResourceWithParams(
+          "facturaclientes",
+          {
+            "filter[idcaja]": cajaId,
+            limit: 0,
+          },
+        );
+        const facturasCajaList = Array.isArray(facturasCaja)
+          ? facturasCaja
+          : [];
+
+        const idsFacturasCaja = facturasCajaList
+          .map((f) => Number(f?.idfactura || 0))
+          .filter((n) => Number.isFinite(n) && n > 0);
+
+        const recibosCaja = idsFacturasCaja.length
+          ? await fetchRecibosByFacturasMulti(idsFacturasCaja)
+          : [];
+        const recibosByFactura = buildRecibosByFacturaMap(recibosCaja);
+
+        cashSession.closeFacturasSnapshot = facturasCajaList;
+        cashSession.closeRecibosByFacturaSnapshot = recibosByFactura;
+
         // ✅ tickets reales de la caja
         await hydrateCloseTicketStatsForCaja(cajaId);
 
         // Métodos (TOTAL)
-        await hydratePaymentsByMethodForClose(cajaId);
+        await hydratePaymentsByMethodForClose(
+          cajaId,
+          facturasCajaList,
+          recibosByFactura,
+        );
 
         // Agentes + métodos por agente
-        cashSession.agentSalesSummary =
-          await buildAgentSalesSummaryForCaja(cajaId);
+        cashSession.agentSalesSummary = await buildAgentSalesSummaryForCaja(
+          cajaId,
+          facturasCajaList,
+          recibosByFactura,
+        );
 
         // 4) pintar UI en el orden correcto
         renderCashCloseTotalMeta(); // ✅ TOTAL + (Agente si solo 1)
         renderPayMethodsSummary(); // ✅ TOTAL por métodos
+        renderMixedTicketsSummary(); // ✅ detalle de tickets mixtos
         renderAgentSalesSummary(); // ✅ por agente (solo si >1)
 
         // 5) resumen superior (cifra esperada, etc.)
@@ -19733,6 +20401,7 @@ function openCashMoveDialog() {
   if (cashMoveAmountEl) cashMoveAmountEl.value = "";
   if (cashMoveReasonEl) cashMoveReasonEl.value = "";
   if (cashMoveErrorEl) cashMoveErrorEl.textContent = "";
+  setCashMoveSaveBusyUi(false);
 
   const radios = cashMoveOverlay.querySelectorAll('input[name="cashMoveType"]');
   if (radios && radios[0]) radios[0].checked = true;
@@ -19742,9 +20411,23 @@ function openCashMoveDialog() {
 }
 
 function closeCashMoveDialog() {
+  if (cashMoveSaveInFlight) return;
   if (!cashMoveOverlay) return;
   cashMoveOverlay.classList.add("hidden");
   unlockAppUI();
+}
+
+function setCashMoveSaveBusyUi(isBusy) {
+  const busy = !!isBusy;
+  if (cashMoveSaveBtn) {
+    cashMoveSaveBtn.disabled = busy;
+    cashMoveSaveBtn.textContent = busy ? "Guardando..." : "Guardar";
+  }
+  if (cashMoveCancelBtn) cashMoveCancelBtn.disabled = busy;
+  if (cashMoveCloseX) {
+    cashMoveCloseX.style.pointerEvents = busy ? "none" : "";
+    cashMoveCloseX.style.opacity = busy ? "0.5" : "";
+  }
 }
 
 if (cashMoveBtn) {
@@ -19768,6 +20451,7 @@ if (cashMoveCloseX) {
 // Cerrar clicando fuera del recuadro
 if (cashMoveOverlay) {
   cashMoveOverlay.addEventListener("click", (e) => {
+    if (cashMoveSaveInFlight) return;
     const box = e.target.closest(".simple-dialog");
     if (!box) {
       closeCashMoveDialog();
@@ -20025,6 +20709,7 @@ async function confirmCashOpening() {
   await refreshStockAndReservationsOnly().catch(() => {});
   startProductsStockAutoRefresh?.();
   startParkedReservationsAutoRefresh?.();
+  scheduleParkedReservationsBurstRefresh?.("cash-open-warmup");
   startSharedCajaHealthMonitor?.();
 
   logFeatureInfo("CAJA", "apertura-ok", {
@@ -22829,13 +23514,8 @@ function buildFastPreApiTicketDraft(ticketPayload, cartSnapshot) {
   // Primera venta de este terminal/tipo: no preimprimir hasta tener referencia real
   if (!predicted?.hasHistory) return null;
 
-  const total = (Array.isArray(cartSnapshot) ? cartSnapshot : []).reduce(
-    (sum, item) => {
-      const unit = getUnitGross(item);
-      return sum + unit * (item?.qty || 1);
-    },
-    0,
-  );
+  const snapshotLines = buildPrintableLinesFromCartSnapshot(cartSnapshot);
+  const total = getCartTotal(snapshotLines);
 
   const now = new Date();
   const fecha = formatTicketPrintDate(now);
@@ -22868,7 +23548,7 @@ function buildFastPreApiTicketDraft(ticketPayload, cartSnapshot) {
     agentName: currentAgent ? currentAgent.name || "" : "",
     clientName,
     company: companyInfo ? { ...companyInfo } : null,
-    lineas: Array.isArray(cartSnapshot) ? cartSnapshot : [],
+    lineas: snapshotLines,
     pagos,
     cambio,
     cashMeta,
@@ -22880,6 +23560,58 @@ function buildFastPreApiTicketDraft(ticketPayload, cartSnapshot) {
     idtpv: terminalId || null,
     _fastPreApiPrint: true,
   };
+}
+
+function buildPrintableLinesFromCartSnapshot(lines) {
+  const src = Array.isArray(lines) ? lines : [];
+
+  return src.map((line) => {
+    if (!line || typeof line !== "object") return line;
+
+    const out = { ...line };
+
+    try {
+      const pricing = getCartLinePricing(line);
+
+      const finalUnit = Number(pricing?.unitGross || 0);
+      if (Number.isFinite(finalUnit) && finalUnit >= 0) {
+        out.__unitGrossOverride = round2(finalUnit);
+      }
+
+      const baseUnit = Number(pricing?.baseUnitGross || 0);
+      if (
+        Number.isFinite(baseUnit) &&
+        baseUnit > 0 &&
+        baseUnit > finalUnit + 0.0001
+      ) {
+        out.__baseUnitGrossHint = round2(baseUnit);
+
+        const hintedPct = clampDiscountPercent(
+          pricing?.cartDiscountApplied
+            ? pricing?.cartDiscountPct
+            : pricing?.tariffApplied
+              ? pricing?.tariffDiscountPct
+              : 0,
+        );
+        if (hintedPct > 0) out.__discountPctHint = hintedPct;
+
+        if (pricing?.manualPriceLocked) {
+          out.__discountTypeHint = "Manual";
+        } else if (pricing?.cartDiscountApplied) {
+          out.__discountTypeHint =
+            pricing?.cartDiscountSource === "line"
+              ? "Dto linea"
+              : "Dto general";
+        } else if (pricing?.tariffApplied) {
+          out.__discountTypeHint = "Tarifa";
+        } else {
+          out.__discountTypeHint = "Descuento";
+        }
+      }
+    } catch {}
+
+    return out;
+  });
 }
 
 function getSavedPrinterReal() {
@@ -24819,50 +25551,15 @@ function buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot) {
   const totalFromFactura =
     typeof factura.total !== "undefined" ? Number(factura.total) : null;
 
-  const totalFromCart = cartSnapshot.reduce((sum, item) => {
-    const unitPrice = getUnitGross(item);
-    return sum + unitPrice * (item.qty || 1);
-  }, 0);
+  const safeSnapshot = Array.isArray(cartSnapshot) ? cartSnapshot : [];
+  const printableSnapshot = buildPrintableLinesFromCartSnapshot(safeSnapshot);
+  const totalFromCart = getCartTotal(printableSnapshot);
 
-  const selected = window.CUSTOMER_SELECTOR?.getSelectedCustomer?.() || null;
-  const list =
-    typeof window.CUSTOMER_SELECTOR?.listCustomers === "function"
-      ? window.CUSTOMER_SELECTOR.listCustomers()
-      : [];
-  const selectedCod = String(
-    selected?.codcliente ||
-      window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() ||
-      safePayload.codcliente ||
-      "",
-  ).trim();
-  const full = Array.isArray(list)
-    ? list.find((c) => String(c?.codcliente || "").trim() === selectedCod) ||
-      selected
-    : selected;
-  const raw = full?._raw || null;
-
+  const selectedCustomer = getSelectedCustomerPrintMeta();
   const clientName =
-    String(
-      full?.razonsocial ||
-        full?.nombre ||
-        raw?.razonsocial ||
-        raw?.nombre ||
-        (cartClientInput && (cartClientInput.value || "").trim()) ||
-        "Cliente",
-    ).trim() || "Cliente";
-
-  const clientFiscalId = String(
-    full?.cifnif || full?.cif || raw?.cifnif || raw?.cif || "",
-  ).trim();
-
-  const clientAddress = [
-    String(full?.direccion || raw?.direccion || "").trim(),
-    String(full?.codpostal || raw?.codpostal || "").trim(),
-    String(full?.ciudad || raw?.ciudad || "").trim(),
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .trim();
+    selectedCustomer.clientName ||
+    (cartClientInput && (cartClientInput.value || "").trim()) ||
+    "Cliente";
 
   return {
     numero,
@@ -24875,12 +25572,15 @@ function buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot) {
     terminalName: currentTerminal ? currentTerminal.name || "" : "",
     agentName: currentAgent ? currentAgent.name || "" : "",
 
-    codcliente: selectedCod || String(safePayload.codcliente || "1").trim(),
+    codcliente:
+      selectedCustomer.codcliente ||
+      String(safePayload.codcliente || "1").trim(),
     clientName,
-    clientFiscalId,
-    clientAddress,
+    clientFiscalId: selectedCustomer.clientFiscalId,
+    clientAddress: selectedCustomer.clientAddress,
+    isDefaultCustomer: selectedCustomer.isDefaultCustomer,
     company: companyInfo ? { ...companyInfo } : null,
-    lineas: cartSnapshot,
+    lineas: printableSnapshot,
     codserie:
       factura.codserie || safePayload.codserie || safePayload.serie || null,
     numero2: factura.numero2 || safePayload.numero2 || null,
@@ -25001,6 +25701,8 @@ function getTaxRateForLine(l) {
 function getUnitGrossForPrint(l) {
   if (l && typeof l.__forceUnitGross === "number")
     return parseQtyValue(l.__forceUnitGross, 0);
+  if (l && l.__unitGrossOverride != null)
+    return parseQtyValue(l.__unitGrossOverride, 0);
   if (l && l.grossPriceOverride != null)
     return parseQtyValue(l.grossPriceOverride, 0);
   if (l?.grossPrice != null) return parseQtyValue(l.grossPrice, 0);
@@ -25214,6 +25916,16 @@ function attachPrintableDiscountHintsFromSnapshot(
       Number(pricing?.baseUnitGross || 0) > Number(pricing?.unitGross || 0)
     ) {
       row.__baseUnitGrossHint = Number(pricing.baseUnitGross || 0);
+      row.__unitGrossOverride = Number(pricing.unitGross || 0);
+
+      const hintedPct = clampDiscountPercent(
+        pricing?.cartDiscountApplied
+          ? pricing?.cartDiscountPct
+          : pricing?.tariffApplied
+            ? pricing?.tariffDiscountPct
+            : 0,
+      );
+      if (hintedPct > 0) row.__discountPctHint = hintedPct;
 
       if (pricing?.manualPriceLocked) {
         row.__discountTypeHint = "Manual";
@@ -25383,8 +26095,8 @@ function renderItemsHtml(doc, lineas) {
   box.innerHTML = arr
     .map((l) => {
       const isChild = isPackChildForPrint(l);
+      const pricing = getPrintableLinePricingBreakdown(l);
       const qty = getQtyForPrint(l);
-
       const unitGross =
         l.__unitGrossOverride != null
           ? Number(l.__unitGrossOverride || 0)
@@ -25392,12 +26104,35 @@ function renderItemsHtml(doc, lineas) {
             ? Number(l.__forceUnitGross || 0)
             : Number(getUnitGrossForPrint(l) || 0);
 
+      const effectiveUnitGross =
+        l.__unitGrossOverride != null || l.__forceUnitGross != null
+          ? unitGross
+          : Number(pricing?.finalUnitGross || unitGross || 0);
+
       const lineTotal =
         l.__lineTotalOverride != null
           ? Number(l.__lineTotalOverride || 0)
           : isChild
             ? 0
-            : qty * unitGross;
+            : qty * effectiveUnitGross;
+
+      const discountPct = (() => {
+        const hinted = clampDiscountPercent(
+          parseNumericLike(l?.__discountPctHint, 0),
+        );
+        if (hinted > 0) return hinted;
+
+        if (pricing?.hasDiscount && Number(pricing?.baseUnitGross || 0) > 0) {
+          return round2(
+            ((Number(pricing.baseUnitGross || 0) -
+              Number(pricing.finalUnitGross || 0)) /
+              Number(pricing.baseUnitGross || 0)) *
+              100,
+          );
+        }
+        return 0;
+      })();
+      const discountLabel = `-${formatDiscountPercent(discountPct)}%`;
 
       const { main, desc } = pickMainAndDesc(l);
 
@@ -25420,6 +26155,11 @@ function renderItemsHtml(doc, lineas) {
             <div class="desc">${nameHtml}</div>
             <div class="ltotal">${totalHtml}</div>
           </div>
+          ${
+            !isChild && pricing?.hasDiscount
+              ? `<div class="item-sub small muted"><strong>${safe(eurTicket(pricing.finalUnitGross))}</strong> (${safe(eurTicket(pricing.baseUnitGross))} ${safe(discountLabel)})</div>`
+              : ""
+          }
           ${desc ? `<div class="item-sub small muted">${safe(desc)}</div>` : ""}
         </div>
       `;
@@ -25472,9 +26212,11 @@ function buildFsLinesFromCart(cartArr) {
       .filter((item) => !item?.meta?.includedInPack)
       .map((item) => {
         const qty = parseQtyValue(item?.qty ?? item?.cantidad, 1);
+        const pricing = getCartLinePricing(item);
 
-        // Precio unitario BRUTO (IVA incl.)
-        const unitGross = Number(getUnitGross(item) || 0);
+        // Importante: FacturaScripts debe recibir el precio final descontado
+        // para que total/base/IVA y tickets guardados cuadren con el carrito.
+        const unitGross = Number(pricing?.unitGross || getUnitGross(item) || 0);
 
         // Convertimos a NETO para FS
         const tax = Number(item.taxRate || 0);
@@ -25610,6 +26352,33 @@ async function renderPayments(doc, ticket, totalToShow) {
   }
 
   wrap.innerHTML = "";
+
+  const discountTotal = isRefundTicket
+    ? 0
+    : calcPrintableDiscountTotal(
+        Array.isArray(ticket?.lineas) ? ticket.lineas : [],
+      );
+  const subtotal = round2(
+    Number(totalToShow || 0) + Number(discountTotal || 0),
+  );
+
+  if (discountTotal > 0.0001) {
+    const rowSubtotal = doc.createElement("div");
+    rowSubtotal.className = "row small muted";
+    rowSubtotal.innerHTML = `
+      <div>Subtotal</div>
+      <div class="right">${eurTicket(subtotal)}</div>
+    `;
+    wrap.appendChild(rowSubtotal);
+
+    const rowDiscount = doc.createElement("div");
+    rowDiscount.className = "row small muted";
+    rowDiscount.innerHTML = `
+      <div>Descuentos aplicados</div>
+      <div class="right">-${eurTicket(discountTotal)}</div>
+    `;
+    wrap.appendChild(rowDiscount);
+  }
 
   // Total
   const rowTotal = doc.createElement("div");
@@ -26105,6 +26874,12 @@ async function printTicket(ticket) {
               pvptotal: Number(l.pvptotal || 0),
             };
           });
+
+          // Si FS no trae detalle de descuento, intentar rescatarlo del snapshot local.
+          lineas = attachPrintableDiscountHintsFromSnapshot(
+            lineas,
+            Array.isArray(ticket?.lineas) ? ticket.lineas : [],
+          );
         }
       }
     } catch (e) {
@@ -26799,6 +27574,7 @@ async function validateRecibosAgainstFactura(idfactura) {
 }
 
 let isPayingNow = false;
+let isParkingNow = false;
 
 function buildCashTicketMeta({ pagos, total, cambio }) {
   const pagosArr = Array.isArray(pagos) ? pagos : [];
@@ -26917,12 +27693,30 @@ function rememberPaidTicketParkedOrigin(ticket, paidInfo = {}) {
 
   if (!paidId && !paidCode) return;
 
+  let snapshotLines = [];
+  let snapshotTotal = 0;
+  try {
+    const items = Array.isArray(ticket?.items) ? ticket.items : [];
+    const frozenGlobalPct = clampDiscountPercent(
+      parseNumericLike(ticket?.cartGlobalDiscountPct, 0),
+    );
+    const frozenItems = freezeGlobalDiscountOnLines(items, frozenGlobalPct);
+    const printableItems = buildPrintableLinesFromCartSnapshot(frozenItems);
+    snapshotLines = printableItems.map(buildTicketInfoLineFromSnapshot);
+    snapshotTotal = Number(getCartTotal(printableItems) || ticket?.total || 0);
+  } catch {
+    snapshotLines = [];
+    snapshotTotal = Number(ticket?.total || 0);
+  }
+
   const origin = {
     parkedDisplayNo: String(getParkedTicketDisplayNumber(ticket) || ""),
     parkedLabel: String(getParkedTicketDisplayLabel(ticket) || "").trim(),
     parkedClientName: String(ticket?.clientName || "").trim(),
     parkedTicketId: Number(ticket?.id || 0) || 0,
     paidAt: new Date().toISOString(),
+    snapshotTotal,
+    snapshotLines,
   };
 
   const map = loadPaidTicketParkedOriginMap();
@@ -26997,7 +27791,7 @@ function saveParkedPaidTombstones(keys) {
 }
 
 function isParkedPaidTombstoned(ticket) {
-  if (!ticket || !ticket?.paid) return false;
+  if (!ticket) return false;
   const key = getParkedTicketSyncKey(ticket);
   if (!key) return false;
   return new Set(loadParkedPaidTombstones()).has(key);
@@ -27059,6 +27853,32 @@ function resetParkedGlobalCounter() {
   } catch {}
 }
 
+function getParkedGlobalIdCounterStorageKey() {
+  return getParkedScopedStorageKey(PARKED_GLOBAL_ID_COUNTER_KEY);
+}
+
+function loadParkedGlobalIdCounter() {
+  try {
+    const raw = localStorage.getItem(getParkedGlobalIdCounterStorageKey());
+    const n = Number(raw || 0);
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return Math.floor(n);
+  } catch {
+    return 0;
+  }
+}
+
+function saveParkedGlobalIdCounter(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return;
+  try {
+    localStorage.setItem(
+      getParkedGlobalIdCounterStorageKey(),
+      String(Math.floor(n)),
+    );
+  } catch {}
+}
+
 function normalizeParkingMode(value) {
   const raw = String(value || "")
     .trim()
@@ -27102,19 +27922,6 @@ function rememberTicketParkingMode(ticket, mode = null) {
     registry[key] = nextMode;
   });
   saveParkedModeRegistry(registry);
-}
-
-function resolveRememberedTicketParkingMode(ticket) {
-  const keys = getParkedTicketSyncKeyVariants(ticket);
-  if (!keys.length) return "";
-  const registry = loadParkedModeRegistry();
-  for (const key of keys) {
-    const found = String(registry?.[key] || "")
-      .trim()
-      .toLowerCase();
-    if (found) return found;
-  }
-  return "";
 }
 
 function getCurrentParkingModeScope() {
@@ -27223,9 +28030,37 @@ function isTicketInCurrentParkingMode(
 }
 
 function reloadParkedTicketsForCurrentMode() {
+  const prevTicket =
+    currentParkedTicketIndex !== null && Array.isArray(parkedTickets)
+      ? parkedTickets[currentParkedTicketIndex] || null
+      : null;
+  const prevSyncKey = String(getParkedTicketSyncKey(prevTicket) || "").trim();
+  const prevTicketId = Number(prevTicket?.id || 0) || 0;
+
   parkedTickets = loadParkedTicketsCache();
+  maybeRunOptionalParkedLegacyMetadataMigration();
   REMOTE_PARKED_RESERVATIONS = getPendingParkedTicketsGlobal(parkedTickets);
+
+  const hasPendingRestore =
+    !!String(PENDING_RUNTIME_PARKED_SYNC_KEY || "").trim() ||
+    (Number(PENDING_RUNTIME_PARKED_TICKET_ID || 0) || 0) > 0;
   currentParkedTicketIndex = null;
+  if (hasPendingRestore) {
+    tryResolvePendingParkedTicketIndex();
+  } else {
+    let idx = -1;
+    if (prevSyncKey) {
+      idx = parkedTickets.findIndex(
+        (t) => getParkedTicketSyncKey(t) === prevSyncKey,
+      );
+    }
+    if (idx < 0 && prevTicketId > 0) {
+      idx = parkedTickets.findIndex((t) => Number(t?.id || 0) === prevTicketId);
+    }
+    if (idx >= 0) {
+      currentParkedTicketIndex = idx;
+    }
+  }
 
   rebuildRemoteReservedByProductMap();
   updateRenderedProductStocks?.();
@@ -27677,7 +28512,14 @@ function normalizeRemoteParkedTicket(raw) {
   const paidFlag =
     docType === "pedido"
       ? pedidoStatus === "pagado-no-recogido" || pedidoStatus === "recogido"
-      : !!raw.paid;
+      : parseBoolLike(
+          raw.paid ??
+            raw.isPaid ??
+            raw.ticketPaid ??
+            raw.pagado ??
+            raw.tpv_pagada,
+          false,
+        );
 
   const rawMode = String(raw.parkingMode || raw.appMode || raw.mode || "")
     .trim()
@@ -27707,6 +28549,10 @@ function normalizeRemoteParkedTicket(raw) {
     updatedAt,
     items,
     total: Number(raw.total || 0),
+    codcliente:
+      String(
+        raw.codcliente || raw.clientCodcliente || raw.codCliente || "1",
+      ).trim() || "1",
     clientName: String(raw.clientName || "").trim() || "Cliente",
     docType,
     pedidoStatus,
@@ -27733,10 +28579,14 @@ function normalizeRemoteParkedTicket(raw) {
         ? normalizeTicketComandaState(raw.comandaState)
         : null,
     paid: paidFlag,
-    paidAt: raw.paidAt ? new Date(raw.paidAt) : null,
+    paidAt: raw.paidAt
+      ? new Date(raw.paidAt)
+      : raw.paid_at
+        ? new Date(raw.paid_at)
+        : null,
     collectedAt: raw.collectedAt ? new Date(raw.collectedAt) : null,
-    paidTicketCode: raw.paidTicketCode || null,
-    paidTicketId: raw.paidTicketId || null,
+    paidTicketCode: raw.paidTicketCode || raw.paid_ticket_code || null,
+    paidTicketId: raw.paidTicketId || raw.paid_ticket_id || null,
     modoMesas: normalizedModoMesas,
     modeMesas: normalizedModoMesas,
     parkingMode: rawMode,
@@ -27873,6 +28723,124 @@ function loadParkedTicketsCache() {
   }
 }
 
+function isOptionalParkedLegacyMetadataMigrationEnabled() {
+  try {
+    const cfg = window.TPV_CONFIG || {};
+    const direct =
+      cfg.normalizeLegacyParkedIds ?? cfg.normalizeLegacyParkedMetadata;
+    return parseBoolLike(direct, false);
+  } catch {
+    return false;
+  }
+}
+
+function getParkedLegacyMetadataMigrationStorageKey() {
+  return getParkedScopedStorageKey(PARKED_LEGACY_METADATA_MIGRATION_KEY);
+}
+
+function maybeRunOptionalParkedLegacyMetadataMigration() {
+  if (__parkedLegacyMetadataMigrationTried) return false;
+  __parkedLegacyMetadataMigrationTried = true;
+
+  if (!isOptionalParkedLegacyMetadataMigrationEnabled()) return false;
+
+  try {
+    const done = String(
+      localStorage.getItem(getParkedLegacyMetadataMigrationStorageKey()) || "",
+    ).trim();
+    if (done === "1") return false;
+  } catch {}
+
+  const source = Array.isArray(parkedTickets) ? parkedTickets : [];
+  if (!source.length) {
+    try {
+      localStorage.setItem(getParkedLegacyMetadataMigrationStorageKey(), "1");
+    } catch {}
+    return false;
+  }
+
+  const selectedCustomerCod =
+    String(
+      window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() ||
+        window.CUSTOMER_SELECTOR?.getSelectedCustomer?.()?.codcliente ||
+        currentTerminal?.codcliente ||
+        "1",
+    ).trim() || "1";
+
+  let changed = false;
+  const migrated = source.map((ticket) => {
+    if (!ticket || typeof ticket !== "object") return ticket;
+
+    const next = { ...ticket };
+
+    const currentDisplayNo =
+      Number(getParkedTicketDisplayNumber(next) || 0) || 0;
+    const fromLegacyId =
+      Number(getParkedDisplayNumberFromId(next?.id) || 0) || 0;
+    if (!currentDisplayNo && fromLegacyId > 0 && fromLegacyId <= 9999) {
+      next.displayNo = fromLegacyId;
+      changed = true;
+    }
+
+    const rawName = String(next.name || next.label || "").trim();
+    if (/^ticket\s*#\s*\d{5,}$/i.test(rawName)) {
+      const normalizedNo =
+        Number(next.displayNo || 0) ||
+        Number(getParkedDisplayNumberFromId(next?.id) || 0) ||
+        0;
+      if (normalizedNo > 0) {
+        next.name = `Ticket #${normalizedNo}`;
+        changed = true;
+      }
+    }
+
+    if (!String(next.codcliente || "").trim()) {
+      next.codcliente = selectedCustomerCod;
+      changed = true;
+    }
+
+    const frozenPct = clampDiscountPercent(
+      parseNumericLike(next?.cartGlobalDiscountPct, 0),
+    );
+    if (frozenPct > 0 && Array.isArray(next.items)) {
+      next.items = next.items.map((line) => {
+        const out = line && typeof line === "object" ? { ...line } : line;
+        if (!out || typeof out !== "object") return out;
+
+        const linePct = clampDiscountPercent(
+          parseNumericLike(out?.cartLineDiscountPct, 0),
+        );
+        const lineFrozen = clampDiscountPercent(
+          parseNumericLike(out?.cartGlobalDiscountPctApplied, 0),
+        );
+
+        if (linePct <= 0 && lineFrozen <= 0) {
+          out.cartGlobalDiscountPctApplied = frozenPct;
+          changed = true;
+        }
+        return out;
+      });
+    }
+
+    return next;
+  });
+
+  try {
+    localStorage.setItem(getParkedLegacyMetadataMigrationStorageKey(), "1");
+  } catch {}
+
+  if (!changed) return false;
+
+  parkedTickets = migrated;
+  saveParkedTicketsCache(parkedTickets);
+
+  parkedTickets
+    .filter((ticket) => !!ticket && !ticket?.paid)
+    .forEach((ticket) => enqueueParkedSyncOperation("upsert", ticket));
+
+  return true;
+}
+
 function getParkedTicketSyncKey(ticket) {
   if (!ticket) return "";
   const mode = isMesasModeTicket(ticket) ? PARKED_MODE_MESAS : PARKED_MODE_TPV;
@@ -27940,6 +28908,201 @@ function saveParkedSyncQueue(queue) {
   }
 }
 
+function loadParkedSyncConflicts() {
+  try {
+    const raw = localStorage.getItem(
+      getParkedScopedStorageKey(PARKED_SYNC_CONFLICTS_KEY),
+    );
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveParkedSyncConflicts(list) {
+  try {
+    const safe = Array.isArray(list) ? list : [];
+    localStorage.setItem(
+      getParkedScopedStorageKey(PARKED_SYNC_CONFLICTS_KEY),
+      JSON.stringify(safe.slice(-200)),
+    );
+  } catch (e) {
+    console.warn(
+      "No se pudo guardar incidencias de sync de aparcados:",
+      e?.message || e,
+    );
+  }
+}
+
+function clearParkedSyncConflicts() {
+  saveParkedSyncConflicts([]);
+}
+
+function registerParkedSyncConflict(
+  entry,
+  remoteTicket,
+  reason = "remote-newer",
+) {
+  const localTicket = normalizeRemoteParkedTicket(entry?.ticket || {}) || null;
+  const remoteNormalized =
+    normalizeRemoteParkedTicket(remoteTicket || {}) || null;
+
+  const key =
+    String(entry?.key || "").trim() ||
+    String(
+      getParkedTicketSyncKey(localTicket || remoteNormalized) || "",
+    ).trim();
+  if (!key) return null;
+
+  const localTs = getParkedTicketComparableRevisionTs(localTicket);
+  const remoteTs = getParkedTicketComparableRevisionTs(remoteNormalized);
+
+  const localLabel = String(
+    localTicket?.name || localTicket?.clientName || "Ticket local",
+  ).trim();
+  const remoteLabel = String(
+    remoteNormalized?.name || remoteNormalized?.clientName || "Ticket remoto",
+  ).trim();
+
+  const id = `${key}|${reason}`;
+  const row = {
+    id,
+    key,
+    reason,
+    slug: String(localTicket?.slug || remoteNormalized?.slug || "").trim(),
+    cajaId: String(
+      localTicket?.cajaId || remoteNormalized?.cajaId || "",
+    ).trim(),
+    ticketId:
+      String(localTicket?.id || remoteNormalized?.id || "").trim() || "?",
+    localLabel: localLabel || "Ticket local",
+    remoteLabel: remoteLabel || "Ticket remoto",
+    localTotal: Number(localTicket?.total || 0) || 0,
+    remoteTotal: Number(remoteNormalized?.total || 0) || 0,
+    localTs,
+    remoteTs,
+    at: new Date().toISOString(),
+  };
+
+  const list = loadParkedSyncConflicts();
+  const idx = list.findIndex((it) => String(it?.id || "") === id);
+  if (idx >= 0) list[idx] = row;
+  else list.push(row);
+
+  list.sort((a, b) => {
+    const ta = Number(new Date(a?.at || 0).getTime()) || 0;
+    const tb = Number(new Date(b?.at || 0).getTime()) || 0;
+    return tb - ta;
+  });
+
+  saveParkedSyncConflicts(list);
+  return row;
+}
+
+function formatParkedSyncConflictDate(value) {
+  const d = value ? new Date(value) : null;
+  if (!d || Number.isNaN(d.getTime())) return "-";
+  return `${d.toLocaleDateString("es-ES")} ${d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
+}
+
+function buildParkedSyncConflictsMiniLog(list) {
+  const rows = Array.isArray(list) ? list : [];
+  if (!rows.length) return "";
+
+  const latest = rows[0] || {};
+  const reason =
+    String(latest?.reason || "") === "remote-paid"
+      ? "remoto ya cobrado"
+      : "remoto más reciente";
+  const ticketId = String(latest?.ticketId || "?").trim() || "?";
+  const cajaId = String(latest?.cajaId || "-").trim() || "-";
+  const detectedAt = formatParkedSyncConflictDate(latest?.at || "");
+  const queueLen = loadParkedSyncQueue().length;
+  const queueText =
+    queueLen > 0 ? ` · Cola pendiente: ${queueLen}` : " · Cola pendiente: 0";
+
+  return `Última incidencia: Ticket #${ticketId} (Caja ${cajaId}) · ${reason} · ${detectedAt}${queueText}`;
+}
+
+function buildParkedSyncConflictsHtml(list) {
+  const rows = Array.isArray(list) ? list : [];
+  if (!rows.length) {
+    return '<div style="font-size:14px;">No hay incidencias de sincronizacion.</div>';
+  }
+
+  const body = rows
+    .slice(0, 80)
+    .map((it) => {
+      const reason =
+        String(it?.reason || "") === "remote-paid"
+          ? "Remoto ya cobrado"
+          : "Remoto mas reciente";
+      const tsLocal = formatParkedSyncConflictDate(it?.localTs || 0);
+      const tsRemote = formatParkedSyncConflictDate(it?.remoteTs || 0);
+      const at = formatParkedSyncConflictDate(it?.at || "");
+      const localLabel = escapeHtmlForModal(
+        String(it?.localLabel || "Ticket local"),
+      );
+      const remoteLabel = escapeHtmlForModal(
+        String(it?.remoteLabel || "Ticket remoto"),
+      );
+      const ticketId = escapeHtmlForModal(String(it?.ticketId || "?"));
+      const box = escapeHtmlForModal(String(it?.cajaId || "-"));
+
+      return `
+        <tr>
+          <td style="padding:6px;border-bottom:1px solid #ddd;vertical-align:top;">${escapeHtmlForModal(reason)}</td>
+          <td style="padding:6px;border-bottom:1px solid #ddd;vertical-align:top;">#${ticketId} (Caja ${box})</td>
+          <td style="padding:6px;border-bottom:1px solid #ddd;vertical-align:top;">${localLabel}<br><span style="opacity:.75">${tsLocal}</span></td>
+          <td style="padding:6px;border-bottom:1px solid #ddd;vertical-align:top;">${remoteLabel}<br><span style="opacity:.75">${tsRemote}</span></td>
+          <td style="padding:6px;border-bottom:1px solid #ddd;vertical-align:top;">${escapeHtmlForModal(at)}</td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  return `
+    <div style="font-size:13px;">
+      <div style="margin-bottom:8px;">Se listan cambios locales que no se subieron para evitar pisar una version remota mas nueva.</div>
+      <div style="max-height:340px;overflow:auto;border:1px solid #ddd;border-radius:8px;">
+        <table style="width:100%;border-collapse:collapse;">
+          <thead>
+            <tr>
+              <th style="text-align:left;padding:6px;border-bottom:1px solid #ddd;">Motivo</th>
+              <th style="text-align:left;padding:6px;border-bottom:1px solid #ddd;">Ticket</th>
+              <th style="text-align:left;padding:6px;border-bottom:1px solid #ddd;">Local</th>
+              <th style="text-align:left;padding:6px;border-bottom:1px solid #ddd;">Remoto</th>
+              <th style="text-align:left;padding:6px;border-bottom:1px solid #ddd;">Detectado</th>
+            </tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+async function openParkedSyncConflictsModal() {
+  const list = loadParkedSyncConflicts();
+  const html = buildParkedSyncConflictsHtml(list);
+
+  const result = await confirmModal("Incidencias sync aparcados", html, {
+    isHtml: true,
+    textClassName: "parked-summary-text",
+    dialogClassName: "parked-summary-dialog",
+    middleButtonText: list.length ? "Limpiar incidencias" : "",
+    middleButtonResult: "clear",
+  });
+
+  if (result === "clear") {
+    clearParkedSyncConflicts();
+    syncParkedToolbarUI?.();
+    renderParkedTicketsModal?.();
+    toast("Incidencias de sincronizacion limpiadas.", "ok", "Aparcados");
+  }
+}
+
 function snapshotTicketForSync(ticket) {
   const t = ticket && typeof ticket === "object" ? ticket : {};
   return {
@@ -27970,6 +29133,65 @@ function enqueueParkedSyncOperation(op, ticket) {
   saveParkedSyncQueue(queue);
 }
 
+function getParkedTicketComparableRevisionTs(ticket) {
+  if (!ticket || typeof ticket !== "object") return 0;
+
+  const localRevTs = Number(ticket?.localRevisionAt || 0) || 0;
+  const updatedTs = Number(new Date(ticket?.updatedAt || 0).getTime()) || 0;
+  const createdTs = Number(new Date(ticket?.createdAt || 0).getTime()) || 0;
+
+  return Math.max(localRevTs, updatedTs, createdTs, 0);
+}
+
+function buildRemoteParkedTicketIndexByKey(list) {
+  const map = new Map();
+
+  (Array.isArray(list) ? list : []).forEach((ticket) => {
+    const normalized = normalizeRemoteParkedTicket(ticket);
+    if (!normalized) return;
+
+    const keys = getParkedTicketSyncKeyVariants(normalized);
+    keys.forEach((key) => {
+      if (!key) return;
+      if (!map.has(key)) map.set(key, normalized);
+    });
+  });
+
+  return map;
+}
+
+function getQueuedRemoteTicketMatch(entry, remoteByKey) {
+  if (!(remoteByKey instanceof Map) || !entry) return null;
+
+  const variants = getParkedTicketSyncKeyVariants(entry?.ticket || {});
+  for (const key of variants) {
+    const found = remoteByKey.get(key);
+    if (found) return found;
+  }
+
+  return null;
+}
+
+function shouldSkipQueuedUpsertDueToRemoteNewer(entry, remoteTicket) {
+  if (!entry || !remoteTicket) return false;
+
+  const localTicket =
+    normalizeRemoteParkedTicket(entry?.ticket || entry) || null;
+  if (!localTicket) return false;
+
+  // Evita reabrir o pisar tickets que ya están pagados remotamente.
+  if (!!remoteTicket?.paid && !localTicket?.paid) {
+    return true;
+  }
+
+  const localTs = getParkedTicketComparableRevisionTs(localTicket);
+  const remoteTs = getParkedTicketComparableRevisionTs(remoteTicket);
+  if (localTs <= 0 || remoteTs <= 0) return false;
+
+  // Si remoto es claramente más nuevo, priorizamos remoto para evitar sobrescrituras cruzadas.
+  return remoteTs > localTs + 1000;
+}
+
 async function processParkedSyncQueue() {
   if (__parkedSyncDrainInFlight) return false;
   if (TPV_STATE?.offline) return false;
@@ -27980,17 +29202,76 @@ async function processParkedSyncQueue() {
   __parkedSyncDrainInFlight = true;
   try {
     const remaining = [];
+    let remoteByKey = null;
+    let skippedConflicts = 0;
+    let skippedPaid = 0;
 
     for (const entry of queue) {
       try {
         if (entry?.op === "delete") {
           await apiDeleteParkedReservation(entry?.ticket || {});
         } else {
+          if (!(remoteByKey instanceof Map)) {
+            const remoteList = await apiListParkedReservations();
+            remoteByKey = buildRemoteParkedTicketIndexByKey(remoteList);
+          }
+
+          const remoteTicket = getQueuedRemoteTicketMatch(entry, remoteByKey);
+          if (shouldSkipQueuedUpsertDueToRemoteNewer(entry, remoteTicket)) {
+            skippedConflicts += 1;
+            if (remoteTicket?.paid) skippedPaid += 1;
+            registerParkedSyncConflict(
+              entry,
+              remoteTicket,
+              remoteTicket?.paid ? "remote-paid" : "remote-newer",
+            );
+            continue;
+          }
+
           await apiSaveParkedReservation(entry?.ticket || {});
+
+          const normalizedLocal = normalizeRemoteParkedTicket(
+            entry?.ticket || {},
+          );
+          if (normalizedLocal && remoteByKey instanceof Map) {
+            const keys = getParkedTicketSyncKeyVariants(normalizedLocal);
+            keys.forEach((key) => {
+              if (key) remoteByKey.set(key, normalizedLocal);
+            });
+          }
         }
       } catch {
         remaining.push(entry);
       }
+    }
+
+    if (skippedConflicts > 0) {
+      console.warn(
+        `Se omitieron ${skippedConflicts} cambios locales de aparcados porque remoto era más reciente.`,
+      );
+
+      syncParkedToolbarUI?.();
+      if (
+        parkedTicketsOverlay &&
+        !parkedTicketsOverlay.classList.contains("hidden")
+      ) {
+        renderParkedTicketsModal?.();
+      }
+
+      const skippedNewer = Math.max(0, skippedConflicts - skippedPaid);
+      const parts = [];
+      if (skippedNewer > 0) {
+        parts.push(`${skippedNewer} remoto más reciente`);
+      }
+      if (skippedPaid > 0) {
+        parts.push(`${skippedPaid} remoto ya cobrado`);
+      }
+
+      toast(
+        `Incidencias de sincronización detectadas: ${parts.join(" · ") || skippedConflicts}. Revisa "Incidencias sync" en aparcados.`,
+        "warn",
+        "Aparcados",
+      );
     }
 
     saveParkedSyncQueue(remaining);
@@ -28017,11 +29298,38 @@ function syncParkedTicketsFromRemote(list) {
     });
   });
 
-  const nextPending = (Array.isArray(list) ? list : [])
+  const paidKeySet = new Set();
+  const paidCandidates = [
+    ...previousTickets.filter((t) => !!t?.paid),
+    ...loadParkedPaidHistory().filter((t) => !!t?.paid),
+  ];
+  paidCandidates.forEach((ticket) => {
+    getParkedTicketSyncKeyVariants(ticket).forEach((key) => {
+      if (key) paidKeySet.add(key);
+    });
+  });
+
+  const normalizedRemote = (Array.isArray(list) ? list : [])
     .map((it) => normalizeRemoteParkedTicket(it))
     .filter(Boolean)
-    .filter((t) => !isParkedPaidTombstoned(t))
+    .filter((t) => !isParkedPaidTombstoned(t));
+
+  // Si remoto ya marca un ticket como pagado, debe prevalecer sobre cualquier
+  // pendiente local preservado temporalmente.
+  normalizedRemote
+    .filter((t) => !!t?.paid)
+    .forEach((ticket) => {
+      getParkedTicketSyncKeyVariants(ticket).forEach((key) => {
+        if (key) paidKeySet.add(key);
+      });
+    });
+
+  const nextPending = normalizedRemote
     .filter((t) => !t.paid)
+    .filter((t) => {
+      const keys = getParkedTicketSyncKeyVariants(t);
+      return !keys.some((key) => paidKeySet.has(key));
+    })
     .map((ticket) => {
       const prev = getParkedTicketSyncKeyVariants(ticket)
         .map((key) => previousByKey.get(key))
@@ -28126,6 +29434,68 @@ function syncParkedTicketsFromRemote(list) {
     nextPending.map((t) => getParkedTicketSyncKey(t)).filter(Boolean),
   );
 
+  const queuedPendingKeySet = new Set();
+  try {
+    const queue = loadParkedSyncQueue();
+    (Array.isArray(queue) ? queue : []).forEach((entry) => {
+      const op = String(entry?.op || "")
+        .trim()
+        .toLowerCase();
+      if (op !== "upsert") return;
+      const qt = normalizeRemoteParkedTicket(entry?.ticket || {}) || null;
+      if (!qt || qt?.paid) return;
+      getParkedTicketSyncKeyVariants(qt).forEach((key) => {
+        if (key) queuedPendingKeySet.add(key);
+      });
+    });
+  } catch {}
+
+  const preservedPendingByKey = new Map();
+  const nowTs = Date.now();
+  previousTickets
+    .filter((t) => !!t && !t?.paid)
+    .filter((t) => !isParkedPaidTombstoned(t))
+    .filter((t) => isTicketInCurrentParkingMode(t))
+    .forEach((t) => {
+      const key = getParkedTicketSyncKey(t);
+      if (!key || nextByKey.has(key)) return;
+
+      const variants = getParkedTicketSyncKeyVariants(t);
+      if (variants.some((k) => paidKeySet.has(k))) return;
+      const hasQueuedUpsert = variants.some((k) => queuedPendingKeySet.has(k));
+      const localRevTs = Number(t?.localRevisionAt || 0) || 0;
+      const updatedTs = Number(new Date(t?.updatedAt || 0).getTime()) || 0;
+      const createdTs = Number(new Date(t?.createdAt || 0).getTime()) || 0;
+      const freshnessTs = Math.max(localRevTs, updatedTs, createdTs, 0);
+      const isRecentLocal =
+        freshnessTs > 0 && nowTs - freshnessTs <= PARKED_LOCAL_PREFER_MS;
+
+      // Mantener pendientes locales recientes/encolados para evitar parpadeo
+      // cuando el backend aún no devuelve el ticket recién creado/actualizado.
+      if (!hasQueuedUpsert && !isRecentLocal) return;
+
+      const prev = preservedPendingByKey.get(key);
+      if (!prev) {
+        preservedPendingByKey.set(key, t);
+        return;
+      }
+
+      const prevTs = Math.max(
+        Number(prev?.localRevisionAt || 0) || 0,
+        Number(new Date(prev?.updatedAt || prev?.createdAt || 0).getTime()) ||
+          0,
+      );
+      const nextTs = Math.max(
+        Number(t?.localRevisionAt || 0) || 0,
+        Number(new Date(t?.updatedAt || t?.createdAt || 0).getTime()) || 0,
+      );
+      if (nextTs >= prevTs) {
+        preservedPendingByKey.set(key, t);
+      }
+    });
+
+  const preservedPending = Array.from(preservedPendingByKey.values());
+
   const preservedPaidByKey = new Map();
   const preservedPaidCandidates = [
     ...previousTickets,
@@ -28161,9 +29531,7 @@ function syncParkedTicketsFromRemote(list) {
 
   const preservedPaid = Array.from(preservedPaidByKey.values());
 
-  const next = [...nextPending, ...preservedPaid];
-
-  purgeParkedPaidTombstonesByTickets(nextPending);
+  const next = [...nextPending, ...preservedPending, ...preservedPaid];
 
   parkedTickets = next;
 
@@ -28186,6 +29554,20 @@ function syncParkedTicketsFromRemote(list) {
     normalizeDisplayCounter(maxDisplayNo),
   );
   if (parkedCounter > 0) saveParkedGlobalCounter(parkedCounter);
+
+  const maxTicketId = parkedTickets.reduce((max, ticket) => {
+    const n = Number(ticket?.id || ticket?.ticketId || 0);
+    if (!Number.isFinite(n) || n <= 0) return max;
+    return Math.max(max, Math.floor(n));
+  }, 0);
+  const globalIdCounter = Math.max(
+    Number(loadParkedGlobalIdCounter() || 0),
+    Number(maxTicketId || 0),
+  );
+  if (globalIdCounter > 0) {
+    saveParkedGlobalIdCounter(globalIdCounter);
+  }
+
   saveParkedTicketsCache(parkedTickets);
 
   if (prevLoadedKey) {
@@ -28370,6 +29752,7 @@ async function apiSaveParkedReservation(ticket) {
           }
         : null,
     clientName: String(ticket.clientName || ""),
+    codcliente: String(ticket.codcliente || "").trim() || "1",
     total: Number(ticket.total || 0),
     terminalId: String(currentTerminal?.id || ""),
     terminalName: String(currentTerminal?.name || ""),
@@ -28484,6 +29867,10 @@ async function apiDeleteParkedReservation(ticket) {
   });
 
   if (!res.ok) {
+    if (res.status === 404) {
+      // Idempotencia: ya no existe remotamente, lo consideramos sincronizado.
+      return true;
+    }
     throw new Error(`Error borrando reserva remota: HTTP ${res.status}`);
   }
 
@@ -28682,9 +30069,12 @@ async function onPayButtonClick() {
   let saleCommitted = false;
   let didFastAutoPrint = false;
   let fastPreApiPrintedNumber = "";
+  let releaseParkedCheckoutLock = null;
+  let parkedSyncKeyToClose = "";
+  let parkedIdToClose = 0;
 
   try {
-    if (isPayingNow) return;
+    if (isPayingNow || isParkingNow) return;
     isPayingNow = true;
     refreshAgentGuardUI?.();
 
@@ -28792,10 +30182,115 @@ async function onPayButtonClick() {
     cartSnapshot = Array.isArray(cart) ? cart.map((i) => ({ ...i })) : [];
     saleLineIds = buildLineIdSetFromSnapshot(cartSnapshot);
 
-    const parkedIndexToClose =
-      currentParkedTicketIndex !== null
-        ? Number(currentParkedTicketIndex)
-        : null;
+    let parkedIndexToClose = resolveUnpaidParkedTicketIndexForCheckout({
+      preferredIndex:
+        currentParkedTicketIndex !== null
+          ? Number(currentParkedTicketIndex)
+          : null,
+      syncKey: String(PENDING_RUNTIME_PARKED_SYNC_KEY || "").trim(),
+      ticketId: Number(PENDING_RUNTIME_PARKED_TICKET_ID || 0) || 0,
+      cartItems: cartSnapshot,
+    });
+
+    if (parkedIndexToClose != null) {
+      currentParkedTicketIndex = parkedIndexToClose;
+      PENDING_RUNTIME_PARKED_SYNC_KEY = "";
+      PENDING_RUNTIME_PARKED_TICKET_ID = 0;
+    }
+
+    const resolveParkedIndexForMark = () =>
+      resolveUnpaidParkedTicketIndexForCheckout({
+        preferredIndex: parkedIndexToClose,
+        syncKey:
+          String(parkedSyncKeyToClose || "").trim() ||
+          String(PENDING_RUNTIME_PARKED_SYNC_KEY || "").trim(),
+        ticketId:
+          Number(parkedIdToClose || 0) ||
+          Number(PENDING_RUNTIME_PARKED_TICKET_ID || 0) ||
+          0,
+        cartItems: cartSnapshot,
+      });
+
+    if (parkedIndexToClose != null) {
+      const parkedTicketToClose =
+        Array.isArray(parkedTickets) && parkedTickets[parkedIndexToClose]
+          ? parkedTickets[parkedIndexToClose]
+          : null;
+
+      parkedSyncKeyToClose = parkedTicketToClose
+        ? String(getParkedTicketSyncKey(parkedTicketToClose) || "").trim()
+        : "";
+      parkedIdToClose = Number(parkedTicketToClose?.id || 0) || 0;
+
+      if (
+        parkedTicketToClose &&
+        isParkedTicketLockedByAnotherTerminal(parkedTicketToClose)
+      ) {
+        throw new Error(
+          "Ese ticket aparcado se está cobrando en otro TPV. Espera unos segundos y vuelve a intentarlo.",
+        );
+      }
+
+      releaseParkedCheckoutLock = beginParkedCheckoutLock(parkedIndexToClose);
+
+      await refreshRemoteParkedReservationsOnly();
+
+      let syncedIdx = -1;
+      if (parkedSyncKeyToClose) {
+        syncedIdx = (
+          Array.isArray(parkedTickets) ? parkedTickets : []
+        ).findIndex((t) => getParkedTicketSyncKey(t) === parkedSyncKeyToClose);
+      }
+      if (syncedIdx < 0 && parkedIdToClose > 0) {
+        syncedIdx = (
+          Array.isArray(parkedTickets) ? parkedTickets : []
+        ).findIndex((t) => Number(t?.id || 0) === parkedIdToClose);
+      }
+
+      if (syncedIdx < 0) {
+        throw new Error(
+          "El ticket aparcado ya no está disponible para cobrar (puede haberse cobrado o borrado en otro TPV).",
+        );
+      }
+
+      const syncedTicket = parkedTickets[syncedIdx];
+      if (!syncedTicket || syncedTicket.paid) {
+        throw new Error("El ticket aparcado ya está cobrado en otro TPV.");
+      }
+
+      const syncedKey = String(
+        getParkedTicketSyncKey(syncedTicket) || "",
+      ).trim();
+      const paidTwin = (Array.isArray(parkedTickets) ? parkedTickets : []).find(
+        (candidate) => {
+          if (!candidate || !candidate?.paid) return false;
+          return (
+            String(getParkedTicketSyncKey(candidate) || "").trim() === syncedKey
+          );
+        },
+      );
+
+      if (paidTwin) {
+        syncedTicket.paid = true;
+        syncedTicket.paidAt =
+          paidTwin?.paidAt || syncedTicket.paidAt || new Date();
+        syncedTicket.paidTicketCode =
+          paidTwin?.paidTicketCode || syncedTicket.paidTicketCode || null;
+        syncedTicket.paidTicketId =
+          paidTwin?.paidTicketId || syncedTicket.paidTicketId || null;
+        upsertParkedPaidHistory(syncedTicket);
+        saveParkedTicketsCache(parkedTickets);
+        throw new Error("El ticket aparcado ya está cobrado en otro TPV.");
+      }
+
+      if (isParkedTicketLockedByAnotherTerminal(syncedTicket)) {
+        throw new Error(
+          "Ese ticket aparcado se está cobrando en otro TPV. Espera unos segundos y vuelve a intentarlo.",
+        );
+      }
+
+      parkedIndexToClose = syncedIdx;
+    }
 
     // 3) Payload factura
     const ticketPayload = buildTicketPayloadFromCart();
@@ -28951,7 +30446,7 @@ async function onPayButtonClick() {
         });
       }
 
-      await markParkedTicketAsPaidByIndex(parkedIndexToClose, {
+      await markParkedTicketAsPaidByIndex(resolveParkedIndexForMark(), {
         idfactura: null,
         codigo:
           lastTicket?.numero ||
@@ -29222,7 +30717,7 @@ async function onPayButtonClick() {
       });
     }
 
-    await markParkedTicketAsPaidByIndex(parkedIndexToClose, {
+    await markParkedTicketAsPaidByIndex(resolveParkedIndexForMark(), {
       idfactura: facturaResp?.idfactura || null,
       codigo: lastTicket?.numero || facturaResp?.codigo || null,
     });
@@ -29309,6 +30804,9 @@ async function onPayButtonClick() {
       setPostPayPrintEnabled(!!lastTicket);
     }
   } finally {
+    try {
+      releaseParkedCheckoutLock?.();
+    } catch {}
     isPayingNow = false;
     refreshAgentGuardUI?.();
   }
@@ -29435,6 +30933,7 @@ async function apiUpdateCajaAfterSale({ totalVenta, pagos }) {
 const clearBtn = document.getElementById("clearCartBtn");
 if (clearBtn) {
   clearBtn.onclick = () => {
+    if (isParkingNow) return;
     if (!cashSession?.open) return;
 
     if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
@@ -29483,6 +30982,7 @@ const payBtn = document.getElementById("payBtn");
 const cartActionGridEl = document.getElementById("cartActionGrid");
 if (payBtn) {
   payBtn.onclick = () => {
+    if (isParkingNow) return;
     onPayButtonClick();
   };
 }
@@ -29778,6 +31278,10 @@ function shouldShowSplitPayAndPreprint() {
   return mesasTransMode && hasLoadedOpenTicketForMesasTrans();
 }
 
+function shouldShowPreprintForLoadedTicket() {
+  return hasLoadedOpenTicketForMesasTrans();
+}
+
 function isMesasTicketSplitAllowed() {
   if (!shouldShowSplitPayAndPreprint()) return false;
   return hasVisibleCartLines(cart);
@@ -29818,19 +31322,19 @@ function refreshPayAndPreprintLayout() {
   const parkBtnEl = document.getElementById("parkBtn");
   if (!cartActionGrid || !payBtnEl) return;
 
-  const split = shouldShowSplitPayAndPreprint();
-  const mesasAutoSaveOpenTicket =
-    split && isMesasTransaccionesMode() && !!getCurrentLoadedParkedTicket();
+  const showPreprint = shouldShowPreprintForLoadedTicket();
+  const loadedOpenTicket = !!getCurrentLoadedParkedTicket();
+  const replaceParkWithPreprint = showPreprint && loadedOpenTicket;
 
-  cartActionGrid.classList.toggle("has-open-ticket", split);
+  cartActionGrid.classList.toggle("has-open-ticket", showPreprint);
   cartActionGrid.classList.toggle(
     "mesas-autosave-open-ticket",
-    mesasAutoSaveOpenTicket,
+    replaceParkWithPreprint,
   );
   payBtnEl.classList.add("cart-btn-pay-tall");
 
   if (parkBtnEl) {
-    parkBtnEl.classList.toggle("hidden", mesasAutoSaveOpenTicket);
+    parkBtnEl.classList.toggle("hidden", replaceParkWithPreprint);
   }
 }
 
@@ -29885,13 +31389,87 @@ function scheduleMesasAutoSave() {
   }, 700);
 }
 
-function isMesasPreprintAllowed() {
-  if (!shouldShowSplitPayAndPreprint()) {
-    return false;
+async function runTpvAutoSaveIfNeeded() {
+  if (MESAS_INLINE_ACTIVE) return;
+
+  const loaded = getCurrentLoadedParkedTicket();
+  if (!loaded || loaded?.paid) return;
+  if (!hasVisibleCartLines() || !hasUnsavedChangesForLoadedParkedTicket(loaded))
+    return;
+  if (!cashSession?.open || !currentTerminal) return;
+
+  if (TPV_AUTO_SAVE_IN_FLIGHT) {
+    TPV_AUTO_SAVE_RERUN = true;
+    return;
   }
 
-  const scope = getSelectedMesaScopeContext();
-  if (!scope?.uid) return false;
+  TPV_AUTO_SAVE_IN_FLIGHT = true;
+  TPV_AUTO_SAVE_RERUN = false;
+  try {
+    const keepParkingMode = normalizeParkingMode(
+      inferTicketParkingMode(loaded),
+    );
+    await parkCurrentCart(loaded.name || "", loaded.obs || "", {
+      mesaAlerts: normalizeMesaTicketAlerts(loaded?.mesaAlerts),
+      openListAfterSave: false,
+      silentAutoSave: true,
+      keepLoadedTicketOpen: true,
+      skipAutoPrint: true,
+      skipStockConfirm: true,
+      parkingMode: keepParkingMode,
+      docType: getParkedTicketDocType(loaded, "ticket"),
+    });
+  } catch (e) {
+    console.warn("No se pudo auto-guardar ticket en TPV:", e?.message || e);
+  } finally {
+    TPV_AUTO_SAVE_IN_FLIGHT = false;
+    if (TPV_AUTO_SAVE_RERUN) {
+      TPV_AUTO_SAVE_RERUN = false;
+      scheduleTpvAutoSave();
+    }
+  }
+}
+
+function scheduleTpvAutoSave() {
+  if (TPV_AUTO_SAVE_TIMER) {
+    clearTimeout(TPV_AUTO_SAVE_TIMER);
+    TPV_AUTO_SAVE_TIMER = null;
+  }
+
+  if (MESAS_INLINE_ACTIVE) return;
+
+  const loaded = getCurrentLoadedParkedTicket();
+  if (!loaded || loaded?.paid) return;
+  if (!hasVisibleCartLines() || !hasUnsavedChangesForLoadedParkedTicket(loaded))
+    return;
+
+  TPV_AUTO_SAVE_TIMER = setTimeout(() => {
+    TPV_AUTO_SAVE_TIMER = null;
+    runTpvAutoSaveIfNeeded();
+  }, 420);
+}
+
+async function flushPendingParkedAutoSaveBeforeModeSwitch() {
+  if (MESAS_AUTO_SAVE_TIMER) {
+    clearTimeout(MESAS_AUTO_SAVE_TIMER);
+    MESAS_AUTO_SAVE_TIMER = null;
+  }
+  if (TPV_AUTO_SAVE_TIMER) {
+    clearTimeout(TPV_AUTO_SAVE_TIMER);
+    TPV_AUTO_SAVE_TIMER = null;
+  }
+
+  if (isMesasTransaccionesMode()) {
+    await runMesasAutoSaveIfNeeded();
+  } else {
+    await runTpvAutoSaveIfNeeded();
+  }
+}
+
+function isMesasPreprintAllowed() {
+  if (!shouldShowPreprintForLoadedTicket()) {
+    return false;
+  }
 
   return hasVisibleCartLines();
 }
@@ -29906,8 +31484,10 @@ function refreshPreprintButtonUI() {
   const enabled = isMesasPreprintAllowed();
   preprintBtnEl.disabled = !enabled;
   preprintBtnEl.title = enabled
-    ? "Imprimir precuenta y marcar mesa pendiente de pago"
-    : "Disponible en Mesas > Transacciones con productos en el carrito";
+    ? isMesasTransaccionesMode()
+      ? "Imprimir precuenta y marcar mesa pendiente de pago"
+      : "Imprimir preimpresion del ticket abierto"
+    : "Disponible con un ticket abierto y productos en el carrito";
 
   if (splitBtnEl) {
     const splitEnabled = isMesasTicketSplitAllowed();
@@ -30584,8 +32164,11 @@ function openSplitTicketModal() {
   if (splitTicketError) splitTicketError.textContent = "";
 
   if (splitTicketSourceName) {
+    const displayNo =
+      getParkedTicketDisplayNumber(loaded) ||
+      getParkedDisplayNumberFromId(loaded?.id);
     splitTicketSourceName.textContent = String(
-      loaded?.name || loaded?.label || `Ticket #${loaded?.id || ""}`,
+      loaded?.name || loaded?.label || `Ticket #${displayNo || ""}`,
     ).trim();
   }
 
@@ -30695,9 +32278,12 @@ async function confirmSplitTicket() {
     const cleanObs = String(
       parseSplitInfoFromObs(loaded?.obs)?.cleanObs || loaded?.obs || "",
     ).trim();
+    const loadedDisplayNo =
+      getParkedTicketDisplayNumber(loaded) ||
+      getParkedDisplayNumberFromId(loaded?.id);
     const baseName =
       stripSplitSuffixFromTicketName(loaded?.name) ||
-      `Ticket #${loaded?.id || ""}`;
+      `Ticket #${loadedDisplayNo || ""}`;
 
     loaded.items = mergedLines;
     loaded.total = getCartTotal(mergedLines);
@@ -30817,8 +32403,11 @@ async function confirmSplitTicket() {
     targetSplitParts = activePartsData.length;
   }
 
+  const loadedDisplayNo =
+    getParkedTicketDisplayNumber(loaded) ||
+    getParkedDisplayNumberFromId(loaded?.id);
   const sourceName = String(
-    loaded?.name || `Ticket #${loaded?.id || ""}`,
+    loaded?.name || `Ticket #${loadedDisplayNo || ""}`,
   ).trim();
   const splitGroupId = makeSplitGroupId();
   const mesaScope = getSelectedMesaScopeContext();
@@ -31407,7 +32996,14 @@ function buildMesasPreprintTicketDraft() {
     minute: "2-digit",
   });
 
-  const snapshot = Array.isArray(cart) ? cart.map((it) => ({ ...it })) : [];
+  const loadedGlobalPct = clampDiscountPercent(
+    parseNumericLike(loaded?.cartGlobalDiscountPct, 0),
+  );
+  const activeGlobalPct = getCartGlobalDiscountPercent();
+  const preprintGlobalPct =
+    activeGlobalPct > 0 ? activeGlobalPct : loadedGlobalPct;
+  const snapshot = freezeGlobalDiscountOnLines(cart, preprintGlobalPct);
+  const printableSnapshot = buildPrintableLinesFromCartSnapshot(snapshot);
   const total = getCartTotal(snapshot);
   const tableLabel = String(
     scope?.tableName || scope?.tableId || "Mesa",
@@ -31416,9 +33012,12 @@ function buildMesasPreprintTicketDraft() {
   const clientName =
     (cartClientInput && String(cartClientInput.value || "").trim()) ||
     "Ventas tickets";
+  const ticketDisplayNo =
+    getParkedTicketDisplayNumber(loaded) ||
+    getParkedDisplayNumberFromId(loaded?.id);
 
   return {
-    numero: String(loaded?.id || "").trim(),
+    numero: String(ticketDisplayNo || loaded?.id || "").trim(),
     fecha,
     hora,
     paymentMethod: "Pendiente de pago",
@@ -31426,7 +33025,7 @@ function buildMesasPreprintTicketDraft() {
     terminalName: currentTerminal ? currentTerminal.name || "" : "",
     agentName: currentAgent ? currentAgent.name || "" : "",
     company: companyInfo ? { ...companyInfo } : null,
-    lineas: snapshot,
+    lineas: printableSnapshot,
     total,
     obs: `Mesa ${tableLabel} · ${roomLabel}`,
     mesaUid: String(scope?.uid || "").trim(),
@@ -31457,6 +33056,11 @@ function markMesaAsPendingPaymentByUid(uid) {
       : {};
 
   mesasState.tableStates[mesaUid] = "cuenta";
+  const linkedTicket = resolveComandaTicketForSelectedMesa();
+  const linkedTicketId = String(linkedTicket?.id || "").trim();
+  if (linkedTicketId) {
+    mesasState.tableTicketMap[mesaUid] = linkedTicketId;
+  }
   mesasState.tableMeta[mesaUid] = {
     ...prevMeta,
     serviceStage: "cuenta-pedida",
@@ -31468,12 +33072,62 @@ function markMesaAsPendingPaymentByUid(uid) {
 }
 
 async function preprintCurrentMesaTicket() {
+  const inMesasTrans = isMesasTransaccionesMode();
+
   if (!isMesasPreprintAllowed()) {
     toast(
-      "Abre una mesa en Transacciones y añade productos para preimprimir.",
+      "Abre un ticket y añade productos para preimprimir.",
       "warn",
       "Precuenta",
     );
+    return;
+  }
+
+  if (!inMesasTrans) {
+    const loaded = getCurrentLoadedParkedTicket();
+    if (!loaded) return;
+
+    const now = new Date();
+    const fecha = now.toLocaleDateString("es-ES");
+    const hora = now.toLocaleTimeString("es-ES", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const loadedGlobalPct = clampDiscountPercent(
+      parseNumericLike(loaded?.cartGlobalDiscountPct, 0),
+    );
+    const activeGlobalPct = getCartGlobalDiscountPercent();
+    const preprintGlobalPct =
+      activeGlobalPct > 0 ? activeGlobalPct : loadedGlobalPct;
+    const snapshot = freezeGlobalDiscountOnLines(cart, preprintGlobalPct);
+    const printableSnapshot = buildPrintableLinesFromCartSnapshot(snapshot);
+    const total = getCartTotal(snapshot);
+    const clientName =
+      (cartClientInput && String(cartClientInput.value || "").trim()) ||
+      "Ventas tickets";
+    const ticketDisplayNo =
+      getParkedTicketDisplayNumber(loaded) ||
+      getParkedDisplayNumberFromId(loaded?.id);
+
+    const draftTicket = {
+      numero: String(ticketDisplayNo || loaded?.id || "").trim(),
+      fecha,
+      hora,
+      paymentMethod: "Pendiente de pago",
+      clientName,
+      terminalName: currentTerminal ? currentTerminal.name || "" : "",
+      agentName: currentAgent ? currentAgent.name || "" : "",
+      company: companyInfo ? { ...companyInfo } : null,
+      lineas: printableSnapshot,
+      total,
+      obs: String(loaded?.obs || "").trim(),
+      _preprint: true,
+    };
+
+    const ok = await printTicket(draftTicket);
+    if (!ok) return;
+    setStatusText("Preimpresion enviada.");
+    toast("Preimpresion del ticket enviada.", "ok", "PreImpr");
     return;
   }
 
@@ -31829,10 +33483,6 @@ function centsToEuro2es(c) {
   return centsToEuro2(c).replace(".", ",") + " €";
 }
 
-function euro2(n) {
-  return (Number(n) || 0).toFixed(2);
-}
-
 function normalizePaySeriesRows(rawList) {
   const src = Array.isArray(rawList) ? rawList : [];
   const out = [];
@@ -32127,20 +33777,13 @@ function renderPayMethods() {
 
       let targetC = 0;
 
-      const otherPaidC = payModalState.formas.reduce((sum, x) => {
-        const c = x.codpago;
-        if (c === cod) return sum;
-        return sum + euroStrToCents(payModalState.values[c] || "");
-      }, 0);
-
-      targetC = Math.max(0, payModalState.totalCents - otherPaidC);
-
       if (
-        nonZeroCods.length > 1 &&
-        !nonZeroCods.includes(cod) &&
-        targetC === payModalState.totalCents
+        nonZeroCods.length <= 1 &&
+        (nonZeroCods.length === 0 || nonZeroCods[0] === cod)
       ) {
-        targetC = 0;
+        targetC = payModalState.totalCents || 0;
+      } else {
+        targetC = remainingToPayCents();
       }
 
       payModalState.values[cod] = centsToEuro2(targetC);
@@ -32814,14 +34457,19 @@ function getNextSuggestedParkTicketName() {
 
 function getNextSuggestedParkTicketDisplayNo() {
   const MAX_SAFE_DISPLAY_NO = 9999;
-  const pendingTickets = getScopedPendingParkedTickets(parkedTickets).filter(
+  const ticketsInScope = getScopedAllParkedTickets(parkedTickets).filter(
     (t) => !isPedidoTpvTicket(t),
   );
+  const paidHistory = loadParkedPaidHistory()
+    .filter((t) => !isPedidoTpvTicket(t))
+    .filter((t) => !isParkedPaidTombstoned(t))
+    .filter((t) => isTicketInCurrentParkingMode(t));
+  const allKnownTickets = [...ticketsInScope, ...paidHistory];
 
-  if (!pendingTickets.length) return 1;
+  if (!allKnownTickets.length) return 1;
 
   const usedDisplayNos = new Set();
-  pendingTickets.forEach((ticket) => {
+  allKnownTickets.forEach((ticket) => {
     const n = Number(getParkedTicketDisplayNumber(ticket) || 0) || 0;
     if (Number.isFinite(n) && n > 0 && n <= MAX_SAFE_DISPLAY_NO) {
       usedDisplayNos.add(Math.floor(n));
@@ -32832,7 +34480,7 @@ function getNextSuggestedParkTicketDisplayNo() {
     return MAX_SAFE_DISPLAY_NO;
   }
 
-  const maxDisplayNo = pendingTickets.reduce((max, ticket) => {
+  const maxDisplayNo = allKnownTickets.reduce((max, ticket) => {
     const n = Number(getParkedTicketDisplayNumber(ticket) || 0) || 0;
     if (!Number.isFinite(n) || n <= 0 || n > MAX_SAFE_DISPLAY_NO) return max;
     return n > max ? n : max;
@@ -32873,17 +34521,17 @@ function getNextSuggestedParkTicketDisplayNo() {
 }
 
 function getNextSuggestedParkTicketId() {
-  const pendingTickets = getScopedPendingParkedTickets(parkedTickets).filter(
+  const allTickets = getScopedAllParkedTickets(parkedTickets).filter(
     (t) => !isPedidoTpvTicket(t),
   );
 
-  const maxTicketId = pendingTickets.reduce((max, ticket) => {
+  const maxTicketId = allTickets.reduce((max, ticket) => {
     const n = Number(ticket?.id || ticket?.ticketId || 0);
     if (!Number.isFinite(n) || n <= 0) return max;
     return Math.max(max, Math.floor(n));
   }, 0);
 
-  const basis = Math.max(maxTicketId, Number(parkedCounter || 0));
+  const basis = Math.max(maxTicketId, Number(loadParkedGlobalIdCounter() || 0));
   if (basis <= 0) return 1;
 
   return basis + 1;
@@ -32938,8 +34586,12 @@ function buildPedidoPrintDraft(ticket) {
     };
   });
 
+  const ticketDisplayNo =
+    getParkedTicketDisplayNumber(ticket) ||
+    getParkedDisplayNumberFromId(ticket?.id);
+
   return {
-    numero: `PED-${ticket?.id || ""}`,
+    numero: `PED-${ticketDisplayNo || ticket?.id || ""}`,
     fecha,
     hora,
     paymentMethod: "Pedido (sin cobro)",
@@ -32962,23 +34614,21 @@ function buildParkedTicketPrintDraft(ticket) {
   });
 
   const items = Array.isArray(ticket?.items) ? ticket.items : [];
-  const lineas = items.map((it) => {
+  const frozenGlobalPct = clampDiscountPercent(
+    parseNumericLike(ticket?.cartGlobalDiscountPct, 0),
+  );
+  const frozenItems = freezeGlobalDiscountOnLines(items, frozenGlobalPct);
+  const printableItems = buildPrintableLinesFromCartSnapshot(frozenItems);
+
+  const lineas = printableItems.map((it) => {
     const qty = Number(it?.qty ?? it?.cantidad ?? 0) || 0;
-    const grossUnit = Number(
-      it?.grossPrice ??
-        it?.__forceUnitGross ??
-        it?.price ??
-        it?.pvpunitario ??
-        0,
-    );
+    const grossUnit = Number(getUnitGrossForPrint(it) || 0);
     const taxRate = Number(it?.taxRate || 0);
     const netUnit = taxRate > 0 ? grossUnit / (1 + taxRate / 100) : grossUnit;
-    const lineGross = Number(
-      (it?.lineTotal ?? it?.pvptotal ?? grossUnit * qty) || 0,
-    );
+    const lineGross = Number(grossUnit * qty || 0);
     const lineNet = taxRate > 0 ? lineGross / (1 + taxRate / 100) : lineGross;
 
-    return {
+    const out = {
       descripcion: String(it?.name || it?.descripcion || "Producto").trim(),
       cantidad: qty,
       pvpunitario: Number.isFinite(netUnit) ? netUnit : 0,
@@ -32987,12 +34637,24 @@ function buildParkedTicketPrintDraft(ticket) {
       taxRate: Number.isFinite(taxRate) ? taxRate : 0,
       __forceUnitGross: Number.isFinite(grossUnit) ? grossUnit : 0,
     };
+
+    if (it?.__baseUnitGrossHint != null) {
+      out.__baseUnitGrossHint = Number(it.__baseUnitGrossHint || 0);
+    }
+    if (it?.__discountPctHint != null) {
+      out.__discountPctHint = Number(it.__discountPctHint || 0);
+    }
+
+    return out;
   });
 
   const splitObsInfo = parseSplitInfoFromObs(ticket?.obs);
+  const ticketDisplayNo =
+    getParkedTicketDisplayNumber(ticket) ||
+    getParkedDisplayNumberFromId(ticket?.id);
 
   return {
-    numero: `PRK-${ticket?.id || ""}`,
+    numero: `PRK-${ticketDisplayNo || ticket?.id || ""}`,
     fecha,
     hora,
     paymentMethod: "Pendiente de pago",
@@ -33001,9 +34663,128 @@ function buildParkedTicketPrintDraft(ticket) {
     agentName: currentAgent ? currentAgent.name || "" : "",
     company: companyInfo ? { ...companyInfo } : null,
     lineas,
-    total: Number(ticket?.total || 0),
+    total: Number(getCartTotal(printableItems) || ticket?.total || 0),
     obs: String(splitObsInfo?.cleanObs || ticket?.obs || "").trim(),
   };
+}
+
+async function resolvePaidParkedFacturaRef(ticket) {
+  const paidId = Number(ticket?.paidTicketId || 0);
+  const paidCode = String(ticket?.paidTicketCode || "").trim();
+
+  if (paidId > 0) {
+    try {
+      const fc = await fetchFacturaClienteById(paidId);
+      if (fc?.idfactura) {
+        return {
+          idfactura: Number(fc.idfactura),
+          row: mapFacturaRowToTicketRow(fc),
+        };
+      }
+    } catch {}
+  }
+
+  if (paidCode) {
+    const byCodeFilters = [
+      { "filter[codigo]": paidCode },
+      { "filter[numero]": paidCode },
+      { "filter[codigofactura]": paidCode },
+    ];
+
+    for (const filterSet of byCodeFilters) {
+      try {
+        const rows = await fetchApiResourceWithParams("facturaclientes", {
+          ...filterSet,
+          limit: 5,
+          "sort[idfactura]": "DESC",
+        });
+        const first = Array.isArray(rows) ? rows[0] : null;
+        if (first?.idfactura) {
+          return {
+            idfactura: Number(first.idfactura),
+            row: mapFacturaRowToTicketRow(first),
+          };
+        }
+      } catch {}
+    }
+  }
+
+  return null;
+}
+
+async function openInfoForPaidParkedTicket(ticket) {
+  const paidRef = await resolvePaidParkedFacturaRef(ticket);
+  if (paidRef?.row) {
+    await openTicketInfoForFactura(paidRef.row, {
+      snapshotTicket: ticket,
+    });
+    return;
+  }
+
+  openTicketInfoFromParkedSnapshot(ticket);
+}
+
+function buildTicketInfoLineFromSnapshot(line) {
+  const qty = Math.max(0, Number(line?.qty ?? line?.cantidad ?? 0) || 0);
+  const finalUnitGross = round2(Number(getUnitGrossForPrint(line) || 0));
+  const baseUnitGross = round2(
+    Number(
+      line?.__baseUnitGrossHint ??
+        line?.baseGrossUnit ??
+        line?.__baseUnitGross ??
+        finalUnitGross,
+    ) || 0,
+  );
+  const hasDiscount = baseUnitGross > finalUnitGross + 0.0001;
+  const discountPct = hasDiscount
+    ? round2(
+        ((baseUnitGross - finalUnitGross) / Math.max(0.000001, baseUnitGross)) *
+          100,
+      )
+    : 0;
+
+  return {
+    idlinea: Number(line?.idlinea || line?.id || 0),
+    cantidad: qty,
+    referencia: String(line?.referencia || "").trim(),
+    descripcion: String(line?.name || line?.descripcion || "Producto").trim(),
+    codimpuesto: line?.codimpuesto || "",
+    pvpunitario: finalUnitGross,
+    pvptotal: round2(finalUnitGross * qty),
+    __infoFromSnapshot: true,
+    __infoBaseUnitGross: baseUnitGross,
+    __infoDiscountPct: discountPct,
+    __infoHasDiscount: hasDiscount,
+  };
+}
+
+function openTicketInfoFromParkedSnapshot(ticket) {
+  const items = Array.isArray(ticket?.items) ? ticket.items : [];
+  const frozenGlobalPct = clampDiscountPercent(
+    parseNumericLike(ticket?.cartGlobalDiscountPct, 0),
+  );
+  const frozenItems = freezeGlobalDiscountOnLines(items, frozenGlobalPct);
+  const printableItems = buildPrintableLinesFromCartSnapshot(frozenItems);
+  const lineasInfo = printableItems.map(buildTicketInfoLineFromSnapshot);
+
+  const ticketDisplayNo =
+    getParkedTicketDisplayNumber(ticket) ||
+    getParkedDisplayNumberFromId(ticket?.id);
+  const ticketLabel = ticket?.paidTicketCode
+    ? String(ticket.paidTicketCode).trim()
+    : `PRK-${ticketDisplayNo || ticket?.id || ""}`;
+
+  openRefundOverlayForViewOnly({
+    facturaRow: {
+      codigo: ticketLabel,
+      nombrecliente:
+        String(ticket?.clientName || "Cliente").trim() || "Cliente",
+      total: Number(getCartTotal(printableItems) || ticket?.total || 0),
+    },
+    lineasInfo,
+    paymentInfoRows: [],
+    subtitle: "Ticket cobrado (aparcado)",
+  });
 }
 
 async function maybeAutoPrintPedidoOnSave(ticket) {
@@ -33044,7 +34825,10 @@ function openParkObsModal() {
   const loadedTicket = getCurrentLoadedParkedTicket();
   if (loadedTicket) {
     const t = loadedTicket;
-    nameInput.value = t.name || `${labels.shortRefLabel} #${t.id}`;
+    const ticketDisplayNo =
+      getParkedTicketDisplayNumber(t) || getParkedDisplayNumberFromId(t?.id);
+    nameInput.value =
+      t.name || `${labels.shortRefLabel} #${ticketDisplayNo || ""}`;
     const splitObsInfo = parseSplitInfoFromObs(t?.obs);
     obsInput.value = String(splitObsInfo?.cleanObs || t?.obs || "").trim();
     parkModalMesaAlerts = mesasMode
@@ -33166,6 +34950,13 @@ parkQuickFlagsList?.addEventListener("click", (ev) => {
 });
 
 parkObsOkBtn?.addEventListener("click", async () => {
+  const loadedTicketForUpdate = getCurrentLoadedParkedTicket();
+  const targetParkingMode = isMesasTransaccionesMode()
+    ? PARKED_MODE_MESAS
+    : loadedTicketForUpdate && isMesasModeTicket(loadedTicketForUpdate)
+      ? PARKED_MODE_MESAS
+      : PARKED_MODE_TPV;
+
   const ticketName =
     (parkNameInput?.value || "").trim() || getNextSuggestedParkTicketName();
   const obs = (parkObsInput?.value || "").trim();
@@ -33190,9 +34981,7 @@ parkObsOkBtn?.addEventListener("click", async () => {
     docType,
     skipAutoPrint: !!parkObsMetaEditMode,
     openListAfterSave: false,
-    parkingMode: isMesasTransaccionesMode()
-      ? PARKED_MODE_MESAS
-      : PARKED_MODE_TPV,
+    parkingMode: targetParkingMode,
   });
   parkObsMetaEditMode = false;
 });
@@ -33222,6 +35011,36 @@ parkedEditingMetaBtn?.addEventListener("click", () => {
 
   parkObsMetaEditMode = true;
   openParkObsModal();
+});
+
+const parkedDeleteBtn = document.getElementById("parkedDeleteBtn");
+parkedDeleteBtn?.addEventListener("click", async () => {
+  const labels = getParkingLabels();
+  if (!cashSession?.open) return;
+
+  if (isMesasTransaccionesMode()) {
+    toast(
+      "Borrado directo no disponible en Mesas desde esta cabecera.",
+      "info",
+      labels.featureTitle,
+    );
+    return;
+  }
+
+  const idx = Number(currentParkedTicketIndex);
+  if (!Number.isInteger(idx) || idx < 0) {
+    toast(
+      `No hay ${labels.item} activo para borrar.`,
+      "info",
+      labels.featureTitle,
+    );
+    return;
+  }
+
+  await deleteParkedTicketByIndex(idx, {
+    confirm: true,
+    clearCartAfterDelete: true,
+  });
 });
 
 const parkedRestoreBtn = document.getElementById("parkedRestoreBtn");
@@ -33905,8 +35724,7 @@ function renderTicketsList(tickets) {
     }
 
     div.onclick = async () => {
-      if (hasRefunds && isFullyRefunded) return;
-      await openRefundForFactura(t);
+      await openTicketInfoForFactura(t);
     };
 
     mountEl.appendChild(div);
@@ -34591,10 +36409,6 @@ function showReconnectIfAvailable(
       setStatusText("Sin internet (modo offline). Reintentando conexión...");
       return;
     }
-
-    // Reinicia numeracion de tickets aparcados al cerrar caja.
-    parkedCounter = 0;
-    resetParkedGlobalCounter();
   }
 
   try {
@@ -35400,17 +37214,6 @@ function normTxt(s) {
     .trim();
 }
 
-function buildPackChildRefSet() {
-  const set = new Set();
-  for (const lines of PACKS_STATE.linesByPackId.values()) {
-    for (const ln of lines || []) {
-      const ref = normTxt(ln.reference);
-      if (ref) set.add(ref);
-    }
-  }
-  return set;
-}
-
 function buildDesiredByPidFromFacturaLines(fsLines) {
   const desired = {};
   const lines = Array.isArray(fsLines) ? fsLines : [];
@@ -35444,45 +37247,6 @@ function negateDesiredByPid(desired) {
     out[k] = -Number(v || 0);
   }
   return out;
-}
-
-function isZeroUnitFsLine(l) {
-  const u = Number(l?.pvpunitario ?? 0);
-  return Math.abs(u) < 1e-9;
-}
-
-function ticketHasOfferByName(fsLines) {
-  // Detecta si el ticket tiene alguna oferta (por nombre del producto oferta)
-  // Usamos tu catálogo `products` (que ya contiene las ofertas como productos)
-  const offerNameSet = new Set(
-    (products || [])
-      .filter((p) => isOfferPackProductById(p.baseProductId || p.id))
-      .map((p) =>
-        normTxt(p.secondaryName ? `${p.name} - ${p.secondaryName}` : p.name),
-      )
-      .filter(Boolean),
-  );
-
-  const lines = Array.isArray(fsLines) ? fsLines : [];
-  return lines.some((l) => {
-    const d = normTxt(l?.descripcion);
-    if (!d) return false;
-    for (const offer of offerNameSet) {
-      if (offer && d.includes(offer)) return true;
-    }
-    return false;
-  });
-}
-
-function looksLikePackChildByRef(fsLine, childRefSet) {
-  const d = normTxt(fsLine?.descripcion);
-  if (!d) return false;
-
-  // coincide si la descripción contiene la reference del packline
-  for (const ref of childRefSet) {
-    if (ref && d.includes(ref)) return true;
-  }
-  return false;
 }
 
 function isPackParentLine(line) {
@@ -37158,27 +38922,6 @@ function linkTicketsRefundRelations(list) {
   return tickets;
 }
 
-// Devuelve un Map: idOriginal -> { refundedAbsTotal, rects: [] }
-function buildRefundIndex(list) {
-  const idx = new Map();
-
-  (Array.isArray(list) ? list : []).forEach((r) => {
-    const raw = r._raw || r;
-    const idOriginal = Number(r.idfacturarect || raw.idfacturarect || 0);
-    if (!(idOriginal > 0)) return; // solo rectificativas
-
-    const total = Number(r.total ?? raw.total ?? 0);
-    const refundedAbs = Math.abs(total);
-
-    const entry = idx.get(idOriginal) || { refundedAbsTotal: 0, rects: [] };
-    entry.refundedAbsTotal += refundedAbs;
-    entry.rects.push(r);
-    idx.set(idOriginal, entry);
-  });
-
-  return idx;
-}
-
 async function fetchLineasFactura(idfactura) {
   // 1) Intento A: filtro tipo FS
   try {
@@ -37859,6 +39602,9 @@ let refundState = {
   factura: null,
   lineas: [],
   qtyByLineId: {}, // { idlinea: qtyDevolver }
+  mode: "refund",
+  recibosOriginales: [],
+  infoFixedTotal: null,
 };
 
 function eurES(n) {
@@ -37897,9 +39643,168 @@ function formatRefundOriginalPayments(recibos) {
     );
 }
 
+function setRefundOverlayMode(mode, opts = {}) {
+  const normalized = mode === "info" ? "info" : "refund";
+  const overlay = document.getElementById("refundOverlay");
+  if (!overlay) return;
+
+  const titleEl = overlay.querySelector(".pay-header h2");
+  const selectAllBtn = document.getElementById("refundSelectAllBtn");
+  const selectNoneBtn = document.getElementById("refundSelectNoneBtn");
+  const confirmBtn = document.getElementById("refundConfirmBtn");
+  const cancelBtn = document.getElementById("refundCancelBtn");
+  const amountEl = document.getElementById("refundAmount");
+  const amountRow = amountEl?.parentElement || null;
+
+  refundState.mode = normalized;
+
+  if (titleEl) {
+    titleEl.textContent =
+      normalized === "info" ? "Informacion de ticket" : "Devolucion";
+  }
+
+  if (selectAllBtn)
+    selectAllBtn.style.display = normalized === "info" ? "none" : "";
+  if (selectNoneBtn)
+    selectNoneBtn.style.display = normalized === "info" ? "none" : "";
+  if (confirmBtn)
+    confirmBtn.style.display = normalized === "info" ? "none" : "";
+  if (cancelBtn)
+    cancelBtn.textContent = normalized === "info" ? "Cerrar" : "Cancelar";
+
+  if (amountRow) {
+    if (normalized === "info") {
+      amountRow.innerHTML = `Total ticket: <strong id="refundAmount">${eurES(opts.total || 0)}</strong>`;
+    } else {
+      amountRow.innerHTML = `Importe a devolver: <strong id="refundAmount">0,00 €</strong>`;
+    }
+  }
+}
+
+function openRefundOverlayForViewOnly({
+  facturaRow,
+  lineasInfo,
+  paymentInfoRows = [],
+  subtitle = "",
+}) {
+  const overlay = document.getElementById("refundOverlay");
+  if (!overlay) {
+    toast("Falta #refundOverlay en el HTML.", "err", "Ticket");
+    return;
+  }
+
+  refundState.factura = facturaRow || {};
+  refundState.lineas = Array.isArray(lineasInfo) ? lineasInfo : [];
+  refundState.lineasAll = refundState.lineas;
+  refundState.qtyByLineId = {};
+  refundState.recibosOriginales = Array.isArray(paymentInfoRows)
+    ? paymentInfoRows
+    : [];
+  refundState.infoFixedTotal = Number(facturaRow?.total || 0);
+
+  const n = document.getElementById("refundTicketNum");
+  const c = document.getElementById("refundClient");
+  const t = document.getElementById("refundTicketTotal");
+
+  if (n) n.textContent = facturaRow?.codigo || "-";
+  if (c) c.textContent = facturaRow?.nombrecliente || "Cliente";
+  if (t) t.textContent = eurES(facturaRow?.total || 0);
+
+  setRefundOverlayMode("info", { total: facturaRow?.total || 0 });
+  overlay.classList.remove("hidden");
+  bindRefundLineClicks();
+  renderRefundLines();
+
+  const x = document.getElementById("refundCloseX");
+  const cancel = document.getElementById("refundCancelBtn");
+  if (x) x.onclick = () => overlay.classList.add("hidden");
+  if (cancel) cancel.onclick = () => overlay.classList.add("hidden");
+
+  const errorEl = document.getElementById("refundError");
+  if (errorEl) {
+    errorEl.textContent = subtitle || "";
+    errorEl.classList.remove("dialog-error");
+    errorEl.style.color = "#4b5563";
+  }
+}
+
+async function openTicketInfoForFactura(facturaRow, options = {}) {
+  const idfactura = Number(facturaRow?.idfactura || 0);
+  if (!(idfactura > 0)) throw new Error("Factura invalida.");
+
+  const lineasAll = await fetchLineasFactura(idfactura);
+  const parkedOrigin = getPaidTicketParkedOriginForTicketRow(facturaRow);
+  const snapshotTicket =
+    options && typeof options === "object" ? options.snapshotTicket : null;
+
+  let preferredSnapshotLines = [];
+  let preferredSnapshotTotal = 0;
+  if (snapshotTicket && typeof snapshotTicket === "object") {
+    try {
+      const items = Array.isArray(snapshotTicket?.items)
+        ? snapshotTicket.items
+        : [];
+      const frozenGlobalPct = clampDiscountPercent(
+        parseNumericLike(snapshotTicket?.cartGlobalDiscountPct, 0),
+      );
+      const frozenItems = freezeGlobalDiscountOnLines(items, frozenGlobalPct);
+      const printableItems = buildPrintableLinesFromCartSnapshot(frozenItems);
+      preferredSnapshotLines = printableItems.map(
+        buildTicketInfoLineFromSnapshot,
+      );
+      preferredSnapshotTotal = Number(
+        getCartTotal(printableItems) || snapshotTicket?.total || 0,
+      );
+    } catch {
+      preferredSnapshotLines = [];
+      preferredSnapshotTotal = 0;
+    }
+  }
+
+  const originSnapshotLines = Array.isArray(parkedOrigin?.snapshotLines)
+    ? parkedOrigin.snapshotLines
+    : [];
+  const originSnapshotTotal = Number(parkedOrigin?.snapshotTotal || 0);
+
+  let recibosOriginales = [];
+  try {
+    recibosOriginales = await fetchRecibosByFactura(idfactura);
+  } catch {
+    recibosOriginales = [];
+  }
+
+  const lineasInfo = preferredSnapshotLines.length
+    ? preferredSnapshotLines
+    : originSnapshotLines.length
+      ? originSnapshotLines
+      : (Array.isArray(lineasAll) ? lineasAll : []).filter((l) => {
+          const qty = Math.abs(Number(l?.cantidad || 0));
+          const unit = Number(lineGrossUnit(l) || 0);
+          return qty > 0.00001 && unit > 0.00001;
+        });
+
+  const totalForInfo =
+    preferredSnapshotLines.length && preferredSnapshotTotal > 0
+      ? preferredSnapshotTotal
+      : originSnapshotLines.length && originSnapshotTotal > 0
+        ? originSnapshotTotal
+        : Number(facturaRow?.total || 0);
+
+  openRefundOverlayForViewOnly({
+    facturaRow: {
+      ...facturaRow,
+      total: totalForInfo,
+    },
+    lineasInfo,
+    paymentInfoRows: recibosOriginales,
+  });
+}
+
 function renderRefundLines() {
   const wrap = document.getElementById("refundLines");
   if (!wrap) return;
+
+  const isInfoMode = refundState.mode === "info";
 
   wrap.innerHTML = "";
 
@@ -37933,58 +39838,71 @@ function renderRefundLines() {
     return "Producto";
   };
 
-  const buildOriginalPaymentInfoInline = () => {
-    const recibos = Array.isArray(refundState.recibosOriginales)
-      ? refundState.recibosOriginales
-      : [];
+  const paymentInfoEl = document.getElementById("refundPaymentInfoInline");
+  if (paymentInfoEl) {
+    const paymentParts = formatRefundOriginalPayments(
+      Array.isArray(refundState.recibosOriginales)
+        ? refundState.recibosOriginales
+        : [],
+    ).map((p) => `${p.label}: ${eurES(p.amount)}`);
 
-    if (!recibos.length) return "";
-
-    const grouped = {};
-    recibos.forEach((r) => {
-      const code =
-        String(r?.codpago || "—")
-          .trim()
-          .toUpperCase() || "—";
-
-      const amount = Number(r?.importe || 0) || 0;
-      if (!(amount > 0)) return;
-
-      grouped[code] = (grouped[code] || 0) + amount;
-    });
-
-    const labelMap = window.__PAYMETHOD_LABELS__ || {};
-
-    const parts = Object.entries(grouped)
-      .map(([code, amount]) => {
-        const label = labelMap[code] || code;
-        return `${label}: ${eurES(amount)}`;
-      })
-      .sort((a, b) => a.localeCompare(b, "es", { sensitivity: "base" }));
-
-    return parts.join("   ");
-  };
-
-  const paymentInfoText = buildOriginalPaymentInfoInline();
+    if (paymentParts.length) {
+      paymentInfoEl.innerHTML = `Pago original: <strong>${escapeHtml(paymentParts.join("  |  "))}</strong>`;
+      paymentInfoEl.style.display = "inline-block";
+    } else {
+      paymentInfoEl.innerHTML = "";
+      paymentInfoEl.style.display = "none";
+    }
+  }
 
   refundState.lineas.forEach((l) => {
     const max = Number(
       l._remainingQty != null ? l._remainingQty : l.cantidad || 0,
     );
     const id = Number(l.idlinea);
-    const curr = Number(refundState.qtyByLineId[id] || 0);
+    const curr = isInfoMode
+      ? Math.abs(Number(l.cantidad || 0))
+      : Number(refundState.qtyByLineId[id] || 0);
 
-    const unitGross = lineGrossUnit(l);
+    const pricing = getRefundLinePricingBreakdown(l);
+    const unitGross = Number(
+      isInfoMode
+        ? Number(l?.__infoFromSnapshot)
+          ? l?.pvpunitario
+          : l?.__infoHasDiscount
+            ? l?.pvpunitario
+            : pricing.finalUnitGross
+        : pricing.finalUnitGross,
+    );
+    const baseUnitGross = Number(
+      isInfoMode && Number(l?.__infoBaseUnitGross || 0) > 0
+        ? l.__infoBaseUnitGross
+        : pricing.baseUnitGross,
+    );
+    const discountPct = Number(
+      isInfoMode && Number(l?.__infoDiscountPct || 0) > 0
+        ? l.__infoDiscountPct
+        : pricing.discountPct,
+    );
+    const hasDiscount = baseUnitGross > unitGross + 0.0001;
     const tax = lineTaxRate(l);
     const displayName = getRefundLineDisplayName(l);
 
-    const paymentInfoHtml = paymentInfoText
-      ? `
-        <div style="margin-top:6px; font-size:13px; color:#475569; padding-left:4px;">
-          ${escapeHtml(paymentInfoText)}
-        </div>
-      `
-      : "";
+    const discountInfoHtml = hasDiscount
+      ? `<div style="font-size:12px; opacity:.85; margin-top:2px;">PVP: <strong>${eurES(unitGross)}</strong> (${eurES(baseUnitGross)} - ${formatDiscountPercent(discountPct)}%)</div>`
+      : `<div style="font-size:12px; opacity:.8;">Precio: <strong>${eurES(unitGross)}</strong> / ud</div>`;
+
+    const qtyInfoHtml = isInfoMode
+      ? `<div style="font-size:12px; opacity:.8;">Cantidad: ${Math.abs(Number(l.cantidad || 0))} · IVA ${tax}%</div>`
+      : `<div style="font-size:12px; opacity:.8;">Vendido: ${max} · IVA ${tax}%</div>`;
+
+    const controlsHtml = isInfoMode
+      ? `<div style="width:84px; text-align:center; font-weight:700;">x${curr}</div>`
+      : `<div style="display:flex; align-items:center; gap:6px;">
+        <button type="button" class="cart-btn" data-a="minus" data-id="${id}">-</button>
+        <div style="min-width:34px; text-align:center; font-weight:700;">${curr}</div>
+        <button type="button" class="cart-btn" data-a="plus" data-id="${id}">+</button>
+      </div>`;
 
     const row = document.createElement("div");
     row.style.cssText =
@@ -37995,17 +39913,11 @@ function renderRefundLines() {
         <div style="font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
           ${escapeHtml(displayName)}
         </div>
-        <div style="font-size:12px; opacity:.8;">
-          Vendido: ${max} · ${eurES(unitGross)} / ud · IVA ${tax}%
-        </div>
-        ${paymentInfoHtml}
+        ${qtyInfoHtml}
+        ${discountInfoHtml}
       </div>
 
-      <div style="display:flex; align-items:center; gap:6px;">
-        <button type="button" class="cart-btn" data-a="minus" data-id="${id}">-</button>
-        <div style="min-width:34px; text-align:center; font-weight:700;">${curr}</div>
-        <button type="button" class="cart-btn" data-a="plus" data-id="${id}">+</button>
-      </div>
+      ${controlsHtml}
 
       <div style="width:110px; text-align:right; font-weight:700;">
         ${eurES(unitGross * curr)}
@@ -38022,8 +39934,24 @@ function updateRefundAmount() {
   const el = document.getElementById("refundAmount");
   if (!el) return;
 
+  const isInfoMode = refundState.mode === "info";
+  if (isInfoMode && Number.isFinite(Number(refundState.infoFixedTotal))) {
+    el.textContent = eurES(Number(refundState.infoFixedTotal || 0));
+    return;
+  }
+
   let total = 0;
   refundState.lineas.forEach((l) => {
+    if (isInfoMode) {
+      const qty = Math.abs(Number(l.cantidad || 0));
+      if (Number(l?.__infoFromSnapshot) || Number(l?.__infoHasDiscount)) {
+        total += Number(l.pvptotal || 0);
+      } else {
+        total += lineGrossUnit(l) * qty;
+      }
+      return;
+    }
+
     const id = Number(l.idlinea);
     const q = Number(refundState.qtyByLineId[id] || 0);
     total += lineGrossUnit(l) * q;
@@ -38037,6 +39965,8 @@ function bindRefundLineClicks() {
   if (!wrap) return;
 
   wrap.onclick = (e) => {
+    if (refundState.mode === "info") return;
+
     const btn = e.target.closest("button[data-a]");
     if (!btn) return;
 
@@ -38063,6 +39993,8 @@ function bindRefundLineClicks() {
 }
 
 function refundSelectAll() {
+  if (refundState.mode === "info") return;
+
   refundState.lineas.forEach((line) => {
     const max = Number(
       line.__pendingQty != null ? line.__pendingQty : line.cantidad || 0,
@@ -38073,6 +40005,8 @@ function refundSelectAll() {
 }
 
 function refundSelectNone() {
+  if (refundState.mode === "info") return;
+
   refundState.qtyByLineId = {};
   renderRefundLines();
 }
@@ -38088,6 +40022,14 @@ async function openRefundForFactura(facturaRow) {
   if (!overlay) {
     toast("Falta #refundOverlay en el HTML.", "err", "Devolución");
     return;
+  }
+
+  setRefundOverlayMode("refund");
+  const errorEl = document.getElementById("refundError");
+  if (errorEl) {
+    errorEl.textContent = "";
+    errorEl.classList.add("dialog-error");
+    errorEl.style.color = "";
   }
 
   // ✅ IMPORTANTE: traer líneas reales de FS (incluye 0€)
@@ -38143,9 +40085,11 @@ async function openRefundForFactura(facturaRow) {
   refundState.lineas = lineasUI;
   refundState.lineasAll = lineasPendientesAll;
   refundState.qtyByLineId = {};
+  refundState.mode = "refund";
   refundState.recibosOriginales = Array.isArray(recibosOriginales)
     ? recibosOriginales
     : [];
+  refundState.infoFixedTotal = null;
 
   // Cabecera
   const n = document.getElementById("refundTicketNum");
@@ -39397,6 +41341,7 @@ async function startOnlineMonitor() {
         const c = await window.TPV_QUEUE.count();
         if ((c?.pending || 0) > 0) {
           await syncQueueNow();
+          await evaluateQueueHealthAndWarn({ online: true });
         }
       }
 
@@ -40494,6 +42439,8 @@ function buildOfflineTicketPrintData(cartSnapshot, ticketPayload, payResult) {
       ? cartSnapshot.items
       : [];
 
+  const printableSnapshot = buildPrintableLinesFromCartSnapshot(safeItems);
+
   const pagos = (payResult?.pagos || []).map((p) => ({
     codpago: p.codpago,
     descripcion: p.descripcion,
@@ -40509,15 +42456,8 @@ function buildOfflineTicketPrintData(cartSnapshot, ticketPayload, payResult) {
     terminalName: currentTerminal ? currentTerminal.name : "",
     agentName: currentAgent ? currentAgent.name : "",
     company: companyInfo ? { ...companyInfo } : null,
-    lineas: safeItems.map((it) => ({
-      name: it.name || it.descripcion || "Producto",
-      qty: Number(it.qty || it.cantidad || 1),
-      price: Number(it.price || it.pvpunitario || 0),
-      grossPrice: Number(it.grossPrice || it.price || 0),
-      codimpuesto: it.codimpuesto || null,
-      taxRate: Number(it.taxRate || 0),
-    })),
-    total: Number(ticketPayload?.total || 0),
+    lineas: printableSnapshot,
+    total: Number(ticketPayload?.total || getCartTotal(printableSnapshot) || 0),
     pagos,
     cambio: Number(payResult?.cambio || 0),
 
@@ -40654,137 +42594,134 @@ async function renderQueuedTicketsIfAny() {
 
 async function saveCashMovement() {
   if (!cashMoveAmountEl || !cashMoveReasonEl || !cashMoveErrorEl) return;
+  if (cashMoveSaveInFlight) return;
 
+  cashMoveSaveInFlight = true;
+  setCashMoveSaveBusyUi(true);
   cashMoveErrorEl.textContent = "";
 
-  const rawAmount = (cashMoveAmountEl.value || "").replace(",", ".");
-  let amount = parseFloat(rawAmount);
-
-  if (!isFinite(amount) || amount <= 0) {
-    cashMoveErrorEl.textContent = "Introduce una cantidad mayor que 0.";
-    cashMoveAmountEl.focus();
-    return;
-  }
-
-  const typeRadio = cashMoveOverlay.querySelector(
-    'input[name="cashMoveType"]:checked',
-  );
-  const type = typeRadio ? typeRadio.value : "in"; // "in" o "out"
-
-  const sign = type === "out" ? -1 : 1;
-  const signedAmount = sign * amount;
-
-  let reason = (cashMoveReasonEl.value || "").trim();
-  if (!reason) {
-    reason = type === "out" ? "Salida de caja" : "Entrada de caja";
-  }
-
-  // ctx + idcaja (para logs)
-  const idcaja = getCajaIdSafe();
-  const ctx = {
-    agentName: currentAgent?.name || currentAgent?.nick || "—",
-    tpvName: currentTerminal?.name || "—",
-  };
-
-  if (ctx.idcaja) {
-    const tipoTxt = type === "out" ? "SALIDA" : "ENTRADA";
-    const extra = `Tipo:${tipoTxt} Importe:${amount.toFixed(2)}€ Motivo:${reason} FS:${fsOk ? "OK" : "FAIL"}`;
-    await appendCajaAutoLogLineForId(
-      ctx.idcaja,
-      buildCajaLogLineWith(ctx, "CONFIRMÓ MOVIMIENTO", extra),
-    );
-  }
-
-  // 1) Actualizar total de movimientos en la sesión
-  const currentMov = Number(cashSession.cashMovementsTotal || 0);
-  cashSession.cashMovementsTotal = currentMov + signedAmount;
-
-  let fsOk = false;
-
-  // 2) Registrar en FacturaScripts (si es posible)
   try {
-    await apiCreateCashMovementInFS({ amount, type, reason });
-    await syncFsCajaTotalsRealtime();
-    fsOk = true;
-  } catch (e) {
-    const isNetwork = isProbablyNetworkError(e);
+    const rawAmount = (cashMoveAmountEl.value || "").replace(",", ".");
+    let amount = parseFloat(rawAmount);
 
-    if (isNetwork) {
-      try {
-        const fsBoxId =
-          (cashSession && cashSession.remoteCajaId) ||
-          (cashSession && cashSession.idcaja) ||
-          null;
-        const fsTerminal = currentTerminal || null;
-        const fsAgent = currentAgent || null;
+    if (!isFinite(amount) || amount <= 0) {
+      cashMoveErrorEl.textContent = "Introduce una cantidad mayor que 0.";
+      cashMoveAmountEl.focus();
+      return;
+    }
 
-        await window.TPV_QUEUE?.enqueue?.({
-          type: "CREATE_TPVMOVIMIENTO",
-          payload: {
-            amount: signedAmount,
-            idcaja: fsBoxId ? String(fsBoxId) : "",
-            idtpv: fsTerminal?.id ? String(fsTerminal.id) : "",
-            codagente: fsAgent?.codagente ? String(fsAgent.codagente) : "",
-            motive:
-              reason && reason.trim()
-                ? reason.trim()
-                : type === "out"
-                  ? "Salida de caja"
-                  : "Entrada de caja",
-            nick: fsAgent?.nick || getLoginUser() || "admin",
-          },
-          createdAt: new Date().toISOString(),
-        });
+    const typeRadio = cashMoveOverlay.querySelector(
+      'input[name="cashMoveType"]:checked',
+    );
+    const type = typeRadio ? typeRadio.value : "in"; // "in" o "out"
 
-        toast(
-          "Sin internet: movimiento encolado y pendiente de sincronizar.",
-          "warn",
-          "Caja",
-        );
-      } catch (qErr) {
+    const sign = type === "out" ? -1 : 1;
+    const signedAmount = sign * amount;
+
+    let reason = (cashMoveReasonEl.value || "").trim();
+    if (!reason) {
+      reason = type === "out" ? "Salida de caja" : "Entrada de caja";
+    }
+
+    const idcaja = getCajaIdSafe();
+    const ctx = {
+      agentName: currentAgent?.name || currentAgent?.nick || "—",
+      tpvName: currentTerminal?.name || "—",
+    };
+
+    const currentMov = Number(cashSession.cashMovementsTotal || 0);
+    cashSession.cashMovementsTotal = currentMov + signedAmount;
+
+    let fsOk = false;
+
+    try {
+      await apiCreateCashMovementInFS({ amount, type, reason });
+      await syncFsCajaTotalsRealtime();
+      fsOk = true;
+    } catch (e) {
+      const isNetwork = isProbablyNetworkError(e);
+
+      if (isNetwork) {
+        try {
+          const fsBoxId =
+            (cashSession && cashSession.remoteCajaId) ||
+            (cashSession && cashSession.idcaja) ||
+            null;
+          const fsTerminal = currentTerminal || null;
+          const fsAgent = currentAgent || null;
+
+          await window.TPV_QUEUE?.enqueue?.({
+            type: "CREATE_TPVMOVIMIENTO",
+            payload: {
+              amount: signedAmount,
+              idcaja: fsBoxId ? String(fsBoxId) : "",
+              idtpv: fsTerminal?.id ? String(fsTerminal.id) : "",
+              codagente: fsAgent?.codagente ? String(fsAgent.codagente) : "",
+              motive:
+                reason && reason.trim()
+                  ? reason.trim()
+                  : type === "out"
+                    ? "Salida de caja"
+                    : "Entrada de caja",
+              nick: fsAgent?.nick || getLoginUser() || "admin",
+            },
+            createdAt: new Date().toISOString(),
+          });
+
+          toast(
+            "Sin internet: movimiento encolado y pendiente de sincronizar.",
+            "warn",
+            "Caja",
+          );
+        } catch (qErr) {
+          console.warn(
+            "No se pudo encolar el movimiento de caja offline:",
+            qErr?.message || qErr,
+          );
+          toast(
+            "Movimiento guardado solo en el TPV (sin encolado remoto).",
+            "warn",
+            "Caja",
+          );
+        }
+      } else {
         console.warn(
-          "No se pudo encolar el movimiento de caja offline:",
-          qErr?.message || qErr,
+          "No se pudo registrar el movimiento en FacturaScripts:",
+          e,
         );
         toast(
-          "Movimiento guardado solo en el TPV (sin encolado remoto).",
+          "Movimiento guardado solo en el TPV (no se registró en FacturaScripts).",
           "warn",
           "Caja",
         );
       }
-    } else {
-      console.warn("No se pudo registrar el movimiento en FacturaScripts:", e);
-      toast(
-        "Movimiento guardado solo en el TPV (no se registró en FacturaScripts).",
-        "warn",
-        "Caja",
-      );
     }
-  }
 
-  // ✅ LOG: confirmó movimiento (con detalle)
-  try {
-    if (idcaja) {
-      const tipoTxt = type === "out" ? "SALIDA" : "ENTRADA";
-      const extra = `Tipo:${tipoTxt} Importe:${amount.toFixed(2)}€ Motivo:${reason} FS:${fsOk ? "OK" : "FAIL"}`;
-      await appendCajaAutoLogLineForId(
-        idcaja,
-        buildCajaLogLineWith(ctx, "CONFIRMÓ MOVIMIENTO", extra),
-      );
+    try {
+      if (idcaja) {
+        const tipoTxt = type === "out" ? "SALIDA" : "ENTRADA";
+        const extra = `Tipo:${tipoTxt} Importe:${amount.toFixed(2)}€ Motivo:${reason} FS:${fsOk ? "OK" : "FAIL"}`;
+        await appendCajaAutoLogLineForId(
+          idcaja,
+          buildCajaLogLineWith(ctx, "CONFIRMÓ MOVIMIENTO", extra),
+        );
+      }
+    } catch (e) {
+      console.warn("No pude registrar log de movimiento:", e?.message || e);
     }
-  } catch (e) {
-    console.warn("No pude registrar log de movimiento:", e?.message || e);
+
+    const prefix = type === "out" ? "-" : "+";
+    toast(
+      `Movimiento de caja registrado: ${prefix}${amount.toFixed(2)} €`,
+      "ok",
+      "Caja",
+    );
+
+    closeCashMoveDialog();
+  } finally {
+    cashMoveSaveInFlight = false;
+    setCashMoveSaveBusyUi(false);
   }
-
-  // 3) Aviso y cerrar
-  const prefix = type === "out" ? "-" : "+";
-  toast(
-    `Movimiento de caja registrado: ${prefix}${amount.toFixed(2)} €`,
-    "ok",
-    "Caja",
-  );
-
-  closeCashMoveDialog();
 }
 
 if (cashMoveSaveBtn) {
