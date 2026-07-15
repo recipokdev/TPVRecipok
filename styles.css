@@ -2066,6 +2066,13 @@ body.mesas-inline-trans-mode .product-tile-resize-handle {
   box-sizing: border-box;
 }
 
+.cart-card {
+  flex-basis: 520px;
+  width: 520px;
+  min-width: 520px;
+  max-width: 520px;
+}
+
 /* --- 2.1 Cabecera --- */
 
 .cart-card-header {
@@ -2973,6 +2980,116 @@ body.session-locked .cart-terminal-row #agentName {
 #msgOverlay .simple-dialog.stock-warning-dialog {
   width: 420px;
   max-width: 94vw;
+}
+
+#msgOverlay .simple-dialog.changelog-dialog {
+  width: min(860px, calc(100vw - 28px));
+  max-width: 860px;
+}
+
+#msgOverlay .simple-dialog.changelog-dialog-compact {
+  width: min(620px, calc(100vw - 28px));
+  max-width: 620px;
+}
+
+#msgText.changelog-content {
+  max-height: min(68vh, 620px);
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.changelog-accordion {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.changelog-item {
+  border: 1px solid #d6deea;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.changelog-toggle {
+  width: 100%;
+  border: none;
+  background: #f7faff;
+  padding: 10px 12px;
+  text-align: left;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.changelog-version {
+  font-weight: 800;
+  color: #0f172a;
+  white-space: nowrap;
+}
+
+.changelog-meta {
+  font-size: 12px;
+  color: #475569;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changelog-caret {
+  color: #334155;
+  transition: transform 0.15s ease;
+}
+
+.changelog-item.is-open .changelog-caret {
+  transform: rotate(180deg);
+}
+
+.changelog-panel {
+  border-top: 1px solid #e5e7eb;
+  background: #ffffff;
+  padding: 10px 12px;
+}
+
+.changelog-lines {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+
+.changelog-lines li {
+  color: #1f2937;
+  line-height: 1.35;
+}
+
+.changelog-empty,
+.changelog-empty-line {
+  color: #475569;
+  font-size: 14px;
+}
+
+.changelog-single {
+  border: 1px solid #d6deea;
+  border-radius: 10px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.changelog-single-head {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: center;
+  background: #f7faff;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 10px 12px;
+}
+
+.changelog-single-body {
+  padding: 10px 12px;
 }
 
 .stock-warning-wrap {

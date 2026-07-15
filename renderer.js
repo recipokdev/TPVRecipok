@@ -2741,10 +2741,24 @@ function refreshCartWidthControlsUi() {
 
 async function loadCartPanelWidthSetting() {
   let stored = 0;
+  let hasStored = false;
   try {
     const cfgVal = await window.TPV_CFG?.get?.(OPTIONS_CART_PANEL_WIDTH_KEY);
-    stored = clampCartPanelWidthPx(Number(cfgVal || 0));
+    const parsed = Number(cfgVal);
+    if (isFinite(parsed) && parsed > 0) {
+      stored = clampCartPanelWidthPx(parsed);
+      hasStored = stored > 0;
+    }
   } catch {}
+
+  if (!hasStored) {
+    stored = CART_PANEL_WIDTH_PX_MAX;
+    try {
+      await window.TPV_CFG?.set?.(OPTIONS_CART_PANEL_WIDTH_KEY, stored);
+    } catch (e) {
+      console.warn("No se pudo guardar ancho por defecto del carrito:", e);
+    }
+  }
 
   cartPanelWidthPx = stored;
   applyCartPanelWidth();
@@ -24545,6 +24559,7 @@ let backgroundUpdateCountdownUiTimer = null;
 const BACKGROUND_UPDATE_SETTINGS_KEY = "tpv_background_update_settings_v1";
 const BACKGROUND_UPDATE_SNOOZE_KEY = "tpv_background_update_snooze_v1";
 const CHANGELOG_LAST_SEEN_VERSION_KEY = "tpv_changelog_last_seen_version_v1";
+const CHANGELOG_LAST_OPEN_VERSION_KEY = "tpv_changelog_last_open_version_v1";
 const CHANGELOG_SOURCE_FILE = "changelog.json";
 
 const BACKGROUND_UPDATE_DEFAULT_SETTINGS = {
@@ -24555,6 +24570,7 @@ const BACKGROUND_UPDATE_DEFAULT_SETTINGS = {
 
 let backgroundUpdateSettings = loadBackgroundUpdateSettings();
 let changelogEntriesCache = null;
+let changelogAccordionBoundHandler = null;
 
 function formatMsAsHumanCountdown(ms) {
   const safeMs = Math.max(0, Number(ms || 0));
@@ -24643,6 +24659,24 @@ function normalizeVersionTag(versionText) {
     .replace(/^v/i, "");
 }
 
+function getChangelogLastOpenVersion() {
+  try {
+    return normalizeVersionTag(
+      localStorage.getItem(CHANGELOG_LAST_OPEN_VERSION_KEY) || "",
+    );
+  } catch {
+    return "";
+  }
+}
+
+function setChangelogLastOpenVersion(versionText) {
+  const v = normalizeVersionTag(versionText);
+  if (!v) return;
+  try {
+    localStorage.setItem(CHANGELOG_LAST_OPEN_VERSION_KEY, v);
+  } catch {}
+}
+
 async function loadChangelogEntries() {
   if (Array.isArray(changelogEntriesCache)) return changelogEntriesCache;
 
@@ -24673,42 +24707,165 @@ async function loadChangelogEntries() {
   return changelogEntriesCache;
 }
 
-function buildChangelogMessage(entries, { onlyVersion = "" } = {}) {
+function buildChangelogEntriesForDialog(entries, { onlyVersion = "" } = {}) {
   const normalizedOnly = normalizeVersionTag(onlyVersion);
   const source = Array.isArray(entries) ? entries : [];
-  const list = normalizedOnly
+  return normalizedOnly
     ? source.filter((it) => normalizeVersionTag(it?.version) === normalizedOnly)
     : source;
+}
+
+function buildChangelogAccordionHtml(
+  entries,
+  {
+    onlyVersion = "",
+    preferredOpenVersion = "",
+    compactSingleVersion = false,
+  } = {},
+) {
+  const list = buildChangelogEntriesForDialog(entries, { onlyVersion });
 
   if (!list.length) {
-    return normalizedOnly
+    const normalizedOnly = normalizeVersionTag(onlyVersion);
+    const txt = normalizedOnly
       ? `No hay notas de cambios registradas para la version v${normalizedOnly}.`
       : "No hay changelog registrado todavia.";
+    return `<div class="changelog-empty">${escapeHtmlForModal(txt)}</div>`;
   }
 
-  return list
-    .map((it) => {
-      const v = normalizeVersionTag(it?.version);
-      const d = String(it?.date || "").trim();
-      const t = String(it?.title || "").trim();
-      const head = [`Version v${v}`, d ? `(${d})` : "", t ? `- ${t}` : ""]
-        .filter(Boolean)
-        .join(" ");
-      const changes = Array.isArray(it?.changes) ? it.changes : [];
-      const lines = changes.length
-        ? changes.map((c) => `- ${c}`).join("\n")
-        : "- Sin detalle de cambios.";
-      return `${head}\n${lines}`;
-    })
-    .join("\n\n");
+  if (compactSingleVersion && list.length === 1) {
+    const it = list[0] || {};
+    const v = normalizeVersionTag(it?.version);
+    const d = String(it?.date || "").trim();
+    const t = String(it?.title || "").trim();
+    const changes = Array.isArray(it?.changes) ? it.changes : [];
+    const linesHtml = changes.length
+      ? `<ul class="changelog-lines">${changes
+          .map((c) => `<li>${escapeHtmlForModal(c)}</li>`)
+          .join("")}</ul>`
+      : `<div class="changelog-empty-line">Sin detalle de cambios.</div>`;
+
+    return `
+      <div class="changelog-single">
+        <div class="changelog-single-head">
+          <span class="changelog-version">v${escapeHtmlForModal(v)}</span>
+          <span class="changelog-meta">${escapeHtmlForModal(d)}${t ? ` · ${escapeHtmlForModal(t)}` : ""}</span>
+        </div>
+        <div class="changelog-single-body">${linesHtml}</div>
+      </div>
+    `;
+  }
+
+  const preferredVersion = normalizeVersionTag(preferredOpenVersion);
+  const hasPreferred = !!preferredVersion;
+
+  return `
+    <div class="changelog-accordion" data-changelog-accordion="1">
+      ${list
+        .map((it, idx) => {
+          const entryId = `changelog-entry-${idx}`;
+          const v = normalizeVersionTag(it?.version);
+          const isOpen = hasPreferred ? v === preferredVersion : idx === 0;
+
+          const d = String(it?.date || "").trim();
+          const t = String(it?.title || "").trim();
+
+          const changes = Array.isArray(it?.changes) ? it.changes : [];
+          const linesHtml = changes.length
+            ? `<ul class="changelog-lines">${changes
+                .map((c) => `<li>${escapeHtmlForModal(c)}</li>`)
+                .join("")}</ul>`
+            : `<div class="changelog-empty-line">Sin detalle de cambios.</div>`;
+
+          return `
+            <section class="changelog-item${isOpen ? " is-open" : ""}" data-changelog-item="${entryId}" data-version="${escapeHtmlForModal(v)}" data-open="${isOpen ? "1" : "0"}">
+              <button
+                type="button"
+                class="changelog-toggle"
+                data-changelog-toggle="${entryId}"
+                aria-expanded="${isOpen ? "true" : "false"}"
+              >
+                <span class="changelog-version">v${escapeHtmlForModal(v)}</span>
+                <span class="changelog-meta">${escapeHtmlForModal(d)}${t ? ` · ${escapeHtmlForModal(t)}` : ""}</span>
+                <span class="changelog-caret">▾</span>
+              </button>
+              <div class="changelog-panel" data-changelog-panel="${entryId}" style="display:${isOpen ? "block" : "none"};">
+                ${linesHtml}
+              </div>
+            </section>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function bindChangelogAccordionInMessageModal() {
+  const textEl = document.getElementById("msgText");
+  if (!textEl) return;
+
+  if (changelogAccordionBoundHandler) {
+    textEl.removeEventListener("click", changelogAccordionBoundHandler);
+    changelogAccordionBoundHandler = null;
+  }
+
+  changelogAccordionBoundHandler = (ev) => {
+    const btn = ev.target?.closest?.("[data-changelog-toggle]");
+    if (!btn || !textEl.contains(btn)) return;
+
+    const targetId = String(btn.getAttribute("data-changelog-toggle") || "");
+    if (!targetId) return;
+
+    textEl.querySelectorAll("[data-changelog-item]").forEach((item) => {
+      const itemId = String(item.getAttribute("data-changelog-item") || "");
+      const panel = textEl.querySelector(`[data-changelog-panel="${itemId}"]`);
+      const toggle = textEl.querySelector(
+        `[data-changelog-toggle="${itemId}"]`,
+      );
+      const shouldOpen = itemId === targetId;
+
+      item.setAttribute("data-open", shouldOpen ? "1" : "0");
+      item.classList.toggle("is-open", shouldOpen);
+      if (panel) panel.style.display = shouldOpen ? "block" : "none";
+      if (toggle)
+        toggle.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+
+      if (shouldOpen) {
+        setChangelogLastOpenVersion(item.getAttribute("data-version") || "");
+      }
+    });
+  };
+
+  textEl.addEventListener("click", changelogAccordionBoundHandler);
+}
+
+function unbindChangelogAccordionInMessageModal() {
+  const textEl = document.getElementById("msgText");
+  if (!textEl || !changelogAccordionBoundHandler) return;
+  textEl.removeEventListener("click", changelogAccordionBoundHandler);
+  changelogAccordionBoundHandler = null;
 }
 
 async function openChangelogDialog({ onlyCurrentVersion = false } = {}) {
   const entries = await loadChangelogEntries();
   const currentVersion = normalizeVersionTag(await getCurrentAppVersionText());
   const onlyVersion = onlyCurrentVersion ? currentVersion : "";
-  const text = buildChangelogMessage(entries, { onlyVersion });
-  showMessageModal("Changelog", text);
+  const preferredOpenVersion = onlyCurrentVersion
+    ? currentVersion
+    : getChangelogLastOpenVersion();
+  const html = buildChangelogAccordionHtml(entries, {
+    onlyVersion,
+    preferredOpenVersion,
+    compactSingleVersion: onlyCurrentVersion,
+  });
+  showMessageModal("Changelog", html, {
+    isHtml: true,
+    textClassName: "changelog-content",
+    dialogClassName: onlyCurrentVersion
+      ? "changelog-dialog changelog-dialog-compact"
+      : "changelog-dialog",
+  });
+  bindChangelogAccordionInMessageModal();
 }
 
 async function maybeShowChangelogAfterUpdate() {
@@ -40620,8 +40777,9 @@ if (changePrinterBtn) {
   };
 }
 
-function showMessageModal(title, text) {
+function showMessageModal(title, text, options = {}) {
   const o = document.getElementById("msgOverlay");
+  const d = o?.querySelector?.(".simple-dialog");
   const t = document.getElementById("msgTitle");
   const p = document.getElementById("msgText");
   const b = document.getElementById("msgOkBtn");
@@ -40629,9 +40787,42 @@ function showMessageModal(title, text) {
   const midBtn = document.getElementById("msgMidBtn");
   if (!o || !t || !p || !b) return;
 
+  const {
+    isHtml = false,
+    textClassName = "",
+    dialogClassName = "",
+  } = options || {};
+
+  if (d) {
+    d.classList.remove("stock-warning-dialog");
+    d.classList.remove("changelog-dialog");
+    d.classList.remove("changelog-dialog-compact");
+    if (dialogClassName) {
+      String(dialogClassName)
+        .split(/\s+/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .forEach((cls) => d.classList.add(cls));
+    }
+  }
+
+  unbindChangelogAccordionInMessageModal();
+
   t.textContent = title || "Aviso";
-  p.textContent = text || "";
-  p.style.whiteSpace = "pre-line";
+
+  p.className = textClassName || "";
+  if (isHtml) {
+    p.innerHTML = text || "";
+    p.style.whiteSpace = "normal";
+    p.style.maxHeight = "none";
+    p.style.overflowY = "visible";
+  } else {
+    p.textContent = text || "";
+    p.style.whiteSpace = "pre-line";
+    p.style.maxHeight = "260px";
+    p.style.overflowY = "auto";
+  }
+
   if (cancelBtn) cancelBtn.classList.add("hidden");
   if (midBtn) midBtn.classList.add("hidden");
   b.textContent = "Aceptar";
@@ -40639,6 +40830,7 @@ function showMessageModal(title, text) {
   lockAppUI();
 
   b.onclick = () => {
+    unbindChangelogAccordionInMessageModal();
     o.classList.add("hidden");
     unlockAppUI();
   };

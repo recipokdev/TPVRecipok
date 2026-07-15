@@ -2,6 +2,19 @@
   "schema": 1,
   "versions": [
     {
+      "version": "0.2.2",
+      "date": "2026-07-15",
+      "title": "UX tickets, cierre y changelog",
+      "changes": [
+        "Tickets devueltos/parciales: al tocar la fila ya abre su informacion igual que el resto de tickets.",
+        "Cierre de caja: nuevo bloque de Tickets mixtos con desglose por ticket y metodo de cobro.",
+        "Changelog: ahora se muestra por versiones en formato desplegable (acordeon) para evitar desbordes.",
+        "Changelog: recuerda la ultima version abierta y la reabre automaticamente al volver a entrar.",
+        "Changelog tras actualizar: vista compacta cuando solo se muestra la version actual.",
+        "Arrastrar carrito: ancho por defecto configurado al maximo (520px) en primera carga; despues se puede reducir arrastrando y queda guardado."
+      ]
+    },
+    {
       "version": "0.2.1-beta.1",
       "date": "2026-07-09",
       "title": "Sincronizacion aparcados multi-TPV",
