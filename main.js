@@ -21,6 +21,9 @@ let allowCustomerClose = false;
 let lastSecondInstanceUpdateCheckAt = 0;
 let forceRelaunchForUpdate = false;
 const scaleManager = new ScaleManager();
+let scaleReconnectMonitorTimer = null;
+let scaleReconnectInFlight = false;
+let lastScaleReconnectAttemptAt = 0;
 const IS_E2E_BACKGROUND =
   String(process.env.TPV_E2E || "") === "1" &&
   String(process.env.TPV_E2E_BACKGROUND || "") === "1";
@@ -1607,6 +1610,89 @@ function bootstrapCurrentUserFromCfg() {
   } catch {}
 }
 
+function readStoredScaleConfigFromCfg() {
+  const cfg = readCfg();
+
+  return {
+    enabled: !!cfg["scale.enabled"],
+    portPath: String(cfg["scale.portPath"] || "").trim(),
+    baudRate: Number(cfg["scale.baudRate"] || 9600),
+    dataBits: Number(cfg["scale.dataBits"] || 8) === 7 ? 7 : 8,
+    parity: ["none", "even", "odd", "mark", "space"].includes(
+      String(cfg["scale.parity"] || "none").toLowerCase(),
+    )
+      ? String(cfg["scale.parity"] || "none").toLowerCase()
+      : "none",
+    stopBits: Number(cfg["scale.stopBits"] || 1) === 2 ? 2 : 1,
+    chargeUnit: cfg["scale.chargeUnit"] === "kg" ? "kg" : "g",
+    decimalPlaces: Number.isFinite(Number(cfg["scale.decimalPlaces"]))
+      ? Number(cfg["scale.decimalPlaces"])
+      : 4,
+    consumeMode:
+      cfg["scale.consumeMode"] === "single" ? "single" : "continuous",
+    parserMode:
+      cfg["scale.parserMode"] === "delimiter" ? "delimiter" : "timeout",
+    delimiter: ["\\r\\n", "\\r", "\\n"].includes(
+      String(cfg["scale.delimiter"] || ""),
+    )
+      ? String(cfg["scale.delimiter"])
+      : "\\r\\n",
+    interByteMs: Number.isFinite(Number(cfg["scale.interByteMs"]))
+      ? Math.max(5, Number(cfg["scale.interByteMs"]))
+      : 20,
+    sourceUnit: cfg["scale.sourceUnit"] === "kg" ? "kg" : "g",
+    reverseReading: !!cfg["scale.reverseReading"],
+    conversionFactor: 1,
+  };
+}
+
+async function tryReconnectScaleFromMain(reason = "timer") {
+  if (scaleReconnectInFlight) return;
+
+  const now = Date.now();
+  if (now - lastScaleReconnectAttemptAt < 5000) return;
+  lastScaleReconnectAttemptAt = now;
+
+  const cfg = readStoredScaleConfigFromCfg();
+  if (!cfg.enabled || !cfg.portPath) return;
+
+  const state = scaleManager.getState();
+  if (state?.enabled && state?.connected) return;
+
+  scaleReconnectInFlight = true;
+  try {
+    await scaleManager.setEnabled(true, cfg);
+    console.log("[SCALE] Reconexion OK desde main (", reason, ")");
+  } catch (e) {
+    console.log(
+      "[SCALE] Reconexion pendiente desde main (",
+      reason,
+      "):",
+      e?.message || String(e),
+    );
+  } finally {
+    scaleReconnectInFlight = false;
+  }
+}
+
+function startScaleReconnectMonitor() {
+  if (scaleReconnectMonitorTimer) return;
+
+  setTimeout(() => {
+    tryReconnectScaleFromMain("startup-delay").catch(() => {});
+  }, 2500);
+
+  scaleReconnectMonitorTimer = setInterval(() => {
+    tryReconnectScaleFromMain("interval").catch(() => {});
+  }, 20000);
+}
+
+function stopScaleReconnectMonitor() {
+  if (!scaleReconnectMonitorTimer) return;
+  clearInterval(scaleReconnectMonitorTimer);
+  scaleReconnectMonitorTimer = null;
+}
+
 scaleManager.setOnStateChange((payload) => {
   for (const win of BrowserWindow.getAllWindows()) {
     try {
@@ -1637,6 +1723,7 @@ app.whenReady().then(async () => {
   }
 
   createWindow();
+  startScaleReconnectMonitor();
   startPreCashUpdateRetries();
 
   if (isCustomerDisplayEnabled()) ensureCustomerWindow();
@@ -2006,6 +2093,8 @@ ipcMain.handle("tpv:attemptQuit", async () => {
 });
 
 app.on("will-quit", () => {
+  stopScaleReconnectMonitor();
+
   // Red de seguridad: al cerrar la app, nunca dejar viva la ventana cliente.
   try {
     destroyCustomerWindow();

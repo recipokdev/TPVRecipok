@@ -2,6 +2,17 @@
   "schema": 1,
   "versions": [
     {
+      "version": "0.2.3",
+      "date": "2026-07-15",
+      "title": "Hotfix bascula",
+      "changes": [
+        "Bascula en modo consumo unico: se evita reutilizar lecturas antiguas para que al retirar peso la siguiente alta vuelva a cantidad por defecto.",
+        "Bascula: al caducar lectura sin nuevas tramas, el peso visible se resetea automaticamente a 0 y se libera el bloqueo interno de consumo unico.",
+        "Conexion bascula: se anade autorreconexion en segundo plano tras arranque y al volver foco, para recuperar puertos que aparecen con retraso.",
+        "Venta: si falla consumo de peso por lock/caducidad, no se bloquean botones ni alta de producto; se aplica fallback seguro de cantidad."
+      ]
+    },
+    {
       "version": "0.2.2",
       "date": "2026-07-15",
       "title": "UX tickets, cierre y changelog",

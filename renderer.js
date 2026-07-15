@@ -781,9 +781,27 @@ let __parkedLegacyMetadataMigrationTried = false;
 let __parkedReservationsRefreshTimer = null;
 let __parkedReservationsRefreshInFlight = false;
 let __parkedBurstRefreshTimers = [];
+let __parkedSyncManualInFlight = false;
+let __parkedSyncLastManualAttemptAt = 0;
+let __parkedSyncLastManualOkAt = 0;
+let __parkedSyncLastManualErrorAt = 0;
+let __parkedSyncLastManualErrorMsg = "";
+let __parkedSyncLastOkAt = 0;
+let __parkedSyncLastErrorAt = 0;
+let __parkedSyncLastErrorMsg = "";
 const PARKED_LOCAL_PREFER_MS = 120000;
+const PARKED_PAID_LOCAL_GRACE_MS = 120000;
+const PARKED_CLOSING_LOCK_MAX_MS = 3 * 60 * 1000;
 let __sharedCajaHealthTimer = null;
 let __sharedCajaHealthInFlight = false;
+let __terminalPresenceTimer = null;
+let __terminalPresenceInFlight = false;
+let __terminalPresenceSessionId = "";
+let __terminalPresenceLastVisibleCount = 0;
+let __terminalPresenceLastPosition = 0;
+let __terminalPresenceLastSig = "";
+const TERMINAL_PRESENCE_HEARTBEAT_MS = 12000;
+const TERMINAL_PRESENCE_SESSION_KEY = "tpv_terminal_presence_session_v1";
 
 // Ajusta esta URL a tu API TPV real
 const TPV_SYNC_API_URL =
@@ -802,6 +820,113 @@ function getTpvSyncApiKey() {
   if (fromLs) return fromLs;
 
   return "";
+}
+
+function isNpmStartRuntimeForPresence() {
+  return !!window.TPV_ENV?.defaultApp;
+}
+
+function isTerminalPresenceSilentMode() {
+  if (isNpmStartRuntimeForPresence()) return true;
+
+  const cfgFlag = window.TPV_CONFIG?.terminalPresenceSilent;
+  if (cfgFlag != null) return !!cfgFlag;
+
+  return false;
+}
+
+function ensureTerminalPresenceSessionId() {
+  if (__terminalPresenceSessionId) return __terminalPresenceSessionId;
+
+  try {
+    const saved = String(
+      sessionStorage.getItem(TERMINAL_PRESENCE_SESSION_KEY) || "",
+    ).trim();
+    if (saved) {
+      __terminalPresenceSessionId = saved;
+      return __terminalPresenceSessionId;
+    }
+  } catch {}
+
+  const generated =
+    (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`) ||
+    `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+  __terminalPresenceSessionId = String(generated).trim();
+
+  try {
+    sessionStorage.setItem(
+      TERMINAL_PRESENCE_SESSION_KEY,
+      __terminalPresenceSessionId,
+    );
+  } catch {}
+
+  return __terminalPresenceSessionId;
+}
+
+function formatPresenceOrdinalEs(n) {
+  const idx = Number(n || 0) || 0;
+  if (idx <= 1) return "primero";
+  if (idx === 2) return "segundo";
+  if (idx === 3) return "tercero";
+  if (idx === 4) return "cuarto";
+  return `${idx}º`;
+}
+
+function formatParkedSyncAgo(ts) {
+  const t = Number(ts || 0);
+  if (!(t > 0)) return "nunca";
+
+  const delta = Math.max(0, Date.now() - t);
+  const sec = Math.floor(delta / 1000);
+  if (sec < 60) return `hace ${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `hace ${min}m`;
+  const h = Math.floor(min / 60);
+  return `hace ${h}h`;
+}
+
+function getParkedSyncHealthSnapshot() {
+  const queueLen = loadParkedSyncQueue().length;
+  const conflictLen = loadParkedSyncConflicts().length;
+  const inFlight = !!__parkedSyncManualInFlight;
+  const hasQueue = queueLen > 0;
+  const hasManualFailure =
+    __parkedSyncLastManualErrorAt > __parkedSyncLastManualOkAt;
+  const offline = !!TPV_STATE?.offline;
+
+  let level = "ok";
+  let title = "Sync al dia";
+  let detail = `Cola: ${queueLen} · Incidencias: ${conflictLen} · Ultimo sync ${formatParkedSyncAgo(__parkedSyncLastOkAt)}`;
+
+  if (conflictLen > 0) {
+    level = "error";
+    title = `Conflictos detectados (${conflictLen})`;
+    detail =
+      "Se aplico remoto por seguridad. Revisa 'Incidencias sync' para contexto.";
+  } else if (hasManualFailure) {
+    level = "error";
+    title = "Ultimo sync manual fallido";
+    detail = __parkedSyncLastManualErrorMsg
+      ? `${__parkedSyncLastManualErrorMsg} · Intento ${formatParkedSyncAgo(__parkedSyncLastManualErrorAt)}.`
+      : `El ultimo intento manual fallo ${formatParkedSyncAgo(__parkedSyncLastManualErrorAt)}.`;
+  } else if (offline) {
+    level = "error";
+    title = "Sin internet";
+    detail = `Trabajando en local. Cola pendiente: ${queueLen}.`;
+  } else if (inFlight) {
+    level = "warn";
+    title = "Sincronizando...";
+    detail = `Procesando cola: ${queueLen}.`;
+  } else if (hasQueue) {
+    level = "warn";
+    title = `Pendiente de sincronizar (${queueLen})`;
+    detail = `Ultimo sync ${formatParkedSyncAgo(__parkedSyncLastOkAt)}.`;
+  }
+
+  return { level, title, detail };
 }
 
 async function confirmIfCartExceedsVisibleStock(cartSnapshot) {
@@ -6968,6 +7093,180 @@ async function apiGetClientFeaturesRemote() {
   const features =
     data?.data && typeof data.data === "object" ? data.data : null;
   return features;
+}
+
+async function apiUpsertTerminalPresenceRemote() {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const terminalId = String(currentTerminal?.id || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  const sessionId = ensureTerminalPresenceSessionId();
+  if (!slug || !terminalId || !syncApiKey || !sessionId) return null;
+
+  const appVersionText =
+    String(document.getElementById("appVersion")?.textContent || "")
+      .trim()
+      .replace(/^v/i, "") || "";
+
+  const payload = {
+    slug,
+    terminalId,
+    sessionId,
+    tpvId: String(currentTerminal?.id || "").trim(),
+    terminalName: String(currentTerminal?.name || "").trim(),
+    userName: String(currentAgent?.name || currentAgent?.nick || "").trim(),
+    host: String(location?.hostname || "").trim(),
+    appVersion: appVersionText,
+    silent: isTerminalPresenceSilentMode(),
+    ttlSec: 35,
+  };
+
+  const url = `${TPV_SYNC_API_URL}?action=upsert-terminal-presence`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-TPV-API-KEY": syncApiKey,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  return data?.data || null;
+}
+
+async function apiListTerminalPresenceRemote() {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const terminalId = String(currentTerminal?.id || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  const sessionId = ensureTerminalPresenceSessionId();
+  if (!slug || !terminalId || !syncApiKey || !sessionId) return null;
+
+  const includeSilent = isTerminalPresenceSilentMode() ? "1" : "0";
+  const qs =
+    `slug=${encodeURIComponent(slug)}` +
+    `&terminalId=${encodeURIComponent(terminalId)}` +
+    `&sessionId=${encodeURIComponent(sessionId)}` +
+    `&includeSilent=${includeSilent}`;
+  const url = `${TPV_SYNC_API_URL}?action=list-terminal-presence&${qs}`;
+
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      "X-TPV-API-KEY": syncApiKey,
+    },
+    cache: "no-store",
+  });
+
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  return data?.data || null;
+}
+
+async function apiClearTerminalPresenceRemote() {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const terminalId = String(currentTerminal?.id || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  const sessionId = ensureTerminalPresenceSessionId();
+  if (!slug || !terminalId || !syncApiKey || !sessionId) return null;
+
+  const payload = {
+    slug,
+    terminalId,
+    sessionId,
+  };
+
+  const url = `${TPV_SYNC_API_URL}?action=clear-terminal-presence`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-TPV-API-KEY": syncApiKey,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  return data?.data || null;
+}
+
+async function checkTerminalPresenceOnce({ notify = true } = {}) {
+  if (TPV_STATE?.offline || TPV_STATE?.locked) return null;
+  if (!cashSession?.open) return null;
+  if (!currentTerminal?.id) return null;
+
+  try {
+    await apiUpsertTerminalPresenceRemote();
+    const data = await apiListTerminalPresenceRemote();
+    if (!data || typeof data !== "object") return null;
+
+    const visibleCount = Number(data?.visibleCount || 0) || 0;
+    const position = Number(data?.youArePosition || 0) || 0;
+
+    if (!isTerminalPresenceSilentMode() && notify) {
+      const sig = `${visibleCount}|${position}`;
+      const changed = sig !== __terminalPresenceLastSig;
+
+      if (changed && visibleCount > 1) {
+        const ordinal = formatPresenceOrdinalEs(position || 1);
+        toast(
+          `Hay ${visibleCount} TPV activos en esta terminal. Eres el ${ordinal}.`,
+          "info",
+          "Terminal compartida",
+        );
+      }
+
+      __terminalPresenceLastSig = sig;
+      __terminalPresenceLastVisibleCount = visibleCount;
+      __terminalPresenceLastPosition = position;
+    }
+
+    return data;
+  } catch (e) {
+    if (!isConnectivityLikeError(e)) {
+      console.warn("Chequeo de presencia de terminal falló:", e?.message || e);
+    }
+    return null;
+  }
+}
+
+function startTerminalPresenceMonitor() {
+  stopTerminalPresenceMonitor({ clearRemote: false });
+  ensureTerminalPresenceSessionId();
+
+  checkTerminalPresenceOnce({ notify: true }).catch(() => {});
+
+  __terminalPresenceTimer = setInterval(async () => {
+    if (__terminalPresenceInFlight) return;
+    if (!cashSession?.open) return;
+
+    __terminalPresenceInFlight = true;
+    try {
+      await checkTerminalPresenceOnce({ notify: true });
+    } finally {
+      __terminalPresenceInFlight = false;
+    }
+  }, TERMINAL_PRESENCE_HEARTBEAT_MS);
+}
+
+function stopTerminalPresenceMonitor({ clearRemote = true } = {}) {
+  if (__terminalPresenceTimer) {
+    clearInterval(__terminalPresenceTimer);
+    __terminalPresenceTimer = null;
+  }
+
+  __terminalPresenceInFlight = false;
+  __terminalPresenceLastVisibleCount = 0;
+  __terminalPresenceLastPosition = 0;
+  __terminalPresenceLastSig = "";
+
+  if (clearRemote) {
+    apiClearTerminalPresenceRemote().catch(() => {});
+  }
 }
 
 async function loadMesasModuleAvailability() {
@@ -14019,11 +14318,40 @@ function updateParkedCountBadge() {
   badge.textContent = String(pendingCount);
 }
 
+function getParkedClosingLockAgeMs(ticket) {
+  if (!ticket) return Number.POSITIVE_INFINITY;
+
+  const rawTs =
+    ticket?.closingByAt || ticket?.updatedAt || ticket?.createdAt || null;
+  const ts = Number(new Date(rawTs || 0).getTime()) || 0;
+  if (!(ts > 0)) return Number.POSITIVE_INFINITY;
+
+  return Math.max(0, Date.now() - ts);
+}
+
+function isParkedClosingLockStale(ticket) {
+  if (!ticket?.closingInProgress) return false;
+  const ageMs = getParkedClosingLockAgeMs(ticket);
+  return !(ageMs >= 0 && ageMs <= PARKED_CLOSING_LOCK_MAX_MS);
+}
+
+function releaseStaleParkedClosingLock(ticket) {
+  if (!ticket?.closingInProgress) return false;
+  if (!isParkedClosingLockStale(ticket)) return false;
+
+  ticket.closingInProgress = false;
+  ticket.closingByTerminalId = "";
+  ticket.closingByTerminalName = "";
+  ticket.closingByAt = null;
+  return true;
+}
+
 function beginParkedCheckoutLock(index) {
   if (!Array.isArray(parkedTickets) || !parkedTickets.length) return null;
   if (index == null || index < 0 || index >= parkedTickets.length) return null;
 
   const ticket = parkedTickets[index];
+  releaseStaleParkedClosingLock(ticket);
   if (!ticket || ticket.paid || ticket.closingInProgress) return null;
 
   if (!String(ticket.slug || "").trim()) {
@@ -14100,6 +14428,7 @@ function syncParkedTicketClosingState(ticket, reason = "") {
 
 function isParkedTicketLockedByAnotherTerminal(ticket) {
   if (!ticket || !ticket.closingInProgress) return false;
+  if (releaseStaleParkedClosingLock(ticket)) return false;
 
   const mine = String(currentTerminal?.id || "").trim();
   const owner = String(ticket?.closingByTerminalId || "").trim();
@@ -15422,10 +15751,15 @@ function syncParkedToolbarUI() {
   const parkedSyncConflictsBtn = document.getElementById(
     "parkedSyncConflictsBtn",
   );
+  const parkedSyncNowBtn = document.getElementById("parkedSyncNowBtn");
   const parkedSummaryBtn = document.getElementById("parkedSummaryBtn");
   const parkedClearPaidBtn = document.getElementById("parkedClearPaidBtn");
   const parkedSyncConflictsMiniLog = document.getElementById(
     "parkedSyncConflictsMiniLog",
+  );
+  const parkedSyncTopWrap = document.getElementById("parkedSyncTopWrap");
+  const parkedSyncHealthBadge = document.getElementById(
+    "parkedSyncHealthBadge",
   );
   const parkedFilterTabs = document.getElementById("parkedFilterTabs");
   const parkedDocTypeTabs = document.getElementById("parkedDocTypeTabs");
@@ -15457,10 +15791,6 @@ function syncParkedToolbarUI() {
   ).length;
   const pendingOlderCount = Math.max(0, pendingCount - pendingTodayCount);
   const hasOlderPending = pendingOlderCount > 0;
-
-  if (!hasOlderPending) {
-    parkedViewState.pendingScope = "today";
-  }
 
   parkedFilterAll?.classList.toggle(
     "is-active",
@@ -15499,10 +15829,31 @@ function syncParkedToolbarUI() {
     !mesaScoped && parkedViewState.filter === "paid";
   const syncConflicts = loadParkedSyncConflicts();
   const syncConflictCount = syncConflicts.length;
+  const syncQueueCount = loadParkedSyncQueue().length;
   if (parkedSyncConflictsBtn) {
     const showConflicts = !mesaScoped && syncConflictCount > 0;
     parkedSyncConflictsBtn.classList.toggle("hidden", !showConflicts);
     parkedSyncConflictsBtn.textContent = `Incidencias sync (${syncConflictCount})`;
+  }
+  if (parkedSyncNowBtn) {
+    const showSyncing = !!__parkedSyncManualInFlight;
+
+    parkedSyncNowBtn.classList.toggle("hidden", !!mesaScoped);
+    parkedSyncNowBtn.disabled =
+      !!mesaScoped ||
+      !!TPV_STATE?.offline ||
+      !!__parkedSyncManualInFlight ||
+      !!__parkedSyncDrainInFlight;
+    parkedSyncNowBtn.classList.toggle("is-syncing", showSyncing);
+    parkedSyncNowBtn.innerHTML = showSyncing
+      ? '<span class="parked-sync-icon" aria-hidden="true">⟳</span><span>Sincronizando...</span>'
+      : '<span class="parked-sync-icon" aria-hidden="true">⟳</span><span>Sync</span>';
+    parkedSyncNowBtn.title = TPV_STATE?.offline
+      ? "Sin internet: la cola se subira automaticamente al reconectar."
+      : "Forzar sincronizacion ahora";
+  }
+  if (parkedSyncTopWrap) {
+    parkedSyncTopWrap.classList.toggle("hidden", !!mesaScoped);
   }
   if (parkedSyncConflictsMiniLog) {
     const showMiniLog = !mesaScoped && syncConflictCount > 0;
@@ -15510,6 +15861,40 @@ function syncParkedToolbarUI() {
     parkedSyncConflictsMiniLog.textContent = showMiniLog
       ? buildParkedSyncConflictsMiniLog(syncConflicts)
       : "";
+  }
+  if (parkedSyncHealthBadge) {
+    const showHealth = !mesaScoped;
+    parkedSyncHealthBadge.classList.toggle("hidden", !showHealth);
+
+    if (showHealth) {
+      const health = getParkedSyncHealthSnapshot();
+      const colors =
+        health.level === "error"
+          ? {
+              bg: "#fdecec",
+              border: "#fecaca",
+              text: "#7f1d1d",
+              dot: "#ef4444",
+            }
+          : health.level === "warn"
+            ? {
+                bg: "#fff8e6",
+                border: "#fde68a",
+                text: "#78350f",
+                dot: "#f59e0b",
+              }
+            : {
+                bg: "#eaf8ef",
+                border: "#bbf7d0",
+                text: "#14532d",
+                dot: "#22c55e",
+              };
+
+      parkedSyncHealthBadge.style.background = colors.bg;
+      parkedSyncHealthBadge.style.borderColor = colors.border;
+      parkedSyncHealthBadge.style.color = colors.text;
+      parkedSyncHealthBadge.innerHTML = `<strong><span style="display:inline-block;width:8px;height:8px;border-radius:999px;background:${colors.dot};margin-right:6px;vertical-align:middle;"></span>${escapeHtmlForModal(health.title)}</strong><div style="margin-top:2px;opacity:.92;">${escapeHtmlForModal(health.detail)}</div>`;
+    }
   }
   if (parkedSummaryBtn) {
     parkedSummaryBtn.classList.toggle("hidden", !showSummaryInLowerRow);
@@ -15702,6 +16087,12 @@ function ensureParkedToolbar() {
       </button>
     </div>
 
+    <div id="parkedSyncTopWrap" class="tickets-tabs" style="margin-left: 10px;">
+      <button id="parkedSyncNowBtn" type="button" class="cart-btn tickets-tab-btn parked-sync-action-btn" style="font-size: 13px; padding: 6px 12px;" title="Forzar sincronizacion ahora">
+        <span class="parked-sync-icon" aria-hidden="true">⟳</span><span>Sync</span>
+      </button>
+    </div>
+
     <div id="parkedFilterTabs" class="tickets-tabs" style="margin-left: 10px;">
       <button id="parkedFilterAll" type="button" class="cart-btn tickets-tab-btn">
         Todos
@@ -15733,6 +16124,7 @@ function ensureParkedToolbar() {
     </div>
 
     <div id="parkedSyncConflictsMiniLog" class="hidden" style="flex-basis: 100%; margin: 6px 0 0 10px; font-size: 12px; color: #7a2e00; background: #fff3e8; border: 1px solid #ffd4ad; border-radius: 8px; padding: 6px 10px;"></div>
+    <div id="parkedSyncHealthBadge" style="flex-basis: 100%; margin: 6px 0 0 10px; font-size: 12px; color: #14532d; background: #eaf8ef; border: 1px solid #bbf7d0; border-radius: 8px; padding: 6px 10px;"></div>
 
     <div id="parkedDocTypeTabs" class="tickets-tabs hidden" style="margin-left: 10px;"></div>
 
@@ -15758,6 +16150,7 @@ function ensureParkedToolbar() {
   const parkedSyncConflictsBtn = document.getElementById(
     "parkedSyncConflictsBtn",
   );
+  const parkedSyncNowBtn = document.getElementById("parkedSyncNowBtn");
   const parkedKeyboardBtn = document.getElementById("parkedKeyboardBtn");
   const parkedSummaryBtn = document.getElementById("parkedSummaryBtn");
   const parkedClearPaidBtn = document.getElementById("parkedClearPaidBtn");
@@ -15809,6 +16202,10 @@ function ensureParkedToolbar() {
 
   parkedSyncConflictsBtn?.addEventListener("click", async () => {
     await openParkedSyncConflictsModal();
+  });
+
+  parkedSyncNowBtn?.addEventListener("click", async () => {
+    await runParkedSyncNowFromToolbar();
   });
 
   parkedFilterPaid?.addEventListener("click", () => {
@@ -16231,6 +16628,18 @@ function openParkedModal(options = {}) {
   ensureParkedToolbar();
   renderParkedTicketsModal();
   parkedTicketsOverlay.classList.remove("hidden");
+
+  refreshRemoteParkedReservationsOnly()
+    .then(() => {
+      if (
+        parkedTicketsOverlay &&
+        !parkedTicketsOverlay.classList.contains("hidden")
+      ) {
+        syncParkedToolbarUI();
+        renderParkedTicketsModal();
+      }
+    })
+    .catch(() => {});
 
   logFeatureInfo("APARCADOS", "modal-abierto", {
     requestId,
@@ -18931,17 +19340,20 @@ function renderMixedTicketsSummary() {
     <div class="cash-agent-methods">
       ${mixedRows
         .map((row) => {
-          const parts = row.breakdown
+          const partsHtml = row.breakdown
             .map((b) => {
               const lbl = labelMap[b.code] || b.code;
-              return `${escapeHtml(lbl)}: ${escapeHtml(eur(b.amount))}`;
+              return `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;background:#eef2ff;border:1px solid #c7d2fe;white-space:nowrap;">${escapeHtml(lbl)}: <strong>${escapeHtml(eur(b.amount))}</strong></span>`;
             })
-            .join(" · ");
+            .join("");
 
           return `
-            <div class="cash-agent-method">
-              <div class="cash-agent-method-label">${escapeHtml(row.ticketCode)} · Total: ${escapeHtml(eur(row.ticketTotal))}</div>
-              <div class="cash-agent-method-amount" style="text-align:left; width:100%;">${parts}</div>
+            <div class="cash-agent-method" style="display:block;padding:8px 0;border-bottom:1px dashed rgba(31,41,55,.22);">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+                <div class="cash-agent-method-label" style="font-weight:800;">${escapeHtml(row.ticketCode)}</div>
+                <div class="cash-agent-method-amount" style="font-weight:900;">Total: ${escapeHtml(eur(row.ticketTotal))}</div>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">${partsHtml}</div>
             </div>
           `;
         })
@@ -19068,6 +19480,7 @@ async function checkSharedCajaHealthOnce() {
 
 function startSharedCajaHealthMonitor() {
   stopSharedCajaHealthMonitor();
+  startTerminalPresenceMonitor();
 
   if (!isSharedCashModeEnabled()) return;
 
@@ -19091,6 +19504,8 @@ function stopSharedCajaHealthMonitor() {
     clearInterval(__sharedCajaHealthTimer);
     __sharedCajaHealthTimer = null;
   }
+
+  stopTerminalPresenceMonitor({ clearRemote: true });
 }
 
 async function maybeOpenCashOrRecover() {
@@ -24559,6 +24974,8 @@ let backgroundUpdateCountdownUiTimer = null;
 const BACKGROUND_UPDATE_SETTINGS_KEY = "tpv_background_update_settings_v1";
 const BACKGROUND_UPDATE_SNOOZE_KEY = "tpv_background_update_snooze_v1";
 const CHANGELOG_LAST_SEEN_VERSION_KEY = "tpv_changelog_last_seen_version_v1";
+const CHANGELOG_LAST_SEEN_APP_VERSION_KEY =
+  "tpv_changelog_last_seen_app_version_v1";
 const CHANGELOG_LAST_OPEN_VERSION_KEY = "tpv_changelog_last_open_version_v1";
 const CHANGELOG_SOURCE_FILE = "changelog.json";
 
@@ -24659,6 +25076,72 @@ function normalizeVersionTag(versionText) {
     .replace(/^v/i, "");
 }
 
+function parseVersionForSort(versionText) {
+  const normalized = normalizeVersionTag(versionText);
+  if (!normalized) return null;
+
+  const [mainRaw = "", preRaw = ""] = normalized.split("-");
+  const mainParts = mainRaw.split(".").map((n) => Number.parseInt(n, 10));
+  if (!mainParts.length || mainParts.some((n) => Number.isNaN(n))) return null;
+
+  const preParts = preRaw
+    ? preRaw.split(".").map((part) => {
+        const n = Number.parseInt(part, 10);
+        return Number.isNaN(n) ? String(part || "").toLowerCase() : n;
+      })
+    : [];
+
+  return {
+    normalized,
+    mainParts,
+    hasPre: preParts.length > 0,
+    preParts,
+  };
+}
+
+function compareParsedVersion(a, b) {
+  if (!a && !b) return 0;
+  if (!a) return -1;
+  if (!b) return 1;
+
+  const maxLen = Math.max(a.mainParts.length, b.mainParts.length);
+  for (let i = 0; i < maxLen; i += 1) {
+    const av = a.mainParts[i] ?? 0;
+    const bv = b.mainParts[i] ?? 0;
+    if (av > bv) return 1;
+    if (av < bv) return -1;
+  }
+
+  if (a.hasPre && !b.hasPre) return -1;
+  if (!a.hasPre && b.hasPre) return 1;
+
+  const preLen = Math.max(a.preParts.length, b.preParts.length);
+  for (let i = 0; i < preLen; i += 1) {
+    const av = a.preParts[i];
+    const bv = b.preParts[i];
+
+    if (typeof av === "undefined" && typeof bv === "undefined") return 0;
+    if (typeof av === "undefined") return -1;
+    if (typeof bv === "undefined") return 1;
+
+    const aNum = typeof av === "number";
+    const bNum = typeof bv === "number";
+    if (aNum && bNum) {
+      if (av > bv) return 1;
+      if (av < bv) return -1;
+      continue;
+    }
+
+    if (aNum && !bNum) return -1;
+    if (!aNum && bNum) return 1;
+
+    if (av > bv) return 1;
+    if (av < bv) return -1;
+  }
+
+  return 0;
+}
+
 function getChangelogLastOpenVersion() {
   try {
     return normalizeVersionTag(
@@ -24713,6 +25196,38 @@ function buildChangelogEntriesForDialog(entries, { onlyVersion = "" } = {}) {
   return normalizedOnly
     ? source.filter((it) => normalizeVersionTag(it?.version) === normalizedOnly)
     : source;
+}
+
+function resolveChangelogVersionForCurrentApp(entries, currentVersion = "") {
+  const source = Array.isArray(entries) ? entries : [];
+  if (!source.length) return "";
+
+  const current = normalizeVersionTag(currentVersion);
+  if (
+    current &&
+    source.some((it) => normalizeVersionTag(it?.version) === current)
+  ) {
+    return current;
+  }
+
+  const currentParsed = parseVersionForSort(current);
+  if (currentParsed) {
+    const candidates = source
+      .map((it) => {
+        const version = normalizeVersionTag(it?.version);
+        const parsed = parseVersionForSort(version);
+        return parsed ? { version, parsed } : null;
+      })
+      .filter(Boolean)
+      .filter((it) => compareParsedVersion(it.parsed, currentParsed) <= 0)
+      .sort((a, b) => compareParsedVersion(b.parsed, a.parsed));
+
+    if (candidates.length) {
+      return normalizeVersionTag(candidates[0]?.version || "");
+    }
+  }
+
+  return normalizeVersionTag(source[0]?.version || "");
 }
 
 function buildChangelogAccordionHtml(
@@ -24849,9 +25364,11 @@ function unbindChangelogAccordionInMessageModal() {
 async function openChangelogDialog({ onlyCurrentVersion = false } = {}) {
   const entries = await loadChangelogEntries();
   const currentVersion = normalizeVersionTag(await getCurrentAppVersionText());
-  const onlyVersion = onlyCurrentVersion ? currentVersion : "";
+  const onlyVersion = onlyCurrentVersion
+    ? resolveChangelogVersionForCurrentApp(entries, currentVersion)
+    : "";
   const preferredOpenVersion = onlyCurrentVersion
-    ? currentVersion
+    ? onlyVersion
     : getChangelogLastOpenVersion();
   const html = buildChangelogAccordionHtml(entries, {
     onlyVersion,
@@ -24869,22 +25386,33 @@ async function openChangelogDialog({ onlyCurrentVersion = false } = {}) {
 }
 
 async function maybeShowChangelogAfterUpdate() {
+  const entries = await loadChangelogEntries();
   const currentVersion = normalizeVersionTag(await getCurrentAppVersionText());
   if (!currentVersion || currentVersion === "desconocida") return;
 
-  let lastSeenVersion = "";
+  const changelogVersionToShow = resolveChangelogVersionForCurrentApp(
+    entries,
+    currentVersion,
+  );
+  if (!changelogVersionToShow) return;
+
+  let lastSeenAppVersion = "";
   try {
-    lastSeenVersion = normalizeVersionTag(
-      localStorage.getItem(CHANGELOG_LAST_SEEN_VERSION_KEY) || "",
+    lastSeenAppVersion = normalizeVersionTag(
+      localStorage.getItem(CHANGELOG_LAST_SEEN_APP_VERSION_KEY) || "",
     );
   } catch {}
 
-  if (lastSeenVersion === currentVersion) return;
+  if (lastSeenAppVersion === currentVersion) return;
 
   await openChangelogDialog({ onlyCurrentVersion: true });
 
   try {
-    localStorage.setItem(CHANGELOG_LAST_SEEN_VERSION_KEY, currentVersion);
+    localStorage.setItem(CHANGELOG_LAST_SEEN_APP_VERSION_KEY, currentVersion);
+    localStorage.setItem(
+      CHANGELOG_LAST_SEEN_VERSION_KEY,
+      changelogVersionToShow,
+    );
   } catch {}
 }
 
@@ -26002,7 +26530,7 @@ function getPrintableLineDiscountType(line, pricing = null) {
     .filter((v) => isFinite(v) && v > 0 && v < 100);
 
   if (fsDiscountFields.length) return "Descuento";
-  return "Descuento";
+  return "";
 }
 
 function calcPrintableDiscountTotal(lineas) {
@@ -26010,6 +26538,8 @@ function calcPrintableDiscountTotal(lineas) {
   for (const line of Array.isArray(lineas) ? lineas : []) {
     if (isPackChildForPrint(line)) continue;
     const b = getPrintableLinePricingBreakdown(line);
+    const discountType = getPrintableLineDiscountType(line, b);
+    if (!discountType || discountType === "Tarifa") continue;
     total += Number(b?.discountTotal || 0);
   }
   return round2(total);
@@ -26253,6 +26783,9 @@ function renderItemsHtml(doc, lineas) {
     .map((l) => {
       const isChild = isPackChildForPrint(l);
       const pricing = getPrintableLinePricingBreakdown(l);
+      const discountType = getPrintableLineDiscountType(l, pricing);
+      const hasPrintableDiscount =
+        !!pricing?.hasDiscount && !!discountType && discountType !== "Tarifa";
       const qty = getQtyForPrint(l);
       const unitGross =
         l.__unitGrossOverride != null
@@ -26279,7 +26812,7 @@ function renderItemsHtml(doc, lineas) {
         );
         if (hinted > 0) return hinted;
 
-        if (pricing?.hasDiscount && Number(pricing?.baseUnitGross || 0) > 0) {
+        if (hasPrintableDiscount && Number(pricing?.baseUnitGross || 0) > 0) {
           return round2(
             ((Number(pricing.baseUnitGross || 0) -
               Number(pricing.finalUnitGross || 0)) /
@@ -26313,7 +26846,7 @@ function renderItemsHtml(doc, lineas) {
             <div class="ltotal">${totalHtml}</div>
           </div>
           ${
-            !isChild && pricing?.hasDiscount
+            !isChild && hasPrintableDiscount
               ? `<div class="item-sub small muted"><strong>${safe(eurTicket(pricing.finalUnitGross))}</strong> (${safe(eurTicket(pricing.baseUnitGross))} ${safe(discountLabel)})</div>`
               : ""
           }
@@ -28383,9 +28916,10 @@ function getScopedPendingParkedTickets(list = parkedTickets) {
 }
 
 function getScopedAllParkedTickets(list = parkedTickets) {
-  let source = (Array.isArray(list) ? list : []).filter(
-    (t) => !t?.closingInProgress,
-  );
+  let source = (Array.isArray(list) ? list : []).filter((t) => {
+    releaseStaleParkedClosingLock(t);
+    return !t?.closingInProgress;
+  });
 
   if (!MESAS_INLINE_ACTIVE) {
     // Compatibilidad con mezcla de versiones (0.2.1 y 0.2.1-beta.1):
@@ -29221,7 +29755,7 @@ function buildParkedSyncConflictsHtml(list) {
 
   return `
     <div style="font-size:13px;">
-      <div style="margin-bottom:8px;">Se listan cambios locales que no se subieron para evitar pisar una version remota mas nueva.</div>
+      <div style="margin-bottom:8px;">Se listan cambios locales que no se subieron para evitar pisar una version remota mas nueva. Regla aplicada automaticamente: en conflicto manda remoto. Si no hay conflicto, la cola local se reintenta sola.</div>
       <div style="max-height:340px;overflow:auto;border:1px solid #ddd;border-radius:8px;">
         <table style="width:100%;border-collapse:collapse;">
           <thead>
@@ -29258,6 +29792,74 @@ async function openParkedSyncConflictsModal() {
     renderParkedTicketsModal?.();
     toast("Incidencias de sincronizacion limpiadas.", "ok", "Aparcados");
   }
+}
+
+async function runParkedSyncNowFromToolbar() {
+  if (__parkedSyncManualInFlight) return false;
+
+  if (TPV_STATE?.offline) {
+    toast(
+      "Sin internet: los cambios quedan en cola y se suben al reconectar.",
+      "warn",
+      "Aparcados",
+    );
+    return false;
+  }
+
+  __parkedSyncLastManualAttemptAt = Date.now();
+  __parkedSyncManualInFlight = true;
+  syncParkedToolbarUI?.();
+
+  let ok = false;
+  try {
+    ok = await refreshRemoteParkedReservationsOnly();
+  } catch {
+    ok = false;
+  } finally {
+    __parkedSyncManualInFlight = false;
+  }
+
+  syncParkedToolbarUI?.();
+  renderParkedTicketsModal?.();
+
+  const queueLen = loadParkedSyncQueue().length;
+  const conflictLen = loadParkedSyncConflicts().length;
+
+  if (!ok) {
+    __parkedSyncLastManualErrorAt = Date.now();
+    __parkedSyncLastManualErrorMsg =
+      String(__parkedSyncLastErrorMsg || "").trim() ||
+      "No se pudo sincronizar en este intento manual.";
+    toast(
+      "No se pudo sincronizar ahora. Revisa conexion o API remota.",
+      "warn",
+      "Aparcados",
+    );
+    return false;
+  }
+
+  if (conflictLen > 0) {
+    __parkedSyncLastManualOkAt = Date.now();
+    __parkedSyncLastManualErrorMsg = "";
+    toast(
+      `Sync completada con incidencias (${conflictLen}). Remoto prevalece en conflicto; revisa 'Incidencias sync'.`,
+      "warn",
+      "Aparcados",
+    );
+    return true;
+  }
+
+  __parkedSyncLastManualOkAt = Date.now();
+  __parkedSyncLastManualErrorMsg = "";
+  toast(
+    queueLen > 0
+      ? `Sync parcial. Cola pendiente: ${queueLen}.`
+      : "Sync completada. Aparcados al dia.",
+    "ok",
+    "Aparcados",
+  );
+
+  return true;
 }
 
 function snapshotTicketForSync(ticket) {
@@ -29507,11 +30109,12 @@ function syncParkedTicketsFromRemote(list) {
 
       // Evita parpadeos por refrescos remotos retrasados que pisan precios/items locales.
       // Si la copia local es igual o más reciente, conservamos líneas y total locales.
-      if (
+      const shouldPreferLocalSnapshot =
         prev &&
         prevItems.length &&
-        (prevTs >= remoteTs || localRevIsRecent)
-      ) {
+        (prevTs >= remoteTs || (localRevIsRecent && remoteTs <= 0));
+
+      if (shouldPreferLocalSnapshot) {
         merged.items = prevItems.map((it) => ({ ...it }));
         if (Number.isFinite(Number(prev?.total))) {
           merged.total = Number(prev.total || 0);
@@ -29587,11 +30190,65 @@ function syncParkedTicketsFromRemote(list) {
     })
     .filter((t) => isTicketInCurrentParkingMode(t));
 
+  // Compatibilidad entre TPVs mixtos: los cobrados remotos deben entrar
+  // explícitamente en local para que no queden invisibles en la pestaña "Cobrados".
+  const remotePaid = normalizedRemote
+    .filter((t) => !!t?.paid)
+    .map((ticket) => {
+      const prev = getParkedTicketSyncKeyVariants(ticket)
+        .map((key) => previousByKey.get(key))
+        .find(Boolean);
+
+      const merged = { ...(prev || {}), ...ticket };
+      merged.paid = true;
+      merged.paidAt = merged?.paidAt
+        ? new Date(merged.paidAt)
+        : ticket?.paidAt
+          ? new Date(ticket.paidAt)
+          : new Date();
+
+      const remoteModeCandidate = String(
+        ticket?.parkingMode || ticket?.appMode || ticket?.mode || "",
+      )
+        .trim()
+        .toLowerCase();
+      const modeProbe = {
+        ...merged,
+        parkingMode: remoteModeCandidate || merged?.parkingMode || "",
+      };
+
+      const remoteMesasFlag = getTicketMesasModeFlag(ticket);
+      const prevMesasFlag = getTicketMesasModeFlag(prev);
+      let mergedIsMesas = remoteMesasFlag;
+      if (mergedIsMesas === null) mergedIsMesas = prevMesasFlag;
+      if (mergedIsMesas === null) {
+        mergedIsMesas = inferTicketParkingMode(modeProbe) === PARKED_MODE_MESAS;
+      }
+
+      setTicketMesasModeFlag(merged, !!mergedIsMesas);
+      merged.parkingMode = mergedIsMesas ? PARKED_MODE_MESAS : PARKED_MODE_TPV;
+      if (!mergedIsMesas) {
+        clearMesaScopeFromTicket(merged);
+      }
+
+      return merged;
+    })
+    .filter((t) => isTicketInCurrentParkingMode(t));
+
+  remotePaid.forEach((t) => {
+    try {
+      upsertParkedPaidHistory(t);
+    } catch {}
+  });
+
   const nextByKey = new Set(
-    nextPending.map((t) => getParkedTicketSyncKey(t)).filter(Boolean),
+    [...nextPending, ...remotePaid]
+      .map((t) => getParkedTicketSyncKey(t))
+      .filter(Boolean),
   );
 
   const queuedPendingKeySet = new Set();
+  const queuedPaidKeySet = new Set();
   try {
     const queue = loadParkedSyncQueue();
     (Array.isArray(queue) ? queue : []).forEach((entry) => {
@@ -29600,9 +30257,10 @@ function syncParkedTicketsFromRemote(list) {
         .toLowerCase();
       if (op !== "upsert") return;
       const qt = normalizeRemoteParkedTicket(entry?.ticket || {}) || null;
-      if (!qt || qt?.paid) return;
+      if (!qt) return;
+      const targetSet = qt?.paid ? queuedPaidKeySet : queuedPendingKeySet;
       getParkedTicketSyncKeyVariants(qt).forEach((key) => {
-        if (key) queuedPendingKeySet.add(key);
+        if (key) targetSet.add(key);
       });
     });
   } catch {}
@@ -29666,6 +30324,20 @@ function syncParkedTicketsFromRemote(list) {
     const key = getParkedTicketSyncKey(t);
     if (!key || nextByKey.has(key)) return;
 
+    const variants = getParkedTicketSyncKeyVariants(t);
+    const hasQueuedPaidUpsert = variants.some((k) => queuedPaidKeySet.has(k));
+    const paidTs = Number(new Date(t?.paidAt || 0).getTime()) || 0;
+    const updatedTs = Number(new Date(t?.updatedAt || 0).getTime()) || 0;
+    const createdTs = Number(new Date(t?.createdAt || 0).getTime()) || 0;
+    const localRevTs = Number(t?.localRevisionAt || 0) || 0;
+    const freshnessTs = Math.max(paidTs, updatedTs, createdTs, localRevTs, 0);
+    const isRecentLocalPaid =
+      freshnessTs > 0 && nowTs - freshnessTs <= PARKED_PAID_LOCAL_GRACE_MS;
+
+    // Si remoto ya no devuelve el cobrado (p.ej. otro TPV hizo limpiar cobrados),
+    // no lo conservamos indefinidamente en local.
+    if (!hasQueuedPaidUpsert && !isRecentLocalPaid) return;
+
     const prev = preservedPaidByKey.get(key);
     if (!prev) {
       preservedPaidByKey.set(key, t);
@@ -29688,7 +30360,22 @@ function syncParkedTicketsFromRemote(list) {
 
   const preservedPaid = Array.from(preservedPaidByKey.values());
 
-  const next = [...nextPending, ...preservedPending, ...preservedPaid];
+  const nextRaw = [
+    ...nextPending,
+    ...preservedPending,
+    ...remotePaid,
+    ...preservedPaid,
+  ];
+  const seenSyncKeys = new Set();
+  const next = [];
+  nextRaw.forEach((ticket) => {
+    const key = getParkedTicketSyncKey(ticket);
+    if (key) {
+      if (seenSyncKeys.has(key)) return;
+      seenSyncKeys.add(key);
+    }
+    next.push(ticket);
+  });
 
   parkedTickets = next;
 
@@ -30078,9 +30765,15 @@ async function refreshRemoteParkedReservationsOnly() {
     syncParkedTicketsFromRemote(REMOTE_PARKED_RESERVATIONS);
     rebuildRemoteReservedByProductMap();
     updateRenderedProductStocks();
+    __parkedSyncLastOkAt = Date.now();
+    __parkedSyncLastErrorMsg = "";
+    syncParkedToolbarUI?.();
     return true;
   } catch (e) {
     console.warn("No se pudieron refrescar reservas remotas:", e?.message || e);
+    __parkedSyncLastErrorAt = Date.now();
+    __parkedSyncLastErrorMsg = String(e?.message || e || "").trim();
+    syncParkedToolbarUI?.();
 
     const cached = loadParkedTicketsCache();
     if (cached.length) {
@@ -30099,9 +30792,11 @@ async function refreshRemoteParkedReservationsOnly() {
       ) {
         renderParkedTicketsModal?.();
       }
+      syncParkedToolbarUI?.();
       return true;
     }
 
+    syncParkedToolbarUI?.();
     return false;
   }
 }
@@ -41035,6 +41730,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
 window.addEventListener("beforeunload", () => {
   persistRuntimeCartSnapshot({ force: true });
+  stopTerminalPresenceMonitor({ clearRemote: true });
 });
 
 async function refreshTicketsCacheFromServer() {

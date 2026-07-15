@@ -9,6 +9,7 @@ class ScaleManager {
 
     this.buffer = "";
     this.flushTimer = null;
+    this.staleTimer = null;
 
     this.state = {
       connected: false,
@@ -81,6 +82,34 @@ class ScaleManager {
     }
   }
 
+  clearStaleTimer() {
+    if (this.staleTimer) {
+      clearTimeout(this.staleTimer);
+      this.staleTimer = null;
+    }
+  }
+
+  scheduleStaleReset(updatedAtMs) {
+    this.clearStaleTimer();
+
+    const timeoutMs = Math.max(800, Number(this.config.maxAgeMs || 5000));
+    const refTs = Number(updatedAtMs || 0);
+    if (refTs <= 0) return;
+
+    this.staleTimer = setTimeout(() => {
+      const currentUpdatedAt = Number(this.state.updatedAt || 0);
+      if (currentUpdatedAt !== refTs) return;
+
+      // Si no llega ninguna trama nueva a tiempo, invalidamos lectura y desbloqueamos consumo único.
+      this.setStatePatch({
+        currentGrams: 0,
+        currentKg: 0,
+        lockedUntilWeightChanges: false,
+        lastConsumedGrams: null,
+      });
+    }, timeoutMs);
+  }
+
   flushBuffer() {
     const chunk = String(this.buffer || "").trim();
     this.buffer = "";
@@ -141,6 +170,8 @@ class ScaleManager {
       lastToken: parsed.token || "",
       detectedUnit: parsed.detectedUnit || "",
     });
+
+    this.scheduleStaleReset(now);
   }
 
   async connect(inputConfig = {}) {
@@ -208,6 +239,7 @@ class ScaleManager {
 
   async disconnect() {
     this.clearFlushTimer();
+    this.clearStaleTimer();
     this.buffer = "";
 
     if (!this.port) {
@@ -300,6 +332,12 @@ class ScaleManager {
 
     const age = Date.now() - this.state.updatedAt;
     if (age > this.config.maxAgeMs) {
+      this.setStatePatch({
+        currentGrams: 0,
+        currentKg: 0,
+        lockedUntilWeightChanges: false,
+        lastConsumedGrams: null,
+      });
       return { ok: false, error: "La lectura de la báscula está caducada." };
     }
 

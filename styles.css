@@ -3888,6 +3888,53 @@ textarea:focus {
   min-width: 110px;
 }
 
+#parkedToolbar .parked-sync-action-btn {
+  min-width: 92px;
+  border-radius: 8px;
+  border: 1px solid #0f766e;
+  background: linear-gradient(180deg, #d1fae5 0%, #a7f3d0 100%);
+  color: #065f46;
+  font-weight: 900;
+  letter-spacing: 0.01em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+#parkedToolbar .parked-sync-action-btn .parked-sync-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  transform-origin: 50% 50%;
+}
+
+#parkedToolbar .parked-sync-action-btn.is-syncing .parked-sync-icon {
+  animation: parkedSyncSpin 0.9s linear infinite;
+}
+
+@keyframes parkedSyncSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+#parkedToolbar .parked-sync-action-btn:hover:not(:disabled) {
+  border-color: #0d9488;
+  background: linear-gradient(180deg, #bbf7d0 0%, #86efac 100%);
+  color: #064e3b;
+}
+
+#parkedToolbar .parked-sync-action-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 #parkedToolbar .tickets-scope-wrap {
   display: flex;
   align-items: center;

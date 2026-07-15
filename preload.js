@@ -113,6 +113,7 @@ contextBridge.exposeInMainWorld("TPV_SETUP", {
 
 contextBridge.exposeInMainWorld("TPV_ENV", {
   platform: process.platform, // "linux" / "win32"
+  defaultApp: !!process.defaultApp,
   e2e: TPV_E2E_MODE,
   mode: TPV_MODE,
   e2eApiBaseUrl: String(process.env.TPV_E2E_BASE_URL || "").trim(),
