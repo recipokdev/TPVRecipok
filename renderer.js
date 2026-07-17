@@ -794,6 +794,9 @@ const PARKED_PAID_LOCAL_GRACE_MS = 120000;
 const PARKED_CLOSING_LOCK_MAX_MS = 3 * 60 * 1000;
 let __sharedCajaHealthTimer = null;
 let __sharedCajaHealthInFlight = false;
+let __sharedCajaStateTimer = null;
+let __sharedCajaStateInFlight = false;
+let __sharedCajaLastKnownOpenId = null;
 let __terminalPresenceTimer = null;
 let __terminalPresenceInFlight = false;
 let __terminalPresenceSessionId = "";
@@ -2816,10 +2819,9 @@ function clampCartPanelWidthPx(value) {
 }
 
 function isCartPanelWidthAdjustableInCurrentLayout() {
-  return !(
-    document.body.classList.contains("mesas-inline-trans-mode") ||
-    document.body.classList.contains("mesas-inline-full-mode")
-  );
+  // En Mesas transacciones reutilizamos layout TPV y permitimos ancho de carrito.
+  // Solo bloqueamos ajuste en vistas embebidas (mapa/diseno).
+  return !document.body.classList.contains("mesas-inline-full-mode");
 }
 
 function applyCartPanelWidth() {
@@ -7204,8 +7206,72 @@ async function checkTerminalPresenceOnce({ notify = true } = {}) {
     const data = await apiListTerminalPresenceRemote();
     if (!data || typeof data !== "object") return null;
 
-    const visibleCount = Number(data?.visibleCount || 0) || 0;
-    const position = Number(data?.youArePosition || 0) || 0;
+    const visibleCountRaw = Number(data?.visibleCount || 0) || 0;
+    const positionRaw = Number(data?.youArePosition || 0) || 0;
+
+    const entries = Array.isArray(data?.entries) ? data.entries : [];
+    const ownSessionId = String(ensureTerminalPresenceSessionId() || "").trim();
+    const ownTerminalId = String(currentTerminal?.id || "").trim();
+    const ownHost = String(location?.hostname || "")
+      .trim()
+      .toLowerCase();
+    const ownUser = String(currentAgent?.name || currentAgent?.nick || "")
+      .trim()
+      .toLowerCase();
+    const ownVersion = String(
+      document.getElementById("appVersion")?.textContent || "",
+    )
+      .trim()
+      .replace(/^v/i, "")
+      .toLowerCase();
+
+    const visibleEntries = entries.filter((entry) => !Boolean(entry?.silent));
+    const currentSessionVisible = visibleEntries.some(
+      (entry) => String(entry?.sessionId || "").trim() === ownSessionId,
+    );
+
+    const foreignVisibleEntries = visibleEntries.filter((entry) => {
+      const sessionId = String(entry?.sessionId || "").trim();
+      if (!sessionId || sessionId === ownSessionId) return false;
+
+      const entryTerminalId = String(
+        entry?.terminalId ?? entry?.tpvId ?? "",
+      ).trim();
+      const entryHost = String(entry?.host || "")
+        .trim()
+        .toLowerCase();
+      const entryUser = String(entry?.userName || "")
+        .trim()
+        .toLowerCase();
+      const entryVersion = String(entry?.appVersion || "")
+        .trim()
+        .toLowerCase();
+
+      const sameTerminal =
+        !!ownTerminalId &&
+        !!entryTerminalId &&
+        entryTerminalId === ownTerminalId;
+      const sameHost = !!ownHost && !!entryHost && entryHost === ownHost;
+      const sameUser = !!ownUser && !!entryUser && entryUser === ownUser;
+      const sameVersion =
+        !!ownVersion && !!entryVersion && entryVersion === ownVersion;
+
+      // Evita falsos positivos por sesiones huérfanas de la misma instancia
+      // (reinicios/cierres abruptos) en misma maquina + mismo terminal.
+      if (sameTerminal && sameHost && (sameUser || sameVersion)) {
+        return false;
+      }
+
+      return true;
+    });
+
+    const visibleCount = Math.max(
+      visibleCountRaw,
+      (currentSessionVisible ? 1 : 0) + foreignVisibleEntries.length,
+    );
+    const position = currentSessionVisible
+      ? Math.max(1, Math.min(visibleCount, positionRaw || 1))
+      : positionRaw;
 
     if (!isTerminalPresenceSilentMode() && notify) {
       const sig = `${visibleCount}|${position}`;
@@ -7692,6 +7758,7 @@ function syncTpvCartWithSelectedMesa(opts = {}) {
     renderCart();
     refreshParkButtonUI?.();
     refreshParkedEditingBanner?.();
+    updateParkedCountBadge?.();
     return;
   }
 
@@ -7739,6 +7806,7 @@ function syncTpvCartWithSelectedMesa(opts = {}) {
     renderCart();
     refreshParkButtonUI?.();
     refreshParkedEditingBanner?.();
+    updateParkedCountBadge?.();
     return;
   }
 
@@ -7771,10 +7839,12 @@ function syncTpvCartWithSelectedMesa(opts = {}) {
       renderCart();
       refreshParkButtonUI?.();
       refreshParkedEditingBanner?.();
+      updateParkedCountBadge?.();
       return;
     }
 
     restoreParkedCartByIndex(idx);
+    updateParkedCountBadge?.();
     return;
   }
 
@@ -7783,6 +7853,7 @@ function syncTpvCartWithSelectedMesa(opts = {}) {
   renderCart();
   refreshParkButtonUI?.();
   refreshParkedEditingBanner?.();
+  updateParkedCountBadge?.();
 }
 
 function normalizeTicketLinesForCompare(lines) {
@@ -8592,6 +8663,9 @@ function updateMesasSelectionFromContext(
   renderMesasTransContextBar();
   syncTpvCartWithSelectedMesa({ preferLinkedTicketOnEmptyDraft });
   updateParkedCountBadge?.();
+  if (cashSession?.open && !TPV_STATE?.offline) {
+    scheduleParkedReservationsBurstRefresh?.("mesas-select-table");
+  }
 }
 
 function linkMesaSelectionWithTicketId(ticketId) {
@@ -8780,6 +8854,10 @@ function setMesasInlineView(view, { persist = true } = {}) {
 
   if (isNativeTransView) {
     syncTpvCartWithSelectedMesa();
+    updateParkedCountBadge?.();
+    if (cashSession?.open && !TPV_STATE?.offline) {
+      scheduleParkedReservationsBurstRefresh?.("mesas-view-transacciones");
+    }
   }
 
   if (persist && MESAS_INLINE_ACTIVE) {
@@ -9406,36 +9484,6 @@ async function runBootFlow() {
     await loadDataFromApi();
 
     let restoredCartAtBoot = false;
-    if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
-      restoredCartAtBoot = await restoreRuntimeCartSnapshot({
-        force: true,
-        mode: "mesas",
-      });
-
-      if (restoredCartAtBoot) {
-        renderCart();
-        toast(
-          "Carrito recuperado tras cierre inesperado.",
-          "info",
-          "Recuperación",
-        );
-      } else {
-        cart = [];
-        currentParkedTicketIndex = null;
-        renderCart();
-      }
-    } else {
-      restoredCartAtBoot = await restoreRuntimeCartSnapshot();
-      if (restoredCartAtBoot) {
-        renderCart();
-        toast(
-          "Carrito recuperado tras cierre inesperado.",
-          "info",
-          "Recuperación",
-        );
-      }
-    }
-    CART_SNAPSHOT_ARMED = true;
 
     // Aplicar visibilidad/admin una vez tras completar carga inicial.
     applyAdminOnlyUI?.();
@@ -9445,7 +9493,47 @@ async function runBootFlow() {
     await ensureTerminalAgentDefaults();
 
     // 5) Caja (recupera o abre modal)
-    maybeOpenCashOrRecover();
+    await maybeOpenCashOrRecover();
+
+    if (cashSession?.open) {
+      if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+        restoredCartAtBoot = await restoreRuntimeCartSnapshot({
+          force: true,
+          mode: "mesas",
+        });
+
+        if (restoredCartAtBoot) {
+          renderCart();
+          toast(
+            "Carrito recuperado tras cierre inesperado.",
+            "info",
+            "Recuperación",
+          );
+        } else {
+          cart = [];
+          currentParkedTicketIndex = null;
+          renderCart();
+        }
+      } else {
+        restoredCartAtBoot = await restoreRuntimeCartSnapshot();
+        if (restoredCartAtBoot) {
+          renderCart();
+          toast(
+            "Carrito recuperado tras cierre inesperado.",
+            "info",
+            "Recuperación",
+          );
+        }
+      }
+      CART_SNAPSHOT_ARMED = true;
+    } else {
+      cart = [];
+      currentParkedTicketIndex = null;
+      renderCart();
+      renderMainUI(true);
+    }
+
+    startSharedCajaStateMonitor?.();
 
     if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
       const mesasState = loadMesasTablesStateForInline();
@@ -11210,6 +11298,15 @@ function renderCart() {
   const container = document.getElementById("cartLines");
   if (!container) return;
   container.innerHTML = "";
+
+  if (!cashSession?.open) {
+    const totalEl = document.getElementById("totalAmount");
+    if (totalEl) totalEl.textContent = eur(0);
+    refreshCartDiscountUi();
+    pushCustomerState();
+    refreshAgentGuardUI?.();
+    return;
+  }
 
   const cartItems = Array.isArray(cart) ? cart : [];
 
@@ -14313,6 +14410,28 @@ function updateParkedCountBadge() {
     return;
   }
 
+  if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+    const mesasState = loadMesasTablesStateForInline();
+    const selectedUid = String(mesasState?.selectedTableId || "").trim();
+
+    const pendingMesas = (Array.isArray(parkedTickets) ? parkedTickets : [])
+      .filter((t) => !t?.paid)
+      .filter((t) => isMesasModeTicket(t));
+
+    if (selectedUid) {
+      const selectedCount = pendingMesas.filter(
+        (t) =>
+          String(resolveTicketMesaUid(t, mesasState) || "").trim() ===
+          selectedUid,
+      ).length;
+      badge.textContent = String(selectedCount);
+      return;
+    }
+
+    badge.textContent = String(pendingMesas.length);
+    return;
+  }
+
   const pendingCount = getScopedPendingParkedTickets(parkedTickets).length;
 
   badge.textContent = String(pendingCount);
@@ -16348,6 +16467,15 @@ function refreshClearCartButtonUi() {
   const btn = document.getElementById("clearCartBtn");
   if (!btn) return;
 
+  if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+    btn.disabled = isParkingNow;
+    btn.textContent = "Vaciar";
+    btn.title = isParkingNow
+      ? "Hay un guardado de aparcado en curso. Espera por favor."
+      : "Vaciar productos del pedido actual manteniendo la mesa y el ticket.";
+    return;
+  }
+
   const loaded = getCurrentLoadedParkedTicket();
   const hasLoadedOpenTicket = !!loaded && !loaded?.paid;
 
@@ -17465,8 +17593,8 @@ if (parkedCloseBtn) {
 // Cerrar al hacer clic fuera de la tarjeta
 if (parkedTicketsOverlay) {
   parkedTicketsOverlay.addEventListener("click", (e) => {
-    const modal = e.target.closest(".parked-modal");
-    if (!modal) {
+    // Solo cerramos si el click cae exactamente en el fondo del overlay.
+    if (e.target === parkedTicketsOverlay) {
       closeParkedModal();
     }
   });
@@ -19457,6 +19585,7 @@ async function checkSharedCajaHealthOnce() {
     updateCashButtonLabel?.();
     renderCashIdChip?.();
     refreshAgentGuardUI?.();
+    renderMainUI?.(true);
     setStatusText("Caja cerrada en otro TPV");
 
     toast(
@@ -19476,6 +19605,85 @@ async function checkSharedCajaHealthOnce() {
     }
     return true;
   }
+}
+
+async function checkSharedCajaStateOnce({ notify = true } = {}) {
+  if (!isSharedCashModeEnabled()) return null;
+  if (TPV_STATE?.offline || TPV_STATE?.locked) return null;
+
+  try {
+    const globalOpen = await apiReadLastOpenCajaGlobal();
+    const globalOpenId = Number(globalOpen?.idcaja || 0) || 0;
+
+    if (__sharedCajaLastKnownOpenId === null) {
+      __sharedCajaLastKnownOpenId = globalOpenId;
+      return globalOpenId;
+    }
+
+    const prev = __sharedCajaLastKnownOpenId;
+    __sharedCajaLastKnownOpenId = globalOpenId;
+
+    if (prev === globalOpenId) return globalOpenId;
+
+    const localOpen = !!cashSession?.open;
+
+    if (notify && prev > 0 && globalOpenId === 0) {
+      toast("Otro TPV cerró la caja compartida.", "warn", "Caja compartida");
+      setStatusText("Caja compartida cerrada por otro TPV");
+    }
+
+    if (notify && prev === 0 && globalOpenId > 0) {
+      toast(
+        `Otro TPV abrió la caja ${globalOpenId}.`,
+        "info",
+        "Caja compartida",
+      );
+      setStatusText(`Caja compartida abierta (${globalOpenId})`);
+    }
+
+    if (!localOpen && globalOpenId > 0) {
+      await maybeOpenCashOrRecover();
+    }
+
+    return globalOpenId;
+  } catch (e) {
+    if (!isConnectivityLikeError(e)) {
+      console.warn(
+        "Chequeo de estado de caja compartida falló:",
+        e?.message || e,
+      );
+    }
+    return null;
+  }
+}
+
+function startSharedCajaStateMonitor() {
+  stopSharedCajaStateMonitor();
+
+  if (!isSharedCashModeEnabled()) return;
+
+  checkSharedCajaStateOnce({ notify: false }).catch(() => {});
+
+  __sharedCajaStateTimer = setInterval(async () => {
+    if (__sharedCajaStateInFlight) return;
+
+    __sharedCajaStateInFlight = true;
+    try {
+      await checkSharedCajaStateOnce({ notify: true });
+    } finally {
+      __sharedCajaStateInFlight = false;
+    }
+  }, 10000);
+}
+
+function stopSharedCajaStateMonitor() {
+  if (__sharedCajaStateTimer) {
+    clearInterval(__sharedCajaStateTimer);
+    __sharedCajaStateTimer = null;
+  }
+
+  __sharedCajaStateInFlight = false;
+  __sharedCajaLastKnownOpenId = null;
 }
 
 function startSharedCajaHealthMonitor() {
@@ -31810,6 +32018,7 @@ if (clearBtn) {
           saveDraftCartForMesaUid(selectedUid, [], { keepEmpty: true });
         }
         renderMesasTransContextBar();
+        updateParkedCountBadge?.();
         refreshParkButtonUI();
         refreshParkedEditingBanner();
         return;
@@ -41730,6 +41939,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
 window.addEventListener("beforeunload", () => {
   persistRuntimeCartSnapshot({ force: true });
+  stopSharedCajaStateMonitor?.();
   stopTerminalPresenceMonitor({ clearRemote: true });
 });
 

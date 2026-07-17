@@ -1,8 +1,14 @@
-﻿{
+{
   "schema": 1,
   "versions": [
     {
-      "version": "0.2.3",
+      "version": "actual",
+      "date": "",
+      "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.4",
       "date": "2026-07-15",
       "title": "Hotfix bascula",
       "changes": [
@@ -13,7 +19,7 @@
       ]
     },
     {
-      "version": "0.2.2",
+      "version": "0.2.3",
       "date": "2026-07-15",
       "title": "UX tickets, cierre y changelog",
       "changes": [
