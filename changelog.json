@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.5",
+      "date": "2026-07-20",
+      "title": "Release 0.2.5",
       "changes": [
         "Aparcados: corregido un fallo por el que cobrar un carrito normal (sin aparcado cargado) marcaba como pagado y borraba por error el ticket aparcado que hubiera en la lista. Ahora cobrar una venta normal no toca los aparcados.",
         "Tickets: los packs/ofertas (p.ej. 3x1) ya no se imprimen como si fueran un descuento con porcentaje negativo confuso; se muestran con su precio de promocion y sin restar un descuento inexistente del total.",
