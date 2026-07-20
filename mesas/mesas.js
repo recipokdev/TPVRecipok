@@ -1873,11 +1873,29 @@ function getLineUnitForTotals(line) {
   return 0;
 }
 
+function round2Mesas(n) {
+  const v = Number(n) || 0;
+  return Math.round((v + Number.EPSILON) * 100) / 100;
+}
+
+// "Neto primero" como FacturaScripts (y como el TPV principal), para que el
+// total de la mesa coincida con lo que se cobra/factura:
+// base = round2(neto*qty); iva = round2(base*tasa/100); total = base+iva.
+function computeLineTotalNetFirst(line, qty) {
+  const gross = getLineUnitForTotals(line);
+  const rate = Number(line?.taxRate) || 0;
+  const divisor = 1 + rate / 100;
+  const netUnit = divisor > 0 ? gross / divisor : gross;
+  const base = round2Mesas(netUnit * qty);
+  const iva = round2Mesas(base * (rate / 100));
+  return round2Mesas(base + iva);
+}
+
 function computeTicketTotalFromItems(items) {
   const src = Array.isArray(items) ? items : [];
   return src.reduce((sum, line) => {
     const qty = Number(line?.qty ?? line?.cantidad ?? 1) || 0;
-    return sum + qty * getLineUnitForTotals(line);
+    return sum + computeLineTotalNetFirst(line, qty);
   }, 0);
 }
 

@@ -5,7 +5,11 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "Aparcados: corregido un fallo por el que cobrar un carrito normal (sin aparcado cargado) marcaba como pagado y borraba por error el ticket aparcado que hubiera en la lista. Ahora cobrar una venta normal no toca los aparcados.",
+        "Tickets: los packs/ofertas (p.ej. 3x1) ya no se imprimen como si fueran un descuento con porcentaje negativo confuso; se muestran con su precio de promocion y sin restar un descuento inexistente del total.",
+        "Importes: el TPV calcula el total igual que FacturaScripts (partiendo del neto: base, luego IVA), de modo que carrito, ticket, cobro, pantalla de cliente y lo guardado en FacturaScripts coinciden sin desfases de 1 centimo en cantidades por peso."
+      ]
     },
     {
       "version": "0.2.4",

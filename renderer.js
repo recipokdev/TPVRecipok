@@ -2433,12 +2433,22 @@ function getCartLinePricing(item) {
     : tariffUnitGross;
 
   const qty = Number(item?.qty || 0) || 0;
-  const baseLineTotal = round2(baseUnitGross * qty);
-  const lineTotal = round2(unitGross * qty);
+
+  // "Neto primero" como FacturaScripts: el total de linea se calcula sobre el
+  // neto (base = round2(neto*qty), iva = round2(base*tasa), total = base+iva),
+  // no sobre el bruto, para que carrito/cobro coincidan con lo que factura FS.
+  const taxRate = getTaxRateForLine(item);
+  const lineNetPricing = computeLineNetFirst(unitGross, qty, taxRate);
+  const baseLineNetPricing = computeLineNetFirst(baseUnitGross, qty, taxRate);
+  const lineTotal = lineNetPricing.total;
+  const baseLineTotal = baseLineNetPricing.total;
 
   return {
     unitGross,
     lineTotal,
+    lineBase: lineNetPricing.base,
+    lineIva: lineNetPricing.iva,
+    taxRate,
     baseUnitGross,
     tariffUnitGross,
     baseLineTotal,
@@ -11000,8 +11010,14 @@ function resolveUnpaidParkedTicketIndexForCheckout({
 } = {}) {
   if (!Array.isArray(parkedTickets) || !parkedTickets.length) return null;
 
-  const idxCandidate = Number(preferredIndex);
-  if (Number.isFinite(idxCandidate) && idxCandidate >= 0) {
+  // OJO: Number(null) === 0 (no NaN). Antes, cobrar un carrito NORMAL sin
+  // aparcado cargado pasaba preferredIndex=null -> idxCandidate=0 y resolvia al
+  // aparcado del indice 0, marcandolo pagado y borrando su presupuesto en FS.
+  // Solo aceptar un indice cuando se ha pasado uno de verdad.
+  const hasPreferredIndex =
+    preferredIndex != null && Number.isFinite(Number(preferredIndex));
+  const idxCandidate = hasPreferredIndex ? Number(preferredIndex) : NaN;
+  if (hasPreferredIndex && idxCandidate >= 0) {
     const t = parkedTickets[idxCandidate];
     if (t && !t?.paid && isTicketInCurrentParkingMode(t)) {
       return idxCandidate;
@@ -11035,7 +11051,7 @@ function resolveUnpaidParkedTicketIndexForCheckout({
   // En flujo de cobro no adivinar por firma de carrito si no hay referencia
   // explícita a un aparcado cargado (evita falsos positivos con carritos parecidos).
   const hasExplicitHint =
-    (Number.isFinite(idxCandidate) && idxCandidate >= 0) || !!key || idNum > 0;
+    (hasPreferredIndex && idxCandidate >= 0) || !!key || idNum > 0;
   if (!hasExplicitHint) {
     return null;
   }
@@ -26631,6 +26647,28 @@ function getCatalogBaseUnitGrossForProductId(productId) {
   }
 }
 
+// Un pack/oferta (p.ej. 3x1) NO es un descuento por linea. Al reimprimir desde
+// FacturaScripts la linea llega con pvpsindto (valor de lista) > pvptotal
+// (precio promo), lo que el calculo generico interpretaria como "Descuento -X%"
+// con porcentajes absurdos. Detectamos el pack padre de forma robusta: por la
+// marca que deja preparePrintableTicket (__isPackParent), por meta de carrito, o
+// por idproducto (isOfferPackProductById, sobrevive a la re-lectura de FS).
+function isPackParentForPrint(line) {
+  if (!line) return false;
+  if (line.__isPackParent) return true;
+  try {
+    if (isPackParentLine(line)) return true;
+  } catch {}
+  const pid =
+    Number(line?.idproducto || line?.id || line?.baseProductId || 0) || 0;
+  if (pid) {
+    try {
+      return !!isOfferPackProductById(pid);
+    } catch {}
+  }
+  return false;
+}
+
 function getPrintableLinePricingBreakdown(line) {
   const qty = parseQtyValue(line?.qty ?? line?.cantidad, 0);
   const absQty = Math.abs(qty);
@@ -26638,6 +26676,21 @@ function getPrintableLinePricingBreakdown(line) {
   const taxFactor = 1 + taxRate / 100;
 
   const finalUnitGross = parseQtyValue(getUnitGrossForPrint(line), 0);
+
+  // Packs/ofertas: nunca mostrar descuento por linea (ver nota arriba).
+  if (isPackParentForPrint(line)) {
+    const finalUnit = round2(finalUnitGross);
+    return {
+      qty,
+      absQty,
+      baseUnitGross: finalUnit,
+      finalUnitGross: finalUnit,
+      discountPerUnit: 0,
+      discountTotal: 0,
+      hasDiscount: false,
+    };
+  }
+
   let baseUnitGross = parseQtyValue(line?.__baseUnitGrossHint, NaN);
   if (!isFinite(baseUnitGross) || baseUnitGross <= 0) {
     baseUnitGross = finalUnitGross;
@@ -26851,16 +26904,15 @@ function calcTotalsAndTaxMap(lineas, totalsOnlyPositive) {
     if (!includeInTotals) continue;
 
     const unitGross = getUnitGrossForPrint(l);
-    const lineGross = round2(unitGross * qty);
+    const rate = getTaxRateForLine(l);
+
+    // "Neto primero" como FacturaScripts: base = round2(neto*qty),
+    // iva = round2(base*tasa), total = base+iva. Coincide con el carrito y con
+    // lo que FS factura (antes se derivaba la base desde el bruto -> desfase).
+    const { base: lineBase, iva: lineIva, total: lineGross } =
+      computeLineNetFirst(unitGross, qty, rate);
 
     totalToShow = round2(totalToShow + lineGross);
-
-    const rate = getTaxRateForLine(l);
-    const divisor = 1 + rate / 100;
-
-    const lineBase =
-      divisor > 0 ? round2(lineGross / divisor) : round2(lineGross);
-    const lineIva = round2(lineGross - lineBase);
 
     if (!taxMap[rate]) taxMap[rate] = { base: 0, iva: 0 };
     taxMap[rate].base = round2(taxMap[rate].base + lineBase);
@@ -27012,7 +27064,9 @@ function renderItemsHtml(doc, lineas) {
           ? Number(l.__lineTotalOverride || 0)
           : isChild
             ? 0
-            : qty * effectiveUnitGross;
+            : // "Neto primero" como FacturaScripts, coherente con base+IVA y total.
+              computeLineNetFirst(effectiveUnitGross, qty, getTaxRateForLine(l))
+                .total;
 
       const discountPct = (() => {
         const hinted = clampDiscountPercent(
@@ -27155,6 +27209,23 @@ function buildFsLinesFromCart(cartArr) {
 function round2(n) {
   const v = Number(n) || 0;
   return Math.round((v + Number.EPSILON) * 100) / 100;
+}
+
+// Calculo "neto primero" por linea, replicando FacturaScripts (que recibe el
+// precio neto y recalcula el total en el servidor). El TPV envia neto a FS, asi
+// que debe calcular igual para que carrito/ticket/cobro coincidan con lo que se
+// factura: base = round2(neto*cant); iva = round2(base*tasa/100); total = base+iva.
+// (Antes el TPV calculaba desde el bruto -> desfase de 1 centimo en cantidades
+// por peso.) unitGross es el bruto unitario ya ajustado (tarifa/descuento).
+function computeLineNetFirst(unitGross, qty, taxRate) {
+  const q = Number(qty) || 0;
+  const rate = Number(taxRate) || 0;
+  const divisor = 1 + rate / 100;
+  const netUnit =
+    divisor > 0 ? Number(unitGross || 0) / divisor : Number(unitGross || 0);
+  const base = round2(netUnit * q);
+  const iva = round2(base * (rate / 100));
+  return { base, iva, total: round2(base + iva), netUnit };
 }
 
 function eurTicket(n) {
@@ -32571,7 +32642,8 @@ function computeLinesTotal(lines) {
   return (Array.isArray(lines) ? lines : []).reduce((sum, line) => {
     const unit = getUnitGross(line);
     const qty = Number(line?.qty || 0) || 0;
-    return sum + unit * qty;
+    // "Neto primero" como el resto del TPV/FacturaScripts.
+    return sum + computeLineNetFirst(unit, qty, getTaxRateForLine(line)).total;
   }, 0);
 }
 
@@ -35787,7 +35859,8 @@ async function openInfoForPaidParkedTicket(ticket) {
 
 function buildTicketInfoLineFromSnapshot(line) {
   const qty = Math.max(0, Number(line?.qty ?? line?.cantidad ?? 0) || 0);
-  const finalUnitGross = round2(Number(getUnitGrossForPrint(line) || 0));
+  const rawUnitGross = Number(getUnitGrossForPrint(line) || 0);
+  const finalUnitGross = round2(rawUnitGross); // solo para mostrar el precio/ud
   const baseUnitGross = round2(
     Number(
       line?.__baseUnitGrossHint ??
@@ -35811,7 +35884,9 @@ function buildTicketInfoLineFromSnapshot(line) {
     descripcion: String(line?.name || line?.descripcion || "Producto").trim(),
     codimpuesto: line?.codimpuesto || "",
     pvpunitario: finalUnitGross,
-    pvptotal: round2(finalUnitGross * qty),
+    // "Neto primero" como FacturaScripts, para coincidir con carrito/ticket/FS.
+    pvptotal: computeLineNetFirst(rawUnitGross, qty, getTaxRateForLine(line))
+      .total,
     __infoFromSnapshot: true,
     __infoBaseUnitGross: baseUnitGross,
     __infoDiscountPct: discountPct,
@@ -40981,7 +41056,7 @@ function renderRefundLines() {
       ${controlsHtml}
 
       <div style="width:110px; text-align:right; font-weight:700;">
-        ${eurES(unitGross * curr)}
+        ${eurES(computeLineNetFirst(unitGross, curr, tax).total)}
       </div>
     `;
 
@@ -41008,14 +41083,14 @@ function updateRefundAmount() {
       if (Number(l?.__infoFromSnapshot) || Number(l?.__infoHasDiscount)) {
         total += Number(l.pvptotal || 0);
       } else {
-        total += lineGrossUnit(l) * qty;
+        total += computeLineNetFirst(lineGrossUnit(l), qty, lineTaxRate(l)).total;
       }
       return;
     }
 
     const id = Number(l.idlinea);
     const q = Number(refundState.qtyByLineId[id] || 0);
-    total += lineGrossUnit(l) * q;
+    total += computeLineNetFirst(lineGrossUnit(l), q, lineTaxRate(l)).total;
   });
 
   el.textContent = eurES(total);
