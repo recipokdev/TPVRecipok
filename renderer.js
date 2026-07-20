@@ -829,6 +829,55 @@ function isNpmStartRuntimeForPresence() {
   return !!window.TPV_ENV?.defaultApp;
 }
 
+// Toggle "Preview ticket" SOLO en desarrollo (npm start). Muestra el control en
+// Opciones y guarda el estado en cfg (devTicketPreview). Con el activado, al
+// cobrar el proceso principal muestra el ticket en pantalla en vez de imprimir
+// (ver main.js: isDevTicketPreviewActive). En la app instalada este control
+// queda oculto y, aunque se forzara la cfg, main lo ignora (doble candado).
+(async function initDevTicketPreviewToggle() {
+  try {
+    // Deteccion FIABLE de modo desarrollo: preguntamos al proceso principal por
+    // app.isPackaged (app:getVersion.packaged). process.defaultApp NO es fiable
+    // en el preload/renderer, por eso no lo usamos como fuente principal.
+    let isDev = false;
+    try {
+      const info = await window.TPV_SYS?.getVersion?.();
+      isDev = !!info && info.packaged === false;
+    } catch {}
+    if (!isDev && window.TPV_ENV?.defaultApp) isDev = true; // fallback
+
+    if (!isDev) return;
+
+    const wrap = document.getElementById("devTicketPreviewRow");
+    const cb = document.getElementById("devTicketPreviewToggle");
+    if (!wrap || !cb) return;
+
+    wrap.classList.remove("hidden");
+    wrap.style.display = "";
+
+    Promise.resolve(window.TPV_CFG?.get?.("devTicketPreview"))
+      .then((v) => {
+        cb.checked = v === true;
+      })
+      .catch(() => {});
+
+    cb.addEventListener("change", () => {
+      try {
+        window.TPV_CFG?.set?.("devTicketPreview", !!cb.checked);
+      } catch {}
+      try {
+        toast?.(
+          cb.checked
+            ? "Preview de ticket ON (no imprime, muestra en pantalla)"
+            : "Preview de ticket OFF (impresion normal)",
+          "info",
+          "Pruebas",
+        );
+      } catch {}
+    });
+  } catch {}
+})();
+
 function isTerminalPresenceSilentMode() {
   if (isNpmStartRuntimeForPresence()) return true;
 
@@ -13149,34 +13198,34 @@ function buildNumPadPricePreviewHtml() {
         ? `${numPadPricePreviewTopDiscountText} · MOD`
         : "MOD";
     }
-    const unitValues = `<span class="num-pad-price-preview-old">${eur(previewBaseUnitGross)}</span><span>${eur(previewUnitGross)}</span>`;
-    html += `
-      <div class="num-pad-price-preview-row num-pad-price-preview-row--unit">
-        <span class="num-pad-price-preview-label">Unitario</span>
-        <span class="num-pad-price-preview-values">${unitValues}</span>
-      </div>
-    `;
-
-    if (qty > 1.0001) {
-      const totalValues = `<span class="num-pad-price-preview-old">${eur(previewBaseLineGross)}</span><span>${eur(previewLineGross)}</span>`;
-      html += `
-        <div class="num-pad-price-preview-row num-pad-price-preview-row--total">
-          <span class="num-pad-price-preview-label">Total x${fmtQty(qty)}</span>
-          <span class="num-pad-price-preview-values">${totalValues}</span>
-        </div>
-      `;
-    }
-  } else {
-    if (previewPriceModified) {
-      numPadPricePreviewTopDiscountText = "MOD";
-    }
+  } else if (previewPriceModified) {
+    numPadPricePreviewTopDiscountText = "MOD";
   }
 
-  if (!hasPreviewDiscount && qty > 1.0001) {
+  // Fila "Unitario" SIEMPRE visible en modo precio/descuento, para que el
+  // teclado no se mueva al aplicar/quitar descuento (se reserva el espacio).
+  // Con descuento muestra precio anterior tachado + nuevo; sin descuento, solo
+  // el precio actual.
+  const unitValues = hasPreviewDiscount
+    ? `<span class="num-pad-price-preview-old">${eur(previewBaseUnitGross)}</span><span>${eur(previewUnitGross)}</span>`
+    : `<span>${eur(previewUnitGross)}</span>`;
+  html += `
+    <div class="num-pad-price-preview-row num-pad-price-preview-row--unit">
+      <span class="num-pad-price-preview-label">Unitario</span>
+      <span class="num-pad-price-preview-values">${unitValues}</span>
+    </div>
+  `;
+
+  // Fila total (solo con cantidad > 1) tambien consistente con/sin descuento,
+  // asi el numero de filas no cambia al aplicar descuento.
+  if (qty > 1.0001) {
+    const totalValues = hasPreviewDiscount
+      ? `<span class="num-pad-price-preview-old">${eur(previewBaseLineGross)}</span><span>${eur(previewLineGross)}</span>`
+      : `<span>${eur(previewLineGross)}</span>`;
     html += `
-      <div class="num-pad-price-preview-row num-pad-price-preview-row--totalonly">
-        <span class="num-pad-price-preview-label">Total nuevo x${fmtQty(qty)}</span>
-        <span class="num-pad-price-preview-values">${eur(previewLineGross)}</span>
+      <div class="num-pad-price-preview-row num-pad-price-preview-row--total">
+        <span class="num-pad-price-preview-label">Total x${fmtQty(qty)}</span>
+        <span class="num-pad-price-preview-values">${totalValues}</span>
       </div>
     `;
   }
@@ -16945,6 +16994,22 @@ function focusParkedListOnPendingToday() {
   parkedViewState.pendingScope = "today";
 }
 
+// Un aparcado tiene descuento si alguna linea lleva descuento de linea o el
+// descuento general del carrito congelado en la linea. (Requiere que esos
+// campos se hayan persistido al guardar el aparcado.)
+function parkedTicketHasDiscount(t) {
+  const items = Array.isArray(t?.items) ? t.items : [];
+  return items.some((it) => {
+    const line = clampDiscountPercent(
+      parseNumericLike(it?.cartLineDiscountPct, 0),
+    );
+    const glob = clampDiscountPercent(
+      parseNumericLike(it?.cartGlobalDiscountPctApplied, 0),
+    );
+    return line > 0.0001 || glob > 0.0001;
+  });
+}
+
 function renderParkedTicketsModal() {
   if (!parkedTicketsList) return;
 
@@ -17146,6 +17211,10 @@ function renderParkedTicketsModal() {
       ? '<span class="ticket-badge ticket-badge-ok">✔ COBRADO</span>'
       : '<span class="ticket-badge ticket-badge-partial">PENDIENTE</span>';
 
+    const discountBadge = parkedTicketHasDiscount(t)
+      ? '<span class="ticket-badge" style="background:#7c3aed;color:#fff;">% DTO</span>'
+      : "";
+
     const paidSub = t.paid
       ? `<div class="pt-items pt-items-paid">Cobrado${
           t.paidTicketCode ? ` · ${escapeHtml(t.paidTicketCode)}` : ""
@@ -17164,6 +17233,7 @@ function renderParkedTicketsModal() {
       <div class="pt-left">
         <div class="pt-title">
           ${paidBadge}
+          ${discountBadge}
           ${escapeHtml(titleText)}
         </div>
 
@@ -26677,9 +26747,25 @@ function getPrintableLinePricingBreakdown(line) {
 
   const finalUnitGross = parseQtyValue(getUnitGrossForPrint(line), 0);
 
-  // Packs/ofertas: nunca mostrar descuento por linea (ver nota arriba).
+  // Packs/ofertas: no mostrar el "descuento" fantasma (pvpsindto = valor de
+  // lista vs precio de promocion). PERO si el usuario aplico un descuento REAL
+  // a la oferta (llega del carrito como __baseUnitGrossHint, el precio de promo
+  // antes del descuento), ese SI se muestra.
   if (isPackParentForPrint(line)) {
     const finalUnit = round2(finalUnitGross);
+    const hintBase = round2(parseQtyValue(line?.__baseUnitGrossHint, 0));
+    if (hintBase > finalUnit + 0.0001) {
+      const discountPerUnit = Math.max(0, round2(hintBase - finalUnit));
+      return {
+        qty,
+        absQty,
+        baseUnitGross: hintBase,
+        finalUnitGross: finalUnit,
+        discountPerUnit,
+        discountTotal: round2(discountPerUnit * absQty),
+        hasDiscount: discountPerUnit > 0.0001,
+      };
+    }
     return {
       qty,
       absQty,
@@ -30913,6 +30999,26 @@ async function apiSaveParkedReservation(ticket) {
             it?.grossPriceOverride == null
               ? null
               : Number(it.grossPriceOverride),
+          // Campos de descuento: hay que persistirlos para que al restaurar el
+          // aparcado (sobre todo desde remoto) no se pierda el descuento de
+          // linea/general aplicado. Antes se omitian y el ticket volvia a precio
+          // normal al reabrirlo.
+          cartLineDiscountPct:
+            it?.cartLineDiscountPct == null
+              ? null
+              : Number(it.cartLineDiscountPct),
+          cartGlobalDiscountPctApplied:
+            it?.cartGlobalDiscountPctApplied == null
+              ? null
+              : Number(it.cartGlobalDiscountPctApplied),
+          discountPctApplied:
+            it?.discountPctApplied == null
+              ? null
+              : Number(it.discountPctApplied),
+          discountBaseNetPrice:
+            it?.discountBaseNetPrice == null
+              ? null
+              : Number(it.discountBaseNetPrice),
           imageUrl: it?.imageUrl || null,
           meta: it?.meta && typeof it.meta === "object" ? it.meta : null,
         }))
@@ -35891,6 +35997,10 @@ function buildTicketInfoLineFromSnapshot(line) {
     __infoBaseUnitGross: baseUnitGross,
     __infoDiscountPct: discountPct,
     __infoHasDiscount: hasDiscount,
+    // Conservar marca de hijo de pack para poder mostrarlo indentado en la
+    // info del ticket (ver renderRefundLines, modo info).
+    __isPackChild: isPackChildForPrint(line),
+    meta: line?.meta && typeof line.meta === "object" ? line.meta : undefined,
   };
 }
 
@@ -40909,15 +41019,35 @@ async function openTicketInfoForFactura(facturaRow, options = {}) {
     recibosOriginales = [];
   }
 
+  // Fallback (factura FS sin snapshot local): antes se descartaban las lineas a
+  // 0 EUR, que son justo los HIJOS de un pack/oferta -> el modal solo mostraba
+  // la linea del pack. Ahora agrupamos padre+hijos con preparePrintableTicket
+  // (como el ticket impreso) y conservamos los hijos para poder ver el contenido
+  // de la oferta.
+  let fsFallbackLines = [];
+  if (!preferredSnapshotLines.length && !originSnapshotLines.length) {
+    let fsLines = Array.isArray(lineasAll) ? lineasAll : [];
+    try {
+      if (!PACKS_STATE?.ready && typeof warmupPacksData === "function") {
+        await warmupPacksData();
+      }
+      const norm = preparePrintableTicket({ lineas: fsLines });
+      fsLines = Array.isArray(norm?.lineas) ? norm.lineas : fsLines;
+    } catch {}
+    fsFallbackLines = fsLines.filter((l) => {
+      const qty = Math.abs(Number(l?.cantidad || 0));
+      if (qty <= 0.00001) return false;
+      if (isPackChildForPrint(l)) return true; // hijos del pack (0 EUR): mantener
+      const unit = Number(lineGrossUnit(l) || 0);
+      return unit > 0.00001;
+    });
+  }
+
   const lineasInfo = preferredSnapshotLines.length
     ? preferredSnapshotLines
     : originSnapshotLines.length
       ? originSnapshotLines
-      : (Array.isArray(lineasAll) ? lineasAll : []).filter((l) => {
-          const qty = Math.abs(Number(l?.cantidad || 0));
-          const unit = Number(lineGrossUnit(l) || 0);
-          return qty > 0.00001 && unit > 0.00001;
-        });
+      : fsFallbackLines;
 
   const totalForInfo =
     preferredSnapshotLines.length && preferredSnapshotTotal > 0
@@ -40992,6 +41122,24 @@ function renderRefundLines() {
   }
 
   refundState.lineas.forEach((l) => {
+    // Hijos de un pack/oferta: en modo info se muestran indentados como
+    // contenido de la oferta (sin precio ni controles), para ver que incluye.
+    if (isInfoMode && isPackChildForPrint(l)) {
+      const childName = getRefundLineDisplayName(l);
+      const childQty = Math.abs(Number(l?.cantidad || 0));
+      const childRow = document.createElement("div");
+      childRow.style.cssText =
+        "display:flex; align-items:center; justify-content:space-between; gap:10px; padding:4px 0 4px 18px; border-bottom:1px dashed #eee; font-size:12px; opacity:.8;";
+      childRow.innerHTML = `
+        <div style="flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+          ↳ ${escapeHtml(childName)}${childQty && Math.abs(childQty - 1) > 0.0001 ? ` x${childQty}` : ""}
+        </div>
+        <div style="opacity:.7;">incluido</div>
+      `;
+      wrap.appendChild(childRow);
+      return;
+    }
+
     const max = Number(
       l._remainingQty != null ? l._remainingQty : l.cantidad || 0,
     );

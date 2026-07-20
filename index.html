@@ -3147,6 +3147,24 @@
           </label>
         </div>
 
+        <!-- Solo pruebas (npm start): al cobrar muestra el ticket en pantalla en
+             vez de imprimir. Oculto por defecto; el renderer lo muestra solo en
+             modo desarrollo. Nunca visible/activo en la app instalada. -->
+        <div class="opt-row hidden" id="devTicketPreviewRow" style="display: none">
+          <div class="opt-row-txt">
+            <div class="opt-row-title">👁 Preview de ticket (solo pruebas)</div>
+            <div class="opt-row-sub">
+              Al cobrar/reimprimir, muestra el ticket en una ventana en vez de
+              imprimir (para revisar desde casa). La ventana tiene boton
+              "Imprimir" por si quieres el ticket fisico en la oficina.
+            </div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="devTicketPreviewToggle" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
         <div class="dialog-actions opt-actions">
           <button
             type="button"

@@ -1408,11 +1408,13 @@ ipcMain.handle("printers:list", async () => {
 });
 
 // --- IPC: imprimir silencioso en una impresora concreta ---
-ipcMain.handle("ticket:print", async (_event, { html, deviceName }) => {
+// Impresion real de un ticket HTML (Windows: silencioso; Linux: PDF + lp).
+// Extraido a funcion para reutilizarlo desde el handler normal y desde el boton
+// "Imprimir" de la ventana de previsualizacion (modo pruebas).
+async function printTicketHtml(html, deviceName) {
   if (!html) return { ok: false, error: "Falta html" };
   if (!deviceName) return { ok: false, error: "Falta deviceName" };
 
-  // Windows: puedes mantener tu print silencioso actual
   if (process.platform === "win32") {
     let win = null;
     try {
@@ -1442,12 +1444,10 @@ ipcMain.handle("ticket:print", async (_event, { html, deviceName }) => {
     }
   }
 
-  // Linux: PDF con tamaño ticket + lp
   if (process.platform === "linux") {
     try {
       const pdfPath = await renderTicketPdf(html);
       const r = await lpPdf(deviceName, pdfPath);
-      // limpieza best-effort
       try {
         fs.unlinkSync(pdfPath);
       } catch (_) {}
@@ -1458,9 +1458,124 @@ ipcMain.handle("ticket:print", async (_event, { html, deviceName }) => {
   }
 
   return { ok: false, error: `Sistema no soportado: ${process.platform}` };
+}
+
+// Previsualizacion de ticket SOLO en desarrollo (npm start) Y con el toggle de
+// Opciones activado. Doble candado: nunca se activa en la app instalada
+// (app.isPackaged) aunque existiera la cfg. Ver toggle en Opciones (renderer).
+function isDevTicketPreviewActive() {
+  try {
+    return !app.isPackaged && readCfg().devTicketPreview === true;
+  } catch {
+    return false;
+  }
+}
+
+function escapeForSrcdoc(s) {
+  return String(s || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+}
+
+function buildTicketPreviewWrapper(html, rawText) {
+  const inner =
+    typeof html === "string" && html.trim()
+      ? html
+      : "<!doctype html><meta charset=\"utf-8\">" +
+        "<body style=\"font-family:monospace;white-space:pre-wrap;padding:12px;\">" +
+        String(rawText || "(ticket vacio)")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;") +
+        "</body>";
+  const srcdoc = escapeForSrcdoc(inner);
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Previsualizacion de ticket (pruebas)</title>
+<style>
+  html,body{margin:0;height:100%;background:#525659;font-family:system-ui,Arial,sans-serif;}
+  .bar{position:sticky;top:0;z-index:2;display:flex;gap:10px;align-items:center;padding:8px 10px;background:#2b2f31;color:#fff;font-size:13px;}
+  .bar button{cursor:pointer;border:0;border-radius:6px;padding:7px 14px;font-weight:600;background:#2563eb;color:#fff;font-size:13px;}
+  .bar button:active{transform:translateY(1px);}
+  .bar .msg{opacity:.85;}
+  .paper{background:#fff;margin:14px auto;width:302px;box-shadow:0 2px 14px rgba(0,0,0,.45);}
+  iframe{border:0;width:302px;display:block;min-height:120px;}
+</style></head>
+<body>
+  <div class="bar">
+    <button id="btnPrint" type="button">🖨 Imprimir</button>
+    <span class="msg" id="msg">Previsualizacion (solo pruebas) — no se ha impreso nada</span>
+  </div>
+  <div class="paper"><iframe id="tk" srcdoc="${srcdoc}"></iframe></div>
+  <script>
+    var msg=document.getElementById('msg');
+    var tk=document.getElementById('tk');
+    tk.addEventListener('load',function(){try{tk.style.height=(tk.contentDocument.body.scrollHeight+24)+'px';}catch(e){}});
+    document.getElementById('btnPrint').addEventListener('click',async function(){
+      msg.textContent='Imprimiendo...';
+      try{
+        var r=(window.PREVIEW&&window.PREVIEW.print)?await window.PREVIEW.print():{ok:false,error:'sin puente'};
+        msg.textContent=(r&&r.ok)?'Enviado a la impresora.':('Error: '+((r&&r.error)||'desconocido'));
+      }catch(e){msg.textContent='Error: '+((e&&e.message)||e);}
+    });
+  </script>
+</body></html>`;
+}
+
+let ticketPreviewWin = null;
+let lastPreviewJob = null; // { html, deviceName }
+
+async function openTicketPreview({ html, deviceName, rawText } = {}) {
+  lastPreviewJob = { html: html || "", deviceName: deviceName || "" };
+  const wrapper = buildTicketPreviewWrapper(html, rawText);
+  try {
+    if (!ticketPreviewWin || ticketPreviewWin.isDestroyed()) {
+      ticketPreviewWin = new BrowserWindow({
+        width: 380,
+        height: 820,
+        title: "Previsualizacion de ticket (solo pruebas)",
+        autoHideMenuBar: true,
+        webPreferences: {
+          preload: path.join(__dirname, "preview_preload.js"),
+          contextIsolation: true,
+          sandbox: false,
+        },
+      });
+      ticketPreviewWin.on("closed", () => {
+        ticketPreviewWin = null;
+      });
+    }
+    const dataUrl =
+      "data:text/html;charset=utf-8," + encodeURIComponent(wrapper);
+    await ticketPreviewWin.loadURL(dataUrl);
+    ticketPreviewWin.show();
+    ticketPreviewWin.focus();
+    return { ok: true, preview: true };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+ipcMain.handle("ticket:print", async (_event, { html, deviceName }) => {
+  if (isDevTicketPreviewActive()) {
+    return openTicketPreview({ html, deviceName });
+  }
+  return printTicketHtml(html, deviceName);
+});
+
+// Imprimir de verdad el ticket que se esta previsualizando (boton de la ventana).
+ipcMain.handle("ticket:previewPrint", async () => {
+  if (!lastPreviewJob || !lastPreviewJob.html) {
+    return { ok: false, error: "No hay ticket para imprimir" };
+  }
+  return printTicketHtml(lastPreviewJob.html, lastPreviewJob.deviceName);
 });
 
 ipcMain.handle("ticket:printRaw", async (_event, { bytes, deviceName }) => {
+  if (isDevTicketPreviewActive()) {
+    let rawText = "";
+    try {
+      rawText = Buffer.from(bytes || []).toString("utf8");
+    } catch {
+      /* bytes no convertibles a texto */
+    }
+    return openTicketPreview({ rawText });
+  }
   if (!bytes || !Array.isArray(bytes) || bytes.length === 0) {
     return { ok: false, error: "Faltan bytes" };
   }
@@ -1783,6 +1898,11 @@ function registerShortcuts() {
 }
 
 ipcMain.handle("tpv:openCashDrawer", async (_event, { deviceName }) => {
+  // Modo pruebas (npm start + toggle): no abrir el cajon fisico en la oficina.
+  if (isDevTicketPreviewActive()) {
+    return { ok: true, mocked: true, devPreview: true, deviceName };
+  }
+
   // Windows: deviceName = nombre impresora
   // Linux: deviceName opcional (si viene vacío, autodetecta)
 
