@@ -1,5 +1,5 @@
 // main.js
-const { app, BrowserWindow, ipcMain, screen } = require("electron");
+const { app, BrowserWindow, ipcMain, screen, shell } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const { execFile, spawn } = require("child_process");
 const path = require("path");
@@ -24,9 +24,11 @@ const scaleManager = new ScaleManager();
 let scaleReconnectMonitorTimer = null;
 let scaleReconnectInFlight = false;
 let lastScaleReconnectAttemptAt = 0;
+const IS_E2E = String(process.env.TPV_E2E || "") === "1";
 const IS_E2E_BACKGROUND =
-  String(process.env.TPV_E2E || "") === "1" &&
-  String(process.env.TPV_E2E_BACKGROUND || "") === "1";
+  IS_E2E && String(process.env.TPV_E2E_BACKGROUND || "") === "1";
+// Etiqueta opcional para distinguir instancias en pruebas multi-TPV (2 ventanas).
+const E2E_TEST_LABEL = String(process.env.TPV_TEST_LABEL || "").trim();
 
 const DEFAULT_UPDATE_POLICY_URLS = {
   stable:
@@ -125,7 +127,9 @@ function getChannelSafe() {
   app.setPath("userData", oldPath + "-beta");
 })();
 
-const gotTheLock = app.requestSingleInstanceLock();
+// En E2E permitimos varias instancias (pruebas multi-TPV: 2 ventanas en el
+// mismo PC). En produccion se mantiene el bloqueo de instancia unica.
+const gotTheLock = IS_E2E ? true : app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
 } else {
@@ -167,7 +171,90 @@ function writeQueue(items) {
 
 function getWindowTitle() {
   const ch = readChannel(); // "beta" | "stable"
-  return ch === "beta" ? "TPV Recipok (BETA)" : "TPV Recipok";
+  const base = ch === "beta" ? "TPV Recipok (BETA)" : "TPV Recipok";
+  // En pruebas multi-TPV (2 ventanas), sufijo para distinguir A/B.
+  return E2E_TEST_LABEL ? `${base} — ${E2E_TEST_LABEL}` : base;
+}
+
+// --- Auto-reparacion de accesos directos (Windows, app instalada) ---
+// El nombre del .exe cambio entre versiones (0.1.44 anadio executableName), asi
+// que accesos directos antiguos pueden apuntar a un .exe inexistente ("no se
+// encuentra el programa"). Al arrancar (y por tanto TRAS CADA ACTUALIZACION, que
+// relanza la app) verificamos/reparamos el acceso directo del escritorio y del
+// menu Inicio para que apunten al .exe ACTUAL.
+function shortcutBaseName() {
+  try {
+    return readChannel() === "beta" ? "TPV Recipok (Beta)" : "TPV Recipok";
+  } catch {
+    return "TPV Recipok";
+  }
+}
+
+function ensureOneShortcut(shortcutPath, exePath, { createIfMissing }) {
+  try {
+    const exists = fs.existsSync(shortcutPath);
+    if (!exists && !createIfMissing) return;
+
+    let ok = false;
+    if (exists) {
+      try {
+        const d = shell.readShortcutLink(shortcutPath);
+        const tgt = String(d?.target || "");
+        ok =
+          !!tgt &&
+          path.normalize(tgt).toLowerCase() ===
+            path.normalize(exePath).toLowerCase() &&
+          fs.existsSync(tgt);
+      } catch {
+        ok = false;
+      }
+    }
+    if (ok) return; // ya apunta al exe actual y valido
+
+    shell.writeShortcutLink(shortcutPath, exists ? "replace" : "create", {
+      target: exePath,
+      cwd: path.dirname(exePath),
+      description: "TPV Recipok",
+      icon: exePath,
+      iconIndex: 0,
+    });
+    console.log(
+      `[shortcut] ${exists ? "reparado" : "creado"}: ${shortcutPath} -> ${exePath}`,
+    );
+  } catch (e) {
+    console.warn("[shortcut] no se pudo verificar/reparar:", e?.message || e);
+  }
+}
+
+function ensureAppShortcuts() {
+  if (process.platform !== "win32") return;
+  if (!app.isPackaged) return;
+  try {
+    const exePath = app.getPath("exe");
+    if (!exePath || !fs.existsSync(exePath)) return; // sin exe no hay nada que hacer
+
+    const name = shortcutBaseName();
+
+    const desktop = app.getPath("desktop");
+    if (desktop) {
+      ensureOneShortcut(path.join(desktop, `${name}.lnk`), exePath, {
+        createIfMissing: true,
+      });
+    }
+
+    // Menu Inicio: salvavidas si el del escritorio muere.
+    const startMenu = path.join(
+      app.getPath("appData"),
+      "Microsoft",
+      "Windows",
+      "Start Menu",
+      "Programs",
+      `${name}.lnk`,
+    );
+    ensureOneShortcut(startMenu, exePath, { createIfMissing: true });
+  } catch (e) {
+    console.warn("[shortcut] ensureAppShortcuts fallo:", e?.message || e);
+  }
 }
 
 function lpPdf(deviceName, pdfPath) {
@@ -215,7 +302,9 @@ async function renderTicketPdf(html) {
 }
 
 function isKioskMode() {
-  if (IS_E2E_BACKGROUND) return false;
+  // E2E (incluidas las pruebas manuales multi-TPV) nunca en kiosco, para poder
+  // ver y colocar las ventanas lado a lado.
+  if (IS_E2E) return false;
   try {
     const cfg = readCfg();
     return cfg.kioskMode !== false; // default true
@@ -289,6 +378,10 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       sandbox: false,
       devTools: isDev && !e2eBackground,
+      // No frenar timers cuando la ventana no esta enfocada/visible: un TPV en
+      // segundo plano debe seguir sincronizando aparcados (cada 10s) y su
+      // contador de "ultimo sync" no debe congelarse. Importante en multi-TPV.
+      backgroundThrottling: false,
     },
   });
 
@@ -1838,6 +1931,7 @@ app.whenReady().then(async () => {
   }
 
   createWindow();
+  ensureAppShortcuts(); // verifica/repara acceso directo escritorio + Inicio
   startScaleReconnectMonitor();
   startPreCashUpdateRetries();
 

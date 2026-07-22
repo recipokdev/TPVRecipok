@@ -790,7 +790,14 @@ let __parkedSyncLastOkAt = 0;
 let __parkedSyncLastErrorAt = 0;
 let __parkedSyncLastErrorMsg = "";
 const PARKED_LOCAL_PREFER_MS = 120000;
-const PARKED_PAID_LOCAL_GRACE_MS = 120000;
+// Gracia para conservar en local un ticket COBRADO que el remoto ya no devuelve.
+// Antes eran 2 min: si el servidor no persiste "paid" (o borra la reserva tras
+// cobrar), los cobrados desaparecian solos del modal a los 2 minutos aunque el
+// usuario no los hubiera limpiado (perdida de datos visible en un solo TPV). Se
+// sube a 12 h para que aguanten todo el turno; "Limpiar cobrados" (tombstone)
+// sigue quitandolos al instante, y la limpieza hecha en otro TPV converge igual
+// (solo un poco mas tarde).
+const PARKED_PAID_LOCAL_GRACE_MS = 12 * 60 * 60 * 1000;
 const PARKED_CLOSING_LOCK_MAX_MS = 3 * 60 * 1000;
 let __sharedCajaHealthTimer = null;
 let __sharedCajaHealthInFlight = false;
@@ -6063,6 +6070,14 @@ function mapFsLineToTpvPrintLine(l) {
     pvpunitario: unitNet, // normalmente neto en FS (según tu API)
     codimpuesto: l?.codimpuesto || "",
 
+    // Importe con y sin descuento + porcentajes: necesarios para que la
+    // reimpresion muestre el descuento (pvpsindto > pvptotal) igual que el
+    // pre-impreso. Antes se descartaban y el ticket reimpreso salia sin descuento.
+    pvpsindto: parseQtyValue(l?.pvpsindto, 0),
+    pvptotal: parseQtyValue(l?.pvptotal, 0),
+    dtopor: parseQtyValue(l?.dtopor, 0),
+    dtopor2: parseQtyValue(l?.dtopor2, 0),
+
     // opcional: idproducto si lo usas en el render
     id: Number(l?.idproducto || 0) || undefined,
     idproducto: Number(l?.idproducto || 0) || undefined,
@@ -6388,6 +6403,17 @@ async function initCustomerSelectorOnce() {
   // ✅ si ya hay terminal seleccionado, aplicar default YA
   if (currentTerminal?.id) {
     await applyTerminalDefaultCustomer();
+  }
+
+  // Si hay un aparcado activo, re-aplicar SU cliente (el default anterior lo
+  // habria pisado). Sin esto, al reabrir un aparcado el cliente volvia al por
+  // defecto en vez de mantener el del ticket.
+  if (
+    currentParkedTicketIndex != null &&
+    Array.isArray(parkedTickets) &&
+    parkedTickets[currentParkedTicketIndex]
+  ) {
+    applyCustomerSelectionForParkedTicket(parkedTickets[currentParkedTicketIndex]);
   }
 }
 
@@ -10953,6 +10979,7 @@ function tryResolvePendingParkedTicketByCartMatch() {
   if (idx < 0) return false;
 
   currentParkedTicketIndex = idx;
+  applyCustomerSelectionForParkedTicket(parkedTickets[idx]);
   PENDING_RUNTIME_PARKED_SYNC_KEY = "";
   PENDING_RUNTIME_PARKED_TICKET_ID = 0;
   return true;
@@ -11046,6 +11073,7 @@ function tryResolvePendingParkedTicketIndex() {
   }
 
   currentParkedTicketIndex = idx;
+  applyCustomerSelectionForParkedTicket(parkedTickets[idx]);
   PENDING_RUNTIME_PARKED_SYNC_KEY = "";
   PENDING_RUNTIME_PARKED_TICKET_ID = 0;
   return true;
@@ -11564,6 +11592,9 @@ function renderCart() {
     }
 
     if (shouldClearCurrentParkedIndex) {
+      // Al salir/cobrar el aparcado (carrito vacio) volver al cliente que
+      // estaba antes de abrirlo.
+      restorePreParkedCustomerSelection();
       currentParkedTicketIndex = null;
     }
   }
@@ -16795,6 +16826,61 @@ function refreshParkedEditingBanner() {
   refreshCartUndoRedoUi();
 }
 
+let __parkedModalSyncTimer = null;
+let __parkedModalSyncInFlight = false;
+let __parkedModalSyncTicks = 0;
+const PARKED_MODAL_SYNC_EVERY_SECONDS = 5; // sincroniza cada 5s con el modal abierto
+
+// Mientras el modal de aparcados esta ABIERTO: un tic cada 1s que (a) refresca
+// el texto "Ultimo sync hace Xs" para que no se congele, y (b) cada N segundos
+// hace la sincronizacion real (equivale a pulsar "Sync" solo), para que los
+// cambios de otro TPV (borrar/cobrar/nuevos) se reflejen en vivo sin cerrar y
+// reabrir el modal. Solo con el modal abierto -> no sobrecarga el resto.
+function startParkedModalAutoSync() {
+  stopParkedModalAutoSync();
+  __parkedModalSyncTicks = 0;
+  __parkedModalSyncTimer = setInterval(async () => {
+    if (
+      !parkedTicketsOverlay ||
+      parkedTicketsOverlay.classList.contains("hidden")
+    ) {
+      stopParkedModalAutoSync();
+      return;
+    }
+
+    // (a) Contador vivo cada segundo.
+    try {
+      syncParkedToolbarUI?.();
+    } catch {}
+
+    // (b) Sincronizacion real cada N segundos.
+    __parkedModalSyncTicks += 1;
+    if (__parkedModalSyncTicks < PARKED_MODAL_SYNC_EVERY_SECONDS) return;
+    __parkedModalSyncTicks = 0;
+
+    if (__parkedModalSyncInFlight) return;
+    if (TPV_STATE?.offline) return;
+    __parkedModalSyncInFlight = true;
+    try {
+      // refreshRemoteParkedReservationsOnly sincroniza y re-renderiza el modal.
+      await refreshRemoteParkedReservationsOnly();
+    } catch (e) {
+      console.warn("Auto-sync del modal de aparcados fallo:", e?.message || e);
+    } finally {
+      __parkedModalSyncInFlight = false;
+    }
+  }, 1000);
+}
+
+function stopParkedModalAutoSync() {
+  if (__parkedModalSyncTimer) {
+    clearInterval(__parkedModalSyncTimer);
+    __parkedModalSyncTimer = null;
+  }
+  __parkedModalSyncInFlight = false;
+  __parkedModalSyncTicks = 0;
+}
+
 function openParkedModal(options = {}) {
   const requestId = createRequestId("PRKMOD");
   const labels = getParkingLabels();
@@ -16833,6 +16919,9 @@ function openParkedModal(options = {}) {
       }
     })
     .catch(() => {});
+
+  // Sincronizacion automatica cada 10s mientras el modal este abierto.
+  startParkedModalAutoSync();
 
   logFeatureInfo("APARCADOS", "modal-abierto", {
     requestId,
@@ -16886,7 +16975,12 @@ async function deleteParkedTicketByIndex(
     return ticketKey ? key !== ticketKey : x !== removedTicket;
   });
 
+  let removedWasLoadedInCart = false;
   if (currentParkedTicketIndex === idx) {
+    // Estabas viendo ESE aparcado en el carrito: al borrarlo hay que vaciar el
+    // carrito (el ticket ya no existe) y volver al cliente anterior.
+    removedWasLoadedInCart = true;
+    restorePreParkedCustomerSelection();
     currentParkedTicketIndex = null;
   } else if (
     currentParkedTicketIndex !== null &&
@@ -16896,6 +16990,16 @@ async function deleteParkedTicketByIndex(
   }
 
   unlinkMesaTicketByTicketId(removedTicket?.id || null, removedTicket);
+
+  if (removedWasLoadedInCart && !clearCartAfterDelete) {
+    cart = [];
+    renderCart();
+    currentParkedTicketIndex = null;
+    if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+      clearCurrentMesaDraft();
+      renderMesasTransContextBar();
+    }
+  }
 
   if (clearCartAfterDelete) {
     cart = [];
@@ -16985,6 +17089,7 @@ async function deleteParkedTicketByIndex(
 }
 
 function closeParkedModal() {
+  stopParkedModalAutoSync();
   if (!parkedTicketsOverlay) return;
   parkedTicketsOverlay.classList.add("hidden");
 }
@@ -17161,9 +17266,18 @@ function renderParkedTicketsModal() {
     };
   };
 
+  // Indice por referencia precomputado (O(N)) para no hacer un indexOf lineal
+  // por cada tarjeta (era O(N^2) con muchos aparcados).
+  const parkedIndexByRef = new Map();
+  (Array.isArray(parkedTickets) ? parkedTickets : []).forEach((pt, i) => {
+    if (!parkedIndexByRef.has(pt)) parkedIndexByRef.set(pt, i);
+  });
+
   const buildTicketCard = (t) => {
     const labels = getParkingLabels();
-    const realIndex = parkedTickets.indexOf(t);
+    const realIndex = parkedIndexByRef.has(t)
+      ? parkedIndexByRef.get(t)
+      : parkedTickets.indexOf(t);
     const mesaCtx = getTicketMesaContext(t);
     const displayNo = getParkedTicketDisplayNumber(t);
     const displaySuffix = displayNo ? ` #${displayNo}` : "";
@@ -17196,7 +17310,28 @@ function renderParkedTicketsModal() {
         )}`
       : "Sin fecha";
 
-    const totalTexto = t.total != null ? t.total.toFixed(2) + " €" : "—";
+    // Resumen de descuento del ticket (usa el guardado al aparcar si existe, o
+    // lo calcula en vivo): base (original) vs final, ahorro y etiqueta.
+    const discSummary = parkedGetDiscountSummary(t);
+    const finalTotalNum =
+      t.total != null ? Number(t.total) : Number(discSummary.finalTotal || 0);
+    const finalTotalTxt = Number.isFinite(finalTotalNum)
+      ? finalTotalNum.toFixed(2) + " €"
+      : "—";
+    const showTicketDiscount =
+      !!discSummary.hasDiscount &&
+      Number(discSummary.baseTotal || 0) > finalTotalNum + 0.0001;
+
+    const totalHtml = showTicketDiscount
+      ? `<div class="pt-total">
+           <span class="pt-total-old" style="text-decoration:line-through;opacity:.55;font-weight:500;font-size:12px;display:block;line-height:1.1;">${Number(discSummary.baseTotal || 0).toFixed(2)} €</span>
+           <span>${finalTotalTxt}</span>
+         </div>`
+      : `<div class="pt-total">${finalTotalTxt}</div>`;
+
+    const discountInfoHtml = showTicketDiscount
+      ? `<div class="pt-discount-info" style="font-size:12px;color:#7c3aed;margin-top:2px;">Descuento: -${Number(discSummary.savings || 0).toFixed(2)} €${discSummary.labelsText ? ` · ${escapeHtml(discSummary.labelsText)}` : ""}</div>`
+      : "";
 
     const items = Array.isArray(t.items) ? t.items : [];
     const preview = parkedBuildGroupedPreview(items);
@@ -17262,12 +17397,13 @@ function renderParkedTicketsModal() {
 
       <div class="pt-mid">
         <div class="pt-items">${escapeHtml(preview || "Sin productos")}</div>
+        ${discountInfoHtml}
         ${paidSub}
       </div>
 
       <div class="pt-right">
         <div class="pt-right-top">
-          <div class="pt-total">${totalTexto}</div>
+          ${totalHtml}
           <button type="button" class="pt-print" title="Imprimir Ticket" aria-label="Imprimir">🖨</button>
           <button type="button" class="pt-del" title="Eliminar ${labels.item}" aria-label="Eliminar">🗑</button>
         </div>
@@ -17788,18 +17924,27 @@ function applyCustomerSelectionForParkedTicket(ticket) {
         nombre: String(ticket?.clientName || "Cliente").trim() || "Cliente",
       };
     }
-  } else if (!parkedCodcliente) {
+  } else {
+    // codcliente por defecto o ausente: recuperar el cliente por su NOMBRE
+    // guardado en el ticket, para que el selector muestre el cliente aunque el
+    // codigo se hubiera quedado por defecto. Solo se sustituye si el cliente
+    // encontrado NO es el por defecto (si coincide con el por defecto, se deja).
     const parkedName = String(ticket?.clientName || "")
       .trim()
       .toLowerCase();
-    targetCustomer = Array.isArray(customers)
-      ? customers.find(
-          (c) =>
-            String(c?.nombre || "")
-              .trim()
-              .toLowerCase() === parkedName,
-        ) || null
-      : null;
+    if (parkedName && parkedName !== "cliente") {
+      const byName = Array.isArray(customers)
+        ? customers.find(
+            (c) =>
+              String(c?.nombre || "")
+                .trim()
+                .toLowerCase() === parkedName,
+          ) || null
+        : null;
+      if (byName && String(byName?.codcliente || "").trim() !== defaultCod) {
+        targetCustomer = byName;
+      }
+    }
   }
 
   if (
@@ -17817,6 +17962,54 @@ function applyCustomerSelectionForParkedTicket(ticket) {
 
   return false;
 }
+
+// Solo pruebas: borra TODOS los aparcados (pendientes y cobrados), local y
+// remoto, para limpiar el demo entre sesiones de test multi-TPV. Se expone en
+// window solo en modo E2E; en la app instalada no existe.
+async function clearAllParkedForTest() {
+  const all = Array.isArray(parkedTickets) ? parkedTickets.slice() : [];
+  parkedTickets = [];
+  currentParkedTicketIndex = null;
+  try {
+    saveParkedTicketsCache(parkedTickets);
+  } catch {}
+  try {
+    REMOTE_PARKED_RESERVATIONS = [];
+  } catch {}
+  updateParkedCountBadge?.();
+  refreshParkButtonUI?.();
+  if (
+    parkedTicketsOverlay &&
+    !parkedTicketsOverlay.classList.contains("hidden")
+  ) {
+    renderParkedTicketsModal?.();
+  }
+
+  let removed = 0;
+  let failed = 0;
+  await Promise.allSettled(
+    all.map(async (t) => {
+      try {
+        await apiDeleteParkedReservation(t);
+        removed += 1;
+      } catch (e) {
+        failed += 1;
+      }
+    }),
+  );
+  const msg = `Aparcados borrados (pruebas): ${removed} ok, ${failed} fallidos.`;
+  try {
+    toast?.(msg, "info", "Pruebas");
+  } catch {}
+  console.log(`[TEST] ${msg}`);
+  return { removed, failed };
+}
+
+try {
+  if (window.TPV_ENV?.e2e) {
+    window.tpvClearAllParkedTest = clearAllParkedForTest;
+  }
+} catch {}
 
 function captureCurrentCustomerSelectionForParked() {
   const selected = window.CUSTOMER_SELECTOR?.getSelectedCustomer?.() || null;
@@ -17887,6 +18080,12 @@ function restoreParkedCartByIndex(index) {
   }
 
   const ticket = parkedTickets[index];
+
+  // Al abrir un aparcado, si no veniamos ya de otro aparcado, recordamos el
+  // cliente actual para poder volver a el al salir/cobrar (restore-on-exit).
+  if (currentParkedTicketIndex == null) {
+    preParkedCustomerSelection = captureCurrentCustomerSelectionForParked();
+  }
 
   applyCustomerSelectionForParkedTicket(ticket);
 
@@ -21540,6 +21739,7 @@ async function confirmCashClosing() {
   }
 
   cashSession.open = false;
+  resetFastTicketPredictorConfirmation();
   stopProductsStockAutoRefresh?.();
   stopParkedReservationsAutoRefresh?.();
   stopSharedCajaHealthMonitor?.();
@@ -24020,6 +24220,32 @@ const OPTIONS_AUTO_COMANDA_ON_SAVE_KEY = "tpv_autoComandaOnSave";
 const OPTIONS_GROUPLINES_KEY = "tpv_groupLines";
 const FAST_TICKET_NUMBER_CACHE_KEY = "tpv_fast_ticket_number_by_type_v1";
 
+// El predictor local (ultimo numero real + 1) solo es de fiar si en ESTA sesion
+// ya hemos completado al menos un cobro real contra FacturaScripts. Motivo:
+// mientras la caja estuvo cerrada, otra persona u otro TPV puede haber avanzado
+// la numeracion (p.ej. local tiene FAC099 pero en FS ya van por FAC101). Si nos
+// fiaramos del cache viejo, el PRIMER cobro pre-imprimiria FAC100 (mal).
+// Por eso el PRIMER cobro tras abrir caja NO pre-imprime: hace el cobro real,
+// refresca el ultimo numero verdadero y a partir del segundo ya pre-imprime bien.
+// Es un simple booleano de sesion (se pone true en el exito del cobro y se
+// resetea al cerrar caja o al reiniciar la app); nunca puede quedar bloqueado.
+let fastPreprintReadyThisSession = false;
+
+function markFastTicketPredictorConfirmed() {
+  fastPreprintReadyThisSession = true;
+}
+
+function isFastTicketPredictorConfirmedThisSession() {
+  return fastPreprintReadyThisSession;
+}
+
+// Al cerrar caja se olvida, para que el primer cobro de la siguiente sesion
+// (aunque se reabra la misma caja sin reiniciar la app) vuelva a re-sincronizar
+// el ultimo numero real antes de pre-imprimir.
+function resetFastTicketPredictorConfirmation() {
+  fastPreprintReadyThisSession = false;
+}
+
 const optionsBtn = document.getElementById("optionsBtn");
 const optionsOverlay = document.getElementById("optionsOverlay");
 const optionsCloseX = document.getElementById("optionsCloseX");
@@ -24145,21 +24371,38 @@ function formatPredictedCode(lastCode, nextNumber, codserie) {
   return `${baseSerie}-${safeNext}`;
 }
 
+// El codigo cacheado solo es util para predecir si es REAL (tiene numero y no
+// es un "SIM..." de una venta de prueba). Asi el pre-impreso nunca predice un
+// SIM: si solo hay eso en cache, no se pre-imprime numero hasta que haya una
+// venta real que cebe el predictor.
+function isUsablePredictorEntry(entry) {
+  const lastNumber = Number(entry?.lastNumber || 0);
+  const lastCode = String(entry?.lastCode || "").trim();
+  return (
+    Number.isFinite(lastNumber) &&
+    lastNumber > 0 &&
+    !!lastCode &&
+    !/^sim/i.test(lastCode)
+  );
+}
+
 function predictNextTicketCodeByType({ codserie, numero2, terminalId }) {
   const typeKey = getSalePrintTypeKey({ codserie, numero2, terminalId });
   const cache = getFastTicketNumberCache();
   const entry = cache[typeKey] || {};
 
+  const usable = isUsablePredictorEntry(entry);
   const lastNumber = Number(entry?.lastNumber || 0);
-  const nextNumber =
-    Number.isFinite(lastNumber) && lastNumber > 0 ? lastNumber + 1 : 1;
-  const code = formatPredictedCode(entry?.lastCode, nextNumber, codserie);
+  const nextNumber = usable ? lastNumber + 1 : 1;
+  const code = usable
+    ? formatPredictedCode(entry?.lastCode, nextNumber, codserie)
+    : "";
 
   return {
     typeKey,
     nextNumber,
     code,
-    hasHistory: Number.isFinite(lastNumber) && lastNumber > 0,
+    hasHistory: usable,
   };
 }
 
@@ -24167,8 +24410,7 @@ function hasFastTicketPredictorHistory({ codserie, numero2, terminalId }) {
   const typeKey = getSalePrintTypeKey({ codserie, numero2, terminalId });
   const cache = getFastTicketNumberCache();
   const entry = cache[typeKey] || {};
-  const lastNumber = Number(entry?.lastNumber || 0);
-  return Number.isFinite(lastNumber) && lastNumber > 0;
+  return isUsablePredictorEntry(entry);
 }
 
 function updateFastTicketNumberByConfirmedCode({
@@ -24178,6 +24420,18 @@ function updateFastTicketNumberByConfirmedCode({
   idfactura,
   terminalId,
 }) {
+  // No contaminar el predictor con codigos simulados (modo pruebas / entorno de
+  // pruebas): asi el pre-impreso predice el numero a partir del ultimo numero
+  // REAL de FacturaScripts, no de un "SIM..." de una venta de prueba.
+  try {
+    if (
+      isSafeTrainingModeEnabled?.() ||
+      /^sim/i.test(String(codigo || "").trim())
+    ) {
+      return;
+    }
+  } catch {}
+
   const cache = getFastTicketNumberCache();
 
   const code = String(codigo || "").trim();
@@ -24193,8 +24447,19 @@ function updateFastTicketNumberByConfirmedCode({
     const prev = cache[key] || {};
     const prevNumber = Number(prev?.lastNumber || 0);
 
-    // Nunca retroceder numeracion si llega una confirmacion antigua
-    if (Number.isFinite(prevNumber) && prevNumber > confirmedNumber) return;
+    // Nunca retroceder numeracion si llega una confirmacion antigua, PERO solo
+    // si la entrada previa es un numero REAL usable. Si la previa es un SIM u
+    // otra entrada no usable (p.ej. restos de una venta de prueba con un numero
+    // gigante como 102743520), hay que sobreescribirla con el codigo real aunque
+    // su numero sea menor; si no, el cache se queda atascado en el SIM y el
+    // pre-impreso no se activa nunca (hasHistory siempre false).
+    if (
+      isUsablePredictorEntry(prev) &&
+      Number.isFinite(prevNumber) &&
+      prevNumber > confirmedNumber
+    ) {
+      return;
+    }
 
     cache[key] = {
       lastNumber: confirmedNumber,
@@ -24217,6 +24482,10 @@ function updateFastTicketNumberByConfirmedCode({
   upsertCacheKey(baseTypeKey);
 
   setFastTicketNumberCache(cache);
+
+  // Ya hemos visto un numero REAL de FS en esta sesion de caja: a partir del
+  // siguiente cobro el pre-impreso puede fiarse del predictor local.
+  markFastTicketPredictorConfirmed();
 }
 
 function buildFastPreApiTicketDraft(ticketPayload, cartSnapshot) {
@@ -24234,8 +24503,11 @@ function buildFastPreApiTicketDraft(ticketPayload, cartSnapshot) {
     terminalId,
   });
 
-  // Primera venta de este terminal/tipo: no preimprimir hasta tener referencia real
-  if (!predicted?.hasHistory) return null;
+  // SIEMPRE pre-imprimir (rapido, antes de la API). Si hay un numero REAL que
+  // predecir (ultimo FAC + 1) se usa; si no hay referencia real (o solo habia un
+  // codigo de prueba "SIM"), se pre-imprime SIN numero, en vez de no imprimir o
+  // poner un SIM. Cuando llegue la primera venta real, ya predecira el numero.
+  const preNumero = predicted?.hasHistory ? predicted.code : "";
 
   const snapshotLines = buildPrintableLinesFromCartSnapshot(cartSnapshot);
   const total = getCartTotal(snapshotLines);
@@ -24262,7 +24534,7 @@ function buildFastPreApiTicketDraft(ticketPayload, cartSnapshot) {
   });
 
   return {
-    numero: predicted.code,
+    numero: preNumero,
     paymentMethod: ticketPayload?.paymentMethod || "—",
     fecha,
     hora,
@@ -24309,17 +24581,22 @@ function buildPrintableLinesFromCartSnapshot(lines) {
       ) {
         out.__baseUnitGrossHint = round2(baseUnit);
 
+        // Porcentaje REAL combinado (base original -> precio final), para que
+        // refleje tarifa de cliente + descuento de carrito juntos. Antes se
+        // mostraba solo una de las dos (la del carrito), pareciendo que no se
+        // aplicaba la tarifa.
         const hintedPct = clampDiscountPercent(
-          pricing?.cartDiscountApplied
-            ? pricing?.cartDiscountPct
-            : pricing?.tariffApplied
-              ? pricing?.tariffDiscountPct
-              : 0,
+          baseUnit > finalUnit + 0.0001
+            ? round2(((baseUnit - finalUnit) / baseUnit) * 100)
+            : 0,
         );
         if (hintedPct > 0) out.__discountPctHint = hintedPct;
 
+        // Etiqueta: si concurren tarifa y descuento, indicarlo como combinado.
         if (pricing?.manualPriceLocked) {
           out.__discountTypeHint = "Manual";
+        } else if (pricing?.cartDiscountApplied && pricing?.tariffApplied) {
+          out.__discountTypeHint = "Tarifa + Dto";
         } else if (pricing?.cartDiscountApplied) {
           out.__discountTypeHint =
             pricing?.cartDiscountSource === "line"
@@ -26813,22 +27090,12 @@ function getPrintableLinePricingBreakdown(line) {
       }
     }
 
-    if (!(baseUnitGross > finalUnitGross + 0.0001)) {
-      try {
-        const pricing = getCartLinePricing?.(line);
-        const candidate = Number(pricing?.baseUnitGross || 0);
-        if (isFinite(candidate) && candidate > 0) baseUnitGross = candidate;
-      } catch {}
-    }
-
-    if (!(baseUnitGross > finalUnitGross + 0.0001)) {
-      const catalogBase = getCatalogBaseUnitGrossForProductId(
-        line?.idproducto || line?.id || line?.baseProductId,
-      );
-      if (catalogBase > finalUnitGross + 0.0001) {
-        baseUnitGross = catalogBase;
-      }
-    }
+    // IMPORTANTE: no inventar un precio base a partir del catalogo ni de
+    // getCartLinePricing cuando NO hay senal real de descuento (ni hint del
+    // carrito, ni pvpsindto>pvptotal, ni dtopor de FacturaScripts). FS es la
+    // fuente de la verdad: si FS no registra descuento, NO hay descuento. Antes
+    // esos fallbacks generaban un "Descuento aplicado" fantasma (p.ej. Subtotal
+    // 12,50 y -10,35 en un producto vendido a 2,15 sin ningun descuento).
   }
 
   const baseUnit = round2(baseUnitGross);
@@ -26877,7 +27144,12 @@ function getPrintableLineDiscountType(line, pricing = null) {
     .filter((v) => isFinite(v) && v > 0 && v < 100);
 
   if (fsDiscountFields.length) return "Descuento";
-  return "";
+  // Llegar aqui implica p.hasDiscount === true (pvpsindto>pvptotal), pero sin
+  // pista de tipo (p.ej. reimpresion desde FacturaScripts sin snapshot local).
+  // Mostrarlo igualmente como "Descuento" para que el ticket reimpreso muestre
+  // el descuento igual que el pre-impreso. Los packs no llegan aqui (su
+  // hasDiscount es false por la supresion del "descuento fantasma").
+  return "Descuento";
 }
 
 function calcPrintableDiscountTotal(lineas) {
@@ -26992,9 +27264,9 @@ function calcTotalsAndTaxMap(lineas, totalsOnlyPositive) {
     const unitGross = getUnitGrossForPrint(l);
     const rate = getTaxRateForLine(l);
 
-    // "Neto primero" como FacturaScripts: base = round2(neto*qty),
-    // iva = round2(base*tasa), total = base+iva. Coincide con el carrito y con
-    // lo que FS factura (antes se derivaba la base desde el bruto -> desfase).
+    // Igual que FacturaScripts (ver computeLineNetFirst): base = round2(neto*qty),
+    // total = round2(neto*qty*factor), iva = total-base. Coincide con carrito,
+    // cobro y con lo que FS factura.
     const { base: lineBase, iva: lineIva, total: lineGross } =
       computeLineNetFirst(unitGross, qty, rate);
 
@@ -27297,12 +27569,17 @@ function round2(n) {
   return Math.round((v + Number.EPSILON) * 100) / 100;
 }
 
-// Calculo "neto primero" por linea, replicando FacturaScripts (que recibe el
-// precio neto y recalcula el total en el servidor). El TPV envia neto a FS, asi
-// que debe calcular igual para que carrito/ticket/cobro coincidan con lo que se
-// factura: base = round2(neto*cant); iva = round2(base*tasa/100); total = base+iva.
-// (Antes el TPV calculaba desde el bruto -> desfase de 1 centimo en cantidades
-// por peso.) unitGross es el bruto unitario ya ajustado (tarifa/descuento).
+// Calculo por linea replicando EXACTAMENTE a FacturaScripts (verificado contra
+// la factura real). FS recibe el precio NETO y hace:
+//   neto  = round2(netoUnit * cant)
+//   total = round2(netoUnit * cant * (1 + tasa/100))   <- redondea el TOTAL, no el IVA
+//   iva   = total - neto                                <- el IVA es la diferencia
+// El TPV debe calcular igual para que carrito/cobro/ticket coincidan con FS y
+// tambien funcione OFFLINE (sin depender de la respuesta de la API).
+// (Antes hacia iva=round2(base*tasa) y total=base+iva: doble redondeo que daba
+// p.ej. 16,01 en vez de 16,00, o 1,46 de IVA en vez de 1,45.)
+// unitGross es el bruto unitario ya ajustado (tarifa/descuento); netoUnit sale
+// de dividirlo por el factor de impuesto, igual que el neto que se envia a FS.
 function computeLineNetFirst(unitGross, qty, taxRate) {
   const q = Number(qty) || 0;
   const rate = Number(taxRate) || 0;
@@ -27310,8 +27587,9 @@ function computeLineNetFirst(unitGross, qty, taxRate) {
   const netUnit =
     divisor > 0 ? Number(unitGross || 0) / divisor : Number(unitGross || 0);
   const base = round2(netUnit * q);
-  const iva = round2(base * (rate / 100));
-  return { base, iva, total: round2(base + iva), netUnit };
+  const total = round2(netUnit * q * divisor);
+  const iva = round2(total - base);
+  return { base, iva, total, netUnit };
 }
 
 function eurTicket(n) {
@@ -29664,6 +29942,17 @@ function normalizeRemoteParkedTicket(raw) {
       raw.mesaAlerts || raw.ticketFlags || raw.ticket_flags || raw.alerts,
     ),
     fs: raw.fs && typeof raw.fs === "object" ? raw.fs : null,
+    // Resumen de descuento "congelado" al aparcar/cobrar (base, final, ahorro y
+    // etiquetas). Se calcula con la tarifa del cliente activa en ese momento; hay
+    // que conservarlo porque el recálculo en vivo (parkedGetDiscountSummary) usa
+    // activeCustomerTariff del cliente ACTUAL, que al ver un cobrado suele ser el
+    // por defecto y pierde la parte de tarifa (números que "no cuadran").
+    // IMPORTANTE: sólo se incluye la clave si viene en el origen. Si el remoto no
+    // la envía (poll de sincronización), se OMITE para que el merge
+    // { ...prev, ...ticket } conserve el resumen bueno que ya tenía el local.
+    ...(raw.discountSummary && typeof raw.discountSummary === "object"
+      ? { discountSummary: raw.discountSummary }
+      : {}),
   };
 }
 
@@ -29756,6 +30045,38 @@ function upsertParkedPaidHistory(ticket) {
 
   if (idx >= 0) list[idx] = { ...list[idx], ...ticket };
   else list.push(ticket);
+
+  saveParkedPaidHistory(list);
+}
+
+// Version por lotes: carga el historial UNA vez, hace upsert de todos los
+// tickets y guarda UNA vez. Evita el O(R*H) de llamar a upsertParkedPaidHistory
+// en bucle (que reparseaba/reescribia las ~2000 entradas del historial por cada
+// ticket cobrado), causa principal de la lentitud en clientes con muchos
+// cobrados. Mismo comportamiento (dedupe por clave + merge), pero O(R + H).
+function upsertParkedPaidHistoryMany(tickets) {
+  const incoming = (Array.isArray(tickets) ? tickets : []).filter(
+    (t) => t && t.paid && getParkedTicketSyncKey(t),
+  );
+  if (!incoming.length) return;
+
+  const list = loadParkedPaidHistory();
+  const indexByKey = new Map();
+  list.forEach((it, i) => {
+    const k = getParkedTicketSyncKey(it);
+    if (k && !indexByKey.has(k)) indexByKey.set(k, i);
+  });
+
+  incoming.forEach((ticket) => {
+    const key = getParkedTicketSyncKey(ticket);
+    const idx = indexByKey.get(key);
+    if (idx != null && idx >= 0) {
+      list[idx] = { ...list[idx], ...ticket };
+    } else {
+      indexByKey.set(key, list.length);
+      list.push(ticket);
+    }
+  });
 
   saveParkedPaidHistory(list);
 }
@@ -30551,6 +30872,10 @@ function syncParkedTicketsFromRemote(list) {
         merged.mesaAlerts = normalizeMesaTicketAlerts(prev?.mesaAlerts);
       }
 
+      // Confirmado presente en remoto: si en un poll posterior desaparece,
+      // es un borrado remoto real (otro TPV) y no hay que conservarlo.
+      merged.__remoteSeen = true;
+
       return merged;
     })
     .filter((t) => isTicketInCurrentParkingMode(t));
@@ -30566,6 +30891,7 @@ function syncParkedTicketsFromRemote(list) {
 
       const merged = { ...(prev || {}), ...ticket };
       merged.paid = true;
+      merged.__remoteSeen = true;
       merged.paidAt = merged?.paidAt
         ? new Date(merged.paidAt)
         : ticket?.paidAt
@@ -30600,11 +30926,9 @@ function syncParkedTicketsFromRemote(list) {
     })
     .filter((t) => isTicketInCurrentParkingMode(t));
 
-  remotePaid.forEach((t) => {
-    try {
-      upsertParkedPaidHistory(t);
-    } catch {}
-  });
+  try {
+    upsertParkedPaidHistoryMany(remotePaid);
+  } catch {}
 
   const nextByKey = new Set(
     [...nextPending, ...remotePaid]
@@ -30643,6 +30967,13 @@ function syncParkedTicketsFromRemote(list) {
       const variants = getParkedTicketSyncKeyVariants(t);
       if (variants.some((k) => paidKeySet.has(k))) return;
       const hasQueuedUpsert = variants.some((k) => queuedPendingKeySet.has(k));
+
+      // Si ya se habia confirmado en remoto y ahora no esta (y no hay upsert
+      // local pendiente), es un borrado real hecho en otro TPV: no conservarlo
+      // por la gracia (que daba hasta ~2 min de lag). Los creados localmente y
+      // aun no subidos (sin __remoteSeen) siguen protegidos.
+      if (t?.__remoteSeen && !hasQueuedUpsert) return;
+
       const localRevTs = Number(t?.localRevisionAt || 0) || 0;
       const updatedTs = Number(new Date(t?.updatedAt || 0).getTime()) || 0;
       const createdTs = Number(new Date(t?.createdAt || 0).getTime()) || 0;
@@ -30783,7 +31114,29 @@ function syncParkedTicketsFromRemote(list) {
     const nextIdx = parkedTickets.findIndex(
       (t) => getParkedTicketSyncKey(t) === prevLoadedKey,
     );
-    currentParkedTicketIndex = nextIdx >= 0 ? nextIdx : null;
+    if (nextIdx >= 0) {
+      currentParkedTicketIndex = nextIdx;
+    } else {
+      // El aparcado que teniamos cargado ya no existe (lo cobraron o borraron
+      // en otro TPV) y no hay edicion local pendiente: vaciar el carrito para no
+      // quedarnos con lineas de un ticket que ya no existe.
+      currentParkedTicketIndex = null;
+      if (Array.isArray(cart) && cart.length) {
+        restorePreParkedCustomerSelection();
+        cart = [];
+        currentParkedTicketIndex = null;
+        renderCart();
+        if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+          clearCurrentMesaDraft?.();
+          renderMesasTransContextBar?.();
+        }
+        toast?.(
+          "El ticket aparcado se cerro o borro en otro TPV; se vacio el carrito.",
+          "info",
+          "Aparcados",
+        );
+      }
+    }
   } else if (PENDING_RUNTIME_PARKED_SYNC_KEY) {
     if (!tryResolvePendingParkedTicketIndex()) {
       if (!tryResolvePendingParkedTicketByCartMatch()) {
@@ -30962,6 +31315,15 @@ async function apiSaveParkedReservation(ticket) {
         : null,
     clientName: String(ticket.clientName || ""),
     codcliente: String(ticket.codcliente || "").trim() || "1",
+    // Estado de cobro: hay que enviarlo para que el cobro se propague a los
+    // demas TPV (el servidor ya lo persiste). Antes se omitia -> el otro TPV
+    // nunca veia el aparcado como cobrado.
+    paid: !!ticket.paid,
+    paidAt: ticket.paidAt ? new Date(ticket.paidAt).toISOString() : null,
+    paidTicketCode: ticket.paidTicketCode
+      ? String(ticket.paidTicketCode)
+      : null,
+    paidTicketId: Number(ticket.paidTicketId || 0) || null,
     total: Number(ticket.total || 0),
     terminalId: String(currentTerminal?.id || ""),
     terminalName: String(currentTerminal?.name || ""),
@@ -31580,8 +31942,14 @@ async function onPayButtonClick() {
       terminalId: ticketPayload?.idtpv || currentTerminal?.id,
     });
 
-    // Preprint rapido: imprime antes de enviar a API usando numeracion local por serie/tipo
-    if (isAutoPrintEnabled() && hasFastPredictorHistory) {
+    // Preprint rapido: imprime antes de enviar a API usando numeracion local por serie/tipo.
+    // Solo si en esta sesion de caja ya confirmamos un numero real (el primer cobro
+    // tras abrir caja no pre-imprime, para re-sincronizar el ultimo numero de FS).
+    if (
+      isAutoPrintEnabled() &&
+      hasFastPredictorHistory &&
+      isFastTicketPredictorConfirmedThisSession()
+    ) {
       try {
         const preApiDraft = buildFastPreApiTicketDraft(
           ticketPayload,
@@ -31754,6 +32122,13 @@ async function onPayButtonClick() {
       idfactura,
       terminalId: ticketPayload?.idtpv || currentTerminal?.id,
     });
+
+    // Cobro online completado: a partir del siguiente ya se puede pre-imprimir
+    // (el numero local quedo refrescado con el ultimo real de FS). Se marca aqui
+    // ademas de dentro de updateFast para que sea robusto aunque aquel salga
+    // antes por algun caso borde; el pre-impreso real sigue gobernado por que
+    // haya un numero usable en cache (nunca imprime un SIM de pruebas).
+    markFastTicketPredictorConfirmed();
 
     // ✅ CLAVE: parchear cantidades de líneas gratis del pack
     if (idfactura) {
@@ -35430,11 +35805,12 @@ async function openPayModal(total) {
             _payCambio: Number(result.cambio || 0),
           };
 
-          const canFastPrintPending = hasFastTicketPredictorHistory({
-            codserie: pendingPayload.codserie,
-            numero2: pendingPayload.numero2,
-            terminalId: pendingPayload.idtpv || currentTerminal?.id,
-          });
+          const canFastPrintPending =
+            hasFastTicketPredictorHistory({
+              codserie: pendingPayload.codserie,
+              numero2: pendingPayload.numero2,
+              terminalId: pendingPayload.idtpv || currentTerminal?.id,
+            }) && isFastTicketPredictorConfirmedThisSession();
 
           const pendingDraft = canFastPrintPending
             ? buildFastPreApiTicketDraft(pendingPayload, cart)

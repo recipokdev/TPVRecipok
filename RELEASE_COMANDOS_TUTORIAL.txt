@@ -21,6 +21,10 @@ Version 3.2 - Tutorial Comandos Release/Test/Publish
 - 2) Si sale mal (bloquear + rollback): npm run stable:incident
 - 3) Subir stable arreglada + limpiar bloqueos: npm run stable:fix
 - 4) Ver estado policy stable: npm run policy:show:stable
+nos e
+
+npm start - abrir la instancia normal.
+npm run test:2tpv - abrir 2 instancias para probar 2 tpv distintos en un ordenador.
 
 - E2E (PRUEBA REAL DE UI)
 - Ejecutar E2E basico (transaccional por defecto): npm run test:e2e

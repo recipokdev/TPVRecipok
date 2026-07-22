@@ -8,6 +8,31 @@
       "changes": []
     },
     {
+      "version": "0.2.6",
+      "date": "2026-07-22",
+      "title": "Release 0.2.6",
+      "changes": [
+        "Multi-TPV: al cobrar un ticket aparcado en un TPV, el resto de TPV ya lo ven como cobrado (antes no se propagaba el estado de cobro).",
+        "Multi-TPV: al borrar un ticket aparcado en un TPV, desaparece del resto de TPV en el siguiente refresco (antes tardaba hasta ~2 minutos).",
+        "Aparcados: al reabrir un ticket aparcado se restaura su cliente (antes salia el cliente por defecto en vez del que se habia usado al aparcar).",
+        "Aparcados: al abrir un aparcado se cambia temporalmente a su cliente; al salir o cobrar ese aparcado, se vuelve al cliente que estaba seleccionado antes.",
+        "Aparcados: si borras (o se cobra/borra en otro TPV) un ticket aparcado que tenias abierto en el carrito, ahora se vacia el carrito automaticamente para no quedar con lineas de un ticket que ya no existe.",
+        "Aparcados: el cliente del ticket se recupera tambien por su nombre al reabrirlo, por si el codigo de cliente no se hubiera guardado bien.",
+        "Sincronizacion: un TPV en segundo plano sigue sincronizando los aparcados (antes se congelaba hasta volver a enfocar la ventana).",
+        "Aparcados: mientras el modal de tickets aparcados esta abierto, ahora se sincroniza solo cada pocos segundos y el contador de 'ultimo sync' avanza en vivo; los cambios de otro TPV (nuevos, borrados, cobrados) aparecen sin cerrar y reabrir el modal.",
+        "Acceso directo: al arrancar, el programa verifica y repara el acceso directo del escritorio y del menu Inicio si apuntaban a un ejecutable que ya no existe (evita el 'no se encuentra el programa' tras algunas actualizaciones).",
+        "Aparcados: en la lista, los tickets con descuento muestran el precio original tachado junto al precio final, mas el ahorro y el tipo de descuento, en todas las pestanas (sin cobrar, cobrados y todos).",
+        "Ticket impreso: el ticket definitivo (y las reimpresiones desde el historial) vuelven a mostrar el descuento por linea (precio final con el original y el porcentaje) y el bloque Subtotal/Descuentos aplicados, igual que el pre-impreso; antes esos datos se perdian al imprimir desde FacturaScripts.",
+        "Numero de ticket: el pre-impreso ya no toma el numero de una venta de prueba; predice el numero a partir del ultimo ticket real, para que coincida con el ticket definitivo (si solo hay ventas de prueba, no pone numero hasta que haya una venta real).",
+        "Numero de ticket: el PRIMER cobro tras abrir caja no pre-imprime; primero obtiene de FacturaScripts el ultimo numero real (por si otra persona u otro TPV avanzo la numeracion con la caja cerrada) y a partir del segundo cobro ya vuelve a pre-imprimir rapido con el numero correcto.",
+        "Aparcados cobrados: ya no desaparecen solos del modal a los pocos minutos. Se conservan durante todo el turno aunque el servidor no confirme el estado cobrado; solo se quitan con 'Limpiar cobrados' o al limpiarlos desde otro TPV.",
+        "Importes por linea: el calculo ahora replica EXACTAMENTE a FacturaScripts (total = redondeo del neto x cantidad x impuesto; IVA = total - base). Antes un doble redondeo daba a veces 1 centimo de mas (p.ej. 16,01 en vez de 16,00, o IVA 1,46 en vez de 1,45) y podia cobrarse ese centimo de mas. Ahora carrito, cobro y ticket coinciden con la factura, tambien sin conexion.",
+        "Ticket: eliminado un 'Descuentos aplicados' fantasma que aparecia en algunos productos sin ningun descuento (mostraba un subtotal inventado mas alto y una rebaja inexistente). Ahora solo se muestra descuento cuando FacturaScripts lo tiene registrado o se aplico de verdad en el carrito.",
+        "Tickets con tarifa de cliente y descuento de carrito a la vez: el porcentaje mostrado ahora es el combinado real (tarifa + descuento), no solo el del carrito.",
+        "Aparcados cobrados: el resumen de descuento (precio original, final y ahorro) se conserva al releer el historial; antes se recalculaba con la tarifa del cliente activo en ese momento y perdia la parte de tarifa, mostrando importes que no cuadraban con el ticket."
+      ]
+    },
+    {
       "version": "0.2.5",
       "date": "2026-07-20",
       "title": "Release 0.2.5",
