@@ -25548,6 +25548,12 @@ const CHANGELOG_LAST_SEEN_VERSION_KEY = "tpv_changelog_last_seen_version_v1";
 const CHANGELOG_LAST_SEEN_APP_VERSION_KEY =
   "tpv_changelog_last_seen_app_version_v1";
 const CHANGELOG_LAST_OPEN_VERSION_KEY = "tpv_changelog_last_open_version_v1";
+// "Baseline": hasta que version de changelog (con contenido) ha visto ya el
+// cliente. El aviso post-actualizacion muestra las versiones nuevas por encima
+// de este baseline. En una instalacion nueva (sin baseline ni historial previo)
+// NO se muestra nada: solo se fija el baseline, para no volcarle decenas de
+// versiones a quien abre el TPV por primera vez.
+const CHANGELOG_BASELINE_VERSION_KEY = "tpv_changelog_baseline_version_v1";
 const CHANGELOG_SOURCE_FILE = "changelog.json";
 
 const BACKGROUND_UPDATE_DEFAULT_SETTINGS = {
@@ -25761,9 +25767,23 @@ async function loadChangelogEntries() {
   return changelogEntriesCache;
 }
 
-function buildChangelogEntriesForDialog(entries, { onlyVersion = "" } = {}) {
-  const normalizedOnly = normalizeVersionTag(onlyVersion);
+function buildChangelogEntriesForDialog(
+  entries,
+  { onlyVersion = "", onlyVersions = null } = {},
+) {
   const source = Array.isArray(entries) ? entries : [];
+
+  // Lista concreta de versiones a mostrar (acumulado tras actualizar), en el
+  // orden dado.
+  if (Array.isArray(onlyVersions) && onlyVersions.length) {
+    const wanted = onlyVersions.map((v) => normalizeVersionTag(v));
+    const byVersion = new Map(
+      source.map((it) => [normalizeVersionTag(it?.version), it]),
+    );
+    return wanted.map((v) => byVersion.get(v)).filter(Boolean);
+  }
+
+  const normalizedOnly = normalizeVersionTag(onlyVersion);
   return normalizedOnly
     ? source.filter((it) => normalizeVersionTag(it?.version) === normalizedOnly)
     : source;
@@ -25773,21 +25793,28 @@ function resolveChangelogVersionForCurrentApp(entries, currentVersion = "") {
   const source = Array.isArray(entries) ? entries : [];
   if (!source.length) return "";
 
-  const current = normalizeVersionTag(currentVersion);
-  if (
-    current &&
-    source.some((it) => normalizeVersionTag(it?.version) === current)
-  ) {
-    return current;
-  }
+  const hasChanges = (it) =>
+    Array.isArray(it?.changes) && it.changes.length > 0;
 
+  const current = normalizeVersionTag(currentVersion);
+
+  // Coincidencia exacta CON cambios: usarla.
+  const exact = source.find(
+    (it) => normalizeVersionTag(it?.version) === current,
+  );
+  if (exact && hasChanges(exact)) return current;
+
+  // Si la version actual existe pero esta VACIA (p.ej. una subida rapida solo
+  // para un arreglo, sin notas) o no existe, buscar la version mas reciente
+  // (<= actual) que SI tenga cambios. Asi el cliente ve mejoras reales y no un
+  // "Sin detalle de cambios" que no le sirve de nada.
   const currentParsed = parseVersionForSort(current);
   if (currentParsed) {
     const candidates = source
       .map((it) => {
         const version = normalizeVersionTag(it?.version);
         const parsed = parseVersionForSort(version);
-        return parsed ? { version, parsed } : null;
+        return parsed && hasChanges(it) ? { version, parsed } : null;
       })
       .filter(Boolean)
       .filter((it) => compareParsedVersion(it.parsed, currentParsed) <= 0)
@@ -25798,18 +25825,19 @@ function resolveChangelogVersionForCurrentApp(entries, currentVersion = "") {
     }
   }
 
-  return normalizeVersionTag(source[0]?.version || "");
+  // Fallback: la primera entrada con cambios; si ninguna tiene, la primera.
+  const firstWithChanges = source.find(hasChanges);
+  return normalizeVersionTag((firstWithChanges || source[0])?.version || "");
 }
 
 function buildChangelogAccordionHtml(
   entries,
-  {
-    onlyVersion = "",
-    preferredOpenVersion = "",
-    compactSingleVersion = false,
-  } = {},
+  { onlyVersion = "", onlyVersions = null, preferredOpenVersion = "" } = {},
 ) {
-  const list = buildChangelogEntriesForDialog(entries, { onlyVersion });
+  const list = buildChangelogEntriesForDialog(entries, {
+    onlyVersion,
+    onlyVersions,
+  });
 
   if (!list.length) {
     const normalizedOnly = normalizeVersionTag(onlyVersion);
@@ -25819,29 +25847,9 @@ function buildChangelogAccordionHtml(
     return `<div class="changelog-empty">${escapeHtmlForModal(txt)}</div>`;
   }
 
-  if (compactSingleVersion && list.length === 1) {
-    const it = list[0] || {};
-    const v = normalizeVersionTag(it?.version);
-    const d = String(it?.date || "").trim();
-    const t = String(it?.title || "").trim();
-    const changes = Array.isArray(it?.changes) ? it.changes : [];
-    const linesHtml = changes.length
-      ? `<ul class="changelog-lines">${changes
-          .map((c) => `<li>${escapeHtmlForModal(c)}</li>`)
-          .join("")}</ul>`
-      : `<div class="changelog-empty-line">Sin detalle de cambios.</div>`;
-
-    return `
-      <div class="changelog-single">
-        <div class="changelog-single-head">
-          <span class="changelog-version">v${escapeHtmlForModal(v)}</span>
-          <span class="changelog-meta">${escapeHtmlForModal(d)}${t ? ` · ${escapeHtmlForModal(t)}` : ""}</span>
-        </div>
-        <div class="changelog-single-body">${linesHtml}</div>
-      </div>
-    `;
-  }
-
+  // Siempre acordeon (aunque sea una sola version), para que el cliente pueda
+  // cerrar/abrir la pestana. La mas reciente sale abierta por defecto (via
+  // preferredOpenVersion) para que se vea de un vistazo lo nuevo.
   const preferredVersion = normalizeVersionTag(preferredOpenVersion);
   const hasPreferred = !!preferredVersion;
 
@@ -25902,13 +25910,21 @@ function bindChangelogAccordionInMessageModal() {
     const targetId = String(btn.getAttribute("data-changelog-toggle") || "");
     if (!targetId) return;
 
+    // Si el panel pulsado ya estaba abierto, se cierra (toggle) y quedan todos
+    // cerrados. Si no, se abre ese y se cierran los demas. Antes no se podia
+    // cerrar el que estaba abierto (solo cambiaba al abrir otro).
+    const targetItem = textEl.querySelector(
+      `[data-changelog-item="${targetId}"]`,
+    );
+    const targetWasOpen = targetItem?.getAttribute("data-open") === "1";
+
     textEl.querySelectorAll("[data-changelog-item]").forEach((item) => {
       const itemId = String(item.getAttribute("data-changelog-item") || "");
       const panel = textEl.querySelector(`[data-changelog-panel="${itemId}"]`);
       const toggle = textEl.querySelector(
         `[data-changelog-toggle="${itemId}"]`,
       );
-      const shouldOpen = itemId === targetId;
+      const shouldOpen = itemId === targetId && !targetWasOpen;
 
       item.setAttribute("data-open", shouldOpen ? "1" : "0");
       item.classList.toggle("is-open", shouldOpen);
@@ -25920,6 +25936,12 @@ function bindChangelogAccordionInMessageModal() {
         setChangelogLastOpenVersion(item.getAttribute("data-version") || "");
       }
     });
+
+    // Si se cerro el que estaba abierto, no dejar ninguna version "recordada"
+    // como abierta, para que al reabrir el modal no se vuelva a desplegar sola.
+    if (targetWasOpen) {
+      setChangelogLastOpenVersion("");
+    }
   };
 
   textEl.addEventListener("click", changelogAccordionBoundHandler);
@@ -25932,9 +25954,32 @@ function unbindChangelogAccordionInMessageModal() {
   changelogAccordionBoundHandler = null;
 }
 
-async function openChangelogDialog({ onlyCurrentVersion = false } = {}) {
+async function openChangelogDialog({
+  onlyCurrentVersion = false,
+  versionsToShow = null,
+} = {}) {
   const entries = await loadChangelogEntries();
   const currentVersion = normalizeVersionTag(await getCurrentAppVersionText());
+
+  // Modo acumulado (aviso tras actualizar): lista concreta de versiones nuevas,
+  // como acordeon, con la mas reciente abierta por defecto.
+  if (Array.isArray(versionsToShow) && versionsToShow.length) {
+    const single = versionsToShow.length === 1;
+    const html = buildChangelogAccordionHtml(entries, {
+      onlyVersions: versionsToShow,
+      preferredOpenVersion: normalizeVersionTag(versionsToShow[0] || ""),
+    });
+    showMessageModal("Changelog", html, {
+      isHtml: true,
+      textClassName: "changelog-content",
+      dialogClassName: single
+        ? "changelog-dialog changelog-dialog-compact"
+        : "changelog-dialog",
+    });
+    bindChangelogAccordionInMessageModal();
+    return;
+  }
+
   const onlyVersion = onlyCurrentVersion
     ? resolveChangelogVersionForCurrentApp(entries, currentVersion)
     : "";
@@ -25944,7 +25989,6 @@ async function openChangelogDialog({ onlyCurrentVersion = false } = {}) {
   const html = buildChangelogAccordionHtml(entries, {
     onlyVersion,
     preferredOpenVersion,
-    compactSingleVersion: onlyCurrentVersion,
   });
   showMessageModal("Changelog", html, {
     isHtml: true,
@@ -25961,30 +26005,111 @@ async function maybeShowChangelogAfterUpdate() {
   const currentVersion = normalizeVersionTag(await getCurrentAppVersionText());
   if (!currentVersion || currentVersion === "desconocida") return;
 
-  const changelogVersionToShow = resolveChangelogVersionForCurrentApp(
+  const hasChanges = (it) =>
+    Array.isArray(it?.changes) && it.changes.length > 0;
+
+  // Version de changelog CON contenido mas alta (<= version de app).
+  const currentChangelogVersion = resolveChangelogVersionForCurrentApp(
     entries,
     currentVersion,
   );
-  if (!changelogVersionToShow) return;
+  if (!currentChangelogVersion) return;
 
-  let lastSeenAppVersion = "";
-  try {
-    lastSeenAppVersion = normalizeVersionTag(
-      localStorage.getItem(CHANGELOG_LAST_SEEN_APP_VERSION_KEY) || "",
+  // Todas las versiones con contenido, de mas nueva a mas antigua.
+  const contentVersions = (Array.isArray(entries) ? entries : [])
+    .filter(hasChanges)
+    .map((it) => {
+      const v = normalizeVersionTag(it?.version);
+      return { v, parsed: parseVersionForSort(v) };
+    })
+    .filter((x) => x.v && x.parsed)
+    .sort((a, b) => compareParsedVersion(b.parsed, a.parsed));
+  if (!contentVersions.length) return;
+
+  const readTag = (k) => {
+    try {
+      return normalizeVersionTag(localStorage.getItem(k) || "");
+    } catch {
+      return "";
+    }
+  };
+  const keyExists = (k) => {
+    try {
+      return localStorage.getItem(k) != null;
+    } catch {
+      return false;
+    }
+  };
+  const store = (k, v) => {
+    try {
+      localStorage.setItem(k, v);
+    } catch {}
+  };
+
+  let baseline = readTag(CHANGELOG_BASELINE_VERSION_KEY);
+
+  if (!baseline) {
+    // Aun no hay baseline: es la primera vez que corre esta logica.
+    const hadPriorUsage =
+      keyExists(CHANGELOG_LAST_SEEN_APP_VERSION_KEY) ||
+      keyExists(CHANGELOG_LAST_SEEN_VERSION_KEY);
+
+    if (!hadPriorUsage) {
+      // PRIMERA VEZ absoluta (instalacion nueva, sin historial): no mostrar el
+      // changelog (seria un volcado de muchas versiones que no le interesa a
+      // quien abre el TPV por primera vez). Solo fijar el punto de partida para
+      // que en la PROXIMA actualizacion ya vea lo nuevo.
+      store(CHANGELOG_BASELINE_VERSION_KEY, currentChangelogVersion);
+      store(CHANGELOG_LAST_SEEN_APP_VERSION_KEY, currentVersion);
+      store(CHANGELOG_LAST_SEEN_VERSION_KEY, currentChangelogVersion);
+      return;
+    }
+
+    // Cliente EXISTENTE estrenando esta logica. El baseline inicial es la mas
+    // ANTIGUA de:
+    //  - la version de contenido justo anterior a la actual (garantiza que TODOS
+    //    vean al menos la version actual una vez; el modal anterior podia estar
+    //    roto), y
+    //  - la ultima version que consta que vio (para que quien venga de mucho mas
+    //    atras vea tambien todas las intermedias que se salto).
+    const idx = contentVersions.findIndex(
+      (x) => x.v === currentChangelogVersion,
     );
-  } catch {}
+    const justBefore =
+      idx >= 0 && contentVersions[idx + 1] ? contentVersions[idx + 1].v : "";
+    const oldLastSeen = readTag(CHANGELOG_LAST_SEEN_VERSION_KEY);
+    const candidates = [justBefore, oldLastSeen]
+      .map((v) => ({ v, parsed: v ? parseVersionForSort(v) : null }))
+      .filter((x) => x.v && x.parsed)
+      .sort((a, b) => compareParsedVersion(a.parsed, b.parsed));
+    baseline = candidates.length ? candidates[0].v : "";
+  }
 
-  if (lastSeenAppVersion === currentVersion) return;
+  const baselineParsed = baseline ? parseVersionForSort(baseline) : null;
+  const currentParsed = parseVersionForSort(currentChangelogVersion);
 
-  await openChangelogDialog({ onlyCurrentVersion: true });
+  // Versiones nuevas en (baseline, actual], mas reciente primero.
+  const newVersions = contentVersions
+    .filter(
+      (x) =>
+        (!baselineParsed ||
+          compareParsedVersion(x.parsed, baselineParsed) > 0) &&
+        (!currentParsed || compareParsedVersion(x.parsed, currentParsed) <= 0),
+    )
+    .map((x) => x.v);
 
-  try {
-    localStorage.setItem(CHANGELOG_LAST_SEEN_APP_VERSION_KEY, currentVersion);
-    localStorage.setItem(
-      CHANGELOG_LAST_SEEN_VERSION_KEY,
-      changelogVersionToShow,
-    );
-  } catch {}
+  if (!newVersions.length) {
+    store(CHANGELOG_BASELINE_VERSION_KEY, currentChangelogVersion);
+    store(CHANGELOG_LAST_SEEN_APP_VERSION_KEY, currentVersion);
+    return;
+  }
+
+  // Mostrar todas las versiones nuevas como acordeon (la mas reciente abierta).
+  await openChangelogDialog({ versionsToShow: newVersions });
+
+  store(CHANGELOG_BASELINE_VERSION_KEY, currentChangelogVersion);
+  store(CHANGELOG_LAST_SEEN_APP_VERSION_KEY, currentVersion);
+  store(CHANGELOG_LAST_SEEN_VERSION_KEY, currentChangelogVersion);
 }
 
 function normalizeBackgroundUpdateSettings(raw) {
@@ -42313,17 +42438,48 @@ function showMessageModal(title, text, options = {}) {
 
   t.textContent = title || "Aviso";
 
+  const closeMsgModal = () => {
+    unbindChangelogAccordionInMessageModal();
+    o.classList.add("hidden");
+    unlockAppUI();
+  };
+
   p.className = textClassName || "";
   if (isHtml) {
     p.innerHTML = text || "";
     p.style.whiteSpace = "normal";
-    p.style.maxHeight = "none";
-    p.style.overflowY = "visible";
+    // No forzar maxHeight/overflow por inline: dejar que el CSS del modal
+    // (contenedor de tamano fijo + contenido con scroll) mande. Antes se ponia
+    // maxHeight:none/overflow:visible y el changelog crecia sin fin hasta sacar
+    // de la pantalla la cabecera y el boton de cerrar.
+    p.style.maxHeight = "";
+    p.style.overflowY = "";
   } else {
     p.textContent = text || "";
     p.style.whiteSpace = "pre-line";
     p.style.maxHeight = "260px";
     p.style.overflowY = "auto";
+  }
+
+  // X de cierre en la esquina, solo para el changelog (contenedor fijo + scroll).
+  if (d) {
+    const isChangelogDialog = /changelog-dialog/.test(
+      String(dialogClassName || ""),
+    );
+    let xBtn = d.querySelector(".simple-dialog-close-x");
+    if (isChangelogDialog) {
+      if (!xBtn) {
+        xBtn = document.createElement("button");
+        xBtn.type = "button";
+        xBtn.className = "simple-dialog-close-x";
+        xBtn.setAttribute("aria-label", "Cerrar");
+        xBtn.textContent = "✕";
+        d.insertBefore(xBtn, d.firstChild);
+      }
+      xBtn.onclick = closeMsgModal;
+    } else if (xBtn) {
+      xBtn.remove();
+    }
   }
 
   if (cancelBtn) cancelBtn.classList.add("hidden");
@@ -42332,11 +42488,7 @@ function showMessageModal(title, text, options = {}) {
   o.classList.remove("hidden");
   lockAppUI();
 
-  b.onclick = () => {
-    unbindChangelogAccordionInMessageModal();
-    o.classList.add("hidden");
-    unlockAppUI();
-  };
+  b.onclick = closeMsgModal;
 }
 
 async function bootstrapE2EMode() {

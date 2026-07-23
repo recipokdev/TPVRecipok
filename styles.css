@@ -2992,10 +2992,54 @@ body.session-locked .cart-terminal-row #agentName {
   max-width: 620px;
 }
 
+/* Contenedor de tamano fijo: la ventana nunca pasa del alto de pantalla; la
+   cabecera (titulo + X) y el pie (boton) quedan fijos y solo el contenido del
+   changelog hace scroll dentro. Antes el modal crecia con el contenido y se
+   salia de la pantalla, dejando el boton de cerrar fuera de alcance. */
+#msgOverlay .simple-dialog.changelog-dialog,
+#msgOverlay .simple-dialog.changelog-dialog-compact {
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+  position: relative;
+}
+
+#msgOverlay .simple-dialog.changelog-dialog > h2,
+#msgOverlay .simple-dialog.changelog-dialog > .dialog-actions,
+#msgOverlay .simple-dialog.changelog-dialog-compact > h2,
+#msgOverlay .simple-dialog.changelog-dialog-compact > .dialog-actions {
+  flex: 0 0 auto;
+}
+
 #msgText.changelog-content {
-  max-height: min(68vh, 620px);
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
   overflow-y: auto;
   padding-right: 2px;
+}
+
+/* X de cierre en la esquina superior derecha del modal del changelog */
+.simple-dialog-close-x {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
+  border: none;
+  background: transparent;
+  color: #5a6a85;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 0;
+  z-index: 2;
+}
+
+.simple-dialog-close-x:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: #1f2b45;
 }
 
 .changelog-accordion {
@@ -7962,6 +8006,15 @@ body.theme-dark .qwerty-pad {
   background: #111827;
   color: #e5e7eb;
   border: 1px solid #374151;
+}
+
+body.theme-dark .simple-dialog-close-x {
+  color: #9aa7bd;
+}
+
+body.theme-dark .simple-dialog-close-x:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #e5e7eb;
 }
 
 body.theme-dark .dialog-actions button,
