@@ -11087,6 +11087,19 @@ function resolveUnpaidParkedTicketIndexForCheckout({
 } = {}) {
   if (!Array.isArray(parkedTickets) || !parkedTickets.length) return null;
 
+  const key = String(syncKey || "").trim();
+  const idNum = Number(ticketId || 0) || 0;
+  const hasStableId = !!key || idNum > 0;
+
+  // ¿El ticket t es EXACTAMENTE el que queremos cerrar (por su identidad
+  // estable, no por su posicion)?
+  const matchesStableId = (t) => {
+    if (!t) return false;
+    if (key && String(getParkedTicketSyncKey(t) || "") === key) return true;
+    if (idNum > 0 && Number(t?.id || 0) === idNum) return true;
+    return false;
+  };
+
   // OJO: Number(null) === 0 (no NaN). Antes, cobrar un carrito NORMAL sin
   // aparcado cargado pasaba preferredIndex=null -> idxCandidate=0 y resolvia al
   // aparcado del indice 0, marcandolo pagado y borrando su presupuesto en FS.
@@ -11096,12 +11109,23 @@ function resolveUnpaidParkedTicketIndexForCheckout({
   const idxCandidate = hasPreferredIndex ? Number(preferredIndex) : NaN;
   if (hasPreferredIndex && idxCandidate >= 0) {
     const t = parkedTickets[idxCandidate];
-    if (t && !t?.paid && isTicketInCurrentParkingMode(t)) {
+    // El indice preferido SOLO vale si el ticket en esa posicion sigue sin pagar
+    // y en modo, Y ADEMAS —cuando tenemos identidad estable— si es el MISMO
+    // ticket. Si la lista se reordeno por un sync durante el cobro (usuario que
+    // aparca mucho + sync frecuente), el indice queda obsoleto y apuntaria a OTRO
+    // aparcado sin pagar: en ese caso NO se usa y se cae a la busqueda por
+    // syncKey/ticketId de abajo. Esto evita marcar como cobrado el ticket
+    // equivocado (e imprimir/facturar uno distinto del que se cobra).
+    if (
+      t &&
+      !t?.paid &&
+      isTicketInCurrentParkingMode(t) &&
+      (!hasStableId || matchesStableId(t))
+    ) {
       return idxCandidate;
     }
   }
 
-  const key = String(syncKey || "").trim();
   if (key) {
     const byKey = parkedTickets.findIndex(
       (t) =>
@@ -11113,7 +11137,6 @@ function resolveUnpaidParkedTicketIndexForCheckout({
     if (byKey >= 0) return byKey;
   }
 
-  const idNum = Number(ticketId || 0) || 0;
   if (idNum > 0) {
     const byId = parkedTickets.findIndex(
       (t) =>
@@ -12433,9 +12456,19 @@ function confirmModal(title, text, options = {}) {
     middleButtonResult = "middle",
   } = options || {};
 
+  const addedDialogClasses = [];
   if (dialogEl) {
     dialogEl.classList.remove("stock-warning-dialog");
-    if (dialogClassName) dialogEl.classList.add(dialogClassName);
+    if (dialogClassName) {
+      String(dialogClassName)
+        .split(/\s+/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .forEach((cls) => {
+          dialogEl.classList.add(cls);
+          addedDialogClasses.push(cls);
+        });
+    }
   }
 
   if (isHtml) {
@@ -12447,8 +12480,12 @@ function confirmModal(title, text, options = {}) {
   }
 
   textEl.className = textClassName || "";
-  textEl.style.maxHeight = isHtml ? "none" : "260px";
-  textEl.style.overflowY = isHtml ? "visible" : "auto";
+  // Para HTML no forzamos maxHeight/overflow por inline: deja que mande el CSS
+  // del modal (contenedor de tamano fijo + contenido con scroll). Antes se ponia
+  // maxHeight:none/overflow:visible y el contenido crecia hasta salirse de la
+  // pantalla (p.ej. el Resumen de aparcados quedaba cortado).
+  textEl.style.maxHeight = isHtml ? "" : "260px";
+  textEl.style.overflowY = isHtml ? "" : "auto";
   textEl.style.paddingRight = "4px";
 
   if (midBtn) {
@@ -12467,6 +12504,11 @@ function confirmModal(title, text, options = {}) {
       if (midBtn) midBtn.onclick = null;
       window.removeEventListener("keydown", onKey);
       overlay.classList.add("hidden");
+      // Quitar las clases de dialogo que anadimos, para no contaminar el
+      // siguiente modal que reutilice #msgOverlay.
+      if (dialogEl && addedDialogClasses.length) {
+        addedDialogClasses.forEach((cls) => dialogEl.classList.remove(cls));
+      }
       unlockAppUI();
     };
 
@@ -15657,6 +15699,66 @@ function buildParkedSummaryHtml(stats, mode = "pending") {
   `;
 }
 
+// Resumen con pestañas Todos / Sin cobrar / Cobrados. Se usa cuando el resumen
+// se abre desde la pestaña "Todos", para que el cliente pueda separar de un
+// vistazo (antes salían todos mezclados y confundía). Desde "Sin cobrar" o
+// "Cobrados" se sigue mostrando solo ese modo (buildParkedSummaryHtml directo).
+function buildParkedSummaryTabsHtml(scoped, defaultMode = "all") {
+  const modes = [
+    { key: "all", label: "Todos" },
+    { key: "pending", label: "Sin cobrar" },
+    { key: "paid", label: "Cobrados" },
+  ];
+  const def = modes.some((m) => m.key === defaultMode) ? defaultMode : "all";
+
+  const tabsHtml = modes
+    .map((m) => {
+      const stats = buildParkedSummaryStats(scoped, m.key);
+      const active = m.key === def;
+      return `<button type="button" class="parked-summary-tab${active ? " is-active" : ""}" data-summary-tab="${m.key}" aria-selected="${active ? "true" : "false"}">${escapeHtmlForModal(m.label)} (${stats.ticketsTotal})</button>`;
+    })
+    .join("");
+
+  const sectionsHtml = modes
+    .map((m) => {
+      const stats = buildParkedSummaryStats(scoped, m.key);
+      const active = m.key === def;
+      return `<div class="parked-summary-section" data-summary-section="${m.key}" style="display:${active ? "block" : "none"};">${buildParkedSummaryHtml(stats, m.key)}</div>`;
+    })
+    .join("");
+
+  return `
+    <div class="parked-summary-tabs-wrap" data-parked-summary-tabs="1">
+      <div class="parked-summary-tabs">${tabsHtml}</div>
+      <div class="parked-summary-sections">${sectionsHtml}</div>
+    </div>
+  `;
+}
+
+function bindParkedSummaryTabs() {
+  const textEl = document.getElementById("msgText");
+  if (!textEl) return;
+  const wrap = textEl.querySelector("[data-parked-summary-tabs]");
+  if (!wrap) return;
+
+  wrap.addEventListener("click", (ev) => {
+    const btn = ev.target?.closest?.("[data-summary-tab]");
+    if (!btn || !wrap.contains(btn)) return;
+    const key = String(btn.getAttribute("data-summary-tab") || "");
+    if (!key) return;
+
+    wrap.querySelectorAll("[data-summary-tab]").forEach((b) => {
+      const active = b.getAttribute("data-summary-tab") === key;
+      b.classList.toggle("is-active", active);
+      b.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    wrap.querySelectorAll("[data-summary-section]").forEach((s) => {
+      s.style.display =
+        s.getAttribute("data-summary-section") === key ? "block" : "none";
+    });
+  });
+}
+
 function parkedTicketMatchesSearch(t, term) {
   const q = String(term || "")
     .trim()
@@ -16454,21 +16556,29 @@ function ensureParkedToolbar() {
           ? "all"
           : "pending";
 
-    const stats = buildParkedSummaryStats(scoped, summaryMode);
-    const html = buildParkedSummaryHtml(stats, summaryMode);
+    // Desde "Todos": resumen con pestañas Todos/Sin cobrar/Cobrados (separado).
+    // Desde "Sin cobrar"/"Cobrados": solo ese modo, como hasta ahora.
+    const useTabs = summaryMode === "all";
+    const html = useTabs
+      ? buildParkedSummaryTabsHtml(scoped, "all")
+      : buildParkedSummaryHtml(
+          buildParkedSummaryStats(scoped, summaryMode),
+          summaryMode,
+        );
 
-    const titleSuffix =
-      parkedViewState.filter === "paid"
-        ? "cobrados"
-        : parkedViewState.filter === "pending"
-          ? "sin cobrar"
-          : "todos";
+    const title = useTabs
+      ? "Resumen de aparcados"
+      : `Resumen de aparcados (${summaryMode === "paid" ? "cobrados" : "sin cobrar"})`;
 
-    await confirmModal(`Resumen de aparcados (${titleSuffix})`, html, {
+    const modalPromise = confirmModal(title, html, {
       isHtml: true,
       textClassName: "parked-summary-text",
       dialogClassName: "parked-summary-dialog",
     });
+
+    if (useTabs) bindParkedSummaryTabs();
+
+    await modalPromise;
   });
 
   parkedClearPaidBtn?.addEventListener("click", async () => {
@@ -30858,6 +30968,17 @@ function syncParkedTicketsFromRemote(list) {
       ? parkedTickets[currentParkedTicketIndex]
       : null;
   const prevLoadedKey = getParkedTicketSyncKey(prevLoadedTicket);
+  // Ademas de la clave exacta, guardamos variantes e id del aparcado cargado.
+  // Al iniciar un cobro se le puede fijar la cajaId (candado de checkout), lo que
+  // CAMBIA su syncKey; si buscaramos solo por la clave exacta, el ticket recien
+  // cargado pareceria "desaparecido" y se vaciaria el carrito por error (se perdia
+  // el aparcado en un cobro que ademas fallaba). Emparejar tambien por id/variantes
+  // lo evita.
+  const prevLoadedVariants = new Set(
+    getParkedTicketSyncKeyVariants(prevLoadedTicket),
+  );
+  const prevLoadedId =
+    Number(prevLoadedTicket?.id || prevLoadedTicket?.ticketId || 0) || 0;
 
   const previousByKey = new Map();
   previousTickets.forEach((ticket) => {
@@ -31236,11 +31357,23 @@ function syncParkedTicketsFromRemote(list) {
   saveParkedTicketsCache(parkedTickets);
 
   if (prevLoadedKey) {
-    const nextIdx = parkedTickets.findIndex(
-      (t) => getParkedTicketSyncKey(t) === prevLoadedKey,
-    );
+    // Buscar el aparcado cargado en la lista nueva por clave exacta O por
+    // id/variantes (tolera que la cajaId le haya cambiado la syncKey al iniciar
+    // el cobro), para no darlo por "desaparecido" y vaciar el carrito por error.
+    const nextIdx = parkedTickets.findIndex((t) => {
+      if (!t) return false;
+      if (getParkedTicketSyncKey(t) === prevLoadedKey) return true;
+      if (prevLoadedId > 0 && Number(t?.id || t?.ticketId || 0) === prevLoadedId)
+        return true;
+      const variants = getParkedTicketSyncKeyVariants(t);
+      return variants.some((k) => prevLoadedVariants.has(k));
+    });
     if (nextIdx >= 0) {
       currentParkedTicketIndex = nextIdx;
+    } else if (isPayingNow) {
+      // Nunca vaciar el carrito ni soltar el aparcado mientras hay un cobro en
+      // curso: si un sync no lo encuentra momentaneamente, se conserva y el
+      // propio flujo de cobro decide (evita perder el ticket a mitad del cobro).
     } else {
       // El aparcado que teniamos cargado ya no existe (lo cobraron o borraron
       // en otro TPV) y no hay edicion local pendiente: vaciar el carrito para no

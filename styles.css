@@ -1634,15 +1634,18 @@ body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode)
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
 }
 
-/* Estado seleccionado robusto incluso con color de familia personalizado (inline) */
+/* Estado seleccionado robusto incluso con color de familia personalizado
+   (inline). Anillo HACIA DENTRO (inset) para que NO se salga del boton por
+   arriba/lados (antes un anillo hacia afuera invadia la fila del buscador) y
+   sin tocar el color de fondo del cliente. Doble tono (claro + oscuro) para que
+   se vea sobre cualquier color de familia. */
 .category-btn.active {
   position: relative;
   z-index: 1;
   font-weight: 700;
   box-shadow:
-    0 0 0 2px #ffffff,
-    0 0 0 5px rgba(17, 24, 39, 0.92),
-    0 8px 20px rgba(15, 23, 42, 0.3);
+    inset 0 0 0 2px rgba(255, 255, 255, 0.95),
+    inset 0 0 0 4px rgba(17, 24, 39, 0.92);
 }
 
 .category-btn-back {
@@ -3040,6 +3043,67 @@ body.session-locked .cart-terminal-row #agentName {
 .simple-dialog-close-x:hover {
   background: rgba(0, 0, 0, 0.08);
   color: #1f2b45;
+}
+
+/* Resumen de aparcados: contenedor de tamano fijo (no se sale de la pantalla),
+   cabecera y botones fijos, y el contenido con scroll dentro. Antes crecia con
+   el contenido y quedaba cortado fuera del TPV. */
+#msgOverlay .simple-dialog.parked-summary-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, calc(100vw - 28px));
+  max-width: 760px;
+  height: 88vh;
+  max-height: 88vh;
+}
+
+#msgOverlay .simple-dialog.parked-summary-dialog > h2,
+#msgOverlay .simple-dialog.parked-summary-dialog > .dialog-actions {
+  flex: 0 0 auto;
+}
+
+#msgText.parked-summary-text {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Pestañas del resumen (Todos / Sin cobrar / Cobrados) */
+.parked-summary-tabs {
+  display: flex;
+  gap: 6px;
+  position: sticky;
+  top: 0;
+  background: #fff;
+  padding: 2px 0 10px;
+  margin-bottom: 4px;
+  z-index: 2;
+  flex-wrap: wrap;
+}
+
+.parked-summary-tab {
+  flex: 1 1 auto;
+  min-width: 110px;
+  padding: 8px 12px;
+  border: 1px solid #cfd8e6;
+  border-radius: 999px;
+  background: #f4f7fb;
+  color: #1f2a4d;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.parked-summary-tab.is-active {
+  background: #198cff;
+  border-color: #198cff;
+  color: #fff;
+}
+
+.parked-summary-tab:hover {
+  border-color: #198cff;
 }
 
 .changelog-accordion {
@@ -7829,9 +7893,8 @@ body.theme-dark .category-btn-back:hover {
 
 body.theme-dark .category-btn.active {
   box-shadow:
-    0 0 0 2px rgba(15, 23, 42, 0.95),
-    0 0 0 5px rgba(255, 255, 255, 0.92),
-    0 8px 20px rgba(0, 0, 0, 0.42);
+    inset 0 0 0 2px rgba(255, 255, 255, 0.95),
+    inset 0 0 0 4px rgba(15, 23, 42, 0.95);
 }
 
 body.theme-dark .product-tile {
@@ -8015,6 +8078,22 @@ body.theme-dark .simple-dialog-close-x {
 body.theme-dark .simple-dialog-close-x:hover {
   background: rgba(255, 255, 255, 0.12);
   color: #e5e7eb;
+}
+
+body.theme-dark .parked-summary-tabs {
+  background: #111827;
+}
+
+body.theme-dark .parked-summary-tab {
+  background: #1f2937;
+  border-color: #374151;
+  color: #e5e7eb;
+}
+
+body.theme-dark .parked-summary-tab.is-active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
 }
 
 body.theme-dark .dialog-actions button,

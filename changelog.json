@@ -8,6 +8,17 @@
       "changes": []
     },
     {
+      "version": "0.2.8",
+      "date": "2026-07-24",
+      "title": "Release 0.2.8",
+      "changes": [
+        "Aparcados: corregido un fallo por el que, al cobrar un ticket aparcado mientras se sincronizaba la lista en segundo plano, podia marcarse como cobrado OTRO ticket aparcado distinto (y el impreso/facturado no coincidia con el que quedaba como cobrado). Ahora el ticket a cobrar se identifica siempre por su identificador estable, no por su posicion en la lista, aunque la lista se reordene durante el cobro.",
+        "Aparcados: corregido un fallo por el que, al cobrar un ticket aparcado recien creado, a veces saltaba el error 'el ticket ya no esta disponible', se vaciaba el carrito y el aparcado desaparecia sin haberse cobrado (se perdia). Ocurria porque al iniciar el cobro cambiaba internamente la clave del ticket y un sync lo daba por desaparecido. Ahora el ticket cargado se reconoce por su identificador aunque cambie esa clave, y nunca se vacia el carrito mientras hay un cobro en curso.",
+        "Resumen de aparcados: al abrirlo desde la pestana 'Todos' ahora se puede separar entre Todos / Sin cobrar / Cobrados con pestanas dentro del propio resumen (antes salian mezclados y confundia). Desde 'Sin cobrar' o 'Cobrados' sigue mostrando solo ese grupo.",
+        "Resumen de aparcados: la ventana tiene ahora un tamano fijo con scroll interno, para que no se corte ni se salga de la pantalla cuando hay muchos productos."
+      ]
+    },
+    {
       "version": "0.2.6",
       "date": "2026-07-22",
       "title": "Release 0.2.6",
@@ -72,7 +83,7 @@
       ]
     },
     {
-      "version": "0.2.1-beta.1",
+      "version": "0.2.2",
       "date": "2026-07-09",
       "title": "Sincronizacion aparcados multi-TPV",
       "changes": [
