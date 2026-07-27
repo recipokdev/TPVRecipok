@@ -8,6 +8,18 @@
       "changes": []
     },
     {
+      "version": "0.2.10",
+      "date": "2026-07-27",
+      "title": "Release 0.2.10",
+      "changes": [
+        "Formas de pago: corregido un fallo por el que en algunas instalaciones de FacturaScripts (las que devuelven el campo 'activa' como 1 en vez de true) NO aparecia ninguna forma de pago en el cobro y solo se podia cobrar 'al contado', descuadrando la caja al pagar con tarjeta. Ahora se reconocen las formas de pago activas venga 'activa' como true, 1 o '1', y ademas quedan cacheadas para que si se cae internet se sigan pudiendo usar (tarjeta incluida) en vez de caer a solo contado.",
+        "Aparcados: nuevo boton 'Reiniciar aparcados' en el modal de tickets aparcados. Borra la copia local de aparcados de ese TPV y vuelve a descargar la lista del servidor; sirve para limpiar aparcados 'fantasma' o cuando dos TPV muestran listas distintas. No afecta a la configuracion, la caja ni el login.",
+        "Resumen de aparcados: mejor presentacion (la etiqueta y su valor ya no aparecen pegados, lista de productos mas clara) y la ventana se ajusta al contenido sin quedar enorme.",
+        "Movimiento de caja: mientras se guarda, el modal queda completamente bloqueado (no se puede pulsar Guardar de nuevo, ni Cancelar, ni cerrar, ni tocar los campos) y el boton Guardar se pone gris con 'Guardando...'. Evita pulsar dos veces sin querer.",
+        "Movimiento de caja: corregido que el modal no se cerraba al guardar correctamente (se quedaba abierto). Ahora se cierra solo al terminar bien."
+      ]
+    },
+    {
       "version": "0.2.8",
       "date": "2026-07-24",
       "title": "Release 0.2.8",

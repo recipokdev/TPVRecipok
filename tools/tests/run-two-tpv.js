@@ -1,18 +1,24 @@
 // run-two-tpv.js
-// Lanza DOS instancias del TPV a la vez en el mismo PC para probar a mano la
-// sincronizacion multi-TPV (aparcar / cobrar / borrar / cliente en aparcados)
-// sin necesidad de una segunda maquina.
+// Lanza DOS instancias del TPV REAL (no E2E) a la vez en el mismo PC, para
+// probar a mano la sincronizacion multi-TPV "espejo" (aparcar / cobrar / borrar
+// / resumen / desincronizacion de aparcados) COBRANDO DE VERDAD contra demo.
 //
-// Ambas instancias:
-//   - corren en modo E2E (no imprime en fisico, no abre cajon, userData aislado)
-//   - apuntan al DEMO (plus.recipok.com/demo) => comparten empresa y por tanto
-//     las reservas de aparcados, igual que 2 TPV reales de la misma terminal.
-//   - son ventanas visibles y NO en kiosco (main.js las deja windowed en E2E),
-//     asi puedes colocarlas lado a lado. El titulo lleva "TPV A" / "TPV B".
+// A diferencia de antes (que corria en E2E con una caja ficticia 9999 y por eso
+// NO dejaba cobrar), ahora cada instancia es el programa NORMAL:
+//   - modo multi-instancia real (TPV_MULTI_INSTANCE=1): salta el bloqueo de
+//     instancia unica y usa un userData aislado por instancia.
+//   - NO activa E2E: hace login, abre caja, cobra, imprime... como el TPV real.
+//   - userData PERSISTENTE por instancia: configuras el demo (empresa + login)
+//     UNA vez en cada ventana y se conserva entre ejecuciones.
 //
-// Uso:  npm run test:2tpv     (Ctrl+C para cerrar ambas y limpiar)
+// Uso:  npm run test:2tpv     (Ctrl+C para cerrar ambas)
 //
-// Nota: crea/borra reservas en el DEMO, no en datos reales.
+// Para probar el modelo "espejo" del cliente:
+//   1) En cada ventana, conecta a la MISMA empresa demo (mismo email/API key).
+//   2) Entra con el MISMO terminal / MISMA caja en las dos (caja compartida).
+//   3) Aparca en la ventana 1 y comprueba que la 2 lo ve; cobra, borra, etc.
+//
+// Nota: crea/borra datos en DEMO, no en produccion real.
 
 const { spawn } = require("child_process");
 const path = require("path");
@@ -22,37 +28,31 @@ const electronPath = require("electron"); // ruta al ejecutable de electron
 
 const ROOT = path.resolve(__dirname, "..", "..");
 
-const DEMO_ENV = {
-  TPV_E2E: "1",
-  TPV_MODE: "demo",
-  TPV_E2E_BASE_URL:
-    process.env.TPV_E2E_BASE_URL || "https://plus.recipok.com/demo/api/3",
-  TPV_E2E_API_KEY: process.env.TPV_E2E_API_KEY || "ST5K5zJOu9r6S63xPx6L",
-  TPV_E2E_REQUIRE_ONLINE: "1",
-  TPV_E2E_ALLOW_WRITES: "1",
-  TPV_E2E_BACKGROUND: "0", // foreground: ventanas visibles y usables
-};
-
 const instances = [
-  { label: "TPV A", color: "\x1b[36m" }, // cian
-  { label: "TPV B", color: "\x1b[35m" }, // magenta
+  { label: "TPV 1", color: "\x1b[36m", dir: "tpvrecipok-2tpv-real-1" }, // cian
+  { label: "TPV 2", color: "\x1b[35m", dir: "tpvrecipok-2tpv-real-2" }, // magenta
 ];
 
 const children = [];
-const tmpDirs = [];
 
-function launch({ label, color }, idx) {
-  const userDataDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), `tpvrecipok-2tpv-${idx}-`),
-  );
-  tmpDirs.push(userDataDir);
+function launch({ label, color, dir }) {
+  // userData PERSISTENTE (no temporal): asi la config de demo y el login se
+  // conservan entre ejecuciones y no hay que reconfigurar cada vez.
+  const userDataDir = path.join(os.tmpdir(), dir);
+  try {
+    fs.mkdirSync(userDataDir, { recursive: true });
+  } catch (_) {}
 
   const env = {
     ...process.env,
-    ...DEMO_ENV,
-    TPV_E2E_USER_DATA: userDataDir,
+    TPV_MULTI_INSTANCE: "1",
+    TPV_USER_DATA: userDataDir,
     TPV_TEST_LABEL: label,
   };
+  // Asegurar que NO arranca en modo E2E (por si el entorno lo trae puesto).
+  delete env.TPV_E2E;
+  delete env.TPV_E2E_USER_DATA;
+  delete env.TPV_MODE;
 
   const child = spawn(electronPath, ["."], { cwd: ROOT, env });
   const tag = `${color}[${label}]\x1b[0m`;
@@ -73,20 +73,13 @@ function launch({ label, color }, idx) {
   });
 
   children.push(child);
-  process.stdout.write(
-    `${tag} lanzado (userData: ${userDataDir})\n`,
-  );
+  process.stdout.write(`${tag} lanzado (userData: ${userDataDir})\n`);
 }
 
 function cleanup() {
   for (const c of children) {
     try {
       c.kill();
-    } catch (_) {}
-  }
-  for (const d of tmpDirs) {
-    try {
-      fs.rmSync(d, { recursive: true, force: true });
     } catch (_) {}
   }
 }
@@ -99,7 +92,9 @@ process.on("SIGINT", () => {
 process.on("exit", cleanup);
 
 console.log(
-  "Lanzando 2 instancias de TPV (modo pruebas, DEMO). Ctrl+C para cerrar.\n" +
-    "Coloca las ventanas 'TPV A' y 'TPV B' lado a lado para probar la sincronizacion.\n",
+  "Lanzando 2 instancias REALES del TPV (no E2E). Ctrl+C para cerrar.\n" +
+    "Configura en cada ventana la MISMA empresa demo y la MISMA caja para\n" +
+    "probar la sincronizacion 'espejo'. El userData de cada una es persistente,\n" +
+    "asi que solo tienes que configurarlas la primera vez.\n",
 );
 instances.forEach(launch);

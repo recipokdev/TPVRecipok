@@ -16302,6 +16302,74 @@ function syncParkedToolbarUI() {
   syncParkedSearchClearBtn();
 }
 
+// Reinicia la copia LOCAL de aparcados de este TPV (cache, cola de sync,
+// tombstones, contadores, historial...) y vuelve a descargar la lista del
+// servidor. Sirve para limpiar aparcados "fantasma" (que ya no existen en el
+// servidor pero se quedaron en local) o cuando dos TPV van desincronizados.
+// NO toca configuracion de empresa, caja ni login (solo claves tpv_parked_*).
+async function resetParkedCacheAndResync() {
+  const ok = await confirmModal(
+    "Reiniciar aparcados",
+    "Se borrara la copia LOCAL de aparcados de este TPV y se volvera a descargar la lista del servidor.\n\n" +
+      "No afecta a la configuracion, la caja ni el login. Uselo si este TPV muestra aparcados que ya no existen o va desincronizado con el otro TPV.\n\n" +
+      "¿Continuar?",
+  );
+  if (!ok) return;
+
+  try {
+    // 1) Borrar TODAS las claves locales de aparcados (se reconstruyen del server).
+    const toRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (
+        k &&
+        (k.startsWith("tpv_parked") || k.startsWith("tpv_paid_ticket_parked"))
+      ) {
+        toRemove.push(k);
+      }
+    }
+    toRemove.forEach((k) => {
+      try {
+        localStorage.removeItem(k);
+      } catch {}
+    });
+
+    // 2) Resetear estado en memoria.
+    parkedTickets = [];
+    currentParkedTicketIndex = null;
+    PENDING_RUNTIME_PARKED_SYNC_KEY = "";
+    PENDING_RUNTIME_PARKED_TICKET_ID = 0;
+    parkedCounter = 0;
+
+    // 3) Volver a bajar la lista real del servidor.
+    let okSync = false;
+    try {
+      okSync = await refreshRemoteParkedReservationsOnly();
+    } catch {}
+
+    updateParkedCountBadge?.();
+    refreshParkButtonUI?.();
+    refreshParkedEditingBanner?.();
+    if (
+      parkedTicketsOverlay &&
+      !parkedTicketsOverlay.classList.contains("hidden")
+    ) {
+      renderParkedTicketsModal?.();
+    }
+
+    toast(
+      okSync
+        ? "Aparcados reiniciados y resincronizados desde el servidor."
+        : "Aparcados reiniciados en local. Se descargaran del servidor al reconectar.",
+      okSync ? "ok" : "warn",
+      "Aparcados",
+    );
+  } catch (e) {
+    console.warn("No se pudo reiniciar la cache de aparcados:", e?.message || e);
+    toast("No se pudo reiniciar los aparcados.", "err", "Aparcados");
+  }
+}
+
 async function clearPaidParkedHistory() {
   const source = Array.isArray(parkedTickets) ? parkedTickets : [];
   const removedPaid = source.filter((t) => !!t?.paid && !isPedidoTpvTicket(t));
@@ -16407,6 +16475,9 @@ function ensureParkedToolbar() {
     <div id="parkedSyncTopWrap" class="tickets-tabs" style="margin-left: 10px;">
       <button id="parkedSyncNowBtn" type="button" class="cart-btn tickets-tab-btn parked-sync-action-btn" style="font-size: 13px; padding: 6px 12px;" title="Forzar sincronizacion ahora">
         <span class="parked-sync-icon" aria-hidden="true">⟳</span><span>Sync</span>
+      </button>
+      <button id="parkedResetCacheBtn" type="button" class="parked-reset-btn" title="Borra la copia local de aparcados de este TPV y vuelve a descargarla del servidor (para limpiar aparcados fantasma o desincronizados)">
+        <span aria-hidden="true">⟲</span> Reiniciar
       </button>
     </div>
 
@@ -16523,6 +16594,11 @@ function ensureParkedToolbar() {
 
   parkedSyncNowBtn?.addEventListener("click", async () => {
     await runParkedSyncNowFromToolbar();
+  });
+
+  const parkedResetCacheBtn = document.getElementById("parkedResetCacheBtn");
+  parkedResetCacheBtn?.addEventListener("click", async () => {
+    await resetParkedCacheAndResync();
   });
 
   parkedFilterPaid?.addEventListener("click", () => {
@@ -21442,23 +21518,53 @@ function openCashMoveDialog() {
   lockAppUI();
 }
 
-function closeCashMoveDialog() {
-  if (cashMoveSaveInFlight) return;
+function closeCashMoveDialog(force = false) {
+  // El guard evita que Cancelar/X/click-fuera cierren el modal a mitad de un
+  // guardado. Pero el cierre por EXITO del guardado debe forzarse (force=true),
+  // porque en ese momento cashMoveSaveInFlight aun es true; sin force el modal se
+  // quedaba abierto tras guardar bien.
+  if (!force && cashMoveSaveInFlight) return;
   if (!cashMoveOverlay) return;
   cashMoveOverlay.classList.add("hidden");
+  setCashMoveSaveBusyUi(false);
   unlockAppUI();
 }
 
 function setCashMoveSaveBusyUi(isBusy) {
   const busy = !!isBusy;
+
+  // Bloqueo TOTAL del modal mientras guarda: se puede VER pero no tocar NADA
+  // (ni Guardar, ni Cancelar, ni X, ni inputs, ni radios, ni teclados). Con
+  // pointer-events:none en el cuadro, ningun click hace nada y el cursor no
+  // cambia a "mano" (es como si los botones no existieran para el raton). Evita
+  // dobles pulsaciones y cierres a mitad del guardado.
+  const dialog = cashMoveOverlay?.querySelector?.(".simple-dialog");
+  if (dialog) {
+    dialog.style.pointerEvents = busy ? "none" : "";
+    dialog.style.userSelect = busy ? "none" : "";
+  }
+
   if (cashMoveSaveBtn) {
     cashMoveSaveBtn.disabled = busy;
     cashMoveSaveBtn.textContent = busy ? "Guardando..." : "Guardar";
+    // Mientras guarda se pone GRIS (pierde el azul primario) y sin cursor mano.
+    cashMoveSaveBtn.style.background = busy ? "#cbd5e1" : "";
+    cashMoveSaveBtn.style.borderColor = busy ? "#cbd5e1" : "";
+    cashMoveSaveBtn.style.color = busy ? "#64748b" : "";
+    cashMoveSaveBtn.style.cursor = busy ? "default" : "";
+    cashMoveSaveBtn.style.pointerEvents = busy ? "none" : "";
   }
-  if (cashMoveCancelBtn) cashMoveCancelBtn.disabled = busy;
+  if (cashMoveCancelBtn) {
+    cashMoveCancelBtn.disabled = busy;
+    cashMoveCancelBtn.style.opacity = busy ? "0.5" : "";
+    cashMoveCancelBtn.style.cursor = busy ? "default" : "";
+    cashMoveCancelBtn.style.pointerEvents = busy ? "none" : "";
+  }
   if (cashMoveCloseX) {
+    cashMoveCloseX.disabled = busy;
+    cashMoveCloseX.style.opacity = busy ? "0.4" : "";
+    cashMoveCloseX.style.cursor = busy ? "default" : "";
     cashMoveCloseX.style.pointerEvents = busy ? "none" : "";
-    cashMoveCloseX.style.opacity = busy ? "0.5" : "";
   }
 }
 
@@ -22240,12 +22346,31 @@ async function fetchFormasPagoActivas(opts = {}) {
       "filter[activa]": 1, // FacturaScripts suele aceptar 1/0
     });
 
+    // OJO: FacturaScripts devuelve "activa" como true, 1 o "1" segun version/
+    // serializacion. Antes se exigia === true (booleano estricto): en las
+    // instancias que devuelven 1/"1" ESTO DESCARTABA TODAS las formas de pago,
+    // la lista quedaba vacia y el modal caia al fallback de solo CONT (contado)
+    // -> el cliente no podia cobrar con tarjeta y todo iba "al contado". Ahora
+    // se acepta cualquier valor veraz y solo se descartan las inactivas (0/false).
+    const isFormaActiva = (f) => {
+      if (!f) return false;
+      const a = f.activa;
+      if (a === false || a === 0 || a === "0") return false;
+      if (a === undefined || a === null || a === "") return true; // sin dato: no descartar
+      return (
+        a === true ||
+        a === 1 ||
+        a === "1" ||
+        String(a).trim().toLowerCase() === "true"
+      );
+    };
+
     const list = (Array.isArray(data) ? data : [])
-      .filter((f) => f && f.activa === true) // por si el filtro no se aplica en server
+      .filter(isFormaActiva) // por si el filtro no se aplica en server
       // opcional: solo imprimibles
       // .filter((f) => f.imprimir !== false)
       .map((f) => ({
-        activa: !!f.activa,
+        activa: true,
         codpago: String(f.codpago || "").trim(),
         descripcion: String(f.descripcion || f.codpago || "").trim(),
         domiciliado: !!f.domiciliado,
@@ -44699,7 +44824,9 @@ async function saveCashMovement() {
       "Caja",
     );
 
-    closeCashMoveDialog();
+    // force=true: cerrar aunque cashMoveSaveInFlight siga en true (se limpia en
+    // el finally justo despues).
+    closeCashMoveDialog(true);
   } finally {
     cashMoveSaveInFlight = false;
     setCashMoveSaveBusyUi(false);

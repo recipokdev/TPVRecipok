@@ -3051,10 +3051,9 @@ body.session-locked .cart-terminal-row #agentName {
 #msgOverlay .simple-dialog.parked-summary-dialog {
   display: flex;
   flex-direction: column;
-  width: min(760px, calc(100vw - 28px));
-  max-width: 760px;
-  height: 88vh;
-  max-height: 88vh;
+  width: min(620px, calc(100vw - 28px));
+  max-width: 620px;
+  max-height: 85vh;
 }
 
 #msgOverlay .simple-dialog.parked-summary-dialog > h2,
@@ -3104,6 +3103,120 @@ body.session-locked .cart-terminal-row #agentName {
 
 .parked-summary-tab:hover {
   border-color: #198cff;
+}
+
+/* Boton "Reiniciar aparcados": accion secundaria de limpieza. Pequeno y naranja
+   para distinguirlo de Sync (azul) y de las pestanas, sin comerse la barra. */
+.parked-reset-btn {
+  font-size: 12px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  border: 1px solid #f6b45a;
+  background: #fff7ed;
+  color: #b45309;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1.1;
+}
+
+.parked-reset-btn:hover {
+  background: #ffedd5;
+  border-color: #e0912f;
+}
+
+body.theme-dark .parked-reset-btn {
+  background: #3a2a12;
+  border-color: #7c5a1e;
+  color: #fbbf6b;
+}
+
+body.theme-dark .parked-reset-btn:hover {
+  background: #4a3517;
+  border-color: #a9772a;
+}
+
+/* Filas del resumen: etiqueta a la izquierda, valor a la derecha (con espacio) */
+.parked-summary-wrap {
+  display: flex;
+  flex-direction: column;
+}
+
+.parked-summary-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 4px;
+  border-bottom: 1px solid #eef2f7;
+  font-size: 15px;
+  color: #33415c;
+}
+
+.parked-summary-row > span {
+  color: #5a6a85;
+}
+
+.parked-summary-row > strong {
+  color: #1f2a4d;
+  font-weight: 700;
+  white-space: nowrap;
+  text-align: right;
+}
+
+/* Bloque de productos */
+.parked-summary-products {
+  margin-top: 14px;
+}
+
+.parked-summary-products-title {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #7a8aa6;
+  margin-bottom: 6px;
+}
+
+.parked-summary-products-list {
+  border: 1px solid #e6ecf5;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.parked-summary-product-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #eef2f7;
+  font-size: 14px;
+}
+
+.parked-summary-product-row:last-child {
+  border-bottom: none;
+}
+
+.parked-summary-product-row:nth-child(odd) {
+  background: #f8fafc;
+}
+
+.parked-summary-product-name {
+  color: #33415c;
+}
+
+.parked-summary-product-qty {
+  color: #1f2a4d;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.parked-summary-empty {
+  padding: 12px;
+  color: #7a8aa6;
+  font-size: 14px;
+  text-align: center;
 }
 
 .changelog-accordion {
@@ -8094,6 +8207,44 @@ body.theme-dark .parked-summary-tab.is-active {
   background: #2563eb;
   border-color: #2563eb;
   color: #fff;
+}
+
+body.theme-dark .parked-summary-row {
+  border-bottom-color: #263244;
+  color: #d1d9e6;
+}
+
+body.theme-dark .parked-summary-row > span {
+  color: #9aa7bd;
+}
+
+body.theme-dark .parked-summary-row > strong {
+  color: #f1f5fb;
+}
+
+body.theme-dark .parked-summary-products-title {
+  color: #9aa7bd;
+}
+
+body.theme-dark .parked-summary-products-list {
+  border-color: #263244;
+}
+
+body.theme-dark .parked-summary-product-row {
+  border-bottom-color: #263244;
+  color: #d1d9e6;
+}
+
+body.theme-dark .parked-summary-product-row:nth-child(odd) {
+  background: #1a2333;
+}
+
+body.theme-dark .parked-summary-product-name {
+  color: #d1d9e6;
+}
+
+body.theme-dark .parked-summary-product-qty {
+  color: #f1f5fb;
 }
 
 body.theme-dark .dialog-actions button,

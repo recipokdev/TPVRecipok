@@ -27,6 +27,12 @@ let lastScaleReconnectAttemptAt = 0;
 const IS_E2E = String(process.env.TPV_E2E || "") === "1";
 const IS_E2E_BACKGROUND =
   IS_E2E && String(process.env.TPV_E2E_BACKGROUND || "") === "1";
+// Modo multi-instancia REAL (no E2E): permite abrir 2 instancias del TPV normal
+// en el mismo PC (userData aislado) para probar a mano la sincronizacion entre
+// TPV "espejo" contra demo, cobrando de verdad. NO activa E2E, asi que funciona
+// como el programa normal (login, abrir caja, cobrar, imprimir...).
+const IS_MULTI_INSTANCE =
+  String(process.env.TPV_MULTI_INSTANCE || "") === "1";
 // Etiqueta opcional para distinguir instancias en pruebas multi-TPV (2 ventanas).
 const E2E_TEST_LABEL = String(process.env.TPV_TEST_LABEL || "").trim();
 
@@ -121,15 +127,30 @@ function getChannelSafe() {
     return;
   }
 
+  // Multi-instancia real: cada instancia usa su propio userData (aislado), para
+  // poder abrir 2 TPV normales a la vez en el mismo PC sin pisarse.
+  if (IS_MULTI_INSTANCE) {
+    const forcedPath = String(process.env.TPV_USER_DATA || "").trim();
+    if (forcedPath) {
+      app.setPath("userData", forcedPath);
+      return;
+    }
+    const oldPath = app.getPath("userData");
+    app.setPath("userData", oldPath + "-multi");
+    return;
+  }
+
   const ch = getChannelSafe();
   if (ch !== "beta") return;
   const oldPath = app.getPath("userData");
   app.setPath("userData", oldPath + "-beta");
 })();
 
-// En E2E permitimos varias instancias (pruebas multi-TPV: 2 ventanas en el
-// mismo PC). En produccion se mantiene el bloqueo de instancia unica.
-const gotTheLock = IS_E2E ? true : app.requestSingleInstanceLock();
+// En E2E y en multi-instancia real permitimos varias instancias (pruebas
+// multi-TPV: 2 ventanas en el mismo PC). En produccion normal se mantiene el
+// bloqueo de instancia unica.
+const gotTheLock =
+  IS_E2E || IS_MULTI_INSTANCE ? true : app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
 } else {
