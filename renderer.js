@@ -14528,15 +14528,30 @@ function setStatusText(text) {
   dot.style.background = "#22c55e"; // verde
 }
 
-function updateOnlineBadge(ok) {
+function updateOnlineBadge(state) {
   const dot = document.getElementById("statusDot");
   const statusBar = document.getElementById("statusBar");
   if (!statusBar) return;
 
   const strong = statusBar.querySelector("strong");
-  if (dot) dot.style.background = ok ? "#22c55e" : "#ef4444"; // verde / rojo
-  if (strong)
-    strong.textContent = ok ? "Online Recipok" : "Sin internet (modo offline)";
+
+  // Admite boolean (compat) o string: "online" | "unstable" | "offline".
+  const normalized =
+    typeof state === "string" ? state : state ? "online" : "offline";
+
+  const COLORS = {
+    online: "#22c55e", // verde
+    unstable: "#f59e0b", // amarillo: posible corte breve, aun no confirmado
+    offline: "#ef4444", // rojo: sin conexion confirmada
+  };
+  const LABELS = {
+    online: "Online Recipok",
+    unstable: "Conexión inestable...",
+    offline: "Sin internet (modo offline)",
+  };
+
+  if (dot) dot.style.background = COLORS[normalized] || COLORS.offline;
+  if (strong) strong.textContent = LABELS[normalized] || LABELS.offline;
 }
 
 function updateParkedCountBadge() {
@@ -19691,13 +19706,26 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
     numero2: n2New,
   };
 
-  const respNew = await createTicketInFacturaScripts(payloadNew);
+  let respNew;
+  try {
+    respNew = await createTicketInFacturaScripts(payloadNew);
+  } catch (e) {
+    throw new Error(
+      `Se creó la rectificativa (${docRect?.codigo || `#${rectId}`}) pero falló el ticket nuevo: ` +
+        `${e?.message || e}. Contacta con soporte indicando la rectificativa #${rectId} ` +
+        `para completar o revertir el cambio manualmente.`,
+    );
+  }
+
   const docNew =
     respNew?.doc || respNew?.factura || respNew?.data || respNew || null;
   const newId = Number(docNew?.idfactura || docNew?.id || 0);
 
   if (!newId) {
-    throw new Error("No pude crear el ticket nuevo.");
+    throw new Error(
+      `Se creó la rectificativa (${docRect?.codigo || `#${rectId}`}) pero no pude crear el ticket nuevo. ` +
+        `Contacta con soporte indicando la rectificativa #${rectId} para completar o revertir el cambio manualmente.`,
+    );
   }
 
   // Parche packs ticket nuevo
@@ -22678,7 +22706,7 @@ if (cashOpenOkBtn) {
 // ===== [08] Caja: logs remotos en FacturaScripts =====
 
 // 1) Request genérico (form-urlencoded) para POST/PUT/DELETE
-async function apiWrite(resource, method = "POST", fields = {}) {
+async function apiWrite(resource, method = "POST", fields = {}, opts = {}) {
   const cfg = window.RECIPOK_API || {};
   if (!cfg.baseUrl || !cfg.apiKey) throw new Error("Config API no definida");
 
@@ -22691,15 +22719,33 @@ async function apiWrite(resource, method = "POST", fields = {}) {
     body.append(k, String(v));
   });
 
-  const res = await fetch(url, {
-    method,
-    headers: {
-      Accept: "application/json",
-      Token: cfg.apiKey,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: body.toString(),
-  });
+  // Sin esto, una red inestable (wifi de restaurante típico) puede dejar el
+  // fetch colgado indefinidamente: nunca resuelve ni rechaza, así que quien
+  // llama nunca reactiva su botón/estado ("atenuado" para siempre, sin error).
+  const timeoutMs = Number(opts.timeoutMs || 20000);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: {
+        Accept: "application/json",
+        Token: cfg.apiKey,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: body.toString(),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new Error(`Timeout al escribir en ${resource}`);
+    }
+    throw new Error(`Error de red en ${resource}: ${err?.message || err}`);
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   const text = await res.text(); // <- leemos el texto bruto
   let data = null;
@@ -26978,6 +27024,45 @@ payOpenDrawerBtn?.addEventListener("click", () =>
   handleOpenDrawerClick(payOpenDrawerBtn),
 );
 
+// Evita facturas duplicadas cuando una petición se reintenta (cola offline,
+// reemisión de método de pago, etc.) tras un fallo de red ambiguo: si ya
+// existe una factura con este numero2 (clave estable por intento de venta),
+// la devolvemos en vez de crear una nueva.
+async function findExistingFacturaByNumero2(cfg, numero2, idtpv) {
+  const n2 = String(numero2 || "").trim();
+  if (!n2) return null;
+
+  const base = String(cfg.baseUrl || "").replace(/\/+$/, "");
+  const params = new URLSearchParams();
+  params.set("filter[numero2]", n2);
+  if (idtpv) params.set("filter[idtpv]", String(idtpv));
+  params.set("limit", "1");
+
+  try {
+    const res = await fetch(`${base}/facturaclientes?${params.toString()}`, {
+      method: "GET",
+      headers: { Accept: "application/json", Token: cfg.apiKey },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+
+    const data = await res.json().catch(() => null);
+    const rows = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.data)
+        ? data.data
+        : [];
+    return rows.length ? rows[0] : null;
+  } catch (e) {
+    // Si la comprobación falla, no bloqueamos la venta: seguimos con el flujo normal.
+    console.warn(
+      "[crearFacturaCliente] No se pudo comprobar duplicados por numero2:",
+      e?.message || e,
+    );
+    return null;
+  }
+}
+
 async function createTicketInFacturaScripts(ticketPayload) {
   const cfg = window.RECIPOK_API || {};
   if (!cfg.baseUrl || !cfg.apiKey) {
@@ -26988,6 +27073,21 @@ async function createTicketInFacturaScripts(ticketPayload) {
 
   const base = cfg.baseUrl.replace(/\/+$/, "");
   const url = `${base}/crearFacturaCliente`;
+
+  if (ticketPayload.numero2) {
+    const existing = await findExistingFacturaByNumero2(
+      cfg,
+      ticketPayload.numero2,
+      ticketPayload.idtpv,
+    );
+    if (existing) {
+      console.warn(
+        `[crearFacturaCliente] Ya existía una factura con numero2=${ticketPayload.numero2} ` +
+          `(idfactura=${existing.idfactura || existing.id}). Evitando duplicado.`,
+      );
+      return { doc: existing, dedup: true };
+    }
+  }
 
   const bodyParams = new URLSearchParams();
   bodyParams.append("codcliente", ticketPayload.codcliente);
@@ -27035,15 +27135,33 @@ async function createTicketInFacturaScripts(ticketPayload) {
   console.log(">>> Enviando a crearFacturaCliente:", bodyParams.toString());
 
   const doPost = async (params) => {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        Token: cfg.apiKey,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: params.toString(),
-    });
+    // Sin timeout, una red inestable deja este fetch colgado para siempre
+    // (ni resuelve ni rechaza) y el botón de cobrar se queda bloqueado sin
+    // ningún error visible. Ver mismo fix en apiWrite().
+    const timeoutMs = 20000;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    let res;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          Token: cfg.apiKey,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: params.toString(),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (err?.name === "AbortError") {
+        throw new Error("Timeout al crear la factura en FacturaScripts");
+      }
+      throw new Error(`Error de red creando factura: ${err?.message || err}`);
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     const rawText = await res.text().catch(() => "");
     let data = null;
@@ -43340,13 +43458,20 @@ let isOnlineFS = null; // 👈 para forzar primera actualización
 async function startOnlineMonitor() {
   let prevOk = null;
 
+  // Un solo ping fallido puede ser un microcorte de wifi, no un corte real.
+  // Solo confirmamos "offline" (y bloqueamos/encolamos acciones) tras varios
+  // fallos seguidos; mientras tanto solo avisamos visualmente (amarillo).
+  const OFFLINE_CONFIRM_FAILS = 2;
+  let consecutiveOfflineFails = 0;
+
   async function tick() {
     const ok = await checkFSOnline().catch(() => false);
 
     // ✅ Caso especial: hay internet, pero aún no hay cfg de empresa
     if (ok === "NO_CFG_ONLINE") {
+      consecutiveOfflineFails = 0;
       TPV_STATE.offline = false;
-      updateOnlineBadge(true);
+      updateOnlineBadge("online");
 
       const shouldResumeActivation =
         !!PENDING_COMPANY_EMAIL || isReconnectOverlayVisible();
@@ -43369,8 +43494,20 @@ async function startOnlineMonitor() {
       return;
     }
 
-    TPV_STATE.offline = !ok;
-    updateOnlineBadge(!!ok);
+    if (ok) {
+      consecutiveOfflineFails = 0;
+      TPV_STATE.offline = false;
+      updateOnlineBadge("online");
+    } else {
+      consecutiveOfflineFails += 1;
+      if (consecutiveOfflineFails < OFFLINE_CONFIRM_FAILS) {
+        // Microcorte: aun no confirmado, no bloqueamos ni encolamos nada.
+        updateOnlineBadge("unstable");
+      } else {
+        TPV_STATE.offline = true;
+        updateOnlineBadge("offline");
+      }
+    }
 
     if (ok) {
       TPV_STATE.locked = false;

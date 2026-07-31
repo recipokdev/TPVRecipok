@@ -31,6 +31,32 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Generate config.js
+        shell: bash
+        env:
+          TPV_API_KEY: ${{ secrets.TPV_API_KEY }}
+        run: |
+          if [ -z "$TPV_API_KEY" ]; then
+            echo "::error::Falta el secret TPV_API_KEY en este repositorio."
+            exit 1
+          fi
+          cat > config.js <<EOF
+          // Configuración de la API de Recipok / FacturaScripts
+          window.RECIPOK_API = {
+            baseUrl: "",
+            apiKey: "",
+            defaultCodClienteTPV: "1",
+            defaultCodPagoTPV: "CONT",
+            defaultCodSerieTPV: "T",
+          };
+
+          window.TPV_CONFIG = {
+            resolverUrl: "https://plus.recipok.com/tpv/clients.json",
+            tpvSyncApiUrl: "https://plus.recipok.com/tpv/api/index.php",
+            tpvApiKey: "$TPV_API_KEY",
+          };
+          EOF
+
       # --- Linux prerequisites (opcional pero recomendado) ---
       - name: Install Linux build prerequisites
         if: matrix.os == 'ubuntu-latest'
