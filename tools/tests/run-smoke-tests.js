@@ -33,15 +33,26 @@ function ensureFileExists(relPath) {
 const rendererPath = ensureFileExists("renderer.js");
 const indexPath = ensureFileExists("index.html");
 const stylesPath = ensureFileExists("styles.css");
+const mainPath = ensureFileExists("main.js");
+const ticketPrintPath = ensureFileExists("ticket_print.html");
 const checklistPath = ensureFileExists("tools/tests/cash-smoke-checklist.md");
 
-if (!rendererPath || !indexPath || !stylesPath || !checklistPath) {
+if (
+  !rendererPath ||
+  !indexPath ||
+  !stylesPath ||
+  !mainPath ||
+  !ticketPrintPath ||
+  !checklistPath
+) {
   process.exit(1);
 }
 
 const renderer = fs.readFileSync(rendererPath, "utf8");
 const index = fs.readFileSync(indexPath, "utf8");
 const styles = fs.readFileSync(stylesPath, "utf8");
+const main = fs.readFileSync(mainPath, "utf8");
+const ticketPrint = fs.readFileSync(ticketPrintPath, "utf8");
 
 console.log("\n[SMOKE] Checking key flows in renderer.js\n");
 
@@ -132,6 +143,110 @@ mustContain(
   styles,
   ".mesas-quick-btn.is-parked .mq-dot",
   "Mesas quick-switch parked status color present",
+);
+
+console.log("\n[SMOKE] Checking 2026-08-05 batch of fixes\n");
+
+// Timeouts en escrituras a FacturaScripts (sin esto, una red inestable puede
+// dejar el boton de cobrar/cerrar caja bloqueado para siempre sin error).
+mustContain(
+  renderer,
+  "Timeout al escribir en",
+  "apiWrite timeout guard present",
+);
+mustContain(
+  renderer,
+  "Timeout al crear la factura en FacturaScripts",
+  "createTicketInFacturaScripts timeout guard present",
+);
+
+// Deduplicacion de facturas por numero2 (evita cobros duplicados en reintentos).
+mustContain(
+  renderer,
+  "async function findExistingFacturaByNumero2",
+  "Invoice dedup by numero2 present",
+);
+
+// Bloqueo entre terminales por sesion, no por id de terminal configurado
+// (dos TPV con el mismo id de terminal deben seguir bloqueandose entre si).
+mustContain(
+  renderer,
+  "ticket.closingByTerminalId = ensureTerminalPresenceSessionId();",
+  "Parked-ticket checkout lock uses per-session id",
+);
+
+// El aviso de "varios TPV activos" no debe poder dispararse dos veces solapado.
+mustContain(
+  renderer,
+  "if (__terminalPresenceInFlight) return null;",
+  "Terminal presence check has overlap guard",
+);
+
+// Descuento de stock local tras la venta (en vez de refrescar todo el catalogo).
+mustContain(
+  renderer,
+  "function applyLocalStockDecrementForSale",
+  "Local stock decrement after sale present",
+);
+
+// Reset de cliente y sugerencia de nombre al aparcar.
+mustContain(
+  renderer,
+  "El siguiente ticket debe arrancar con el cliente por defecto",
+  "Customer resets to default after payment",
+);
+mustContain(
+  renderer,
+  "selectedCustomerName && !selectedCustomer?.isDefault",
+  "Park name suggestion uses selected customer",
+);
+
+// Cash dialog y modal de ticket/devolucion: los botones no deben quedar
+// dentro del area que hace scroll.
+mustContain(
+  styles,
+  ".cash-page-scroll",
+  "Cash dialog scroll wrapper present",
+);
+mustContain(
+  styles,
+  ".pay-modal-scroll",
+  "Ticket/refund modal scroll wrapper present",
+);
+mustContain(
+  styles,
+  "flex-shrink: 0; /* sin esto, un texto largo al lado lo encoge",
+  "Toggle switch protected from flex-shrink",
+);
+
+// Opciones de cierre de caja (admin-only) y su subopcion dependiente.
+mustContain(
+  index,
+  'data-sec="cierre-caja"',
+  "Cierre de Caja options section present",
+);
+mustContain(
+  index,
+  'id="printCajaDrawerLogsRow"',
+  "Drawer-open logs suboption row present",
+);
+mustContain(
+  renderer,
+  "function syncPrintCajaDrawerLogsRowVisibility",
+  "Suboption visibility sync function present",
+);
+
+// Impresion: logo debe esperar a cargar antes de imprimir; descripcion de
+// producto debe imprimirse solida, no atenuada.
+mustContain(
+  main,
+  "Array.from(document.images).map((img) =>",
+  "Print window waits for images before printing",
+);
+mustContain(
+  ticketPrint,
+  ".item-sub.muted {",
+  "Product description prints at full opacity",
 );
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");

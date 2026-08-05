@@ -725,6 +725,7 @@
           </button>
         </div>
 
+        <div class="cash-page-scroll">
         <!-- GRID billetes/monedas -->
         <div class="cash-grid-page">
           <!-- fila 1 -->
@@ -1013,6 +1014,7 @@
 
           <!-- ✅ Ventas por agente (después) -->
           <div id="agentSalesSummary"></div>
+        </div>
         </div>
 
         <!-- Acciones -->
@@ -1433,7 +1435,7 @@
           <button type="button" id="refundCloseX" class="pay-x">✕</button>
         </header>
 
-        <div style="padding: 12px 14px; font-size: 14px">
+        <div class="pay-modal-scroll" style="padding: 12px 14px; font-size: 14px">
           <div
             style="
               display: flex;
@@ -1494,43 +1496,46 @@
             </div>
 
             <div id="refundLines" style="margin-top: 10px"></div>
-
-            <div
-              style="
-                margin-top: 12px;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                gap: 10px;
-                flex-wrap: wrap;
-              "
-            >
-              <div>
-                Importe a devolver: <strong id="refundAmount">0,00 €</strong>
-              </div>
-              <div style="display: flex; gap: 10px">
-                <button id="refundCancelBtn" class="pay-btn" type="button">
-                  Cancelar
-                </button>
-                <button
-                  id="refundConfirmBtn"
-                  class="pay-btn pay-btn-green"
-                  type="button"
-                >
-                  Confirmar devolución
-                </button>
-              </div>
-            </div>
-
-            <div
-              id="refundError"
-              class="dialog-error"
-              style="margin-top: 10px"
-            ></div>
           </div>
         </div>
+
+          <div
+            style="
+              padding: 0 14px 12px;
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              gap: 10px;
+              flex-wrap: wrap;
+              flex: 0 0 auto;
+              border-top: 1px solid #e7e7e7;
+              padding-top: 12px;
+            "
+          >
+            <div>
+              Importe a devolver: <strong id="refundAmount">0,00 €</strong>
+            </div>
+            <div style="display: flex; gap: 10px">
+              <button id="refundCancelBtn" class="pay-btn" type="button">
+                Cancelar
+              </button>
+              <button
+                id="refundConfirmBtn"
+                class="pay-btn pay-btn-green"
+                type="button"
+              >
+                Confirmar devolución
+              </button>
+            </div>
+          </div>
+
+          <div
+            id="refundError"
+            class="dialog-error"
+            style="margin: 0 14px 10px"
+          ></div>
+        </div>
       </div>
-    </div>
 
     <!-- Overlay: Dividir ticket (Mesas) -->
     <div id="splitTicketOverlay" class="simple-overlay hidden">
@@ -2869,6 +2874,7 @@
                   <span class="slider"></span>
                 </label>
               </div>
+
               <div class="opt-row">
                 <div class="opt-row-txt">
                   <div class="opt-row-title">Modo redimensionar productos</div>
@@ -2945,6 +2951,49 @@
                 >
                   Restablecer
                 </button>
+              </div>
+            </div>
+          </section>
+
+          <!-- CIERRE DE CAJA (ADMIN ONLY) -->
+          <section class="opt-sec" data-sec="cierre-caja" data-admin-only>
+            <button type="button" class="opt-sec-h">
+              <span>Cierre de Caja <span class="opt-admin-pill">ADMIN</span></span>
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Cierre de caja: mostrar registro de avisos
+                  </div>
+                  <div class="opt-row-sub">
+                    Al cerrar caja, imprime también un listado de eventos
+                    (abrir cajón, quitar productos, etc.). Desactívalo si solo
+                    quieres ver el resumen de ventas.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="printCajaAutoLogToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div
+                class="opt-row opt-row-suboption"
+                id="printCajaDrawerLogsRow"
+              >
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Incluir aperturas de cajón</div>
+                  <div class="opt-row-sub">
+                    Dentro del registro anterior, oculta solo las líneas de
+                    "abrió cajón" (suelen ser las más numerosas).
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="printCajaDrawerLogsToggle" />
+                  <span class="slider"></span>
+                </label>
               </div>
             </div>
           </section>

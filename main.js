@@ -1490,6 +1490,30 @@ async function createHiddenPrintWindow(html) {
 
   const dataUrl = "data:text/html;charset=utf-8," + encodeURIComponent(html);
   await win.loadURL(dataUrl);
+
+  // Espera a que las imagenes (p.ej. el logo de la empresa) terminen de
+  // cargar antes de imprimir. Si no, con "size: 80mm auto" Chromium a veces
+  // calcula la altura de la pagina con el logo aun sin cargar, y el
+  // contenido que viene despues (resumen de caja, etc.) se corta al
+  // imprimir. Timeout de seguridad por si una imagen no llega a cargar.
+  try {
+    await win.webContents.executeJavaScript(`
+      Promise.race([
+        Promise.all(
+          Array.from(document.images).map((img) =>
+            img.complete
+              ? Promise.resolve()
+              : new Promise((resolve) => {
+                  img.addEventListener("load", resolve, { once: true });
+                  img.addEventListener("error", resolve, { once: true });
+                })
+          )
+        ),
+        new Promise((resolve) => setTimeout(resolve, 2000)),
+      ])
+    `);
+  } catch (_) {}
+
   return win;
 }
 

@@ -8,6 +8,23 @@
       "changes": []
     },
     {
+      "version": "0.2.12",
+      "date": "2026-08-05",
+      "title": "Release 0.2.12",
+      "changes": [
+        "Cobrar y cerrar caja: si la conexion fallaba en mal momento, el boton se podia quedar bloqueado para siempre (sin avisar de nada) y a veces el ticket llegaba a cobrarse pero seguia apareciendo tambien como aparcado. Ahora, si la red falla, se avisa a los pocos segundos en vez de quedarse colgado, y no se puede duplicar el mismo cobro.",
+        "Varios TPV con el mismo terminal: si dos TPV (por ejemplo, barra y cocina) estaban configurados con el mismo numero de terminal, en algun caso muy concreto podian llegar a cobrar el mismo ticket aparcado dos veces a la vez. Corregido: ahora cada TPV se identifica de forma unica y se respeta el bloqueo aunque compartan terminal.",
+        "Aviso de 'varios TPV activos en esta terminal': a veces salia duplicado (dos avisos seguidos con el mismo mensaje). Ahora solo aparece una vez.",
+        "Cerrar caja: si el resumen tenia muchos metodos de pago o ventas por agente, el dialogo no dejaba hacer scroll hasta el boton de Guardar/Cerrar, quedandose bloqueado en pantalla. Lo mismo pasaba al ver el detalle de un ticket con muchos productos. Ahora los botones quedan siempre visibles y solo se desplaza el contenido.",
+        "Cliente en el cobro: despues de cobrar a un cliente concreto, se quedaba seleccionado para la siguiente venta. Ahora vuelve solo al cliente por defecto ('Ventas tickets') al terminar cada cobro.",
+        "Aparcar ticket: al guardar un ticket con un cliente ya seleccionado, el nombre sugerido era el numero de ticket en vez del nombre del cliente. Ahora, si hay un cliente elegido, se sugiere su nombre; si es el cliente por defecto, sigue saliendo el numero.",
+        "Velocidad al cobrar: se ha quitado un paso innecesario que recalculaba el stock de TODO el catalogo despues de cada venta (ahora solo se actualiza el producto vendido, al instante). El cobro deberia notarse mas rapido.",
+        "Ticket impreso: la descripcion que aparece debajo del nombre del producto se imprimia mas clara/borrosa que el nombre en algunas impresoras. Ahora se imprime igual de nitida.",
+        "Cierre de caja: nueva opcion en Ajustes para elegir si el ticket de cierre incluye el registro de avisos (abrir cajon, quitar productos, etc.) o solo el resumen de ventas; y otra opcion aparte para ocultar unicamente las aperturas de cajon manuales dentro de ese registro.",
+        "Ticket de cierre de caja: en algunas impresoras, a veces se cortaba a media impresion y faltaba el resumen de ventas (totales, pagos, ventas por agente), aunque el registro de avisos si salia completo. Era una carrera con el logo de la empresa, que a veces tardaba en cargar antes de imprimir. Corregido: ahora se espera a que el logo cargue antes de mandar a imprimir."
+      ]
+    },
+    {
       "version": "0.2.10",
       "date": "2026-07-27",
       "title": "Release 0.2.10",

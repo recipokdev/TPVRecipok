@@ -3835,9 +3835,23 @@ textarea:focus {
   padding: 12px 14px 12px; /* compacto integrado */
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
   max-height: 86vh; /* compacto integrado */
-  overflow: auto; /* si la pantalla es baja, scroll controlado */
+  overflow: hidden; /* el scroll lo hace .cash-page-scroll, no el dialogo entero */
   display: flex;
   flex-direction: column;
+}
+
+/* Cabecera y botones no encogen ni hacen scroll: siempre visibles.
+   Solo el contenido intermedio (que puede crecer mucho: metodos de pago,
+   ventas por agente...) hace scroll internamente. */
+.cash-page-header,
+.cash-actions-page {
+  flex: 0 0 auto;
+}
+
+.cash-page-scroll {
+  flex: 1 1 auto;
+  min-height: 0; /* imprescindible para que el hijo flex pueda encoger y hacer scroll */
+  overflow-y: auto;
 }
 
 .cash-page-header h2 {
@@ -5741,6 +5755,7 @@ body.theme-dark #parkObsOverlay .park-quick-flag.is-active {
   display: inline-block;
   width: 50px;
   height: 28px;
+  flex-shrink: 0; /* sin esto, un texto largo al lado lo encoge y el circulo se sale */
 }
 .switch input {
   display: none;
@@ -5865,6 +5880,9 @@ body.theme-dark #parkObsOverlay .park-quick-flag.is-active {
   border-radius: 12px;
   overflow: hidden;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .pay-header {
@@ -5874,6 +5892,15 @@ body.theme-dark #parkObsOverlay .park-quick-flag.is-active {
   padding: 12px 14px;
   border-bottom: 1px solid #e7e7e7;
   background: #ffffff;
+  flex: 0 0 auto;
+}
+
+/* Contenido con muchas lineas (tickets largos): scroll solo aqui, los
+   botones de accion quedan fuera de este bloque y siempre visibles. */
+.pay-modal-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .pay-x {
@@ -6925,6 +6952,13 @@ body.theme-dark #parkObsOverlay .park-quick-flag.is-active {
 }
 .opt-row + .opt-row {
   border-top: 1px dashed #eee;
+}
+.opt-row-suboption {
+  padding-left: 22px;
+  border-top: none !important; /* depende visualmente de la fila de arriba, no de una nueva seccion */
+}
+.opt-row-suboption .opt-row-title {
+  font-size: 12px;
 }
 .opt-row-title {
   font-size: 13px;

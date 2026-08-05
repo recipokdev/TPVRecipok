@@ -316,6 +316,8 @@ let currentParkedTicketIndex = null;
 let PENDING_RUNTIME_PARKED_SYNC_KEY = "";
 let PENDING_RUNTIME_PARKED_TICKET_ID = 0;
 let showParkStockWarning = true;
+let printCajaAutoLogEnabled = true;
+let printCajaDrawerOpenLogsEnabled = true;
 
 // ===== [02] Estado operativo: TPVs, agentes y caja =====
 let terminals = [];
@@ -1756,6 +1758,8 @@ const OPTIONS_SHOW_PRODUCT_STOCK_KEY = "ui.showProductStockBadge";
 const OPTIONS_ENABLE_STOCK_EDIT_KEY = "ui.enableStockEdition";
 const OPTIONS_ALLOW_CLOSE_WITH_PARKED_KEY = "ui.allowCloseWithParkedTickets";
 const OPTIONS_SHOW_PARK_STOCK_WARNING_KEY = "ui.showParkStockWarning";
+const OPTIONS_PRINT_CAJA_AUTO_LOG_KEY = "ui.printCajaAutoLog";
+const OPTIONS_PRINT_CAJA_DRAWER_LOGS_KEY = "ui.printCajaDrawerOpenLogs";
 const OPTIONS_PRODUCT_TILE_SIZE_KEY = "ui.productTileMinSize";
 const OPTIONS_PRODUCT_TILE_RESIZE_MODE_KEY = "ui.productTileResizeMode";
 const OPTIONS_SCALE_MANUAL_CAPTURE_MODE_KEY = "scale.manualCaptureMode";
@@ -3996,6 +4000,46 @@ async function loadParkStockWarningToggle() {
   if (el) el.checked = showParkStockWarning;
 }
 
+// La subopcion "Incluir aperturas de cajon" solo tiene sentido si el
+// registro de avisos esta activado; se oculta si no.
+function syncPrintCajaDrawerLogsRowVisibility() {
+  const row = document.getElementById("printCajaDrawerLogsRow");
+  if (row) row.classList.toggle("hidden", !printCajaAutoLogEnabled);
+}
+
+async function loadPrintCajaAutoLogToggle() {
+  const el = document.getElementById("printCajaAutoLogToggle");
+  let enabled = true;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(OPTIONS_PRINT_CAJA_AUTO_LOG_KEY);
+    if (cfgVal !== undefined && cfgVal !== null && cfgVal !== "") {
+      enabled = parseBoolLike(cfgVal, true);
+    }
+  } catch {}
+
+  printCajaAutoLogEnabled = !!enabled;
+  if (el) el.checked = printCajaAutoLogEnabled;
+  syncPrintCajaDrawerLogsRowVisibility();
+}
+
+async function loadPrintCajaDrawerOpenLogsToggle() {
+  const el = document.getElementById("printCajaDrawerLogsToggle");
+  let enabled = true;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(
+      OPTIONS_PRINT_CAJA_DRAWER_LOGS_KEY,
+    );
+    if (cfgVal !== undefined && cfgVal !== null && cfgVal !== "") {
+      enabled = parseBoolLike(cfgVal, true);
+    }
+  } catch {}
+
+  printCajaDrawerOpenLogsEnabled = !!enabled;
+  if (el) el.checked = printCajaDrawerOpenLogsEnabled;
+}
+
 async function loadProductDiscountConfig() {
   let map = { ...productDiscountPctById };
 
@@ -4853,6 +4897,35 @@ async function saveParkStockWarningToggle(enabled) {
   }
 }
 
+async function savePrintCajaAutoLogToggle(enabled) {
+  printCajaAutoLogEnabled = !!enabled;
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_PRINT_CAJA_AUTO_LOG_KEY,
+      printCajaAutoLogEnabled,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar toggle de registro en cierre de caja:", e);
+  }
+}
+
+async function savePrintCajaDrawerOpenLogsToggle(enabled) {
+  printCajaDrawerOpenLogsEnabled = !!enabled;
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_PRINT_CAJA_DRAWER_LOGS_KEY,
+      printCajaDrawerOpenLogsEnabled,
+    );
+  } catch (e) {
+    console.warn(
+      "No se pudo guardar toggle de aperturas de cajon en cierre de caja:",
+      e,
+    );
+  }
+}
+
 let productStockToggleBound = false;
 let productStockEditionToggleBound = false;
 let allowCloseWithParkedToggleBound = false;
@@ -4917,6 +4990,36 @@ function bindParkStockWarningToggleOnce() {
   el.addEventListener("change", async () => {
     const wanted = !!el.checked;
     await saveParkStockWarningToggle(wanted);
+  });
+}
+
+let printCajaAutoLogToggleBound = false;
+let printCajaDrawerLogsToggleBound = false;
+
+function bindPrintCajaAutoLogToggleOnce() {
+  if (printCajaAutoLogToggleBound) return;
+  printCajaAutoLogToggleBound = true;
+
+  const el = document.getElementById("printCajaAutoLogToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+    await savePrintCajaAutoLogToggle(wanted);
+    syncPrintCajaDrawerLogsRowVisibility();
+  });
+}
+
+function bindPrintCajaDrawerOpenLogsToggleOnce() {
+  if (printCajaDrawerLogsToggleBound) return;
+  printCajaDrawerLogsToggleBound = true;
+
+  const el = document.getElementById("printCajaDrawerLogsToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+    await savePrintCajaDrawerOpenLogsToggle(wanted);
   });
 }
 
@@ -7286,6 +7389,13 @@ async function checkTerminalPresenceOnce({ notify = true } = {}) {
   if (!cashSession?.open) return null;
   if (!currentTerminal?.id) return null;
 
+  // Evita que dos llamadas solapadas (p. ej. el disparo inmediato al arrancar
+  // el monitor y otro disparo casi a la vez) lean el mismo __terminalPresenceLastSig
+  // "viejo" antes de que ninguna lo actualice, y acaben mostrando el toast
+  // "Hay N TPV activos..." duplicado.
+  if (__terminalPresenceInFlight) return null;
+  __terminalPresenceInFlight = true;
+
   try {
     await apiUpsertTerminalPresenceRemote();
     const data = await apiListTerminalPresenceRemote();
@@ -7382,6 +7492,8 @@ async function checkTerminalPresenceOnce({ notify = true } = {}) {
       console.warn("Chequeo de presencia de terminal falló:", e?.message || e);
     }
     return null;
+  } finally {
+    __terminalPresenceInFlight = false;
   }
 }
 
@@ -14636,7 +14748,10 @@ function beginParkedCheckoutLock(index) {
   }
 
   ticket.closingInProgress = true;
-  ticket.closingByTerminalId = String(currentTerminal?.id || "").trim();
+  // OJO: usamos el id de SESION (unico por dispositivo/app abierta), no el id
+  // de terminal configurado — dos TPV distintos pueden tener el mismo id de
+  // terminal, y con eso el bloqueo no protegia nada entre ellos.
+  ticket.closingByTerminalId = ensureTerminalPresenceSessionId();
   ticket.closingByTerminalName = String(currentTerminal?.name || "").trim();
   ticket.closingByAt = new Date().toISOString();
 
@@ -14702,7 +14817,9 @@ function isParkedTicketLockedByAnotherTerminal(ticket) {
   if (!ticket || !ticket.closingInProgress) return false;
   if (releaseStaleParkedClosingLock(ticket)) return false;
 
-  const mine = String(currentTerminal?.id || "").trim();
+  // Comparamos por id de SESION, no por id de terminal configurado: dos
+  // dispositivos con el mismo id de terminal deben seguir bloqueandose entre si.
+  const mine = ensureTerminalPresenceSessionId();
   const owner = String(ticket?.closingByTerminalId || "").trim();
   if (!owner) return false;
   if (!mine) return true;
@@ -21477,7 +21594,17 @@ function buildCashClosePrintData(remoteCaja) {
 
   const obs = String(document.getElementById("cashObs")?.value || "").trim();
   const rawCajaObs = String(remoteCaja?.observaciones || "");
-  const { autoLines } = splitCajaObservaciones(rawCajaObs);
+  const { autoLines: rawAutoLines } = splitCajaObservaciones(rawCajaObs);
+
+  // Opciones: el cliente puede no querer ver el registro de avisos en el
+  // cierre (o solo quitar las aperturas de cajon, que suelen ser las mas
+  // frecuentes/ruidosas).
+  const autoLines = printCajaAutoLogEnabled
+    ? printCajaDrawerOpenLogsEnabled
+      ? rawAutoLines
+      : rawAutoLines.filter((line) => !/ABRIÓ CAJÓN/.test(line))
+    : [];
+
   const autoLogText = buildCajaAutoLogText(autoLines);
 
   return {
@@ -25268,6 +25395,12 @@ async function openOptions() {
   await loadMesasComandaFamilyRules();
   bindParkStockWarningToggleOnce();
   await loadParkStockWarningToggle();
+
+  bindPrintCajaAutoLogToggleOnce();
+  await loadPrintCajaAutoLogToggle();
+
+  bindPrintCajaDrawerOpenLogsToggleOnce();
+  await loadPrintCajaDrawerOpenLogsToggle();
 
   bindProductTileResizeModeToggleOnce();
   await loadProductTileResizeModeToggle();
@@ -30200,6 +30333,23 @@ function applyStockQtyToLocalProductsById(idProd, qty) {
   updateRenderedProductStocks?.();
 }
 
+// Tras cobrar, descuenta en local solo lo vendido en vez de refrescar todo el
+// catalogo por red (eso ya lo cubre el temporizador periodico de 10s, pensado
+// para el caso raro de que otro producto se edite desde FacturaScripts).
+function applyLocalStockDecrementForSale(items) {
+  const qtyByProduct = buildReservedQtyByProductMap(items);
+
+  qtyByProduct.forEach((qtySold, idProd) => {
+    const product = findProductByBaseId(idProd);
+    if (!product) return;
+
+    const currentStock = parseManagedStockValue(product.stockfis);
+    if (currentStock === null) return; // sin gestion de stock
+
+    applyStockQtyToLocalProductsById(idProd, currentStock - qtySold);
+  });
+}
+
 function isReservedStockSyncedToFsEnabled() {
   const cfgVal = window.TPV_CONFIG?.syncReservedStockToFS;
   if (cfgVal == null) return true;
@@ -32475,6 +32625,12 @@ async function onPayButtonClick() {
     removeCartLinesByIdSet(saleLineIds);
     renderCart();
 
+    // El siguiente ticket debe arrancar con el cliente por defecto, no con
+    // el que se acaba de cobrar (igual que el carrito, que ya se limpia aqui).
+    try {
+      window.CUSTOMER_SELECTOR?.resetToDefault?.();
+    } catch {}
+
     // 4) Enviar o encolar
     const sendResult = await sendOrQueueFactura(ticketPayload);
 
@@ -32560,6 +32716,8 @@ async function onPayButtonClick() {
             .slice(0, 6)
             .toUpperCase()}`,
       });
+
+      applyLocalStockDecrementForSale(cartSnapshot);
 
       removeCartLinesByIdSet(saleLineIds);
       renderCart();
@@ -32714,13 +32872,16 @@ async function onPayButtonClick() {
       }
     }
 
-    // Cleanup/validate
-    try {
-      await cleanupRecibosFactura(idfactura, pagosFinal);
+    // Cleanup/validate: ya se trataban como "best effort" (errores ignorados),
+    // asi que no hace falta bloquear el cobro esperandolas — corren de fondo.
+    (async () => {
       try {
-        await validateRecibosAgainstFactura(idfactura);
+        await cleanupRecibosFactura(idfactura, pagosFinal);
+        try {
+          await validateRecibosAgainstFactura(idfactura);
+        } catch {}
       } catch {}
-    } catch {}
+    })();
 
     registerPaymentsForCurrentSession(pagosFinal);
     registerPayMethodUsageForTicket(pagosFinal);
@@ -32777,7 +32938,7 @@ async function onPayButtonClick() {
       }
     }
 
-    await runProductsStockRefreshOnce();
+    applyLocalStockDecrementForSale(cartSnapshot);
 
     lastTicket = buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot);
 
@@ -36958,7 +37119,19 @@ function openParkObsModal() {
       ? normalizeMesaTicketAlerts(t?.mesaAlerts)
       : [];
   } else {
-    nameInput.value = getNextSuggestedParkTicketName();
+    // Fuera de modo mesas: si hay un cliente real seleccionado (no el de por
+    // defecto), sugerimos su nombre en vez del numero de ticket generico.
+    const selectedCustomer = !mesasMode
+      ? window.CUSTOMER_SELECTOR?.getSelectedCustomer?.()
+      : null;
+    const selectedCustomerName = String(
+      selectedCustomer?.nombre || "",
+    ).trim();
+
+    nameInput.value =
+      selectedCustomerName && !selectedCustomer?.isDefault
+        ? selectedCustomerName
+        : getNextSuggestedParkTicketName();
     obsInput.value = "";
     parkModalMesaAlerts = [];
   }

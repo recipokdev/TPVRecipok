@@ -121,6 +121,14 @@
         text-overflow: ellipsis;
       }
 
+      /* La descripcion del producto debe leerse igual de nitida que el nombre:
+         .muted (opacity 0.9) combinado con el tamaño pequeño de .item-sub
+         imprime como gris tramado en impresoras termicas. Forzamos negro solido
+         solo aqui, sin tocar .muted en el resto del ticket. */
+      .item-sub.muted {
+        opacity: 1;
+      }
+
       .price-old-strike {
         text-decoration: line-through;
         opacity: 0.72;
