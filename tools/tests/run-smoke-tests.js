@@ -219,6 +219,85 @@ mustContain(
   "Toggle switch protected from flex-shrink",
 );
 
+// Sincronizacion de aparcados: las llamadas a la API de reservas deben pasar
+// por fetchWithTimeout (sin esto, un fetch colgado bloquea el reintento de
+// la cola para siempre y en silencio).
+mustContain(
+  renderer,
+  "async function fetchWithTimeout",
+  "Shared fetch-with-timeout helper present",
+);
+mustContain(
+  renderer,
+  "await fetchWithTimeout(createUrl,",
+  "Parked reservation create/upsert uses timeout",
+);
+mustContain(
+  renderer,
+  "await fetchWithTimeout(deleteUrl,",
+  "Parked reservation delete uses timeout",
+);
+
+// El id interno de un aparcado (usado como clave de sincronizacion con el
+// servidor) no puede depender solo de un contador local: dos TPV que no se
+// hayan visto aun pueden calcular el mismo "siguiente id" y uno pisa al otro.
+mustContain(
+  renderer,
+  "Math.max(basis + 1, Date.now());",
+  "Parked ticket id generation is multi-terminal safe",
+);
+
+// "Reiniciar aparcados" no debe poder borrar cambios aun sin subir (p.ej. un
+// cobro marcado localmente pero no confirmado todavia con el servidor).
+mustContain(
+  renderer,
+  "if (k.startsWith(PARKED_SYNC_QUEUE_KEY)) continue;",
+  "Reset-parked-cache preserves pending sync queue",
+);
+
+// Borrado en bloque de pendientes sin cobrar (admin-only), sin tocar stock
+// por defecto (evita inflar stock si son duplicados fantasma por un fallo
+// de sincronizacion entre TPV).
+mustContain(
+  renderer,
+  "async function deleteAllPendingParkedTickets",
+  "Bulk delete pending parked tickets function present",
+);
+mustContain(
+  renderer,
+  'id="parkedClearPendingBtn"',
+  "Bulk delete pending button present",
+);
+mustContain(
+  renderer,
+  "!!window.TPV_STATE?.isAdmin;",
+  "Bulk delete pending button is admin-gated",
+);
+mustContain(
+  renderer,
+  "if (askStockOnBulkDeletePendingEnabled) {",
+  "Bulk delete pending respects ask-stock toggle",
+);
+mustContain(
+  index,
+  'id="askStockBulkDeletePendingToggle"',
+  "Ask-stock-on-bulk-delete option present",
+);
+
+// Borrado individual de un aparcado pendiente: misma pregunta real/duplicado
+// que en el borrado en bloque (antes liberaba el stock siempre, sin
+// preguntar, lo cual era inconsistente y podia inflar stock en duplicados).
+mustContain(
+  renderer,
+  "const askAboutStock =",
+  "Single delete asks real-vs-duplicate stock question",
+);
+mustContain(
+  styles,
+  "#msgOverlay .simple-dialog.wide-dialog {",
+  "Wide dialog style for long confirm texts present",
+);
+
 // Opciones de cierre de caja (admin-only) y su subopcion dependiente.
 mustContain(
   index,

@@ -2875,6 +2875,28 @@
                 </label>
               </div>
 
+              <div class="opt-row" data-admin-only>
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Preguntar por el stock al "Borrar pendientes"
+                  </div>
+                  <div class="opt-row-sub">
+                    Al borrar todos los aparcados sin cobrar de golpe, pregunta
+                    si son pedidos reales (devuelve su stock) o duplicados por
+                    un fallo de sincronizacion (no toca el stock).
+                    Desactívalo si siempre vas a querer lo segundo: no
+                    volverá a preguntar y no tocará el stock.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input
+                    type="checkbox"
+                    id="askStockBulkDeletePendingToggle"
+                  />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
               <div class="opt-row">
                 <div class="opt-row-txt">
                   <div class="opt-row-title">Modo redimensionar productos</div>

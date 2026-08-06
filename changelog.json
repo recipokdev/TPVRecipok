@@ -8,6 +8,18 @@
       "changes": []
     },
     {
+      "version": "0.2.13",
+      "date": "2026-08-06",
+      "title": "Release 0.2.13",
+      "changes": [
+        "Aparcados: si la conexion fallaba en mal momento al guardar/borrar un aparcado, ademas de no subirse esa vez, se bloqueaban en silencio TODOS los reintentos automaticos posteriores durante el resto de la sesion (el TPV creia que 'ya habia uno en marcha' para siempre). Corregido: ahora esas peticiones tienen un limite de espera, asi que un fallo puntual ya no bloquea los intentos siguientes.",
+        "Varios TPV a la vez, aparcados: si dos TPV aparcaban casi al mismo tiempo sin haberse sincronizado aun entre ellos, en casos raros podian calcular el mismo identificador interno para dos tickets distintos, y uno podia acabar sobrescribiendo al otro en el servidor (perdiendose). Corregido para que dos dispositivos nunca puedan coincidir en ese identificador, se hayan visto entre ellos o no.",
+        "Aparcados: el boton 'Reiniciar aparcados' podia borrar cambios que aun no se habian subido al servidor (por ejemplo, un cobro marcado en local justo antes de reiniciar), haciendo que ese ticket volviera a aparecer como no cobrado al descargar de nuevo la lista. Ahora, antes de reiniciar, se intenta subir primero lo pendiente; y si no se puede, ya no se borra, para que se reintente solo mas tarde.",
+        "Aparcados: nuevo boton 'Borrar pendientes' (solo administradores, en la pestaña 'Sin cobrar') para borrar de golpe todos los tickets aparcados sin cobrar, en vez de tener que borrarlos uno a uno. Al usarlo, pregunta si son pedidos reales que se cancelan (devuelve su stock reservado, igual que borrar uno a uno) o son duplicados/fantasma por un fallo de sincronizacion entre TPV (no toca el stock, para no inflarlo). Es permanente y no se puede deshacer. Hay una opcion nueva en Ajustes (Productos, solo admin) para dejar de preguntar y asumir siempre que no hay que tocar el stock.",
+        "Aparcados: al borrar un ticket sin cobrar uno a uno, antes se liberaba siempre su stock reservado sin preguntar (podia inflar stock si en realidad era un duplicado/fantasma por fallo de sincronizacion entre TPV). Ahora hace la misma pregunta que 'Borrar pendientes' en bloque (o la omite si se desactivo esa opcion en Ajustes). Tambien se ha ensanchado el cuadro de esos avisos de stock, que se quedaba pequeno para el texto."
+      ]
+    },
+    {
       "version": "0.2.12",
       "date": "2026-08-05",
       "title": "Release 0.2.12",

@@ -311,11 +311,13 @@ const parkedViewState = {
 };
 let parkedCounter = 0;
 let parkedClearPaidInFlight = false;
+let parkedClearPendingInFlight = false;
 // Índice del ticket aparcado actualmente cargado en el carrito
 let currentParkedTicketIndex = null;
 let PENDING_RUNTIME_PARKED_SYNC_KEY = "";
 let PENDING_RUNTIME_PARKED_TICKET_ID = 0;
 let showParkStockWarning = true;
+let askStockOnBulkDeletePendingEnabled = true;
 let printCajaAutoLogEnabled = true;
 let printCajaDrawerOpenLogsEnabled = true;
 
@@ -1758,6 +1760,8 @@ const OPTIONS_SHOW_PRODUCT_STOCK_KEY = "ui.showProductStockBadge";
 const OPTIONS_ENABLE_STOCK_EDIT_KEY = "ui.enableStockEdition";
 const OPTIONS_ALLOW_CLOSE_WITH_PARKED_KEY = "ui.allowCloseWithParkedTickets";
 const OPTIONS_SHOW_PARK_STOCK_WARNING_KEY = "ui.showParkStockWarning";
+const OPTIONS_ASK_STOCK_BULK_DELETE_PENDING_KEY =
+  "ui.askStockOnBulkDeletePending";
 const OPTIONS_PRINT_CAJA_AUTO_LOG_KEY = "ui.printCajaAutoLog";
 const OPTIONS_PRINT_CAJA_DRAWER_LOGS_KEY = "ui.printCajaDrawerOpenLogs";
 const OPTIONS_PRODUCT_TILE_SIZE_KEY = "ui.productTileMinSize";
@@ -4000,6 +4004,23 @@ async function loadParkStockWarningToggle() {
   if (el) el.checked = showParkStockWarning;
 }
 
+async function loadAskStockBulkDeletePendingToggle() {
+  const el = document.getElementById("askStockBulkDeletePendingToggle");
+  let enabled = true;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(
+      OPTIONS_ASK_STOCK_BULK_DELETE_PENDING_KEY,
+    );
+    if (cfgVal !== undefined && cfgVal !== null && cfgVal !== "") {
+      enabled = parseBoolLike(cfgVal, true);
+    }
+  } catch {}
+
+  askStockOnBulkDeletePendingEnabled = !!enabled;
+  if (el) el.checked = askStockOnBulkDeletePendingEnabled;
+}
+
 // La subopcion "Incluir aperturas de cajon" solo tiene sentido si el
 // registro de avisos esta activado; se oculta si no.
 function syncPrintCajaDrawerLogsRowVisibility() {
@@ -4897,6 +4918,22 @@ async function saveParkStockWarningToggle(enabled) {
   }
 }
 
+async function saveAskStockBulkDeletePendingToggle(enabled) {
+  askStockOnBulkDeletePendingEnabled = !!enabled;
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_ASK_STOCK_BULK_DELETE_PENDING_KEY,
+      askStockOnBulkDeletePendingEnabled,
+    );
+  } catch (e) {
+    console.warn(
+      "No se pudo guardar toggle de preguntar stock al borrar pendientes:",
+      e,
+    );
+  }
+}
+
 async function savePrintCajaAutoLogToggle(enabled) {
   printCajaAutoLogEnabled = !!enabled;
 
@@ -4990,6 +5027,21 @@ function bindParkStockWarningToggleOnce() {
   el.addEventListener("change", async () => {
     const wanted = !!el.checked;
     await saveParkStockWarningToggle(wanted);
+  });
+}
+
+let askStockBulkDeletePendingToggleBound = false;
+
+function bindAskStockBulkDeletePendingToggleOnce() {
+  if (askStockBulkDeletePendingToggleBound) return;
+  askStockBulkDeletePendingToggleBound = true;
+
+  const el = document.getElementById("askStockBulkDeletePendingToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+    await saveAskStockBulkDeletePendingToggle(wanted);
   });
 }
 
@@ -12555,7 +12607,6 @@ function confirmModal(title, text, options = {}) {
     return Promise.resolve(window.confirm(text));
   }
 
-  okBtn.textContent = "Aceptar";
   cancelBtn.textContent = "Cancelar";
   cancelBtn.classList.remove("hidden");
 
@@ -12566,7 +12617,10 @@ function confirmModal(title, text, options = {}) {
     dialogClassName = "",
     middleButtonText = "",
     middleButtonResult = "middle",
+    okButtonText = "",
   } = options || {};
+
+  okBtn.textContent = String(okButtonText || "").trim() || "Aceptar";
 
   const addedDialogClasses = [];
   if (dialogEl) {
@@ -16203,6 +16257,9 @@ function syncParkedToolbarUI() {
   const parkedSyncNowBtn = document.getElementById("parkedSyncNowBtn");
   const parkedSummaryBtn = document.getElementById("parkedSummaryBtn");
   const parkedClearPaidBtn = document.getElementById("parkedClearPaidBtn");
+  const parkedClearPendingBtn = document.getElementById(
+    "parkedClearPendingBtn",
+  );
   const parkedSyncConflictsMiniLog = document.getElementById(
     "parkedSyncConflictsMiniLog",
   );
@@ -16276,6 +16333,12 @@ function syncParkedToolbarUI() {
   const showSummaryInLowerRow = !mesaScoped;
   const showClearPaidInLowerRow =
     !mesaScoped && parkedViewState.filter === "paid";
+  // Admin-only: borra pendientes sin cobrar de forma permanente, sin registro
+  // en FacturaScripts que lo respalde (a diferencia de "Limpiar cobrados").
+  const showClearPendingInLowerRow =
+    !mesaScoped &&
+    parkedViewState.filter === "pending" &&
+    !!window.TPV_STATE?.isAdmin;
   const syncConflicts = loadParkedSyncConflicts();
   const syncConflictCount = syncConflicts.length;
   const syncQueueCount = loadParkedSyncQueue().length;
@@ -16355,6 +16418,17 @@ function syncParkedToolbarUI() {
     parkedClearPaidBtn.textContent = parkedClearPaidInFlight
       ? "Borrando..."
       : "Limpiar cobrados";
+  }
+  if (parkedClearPendingBtn) {
+    parkedClearPendingBtn.classList.toggle(
+      "hidden",
+      !showClearPendingInLowerRow,
+    );
+    parkedClearPendingBtn.disabled =
+      parkedClearPendingInFlight || !showClearPendingInLowerRow;
+    parkedClearPendingBtn.textContent = parkedClearPendingInFlight
+      ? "Borrando..."
+      : "Borrar pendientes";
   }
 
   const allTodayCount = docTypeFiltered.filter((t) =>
@@ -16449,13 +16523,24 @@ async function resetParkedCacheAndResync() {
   if (!ok) return;
 
   try {
-    // 1) Borrar TODAS las claves locales de aparcados (se reconstruyen del server).
+    // 0) Intentar subir primero lo que este pendiente de sincronizar: si no,
+    // el paso 1 lo borraria sin haberse llegado a guardar en el servidor
+    // (p.ej. un "marcar como cobrado" que aun no se habia confirmado).
+    try {
+      await processParkedSyncQueue();
+    } catch {}
+
+    // 1) Borrar TODAS las claves locales de aparcados (se reconstruyen del
+    // server), EXCEPTO la cola de sincronizacion: esa son cambios que aun no
+    // se han subido, no una copia/cache que se pueda tirar sin mas.
     const toRemove = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
+      if (!k) continue;
+      if (k.startsWith(PARKED_SYNC_QUEUE_KEY)) continue;
       if (
-        k &&
-        (k.startsWith("tpv_parked") || k.startsWith("tpv_paid_ticket_parked"))
+        k.startsWith("tpv_parked") ||
+        k.startsWith("tpv_paid_ticket_parked")
       ) {
         toRemove.push(k);
       }
@@ -16562,6 +16647,89 @@ async function clearPaidParkedHistory() {
   return { removedCount: removedPaid.length, queuedCount };
 }
 
+// Borra en bloque los aparcados SIN COBRAR. A diferencia de "Limpiar
+// cobrados" (que solo limpia el historial de algo ya facturado de verdad en
+// FacturaScripts), aqui se pierde para siempre un pedido que nunca se llego
+// a cobrar — por eso es una accion admin-only con confirmacion fuerte.
+//
+// Por defecto NO libera stock reservado (releaseStock=false): si estos
+// aparcados son en realidad duplicados fantasma por un fallo de
+// sincronizacion entre varios TPV, liberar su stock "reservado" varias veces
+// inflaria el stock por encima del real. Solo se debe activar releaseStock
+// si se sabe con seguridad que son reservas legitimas y distintas.
+async function deleteAllPendingParkedTickets({ releaseStock = false } = {}) {
+  const source = Array.isArray(parkedTickets) ? parkedTickets : [];
+  const removedPending = source.filter(
+    (t) => !t?.paid && !isPedidoTpvTicket(t),
+  );
+
+  if (!removedPending.length) {
+    return { removedCount: 0, queuedCount: 0 };
+  }
+
+  parkedTickets = source.filter((t) => !(!t?.paid && !isPedidoTpvTicket(t)));
+  saveParkedTicketsCache(parkedTickets);
+
+  REMOTE_PARKED_RESERVATIONS = (
+    Array.isArray(REMOTE_PARKED_RESERVATIONS) ? REMOTE_PARKED_RESERVATIONS : []
+  ).filter((t) => !(!t?.paid && !isPedidoTpvTicket(t)));
+
+  updateParkedCountBadge?.();
+  refreshParkButtonUI?.();
+  refreshParkedEditingBanner?.();
+  renderParkedTicketsModal?.();
+
+  let queuedCount = 0;
+
+  await Promise.allSettled(
+    removedPending.map(async (ticket) => {
+      try {
+        await apiDeleteParkedReservation(ticket);
+      } catch (e) {
+        queuedCount += 1;
+        enqueueParkedSyncOperation("delete", ticket);
+        console.warn(
+          "No se pudo borrar la reserva pendiente remota:",
+          e?.message || e,
+        );
+      }
+
+      if (releaseStock) {
+        try {
+          const releaseDelta = buildReservedQtyDeltaMap(
+            [],
+            ticket?.items || [],
+          );
+          if (releaseDelta.size > 0) {
+            await syncReservedStockDeltaToFS(
+              releaseDelta,
+              "borrado masivo de pendientes",
+            );
+          }
+        } catch (e) {
+          console.warn(
+            "No se pudo liberar stock al borrar pendiente en bloque:",
+            e?.message || e,
+          );
+        }
+      }
+    }),
+  );
+
+  if (
+    currentParkedTicketIndex != null &&
+    (!parkedTickets[currentParkedTicketIndex] ||
+      !parkedTickets[currentParkedTicketIndex]?.paid)
+  ) {
+    currentParkedTicketIndex = null;
+  }
+
+  parkedCounter = 0;
+  resetParkedGlobalCounter();
+
+  return { removedCount: removedPending.length, queuedCount };
+}
+
 function ensureParkedToolbar() {
   if (!parkedTicketsOverlay) return null;
 
@@ -16640,6 +16808,9 @@ function ensureParkedToolbar() {
       </button>
       <button id="parkedClearPaidBtn" type="button" class="cart-btn tickets-tab-btn hidden" style="font-size: 13px; padding: 6px 12px;" title="Limpiar historial de cobrados">
         Limpiar cobrados
+      </button>
+      <button id="parkedClearPendingBtn" type="button" class="cart-btn tickets-tab-btn hidden" style="font-size: 13px; padding: 6px 12px; color: #b91c1c;" title="Borra TODOS los pendientes sin cobrar (irreversible, solo admin)">
+        Borrar pendientes
       </button>
     </div>
 
@@ -16827,6 +16998,85 @@ function ensureParkedToolbar() {
       }
     } finally {
       parkedClearPaidInFlight = false;
+      syncParkedToolbarUI();
+    }
+  });
+
+  parkedClearPendingBtn?.addEventListener("click", async () => {
+    if (parkedClearPendingInFlight) return;
+    if (!window.TPV_STATE?.isAdmin) return;
+
+    const pendingCount = (
+      Array.isArray(parkedTickets) ? parkedTickets : []
+    ).filter((t) => !t?.paid && !isPedidoTpvTicket(t)).length;
+
+    if (!pendingCount) {
+      toast(
+        `No hay ${labels.itemsPlural} sin cobrar para borrar.`,
+        "info",
+        labels.featureTitle,
+      );
+      return;
+    }
+
+    // Dos situaciones muy distintas piden lo mismo, "borrar pendientes":
+    // 1) Cancelar pedidos de verdad -> SI hay que devolver el stock reservado,
+    //    igual que al borrar uno solo.
+    // 2) Limpiar duplicados fantasma por un fallo de sincronizacion entre
+    //    varios TPV -> NO devolver stock (no se reservo realmente N veces).
+    // Se decide aqui mismo, salvo que el admin haya desactivado la pregunta
+    // en Opciones (entonces siempre se asume el caso 2, sin tocar stock).
+    let releaseStock = false;
+
+    if (askStockOnBulkDeletePendingEnabled) {
+      const choice = await confirmModal(
+        "Borrar TODOS los pendientes",
+        `Vas a borrar ${pendingCount} ${labels.item}(s) SIN COBRAR de forma permanente. ` +
+          `No se puede deshacer (a diferencia de "Limpiar cobrados", estos nunca se facturaron en FacturaScripts).\n\n` +
+          `¿Son pedidos reales que quieres cancelar (se devuelve su stock reservado), ` +
+          `o son duplicados/fantasma por un fallo de sincronizacion entre TPV (no se toca el stock)?\n\n` +
+          `(Si no quieres que se te pregunte esto cada vez, desactívalo en Opciones → Productos → ` +
+          `"Preguntar por el stock al 'Borrar pendientes'".)`,
+        {
+          dialogClassName: "wide-dialog",
+          okButtonText: "Sí, son pedidos reales (devolver stock)",
+          middleButtonText: "Borrar sin tocar stock (duplicados)",
+          middleButtonResult: "no-stock",
+        },
+      );
+      if (!choice) return;
+
+      releaseStock = choice !== "no-stock";
+    } else {
+      const ok = await confirmModal(
+        "Borrar TODOS los pendientes",
+        `Vas a borrar ${pendingCount} ${labels.item}(s) SIN COBRAR de forma permanente, sin tocar el stock reservado. ` +
+          `No se puede deshacer.\n\n¿Continuar?`,
+        { dialogClassName: "wide-dialog" },
+      );
+      if (!ok) return;
+    }
+
+    parkedClearPendingInFlight = true;
+    syncParkedToolbarUI();
+
+    try {
+      const result = await deleteAllPendingParkedTickets({ releaseStock });
+      if (result?.queuedCount > 0) {
+        toast(
+          "Pendientes borrados localmente; algunos se sincronizaran cuando vuelva la conexion.",
+          "warn",
+          labels.featureTitle,
+        );
+      } else {
+        toast(
+          `${result?.removedCount || 0} pendiente(s) borrados.`,
+          "ok",
+          labels.featureTitle,
+        );
+      }
+    } finally {
+      parkedClearPendingInFlight = false;
       syncParkedToolbarUI();
     }
   });
@@ -17269,12 +17519,49 @@ async function deleteParkedTicketByIndex(
     getParkedDisplayNumberFromId(ticket?.id);
   const displaySuffix = displayNo ? ` #${displayNo}` : "";
 
+  // Igual que en "Borrar pendientes" en bloque: un aparcado sin cobrar puede
+  // ser un pedido real que se cancela (hay que devolver su stock reservado)
+  // o un duplicado/fantasma por un fallo de sincronizacion entre TPV (no
+  // hay que tocar el stock). Los "pedido" de clientes online y los ya
+  // cobrados mantienen el comportamiento de siempre (se libera el stock).
+  const askAboutStock =
+    confirm && !ticket?.paid && !isPedidoTpvTicket(ticket);
+  let releaseStock = true;
+
   if (confirm) {
-    const ok = await confirmModal(
-      `Eliminar ${labels.item}`,
-      `¿Seguro que quieres eliminar Ticket${displaySuffix}? Esta acción no se puede deshacer.`,
-    );
-    if (!ok) return false;
+    if (askAboutStock && askStockOnBulkDeletePendingEnabled) {
+      const choice = await confirmModal(
+        `Eliminar ${labels.item}`,
+        `Vas a eliminar Ticket${displaySuffix} SIN COBRAR de forma permanente. Esta acción no se puede deshacer.\n\n` +
+          `¿Es un pedido real que quieres cancelar (se devuelve su stock reservado), ` +
+          `o es un duplicado/fantasma por un fallo de sincronizacion entre TPV (no se toca el stock)?\n\n` +
+          `(Si no quieres que se te pregunte esto cada vez, desactívalo en Opciones → Productos → ` +
+          `"Preguntar por el stock al 'Borrar pendientes'".)`,
+        {
+          dialogClassName: "wide-dialog",
+          okButtonText: "Sí, es un pedido real (devolver stock)",
+          middleButtonText: "Borrar sin tocar stock (duplicado)",
+          middleButtonResult: "no-stock",
+        },
+      );
+      if (!choice) return false;
+      releaseStock = choice !== "no-stock";
+    } else if (askAboutStock) {
+      const ok = await confirmModal(
+        `Eliminar ${labels.item}`,
+        `Vas a eliminar Ticket${displaySuffix} SIN COBRAR de forma permanente, sin tocar el stock reservado. ` +
+          `No se puede deshacer.\n\n¿Continuar?`,
+        { dialogClassName: "wide-dialog" },
+      );
+      if (!ok) return false;
+      releaseStock = false;
+    } else {
+      const ok = await confirmModal(
+        `Eliminar ${labels.item}`,
+        `¿Seguro que quieres eliminar Ticket${displaySuffix}? Esta acción no se puede deshacer.`,
+      );
+      if (!ok) return false;
+    }
   }
 
   const removedTicket = parkedTickets[idx];
@@ -17365,12 +17652,14 @@ async function deleteParkedTicketByIndex(
     }
 
     try {
-      const releaseDelta = buildReservedQtyDeltaMap(
-        [],
-        removedTicket?.items || [],
-      );
-      if (releaseDelta.size > 0) {
-        await syncReservedStockDeltaToFS(releaseDelta, "eliminar aparcado");
+      if (releaseStock) {
+        const releaseDelta = buildReservedQtyDeltaMap(
+          [],
+          removedTicket?.items || [],
+        );
+        if (releaseDelta.size > 0) {
+          await syncReservedStockDeltaToFS(releaseDelta, "eliminar aparcado");
+        }
       }
     } catch (e) {
       console.warn(
@@ -25396,6 +25685,9 @@ async function openOptions() {
   bindParkStockWarningToggleOnce();
   await loadParkStockWarningToggle();
 
+  bindAskStockBulkDeletePendingToggleOnce();
+  await loadAskStockBulkDeletePendingToggle();
+
   bindPrintCajaAutoLogToggleOnce();
   await loadPrintCajaAutoLogToggle();
 
@@ -31886,6 +32178,26 @@ function getVisibleStockForProduct(productOrId) {
   return realStock - reserved;
 }
 
+// Sin timeout, un fetch colgado por red inestable no resuelve ni rechaza
+// nunca. En la cola de sincronizacion de aparcados eso es especialmente grave:
+// processParkedSyncQueue queda marcado "en marcha" para siempre y el
+// temporizador de 10s deja de reintentar el resto de la sesion, en silencio.
+async function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new Error(`Timeout conectando con ${url}`);
+    }
+    throw new Error(`Error de red conectando con ${url}: ${err?.message || err}`);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function apiListParkedReservations() {
   const slug = getCurrentSlugForReservations();
   if (!slug) return [];
@@ -31897,7 +32209,7 @@ async function apiListParkedReservations() {
 
   const url = `${TPV_SYNC_API_URL}?action=list-parked-reservations&slug=${encodeURIComponent(slug)}`;
 
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: "GET",
     headers: {
       Accept: "application/json",
@@ -32042,7 +32354,7 @@ async function apiSaveParkedReservation(ticket) {
 
   const createUrl = `${TPV_SYNC_API_URL}?action=create-parked-reservation`;
 
-  const res = await fetch(createUrl, {
+  const res = await fetchWithTimeout(createUrl, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -32060,7 +32372,7 @@ async function apiSaveParkedReservation(ticket) {
   if (res.status === 409 || res.status === 422 || res.status === 404) {
     const updateUrl = `${TPV_SYNC_API_URL}?action=update-parked-reservation`;
 
-    const retryRes = await fetch(updateUrl, {
+    const retryRes = await fetchWithTimeout(updateUrl, {
       method: "POST",
       headers: {
         Accept: "application/json",
@@ -32098,7 +32410,7 @@ async function apiDeleteParkedReservation(ticket) {
 
   const deleteUrl = `${TPV_SYNC_API_URL}?action=delete-parked-reservation`;
 
-  const res = await fetch(deleteUrl, {
+  const res = await fetchWithTimeout(deleteUrl, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -36809,9 +37121,16 @@ function getNextSuggestedParkTicketId() {
   }, 0);
 
   const basis = Math.max(maxTicketId, Number(loadParkedGlobalIdCounter() || 0));
-  if (basis <= 0) return 1;
 
-  return basis + 1;
+  // "basis + 1" (contador local) es inseguro con varios TPV: dos aparatos que
+  // aun no se han sincronizado entre si pueden calcular el MISMO siguiente id
+  // a la vez, y el servidor (que identifica cada aparcado por su id) acaba
+  // sobrescribiendo uno con el otro sin avisar. Date.now() practicamente
+  // nunca coincide entre dos dispositivos (haria falta el mismo milisegundo
+  // exacto), asi que lo usamos como suelo real, sin depender de que ambos
+  // TPV se hayan visto todavia. Seguimos respetando el maximo local conocido
+  // para no repetir nunca un id ya usado en este mismo dispositivo.
+  return Math.max(basis + 1, Date.now());
 }
 
 function getParkModalTargetText() {

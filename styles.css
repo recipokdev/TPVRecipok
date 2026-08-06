@@ -2985,6 +2985,11 @@ body.session-locked .cart-terminal-row #agentName {
   max-width: 94vw;
 }
 
+#msgOverlay .simple-dialog.wide-dialog {
+  width: 520px;
+  max-width: 94vw;
+}
+
 #msgOverlay .simple-dialog.changelog-dialog {
   width: min(860px, calc(100vw - 28px));
   max-width: 860px;
