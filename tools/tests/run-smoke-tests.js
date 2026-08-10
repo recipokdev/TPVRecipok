@@ -34,6 +34,7 @@ const rendererPath = ensureFileExists("renderer.js");
 const indexPath = ensureFileExists("index.html");
 const stylesPath = ensureFileExists("styles.css");
 const mainPath = ensureFileExists("main.js");
+const preloadPath = ensureFileExists("preload.js");
 const ticketPrintPath = ensureFileExists("ticket_print.html");
 const checklistPath = ensureFileExists("tools/tests/cash-smoke-checklist.md");
 
@@ -42,6 +43,7 @@ if (
   !indexPath ||
   !stylesPath ||
   !mainPath ||
+  !preloadPath ||
   !ticketPrintPath ||
   !checklistPath
 ) {
@@ -52,6 +54,7 @@ const renderer = fs.readFileSync(rendererPath, "utf8");
 const index = fs.readFileSync(indexPath, "utf8");
 const styles = fs.readFileSync(stylesPath, "utf8");
 const main = fs.readFileSync(mainPath, "utf8");
+const preload = fs.readFileSync(preloadPath, "utf8");
 const ticketPrint = fs.readFileSync(ticketPrintPath, "utf8");
 
 console.log("\n[SMOKE] Checking key flows in renderer.js\n");
@@ -298,6 +301,16 @@ mustContain(
   "Wide dialog style for long confirm texts present",
 );
 
+// Si se desactiva la pregunta de stock, el comportamiento por defecto debe
+// ser el normal (devolver stock, como al borrar uno solo), NO el caso
+// excepcional de duplicados fantasma (eso habria dejado stock sin devolver
+// en silencio en el caso de uso mas comun).
+mustContain(
+  renderer,
+  "async function deleteAllPendingParkedTickets({ releaseStock = true } = {})",
+  "Bulk delete pending defaults to releasing stock (the normal case)",
+);
+
 // Opciones de cierre de caja (admin-only) y su subopcion dependiente.
 mustContain(
   index,
@@ -326,6 +339,86 @@ mustContain(
   ticketPrint,
   ".item-sub.muted {",
   "Product description prints at full opacity",
+);
+
+console.log("\n[SMOKE] Checking 2026-08-07 update-gate resilience fixes\n");
+
+// Clic en "Actualizar" mientras ya hay una comprobacion en curso: antes no
+// hacia nada en absoluto (parecia que el boton estaba roto). Ahora avisa.
+mustContain(
+  renderer,
+  "Ya hay una comprobación de actualización en curso",
+  "Manual update button warns instead of silently no-op'ing",
+);
+
+// Mensaje de "llevas X tiempo esperando" en los reintentos del arranque
+// (no cambia el comportamiento, solo explica por que tarda).
+mustContain(
+  main,
+  "function elapsedRetryHint(startedAt)",
+  "Startup gate shows elapsed-wait hint during retries",
+);
+
+// Sin internet de verdad (ni Google, ni Cloudflare, ni GitHub responden) tras
+// un tiempo razonable: se abre con la version actual en vez de bloquear para
+// siempre (el riesgo que evita la comprobacion no existe sin conexion).
+mustContain(
+  main,
+  "const NO_INTERNET_BYPASS_MS = 50_000;",
+  "No-internet startup bypass constant present",
+);
+mustContain(
+  main,
+  "return { ok: true, noInternet: true };",
+  "Internet check returns noInternet bypass signal",
+);
+mustContain(
+  main,
+  "if (netGate?.noInternet) {",
+  "Update gate skips update check when there is no internet at all",
+);
+mustContain(
+  main,
+  'ipcMain.handle("updater:getStartupNoInternetFlag"',
+  "Startup no-internet flag exposed via IPC",
+);
+mustContain(
+  preload,
+  "getStartupNoInternetFlag:",
+  "Startup no-internet flag bridged in preload",
+);
+mustContain(
+  renderer,
+  "function showStartupNoInternetBanner()",
+  "Persistent no-internet startup banner present",
+);
+mustContain(
+  renderer,
+  "checkStartupNoInternetFlag()",
+  "App checks the no-internet startup flag on boot",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-07 parked-paid-sync-stuck-forever fix\n",
+);
+
+// Un cobro confirmado en local nunca debe perder frente a una comparacion de
+// fechas al reintentar la cola: sin esto, si el remoto parecia "mas
+// reciente" por cualquier motivo, el aviso de "cobrado" se descartaba para
+// siempre en silencio y el servidor se quedaba en paid:false indefinidamente
+// (otros TPV seguian contando ese ticket como pendiente sin fin).
+mustContain(
+  renderer,
+  "if (!!localTicket?.paid && !remoteTicket?.paid) {",
+  "Confirmed-paid queued upsert always wins over remote-newer heuristic",
+);
+
+// Sin logging, un elemento de la cola que falla siempre por el mismo motivo
+// reintentaba en silencio para siempre sin ninguna pista de por que.
+mustContain(
+  renderer,
+  "No se pudo sincronizar reserva aparcada en cola",
+  "Parked sync queue retry failures are logged instead of silently swallowed",
 );
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");

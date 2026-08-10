@@ -1238,9 +1238,32 @@ function getCompanyFromCfgForMain() {
   return { baseUrl, apiKey, email };
 }
 
+// A partir de este tiempo esperando en un mismo reintento, se añade una
+// pista visible en pantalla (sigue reintentando igual, solo que ahora se
+// entiende por que: evita que parezca que el programa se ha colgado).
+const SLOW_RETRY_HINT_MS = 20_000;
+
+// Sin salida real a internet (ni Google, ni Cloudflare, ni GitHub responden)
+// tras esperar un rato razonable, se deja abrir con la version actual en vez
+// de reintentar para siempre. Sin internet el TPV no puede hablar con NINGUN
+// servidor real de todos modos, asi que el riesgo que esta comprobacion
+// evita (un cliente desactualizado hablando con el servidor real) no existe
+// mientras dure el corte. Si SI hay internet pero falla la API del cliente o
+// la busqueda de actualizacion en GitHub, esto no aplica: ahi se sigue
+// reintentando para siempre (es justo el caso que la comprobacion protege).
+const NO_INTERNET_BYPASS_MS = 50_000;
+
+function elapsedRetryHint(startedAt) {
+  const elapsedMs = Date.now() - startedAt;
+  if (elapsedMs < SLOW_RETRY_HINT_MS) return "";
+  const elapsedSec = Math.floor(elapsedMs / 1000);
+  return ` (llevas ${elapsedSec}s esperando; comprueba tu conexión a internet)`;
+}
+
 async function waitForInternetAndApiGate() {
   // 1) Internet real (evita "wifi con portal cautivo" o sin salida)
   let attempt = 0;
+  const internetCheckStartedAt = Date.now();
 
   // Probes: si alguno responde, consideramos "hay salida"
   // (usa varios por si GitHub está bloqueado en alguna red)
@@ -1256,7 +1279,22 @@ async function waitForInternetAndApiGate() {
   while (true) {
     attempt++;
 
-    splashSet(`Comprobando internet... (intento ${attempt})`, 10);
+    if (Date.now() - internetCheckStartedAt >= NO_INTERNET_BYPASS_MS) {
+      logUpdater(
+        "[GATE] Sin internet tras espera razonable, se abre con la version actual.",
+      );
+      splashSet(
+        "Sin conexión: abriendo con la versión actual...",
+        20,
+      );
+      await sleep(600);
+      return { ok: true, noInternet: true };
+    }
+
+    splashSet(
+      `Comprobando internet... (intento ${attempt})${elapsedRetryHint(internetCheckStartedAt)}`,
+      10,
+    );
 
     // DNS rápido (con 2-3 hosts distintos)
     const dnsAny =
@@ -1265,7 +1303,10 @@ async function waitForInternetAndApiGate() {
       (await dnsOk("github.com"));
 
     if (!dnsAny) {
-      splashSet("Sin internet (DNS). Esperando conexión...", 10);
+      splashSet(
+        `Sin internet (DNS). Esperando conexión...${elapsedRetryHint(internetCheckStartedAt)}`,
+        10,
+      );
       await sleep(2500);
       continue;
     }
@@ -1286,7 +1327,7 @@ async function waitForInternetAndApiGate() {
 
     if (!okOut) {
       splashSet(
-        "Conectado a red, pero sin salida a internet. Reintentando...",
+        `Conectado a red, pero sin salida a internet. Reintentando...${elapsedRetryHint(internetCheckStartedAt)}`,
         25,
       );
       await sleep(2500);
@@ -1297,20 +1338,24 @@ async function waitForInternetAndApiGate() {
   }
 
   // 2) API OK (solo si ya hay empresa configurada en cfg)
+  // A partir de aqui SI hay internet real: si esta parte falla (servidor del
+  // cliente caido, etc.) se sigue reintentando para siempre a proposito, sin
+  // ningun bypass.
   const { baseUrl, apiKey, email } = getCompanyFromCfgForMain();
 
   // Si todavía no hay empresa resuelta, no bloqueamos por API:
   // la UI necesitará internet igual para activarse (y pedirá email).
   if (!baseUrl || !apiKey) {
     splashSet("Internet OK. Preparando...", 55);
-    return true;
+    return { ok: true };
   }
 
   let apiAttempt = 0;
+  const apiCheckStartedAt = Date.now();
   while (true) {
     apiAttempt++;
     splashSet(
-      `Conectando con servidor... (${email || "empresa"}) (intento ${apiAttempt})`,
+      `Conectando con servidor... (${email || "empresa"}) (intento ${apiAttempt})${elapsedRetryHint(apiCheckStartedAt)}`,
       55,
     );
 
@@ -1322,7 +1367,7 @@ async function waitForInternetAndApiGate() {
 
     if (rr.ok) {
       splashSet("Servidor OK. Buscando actualizaciones...", 70);
-      return true;
+      return { ok: true };
     }
 
     // Si el token/baseUrl están mal, no nos quedamos en bucle infinito:
@@ -1333,15 +1378,23 @@ async function waitForInternetAndApiGate() {
         70,
       );
       await sleep(400);
-      return true;
+      return { ok: true };
     }
 
-    splashSet("Servidor no disponible todavía. Esperando...", 55);
+    splashSet(
+      `Servidor no disponible todavía. Esperando...${elapsedRetryHint(apiCheckStartedAt)}`,
+      55,
+    );
     await sleep(2500);
   }
 }
 
 let appIsInstallingUpdate = false;
+// Se puso true en este arranque porque no habia internet de verdad (ver
+// NO_INTERNET_BYPASS_MS): la app se abrio con la version actual sin poder
+// comprobar actualizaciones. La UI lo consulta una vez al arrancar para
+// mostrar un aviso fijo.
+let startupNoInternetFlag = false;
 
 async function runAutoUpdateGate() {
   if (IS_E2E_BACKGROUND) {
@@ -1357,7 +1410,13 @@ async function runAutoUpdateGate() {
   splashSet("Comprobando conexión…", 5);
 
   // Bloquea hasta internet + API si hay cfg
-  await waitForInternetAndApiGate();
+  const netGate = await waitForInternetAndApiGate();
+
+  // De verdad no hay internet (ver NO_INTERNET_BYPASS_MS): se abre con la
+  // version actual sin buscar actualizacion, avisando en la propia app.
+  if (netGate?.noInternet) {
+    return { updatedOrReady: true, noInternet: true };
+  }
 
   splashSet("Buscando actualizaciones...", 20);
 
@@ -1376,10 +1435,14 @@ async function runAutoUpdateGate() {
   const CHECK_TIMEOUT_MS = 60_000; // 60s para cada intento
   const RETRY_WAIT_MS = 5_000; // espera entre intentos
   let attempt = 0;
+  const updateCheckStartedAt = Date.now();
 
   while (true) {
     attempt++;
-    splashSet(`Buscando actualizaciones... (intento ${attempt})`, 25);
+    splashSet(
+      `Buscando actualizaciones... (intento ${attempt})${elapsedRetryHint(updateCheckStartedAt)}`,
+      25,
+    );
 
     const policy = await loadUpdatePolicy(channel);
     const currentVersion = app.getVersion();
@@ -1469,7 +1532,10 @@ async function runAutoUpdateGate() {
     if (result?.installing) return result;
 
     // Si falló/timeout -> esperar y reintentar
-    splashSet("Conexión lenta / servidor ocupado. Reintentando…", 25);
+    splashSet(
+      `Conexión lenta / servidor ocupado. Reintentando…${elapsedRetryHint(updateCheckStartedAt)}`,
+      25,
+    );
     await sleep(RETRY_WAIT_MS);
 
     // Muy importante: limpiar listeners antes del siguiente intento
@@ -1975,6 +2041,8 @@ app.whenReady().then(async () => {
     return;
   }
 
+  startupNoInternetFlag = !!updateGate?.noInternet;
+
   createWindow();
   ensureAppShortcuts(); // verifica/repara acceso directo escritorio + Inicio
   startScaleReconnectMonitor();
@@ -2267,6 +2335,10 @@ ipcMain.handle("app:quit", async () => {
 
   app.quit();
   return { ok: true };
+});
+
+ipcMain.handle("updater:getStartupNoInternetFlag", async () => {
+  return { noInternet: startupNoInternetFlag };
 });
 
 ipcMain.handle("updater:checkManual", async () => {

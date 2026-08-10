@@ -102,6 +102,8 @@ contextBridge.exposeInMainWorld("TPV_SYS", {
 contextBridge.exposeInMainWorld("TPV_UPDATER", {
   checkNow: () => ipcRenderer.invoke("updater:checkManual"),
   relaunchForUpdate: () => ipcRenderer.invoke("updater:relaunchForUpdate"),
+  getStartupNoInternetFlag: () =>
+    ipcRenderer.invoke("updater:getStartupNoInternetFlag"),
 });
 
 contextBridge.exposeInMainWorld("TPV_SETUP", {

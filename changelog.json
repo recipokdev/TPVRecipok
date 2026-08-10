@@ -8,6 +8,18 @@
       "changes": []
     },
     {
+      "version": "0.2.14",
+      "date": "2026-08-10",
+      "title": "Release 0.2.14",
+      "changes": [
+        "Aparcados: al borrar un ticket sin cobrar uno a uno, antes se liberaba siempre su stock reservado sin preguntar (podia inflar stock si en realidad era un duplicado/fantasma por fallo de sincronizacion entre TPV). Ahora hace la misma pregunta que 'Borrar pendientes' en bloque. Tambien se ha ensanchado el cuadro de esos avisos de stock, que se quedaba pequeno para el texto.",
+        "Aparcados, 'Preguntar por el stock al Borrar pendientes': corregido el comportamiento al desactivar esta opcion. Antes, al desactivarla, dejaba de preguntar y asumia que NUNCA habia que devolver stock (el caso raro de duplicados), pudiendo dejar stock sin devolver en silencio en el caso normal (pedidos reales cancelados). Ahora, al desactivarla, deja de preguntar y devuelve el stock directamente, como al borrar uno solo (el caso normal).",
+        "Actualizaciones: si al pulsar 'Actualizar' ya habia una comprobacion en curso, el segundo clic no hacia nada sin avisar (parecia que el boton estaba roto). Ahora avisa de que ya hay una comprobacion en marcha.",
+        "Actualizaciones: si el arranque se queda esperando internet o al servidor mucho tiempo, ahora se muestra cuanto tiempo lleva esperando (para que se entienda que es un problema de conexion, no que el programa se ha colgado). Y si de verdad no hay internet (ni siquiera para comprobar la conexion) tras esperar un rato razonable, el TPV se abre igualmente con la version que ya tenias instalada, avisando en pantalla, en vez de quedarse bloqueado para siempre.",
+        "Varios TPV a la vez, aparcados: si al cobrar un ticket fallaba justo el aviso al servidor de que ya estaba cobrado (un corte de red puntual), se guardaba para reintentar mas tarde, pero en algunos casos ese reintento se descartaba para siempre en silencio, dejando ese ticket marcado como 'pendiente' en el resto de TPV indefinidamente (aunque en el TPV que lo cobro apareciera bien). Corregido: un cobro confirmado ya nunca se descarta al reintentar, se sigue intentando avisar al servidor hasta que lo consigue."
+      ]
+    },
+    {
       "version": "0.2.13",
       "date": "2026-08-06",
       "title": "Release 0.2.13",

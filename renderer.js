@@ -16652,12 +16652,13 @@ async function clearPaidParkedHistory() {
 // FacturaScripts), aqui se pierde para siempre un pedido que nunca se llego
 // a cobrar — por eso es una accion admin-only con confirmacion fuerte.
 //
-// Por defecto NO libera stock reservado (releaseStock=false): si estos
-// aparcados son en realidad duplicados fantasma por un fallo de
-// sincronizacion entre varios TPV, liberar su stock "reservado" varias veces
-// inflaria el stock por encima del real. Solo se debe activar releaseStock
-// si se sabe con seguridad que son reservas legitimas y distintas.
-async function deleteAllPendingParkedTickets({ releaseStock = false } = {}) {
+// Por defecto SI libera stock reservado (releaseStock=true): el caso normal
+// al borrar pendientes es que sean pedidos reales que se cancelan, igual que
+// al borrar uno solo. Solo se debe pasar releaseStock=false cuando se sabe
+// que son duplicados fantasma por un fallo de sincronizacion entre varios
+// TPV (donde liberar su stock "reservado" varias veces inflaria el stock por
+// encima del real).
+async function deleteAllPendingParkedTickets({ releaseStock = true } = {}) {
   const source = Array.isArray(parkedTickets) ? parkedTickets : [];
   const removedPending = source.filter(
     (t) => !t?.paid && !isPedidoTpvTicket(t),
@@ -17021,12 +17022,14 @@ function ensureParkedToolbar() {
 
     // Dos situaciones muy distintas piden lo mismo, "borrar pendientes":
     // 1) Cancelar pedidos de verdad -> SI hay que devolver el stock reservado,
-    //    igual que al borrar uno solo.
+    //    igual que al borrar uno solo. Es el caso normal/esperado.
     // 2) Limpiar duplicados fantasma por un fallo de sincronizacion entre
     //    varios TPV -> NO devolver stock (no se reservo realmente N veces).
+    //    Es la excepcion.
     // Se decide aqui mismo, salvo que el admin haya desactivado la pregunta
-    // en Opciones (entonces siempre se asume el caso 2, sin tocar stock).
-    let releaseStock = false;
+    // en Opciones: en ese caso se asume el caso normal (1), no la excepcion,
+    // para no dejar stock sin devolver en silencio en el caso de uso comun.
+    let releaseStock = true;
 
     if (askStockOnBulkDeletePendingEnabled) {
       const choice = await confirmModal(
@@ -17036,7 +17039,7 @@ function ensureParkedToolbar() {
           `¿Son pedidos reales que quieres cancelar (se devuelve su stock reservado), ` +
           `o son duplicados/fantasma por un fallo de sincronizacion entre TPV (no se toca el stock)?\n\n` +
           `(Si no quieres que se te pregunte esto cada vez, desactívalo en Opciones → Productos → ` +
-          `"Preguntar por el stock al 'Borrar pendientes'".)`,
+          `"Preguntar por el stock al 'Borrar pendientes'". Se asumira que son pedidos reales y se devolvera el stock.)`,
         {
           dialogClassName: "wide-dialog",
           okButtonText: "Sí, son pedidos reales (devolver stock)",
@@ -17050,7 +17053,7 @@ function ensureParkedToolbar() {
     } else {
       const ok = await confirmModal(
         "Borrar TODOS los pendientes",
-        `Vas a borrar ${pendingCount} ${labels.item}(s) SIN COBRAR de forma permanente, sin tocar el stock reservado. ` +
+        `Vas a borrar ${pendingCount} ${labels.item}(s) SIN COBRAR de forma permanente, devolviendo su stock reservado. ` +
           `No se puede deshacer.\n\n¿Continuar?`,
         { dialogClassName: "wide-dialog" },
       );
@@ -17520,10 +17523,11 @@ async function deleteParkedTicketByIndex(
   const displaySuffix = displayNo ? ` #${displayNo}` : "";
 
   // Igual que en "Borrar pendientes" en bloque: un aparcado sin cobrar puede
-  // ser un pedido real que se cancela (hay que devolver su stock reservado)
-  // o un duplicado/fantasma por un fallo de sincronizacion entre TPV (no
-  // hay que tocar el stock). Los "pedido" de clientes online y los ya
-  // cobrados mantienen el comportamiento de siempre (se libera el stock).
+  // ser un pedido real que se cancela (hay que devolver su stock reservado,
+  // el caso normal/esperado) o un duplicado/fantasma por un fallo de
+  // sincronizacion entre TPV (no hay que tocar el stock, la excepcion). Los
+  // "pedido" de clientes online y los ya cobrados mantienen el comportamiento
+  // de siempre (se libera el stock).
   const askAboutStock =
     confirm && !ticket?.paid && !isPedidoTpvTicket(ticket);
   let releaseStock = true;
@@ -17536,7 +17540,7 @@ async function deleteParkedTicketByIndex(
           `¿Es un pedido real que quieres cancelar (se devuelve su stock reservado), ` +
           `o es un duplicado/fantasma por un fallo de sincronizacion entre TPV (no se toca el stock)?\n\n` +
           `(Si no quieres que se te pregunte esto cada vez, desactívalo en Opciones → Productos → ` +
-          `"Preguntar por el stock al 'Borrar pendientes'".)`,
+          `"Preguntar por el stock al 'Borrar pendientes'". Se asumira que es un pedido real y se devolvera el stock.)`,
         {
           dialogClassName: "wide-dialog",
           okButtonText: "Sí, es un pedido real (devolver stock)",
@@ -17549,12 +17553,12 @@ async function deleteParkedTicketByIndex(
     } else if (askAboutStock) {
       const ok = await confirmModal(
         `Eliminar ${labels.item}`,
-        `Vas a eliminar Ticket${displaySuffix} SIN COBRAR de forma permanente, sin tocar el stock reservado. ` +
+        `Vas a eliminar Ticket${displaySuffix} SIN COBRAR de forma permanente, devolviendo su stock reservado. ` +
           `No se puede deshacer.\n\n¿Continuar?`,
         { dialogClassName: "wide-dialog" },
       );
       if (!ok) return false;
-      releaseStock = false;
+      releaseStock = true;
     } else {
       const ok = await confirmModal(
         `Eliminar ${labels.item}`,
@@ -27012,6 +27016,78 @@ function hideBackgroundUpdateNotice() {
   root.classList.remove("is-visible");
 }
 
+// Aviso fijo cuando este arranque concreto se abrio SIN internet real (ver
+// NO_INTERNET_BYPASS_MS en main.js): no se pudo comprobar si hay una version
+// mas reciente, asi que se sigue usando la actual. Se consulta una vez al
+// arrancar (no es un aviso que pueda "saltar" en medio de la sesion).
+function showStartupNoInternetBanner() {
+  if (document.getElementById("startupNoInternetBanner")) return;
+
+  if (!document.getElementById("startupNoInternetBannerStyle")) {
+    const style = document.createElement("style");
+    style.id = "startupNoInternetBannerStyle";
+    style.textContent = `
+      .startup-no-internet-banner {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 1300;
+        background: #7a4a00;
+        color: #fff8ec;
+        font-size: 13px;
+        font-weight: 700;
+        text-align: center;
+        padding: 8px 36px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      }
+
+      .startup-no-internet-banner-close {
+        position: absolute;
+        right: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+        border: none;
+        background: transparent;
+        color: #fff8ec;
+        font-size: 16px;
+        font-weight: 800;
+        cursor: pointer;
+        line-height: 1;
+        padding: 4px 8px;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  const root = document.createElement("div");
+  root.id = "startupNoInternetBanner";
+  root.className = "startup-no-internet-banner";
+  root.textContent =
+    "Sin conexión: usando la versión anterior. Actualiza en cuanto tengas internet.";
+
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "startup-no-internet-banner-close";
+  closeBtn.setAttribute("aria-label", "Cerrar aviso");
+  closeBtn.textContent = "×";
+  closeBtn.addEventListener("click", () => root.remove());
+  root.appendChild(closeBtn);
+
+  document.body.appendChild(root);
+}
+
+async function checkStartupNoInternetFlag() {
+  try {
+    const result = await window.TPV_UPDATER?.getStartupNoInternetFlag?.();
+    if (result?.noInternet) {
+      showStartupNoInternetBanner();
+    }
+  } catch (e) {
+    console.warn("[UPDATE-PASSIVE] no se pudo comprobar arranque sin internet:", e?.message || e);
+  }
+}
+
 async function refreshBackgroundUpdateCurrentVersionUi() {
   const versionEl = document.getElementById("updateNoticeCurrentVersionText");
   if (!versionEl) return;
@@ -27296,7 +27372,14 @@ function runUpdateRelaunchCountdown({ seconds = 5, targetVersion = "" } = {}) {
 }
 
 async function startManualUpdateFlowFromOptions() {
-  if (manualUpdateActionInFlight) return;
+  if (manualUpdateActionInFlight) {
+    toast(
+      "Ya hay una comprobación de actualización en curso, espera un momento.",
+      "info",
+      "Actualizar programa",
+    );
+    return;
+  }
   manualUpdateActionInFlight = true;
 
   try {
@@ -31549,6 +31632,17 @@ function shouldSkipQueuedUpsertDueToRemoteNewer(entry, remoteTicket) {
     return true;
   }
 
+  // Caso espejo: un cobro confirmado en local NUNCA debe perder frente a la
+  // comparacion de fechas de mas abajo. Sin esto, si el remoto parecia "mas
+  // reciente" por cualquier motivo (otro TPV tocando el ticket justo despues
+  // del fallo de red, reloj desincronizado, etc.), el aviso de "cobrado" se
+  // descartaba para siempre en silencio y el servidor se quedaba con
+  // paid:false indefinidamente (el badge de otros TPV lo seguia contando
+  // como pendiente hasta que algo ajeno, como "Limpiar cobrados", lo borraba).
+  if (!!localTicket?.paid && !remoteTicket?.paid) {
+    return false;
+  }
+
   const localTs = getParkedTicketComparableRevisionTs(localTicket);
   const remoteTs = getParkedTicketComparableRevisionTs(remoteTicket);
   if (localTs <= 0 || remoteTs <= 0) return false;
@@ -31605,7 +31699,14 @@ async function processParkedSyncQueue() {
             });
           }
         }
-      } catch {
+      } catch (e) {
+        // Sin este log, un elemento de la cola que falla siempre por el mismo
+        // motivo (p.ej. un error de validacion del servidor) queda
+        // reintentando en silencio para siempre sin ninguna pista de por que.
+        console.warn(
+          `No se pudo sincronizar reserva aparcada en cola (${entry?.op || "upsert"}, key=${entry?.key || "?"}):`,
+          e?.message || e,
+        );
         remaining.push(entry);
       }
     }
@@ -43553,6 +43654,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   await bootstrapApp(); // y listo
   startBackgroundUpdateMonitor();
+  checkStartupNoInternetFlag().catch(() => {});
   maybeShowChangelogAfterUpdate().catch(() => {});
 });
 
