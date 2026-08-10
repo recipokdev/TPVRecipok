@@ -421,6 +421,16 @@ mustContain(
   "Parked sync queue retry failures are logged instead of silently swallowed",
 );
 
+// Vaciar el carrito (o soltar un aparcado) llamaba a
+// restorePreParkedCustomerSelection(), que leia/escribia esta variable sin
+// que existiera ninguna declaracion a nivel de modulo -> ReferenceError en
+// produccion (0.2.14) al pulsar "Vaciar".
+mustContain(
+  renderer,
+  "let preParkedCustomerSelection = null;",
+  "preParkedCustomerSelection has a module-level declaration (was missing, crashed clear-cart)",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

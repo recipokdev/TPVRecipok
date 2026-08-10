@@ -8,6 +8,14 @@
       "changes": []
     },
     {
+      "version": "0.2.15",
+      "date": "2026-08-10",
+      "title": "Release 0.2.15",
+      "changes": [
+        "Vaciar carrito: en algunos casos el boton 'Vaciar' se quedaba colgado y no vaciaba nada (error interno al intentar recordar el cliente anterior de un aparcado). Corregido."
+      ]
+    },
+    {
       "version": "0.2.14",
       "date": "2026-08-10",
       "title": "Release 0.2.14",

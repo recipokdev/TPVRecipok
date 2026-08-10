@@ -314,6 +314,9 @@ let parkedClearPaidInFlight = false;
 let parkedClearPendingInFlight = false;
 // Índice del ticket aparcado actualmente cargado en el carrito
 let currentParkedTicketIndex = null;
+// Cliente seleccionado justo antes de cargar un aparcado, para restaurarlo
+// al vaciar el carrito o soltar el aparcado sin cobrar.
+let preParkedCustomerSelection = null;
 let PENDING_RUNTIME_PARKED_SYNC_KEY = "";
 let PENDING_RUNTIME_PARKED_TICKET_ID = 0;
 let showParkStockWarning = true;
