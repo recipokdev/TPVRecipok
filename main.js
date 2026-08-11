@@ -2531,17 +2531,25 @@ ipcMain.handle("ui:setKioskMode", async (_e, enabled) => {
 function cfgPath() {
   return path.join(app.getPath("userData"), "tpv-config.json");
 }
+// La pantalla de Opciones dispara ~30 llamadas "cfg:get" seguidas al abrirse,
+// y cada una releia y parseaba el JSON entero desde disco. Con el fichero
+// aun frio en cache del SO, esa primera tanda de lecturas podia notarse como
+// varios segundos de espera. Se cachea en memoria y se invalida al escribir.
+let __cfgCache = null;
 function readCfg() {
+  if (__cfgCache) return __cfgCache;
   try {
-    return JSON.parse(fs.readFileSync(cfgPath(), "utf8"));
+    __cfgCache = JSON.parse(fs.readFileSync(cfgPath(), "utf8"));
   } catch {
-    return {};
+    __cfgCache = {};
   }
+  return __cfgCache;
 }
 function writeCfg(patch) {
   const cur = readCfg();
   const next = { ...cur, ...patch };
   fs.writeFileSync(cfgPath(), JSON.stringify(next, null, 2), "utf8");
+  __cfgCache = next;
   return next;
 }
 

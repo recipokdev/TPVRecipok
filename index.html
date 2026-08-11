@@ -104,13 +104,23 @@
                 </label>
               </div>
               <div id="mesasTransReservaPanel" class="mts-reserva-panel hidden">
-                <input
-                  id="mesasTransReservaName"
-                  class="mts-reserva-input"
-                  type="text"
-                  placeholder="Nombre reserva"
-                  autocomplete="off"
-                />
+                <div class="input-clear-wrap">
+                  <input
+                    id="mesasTransReservaName"
+                    class="mts-reserva-input"
+                    type="text"
+                    placeholder="Nombre reserva"
+                    autocomplete="off"
+                  />
+                  <button
+                    type="button"
+                    id="mesasTransReservaNameClearBtn"
+                    class="input-clear-btn hidden"
+                    title="Borrar"
+                  >
+                    ✕
+                  </button>
+                </div>
                 <input
                   id="mesasTransReservaTime"
                   class="mts-reserva-input"
@@ -143,7 +153,6 @@
           autocomplete="off"
         />
         <button id="searchClearBtn" class="search-btn">✕</button>
-        <button id="searchKeyboardBtn" class="search-btn">⌨</button>
       </div>
 
       <!-- Categorías con flechas -->
@@ -930,14 +939,6 @@
               </button>
             </div>
 
-            <button
-              type="button"
-              id="cashDirectTotalKeyboardBtn"
-              class="cash-direct-total-btn"
-              title="Abrir teclado numérico"
-            >
-              ⌨
-            </button>
           </div>
 
           <div class="cash-direct-total-help">
@@ -948,7 +949,17 @@
         <!-- Observaciones -->
         <div class="cash-obs">
           <label for="cashObs">Observaciones</label>
-          <textarea id="cashObs" rows="3" placeholder=""></textarea>
+          <div class="input-clear-wrap">
+            <textarea id="cashObs" rows="3" placeholder=""></textarea>
+            <button
+              type="button"
+              id="cashObsClearBtn"
+              class="input-clear-btn hidden"
+              title="Borrar"
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         <!-- Resumen principal (igual que tu JS espera) -->
@@ -1056,14 +1067,6 @@
               />
               <span class="cash-move-euro">€</span>
             </div>
-            <button
-              type="button"
-              id="cashMoveAmountKeyboardBtn"
-              class="cash-move-key-btn"
-              title="Teclado numérico"
-            >
-              🔢
-            </button>
           </div>
 
           <!-- Tipo -->
@@ -1083,20 +1086,22 @@
           <div class="cash-move-reason">
             <label for="cashMoveReason" class="cash-move-label">Motivo</label>
             <div class="cash-move-reason-row">
-              <textarea
-                id="cashMoveReason"
-                rows="3"
-                class="cash-move-textarea"
-                placeholder="Ej: cambio inicial, ingreso en banco, pago proveedor..."
-              ></textarea>
-              <button
-                type="button"
-                id="cashMoveReasonKeyboardBtn"
-                class="cash-move-key-btn"
-                title="Teclado de texto"
-              >
-                ⌨️
-              </button>
+              <div class="input-clear-wrap">
+                <textarea
+                  id="cashMoveReason"
+                  rows="3"
+                  class="cash-move-textarea"
+                  placeholder="Ej: cambio inicial, ingreso en banco, pago proveedor..."
+                ></textarea>
+                <button
+                  type="button"
+                  id="cashMoveReasonClearBtn"
+                  class="input-clear-btn hidden"
+                  title="Borrar"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1118,16 +1123,24 @@
         <h2>Activar TPV</h2>
         <p>Introduce el email de tu empresa</p>
 
-        <input id="emailInput" type="email" placeholder="tu@email.com" />
         <div
-          style="
-            display: flex;
-            gap: 8px;
-            justify-content: center;
-            margin-top: 8px;
-          "
+          class="input-clear-wrap"
+          style="width: min(320px, 100%); margin: 8px auto 0"
         >
-          <button id="emailKeyboardBtn" type="button">⌨ Teclado</button>
+          <input
+            id="emailInput"
+            type="email"
+            placeholder="tu@email.com"
+            style="width: 100%; padding: 10px 34px 10px 10px; margin: 0"
+          />
+          <button
+            type="button"
+            id="emailClearBtn"
+            class="input-clear-btn hidden"
+            title="Borrar"
+          >
+            ✕
+          </button>
         </div>
         <div class="email-actions">
           <button id="emailCancelBtn" type="button">Cancelar</button>
@@ -1223,7 +1236,17 @@
               <div class="pay-extra-row">
                 <div class="pay-extra-col">
                   <label class="pay-label">Número</label>
-                  <input id="payNumber" class="pay-input" placeholder="" />
+                  <div class="input-clear-wrap">
+                    <input id="payNumber" class="pay-input" placeholder="" />
+                    <button
+                      type="button"
+                      id="payNumberClearBtn"
+                      class="input-clear-btn hidden"
+                      title="Borrar"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
 
                 <div class="pay-extra-col">
@@ -1238,7 +1261,17 @@
               <label class="pay-label" style="margin-top: 10px"
                 >Observaciones</label
               >
-              <textarea id="payObs" class="pay-textarea" rows="3"></textarea>
+              <div class="input-clear-wrap">
+                <textarea id="payObs" class="pay-textarea" rows="3"></textarea>
+                <button
+                  type="button"
+                  id="payObsClearBtn"
+                  class="input-clear-btn hidden"
+                  title="Borrar"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
 
             <div
@@ -1327,15 +1360,6 @@
                 ✕
               </button>
             </div>
-
-            <button
-              id="ticketsKeyboardBtn"
-              type="button"
-              class="cart-btn"
-              title="Teclado"
-            >
-              ⌨
-            </button>
 
             <button id="ticketsReloadBtn" type="button" class="cart-btn">
               Recargar
@@ -1703,12 +1727,22 @@
             <label class="pay-label" style="margin-top: 10px"
               >Observaciones</label
             >
-            <textarea
-              id="comandaObs"
-              class="pay-textarea"
-              rows="3"
-              placeholder="Observaciones para cocina"
-            ></textarea>
+            <div class="input-clear-wrap">
+              <textarea
+                id="comandaObs"
+                class="pay-textarea"
+                rows="3"
+                placeholder="Observaciones para cocina"
+              ></textarea>
+              <button
+                type="button"
+                id="comandaObsClearBtn"
+                class="input-clear-btn hidden"
+                title="Borrar"
+              >
+                ✕
+              </button>
+            </div>
 
             <div
               style="
@@ -1917,12 +1951,23 @@
           <button type="button" id="optionsCloseX" class="small-btn">✕</button>
         </div>
 
+        <div id="optionsLoadingBanner" class="opt-loading-banner hidden">
+          ⏳ Cargando opciones...
+        </div>
+
         <div class="opt-acc" id="optionsAccordion">
           <section class="opt-sec" data-sec="actualizacion">
             <button type="button" class="opt-sec-h">
               <span>Actualización automática</span>
               <span class="opt-sec-chev">▾</span>
             </button>
+            <div class="opt-sec-preview">
+              <span
+                class="opt-preview-item"
+                data-toggle-id="updateNoticeEnabledToggle"
+                >Avisos de version nueva</span
+              >, frecuencia de comprobacion, changelog
+            </div>
             <div class="opt-sec-b">
               <div class="opt-row">
                 <div class="opt-row-txt">
@@ -2000,6 +2045,13 @@
               <span>Caja</span>
               <span class="opt-sec-chev">▾</span>
             </button>
+            <div class="opt-sec-preview">
+              <span
+                class="opt-preview-item"
+                data-toggle-id="openDrawerAlwaysToggle"
+                >Abrir cajon con todos los pagos</span
+              >, abrir cajon manualmente
+            </div>
             <div class="opt-sec-b">
               <div class="opt-row">
                 <div class="opt-row-txt">
@@ -2040,6 +2092,12 @@
               <span>Impresora</span>
               <span class="opt-sec-chev">▾</span>
             </button>
+            <div class="opt-sec-preview">
+              Impresora de tickets, impresora de comandas,
+              <span class="opt-preview-item" data-toggle-id="autoPrintToggle"
+                >auto-imprimir</span
+              >
+            </div>
             <div class="opt-sec-b">
               <div class="opt-row">
                 <div class="opt-row-txt">
@@ -2083,7 +2141,7 @@
                 </label>
               </div>
 
-              <div class="opt-row">
+              <div class="opt-row" data-mesas-only>
                 <div class="opt-row-txt">
                   <div class="opt-row-title">
                     Impresora de comandas:
@@ -2113,47 +2171,6 @@
                 </div>
               </div>
 
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Enviar comanda automáticamente al guardar
-                  </div>
-                  <div class="opt-row-sub">
-                    Si está activado, al guardar pedido en Mesas se envía
-                    comanda a cocina.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="autoComandaOnSaveToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-
-              <div class="opt-row opt-row-stack" data-admin-only>
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Familias para comandas (Mesas)
-                  </div>
-                  <div class="opt-row-sub">
-                    Solo estas familias se incluirán al imprimir comandas de
-                    cocina.
-                  </div>
-                </div>
-                <div class="opt-inline-fields">
-                  <select
-                    id="mesasComandaFamilySelect"
-                    class="opt-select"
-                  ></select>
-                  <button
-                    type="button"
-                    id="mesasComandaFamilyAddBtn"
-                    class="small-btn"
-                  >
-                    Añadir
-                  </button>
-                </div>
-                <div id="mesasComandaFamilyList" class="opt-chip-list"></div>
-              </div>
             </div>
           </section>
 
@@ -2163,6 +2180,13 @@
               <span>Báscula</span>
               <span class="opt-sec-chev">▾</span>
             </button>
+            <div class="opt-sec-preview">
+              <span
+                class="opt-preview-item"
+                data-toggle-id="scaleEnabledToggle"
+                >Activar</span
+              >, puerto, unidad de peso, modo de parser, calibracion
+            </div>
 
             <div class="opt-sec-b">
               <div class="opt-row">
@@ -2489,6 +2513,21 @@
               <span>Carrito</span>
               <span class="opt-sec-chev">▾</span>
             </button>
+            <div class="opt-sec-preview">
+              <span class="opt-preview-item" data-toggle-id="groupLinesToggle"
+                >Desagrupar lineas</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="cartDiscountToolsToggle"
+                >descuentos manuales</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="cartWidthControlsToggle"
+                >ancho</span
+              >, cliente por defecto
+            </div>
             <div class="opt-sec-b">
               <div class="opt-row">
                 <div class="opt-row-txt">
@@ -2564,6 +2603,9 @@
               <span>Tarifas</span>
               <span class="opt-sec-chev">▾</span>
             </button>
+            <div class="opt-sec-preview">
+              Crear/editar tarifas, descuentos, clientes asignados
+            </div>
             <div class="opt-sec-b">
               <div class="opt-row">
                 <div class="opt-row-txt">
@@ -2688,20 +2730,22 @@
                 </div>
 
                 <div class="opt-row-actions">
-                  <input
-                    id="tariffCustomerSearchInput"
-                    type="text"
-                    class="opt-input"
-                    placeholder="Buscar cliente..."
-                  />
-                  <button
-                    type="button"
-                    id="tariffCustomerSearchKeyboardBtn"
-                    class="small-btn"
-                    title="Teclado"
-                  >
-                    ⌨
-                  </button>
+                  <div class="input-clear-wrap">
+                    <input
+                      id="tariffCustomerSearchInput"
+                      type="text"
+                      class="opt-input"
+                      placeholder="Buscar cliente..."
+                    />
+                    <button
+                      type="button"
+                      id="tariffCustomerSearchClearBtn"
+                      class="input-clear-btn hidden"
+                      title="Limpiar búsqueda"
+                    >
+                      ✕
+                    </button>
+                  </div>
                   <button
                     type="button"
                     id="tariffCustomersSelectVisibleBtn"
@@ -2749,12 +2793,117 @@
             </div>
           </section>
 
+          <!-- MODO MESAS (ADMIN ONLY, solo clientes con Mesas contratado) -->
+          <section
+            class="opt-sec"
+            data-sec="mesas"
+            data-admin-only
+            data-mesas-only
+          >
+            <button type="button" class="opt-sec-h">
+              <span
+                >Modo Mesas <span class="opt-admin-pill">ADMIN</span>
+                <span class="opt-mesas-pill">MESAS</span></span
+              >
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-preview">
+              <span
+                class="opt-preview-item"
+                data-toggle-id="autoComandaOnSaveToggle"
+                >Comanda automatica</span
+              >, familias por comensales, familias para comanda
+            </div>
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Enviar comanda automáticamente al guardar
+                  </div>
+                  <div class="opt-row-sub">
+                    Si está activado, al guardar pedido en Mesas se envía
+                    comanda a cocina.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="autoComandaOnSaveToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="opt-row opt-row-stack">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Familias por comensales</div>
+                  <div class="opt-row-sub">
+                    Los productos de estas familias usarán automáticamente el
+                    número de comensales de la mesa como cantidad al añadirse.
+                  </div>
+                </div>
+                <div class="opt-inline-fields">
+                  <select
+                    id="mesasDinersFamilySelect"
+                    class="opt-select"
+                  ></select>
+                  <button
+                    type="button"
+                    id="mesasDinersFamilyAddBtn"
+                    class="small-btn"
+                  >
+                    Añadir
+                  </button>
+                </div>
+                <div id="mesasDinersFamilyList" class="opt-chip-list"></div>
+              </div>
+
+              <div class="opt-row opt-row-stack">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Familias para comandas</div>
+                  <div class="opt-row-sub">
+                    Solo estas familias se incluirán al imprimir comandas de
+                    cocina.
+                  </div>
+                </div>
+                <div class="opt-inline-fields">
+                  <select
+                    id="mesasComandaFamilySelect"
+                    class="opt-select"
+                  ></select>
+                  <button
+                    type="button"
+                    id="mesasComandaFamilyAddBtn"
+                    class="small-btn"
+                  >
+                    Añadir
+                  </button>
+                </div>
+                <div id="mesasComandaFamilyList" class="opt-chip-list"></div>
+              </div>
+            </div>
+          </section>
+
           <!-- PRODUCTOS (ADMIN ONLY) -->
           <section class="opt-sec" data-sec="productos" data-admin-only>
             <button type="button" class="opt-sec-h">
               <span>Productos <span class="opt-admin-pill">ADMIN</span></span>
               <span class="opt-sec-chev">▾</span>
             </button>
+            <div class="opt-sec-preview">
+              <span
+                class="opt-preview-item"
+                data-toggle-id="productStockToggle"
+                >Mostrar stock</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="productStockEditToggle"
+                >editar stock</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="parkStockWarningToggle"
+                >aviso al aparcar</span
+              >, orden y tamaño de tarjetas
+            </div>
             <div class="opt-sec-b">
               <div class="opt-row">
                 <div class="opt-row-txt">
@@ -2822,45 +2971,6 @@
                   <span class="slider"></span>
                 </label>
               </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Permitir cerrar con aparcados</div>
-                  <div class="opt-row-sub">
-                    Si hay tickets aparcados, permite cerrar caja mostrando una
-                    confirmación. Los tickets aparcados se conservan.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="allowCloseWithParkedToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="opt-row opt-row-stack">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Familias por comensales (Mesas)
-                  </div>
-                  <div class="opt-row-sub">
-                    Los productos de estas familias usarán automáticamente el
-                    número de comensales de la mesa como cantidad al añadirse.
-                  </div>
-                </div>
-                <div class="opt-inline-fields">
-                  <select
-                    id="mesasDinersFamilySelect"
-                    class="opt-select"
-                  ></select>
-                  <button
-                    type="button"
-                    id="mesasDinersFamilyAddBtn"
-                    class="small-btn"
-                  >
-                    Añadir
-                  </button>
-                </div>
-                <div id="mesasDinersFamilyList" class="opt-chip-list"></div>
-              </div>
-
               <div class="opt-row">
                 <div class="opt-row-txt">
                   <div class="opt-row-title">Aviso de stock al aparcar</div>
@@ -2983,7 +3093,33 @@
               <span>Cierre de Caja <span class="opt-admin-pill">ADMIN</span></span>
               <span class="opt-sec-chev">▾</span>
             </button>
+            <div class="opt-sec-preview">
+              <span
+                class="opt-preview-item"
+                data-toggle-id="allowCloseWithParkedToggle"
+                >Cerrar con aparcados</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="printCajaAutoLogToggle"
+                >registro de avisos</span
+              >
+              en el cierre
+            </div>
             <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Permitir cerrar con aparcados</div>
+                  <div class="opt-row-sub">
+                    Si hay tickets aparcados, permite cerrar caja mostrando una
+                    confirmación. Los tickets aparcados se conservan.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="allowCloseWithParkedToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
               <div class="opt-row">
                 <div class="opt-row-txt">
                   <div class="opt-row-title">
@@ -3028,6 +3164,30 @@
               >
               <span class="opt-sec-chev">▾</span>
             </button>
+            <div class="opt-sec-preview">
+              Mostrar:
+              <span
+                class="opt-preview-item"
+                data-toggle-id="infoBarShowTerminalToggle"
+                >terminal</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="infoBarShowAgentToggle"
+                >agente</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="infoBarShowUserToggle"
+                >usuario</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="infoBarShowCashToggle"
+                >caja</span
+              >
+              y acciones alternativas
+            </div>
             <div class="opt-sec-b">
               <div class="opt-row">
                 <div class="opt-row-txt">
@@ -3119,6 +3279,9 @@
               <span>Terminales <span class="opt-admin-pill">ADMIN</span></span>
               <span class="opt-sec-chev">▾</span>
             </button>
+            <div class="opt-sec-preview">
+              Visibilidad de familias de productos por terminal
+            </div>
             <div class="opt-sec-b">
               <div class="opt-row">
                 <div class="opt-row-txt">
@@ -3150,6 +3313,16 @@
               <span>Pantalla <span class="opt-admin-pill">ADMIN</span></span>
               <span class="opt-sec-chev">▾</span>
             </button>
+            <div class="opt-sec-preview">
+              <span class="opt-preview-item" data-toggle-id="kioskToggle"
+                >Modo kiosk</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="customerDisplayToggle"
+                >pantalla de cliente</span
+              >
+            </div>
             <div class="opt-sec-b">
               <div class="opt-row">
                 <div class="opt-row-txt">
@@ -3187,6 +3360,11 @@
               <span>Inicio <span class="opt-admin-pill">ADMIN</span></span>
               <span class="opt-sec-chev">▾</span>
             </button>
+            <div class="opt-sec-preview">
+              <span class="opt-preview-item" data-toggle-id="autostartToggle"
+                >Iniciar el TPV al encender el PC</span
+              >
+            </div>
             <div class="opt-sec-b">
               <div class="opt-row">
                 <div class="opt-row-txt">
@@ -3353,21 +3531,30 @@
           Nombre del pedido/ticket
         </label>
 
-        <input
-          id="parkNameInput"
-          type="text"
-          placeholder="Ej: Mesa 5, Barra, Pedido Ana..."
-          style="
-            width: 100%;
-            padding: 10px 12px;
-            border-radius: 8px;
-            border: 1px solid #ccc;
-            font-size: 16px;
-            margin-bottom: 12px;
-            box-sizing: border-box;
-          "
-          autocomplete="off"
-        />
+        <div class="input-clear-wrap" style="margin-bottom: 12px">
+          <input
+            id="parkNameInput"
+            type="text"
+            placeholder="Ej: Mesa 5, Barra, Pedido Ana..."
+            style="
+              width: 100%;
+              padding: 10px 34px 10px 12px;
+              border-radius: 8px;
+              border: 1px solid #ccc;
+              font-size: 16px;
+              box-sizing: border-box;
+            "
+            autocomplete="off"
+          />
+          <button
+            type="button"
+            id="parkNameClearBtn"
+            class="input-clear-btn hidden"
+            title="Borrar"
+          >
+            ✕
+          </button>
+        </div>
 
         <label
           style="
@@ -3380,39 +3567,34 @@
           Observaciones (opcional)
         </label>
 
-        <input
-          id="parkObsInput"
-          type="text"
-          placeholder="Ej: sin cebolla, para llevar, cliente habitual..."
-          style="
-            width: 100%;
-            padding: 10px 12px;
-            border-radius: 8px;
-            border: 1px solid #ccc;
-            font-size: 16px;
-          "
-          autocomplete="off"
-        />
+        <div class="input-clear-wrap">
+          <input
+            id="parkObsInput"
+            type="text"
+            placeholder="Ej: sin cebolla, para llevar, cliente habitual..."
+            style="
+              width: 100%;
+              padding: 10px 34px 10px 12px;
+              border-radius: 8px;
+              border: 1px solid #ccc;
+              font-size: 16px;
+              box-sizing: border-box;
+            "
+            autocomplete="off"
+          />
+          <button
+            type="button"
+            id="parkObsClearBtn"
+            class="input-clear-btn hidden"
+            title="Borrar"
+          >
+            ✕
+          </button>
+        </div>
 
         <div id="parkQuickFlagsWrap" class="park-quick-flags hidden">
           <div class="park-quick-flags-title">Avisos rapidos de mesa</div>
           <div id="parkQuickFlagsList" class="park-quick-flags-list"></div>
-        </div>
-
-        <div
-          style="
-            display: flex;
-            gap: 8px;
-            justify-content: flex-end;
-            margin-top: 10px;
-          "
-        >
-          <button id="parkNameKeyboardBtn" type="button" class="cart-btn">
-            ⌨ Nombre
-          </button>
-          <button id="parkObsKeyboardBtn" type="button" class="cart-btn">
-            ⌨ Observación
-          </button>
         </div>
 
         <div class="dialog-actions">

@@ -8,6 +8,36 @@
       "changes": []
     },
     {
+      "version": "0.2.16",
+      "date": "2026-08-11",
+      "title": "Release 0.2.16",
+      "changes": [
+        "Varios TPV a la vez: al usar 'Limpiar cobrados' en un TPV, el resto de TPV podian seguir mostrando esos mismos tickets como cobrados durante horas, como si no se hubieran borrado. Corregido para que se refleje en el resto de TPV en segundos.",
+        "Modo Mesas: mientras se estaba en 'Mapa de Salas' o 'Diseñar Salas' (sin estar en 'Transacciones'), los tickets aparcados de las mesas podian desaparecer solos cada pocos segundos (parecia que se habian cobrado o borrado en otro TPV sin haberlo hecho). Corregido.",
+        "Aparcados: si un borrado tenia un guardado antiguo pendiente en cola (por ejemplo, un aviso de bloqueo de caja que fallo justo antes), el borrado se aplicaba bien pero el ticket podia 'revivir' solo unos segundos despues por ese guardado atrasado. Corregido: borrar limpia tambien cualquier guardado pendiente de ese mismo ticket.",
+        "Teclado en pantalla: en todos los campos de texto que aun tenian un boton aparte para abrir el teclado (buscador de productos, buscador de tickets, buscador de aparcados, buscador de clientes de tarifas, email de activacion, motivo e importe de movimiento de caja), ahora se abre directamente al tocar el propio campo. Menos botones, mas natural.",
+        "Conexion: en algunos casos el TPV se quedaba diciendo 'sin internet' y recuperandose en bucle sin parar, aunque la conexion funcionara perfectamente. Era el propio programa saturandose a si mismo (una recarga completa de datos podia hacer fallar por tiempo la comprobacion de conexion, lo que disparaba otra recarga completa, y asi sin fin). Corregido.",
+        "Conexion: los avisos automaticos que se repiten cada 10 segundos (stock, aparcados, estado de caja compartida) arrancaban todos en el mismo instante, agrupando muchas peticiones a la vez y aumentando el riesgo de 'sin internet' falso. Ahora arrancan repartidos en el tiempo.",
+        "Opciones: el modal se quedaba invisible mientras cargaba todos sus ajustes (varios contra el servidor), asi que si el servidor iba lento, parecia que 'Opciones' no reaccionaba durante varios segundos. Ahora el modal aparece al instante y los ajustes se van rellenando.",
+        "Aparcados: al encender el TPV, el primer borrado de un aparcado sin cobrar siempre preguntaba si devolver el stock, aunque esa pregunta estuviera desactivada en Opciones → Productos. Corregido: ahora respeta lo guardado desde el primer borrado, sin necesidad de haber entrado antes en Opciones.",
+        "Buscador de productos: la 'X' para borrar la busqueda aparecia siempre, incluso con el campo vacio. Ahora solo aparece cuando hay algo escrito.",
+        "Teclado en pantalla: tocar fuera para cerrarlo borraba lo que se acababa de escribir y volvia a dejar el texto anterior. Ahora tocar fuera mantiene lo escrito (para descartar cambios ya existe la tecla 'Cancelar').",
+        "Se ha añadido una 'X' para vaciar de un toque (sin abrir el teclado) en varios campos de texto que no la tenian: nombre y observaciones al aparcar, buscador de clientes de tarifas, email de activacion, motivo de movimiento de caja, observaciones de cobro/comanda/apertura de caja y nombre de reserva de mesa.",
+        "Buscadores: ahora ignoran mayusculas y acentos, asi buscar 'jamon' encuentra 'jamón' aunque el teclado no tenga tildes. Aplica a productos, tickets, aparcados, clientes de tarifas y selector de clientes.",
+        "Cambiar de terminal o de agente (botones de arriba) podia tardar varios segundos en abrir el selector porque esperaba a refrescar datos del servidor antes de mostrar nada. Ahora se abre al instante con los datos que ya se tenian y se actualiza solo si hace falta (si se cerraba muy rapido, a veces se reabria solo unos segundos despues; tambien corregido).",
+        "El modal de 'Tickets' no se cerraba al tocar fuera, a diferencia del resto de modales de la app. Corregido.",
+        "Buscador de aparcados: el campo de busqueda no tenia ningun estilo (se veia distinto y mas soso que el de productos). Ahora tiene el mismo aspecto redondeado.",
+        "Opciones: mientras cargan los ajustes ahora se muestra un aviso de 'Cargando opciones...' y no se puede tocar nada del menu, para evitar que un cambio hecho demasiado pronto se pierda al terminar de cargar.",
+        "Opciones: los ajustes de modo Mesas (comanda automatica, familias por comensales, familias para comanda) estaban repartidos entre 'Productos' e 'Impresora' y los veia cualquier cliente aunque no tuviera el modo Mesas contratado. Ahora tienen su propia seccion 'Modo Mesas', que solo aparece si el modo Mesas esta activo (igual que el boton de 'ir a modo mesas').",
+        "Opciones: 'Permitir cerrar con aparcados' estaba dentro de 'Productos' sin tener que ver con productos. Movido a 'Cierre de Caja'.",
+        "Opciones: cada apartado (Productos, Caja, Impresora...) muestra ahora una lista corta de lo que contiene mientras esta cerrado, para saber que hay dentro sin tener que abrirlo.",
+        "Opciones: 'Modo Mesas' se ha subido justo encima de 'Productos' y ahora tiene tambien una etiqueta amarilla 'MESAS' para distinguirlo de un vistazo del resto de apartados de administrador.",
+        "Opciones: al tocar la lista corta de un apartado cerrado (la zona de texto bajo el nombre) no se abria, solo tocando el titulo. Ahora toda la zona abre/cierra el apartado.",
+        "Opciones: en la lista corta de cada apartado, los ajustes que ya estan activados aparecen en verde, para saber de un vistazo que esta encendido sin abrir el apartado.",
+        "Actualizaciones: al cambiar la frecuencia de comprobacion (o activar el aviso), la cuenta atras siempre mostraba 'proxima en ~5 minutos' sin importar lo elegido, hasta que pasaban esos 5 minutos. Corregido: ahora refleja la frecuencia elegida al instante."
+      ]
+    },
+    {
       "version": "0.2.15",
       "date": "2026-08-10",
       "title": "Release 0.2.15",

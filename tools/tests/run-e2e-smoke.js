@@ -770,7 +770,12 @@ async function runCartAdvancedAssertions(win) {
         refreshPriceEditToggleUI();
     } catch {}
 
-    const sec = document.querySelector("#optionsOverlay [data-admin-only]");
+    // "Modo Mesas" es admin-only Y mesas-only a la vez: si el cliente de
+    // prueba no tiene Mesas activo, ese seguira oculto aunque isAdmin=true.
+    // Se usa un admin-only que no dependa de Mesas para esta comprobacion.
+    const sec = document.querySelector(
+      '#optionsOverlay [data-admin-only]:not([data-mesas-only])',
+    );
     if (!sec) return false;
     const st = window.getComputedStyle(sec);
     return st.display !== "none";

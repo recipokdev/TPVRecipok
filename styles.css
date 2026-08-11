@@ -1484,6 +1484,60 @@ body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode)
   transform: translateY(-1px);
 }
 
+/* Boton "X" generico para vaciar un input/textarea sin tener que abrir el
+   teclado en pantalla. Envolver el campo en .input-clear-wrap y colocar el
+   boton como hermano con clase .input-clear-btn (empieza oculto con
+   .hidden; el JS lo muestra/oculta segun si el campo tiene texto). */
+.input-clear-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+}
+
+.input-clear-wrap input,
+.input-clear-wrap textarea {
+  width: 100%;
+  padding-right: 34px;
+}
+
+.input-clear-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: #e5e7eb;
+  color: #374151;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.input-clear-wrap textarea ~ .input-clear-btn {
+  top: 16px;
+  transform: none;
+}
+
+.input-clear-btn:hover {
+  background: #d1d5db;
+}
+
+body.theme-dark .input-clear-btn {
+  background: #2a3352;
+  color: #cfd8ff;
+}
+
+body.theme-dark .input-clear-btn:hover {
+  background: #37416b;
+}
+
 .product-filters-bar {
   display: flex;
   align-items: center;
@@ -4883,6 +4937,30 @@ textarea:focus {
   padding-right: 42px;
 }
 
+/* El buscador de aparcados no tenia ninguna regla propia (a diferencia del
+   de tickets, que ya usa el bloque de arriba): quedaba con el input suelto
+   sin estilo, muy distinto al buscador de productos. Se le da el mismo
+   aspecto "pildora" que .search-bar. */
+#parkedToolbar .tickets-search-wrap {
+  background: #ffffff;
+  border-radius: 999px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  padding: 3px 10px;
+}
+
+#parkedToolbar .tickets-search-wrap input#parkedSearch {
+  width: 100%;
+  border: none;
+  outline: none;
+  font-size: 14px;
+  padding: 6px 42px 6px 4px;
+  background: transparent;
+}
+
+#parkedToolbar .tickets-search-wrap input#parkedSearch::placeholder {
+  color: #9aa5c4;
+}
+
 .tickets-search-clear {
   position: absolute;
   right: 10px;
@@ -6937,6 +7015,32 @@ body.theme-dark #parkObsOverlay .park-quick-flag.is-active {
   display: block;
 }
 
+/* Lista corta de lo que hay dentro de cada seccion, visible solo mientras
+   esta colapsada, para saber que hay sin tener que abrirla. */
+.opt-sec-preview {
+  padding: 0 14px 10px;
+  margin-top: -4px;
+  font-size: 12px;
+  color: #8a8f98;
+  background: #fafafa;
+  cursor: pointer;
+}
+
+.opt-sec[data-open="1"] .opt-sec-preview {
+  display: none;
+}
+
+/* Items de la lista corta que corresponden a un interruptor real: se
+   ponen en verde cuando ese interruptor esta activado. */
+.opt-preview-item.is-on {
+  color: #16a34a;
+  font-weight: 600;
+}
+
+body.theme-dark .opt-preview-item.is-on {
+  color: #4ade80;
+}
+
 .opt-admin-pill {
   font-size: 10px;
   padding: 2px 6px;
@@ -6946,6 +7050,17 @@ body.theme-dark #parkObsOverlay .park-quick-flag.is-active {
   color: #2563eb;
   font-weight: 700;
   margin-left: 8px;
+}
+
+.opt-mesas-pill {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(217, 119, 6, 0.35);
+  background: rgba(217, 119, 6, 0.12);
+  color: #b45309;
+  font-weight: 700;
+  margin-left: 4px;
 }
 
 .opt-row {
@@ -7155,6 +7270,35 @@ body.theme-dark #parkObsOverlay .park-quick-flag.is-active {
 
 .options-readonly-note.hidden {
   display: none;
+}
+
+.opt-loading-banner {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #eef3ff;
+  border: 1px solid #cfe0ff;
+  color: #2952a3;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.opt-loading-banner.hidden {
+  display: none;
+}
+
+/* Mientras cargan los ajustes, se atenua y bloquea el acordeon para que no
+   se pueda tocar un interruptor justo antes de que la carga real lo
+   sobreescriba con el valor guardado. */
+.opt-acc.opt-loading {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+body.theme-dark .opt-loading-banner {
+  background: #1b2540;
+  border-color: #2b3a63;
+  color: #cfe0ff;
 }
 
 .cart-line-packincludes {
@@ -8383,6 +8527,11 @@ body.theme-dark .opt-sec-h {
   color: #e5e7eb;
 }
 
+body.theme-dark .opt-sec-preview {
+  background: #1f2937;
+  color: #9aa4b2;
+}
+
 body.theme-dark .opt-row + .opt-row {
   border-top-color: #334155;
 }
@@ -8500,6 +8649,24 @@ body.theme-dark .tickets-caja-empty {
 body.theme-dark .tickets-search-clear {
   background: #374151;
   color: #e5e7eb;
+}
+
+body.theme-dark #parkedToolbar .tickets-search-wrap {
+  background: #111827;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  border: 1px solid #243042;
+}
+
+body.theme-dark #parkedToolbar .tickets-search-wrap input#parkedSearch {
+  background: transparent;
+  color: #e5e7eb;
+}
+
+body.theme-dark
+  #parkedToolbar
+  .tickets-search-wrap
+  input#parkedSearch::placeholder {
+  color: #9ca3af;
 }
 
 body.theme-dark .tickets-mini-action {

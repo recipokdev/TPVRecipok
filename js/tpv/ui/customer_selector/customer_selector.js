@@ -55,6 +55,20 @@
     ],
   ];
 
+  // Minusculas y sin acentos, asi "jose" encuentra "José" (teclado sin
+  // tildes). Copia local a proposito: este selector es un componente aparte
+  // y no depende de renderer.js para funcionar.
+  var CUSTOMER_SEARCH_DIACRITICS_RE = new RegExp(
+    "[" + String.fromCharCode(0x0300) + "-" + String.fromCharCode(0x036f) + "]",
+    "g",
+  );
+  function normalizeCustomerSearchText(str) {
+    return String(str || "")
+      .normalize("NFD")
+      .replace(CUSTOMER_SEARCH_DIACRITICS_RE, "")
+      .toLowerCase();
+  }
+
   const CSX = {
     _cfg: null,
     _customers: [],
@@ -628,17 +642,16 @@
       const foot = this._els.listCount;
       if (!body) return;
 
-      const text = String(term || "")
-        .trim()
-        .toLowerCase();
+      const text = normalizeCustomerSearchText(String(term || "").trim());
       const selectedCod = String(
         this._selected?.codcliente || this._defaultCod,
       );
 
       const list = (this._customers || []).filter((customer) => {
         if (!text) return true;
-        const haystack =
-          `${customer.codcliente} ${customer.nombre} ${customer.razonsocial} ${customer.cifnif}`.toLowerCase();
+        const haystack = normalizeCustomerSearchText(
+          `${customer.codcliente} ${customer.nombre} ${customer.razonsocial} ${customer.cifnif}`,
+        );
         return haystack.includes(text);
       });
 

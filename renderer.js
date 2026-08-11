@@ -540,7 +540,6 @@ window.__TPV_GUARDS__ = () => {
 // ===== [06] Referencias DOM base =====
 const searchInput = document.getElementById("searchInput");
 const searchClearBtn = document.getElementById("searchClearBtn");
-const searchKeyboardBtn = document.getElementById("searchKeyboardBtn");
 const productsStockOnlyToggle = document.getElementById(
   "productsStockOnlyToggle",
 );
@@ -645,9 +644,6 @@ const cashDirectTotalWrap = document.getElementById("cashDirectTotalWrap");
 const cashDirectTotalEl = document.getElementById("cashDirectTotal");
 const cashDirectTotalClearBtn = document.getElementById(
   "cashDirectTotalClearBtn",
-);
-const cashDirectTotalKeyboardBtn = document.getElementById(
-  "cashDirectTotalKeyboardBtn",
 );
 
 // ===== [08] Caja: movimientos manuales (entrada/salida) =====
@@ -786,6 +782,7 @@ let __parkedSyncDrainInFlight = false;
 let __parkedLegacyMetadataMigrationTried = false;
 
 let __parkedReservationsRefreshTimer = null;
+let __parkedReservationsRefreshStartTimeout = null;
 let __parkedReservationsRefreshInFlight = false;
 let __parkedBurstRefreshTimers = [];
 let __parkedSyncManualInFlight = false;
@@ -798,17 +795,21 @@ let __parkedSyncLastErrorAt = 0;
 let __parkedSyncLastErrorMsg = "";
 const PARKED_LOCAL_PREFER_MS = 120000;
 // Gracia para conservar en local un ticket COBRADO que el remoto ya no devuelve.
-// Antes eran 2 min: si el servidor no persiste "paid" (o borra la reserva tras
-// cobrar), los cobrados desaparecian solos del modal a los 2 minutos aunque el
-// usuario no los hubiera limpiado (perdida de datos visible en un solo TPV). Se
-// sube a 12 h para que aguanten todo el turno; "Limpiar cobrados" (tombstone)
-// sigue quitandolos al instante, y la limpieza hecha en otro TPV converge igual
-// (solo un poco mas tarde).
-const PARKED_PAID_LOCAL_GRACE_MS = 12 * 60 * 60 * 1000;
+// Solo cubre el tiempo real de ida y vuelta a la red tras cobrar (por eso es
+// corta, igual que PARKED_LOCAL_PREFER_MS para pendientes) — NO es una
+// politica de retencion. Antes estaba en 12 horas para tapar un sintoma
+// distinto (el servidor a veces no persistia "paid" de verdad), pero eso ya
+// esta arreglado de raiz en el servidor (un cobro confirmado ya no se puede
+// perder ni sobreescribir). Con 12h, borrar cobrados en un TPV ("Limpiar
+// cobrados") podia tardar hasta 12 horas en reflejarse en el resto de TPV,
+// que seguian mostrando esos tickets como si nunca se hubieran borrado.
+const PARKED_PAID_LOCAL_GRACE_MS = 2 * 60 * 1000;
 const PARKED_CLOSING_LOCK_MAX_MS = 3 * 60 * 1000;
 let __sharedCajaHealthTimer = null;
+let __sharedCajaHealthStartTimeout = null;
 let __sharedCajaHealthInFlight = false;
 let __sharedCajaStateTimer = null;
+let __sharedCajaStateStartTimeout = null;
 let __sharedCajaStateInFlight = false;
 let __sharedCajaLastKnownOpenId = null;
 let __terminalPresenceTimer = null;
@@ -1145,6 +1146,7 @@ async function confirmIfCartExceedsVisibleStock(cartSnapshot) {
 // ===== [07] Refrescos automaticos de datos (stock, etc.) =====
 
 let __stockRefreshTimer = null;
+let __stockRefreshStartTimeout = null;
 let __stockRefreshInFlight = false;
 
 async function runProductsStockRefreshOnce() {
@@ -1166,18 +1168,31 @@ async function runProductsStockRefreshOnce() {
   }
 }
 
+// Los 4 monitores de refresco cada 10s (stock, aparcados, estado de caja
+// compartida, salud de caja compartida) arrancan todos juntos justo tras
+// abrir/recuperar caja. Sin escalonar, sus peticiones caen siempre en el
+// mismo instante cada 10s, saturando el límite de conexiones concurrentes
+// del navegador y provocando falsos "sin conexión". Cada start...() retrasa
+// su primer disparo un múltiplo distinto de AUTO_REFRESH_STAGGER_MS.
+const AUTO_REFRESH_STAGGER_MS = 2500;
+
 function startProductsStockAutoRefresh() {
   stopProductsStockAutoRefresh();
 
-  // primer refresh inmediato
-  runProductsStockRefreshOnce().catch(() => {});
-
-  __stockRefreshTimer = setInterval(async () => {
-    await runProductsStockRefreshOnce();
-  }, 10000); // 10 segundos
+  __stockRefreshStartTimeout = setTimeout(() => {
+    __stockRefreshStartTimeout = null;
+    runProductsStockRefreshOnce().catch(() => {});
+    __stockRefreshTimer = setInterval(async () => {
+      await runProductsStockRefreshOnce();
+    }, 10000); // 10 segundos
+  }, 0);
 }
 
 function stopProductsStockAutoRefresh() {
+  if (__stockRefreshStartTimeout) {
+    clearTimeout(__stockRefreshStartTimeout);
+    __stockRefreshStartTimeout = null;
+  }
   if (__stockRefreshTimer) {
     clearInterval(__stockRefreshTimer);
     __stockRefreshTimer = null;
@@ -1511,14 +1526,6 @@ function syncCashDirectClearButtonVisibility() {
 }
 
 function bindCashDirectTotalInput() {
-  if (cashDirectTotalKeyboardBtn && !cashDirectTotalKeyboardBtn.dataset.bound) {
-    cashDirectTotalKeyboardBtn.dataset.bound = "1";
-
-    cashDirectTotalKeyboardBtn.onclick = () => {
-      openCashDirectTotalNumPad();
-    };
-  }
-
   if (cashDirectTotalEl && !cashDirectTotalEl.dataset.bound) {
     cashDirectTotalEl.dataset.bound = "1";
 
@@ -2264,9 +2271,7 @@ function getTariffEditBaseline(codtarifa) {
 
 function getTariffCustomerSearchText() {
   const input = document.getElementById("tariffCustomerSearchInput");
-  return String(input?.value || "")
-    .trim()
-    .toLowerCase();
+  return normalizeSearchText(String(input?.value || "").trim());
 }
 
 function getAssignedCustomerSetForTariff(codtarifa) {
@@ -3252,7 +3257,7 @@ async function renderTariffCustomerSelectForTariff(codtarifa, opts = {}) {
 
   const visible = customers.filter((c) => {
     if (!search) return true;
-    const hay = `${c.codcliente} ${c.nombre}`.toLowerCase();
+    const hay = normalizeSearchText(`${c.codcliente} ${c.nombre}`);
     return hay.includes(search);
   });
 
@@ -3688,9 +3693,6 @@ function bindTariffOptionsOnce() {
   const customerSearchInput = document.getElementById(
     "tariffCustomerSearchInput",
   );
-  const customerSearchKbBtn = document.getElementById(
-    "tariffCustomerSearchKeyboardBtn",
-  );
   const selectVisibleBtn = document.getElementById(
     "tariffCustomersSelectVisibleBtn",
   );
@@ -3745,10 +3747,10 @@ function bindTariffOptionsOnce() {
     window.TPV_QWERTY?.openForInput?.(customerSearchInput, "text");
   });
 
-  customerSearchKbBtn?.addEventListener("click", () => {
-    if (!customerSearchInput) return;
-    window.TPV_QWERTY?.openForInput?.(customerSearchInput, "text");
-  });
+  wireInputClearButton(
+    customerSearchInput,
+    document.getElementById("tariffCustomerSearchClearBtn"),
+  );
 
   selectVisibleBtn?.addEventListener("click", async () => {
     const cod = getSelectedTariffCodeInOptions();
@@ -5222,15 +5224,28 @@ function bindInfoBarVisibilityOnce() {
 
   infoBarAltTerminalBtn?.addEventListener("click", async () => {
     if (TPV_LOADING) return;
-    await refreshTerminalsAndAgents();
+    // Mostrar YA con la lista que ya tengamos en memoria (normalmente
+    // fresca, cargada al iniciar sesion) y refrescar en segundo plano: antes
+    // se esperaba a la respuesta del servidor para mostrar el modal, y si
+    // iba lento parecia que el boton no hacia nada durante varios segundos.
     showTerminalOverlay("terminalSwitch");
+    refreshTerminalsAndAgents()
+      .then(() => {
+        // Si el usuario ya cerro el modal mientras refrescaba, no reabrirlo solo.
+        if (isTerminalOverlayCurrentlyOpen()) showTerminalOverlay("terminalSwitch");
+      })
+      .catch(() => {});
   });
 
   infoBarAltAgentBtn?.addEventListener("click", async () => {
     if (TPV_LOADING) return;
     if (!hasActiveLoginSession()) return;
-    await refreshTerminalsAndAgents();
     showTerminalOverlay("agentSwitch");
+    refreshTerminalsAndAgents()
+      .then(() => {
+        if (isTerminalOverlayCurrentlyOpen()) showTerminalOverlay("agentSwitch");
+      })
+      .catch(() => {});
   });
 
   infoBarAltUserBtn?.addEventListener("click", async () => {
@@ -5910,8 +5925,12 @@ if (agentMissingBadgeEl) {
   agentMissingBadgeEl.addEventListener("click", async () => {
     if (TPV_LOADING) return;
     if (!hasActiveLoginSession()) return;
-    await refreshTerminalsAndAgents();
     showTerminalOverlay("agentSwitch");
+    refreshTerminalsAndAgents()
+      .then(() => {
+        if (isTerminalOverlayCurrentlyOpen()) showTerminalOverlay("agentSwitch");
+      })
+      .catch(() => {});
   });
 }
 
@@ -5982,7 +6001,14 @@ if (terminalNameEl) {
   terminalNameEl.addEventListener("click", async () => {
     if (TPV_LOADING) return;
 
-    // Refrescar datos antes de decidir
+    // Si ya sabiamos (por la ultima carga) que hay mas de un terminal,
+    // abrimos YA con esos datos y refrescamos en segundo plano — antes se
+    // esperaba siempre a la respuesta del servidor antes de mostrar nada,
+    // y si iba lento el boton parecia no hacer nada durante varios segundos.
+    const canSwitchNow = Array.isArray(terminals) && terminals.length > 1;
+    const openedImmediately = canSwitchNow;
+    if (openedImmediately) showTerminalOverlay("terminalSwitch");
+
     await refreshTerminalsAndAgents();
 
     const canSwitch = Array.isArray(terminals) && terminals.length > 1;
@@ -5991,7 +6017,11 @@ if (terminalNameEl) {
     // Si hay 0/1 terminal: no hacemos nada (y ni siquiera parece botón)
     if (!canSwitch) return;
 
-    // Abrimos overlay en modo "solo cambiar terminal"
+    // Si ya lo habiamos abierto y el usuario lo cerro mientras refrescaba,
+    // no reabrirlo solo.
+    if (openedImmediately && !isTerminalOverlayCurrentlyOpen()) return;
+
+    // Abrimos (o re-renderizamos si ya estaba abierto) en modo "solo cambiar terminal"
     showTerminalOverlay("terminalSwitch");
   });
 }
@@ -8669,6 +8699,9 @@ function refreshMesasTransSidebar() {
   if (reservaNameEl) {
     reservaNameEl.value = reservationName;
     reservaNameEl.disabled = !uid;
+    document
+      .getElementById("mesasTransReservaNameClearBtn")
+      ?.classList.toggle("hidden", !String(reservationName || "").trim());
   }
   if (reservaTimeEl) {
     reservaTimeEl.value = reservationTime;
@@ -9339,6 +9372,16 @@ function bindMesasInlineEventsOnce() {
     if (typeof openQwertyForInput !== "function") return;
     openQwertyForInput(mesasTransReservaName, "text");
   });
+  wireInputClearButton(
+    mesasTransReservaName,
+    document.getElementById("mesasTransReservaNameClearBtn"),
+  );
+  // La X solo dispara "input" (igual que un buscador); este campo persiste
+  // el nombre en "change"/"blur", asi que forzamos el commit tambien al
+  // vaciar con la X, o el borrado no se guardaria hasta perder el foco.
+  document
+    .getElementById("mesasTransReservaNameClearBtn")
+    ?.addEventListener("click", onReservaMetaCommit);
   mesasTransReservaTime?.addEventListener("change", onReservaMetaCommit);
   mesasTransReservaTime?.addEventListener("blur", onReservaMetaCommit);
 
@@ -9670,17 +9713,29 @@ function initThemeMode() {
   applyThemeMode(saved, { persist: false });
 }
 
+// Aplica los dos filtros de visibilidad de Opciones a la vez (no por
+// separado): admin-only y mesas-only. Un elemento puede tener uno, otro o
+// ambos atributos; si se calcularan por separado, cada funcion pisaria el
+// display que puso la otra en el elemento que tiene los dos (la seccion
+// "Modo Mesas" es admin-only Y mesas-only).
 function applyAdminOnlyUI() {
   const isAdmin = !!window.TPV_STATE?.isAdmin;
-  const els = document.querySelectorAll("[data-admin-only]");
+  const mesasEnabled = !!MESAS_MODULE_ENABLED;
+  const els = document.querySelectorAll(
+    "[data-admin-only], [data-mesas-only]",
+  );
 
   debugLog("[ADMIN] applyAdminOnlyUI", {
     isAdmin,
-    adminOnlyCount: els.length,
+    mesasEnabled,
+    gatedCount: els.length,
   });
 
   els.forEach((el) => {
-    el.style.display = isAdmin ? "" : "none";
+    const needsAdmin = el.hasAttribute("data-admin-only");
+    const needsMesas = el.hasAttribute("data-mesas-only");
+    const shouldShow = (!needsAdmin || isAdmin) && (!needsMesas || mesasEnabled);
+    el.style.display = shouldShow ? "" : "none";
   });
 
   if (!isAdmin && MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "diseno") {
@@ -10315,7 +10370,7 @@ function renderProducts() {
   grid.innerHTML = "";
   refreshProductReorderModeNotice();
 
-  const term = (searchTerm || "").trim().toLowerCase();
+  const term = normalizeSearchText((searchTerm || "").trim());
 
   const terminalId = currentTerminal?.id;
   const mode = getTerminalModeSync(terminalId);
@@ -10361,8 +10416,8 @@ function renderProducts() {
   // Filtro por buscador
   if (term) {
     filtered = filtered.filter((p) => {
-      const n1 = String(p.name || "").toLowerCase();
-      const n2 = String(p.secondaryName || "").toLowerCase();
+      const n1 = normalizeSearchText(p.name);
+      const n2 = normalizeSearchText(p.secondaryName);
       return n1.includes(term) || n2.includes(term);
     });
   }
@@ -10598,6 +10653,20 @@ function renderMainUI(force = false) {
   bindCartCustomerUiEvents();
 }
 
+// Normaliza texto para comparar en buscadores: minusculas y sin acentos, asi
+// "jamon" encuentra "jamón" (util para teclados sin tildes). Se usa en todos
+// los buscadores de la app (productos, tickets, aparcados, clientes...).
+const SEARCH_DIACRITICS_RE = new RegExp(
+  "[" + String.fromCharCode(0x0300) + "-" + String.fromCharCode(0x036f) + "]",
+  "g",
+);
+function normalizeSearchText(str) {
+  return String(str || "")
+    .normalize("NFD")
+    .replace(SEARCH_DIACRITICS_RE, "")
+    .toLowerCase();
+}
+
 function eur2(n) {
   return (
     Number(n || 0)
@@ -10606,18 +10675,51 @@ function eur2(n) {
   );
 }
 
+// Boton "X" generico para vaciar un input/textarea sin abrir el teclado.
+// Requiere el HTML ".input-clear-wrap" (ver styles.css). Se usa en varios
+// campos de texto sueltos que no son un buscador con su propia logica.
+// Ojo: NO se hace foco en el input tras limpiar. Algunos campos abren el
+// teclado en pantalla tambien con el evento "focus" (no solo "click"), y
+// forzar el foco aqui volveria a abrirlo justo despues de cerrarlo con la X.
+function wireInputClearButton(inputEl, btnEl) {
+  if (!inputEl || !btnEl) return () => {};
+
+  const sync = () => {
+    btnEl.classList.toggle("hidden", !String(inputEl.value || "").trim());
+  };
+
+  inputEl.addEventListener("input", sync);
+  btnEl.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    inputEl.value = "";
+    inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+    sync();
+  });
+
+  sync();
+  return sync;
+}
+
 // ===== [08] UI venta: buscador =====
+function syncSearchClearBtnVisibility() {
+  searchClearBtn?.classList.toggle("hidden", !searchInput?.value);
+}
+
 if (searchInput) {
   searchInput.addEventListener("input", () => {
     searchTerm = searchInput.value || "";
+    syncSearchClearBtnVisibility();
     renderProducts();
   });
 }
 
 if (searchClearBtn) {
+  syncSearchClearBtnVisibility();
   searchClearBtn.onclick = () => {
     searchInput.value = "";
     searchTerm = "";
+    syncSearchClearBtnVisibility();
     renderProducts();
   };
 }
@@ -11474,6 +11576,7 @@ async function restoreRuntimeCartSnapshot({ force = false, mode } = {}) {
     const restoredSearch = String(uiSnapshot?.searchTerm ?? "");
     searchTerm = restoredSearch;
     if (searchInput) searchInput.value = restoredSearch;
+    syncSearchClearBtnVisibility();
 
     PENDING_RUNTIME_UI_RESTORE = {
       optionsOpen: !!uiSnapshot?.optionsOpen,
@@ -14223,11 +14326,10 @@ window.TPV_QWERTY = {
   close: () => closeQwerty(),
 };
 
-if (searchKeyboardBtn) {
-  searchKeyboardBtn.onclick = () => {
-    openQwertyForInput(searchInput);
-  };
-}
+// Abre el teclado en pantalla al tocar el propio campo, sin boton aparte.
+searchInput?.addEventListener("click", () => {
+  openQwertyForInput(searchInput);
+});
 
 if (qwertyOverlay) {
   initQwertyKeysStyling();
@@ -14268,8 +14370,10 @@ if (qwertyOverlay) {
   qwertyOverlay.addEventListener("click", (e) => {
     if (qwertyWindowManager?.shouldIgnoreOutsideClick?.()) return;
 
+    // Tocar fuera cierra y mantiene lo escrito (como cualquier teclado
+    // tactil): ya hay una tecla "Cancelar" explicita para descartar.
     if (
-      handleOverlayOutsideClick(e, ".qwerty-pad", () => closeQwerty("cancel"))
+      handleOverlayOutsideClick(e, ".qwerty-pad", () => closeQwerty("confirm"))
     ) {
       return;
     }
@@ -14407,8 +14511,6 @@ window.addEventListener("keydown", (e) => {
 function wireQwertyInputs() {
   const payObsEl = document.getElementById("payObs");
   const payNumberEl = document.getElementById("payNumber");
-  const ticketsKeyboardBtnEl = document.getElementById("ticketsKeyboardBtn");
-  const ticketsSearchEl = document.getElementById("ticketsSearch");
 
   // Cobrar -> Observaciones
   if (payObsEl) {
@@ -14424,11 +14526,8 @@ function wireQwertyInputs() {
     payNumberEl.addEventListener("click", open);
   }
 
-  // Tickets -> botón teclado
-  if (ticketsKeyboardBtnEl && ticketsSearchEl) {
-    ticketsKeyboardBtnEl.onclick = () =>
-      openQwertyForInput(ticketsSearchEl, "text");
-  }
+  // El teclado de "Tickets" (busqueda) se conecta en su propio bloque de
+  // binding, junto al resto de botones de ese modal (ver mas abajo).
 }
 
 // Importante: ejecutar cuando el DOM ya existe
@@ -15949,9 +16048,7 @@ function bindParkedSummaryTabs() {
 }
 
 function parkedTicketMatchesSearch(t, term) {
-  const q = String(term || "")
-    .trim()
-    .toLowerCase();
+  const q = normalizeSearchText(String(term || "").trim());
   if (!q) return true;
 
   const getItemPrimaryName = (it) =>
@@ -16024,11 +16121,9 @@ function parkedTicketMatchesSearch(t, term) {
     itemsText,
     t.paidTicketCode || "",
     t.paidTicketId || "",
-  ]
-    .join(" ")
-    .toLowerCase();
+  ].join(" ");
 
-  return haystack.includes(q);
+  return normalizeSearchText(haystack).includes(q);
 }
 
 function parkedTicketPassesFilter(t, options = {}) {
@@ -16759,14 +16854,6 @@ function ensureParkedToolbar() {
         autocomplete="off"
       />
       <button
-      id="parkedKeyboardBtn"
-      type="button"
-      class="cart-btn"
-      title="Teclado"
-    >
-      ⌨
-    </button>
-      <button
         id="parkedSearchClearBtn"
         type="button"
         class="tickets-search-clear hidden"
@@ -16846,7 +16933,6 @@ function ensureParkedToolbar() {
     "parkedSyncConflictsBtn",
   );
   const parkedSyncNowBtn = document.getElementById("parkedSyncNowBtn");
-  const parkedKeyboardBtn = document.getElementById("parkedKeyboardBtn");
   const parkedSummaryBtn = document.getElementById("parkedSummaryBtn");
   const parkedClearPaidBtn = document.getElementById("parkedClearPaidBtn");
   const parkedScopeSelect = document.getElementById("parkedScopeSelect");
@@ -16920,8 +17006,8 @@ function ensureParkedToolbar() {
     renderParkedTicketsModal();
   });
 
-  parkedKeyboardBtn?.addEventListener("click", () => {
-    if (!parkedSearch) return;
+  // Teclado en pantalla al tocar el propio campo, sin boton aparte.
+  parkedSearch?.addEventListener("click", () => {
     openQwertyForInput(parkedSearch, "text");
   });
 
@@ -17033,6 +17119,11 @@ function ensureParkedToolbar() {
     // en Opciones: en ese caso se asume el caso normal (1), no la excepcion,
     // para no dejar stock sin devolver en silencio en el caso de uso comun.
     let releaseStock = true;
+
+    // Releer valor efectivo: si Opciones no se ha abierto aun esta sesion,
+    // la variable en memoria seguia en su default (true) aunque el admin
+    // lo hubiera desactivado y guardado en una sesion anterior.
+    await loadAskStockBulkDeletePendingToggle();
 
     if (askStockOnBulkDeletePendingEnabled) {
       const choice = await confirmModal(
@@ -17536,6 +17627,11 @@ async function deleteParkedTicketByIndex(
   let releaseStock = true;
 
   if (confirm) {
+    // Releer valor efectivo: si Opciones no se ha abierto aun esta sesion,
+    // la variable en memoria seguia en su default (true) aunque el admin
+    // lo hubiera desactivado y guardado en una sesion anterior.
+    if (askAboutStock) await loadAskStockBulkDeletePendingToggle();
+
     if (askAboutStock && askStockOnBulkDeletePendingEnabled) {
       const choice = await confirmModal(
         `Eliminar ${labels.item}`,
@@ -19068,6 +19164,14 @@ function renderMainAgentBar() {
 }
 
 // Overlay para elegir TPV / agente
+// El refresco de terminales/agentes se lanza en segundo plano tras mostrar
+// el overlay (ver bindInfoBarButtons/agentNameEl/terminalNameEl); si el
+// usuario cierra el overlay antes de que termine ese refresco, el callback
+// diferido no debe volver a abrirlo solo. Comprobar esto con este helper.
+function isTerminalOverlayCurrentlyOpen() {
+  return !!terminalOverlay && !terminalOverlay.classList.contains("hidden");
+}
+
 function showTerminalOverlay(mode = "session") {
   if (LOGIN_ACTIVE) return;
   if (!terminalOverlay) return;
@@ -19631,6 +19735,7 @@ function fillCashObsTextareaFromRemote(remoteCaja) {
 
   const { userText } = splitCajaObservaciones(remoteCaja?.observaciones || "");
   ta.value = userText || "";
+  syncCashObsClearBtn?.();
 }
 
 function isCashCodpago(codpago) {
@@ -20418,6 +20523,7 @@ function cashResetUIForOpening() {
   // Observaciones
   const obs = document.querySelector("#cashOpenOverlay #cashObs");
   if (obs) obs.value = "";
+  syncCashObsClearBtn?.();
 
   // Totales
   const idsToZero = [
@@ -20574,21 +20680,28 @@ function startSharedCajaStateMonitor() {
 
   if (!isSharedCashModeEnabled()) return;
 
-  checkSharedCajaStateOnce({ notify: false }).catch(() => {});
+  __sharedCajaStateStartTimeout = setTimeout(() => {
+    __sharedCajaStateStartTimeout = null;
+    checkSharedCajaStateOnce({ notify: false }).catch(() => {});
 
-  __sharedCajaStateTimer = setInterval(async () => {
-    if (__sharedCajaStateInFlight) return;
+    __sharedCajaStateTimer = setInterval(async () => {
+      if (__sharedCajaStateInFlight) return;
 
-    __sharedCajaStateInFlight = true;
-    try {
-      await checkSharedCajaStateOnce({ notify: true });
-    } finally {
-      __sharedCajaStateInFlight = false;
-    }
-  }, 10000);
+      __sharedCajaStateInFlight = true;
+      try {
+        await checkSharedCajaStateOnce({ notify: true });
+      } finally {
+        __sharedCajaStateInFlight = false;
+      }
+    }, 10000);
+  }, 2 * AUTO_REFRESH_STAGGER_MS);
 }
 
 function stopSharedCajaStateMonitor() {
+  if (__sharedCajaStateStartTimeout) {
+    clearTimeout(__sharedCajaStateStartTimeout);
+    __sharedCajaStateStartTimeout = null;
+  }
   if (__sharedCajaStateTimer) {
     clearInterval(__sharedCajaStateTimer);
     __sharedCajaStateTimer = null;
@@ -20600,26 +20713,36 @@ function stopSharedCajaStateMonitor() {
 
 function startSharedCajaHealthMonitor() {
   stopSharedCajaHealthMonitor();
-  startTerminalPresenceMonitor();
 
-  if (!isSharedCashModeEnabled()) return;
+  if (!isSharedCashModeEnabled()) {
+    startTerminalPresenceMonitor();
+    return;
+  }
 
-  checkSharedCajaHealthOnce().catch(() => {});
+  __sharedCajaHealthStartTimeout = setTimeout(() => {
+    __sharedCajaHealthStartTimeout = null;
+    startTerminalPresenceMonitor();
+    checkSharedCajaHealthOnce().catch(() => {});
 
-  __sharedCajaHealthTimer = setInterval(async () => {
-    if (__sharedCajaHealthInFlight) return;
-    if (!cashSession?.open) return;
+    __sharedCajaHealthTimer = setInterval(async () => {
+      if (__sharedCajaHealthInFlight) return;
+      if (!cashSession?.open) return;
 
-    __sharedCajaHealthInFlight = true;
-    try {
-      await checkSharedCajaHealthOnce();
-    } finally {
-      __sharedCajaHealthInFlight = false;
-    }
-  }, 10000);
+      __sharedCajaHealthInFlight = true;
+      try {
+        await checkSharedCajaHealthOnce();
+      } finally {
+        __sharedCajaHealthInFlight = false;
+      }
+    }, 10000);
+  }, 3 * AUTO_REFRESH_STAGGER_MS);
 }
 
 function stopSharedCajaHealthMonitor() {
+  if (__sharedCajaHealthStartTimeout) {
+    clearTimeout(__sharedCajaHealthStartTimeout);
+    __sharedCajaHealthStartTimeout = null;
+  }
   if (__sharedCajaHealthTimer) {
     clearInterval(__sharedCajaHealthTimer);
     __sharedCajaHealthTimer = null;
@@ -21531,6 +21654,11 @@ const cashOpenCloseX = document.getElementById("cashOpenCloseX");
 const cashOpenCancelBtn = document.getElementById("cashOpenCancelBtn");
 let closeWithParkedPreConfirmed = false;
 
+const syncCashObsClearBtn = wireInputClearButton(
+  document.getElementById("cashObs"),
+  document.getElementById("cashObsClearBtn"),
+);
+
 cashOpenCloseX?.addEventListener("click", closeCashOpenDialog);
 cashOpenCancelBtn?.addEventListener("click", closeCashOpenDialog);
 
@@ -21959,6 +22087,7 @@ function openCashMoveDialog() {
   // Reset campos
   if (cashMoveAmountEl) cashMoveAmountEl.value = "";
   if (cashMoveReasonEl) cashMoveReasonEl.value = "";
+  syncCashMoveReasonClearBtn?.();
   if (cashMoveErrorEl) cashMoveErrorEl.textContent = "";
   setCashMoveSaveBusyUi(false);
 
@@ -23696,28 +23825,41 @@ if (cashHeaderBtn) {
 
 // Click en nombre de agente: cambio rápido (agente y, si hay >1, también terminal)
 if (agentNameEl) {
-  agentNameEl.addEventListener("click", async () => {
-    if (TPV_LOADING) return;
-    if (!hasActiveLoginSession()) return;
-
-    await refreshTerminalsAndAgents();
-
+  const tryShowAgentSwitchOverlay = () => {
     const tpvs = Array.isArray(terminals) ? terminals : [];
-    if (tpvs.length === 0) return;
+    if (tpvs.length === 0) return false;
 
     // si hay múltiples TPVs, abrimos siempre (para poder elegir un TPV con agentes)
     if (tpvs.length > 1) {
       showTerminalOverlay("agentSwitch");
-      return;
+      return true;
     }
 
     // si solo hay 1 TPV, solo abrimos si hay agentes
     const terminalId = currentTerminal?.id || tpvs[0]?.id;
     const list = getAgentsForTerminalId(terminalId);
-
-    if (!list || list.length === 0) return;
+    if (!list || list.length === 0) return false;
 
     showTerminalOverlay("agentSwitch");
+    return true;
+  };
+
+  agentNameEl.addEventListener("click", async () => {
+    if (TPV_LOADING) return;
+    if (!hasActiveLoginSession()) return;
+
+    // Abrir YA con los datos que ya tengamos en memoria y refrescar en
+    // segundo plano — antes se esperaba siempre a la respuesta del
+    // servidor antes de mostrar nada.
+    const openedImmediately = tryShowAgentSwitchOverlay();
+
+    await refreshTerminalsAndAgents();
+
+    // Si ya lo habiamos abierto y el usuario lo cerro mientras refrescaba,
+    // no reabrirlo solo.
+    if (openedImmediately && !isTerminalOverlayCurrentlyOpen()) return;
+
+    tryShowAgentSwitchOverlay();
   });
 }
 
@@ -25527,12 +25669,37 @@ async function applyOptionsAccordionState(state) {
   });
 }
 
+// Lee el estado real de cada interruptor del DOM (nunca puede quedar
+// desactualizado, es la misma fuente que usa el propio interruptor) y
+// colorea en verde el item de la lista corta que le corresponde.
+function syncOptionsPreviewItemStates() {
+  document
+    .querySelectorAll("#optionsAccordion .opt-preview-item[data-toggle-id]")
+    .forEach((span) => {
+      const input = document.getElementById(
+        span.getAttribute("data-toggle-id"),
+      );
+      span.classList.toggle("is-on", !!input?.checked);
+    });
+}
+
 function bindOptionsAccordionOnce() {
   if (optionsAccordionBound) return;
   optionsAccordionBound = true;
 
+  document.getElementById("optionsAccordion")?.addEventListener(
+    "change",
+    (e) => {
+      if (e.target?.matches('input[type="checkbox"]')) {
+        syncOptionsPreviewItemStates();
+      }
+    },
+  );
+
   document.addEventListener("click", async (e) => {
-    const btn = e.target.closest("#optionsAccordion .opt-sec-h");
+    const btn = e.target.closest(
+      "#optionsAccordion .opt-sec-h, #optionsAccordion .opt-sec-preview",
+    );
     if (!btn) return;
 
     const sec = btn.closest(".opt-sec");
@@ -25660,6 +25827,20 @@ async function openOptions() {
 
   setOptionsReadOnlyMode(false);
 
+  // Mostrar el modal YA: a partir de aqui hay ~30 cargas de ajustes en
+  // secuencia, varias contra el servidor (tarifas, reglas de mesas, cliente
+  // por defecto). Antes el modal se mantenia oculto hasta que TODAS
+  // terminaban, asi que si el servidor iba lento, "Opciones" parecia
+  // tardar varios segundos en reaccionar aunque no hubiera ningun fallo.
+  optionsOverlay?.classList.remove("hidden");
+
+  const optionsLoadingBanner = document.getElementById(
+    "optionsLoadingBanner",
+  );
+  const optionsAccordionEl = document.getElementById("optionsAccordion");
+  optionsLoadingBanner?.classList.remove("hidden");
+  optionsAccordionEl?.classList.add("opt-loading");
+
   await loadPriceEditModeFromCfg?.();
   await loadProductDiscountConfig?.();
   await loadProductManualOrderConfig?.();
@@ -25740,8 +25921,6 @@ async function openOptions() {
   await window.initScaleOptionsUI?.();
   updateThemeButtonsUI();
 
-  optionsOverlay?.classList.remove("hidden");
-
   bindTerminalDefaultCustomerSave();
 
   await maybeRefreshTerminalDefaultCustomer("open-options", {
@@ -25749,6 +25928,10 @@ async function openOptions() {
   }).catch(() => {});
 
   await renderTerminalDefaultCustomerSelect();
+
+  optionsLoadingBanner?.classList.add("hidden");
+  optionsAccordionEl?.classList.remove("opt-loading");
+  syncOptionsPreviewItemStates();
 }
 
 function closeOptions() {
@@ -27176,7 +27359,7 @@ function bindBackgroundUpdateOptionsOnce() {
     });
 
     if (next.enabled) {
-      startBackgroundUpdateMonitor();
+      startBackgroundUpdateMonitor({ useFirstDelay: false });
       runBackgroundUpdateAvailabilityCheck("toggle-enable").catch(() => {});
       toast("Avisos automaticos de actualizacion activados.", "ok", "Opciones");
     } else {
@@ -27196,7 +27379,7 @@ function bindBackgroundUpdateOptionsOnce() {
     saveBackgroundUpdateSettings({ intervalMs });
 
     if (backgroundUpdateSettings?.enabled) {
-      startBackgroundUpdateMonitor();
+      startBackgroundUpdateMonitor({ useFirstDelay: false });
     }
 
     refreshBackgroundUpdateOptionsUI();
@@ -27250,7 +27433,13 @@ function bindBackgroundUpdateOptionsOnce() {
   });
 }
 
-function startBackgroundUpdateMonitor() {
+// "firstDelayMs" (5 min fijos) es un margen de gracia para no comprobar
+// nada justo al arrancar el TPV, no la frecuencia real elegida. Al
+// reiniciar el monitor desde una accion manual (activar el aviso o
+// cambiar la frecuencia), useFirstDelay debe ir a false: si no, la cuenta
+// atras siempre mostraba "~5 min" nada mas cambiar la frecuencia, sin
+// reflejar lo elegido hasta que pasaban esos 5 minutos.
+function startBackgroundUpdateMonitor({ useFirstDelay = true } = {}) {
   stopBackgroundUpdateMonitor();
 
   if (!backgroundUpdateSettings?.enabled) {
@@ -27265,15 +27454,16 @@ function startBackgroundUpdateMonitor() {
 
   const firstDelayMs = Number(backgroundUpdateSettings?.firstDelayMs || 0);
   const intervalMs = Number(backgroundUpdateSettings?.intervalMs || 0);
+  const initialDelayMs = useFirstDelay ? firstDelayMs : intervalMs;
 
-  setBackgroundUpdateNextCheckAt(Date.now() + Math.max(1000, firstDelayMs));
+  setBackgroundUpdateNextCheckAt(Date.now() + Math.max(1000, initialDelayMs));
   syncBackgroundUpdateCountdownUi();
 
   backgroundUpdateNoticeFirstTimer = setTimeout(() => {
     setBackgroundUpdateNextCheckAt(Date.now() + Math.max(1000, intervalMs));
     syncBackgroundUpdateCountdownUi();
-    run("first-delay");
-  }, firstDelayMs);
+    run(useFirstDelay ? "first-delay" : "interval-restart");
+  }, initialDelayMs);
 
   backgroundUpdateNoticeTimer = setInterval(() => {
     setBackgroundUpdateNextCheckAt(Date.now() + Math.max(1000, intervalMs));
@@ -30247,7 +30437,14 @@ function rememberTicketParkingMode(ticket, mode = null) {
 }
 
 function getCurrentParkingModeScope() {
-  return isMesasTransaccionesMode() ? PARKED_MODE_MESAS : PARKED_MODE_TPV;
+  // OJO: antes solo contaba "Transacciones" como modo Mesas. En "Mapa de
+  // Salas" o "Diseñar Salas" (misma sesion de Mesas, MESAS_INLINE_ACTIVE
+  // sigue true) el scope caia a "tpv", y cada sondeo automatico (cada 10s)
+  // descartaba TODOS los tickets de Mesas de la cache local por no encajar
+  // en ese scope — parecia que el aparcado "se habia cerrado o borrado en
+  // otro TPV" sin que nadie hubiera tocado nada. Todo el modo Mesas (las 3
+  // pestañas) debe contar como scope "mesas", no solo Transacciones.
+  return MESAS_INLINE_ACTIVE ? PARKED_MODE_MESAS : PARKED_MODE_TPV;
 }
 
 function getTicketMesasModeFlag(ticket) {
@@ -32532,6 +32729,26 @@ async function apiDeleteParkedReservation(ticket) {
     throw new Error(`Error borrando reserva remota: HTTP ${res.status}`);
   }
 
+  // Un borrado que triunfa debe anular cualquier guardado ("upsert") que
+  // hubiera quedado en cola para este mismo ticket (p.ej. el aviso de
+  // bloqueo de caja que fallo justo antes de borrarlo). Si no se limpia,
+  // el siguiente drenaje de la cola vuelve a mandar ese guardado viejo y
+  // "resucita" un ticket que el usuario acaba de borrar a proposito.
+  try {
+    const variants = getParkedTicketSyncKeyVariants(ticket).map((k) =>
+      String(k || ""),
+    );
+    if (variants.length) {
+      const queue = loadParkedSyncQueue();
+      const filtered = queue.filter(
+        (q) => !variants.includes(String(q?.key || "")),
+      );
+      if (filtered.length !== queue.length) {
+        saveParkedSyncQueue(filtered);
+      }
+    }
+  } catch {}
+
   return true;
 }
 
@@ -32652,23 +32869,30 @@ function scheduleParkedReservationsBurstRefresh(reason = "manual") {
 function startParkedReservationsAutoRefresh() {
   stopParkedReservationsAutoRefresh();
 
-  __parkedReservationsRefreshTimer = setInterval(async () => {
-    if (__parkedReservationsRefreshInFlight) return;
-    if (TPV_STATE?.offline) return;
-    if (!cashSession?.open) return;
+  __parkedReservationsRefreshStartTimeout = setTimeout(() => {
+    __parkedReservationsRefreshStartTimeout = null;
+    __parkedReservationsRefreshTimer = setInterval(async () => {
+      if (__parkedReservationsRefreshInFlight) return;
+      if (TPV_STATE?.offline) return;
+      if (!cashSession?.open) return;
 
-    __parkedReservationsRefreshInFlight = true;
-    try {
-      await refreshRemoteParkedReservationsOnly();
-    } catch (e) {
-      console.warn("Auto refresh reservas falló:", e?.message || e);
-    } finally {
-      __parkedReservationsRefreshInFlight = false;
-    }
-  }, 10000);
+      __parkedReservationsRefreshInFlight = true;
+      try {
+        await refreshRemoteParkedReservationsOnly();
+      } catch (e) {
+        console.warn("Auto refresh reservas falló:", e?.message || e);
+      } finally {
+        __parkedReservationsRefreshInFlight = false;
+      }
+    }, 10000);
+  }, AUTO_REFRESH_STAGGER_MS);
 }
 
 function stopParkedReservationsAutoRefresh() {
+  if (__parkedReservationsRefreshStartTimeout) {
+    clearTimeout(__parkedReservationsRefreshStartTimeout);
+    __parkedReservationsRefreshStartTimeout = null;
+  }
   if (__parkedReservationsRefreshTimer) {
     clearInterval(__parkedReservationsRefreshTimer);
     __parkedReservationsRefreshTimer = null;
@@ -33717,6 +33941,10 @@ const comandaAgentLabel = document.getElementById("comandaAgentLabel");
 const comandaCountLabel = document.getElementById("comandaCountLabel");
 const comandaLines = document.getElementById("comandaLines");
 const comandaObs = document.getElementById("comandaObs");
+const syncComandaObsClearBtn = wireInputClearButton(
+  comandaObs,
+  document.getElementById("comandaObsClearBtn"),
+);
 const comandaError = document.getElementById("comandaError");
 
 let splitTicketPartsCount = 2;
@@ -35610,6 +35838,7 @@ function openComandaModal() {
 
   if (comandaObs) {
     comandaObs.value = "";
+    syncComandaObsClearBtn?.();
     comandaObs.readOnly = true;
     const open = () => {
       if (typeof window.openQwertyForInput === "function") {
@@ -36105,6 +36334,14 @@ const payCloseX = document.getElementById("payCloseX");
 const payObs = document.getElementById("payObs");
 const payNumber = document.getElementById("payNumber");
 const paySerie = document.getElementById("paySerie");
+const syncPayObsClearBtn = wireInputClearButton(
+  payObs,
+  document.getElementById("payObsClearBtn"),
+);
+const syncPayNumberClearBtn = wireInputClearButton(
+  payNumber,
+  document.getElementById("payNumberClearBtn"),
+);
 
 let payModalState = {
   totalCents: 0,
@@ -36723,6 +36960,8 @@ async function openPayModal(total) {
   // limpiar extras
   if (payObs) payObs.value = "";
   if (payNumber) payNumber.value = "";
+  syncPayObsClearBtn?.();
+  syncPayNumberClearBtn?.();
   if (paySerie) paySerie.value = "S";
 
   // QWERTY en Observaciones
@@ -36919,9 +37158,7 @@ const parkObsOverlay = document.getElementById("parkObsOverlay");
 const parkObsInput = document.getElementById("parkObsInput");
 const parkObsCancelBtn = document.getElementById("parkObsCancelBtn");
 const parkObsOkBtn = document.getElementById("parkObsOkBtn");
-const parkObsKeyboardBtn = document.getElementById("parkObsKeyboardBtn");
 const parkNameInput = document.getElementById("parkNameInput");
-const parkNameKeyboardBtn = document.getElementById("parkNameKeyboardBtn");
 const parkObsTargetInfo = document.getElementById("parkObsTargetInfo");
 const parkQuickFlagsWrap = document.getElementById("parkQuickFlagsWrap");
 const parkQuickFlagsList = document.getElementById("parkQuickFlagsList");
@@ -37559,6 +37796,9 @@ function openParkObsModal() {
     parkModalMesaAlerts = [];
   }
 
+  syncParkNameClearBtn?.();
+  syncParkObsClearBtn?.();
+
   if (titleEl) {
     titleEl.textContent = loadedTicket
       ? labels.mesasMode
@@ -37705,13 +37945,27 @@ parkObsOkBtn?.addEventListener("click", async () => {
   parkObsMetaEditMode = false;
 });
 
-parkNameKeyboardBtn?.addEventListener("click", () => {
+// El teclado en pantalla se abre al tocar el propio campo (mas natural que
+// un boton aparte). Se usa "click", no "focus": el modal hace
+// nameInput.focus() al abrirse (linea ~37610) para dejar el cursor listo
+// para teclado fisico, y eso no debe disparar el teclado en pantalla por
+// si solo — solo un toque real del usuario.
+parkNameInput?.addEventListener("click", () => {
   openQwertyForInput(parkNameInput, "text");
 });
 
-parkObsKeyboardBtn?.addEventListener("click", () => {
+parkObsInput?.addEventListener("click", () => {
   openQwertyForInput(parkObsInput, "text");
 });
+
+const syncParkNameClearBtn = wireInputClearButton(
+  parkNameInput,
+  document.getElementById("parkNameClearBtn"),
+);
+const syncParkObsClearBtn = wireInputClearButton(
+  parkObsInput,
+  document.getElementById("parkObsClearBtn"),
+);
 
 const parkedEditingMetaBtn = document.getElementById("parkedEditingMetaBtn");
 parkedEditingMetaBtn?.addEventListener("click", () => {
@@ -38188,7 +38442,7 @@ function renderTicketsList(tickets) {
 
   renderTicketsSummary(tickets);
 
-  const term = (ticketsSearch?.value || "").trim().toLowerCase();
+  const term = normalizeSearchText((ticketsSearch?.value || "").trim());
   const sourceList = Array.isArray(tickets) ? tickets : [];
 
   const matchesTicket = (t) => {
@@ -38197,11 +38451,13 @@ function renderTicketsList(tickets) {
       ? `${parkedOrigin.parkedDisplayNo || ""} ${parkedOrigin.parkedLabel || ""} ${parkedOrigin.parkedClientName || ""}`
       : "";
 
-    const s = `${t.codigo || ""} ${t.nombrecliente || ""} ${t.total || ""} ${
-      t.codpago || ""
-    } ${t.codserie || ""} ${t.idfactura || ""} ${t.codigorect || ""} ${
-      t.idcaja || t?._raw?.idcaja || ""
-    } ${parkedOriginText}`.toLowerCase();
+    const s = normalizeSearchText(
+      `${t.codigo || ""} ${t.nombrecliente || ""} ${t.total || ""} ${
+        t.codpago || ""
+      } ${t.codserie || ""} ${t.idfactura || ""} ${t.codigorect || ""} ${
+        t.idcaja || t?._raw?.idcaja || ""
+      } ${parkedOriginText}`,
+    );
 
     return s.includes(term);
   };
@@ -38565,8 +38821,6 @@ function renderTicketsList(tickets) {
 }
 
 // Bind botones del overlay
-const ticketsKeyboardBtn = document.getElementById("ticketsKeyboardBtn");
-
 ticketsExpandAllBtn?.addEventListener("click", () => {
   const source = ticketsUiCache.length ? ticketsUiCache : ticketsCache;
   const list = Array.isArray(source) ? source : [];
@@ -38664,11 +38918,20 @@ tkFilterPartial?.addEventListener("change", () => {
   renderTicketsList(ticketsUiCache.length ? ticketsUiCache : ticketsCache);
 });
 
-ticketsKeyboardBtn?.addEventListener("click", () => {
-  if (!ticketsSearch) return;
+// Teclado en pantalla al tocar el propio campo, sin boton aparte.
+ticketsSearch?.addEventListener("click", () => {
   openQwertyForInput(ticketsSearch);
 });
 if (ticketsCloseBtn) ticketsCloseBtn.onclick = closeTicketsModal;
+
+// Cerrar al hacer clic fuera de la tarjeta (como el resto de modales).
+if (ticketsOverlay) {
+  ticketsOverlay.addEventListener("click", (e) => {
+    if (e.target === ticketsOverlay) {
+      closeTicketsModal();
+    }
+  });
+}
 if (ticketsReloadBtn) ticketsReloadBtn.onclick = loadAndRenderTickets;
 let ticketsSearchTimer = null;
 
@@ -41732,7 +41995,6 @@ function askEmailWithModal() {
     const emailOkBtn = document.getElementById("emailOkBtn");
     const emailCancelBtn = document.getElementById("emailCancelBtn");
     const emailError = document.getElementById("emailError");
-    const emailKeyboardBtn = document.getElementById("emailKeyboardBtn");
 
     // ✅ Si faltan elementos, NO usamos prompt en Electron: mostramos mensaje claro
     if (!emailOverlay || !emailInput || !emailOkBtn || !emailCancelBtn) {
@@ -41774,12 +42036,17 @@ function askEmailWithModal() {
 
     emailInput.addEventListener("input", updateValidation);
     updateValidation();
+    wireInputClearButton(
+      emailInput,
+      document.getElementById("emailClearBtn"),
+    );
 
-    if (emailKeyboardBtn) {
-      emailKeyboardBtn.onclick = () => {
-        openQwertyForInput(emailInput, "email");
-      };
-    }
+    // Teclado en pantalla al tocar el propio campo, sin boton aparte. "click"
+    // y no "focus": el modal hace emailInput.focus() al abrirse (arriba) para
+    // dejar el cursor listo, y eso no debe abrir el teclado por si solo.
+    emailInput.onclick = () => {
+      openQwertyForInput(emailInput, "email");
+    };
 
     const cleanup = () => {
       emailOkBtn.onclick = null;
@@ -41813,18 +42080,13 @@ function askEmailWithModal() {
 }
 
 // --- Teclados para el modal de movimientos ---
+// Se abren al tocar el propio campo, sin boton aparte.
 const cashMoveAmountInput = document.getElementById("cashMoveAmount");
 const cashMoveReasonInput = document.getElementById("cashMoveReason");
-const cashMoveAmountKeyboardBtn = document.getElementById(
-  "cashMoveAmountKeyboardBtn",
-);
-const cashMoveReasonKeyboardBtn = document.getElementById(
-  "cashMoveReasonKeyboardBtn",
-);
 
 // Teclado numérico para cantidad
-if (cashMoveAmountKeyboardBtn && cashMoveAmountInput) {
-  cashMoveAmountKeyboardBtn.onclick = () => {
+if (cashMoveAmountInput) {
+  cashMoveAmountInput.addEventListener("click", () => {
     const initial = cashMoveAmountInput.value
       ? Number(cashMoveAmountInput.value.replace(",", "."))
       : 0;
@@ -41838,15 +42100,20 @@ if (cashMoveAmountKeyboardBtn && cashMoveAmountInput) {
       "Movimiento de caja",
       "cash",
     );
-  };
+  });
 }
 
 // Teclado QWERTY para motivo
-if (cashMoveReasonKeyboardBtn && cashMoveReasonInput) {
-  cashMoveReasonKeyboardBtn.onclick = () => {
+if (cashMoveReasonInput) {
+  cashMoveReasonInput.addEventListener("click", () => {
     openQwertyForInput(cashMoveReasonInput, "text");
-  };
+  });
 }
+
+const syncCashMoveReasonClearBtn = wireInputClearButton(
+  cashMoveReasonInput,
+  document.getElementById("cashMoveReasonClearBtn"),
+);
 
 function buildTicketFromFacturaRow(facturaRow, lineasFactura) {
   const mapped = (lineasFactura || []).map((l) => {
@@ -44023,7 +44290,12 @@ async function checkFSOnline() {
     const url = `${base}/facturaclientes?limit=1`;
 
     const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), 3000);
+    // 8s, no 3s: si justo en ese momento hay una recarga completa en marcha
+    // (loadDataFromApi, 7 peticiones a la vez), este ping puede quedarse en
+    // cola detras de ellas por el limite de conexiones simultaneas del
+    // navegador. Con 3s fallaba por tiempo sin que hubiera ningun problema
+    // real de conexion, y eso disparaba mas recargas completas en cadena.
+    const t = setTimeout(() => controller.abort(), 8000);
 
     try {
       const r = await fetch(url, {
@@ -44060,8 +44332,22 @@ async function startOnlineMonitor() {
   // fallos seguidos; mientras tanto solo avisamos visualmente (amarillo).
   const OFFLINE_CONFIRM_FAILS = 2;
   let consecutiveOfflineFails = 0;
+  // El intervalo (5s) es mas corto que el timeout del propio ping (8s): sin
+  // este candado, dos "tick" podrian quedar corriendo a la vez, sumando aun
+  // mas peticiones a la cola en el peor momento posible.
+  let tickInFlight = false;
 
   async function tick() {
+    if (tickInFlight) return;
+    tickInFlight = true;
+    try {
+      await tickImpl();
+    } finally {
+      tickInFlight = false;
+    }
+  }
+
+  async function tickImpl() {
     const ok = await checkFSOnline().catch(() => false);
 
     // ✅ Caso especial: hay internet, pero aún no hay cfg de empresa
@@ -44124,8 +44410,16 @@ async function startOnlineMonitor() {
       } catch {}
 
       try {
+        // 60s, no 15s: una recarga completa dispara 7 peticiones a la vez
+        // (loadDataFromApi), que puede saturar las conexiones del navegador
+        // y hacer fallar por tiempo la propia comprobacion de conexion de
+        // abajo (checkFSOnline) -> se detecta "sin internet" en falso ->
+        // se vuelve a considerar "reconexion" -> se relanza OTRA recarga
+        // completa -> bucle que se retroalimenta solo sin que haya ningun
+        // problema real de red. Con una ventana mas larga, ese bucle no
+        // puede sostenerse.
         const loadedRecently =
-          Date.now() - Number(LAST_FULL_LOAD_AT || 0) < 15000;
+          Date.now() - Number(LAST_FULL_LOAD_AT || 0) < 60000;
         if (!BOOT_IN_FLIGHT && !loadedRecently) {
           await loadDataFromApi({ refresh: true, silentRetry: true });
         }

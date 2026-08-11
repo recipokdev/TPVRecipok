@@ -33,6 +33,11 @@ const DEFAULT_STATE = {
   tableMeta: {},
   designSnapMode: "free",
   roomDesigns: {},
+  // Este iframe no usa draftCartByTable para nada, pero como saveState()
+  // reescribe el bloque ENTERO, si no lo conserva aqui lo borra para todas
+  // las mesas en cuanto se toca cualquiera (aunque sea con el renderer
+  // principal usandolo activamente en otra pestaña).
+  draftCartByTable: {},
 };
 
 let state = cloneDefaultState();
@@ -1616,6 +1621,10 @@ function loadState() {
       roomDesigns:
         parsed?.roomDesigns && typeof parsed.roomDesigns === "object"
           ? { ...parsed.roomDesigns }
+          : {},
+      draftCartByTable:
+        parsed?.draftCartByTable && typeof parsed.draftCartByTable === "object"
+          ? { ...parsed.draftCartByTable }
           : {},
       roomList,
     };

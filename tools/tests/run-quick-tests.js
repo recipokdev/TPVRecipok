@@ -22,6 +22,7 @@ const filesToCheck = [
   "js/tpv/scale/scale-ui.js",
   "js/tpv/ui/selector.js",
   "js/tpv/ui/customer_selector/customer_selector.js",
+  "mesas/mesas.js",
 ];
 
 const missing = filesToCheck.filter(
