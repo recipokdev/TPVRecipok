@@ -133,10 +133,16 @@ async function assertNoCriticalDiagnostics(win, diagnostics) {
     const msg = String(t?.message || "").toLowerCase();
     const title = String(t?.title || "").toLowerCase();
 
+    // In local-fallback demo mode there's no real RECIPOK_API config, so the
+    // offline-simulation charge fails pre-flight with "Config API ... no
+    // definida" (E_COBRO) instead of a network abort. Before 2026-08-13 this
+    // got masked into a generic E_COBRO_RESP_INVALIDA toast, which is why that
+    // text is still allowlisted below alongside the real, unmasked message.
     const isExpectedOfflineSimulationToast =
       title.includes("cobrar") &&
       (msg.includes("e_cobro_resp_invalida") ||
-        msg.includes("respuesta de venta inválida"));
+        msg.includes("respuesta de venta inválida") ||
+        msg.includes("config api de facturascripts no definida"));
 
     if (isExpectedOfflineSimulationToast) return false;
     return typ === "err" || typ === "error" || msg.includes("error");
@@ -179,6 +185,7 @@ async function assertNoCriticalDiagnostics(win, diagnostics) {
       m.includes("Failed to load resource: net::ERR_FAILED") ||
       (m.includes("crearFacturaCliente") && m.includes("422")) ||
       m.includes("E_COBRO_RESP_INVALIDA") ||
+      m.includes("Config API de FacturaScripts no definida") ||
       (m.includes("Respuesta de error crearFacturaCliente") &&
         m.includes("Ha ocurrido un error mientras se guardaban los datos"));
 
@@ -554,10 +561,25 @@ async function clearCartByUi(win) {
 
 async function openOptionsOverlay(win) {
   const hidden = await isHidden(win, "optionsOverlay");
-  if (hidden === false) return;
+  if (hidden !== false) {
+    await win.click("#optionsBtn");
+    await win.waitForSelector("#optionsOverlay:not(.hidden)", {
+      timeout: 10000,
+    });
+  }
 
-  await win.click("#optionsBtn");
-  await win.waitForSelector("#optionsOverlay:not(.hidden)", { timeout: 10000 });
+  // openOptions() shows the modal immediately but keeps loading settings
+  // (~30 sequential awaits) in the background, only removing .opt-loading
+  // once done. Clicking an accordion section before that finishes races
+  // against applyOptionsAccordionState() restoring the persisted open/closed
+  // state, which can silently undo the click. Wait for it to actually finish.
+  await win.waitForFunction(
+    () => {
+      const acc = document.getElementById("optionsAccordion");
+      return !!acc && !acc.classList.contains("opt-loading");
+    },
+    { timeout: 15000 },
+  );
 }
 
 async function closeOptionsOverlay(win) {

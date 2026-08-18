@@ -1,5 +1,5 @@
 // preload.js
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, clipboard } = require("electron");
 const { initTPVBootstrap } = require("./js/tpv/bootstrap.js");
 
 const TPV_E2E_MODE = String(process.env.TPV_E2E || "") === "1";
@@ -171,6 +171,16 @@ contextBridge.exposeInMainWorld("TPV_CUSTOMER_CTRL", {
   setEnabled: (val) => ipcRenderer.invoke("customer:setEnabled", !!val),
   getTheme: () => ipcRenderer.invoke("customer:getTheme"),
   setTheme: (mode) => ipcRenderer.invoke("customer:setTheme", mode),
+});
+
+contextBridge.exposeInMainWorld("TPV_CLIPBOARD", {
+  readText: () => {
+    try {
+      return clipboard.readText() || "";
+    } catch {
+      return "";
+    }
+  },
 });
 
 contextBridge.exposeInMainWorld("TPV_SCALE", {

@@ -8,6 +8,30 @@
       "changes": []
     },
     {
+      "version": "0.2.17",
+      "date": "2026-08-18",
+      "title": "Release 0.2.17",
+      "changes": [
+        "Cobro: en casos raros, si FacturaScripts tardaba en responder de forma rara (una respuesta vacia o un error del servidor) despues de crear la factura, el TPV podia pensar que el cobro habia fallado aunque la venta ya se hubiera hecho, dejando el ticket como 'sin cobrar' y permitiendo cobrarlo otra vez en otro TPV (factura duplicada). Corregido: ahora, antes de dar el cobro por fallido, se comprueba si la factura ya se creo, y si es asi se usa esa en vez de arriesgarse a duplicarla.",
+        "Opciones -> Pantalla: nuevo interruptor 'Teclado en pantalla' para los TPV que tengan un teclado fisico conectado. Al desactivarlo, tocar un campo de texto ya no abre el teclado tactil y se puede escribir directamente con el teclado fisico.",
+        "Opciones -> Carrito: nuevo ajuste 'Cliente al salir de un aparcado'. Antes, al terminar de aparcar o cobrar un ticket que tenia un cliente distinto, el selector volvia siempre al cliente que habia justo antes de abrirlo (aunque mientras tanto se hubiera cambiado y guardado a otro cliente distinto). Ahora se puede elegir que vuelva a ese cliente anterior (como hasta ahora) o directamente al cliente por defecto del terminal.",
+        "Aparcados: el ajuste de arriba ('Cliente al salir de un aparcado') no hacia nada al aparcar/salir de un ticket nuevo, y cambiar solo el cliente de un aparcado ya abierto (sin tocar cantidades) no se guardaba. Corregido en ambos casos.",
+        "Aparcados: saltar directamente de un aparcado abierto a otro (desde la lista, o entre partes de un ticket dividido) podia perder cambios recientes (cliente, cantidades) del que se abandonaba si no le habia dado tiempo a autoguardarse. Ahora se guarda antes de cambiar.",
+        "Aparcados: el numero de ticket que se ve al editar un aparcado podia salir larguisimo (ej. 'Ticket #1786619975110') si ese aparcado se recargaba desde otro TPV. Corregido.",
+        "Teclado en pantalla: ahora se puede pegar (boton 'Pegar' o Ctrl+V) en vez de tener que escribir todo a mano, util por ejemplo para el email al activar el TPV por primera vez.",
+        "Cierre de caja: en cajas con muchos tickets, cargar los datos para cerrar podia tardar muchisimo (incluso dejar el TPV sin responder un buen rato). Corregido un fallo real en como se pedian los datos de pagos que provocaba cientos de peticiones de mas cuanto mas grande era la caja; ahora carga en paralelo y sin repetir peticiones innecesarias.",
+        "Cobro: si un producto se quedaba sin stock y no tenia permitida la venta sin stock en FacturaScripts, el TPV no avisaba de nada y terminaba guardando la venta sin vincular el producto (sin referencia, sin descontar stock). Ahora se avisa antes de cobrar, con opcion de 'Cobrar sin stock' si se quiere continuar igualmente, sin perder nunca el vinculo con el producto.",
+        "Aparcados: mientras se estaba guardando un aparcado, se podia seguir tocando productos y editando o borrando lineas del carrito sin ningun aviso (esos cambios no se aplicaban al aparcado en curso). Ahora la zona de productos se atenua y deja de responder mientras se guarda, con un aviso de 'Aparcando...'.",
+        "Aparcados: un ticket aparcado en un TPV y cobrado en otro podia tardar mucho en aparecer como cobrado en 'Aparcados cobrados' (incluso el boton 'Sync' parecia no hacer nada), aunque el cobro ya estuviera bien guardado. Corregido: ya no se descarta un cobrado confirmado por el servidor solo porque el TPV que sincroniza este en otro modo.",
+        "Cierre de caja: el ticket de cierre podia imprimir el registro de avisos aunque estuviera desactivado en Ajustes. Pasaba si el TPV se reiniciaba y nadie abria 'Opciones' ese dia antes de cerrar caja: el ajuste guardado no se leia hasta entonces. Ahora se lee al arrancar el TPV, se abran o no las Opciones.",
+        "Opciones: revisado el resto de ajustes por el mismo motivo que el del registro de avisos. 'Teclado en pantalla', 'Cliente al salir de un aparcado' y 'Modo entrenamiento seguro' tenian el mismo fallo (no se aplicaban hasta abrir Opciones una vez). El de entrenamiento seguro era el mas delicado: si no llegaba a cargarse, un TPV pensado para practicar sin afectar a datos reales podia acabar escribiendo ventas de verdad en FacturaScripts sin avisar. Los tres se cargan ahora al arrancar el TPV.",
+        "Cierre de caja: encontrada la causa real de que a veces el ticket de cierre saliera sin las cajas de importes (total ventas, pagos, ventas por agente). Esos datos tardan un poco en llegar de FacturaScripts al abrir el dialogo de 'Cerrar caja' (mas en cajas con muchos tickets), y antes se podia pulsar 'Cerrar caja' antes de que terminaran de cargar, cerrando e imprimiendo con esa parte vacia. El registro de avisos venia de otro sitio mas rapido, por eso ese siempre salia bien. Mientras esos datos cargan, el boton 'Cerrar caja' se ve en gris con 'Cargando...' y no deja cerrar hasta que termina.",
+        "Actualizaciones (Windows): al actualizarse, la app se cerraba, el icono del escritorio se quedaba en blanco un instante sin ningun aviso y luego se reabria sola -- parecia que algo se habia colgado. Ahora, justo en ese hueco, aparece un aviso de 'Instalando TPV Recipok...' hasta que la nueva version ya se ve.",
+        "Cobro: no se podia cobrar un ticket a 0€ (por ejemplo, una promocion con descuento del 100%, en producto o en todo el carrito). Ahora se permite, pero solo si ese 0€ viene de un descuento o de un precio editado a mano en ese ticket -- si un producto esta a 0€ tal cual viene del catalogo (sin ningun descuento ni cambio), se sigue bloqueando, para evitar vender gratis para siempre un producto mal puesto a 0€ por error. Al confirmar un ticket a 0€ no hace falta indicar ningun importe, solo confirmar.",
+        "Descuentos: en el teclado de descuento (de linea o del carrito entero), ahora hay botones rapidos ademas de poder seguir escribiendo cualquier otro a mano. Vienen puestos por defecto 10%, 20%, 50% y 100%, pero se pueden cambiar en Opciones -> Carrito -> 'Accesos rapidos de descuento' (hasta 5, dejando en blanco los que no se quieran)."
+      ]
+    },
+    {
       "version": "0.2.16",
       "date": "2026-08-11",
       "title": "Release 0.2.16",
@@ -34,7 +58,8 @@
         "Opciones: 'Modo Mesas' se ha subido justo encima de 'Productos' y ahora tiene tambien una etiqueta amarilla 'MESAS' para distinguirlo de un vistazo del resto de apartados de administrador.",
         "Opciones: al tocar la lista corta de un apartado cerrado (la zona de texto bajo el nombre) no se abria, solo tocando el titulo. Ahora toda la zona abre/cierra el apartado.",
         "Opciones: en la lista corta de cada apartado, los ajustes que ya estan activados aparecen en verde, para saber de un vistazo que esta encendido sin abrir el apartado.",
-        "Actualizaciones: al cambiar la frecuencia de comprobacion (o activar el aviso), la cuenta atras siempre mostraba 'proxima en ~5 minutos' sin importar lo elegido, hasta que pasaban esos 5 minutos. Corregido: ahora refleja la frecuencia elegida al instante."
+        "Actualizaciones: al cambiar la frecuencia de comprobacion (o activar el aviso), la cuenta atras siempre mostraba 'proxima en ~5 minutos' sin importar lo elegido, hasta que pasaban esos 5 minutos. Corregido: ahora refleja la frecuencia elegida al instante.",
+        "Varios TPV a la vez: el aviso de 'sigo aqui' solo se mandaba una vez al abrir caja y nunca mas en toda la sesion (un TPV podia llevar horas abierto y dejar de contar como activo casi de inmediato). Corregido: ahora se manda de verdad cada pocos segundos mientras la caja esta abierta, como estaba pensado."
       ]
     },
     {

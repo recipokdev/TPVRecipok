@@ -1765,6 +1765,69 @@ body.theme-dark .input-clear-btn:hover {
   align-content: start; /* clave: evita que las filas se estiren */
 }
 
+.products-grid-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.products-grid-wrap .products-grid {
+  flex: 1;
+}
+
+/* Mientras se guarda un aparcado: la zona de productos se ve atenuada y deja
+   de responder a toques, para no dar la falsa impresion de que anadir/quitar
+   productos en ese momento se aplica al aparcado que se esta guardando. */
+.products-grid-parking-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 24px;
+  background: rgba(255, 255, 255, 0.55);
+  cursor: default;
+  z-index: 5;
+}
+
+.products-grid-parking-overlay.hidden {
+  display: none;
+}
+
+.products-grid-parking-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: #1f2937;
+  color: #fff;
+  font-weight: 600;
+  font-size: 14px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.products-grid-parking-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  animation: products-grid-parking-spin 0.7s linear infinite;
+}
+
+@keyframes products-grid-parking-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+body.theme-dark .products-grid-parking-overlay {
+  background: rgba(17, 24, 39, 0.55);
+}
+
 .mesas-trans-terminal {
   display: inline-flex;
   align-items: stretch;
@@ -3618,6 +3681,30 @@ body.theme-dark .parked-reset-btn:hover {
   text-decoration: line-through;
   opacity: 0.75;
   margin-right: 6px;
+}
+
+/* Accesos rapidos de % en el teclado de descuentos (linea/general): evita
+   teclear a mano los porcentajes redondos mas habituales. */
+.num-pad-quick-percents {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.num-pad-quick-percents.hidden {
+  display: none;
+}
+
+.num-pad-quick-pct {
+  flex: 1;
+  padding: calc(6px * var(--kb-scale)) 0;
+  font-size: calc(20px * var(--kb-scale));
+  border-radius: 999px;
+  border: 1px solid #93c5fd;
+  background: #eff6ff;
+  color: #1d4ed8;
+  cursor: pointer;
+  font-weight: 700;
 }
 
 .num-pad-grid {
@@ -6039,6 +6126,15 @@ body.theme-dark #parkObsOverlay .park-quick-flag.is-active {
   gap: 10px;
 }
 
+/* Ticket a 0€ (descuento del 100% / precio editado a 0): no hay nada que
+   escribir, asi que se bloquea la entrada de importes en vez de dejar que
+   se teclee un valor sin sentido para un cobro gratuito. */
+.pay-methods-list.pay-frozen,
+.pay-keypad.pay-frozen {
+  pointer-events: none;
+  opacity: 0.45;
+}
+
 .pay-method-row {
   display: grid;
   grid-template-columns: 140px 1fr 64px 44px;
@@ -7138,6 +7234,15 @@ body.theme-dark .opt-preview-item.is-on {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+/* 5 campos de porcentaje para los accesos rapidos de descuento: cada uno
+   solo necesita sitio para 2-3 digitos, no el ancho por defecto de un input
+   numerico normal. */
+.opt-input-narrow {
+  width: 50px;
+  text-align: center;
+  padding: 6px 4px;
 }
 
 .opt-sec[data-sec="tarifas"] .opt-row-actions {
@@ -8433,6 +8538,7 @@ body.theme-dark .parked-summary-product-qty {
 body.theme-dark .dialog-actions button,
 body.theme-dark .pay-btn,
 body.theme-dark .num-pad-btn,
+body.theme-dark .num-pad-quick-pct,
 body.theme-dark .q-key,
 body.theme-dark .q-btn,
 body.theme-dark .kb-window-btn {

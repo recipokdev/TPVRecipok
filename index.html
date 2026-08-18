@@ -183,7 +183,18 @@
         </div>
       </div>
 
-      <div class="products-grid" id="productsGrid"></div>
+      <div class="products-grid-wrap" id="productsGridWrap">
+        <div class="products-grid" id="productsGrid"></div>
+        <div
+          id="productsGridParkingOverlay"
+          class="products-grid-parking-overlay hidden"
+        >
+          <div class="products-grid-parking-badge">
+            <span class="products-grid-parking-spinner"></span>
+            Aparcando...
+          </div>
+        </div>
+      </div>
       <div id="statusBar" class="status-bar">
         <div class="status-online-group">
           <span id="statusDot" class="status-dot"></span>
@@ -513,6 +524,9 @@
         </div>
         <div id="numPadDisplay" class="num-pad-display">0</div>
         <div id="numPadPricePreview" class="num-pad-price-preview hidden"></div>
+        <!-- Botones rellenados por JS segun Opciones -> Carrito -> Accesos
+             rapidos de descuento (ver renderNumPadQuickPercents). -->
+        <div id="numPadQuickPercents" class="num-pad-quick-percents hidden"></div>
         <div class="num-pad-grid calc-grid">
           <button class="num-pad-btn" data-key="7">7</button>
           <button class="num-pad-btn" data-key="8">8</button>
@@ -641,6 +655,7 @@
           <button class="q-btn q-back" data-key="back">←</button>
           <button class="q-btn q-clear" data-key="clear">Borrar todo</button>
           <button class="q-btn" data-key="space">Espacio</button>
+          <button class="q-btn q-paste" data-key="paste">Pegar</button>
           <button class="q-btn q-cancel" data-key="cancel">Cancelar</button>
           <button class="q-btn q-ok" data-key="ok">OK</button>
         </div>
@@ -2526,7 +2541,8 @@
                 class="opt-preview-item"
                 data-toggle-id="cartWidthControlsToggle"
                 >ancho</span
-              >, cliente por defecto
+              >, cliente por defecto, cliente al salir de un aparcado,
+              accesos rapidos de descuento
             </div>
             <div class="opt-sec-b">
               <div class="opt-row">
@@ -2589,6 +2605,83 @@
                   <button
                     type="button"
                     id="terminalDefaultCustomerSaveBtn"
+                    class="small-btn"
+                  >
+                    Guardar
+                  </button>
+                </div>
+              </div>
+              <!-- Cliente al terminar/salir de un aparcado -->
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Cliente al salir de un aparcado
+                  </div>
+                  <div class="opt-row-sub">
+                    Al terminar de aparcar/cobrar un ticket que tenía un
+                    cliente distinto, ¿a qué cliente vuelve el selector?
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <select id="parkedCustomerResetModeSelect" class="opt-select">
+                    <option value="previous">
+                      Al cliente anterior (el que había antes de abrirlo)
+                    </option>
+                    <option value="default">Al cliente por defecto</option>
+                  </select>
+                </div>
+              </div>
+              <!-- Accesos rapidos de descuento (%) en el teclado numerico -->
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Accesos rápidos de descuento (%)
+                  </div>
+                  <div class="opt-row-sub">
+                    Botones de porcentaje en el teclado de descuento (línea o
+                    carrito entero). Deja un campo en blanco para no mostrar
+                    ese botón. Máximo 5.
+                  </div>
+                </div>
+                <div class="opt-row-actions opt-discount-quick-pcts">
+                  <input
+                    id="discountQuickPct1"
+                    type="number"
+                    class="opt-input opt-input-narrow"
+                    min="1"
+                    max="100"
+                  />
+                  <input
+                    id="discountQuickPct2"
+                    type="number"
+                    class="opt-input opt-input-narrow"
+                    min="1"
+                    max="100"
+                  />
+                  <input
+                    id="discountQuickPct3"
+                    type="number"
+                    class="opt-input opt-input-narrow"
+                    min="1"
+                    max="100"
+                  />
+                  <input
+                    id="discountQuickPct4"
+                    type="number"
+                    class="opt-input opt-input-narrow"
+                    min="1"
+                    max="100"
+                  />
+                  <input
+                    id="discountQuickPct5"
+                    type="number"
+                    class="opt-input opt-input-narrow"
+                    min="1"
+                    max="100"
+                  />
+                  <button
+                    type="button"
+                    id="discountQuickPctsSaveBtn"
                     class="small-btn"
                   >
                     Guardar
@@ -3321,6 +3414,11 @@
                 class="opt-preview-item"
                 data-toggle-id="customerDisplayToggle"
                 >pantalla de cliente</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="virtualKeyboardToggle"
+                >teclado en pantalla</span
               >
             </div>
             <div class="opt-sec-b">
@@ -3348,6 +3446,21 @@
                 </div>
                 <label class="switch">
                   <input type="checkbox" id="customerDisplayToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Teclado en pantalla</div>
+                  <div class="opt-row-sub">
+                    Desactívalo si el TPV tiene un teclado físico conectado:
+                    al tocar un campo de texto ya no se abrirá el teclado
+                    táctil y podrás escribir directamente con el teclado
+                    físico.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="virtualKeyboardToggle" />
                   <span class="slider"></span>
                 </label>
               </div>

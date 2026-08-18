@@ -36,6 +36,21 @@ const IS_MULTI_INSTANCE =
 // Etiqueta opcional para distinguir instancias en pruebas multi-TPV (2 ventanas).
 const E2E_TEST_LABEL = String(process.env.TPV_TEST_LABEL || "").trim();
 
+// Modo especial: proceso ligero e independiente que se lanza justo antes de
+// autoUpdater.quitAndInstall() (ver spawnPostUpdateSplash) para tapar el
+// hueco del instalador NSIS silencioso -- ahi Windows no da ningun progreso
+// real (icono del escritorio en blanco un instante) porque el proceso normal
+// de la app ya se ha cerrado para poder sobrescribir el .exe. Este proceso no
+// hace NADA del arranque normal: solo muestra una ventana y espera a que la
+// app real avise de que ya se ve (ver notifyPostUpdateSplashReady), asi que
+// debe cortar aqui mismo, antes del bloqueo de instancia unica y de todo lo
+// demas (top-level return: main.js es CommonJS, es valido).
+const IS_POST_UPDATE_SPLASH = process.argv.includes("--post-update-splash");
+if (IS_POST_UPDATE_SPLASH) {
+  runPostUpdateSplashProcess();
+  return;
+}
+
 const DEFAULT_UPDATE_POLICY_URLS = {
   stable:
     "https://raw.githubusercontent.com/recipokdev/TPVRecipok/main/build/update-policy.stable.json",
@@ -497,6 +512,7 @@ function createWindow() {
     }
 
     mainWin.show();
+    notifyPostUpdateSplashReady();
     // si NO es kiosk, maximiza al arrancar
     if (!kioskMode) {
       try {
@@ -600,6 +616,7 @@ async function runUpdateCheckOncePreCash() {
 
         // instalar (tu comportamiento actual)
         try {
+          spawnPostUpdateSplash();
           setTimeout(() => autoUpdater.quitAndInstall(true, true), 400);
         } catch {}
         done({ ok: true, updated: true, installing: true });
@@ -935,6 +952,180 @@ function closeSplash() {
     } catch (_) {}
   }
   splashWin = null;
+}
+
+// ===== Splash de "instalando" (hueco del instalador NSIS silencioso) =====
+// Ver nota junto a IS_POST_UPDATE_SPLASH mas arriba. Solo tiene sentido en
+// Windows: es el unico caso donde quitAndInstall cierra la app, lanza un
+// instalador SILENCIOSO (sin ninguna ventana propia) y vuelve a abrir la app
+// sola, dejando un hueco sin ningun indicador visual.
+function postUpdateSplashMarkerPath() {
+  return path.join(app.getPath("temp"), "tpv-recipok-post-update-ready.flag");
+}
+
+// Llamar justo antes de quitAndInstall(): lanza un proceso independiente
+// (mismo ejecutable, con un flag especial) que sobrevive a que esta app se
+// cierre, y que se queda mostrando "Instalando..." hasta que la nueva version
+// avise de que ya se ve (o hasta un tope de seguridad).
+function spawnPostUpdateSplash() {
+  if (process.platform !== "win32") return;
+  try {
+    try {
+      fs.unlinkSync(postUpdateSplashMarkerPath());
+    } catch (_) {}
+
+    const args = app.isPackaged
+      ? ["--post-update-splash"]
+      : [app.getAppPath(), "--post-update-splash"];
+
+    const child = spawn(process.execPath, args, {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+  } catch (e) {
+    logUpdater(
+      `No se pudo lanzar la ventana de "instalando": ${e?.message || e}`,
+    );
+  }
+}
+
+// Llamar en cuanto la ventana principal de una nueva version ya se muestra
+// (ver mainWin.show() en createWindow): si hay un splash de instalacion
+// esperando, esto es su señal para cerrarse.
+function notifyPostUpdateSplashReady() {
+  try {
+    fs.writeFileSync(postUpdateSplashMarkerPath(), String(Date.now()));
+  } catch (_) {}
+}
+
+// Cuerpo completo del proceso "--post-update-splash": no hace nada del
+// arranque normal (sin instancia unica, sin login, sin auto-update...), solo
+// una ventanita que espera a que aparezca el marcador de "ya se ve la app
+// real" (o un tope de 30s por si algo falla) y luego se cierra sola.
+function runPostUpdateSplashProcess() {
+  // Perfil de Chromium propio y separado del de la app real: este proceso
+  // nunca pide el bloqueo de instancia unica (requestSingleInstanceLock), y
+  // ademas al usar su propia carpeta de userData no puede llegar a compartir
+  // ningun candado/fichero de sesion con el perfil real -- la nueva version
+  // real, cuando arranque, no debe encontrarse NADA que le haga pensar que ya
+  // hay una instancia corriendo.
+  try {
+    app.setPath(
+      "userData",
+      path.join(app.getPath("temp"), "tpv-recipok-post-update-splash"),
+    );
+  } catch (_) {}
+
+  app.whenReady().then(() => {
+    const win = new BrowserWindow({
+      width: 420,
+      height: 220,
+      frame: false,
+      resizable: false,
+      movable: true,
+      minimizable: false,
+      maximizable: false,
+      closable: false,
+      // Sin skipTaskbar: si el usuario pone otra ventana delante (no es
+      // alwaysOnTop, ver mas abajo), necesita algun sitio desde donde
+      // recuperarla -- sin icono en la barra de tareas se quedaria sin forma
+      // de volver a verla salvo minimizando todo.
+      show: false,
+      // Sin alwaysOnTop: aparece delante al crearse (como cualquier ventana
+      // nueva), pero no se impone sobre lo que el usuario haga despues en
+      // otras ventanas mientras dura la instalacion.
+      center: true,
+      backgroundColor: "#111827",
+      icon: path.join(__dirname, "assets", "icon.png"),
+      webPreferences: {
+        contextIsolation: true,
+        sandbox: false,
+      },
+    });
+
+    win.removeMenu();
+
+    const html = `
+    <!doctype html>
+    <html lang="es">
+    <head>
+      <meta charset="UTF-8" />
+      <title>TPV Recipok</title>
+      <style>
+        body{
+          margin:0;
+          font-family: Arial, Helvetica, sans-serif;
+          background:#111827;
+          color:#e5e7eb;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          height:100vh;
+        }
+        .box{ width: 84%; text-align:center; }
+        .title{ font-size: 17px; font-weight: 700; margin-bottom: 14px; }
+        .bar{
+          width:100%;
+          height:10px;
+          background:#1f2937;
+          border-radius:999px;
+          overflow:hidden;
+          border:1px solid rgba(255,255,255,0.08);
+          position:relative;
+        }
+        .bar .fill{
+          position:absolute;
+          top:0; left:-40%;
+          height:100%;
+          width:40%;
+          background:#22c55e;
+          border-radius:999px;
+          animation: slide 1.1s ease-in-out infinite;
+        }
+        @keyframes slide{
+          0% { left: -40%; }
+          100% { left: 100%; }
+        }
+        .hint{ margin-top: 16px; font-size: 12px; opacity: 0.65; }
+      </style>
+    </head>
+    <body>
+      <div class="box">
+        <div class="title">Instalando TPV Recipok...</div>
+        <div class="bar"><div class="fill"></div></div>
+        <div class="hint">No apagues el ordenador. Esto tarda solo unos segundos.</div>
+      </div>
+    </body>
+    </html>
+    `;
+
+    win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
+    win.once("ready-to-show", () => win.show());
+
+    const markerPath = postUpdateSplashMarkerPath();
+    const POLL_MS = 300;
+    const MAX_WAIT_MS = 30000;
+    const startedAt = Date.now();
+
+    const timer = setInterval(() => {
+      let ready = false;
+      try {
+        ready = fs.existsSync(markerPath);
+      } catch (_) {}
+
+      if (!ready && Date.now() - startedAt < MAX_WAIT_MS) return;
+
+      clearInterval(timer);
+      try {
+        fs.unlinkSync(markerPath);
+      } catch (_) {}
+      try {
+        win.destroy();
+      } catch (_) {}
+      app.quit();
+    }, POLL_MS);
+  });
 }
 
 // (opcional) log a fichero para depurar en clientes
@@ -1504,6 +1695,7 @@ async function runAutoUpdateGate() {
       autoUpdater.once("update-downloaded", () => {
         appIsInstallingUpdate = true;
         splashSet("Instalando actualización…", 100);
+        spawnPostUpdateSplash();
         setTimeout(() => autoUpdater.quitAndInstall(true, true), 600);
         setTimeout(() => {
           try {

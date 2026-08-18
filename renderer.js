@@ -364,6 +364,12 @@ let cashSession = {
 };
 
 let cashDialogMode = "open"; // "open" (apertura) o "close" (cierre)
+// Promesa de la carga en segundo plano de los totales/metodos/agentes del
+// dialogo de cierre (ver openCashOpenDialog). El click de "Cerrar caja"
+// espera a que termine antes de imprimir/cerrar, para no hacerlo con datos
+// a medio cargar si el usuario pulsa demasiado rapido.
+let cashCloseSummaryReadyPromise = Promise.resolve();
+let cashCloseSummaryLoading = false;
 let terminalOverlayMode = "session"; // "session" (elegir tpv/agent para abrir caja) o "agentSwitch"
 
 let apiBaseUrl = ""; // base de la API para montar URLs de imágenes
@@ -554,6 +560,9 @@ const mesasTransTerminalBarEl = document.getElementById(
 );
 
 const productSortModeSelect = document.getElementById("productSortModeSelect");
+const parkedCustomerResetModeSelect = document.getElementById(
+  "parkedCustomerResetModeSelect",
+);
 const productReorderModeToggle = document.getElementById(
   "productReorderModeToggle",
 );
@@ -1804,9 +1813,24 @@ const OPTIONS_CART_DISCOUNT_TOOLS_KEY = "ui.cartDiscountToolsEnabled";
 const OPTIONS_CART_WIDTH_CONTROLS_KEY = "ui.cartWidthControlsEnabled";
 const OPTIONS_CART_PANEL_WIDTH_KEY = "ui.cartPanelWidthPx";
 const OPTIONS_SAFE_TRAINING_MODE_KEY = "runtime.safeTrainingMode";
+const OPTIONS_VIRTUAL_KEYBOARD_ENABLED_KEY = "ui.virtualKeyboardEnabled";
+const OPTIONS_PARKED_CUSTOMER_RESET_MODE_KEY = "ui.parkedCustomerResetMode";
+const OPTIONS_DISCOUNT_QUICK_PERCENTS_KEY = "ui.discountQuickPercents";
+const DISCOUNT_QUICK_PERCENTS_MAX = 5;
+// Cada hueco (campo de Opciones) conserva su propio valor/posicion siempre;
+// null = campo vacio (sin boton ahi). Por defecto: los 4 de toda la vida.
+const DISCOUNT_QUICK_PERCENT_SLOTS_DEFAULT = [10, 20, 50, 100, null];
 let showProductStockBadge = false;
 let enableProductStockEdition = false;
 let allowCloseWithParkedTickets = false;
+let virtualKeyboardEnabled = true;
+let parkedCustomerResetMode = "previous";
+// Lista ya "compactada" (sin huecos ni repetidos) que se usa de verdad para
+// pintar los botones del teclado de descuento -- ver
+// computeActiveDiscountQuickPercents().
+let discountQuickPercents = DISCOUNT_QUICK_PERCENT_SLOTS_DEFAULT.filter(
+  (v) => v != null,
+);
 let mesasDinersFamilyRules = [];
 let mesasComandaFamilyRules = [];
 let productDiscountPctById = {};
@@ -2536,6 +2560,20 @@ function getCartLinePricing(item) {
   };
 }
 
+// Peticion de cliente: permitir cobrar un ticket a 0€ cuando ese 0€ viene de
+// un descuento del 100% o de un precio editado a mano (acciones deliberadas
+// del cajero en ESE ticket), pero seguir bloqueandolo si alguna linea esta a
+// 0€ "de fabrica" (precio del catalogo sin tocar) -- si no, un producto mal
+// puesto a 0€ en FacturaScripts por error se venderia gratis para siempre
+// sin que nadie se diera cuenta.
+function getZeroPricedUnmodifiedLines(cart) {
+  return (Array.isArray(cart) ? cart : []).filter((item) => {
+    if (isPackChildLine(item)) return false;
+    if (Number(item?.qty || 0) <= 0) return false;
+    return round2(getOriginalUnitGross(item)) <= 0;
+  });
+}
+
 function getDiscountProductId(productOrId) {
   if (typeof productOrId === "number" || typeof productOrId === "string") {
     return String(Number(productOrId) || 0);
@@ -2564,6 +2602,13 @@ function getProductManualOrderPriority(productOrId) {
   const key = getManualOrderProductId(productOrId);
   if (!key || key === "0") return 0;
   return clampManualOrderPriority(productManualOrderById?.[key] || 0);
+}
+
+function normalizeParkedCustomerResetMode(value) {
+  const v = String(value || "")
+    .trim()
+    .toLowerCase();
+  return v === "default" ? "default" : "previous";
 }
 
 function normalizeProductSortMode(value) {
@@ -2820,6 +2865,7 @@ function bindCartGlobalDiscountButtonsOnce() {
       "price",
       current,
       null,
+      { ...DISCOUNT_QUICK_PERCENTS_OPTS },
     );
   });
 
@@ -4290,6 +4336,214 @@ function applyInfoBarVisibilityUi() {
     infoBarAltUserBtn.style.display = showAltUser ? "" : "none";
 
   updateCashButtonLabel?.();
+}
+
+async function loadVirtualKeyboardToggle() {
+  try {
+    virtualKeyboardEnabled = parseBoolLike(
+      await window.TPV_CFG?.get?.(OPTIONS_VIRTUAL_KEYBOARD_ENABLED_KEY),
+      true,
+    );
+  } catch {}
+
+  const el = document.getElementById("virtualKeyboardToggle");
+  if (el) el.checked = !!virtualKeyboardEnabled;
+}
+
+async function saveVirtualKeyboardToggle(enabled) {
+  virtualKeyboardEnabled = !!enabled;
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_VIRTUAL_KEYBOARD_ENABLED_KEY,
+      virtualKeyboardEnabled,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar toggle de teclado en pantalla:", e);
+  }
+
+  // Si se desactiva mientras el teclado en pantalla está abierto, cerrarlo
+  // ya (si no, se quedaría abierto pero ya no se reabriría en el resto de
+  // campos, lo que resultaria confuso).
+  if (!virtualKeyboardEnabled && qwertyVisible) {
+    closeQwerty("cancel");
+  }
+}
+
+let virtualKeyboardToggleBound = false;
+function bindVirtualKeyboardToggleOnce() {
+  if (virtualKeyboardToggleBound) return;
+  virtualKeyboardToggleBound = true;
+
+  const el = document.getElementById("virtualKeyboardToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    await saveVirtualKeyboardToggle(!!el.checked);
+  });
+}
+
+async function loadParkedCustomerResetModeSetting() {
+  let mode = "previous";
+  try {
+    mode = normalizeParkedCustomerResetMode(
+      await window.TPV_CFG?.get?.(OPTIONS_PARKED_CUSTOMER_RESET_MODE_KEY),
+    );
+  } catch {
+    mode = "previous";
+  }
+
+  parkedCustomerResetMode = mode;
+  if (parkedCustomerResetModeSelect) parkedCustomerResetModeSelect.value = mode;
+}
+
+async function saveParkedCustomerResetModeSetting(mode) {
+  parkedCustomerResetMode = normalizeParkedCustomerResetMode(mode);
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_PARKED_CUSTOMER_RESET_MODE_KEY,
+      parkedCustomerResetMode,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar modo de cliente al salir de aparcado:", e);
+  }
+}
+
+let parkedCustomerResetModeBound = false;
+function bindParkedCustomerResetModeOnce() {
+  if (parkedCustomerResetModeBound) return;
+  parkedCustomerResetModeBound = true;
+
+  if (!parkedCustomerResetModeSelect) return;
+
+  parkedCustomerResetModeSelect.addEventListener("change", async () => {
+    await saveParkedCustomerResetModeSetting(parkedCustomerResetModeSelect.value);
+  });
+}
+
+// Valor de UN campo de Opciones -> valor real de ese hueco, o null si el
+// hueco esta "vacio". Feedback de cliente: escribir 0 debe tratarse igual
+// que dejarlo en blanco (un descuento del 0% no tiene sentido como boton).
+function sanitizeDiscountQuickPercentSlot(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) return null;
+  const n = parseNumericLike(s, 0);
+  if (!(n > 0)) return null;
+  return clampDiscountPercent(n);
+}
+
+// Los botones que se ven de verdad en el teclado de descuento: los huecos
+// con valor, en su mismo orden de izquierda a derecha, sin huecos vacios en
+// medio y sin repetidos. Esto NUNCA reordena ni toca los 5 campos de
+// Opciones -- cada campo conserva siempre su propio valor y posicion,
+// aunque los de su izquierda esten vacios (feedback de cliente: si escribes
+// solo en el ultimo campo, ese boton debe salir igualmente, sin mover nada).
+function computeActiveDiscountQuickPercents(slots) {
+  const seen = new Set();
+  const out = [];
+  (Array.isArray(slots) ? slots : []).forEach((v) => {
+    if (v == null) return;
+    const pct = clampDiscountPercent(v);
+    if (pct <= 0 || seen.has(pct)) return;
+    seen.add(pct);
+    out.push(pct);
+  });
+  return out;
+}
+
+function fillDiscountQuickPercentInputs(slots) {
+  for (let i = 0; i < DISCOUNT_QUICK_PERCENTS_MAX; i++) {
+    const el = document.getElementById(`discountQuickPct${i + 1}`);
+    if (el) el.value = slots[i] != null ? String(slots[i]) : "";
+  }
+}
+
+async function loadDiscountQuickPercentsSetting() {
+  let slots = DISCOUNT_QUICK_PERCENT_SLOTS_DEFAULT;
+  try {
+    const raw = await window.TPV_CFG?.get?.(
+      OPTIONS_DISCOUNT_QUICK_PERCENTS_KEY,
+    );
+    // Solo si ya se guardo algo alguna vez (aunque sean todos huecos)
+    // respetamos esa eleccion; si nunca se ha tocado, se usan los 4 de
+    // siempre por defecto.
+    if (Array.isArray(raw)) {
+      slots = Array.from({ length: DISCOUNT_QUICK_PERCENTS_MAX }, (_, i) =>
+        sanitizeDiscountQuickPercentSlot(raw[i]),
+      );
+    }
+  } catch {}
+
+  discountQuickPercents = computeActiveDiscountQuickPercents(slots);
+  fillDiscountQuickPercentInputs(slots);
+}
+
+async function saveDiscountQuickPercentsSetting() {
+  const slots = [];
+  for (let i = 0; i < DISCOUNT_QUICK_PERCENTS_MAX; i++) {
+    const el = document.getElementById(`discountQuickPct${i + 1}`);
+    slots.push(sanitizeDiscountQuickPercentSlot(el?.value));
+  }
+
+  discountQuickPercents = computeActiveDiscountQuickPercents(slots);
+  // Normaliza cada campo EN SU PROPIO SITIO (ej. "0" -> vacio, "7.6" -> "8"),
+  // nunca los reordena ni los compacta hacia la izquierda.
+  fillDiscountQuickPercentInputs(slots);
+
+  try {
+    await window.TPV_CFG?.set?.(OPTIONS_DISCOUNT_QUICK_PERCENTS_KEY, slots);
+    toast("Accesos rápidos de descuento guardados.", "ok", "Carrito");
+  } catch (e) {
+    console.warn("No se pudo guardar accesos rapidos de descuento:", e);
+    toast("No se pudo guardar.", "err", "Carrito");
+  }
+}
+
+// Feedback de cliente: los 5 campos son type="number" y no tenian ningun
+// teclado en pantalla asociado (ni qwerty ni numerico), asi que con el
+// teclado tactil activado no pasaba nada al tocarlos. Igual que ya se hace
+// para los importes de apertura/cierre de caja: abren el teclado numerico y
+// escriben el resultado en el propio campo.
+let __discountQuickPctLastFocusedInput = null;
+function openNumPadForDiscountQuickPctInput(inputEl) {
+  if (!inputEl || __discountQuickPctLastFocusedInput === inputEl) return;
+  __discountQuickPctLastFocusedInput = inputEl;
+
+  openNumPad(
+    String(inputEl.value || ""),
+    (val, meta = {}) => {
+      __discountQuickPctLastFocusedInput = null;
+      if (meta?.phase && meta.phase !== "confirm") return;
+
+      const pct = sanitizeDiscountQuickPercentSlot(val);
+      inputEl.value = pct != null ? String(pct) : "";
+      inputEl.blur(); // para que el proximo focus vuelva a disparar el teclado
+    },
+    "Accesos rápidos de descuento (%)",
+    "qty",
+    null,
+    null,
+  );
+}
+
+let discountQuickPctsSaveBound = false;
+function bindDiscountQuickPctsSaveOnce() {
+  if (discountQuickPctsSaveBound) return;
+  discountQuickPctsSaveBound = true;
+
+  const btn = document.getElementById("discountQuickPctsSaveBtn");
+  if (btn) {
+    btn.addEventListener("click", async () => {
+      await saveDiscountQuickPercentsSetting();
+    });
+  }
+
+  for (let i = 0; i < DISCOUNT_QUICK_PERCENTS_MAX; i++) {
+    const el = document.getElementById(`discountQuickPct${i + 1}`);
+    if (!el) continue;
+    el.addEventListener("focus", () => openNumPadForDiscountQuickPctInput(el));
+    el.addEventListener("click", () => openNumPadForDiscountQuickPctInput(el));
+  }
 }
 
 async function loadInfoBarVisibilitySettings() {
@@ -6581,7 +6835,15 @@ async function initCustomerSelectorOnce() {
     baseUrl,
     apiKey,
     defaultCodcliente: "1",
-    onChange: (c) => renderSelectedCustomerInCartHeader(c),
+    onChange: (c) => {
+      renderSelectedCustomerInCartHeader(c);
+      // Cambiar el cliente de un aparcado cargado, sin tocar ninguna linea,
+      // no disparaba el autoguardado (ese solo se programaba desde renderCart).
+      // Sin esto el cliente nuevo se perdia si se salia del ticket antes de
+      // volver a tocar el carrito.
+      scheduleMesasAutoSave?.();
+      scheduleTpvAutoSave?.();
+    },
     debug: false,
   });
 
@@ -7396,7 +7658,11 @@ async function apiUpsertTerminalPresenceRemote() {
   };
 
   const url = `${TPV_SYNC_API_URL}?action=upsert-terminal-presence`;
-  const res = await fetch(url, {
+  // fetchWithTimeout, no fetch a secas: sin limite de tiempo, una peticion
+  // colgada (red inestable) dejaba __terminalPresenceInFlight bloqueado para
+  // siempre (solo se libera en el finally al terminar la peticion), y esa
+  // sesion dejaba de mandar latidos el resto del dia sin ningun error visible.
+  const res = await fetchWithTimeout(url, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -7426,7 +7692,7 @@ async function apiListTerminalPresenceRemote() {
     `&includeSilent=${includeSilent}`;
   const url = `${TPV_SYNC_API_URL}?action=list-terminal-presence&${qs}`;
 
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: "GET",
     headers: {
       Accept: "application/json",
@@ -7454,7 +7720,7 @@ async function apiClearTerminalPresenceRemote() {
   };
 
   const url = `${TPV_SYNC_API_URL}?action=clear-terminal-presence`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -7588,16 +7854,16 @@ function startTerminalPresenceMonitor() {
 
   checkTerminalPresenceOnce({ notify: true }).catch(() => {});
 
-  __terminalPresenceTimer = setInterval(async () => {
-    if (__terminalPresenceInFlight) return;
+  // checkTerminalPresenceOnce() YA tiene su propio candado interno
+  // (__terminalPresenceInFlight) para evitar llamadas solapadas. Poner el
+  // MISMO candado aqui tambien, antes de llamarla, hacia que la funcion se
+  // viera a si misma como "ya en marcha" y se cancelara sin mandar nada en
+  // cada tick del intervalo (solo funcionaba la primera vez, llamada antes
+  // de que este intervalo existiera). Un solo latido real por sesion, nunca
+  // mas, en todos los TPV, siempre.
+  __terminalPresenceTimer = setInterval(() => {
     if (!cashSession?.open) return;
-
-    __terminalPresenceInFlight = true;
-    try {
-      await checkTerminalPresenceOnce({ notify: true });
-    } finally {
-      __terminalPresenceInFlight = false;
-    }
+    checkTerminalPresenceOnce({ notify: true }).catch(() => {});
   }, TERMINAL_PRESENCE_HEARTBEAT_MS);
 }
 
@@ -8166,9 +8432,70 @@ function hasUnsavedChangesForLoadedParkedTicket(ticket) {
   );
   if (currentGlobalPct !== savedGlobalPct) return true;
 
+  // Sin esto, cambiar SOLO el cliente (sin tocar lineas/cantidades) no se
+  // consideraba "cambio pendiente" y el autoguardado nunca lo persistia: el
+  // ticket se quedaba con el cliente viejo hasta el siguiente cambio de carrito.
+  const currentCod =
+    String(
+      window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() ||
+        window.CUSTOMER_SELECTOR?.getSelectedCustomer?.()?.codcliente ||
+        currentTerminal?.codcliente ||
+        "1",
+    ).trim() || "1";
+  const savedCod = String(ticket?.codcliente || "1").trim() || "1";
+  if (currentCod !== savedCod) return true;
+
   const current = JSON.stringify(normalizeTicketLinesForCompare(cart));
   const saved = JSON.stringify(normalizeTicketLinesForCompare(ticket?.items));
   return current !== saved;
+}
+
+// Saltar de un aparcado cargado a OTRO (desde la lista, o navegando partes
+// de un dividido) pisaba cart/currentParkedTicketIndex sin pasar por
+// parkCurrentCart, así que cualquier cambio pendiente (cliente, cantidades)
+// del ticket que se abandonaba se perdía en silencio. Esto vuelca ese ticket
+// de forma síncrona (sin awaits) justo antes de pisarlo, para que no dependa
+// de que el temporizador del autoguardado normal llegue a tiempo. No repite
+// toda la lógica de parkCurrentCart (stock, mesas, presupuesto...): solo
+// persiste lo que hasUnsavedChangesForLoadedParkedTicket vigila.
+function flushLoadedParkedTicketChangesSync() {
+  const idx = currentParkedTicketIndex;
+  if (idx == null || !Array.isArray(parkedTickets) || !parkedTickets[idx]) {
+    return;
+  }
+
+  const ticket = parkedTickets[idx];
+  if (!hasUnsavedChangesForLoadedParkedTicket(ticket)) return;
+
+  const selectedCustomerCod =
+    String(
+      window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() ||
+        window.CUSTOMER_SELECTOR?.getSelectedCustomer?.()?.codcliente ||
+        currentTerminal?.codcliente ||
+        "1",
+    ).trim() || "1";
+
+  const currentGlobalPct = getCartGlobalDiscountPercent();
+  const snapshot = freezeGlobalDiscountOnLines(cart, currentGlobalPct);
+
+  ticket.items = snapshot;
+  ticket.total = getCartTotal(snapshot);
+  ticket.cartGlobalDiscountPct = currentGlobalPct;
+  ticket.codcliente = selectedCustomerCod;
+  ticket.localRevisionAt = Date.now();
+  ticket.updatedAt = new Date();
+
+  saveParkedTicketsCache();
+
+  apiSaveParkedReservation(ticket)
+    .then(() => refreshRemoteParkedReservationsOnly())
+    .catch((e) => {
+      enqueueParkedSyncOperation("upsert", ticket);
+      console.warn(
+        "No se pudo guardar la reserva remota al cambiar de aparcado:",
+        e?.message || e,
+      );
+    });
 }
 
 function ensureMesaLinkedTicketLoaded() {
@@ -9786,6 +10113,12 @@ async function runBootFlow() {
     await loadProductTileResizeModeToggle?.();
     await loadCartPanelWidthSetting?.();
     await loadCartWidthControlsToggle?.();
+    await loadPrintCajaAutoLogToggle?.();
+    await loadPrintCajaDrawerOpenLogsToggle?.();
+    await loadVirtualKeyboardToggle?.();
+    await loadParkedCustomerResetModeSetting?.();
+    await loadSafeTrainingModeToggle?.();
+    await loadDiscountQuickPercentsSetting?.();
 
     // 3) Datos
     await loadDataFromApi();
@@ -10834,10 +11167,22 @@ async function addToCart(product, quantity = 1) {
     unlockAppUI();
   }
 
-  const editLockReason = getMesasCartEditLockReason();
+  const editLockReason = getCartEditLockReason();
   if (editLockReason) {
-    toast(editLockReason, "warn", "Mesa bloqueada");
+    toast(editLockReason, "warn", "Carrito bloqueado");
     return;
+  }
+
+  // Empezamos un ticket nuevo (no es la edicion de un aparcado ya existente,
+  // eso lo captura restoreParkedCartByIndex): recordamos que cliente habia
+  // seleccionado ANTES de tocar nada, para poder volver a el al aparcar/salir
+  // si Opciones -> Carrito esta puesto en "cliente anterior".
+  if (
+    currentParkedTicketIndex == null &&
+    !preParkedCustomerSelection &&
+    (!Array.isArray(cart) || cart.length === 0)
+  ) {
+    preParkedCustomerSelection = captureCurrentCustomerSelectionForParked();
   }
 
   product = buildProductWithAppliedDiscount(product);
@@ -10995,9 +11340,9 @@ async function addToCart(product, quantity = 1) {
 }
 
 function updateCartItemQuantity(lineId, newQty) {
-  const editLockReason = getMesasCartEditLockReason();
+  const editLockReason = getCartEditLockReason();
   if (editLockReason) {
-    toast(editLockReason, "warn", "Mesa bloqueada");
+    toast(editLockReason, "warn", "Carrito bloqueado");
     return;
   }
 
@@ -11042,7 +11387,7 @@ function updateCartItemQuantity(lineId, newQty) {
 }
 
 function previewCartItemQuantity(lineId, newQty) {
-  if (getMesasCartEditLockReason()) return;
+  if (getCartEditLockReason()) return;
 
   const item = cart.find((c) => c._lineId === lineId);
   if (!item || isPackChildLine(item)) return;
@@ -11069,7 +11414,15 @@ function getOriginalUnitGross(item) {
   );
 }
 
-function getMesasCartEditLockReason() {
+function getCartEditLockReason() {
+  // Mientras se esta guardando el aparcado (varios awaits: confirmar stock,
+  // crear presupuesto, guardar reserva remota...), el carrito seguia
+  // aceptando toques de producto/edicion de lineas sin avisar que no se
+  // iban a aplicar al aparcado que se esta guardando en ese momento.
+  if (isParkingNow) {
+    return "Aparcando... espera a que termine para seguir.";
+  }
+
   if (!MESAS_INLINE_ACTIVE || MESAS_INLINE_VIEW !== "transacciones") {
     return "";
   }
@@ -12850,6 +13203,11 @@ const numPadOverlay = document.getElementById("numPadOverlay");
 const numPadEl = numPadOverlay?.querySelector(".num-pad");
 const numPadDisplay = document.getElementById("numPadDisplay");
 const numPadProductName = document.getElementById("numPadProductName");
+const numPadQuickPercentsEl = document.getElementById("numPadQuickPercents");
+// Peticion de cliente: accesos rapidos (10/20/50/100%, fijos en el HTML) en
+// el teclado de descuentos, para no tener que teclear a mano los porcentajes
+// redondos mas habituales.
+const DISCOUNT_QUICK_PERCENTS_OPTS = { showQuickPercents: true };
 let numPadCurrentValue = "";
 let numPadOnConfirm = null;
 let numPadVisible = false;
@@ -13690,6 +14048,26 @@ function applyNumPadPreview() {
   numPadOnConfirm(nextValue, { phase: "preview", mode: numPadMode });
 }
 
+// Botones de porcentaje del teclado de descuento (linea/general), segun lo
+// configurado en Opciones -> Carrito -> Accesos rapidos de descuento.
+function renderNumPadQuickPercents(show) {
+  if (!numPadQuickPercentsEl) return;
+
+  if (!show || !discountQuickPercents.length) {
+    numPadQuickPercentsEl.classList.add("hidden");
+    numPadQuickPercentsEl.innerHTML = "";
+    return;
+  }
+
+  numPadQuickPercentsEl.innerHTML = discountQuickPercents
+    .map(
+      (pct) =>
+        `<button class="num-pad-quick-pct" data-pct="${pct}">${pct}%</button>`,
+    )
+    .join("");
+  numPadQuickPercentsEl.classList.remove("hidden");
+}
+
 function openNumPad(
   initialValue,
   onConfirm,
@@ -13719,6 +14097,8 @@ function openNumPad(
   // ✅ si es precio, muestra botón “Restaurar”
   const resetBtn = document.querySelector('[data-key="resetPrice"]');
   if (resetBtn) resetBtn.style.display = mode === "price" ? "" : "none";
+
+  renderNumPadQuickPercents(!!opts.showQuickPercents);
 
   updateNumPadDisplay();
   if (numPadOverlay) numPadOverlay.classList.remove("hidden");
@@ -13870,6 +14250,7 @@ if (numPadOverlay) {
   numPadOverlay.addEventListener("mousedown", (e) => {
     if (
       e.target.closest("[data-key]") ||
+      e.target.closest("[data-pct]") ||
       e.target.closest(".kb-window-btn") ||
       e.target.closest(".kb-drag-handle") ||
       e.target.closest(".kb-resize-handle")
@@ -13882,6 +14263,14 @@ if (numPadOverlay) {
     if (numPadWindowManager?.shouldIgnoreOutsideClick?.()) return;
 
     if (handleOverlayOutsideClick(e, ".num-pad", () => closeNumPad("cancel"))) {
+      return;
+    }
+
+    const pctBtn = e.target.closest("[data-pct]");
+    if (pctBtn) {
+      numPadCurrentValue = pctBtn.getAttribute("data-pct") || "0";
+      numPadOverwriteNextDigit = true;
+      updateNumPadDisplay();
       return;
     }
 
@@ -14171,6 +14560,13 @@ function resolveQwertyTargetInput() {
 
 // default: text
 function openQwertyForInput(inputEl, mode = "text") {
+  // Con teclado fisico conectado, el usuario desactiva esto en Opciones para
+  // poder escribir directamente en el campo sin que salte el tactil encima.
+  if (!virtualKeyboardEnabled) {
+    inputEl?.focus?.();
+    return;
+  }
+
   qwertyMode = mode;
   qwertyCommitted = false;
 
@@ -14263,6 +14659,26 @@ function qwertyAddChar(ch) {
   consumeQwertySingleCapsIfNeeded(insertion);
   updateQwertyDisplay();
   applyQwertyPreview();
+}
+
+async function qwertyPasteFromClipboard() {
+  let text = "";
+  try {
+    text = await window.TPV_CLIPBOARD?.readText?.();
+  } catch {
+    text = "";
+  }
+
+  // Este teclado es de una sola linea: quitamos saltos de linea/tabs para no
+  // romper la vista si se pega algo copiado de un documento u hoja de calculo.
+  text = String(text || "")
+    .replace(/[\r\n\t]+/g, " ")
+    .trim();
+  if (!text) return;
+
+  // Pegar un valor concreto (email, referencia...) no debe pasar por el
+  // mayus/minus de una sola tecla: se inserta tal cual viene del portapapeles.
+  qwertyAddChar(text);
 }
 
 function qwertyBackspace() {
@@ -14426,6 +14842,8 @@ if (qwertyOverlay) {
       qwertyClearAll();
     } else if (key === "clear-inline") {
       qwertyToggleClearOrRestore();
+    } else if (key === "paste") {
+      qwertyPasteFromClipboard();
     } else if (key === "cancel") {
       closeQwerty("cancel");
     } else if (key === "ok") {
@@ -14437,7 +14855,10 @@ if (qwertyOverlay) {
 window.addEventListener("keydown", (e) => {
   if (!qwertyVisible) return;
 
-  if (e.key.length === 1) {
+  if ((e.ctrlKey || e.metaKey) && String(e.key || "").toLowerCase() === "v") {
+    e.preventDefault();
+    qwertyPasteFromClipboard();
+  } else if (e.key.length === 1) {
     e.preventDefault();
     qwertyAddChar(e.key);
   } else if (e.key === "Backspace") {
@@ -14592,7 +15013,7 @@ if (cartLinesContainer) {
         "discount",
         currentPct,
         lineId,
-        { showPricePreview: true },
+        { showPricePreview: true, ...DISCOUNT_QUICK_PERCENTS_OPTS },
       );
       return;
     }
@@ -14672,9 +15093,9 @@ if (cartLinesContainer) {
     if (priceBtn) {
       if (!item) return;
 
-      const editLockReason = getMesasCartEditLockReason();
+      const editLockReason = getCartEditLockReason();
       if (editLockReason) {
-        toast(editLockReason, "warn", "Mesa bloqueada");
+        toast(editLockReason, "warn", "Carrito bloqueado");
         return;
       }
 
@@ -15391,6 +15812,7 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
         cart = [];
         renderCart();
         currentParkedTicketIndex = null;
+        restorePreParkedCustomerSelection();
       }
 
       refreshParkButtonUI();
@@ -15564,6 +15986,7 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
       cart = [];
       renderCart();
       currentParkedTicketIndex = null;
+      restorePreParkedCustomerSelection();
     }
 
     refreshParkButtonUI();
@@ -16263,6 +16686,13 @@ function getParkedDisplayNumberFromId(rawId) {
   if (nodePart >= 1000 && nodePart <= 9999 && seqPart >= 1 && seqPart <= 9999) {
     return String(seqPart);
   }
+
+  // Los ids nuevos se generan con Date.now() (epoch en ms, ~13 cifras) para
+  // evitar colisiones entre TPV, y no se pueden decodificar con el esquema
+  // node/seq de arriba (de ids antiguos y mas cortos). Antes se devolvia el
+  // id entero tal cual, mostrando numeros de ticket enormes e ilegibles;
+  // mejor no dar ningun numero y que se use el nombre del ticket.
+  if (id > 999999) return "";
 
   return String(id);
 }
@@ -17182,7 +17612,13 @@ function ensureParkedToolbar() {
   return toolbar;
 }
 
+function refreshProductsGridParkingOverlay() {
+  const overlay = document.getElementById("productsGridParkingOverlay");
+  if (overlay) overlay.classList.toggle("hidden", !isParkingNow);
+}
+
 function refreshParkButtonUI() {
+  refreshProductsGridParkingOverlay();
   if (!parkBtn) return;
   const labels = getParkingLabels();
 
@@ -18773,6 +19209,15 @@ function applyCustomerSelectionSnapshot(snapshot) {
 function restorePreParkedCustomerSelection() {
   const snapshot = preParkedCustomerSelection;
   preParkedCustomerSelection = null;
+
+  // Opciones -> Carrito: elegir si al terminar/salir de un aparcado el
+  // selector vuelve al cliente que había antes de abrirlo (comportamiento
+  // de siempre) o directamente al cliente por defecto del terminal.
+  if (parkedCustomerResetMode === "default") {
+    window.CUSTOMER_SELECTOR?.resetToDefault?.();
+    return;
+  }
+
   if (!snapshot) return;
   applyCustomerSelectionSnapshot(snapshot);
 }
@@ -18787,6 +19232,13 @@ function restoreParkedCartByIndex(index) {
   if (index < 0 || index >= parkedTickets.length) {
     toast(`${labels.itemCap} no valido.`, "err", labels.featureTitle);
     return;
+  }
+
+  // Saltar directamente de ESTE aparcado a otro (sin pasar por "Aparcar" ni
+  // "Salir") pisaria el carrito sin guardar antes lo pendiente del que se
+  // abandona.
+  if (currentParkedTicketIndex !== null && currentParkedTicketIndex !== index) {
+    flushLoadedParkedTicketChangesSync();
   }
 
   const ticket = parkedTickets[index];
@@ -20923,23 +21375,52 @@ async function fetchRecibosByFacturasMulti(idfacturas) {
   const base = (cfg.baseUrl || "").replace(/\/+$/, "");
   if (!base || !cfg.apiKey) return [];
 
-  const ids = (idfacturas || []).map((x) => String(x)).filter(Boolean);
+  const ids = Array.from(
+    new Set((idfacturas || []).map((x) => String(x).trim()).filter(Boolean)),
+  );
   if (!ids.length) return [];
 
-  const all = [];
-  for (const batch of chunk(ids, 30)) {
-    // 30 es un tamaño prudente
-    const url = new URL(`${base}/reciboclientes`);
-    url.searchParams.set("limit", "0");
-    batch.forEach((id) => url.searchParams.append("filter[idfactura]", id));
+  // La API de FacturaScripts no soporta un filtro "IN" real por querystring:
+  // repetir "filter[idfactura]" varias veces (como se hacia antes, por lotes
+  // de 30) no funciona como OR/IN, PHP colapsa las claves repetidas y se
+  // queda solo con el ULTIMO valor de cada lote. Eso hacia que ~29 de cada
+  // 30 facturas nunca se encontraran en el prefetch, y cada una disparaba
+  // luego (en getFacturaPaymentBreakdown) una peticion individual de mas,
+  // en secuencia, dentro del bucle de cierre de caja: con cientos de
+  // tickets en la caja, eso eran cientos de peticiones una detras de otra.
+  // Aqui se pide factura a factura (lo unico que la API filtra bien), pero
+  // en paralelo con un limite de concurrencia, no en secuencia.
+  const fetchOne = async (id) => {
+    try {
+      const url = new URL(`${base}/reciboclientes`);
+      url.searchParams.set("limit", "0");
+      url.searchParams.set("filter[idfactura]", id);
 
-    const res = await fetch(url.toString(), {
-      headers: { Accept: "application/json", Token: cfg.apiKey },
-      cache: "no-store",
-    });
-    const data = await res.json().catch(() => null);
-    if (res.ok && Array.isArray(data)) all.push(...data);
-  }
+      const res = await fetch(url.toString(), {
+        headers: { Accept: "application/json", Token: cfg.apiKey },
+        cache: "no-store",
+      });
+      const data = await res.json().catch(() => null);
+      return res.ok && Array.isArray(data) ? data : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const CONCURRENCY = 8;
+  const all = [];
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < ids.length) {
+      const id = ids[cursor++];
+      const recibos = await fetchOne(id);
+      if (recibos.length) all.push(...recibos);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, ids.length) }, worker),
+  );
+
   return all;
 }
 
@@ -21524,7 +22005,7 @@ async function hydratePaymentsByMethodForClose(
   cashSession.totalPaymentUses = totalPaymentUses;
 }
 
-async function hydrateCloseTicketStatsForCaja(idcaja) {
+async function hydrateCloseTicketStatsForCaja(idcaja, facturasInput = null) {
   const cajaId = Number(idcaja || 0) || 0;
   if (!cajaId) {
     cashSession.numtickets = 0;
@@ -21532,10 +22013,15 @@ async function hydrateCloseTicketStatsForCaja(idcaja) {
     return { totalTickets: 0, byAgent: {} };
   }
 
-  const facturas = await fetchApiResourceWithParams("facturaclientes", {
-    "filter[idcaja]": cajaId,
-    limit: 0,
-  });
+  // El cierre de caja ya habia leido esta misma lista de facturas unas
+  // lineas antes; volver a pedirla aqui era una segunda peticion completa
+  // e innecesaria (mas lenta cuanto mas grande la caja).
+  const facturas = Array.isArray(facturasInput)
+    ? facturasInput
+    : await fetchApiResourceWithParams("facturaclientes", {
+        "filter[idcaja]": cajaId,
+        limit: 0,
+      });
 
   const validFacturas = (Array.isArray(facturas) ? facturas : []).filter(
     (f) => f.tpv_venta === true,
@@ -21808,6 +22294,7 @@ function openCashOpenDialog(mode = "open") {
       mode === "open" ? "Apertura de caja" : "Cierre de caja";
   }
   if (cashOpenOkBtn) {
+    cashOpenOkBtn.disabled = false;
     cashOpenOkBtn.textContent = mode === "open" ? "Abrir caja" : "Cerrar caja";
   }
 
@@ -21851,7 +22338,12 @@ function openCashOpenDialog(mode = "open") {
     if (l1) l1.style.display = "grid";
     if (l2) l2.style.display = "none"; // se mostrará cuando haya datos
     if (l3) l3.style.display = "none"; // se mostrará en updateCloseSummary
-    (async () => {
+    cashCloseSummaryLoading = true;
+    if (cashOpenOkBtn) {
+      cashOpenOkBtn.disabled = true;
+      cashOpenOkBtn.textContent = "Cargando...";
+    }
+    cashCloseSummaryReadyPromise = (async () => {
       try {
         const remoteCaja = await apiReadCurrentCaja();
         if (!remoteCaja) {
@@ -21894,7 +22386,7 @@ function openCashOpenDialog(mode = "open") {
         cashSession.closeRecibosByFacturaSnapshot = recibosByFactura;
 
         // ✅ tickets reales de la caja
-        await hydrateCloseTicketStatsForCaja(cajaId);
+        await hydrateCloseTicketStatsForCaja(cajaId, facturasCajaList);
 
         // Métodos (TOTAL)
         await hydratePaymentsByMethodForClose(
@@ -21930,6 +22422,12 @@ function openCashOpenDialog(mode = "open") {
           cashDirectTotalEl.value = formatCashDirectAmount(
             Number(cashSession.closingTotal || 0),
           );
+        }
+      } finally {
+        cashCloseSummaryLoading = false;
+        if (cashOpenOkBtn && cashDialogMode === "close") {
+          cashOpenOkBtn.disabled = false;
+          cashOpenOkBtn.textContent = "Cerrar caja";
         }
       }
     })();
@@ -23186,6 +23684,15 @@ if (cashOpenOkBtn) {
         return;
       }
 
+      // Salvaguarda: el boton ya se deshabilita con "Cargando..." mientras
+      // openCashOpenDialog trae los totales/metodos/agentes en segundo plano
+      // (ver mas arriba), asi que este onclick no deberia poder dispararse
+      // durante la carga. Se espera aqui igualmente por si acaso, para no
+      // cerrar ni imprimir con esos datos a medias.
+      if (cashCloseSummaryLoading) {
+        await cashCloseSummaryReadyPromise.catch(() => {});
+      }
+
       const parkedCountGlobal =
         getPendingParkedTicketsGlobal(parkedTickets).length;
 
@@ -24203,6 +24710,8 @@ async function loadDataFromApi(opts = {}) {
             imageUrl: imgInfoBase ? imgInfoBase.url : null,
             stockfisRaw: base.stockfis,
             stockfis: parseManagedStockValue(base.stockfis),
+            stockManaged: isFalseFlag(base.nostock),
+            allowSellWithoutStock: !isFalseFlag(base.ventasinstock),
           });
         });
       });
@@ -24243,6 +24752,8 @@ async function loadDataFromApi(opts = {}) {
           imageUrl: imgInfo ? imgInfo.url : null,
           stockfisRaw: p.stockfis,
           stockfis: parseManagedStockValue(p.stockfis),
+          stockManaged: isFalseFlag(p.nostock),
+          allowSellWithoutStock: !isFalseFlag(p.ventasinstock),
         });
       });
 
@@ -25847,6 +26358,15 @@ async function openOptions() {
   await loadProductSortModeSetting?.();
   await loadProductReorderModeSetting?.();
   await loadInfoBarVisibilitySettings?.();
+
+  bindVirtualKeyboardToggleOnce();
+  await loadVirtualKeyboardToggle();
+
+  bindParkedCustomerResetModeOnce();
+  await loadParkedCustomerResetModeSetting();
+
+  bindDiscountQuickPctsSaveOnce();
+  await loadDiscountQuickPercentsSetting();
 
   applyAdminOnlyUI?.();
   refreshOptionsUI?.();
@@ -27877,42 +28397,17 @@ async function createTicketInFacturaScripts(ticketPayload) {
 
   let submit = await doPost(bodyParams);
 
-  const isTotals422 =
-    submit.res.status === 422 &&
-    String(submit.data?.message || "")
-      .trim()
-      .toLowerCase() === "error-calculating-totals";
-
-  if (isTotals422) {
-    const hasProductBoundLine = (
-      Array.isArray(ticketPayload.lineas) ? ticketPayload.lineas : []
-    ).some((l) => l?.idproducto != null || String(l?.referencia || "").trim());
-
-    if (hasProductBoundLine) {
-      const cleanLines = (
-        Array.isArray(ticketPayload.lineas) ? ticketPayload.lineas : []
-      ).map((l) => {
-        const next = { ...l };
-        delete next.idproducto;
-        delete next.referencia;
-        return next;
-      });
-
-      const retryParams = new URLSearchParams(bodyParams.toString());
-      retryParams.set("lineas", JSON.stringify(cleanLines));
-
-      console.warn(
-        "[crearFacturaCliente] 422 error-calculating-totals. Reintentando sin idproducto/referencia...",
-      );
-      console.log(
-        ">>> Enviando a crearFacturaCliente [retry-lineas-sin-idproducto-referencia]:",
-        retryParams.toString(),
-      );
-
-      submit = await doPost(retryParams);
-    }
-  }
-
+  // Antes, un 422 "error-calculating-totals" (casi siempre stock insuficiente
+  // en un producto sin "venta sin stock" en FacturaScripts) se resolvia
+  // reintentando la MISMA venta sin idproducto/referencia en ninguna linea,
+  // en silencio. La venta se cobraba, pero la factura quedaba sin ningun
+  // producto vinculado (sin stock descontado, sin poder abrir el producto
+  // desde la factura...). Ahora esto se evita ANTES de cobrar (aviso de
+  // stock con opcion de "cobrar sin stock" en checkCartStockProblems, que
+  // activa "venta sin stock" solo para esa venta). Si aun asi llega este
+  // 422 aqui, es una situacion real que no detectamos a tiempo (p.ej. el
+  // stock cambio justo antes de confirmar el cobro): se propaga como error
+  // de verdad en vez de guardar la venta con datos incompletos.
   if (submit.res.status === 429) {
     console.error(
       "Error 429 crearFacturaCliente:",
@@ -27924,7 +28419,49 @@ async function createTicketInFacturaScripts(ticketPayload) {
     );
   }
 
+  // Si la respuesta es ambigua (5xx, o cuerpo vacío/no-JSON con status ok),
+  // no sabemos si FacturaScripts llegó a crear la factura antes de fallar.
+  // Comprobamos por numero2 antes de dar el cobro por fallido: si ya existe,
+  // la usamos (igual que el dedup de arriba) en vez de arriesgarnos a que el
+  // ticket se quede como "no cobrado" y se vuelva a cobrar en otro TPV.
+  const tryRecoverExistingFactura = async () => {
+    if (!ticketPayload.numero2) return null;
+    try {
+      return await findExistingFacturaByNumero2(
+        cfg,
+        ticketPayload.numero2,
+        ticketPayload.idtpv,
+      );
+    } catch {
+      return null;
+    }
+  };
+
   if (!submit.res.ok) {
+    if (submit.res.status >= 500) {
+      const recovered = await tryRecoverExistingFactura();
+      if (recovered) {
+        console.warn(
+          `[crearFacturaCliente] HTTP ${submit.res.status} pero ya existía una factura con numero2=${ticketPayload.numero2}. Usando esa en vez de fallar.`,
+        );
+        return { doc: recovered, dedup: true, recovered: true };
+      }
+    }
+
+    if (
+      submit.res.status === 422 &&
+      String(submit.data?.message || "").trim().toLowerCase() ===
+        "error-calculating-totals"
+    ) {
+      console.error(
+        "[crearFacturaCliente] error-calculating-totals (probable stock insuficiente ya sin producto sobrante para el override):",
+        submit.data,
+      );
+      throw new Error(
+        "No se puede cobrar: probablemente uno de los productos se quedó sin stock justo ahora. Vuelve a intentar el cobro.",
+      );
+    }
+
     let msg = `Error HTTP ${submit.res.status}`;
     if (submit.data && typeof submit.data === "object") {
       console.error("Respuesta de error crearFacturaCliente:", submit.data);
@@ -27939,6 +28476,13 @@ async function createTicketInFacturaScripts(ticketPayload) {
 
   const data = submit.data;
   if (!data || typeof data !== "object") {
+    const recovered = await tryRecoverExistingFactura();
+    if (recovered) {
+      console.warn(
+        `[crearFacturaCliente] Respuesta vacía/no válida pero ya existía una factura con numero2=${ticketPayload.numero2}. Usando esa en vez de fallar.`,
+      );
+      return { doc: recovered, dedup: true, recovered: true };
+    }
     throw new Error(
       "Respuesta no válida de FacturaScripts al crear la factura.",
     );
@@ -27950,6 +28494,7 @@ async function createTicketInFacturaScripts(ticketPayload) {
   }
 
   console.log("Respuesta OK crearFacturaCliente:", data);
+
   return data;
 }
 
@@ -32155,8 +32700,13 @@ function syncParkedTicketsFromRemote(list) {
       }
 
       return merged;
-    })
-    .filter((t) => isTicketInCurrentParkingMode(t));
+    });
+    // Sin filtrar por isTicketInCurrentParkingMode aqui: un cobrado confirmado
+    // por el servidor es un hecho consumado, no una tarea "de este modo". Si
+    // el terminal esta en Mesas justo al sincronizar y el ticket es de TPV
+    // normal (o al reves), antes se descartaba en este mismo paso y el
+    // cobrado desaparecia de "Cobrados" hasta el siguiente sync en el modo
+    // "correcto" -- el boton "Sync" podia parecer que "no hacia nada".
 
   try {
     upsertParkedPaidHistoryMany(remotePaid);
@@ -32240,13 +32790,15 @@ function syncParkedTicketsFromRemote(list) {
   const preservedPending = Array.from(preservedPendingByKey.values());
 
   const preservedPaidByKey = new Map();
+  // Igual que en remotePaid: un ticket ya cobrado no se descarta por no
+  // coincidir con el modo (Mesas/TPV) actual del terminal, para que "Cobrados"
+  // no lo pierda de vista solo por sincronizar desde el modo "equivocado".
   const preservedPaidCandidates = [
     ...previousTickets,
     ...loadParkedPaidHistory(),
   ]
     .filter((t) => !!t?.paid)
-    .filter((t) => !isParkedPaidTombstoned(t))
-    .filter((t) => isTicketInCurrentParkingMode(t));
+    .filter((t) => !isParkedPaidTombstoned(t));
 
   preservedPaidCandidates.forEach((t) => {
     const key = getParkedTicketSyncKey(t);
@@ -32479,6 +33031,85 @@ function getVisibleStockForProduct(productOrId) {
   return realStock - reserved;
 }
 
+// Activa/desactiva temporalmente "venta sin stock" en FacturaScripts para un
+// producto concreto. Se usa SOLO como parte del override "cobrar sin stock
+// de todas formas": FacturaScripts rechaza (422 error-calculating-totals)
+// cualquier linea CON producto vinculado si el producto no permite vender
+// sin stock y no queda suficiente. Sin este permiso momentaneo, el unico
+// modo de que la venta pase es sin idproducto/referencia (ver
+// createTicketInFacturaScripts), que es justo lo que queremos evitar.
+async function setProductVentasInStock(idProducto, enabled) {
+  try {
+    await apiWrite(`productos/${idProducto}`, "PUT", {
+      ventasinstock: enabled ? 1 : 0,
+    });
+    return true;
+  } catch (e) {
+    console.warn(
+      `No se pudo ${enabled ? "activar" : "restaurar"} venta sin stock para producto ${idProducto}:`,
+      e?.message || e,
+    );
+    return false;
+  }
+}
+
+// Comprueba, con el stock mas fresco posible, si el carrito intenta vender
+// mas cantidad de la disponible en algun producto que en FacturaScripts NO
+// tiene permitido vender sin stock. Devuelve null si todo bien, o la lista
+// de productos problematicos (para poder ofrecer el override "cobrar sin
+// stock" y saber a que productos aplicarlo).
+async function checkCartStockProblems(cart) {
+  await refreshProductsStockOnly().catch(() => {});
+
+  const requestedByProduct = new Map();
+
+  (Array.isArray(cart) ? cart : []).forEach((item) => {
+    if (isPackChildLine(item)) return;
+    const idProd = getProductBaseId(item);
+    if (!idProd) return;
+
+    const qty = Number(getCartItemReservedQty(item) || 0);
+    if (qty <= 0) return;
+
+    if (!requestedByProduct.has(idProd)) {
+      requestedByProduct.set(idProd, { qty: 0, name: "" });
+    }
+    const row = requestedByProduct.get(idProd);
+    row.qty += qty;
+    if (!row.name) {
+      row.name = String(
+        item?.name || item?.descripcion || item?.referencia || `Producto ${idProd}`,
+      ).trim();
+    }
+  });
+
+  const blocked = [];
+
+  for (const [idProd, row] of requestedByProduct.entries()) {
+    const product = Array.isArray(products)
+      ? products.find((p) => getProductBaseId(p) === idProd)
+      : null;
+    if (!product) continue;
+    if (!product.stockManaged) continue;
+    if (product.allowSellWithoutStock) continue;
+
+    const visibleStock = getVisibleStockForProduct(product);
+    if (visibleStock === null) continue;
+    if (row.qty <= visibleStock) continue;
+
+    blocked.push({
+      baseProductId: idProd,
+      productName: String(
+        product.referencia || product.name || row.name,
+      ).trim(),
+      qtyToSell: row.qty,
+      visibleStock,
+    });
+  }
+
+  return blocked.length ? blocked : null;
+}
+
 // Sin timeout, un fetch colgado por red inestable no resuelve ni rechaza
 // nunca. En la cola de sincronizacion de aparcados eso es especialmente grave:
 // processParkedSyncQueue queda marcado "en marcha" para siempre y el
@@ -32579,6 +33210,11 @@ async function apiSaveParkedReservation(ticket) {
         : null,
     clientName: String(ticket.clientName || ""),
     codcliente: String(ticket.codcliente || "").trim() || "1",
+    // Numero corto de aparcado (max 9999) para no depender del id interno
+    // (que desde que se genera con Date.now() para evitar colisiones entre
+    // TPV es un numero larguisimo, no apto para mostrar al usuario) cuando
+    // este ticket se recarga desde el servidor en otro TPV.
+    displayNo: Number(ticket?.displayNo || 0) || null,
     // Estado de cobro: hay que enviarlo para que el cobro se propague a los
     // demas TPV (el servidor ya lo persiste). Antes se omitia -> el otro TPV
     // nunca veia el aparcado como cobrado.
@@ -32707,6 +33343,9 @@ async function apiDeleteParkedReservation(ticket) {
     slug,
     cajaId,
     ticketId: String(ticket.id),
+    // No hace falta para borrar, pero sin esto el registro de auditoria
+    // nunca sabia desde que terminal se habia borrado un aparcado.
+    terminalId: String(currentTerminal?.id || ""),
   };
 
   const deleteUrl = `${TPV_SYNC_API_URL}?action=delete-parked-reservation`;
@@ -32910,7 +33549,11 @@ async function refreshProductsStockOnly() {
     list.forEach((p, idx) => {
       const idProd = Number(p.idproducto ?? p.id ?? idx);
       if (!idProd) return;
-      stockById.set(idProd, p.stockfis);
+      stockById.set(idProd, {
+        stockfisRaw: p.stockfis,
+        stockManaged: isFalseFlag(p.nostock),
+        allowSellWithoutStock: !isFalseFlag(p.ventasinstock),
+      });
     });
 
     if (!Array.isArray(products) || !products.length) {
@@ -32924,17 +33567,23 @@ async function refreshProductsStockOnly() {
       if (!baseId) return p;
       if (!stockById.has(baseId)) return p;
 
-      const nextRawStock = stockById.get(baseId);
-      const nextStock = parseManagedStockValue(nextRawStock);
+      const fresh = stockById.get(baseId);
+      const nextStock = parseManagedStockValue(fresh.stockfisRaw);
       const prevStock = parseManagedStockValue(p.stockfis);
-      const prevRawStock = p.stockfisRaw;
 
-      if (prevStock !== nextStock || prevRawStock !== nextRawStock) {
+      if (
+        prevStock !== nextStock ||
+        p.stockfisRaw !== fresh.stockfisRaw ||
+        p.stockManaged !== fresh.stockManaged ||
+        p.allowSellWithoutStock !== fresh.allowSellWithoutStock
+      ) {
         changed = true;
         return {
           ...p,
-          stockfisRaw: nextRawStock,
+          stockfisRaw: fresh.stockfisRaw,
           stockfis: nextStock,
+          stockManaged: fresh.stockManaged,
+          allowSellWithoutStock: fresh.allowSellWithoutStock,
         };
       }
 
@@ -32960,6 +33609,7 @@ async function onPayButtonClick() {
   let didFastAutoPrint = false;
   let fastPreApiPrintedNumber = "";
   let releaseParkedCheckoutLock = null;
+  let stockOverrideProductIds = [];
   let parkedSyncKeyToClose = "";
   let parkedIdToClose = 0;
 
@@ -32986,6 +33636,24 @@ async function onPayButtonClick() {
     }
 
     const totalCart = round2(getCartTotal(cart));
+
+    if (totalCart <= 0) {
+      const zeroLines = getZeroPricedUnmodifiedLines(cart);
+      if (zeroLines.length) {
+        const names = zeroLines
+          .map((l) =>
+            String(l?.name || l?.descripcion || l?.referencia || "Producto").trim(),
+          )
+          .join(", ");
+        toast(
+          `No se puede cobrar a 0€: ${names} tiene precio 0€ de catalogo, sin ningun descuento ni edicion de precio aplicado. Revisa el precio en FacturaScripts o aplica un descuento/edicion de precio si es intencionado.`,
+          "warn",
+          "Cobrar",
+        );
+        return;
+      }
+    }
+
     logFeatureInfo("COBRO", "inicio", {
       requestId,
       cartLines: Array.isArray(cart) ? cart.length : 0,
@@ -32999,20 +33667,48 @@ async function onPayButtonClick() {
     const okAgent = await requireAssignedAgentOrBlock({ showModal: true });
     if (!okAgent) return;
 
-    function checkCartStockProblems(cart) {
-      for (const item of cart) {
-        if (item.noStock && item.noVenderSinStock) {
-          return `El producto "${item.descripcion}" no tiene stock y no está permitido vender sin stock.`;
-        }
+    const stockProblems = await checkCartStockProblems(cart);
+
+    if (stockProblems) {
+      const blocksHtml = stockProblems
+        .map((w, idx) => {
+          const title = escapeHtmlForModal(
+            w.productName || `Producto ${idx + 1}`,
+          );
+          const qty = escapeHtmlForModal(fmtQty(w.qtyToSell));
+          const stock = escapeHtmlForModal(formatProductStock(w.visibleStock));
+
+          return [
+            `<div class="stock-warning-item">`,
+            `  <div class="stock-warning-name">${idx + 1}. ${title}</div>`,
+            `  <div class="stock-warning-row">Cantidad a cobrar: <strong>${qty}</strong></div>`,
+            `  <div class="stock-warning-row">Stock actual: <strong>${stock}</strong></div>`,
+            `</div>`,
+          ].join("\n");
+        })
+        .join("\n");
+
+      const html = [
+        `<div class="stock-warning-wrap">`,
+        `  <div class="stock-warning-intro">No hay stock suficiente para cobrar estos productos (no tienen permitida la venta sin stock en FacturaScripts):</div>`,
+        `  <div class="stock-warning-list">${blocksHtml}</div>`,
+        `  <div class="stock-warning-outro">Si quieres que esto no bloquee la venta, activa "Venta sin stock" en la ficha del producto en FacturaScripts.<br>¿Cobrar de todas formas?</div>`,
+        `</div>`,
+      ].join("\n");
+
+      const proceedAnyway = await confirmModal("Sin stock suficiente", html, {
+        isHtml: true,
+        textClassName: "stock-warning-content",
+        dialogClassName: "stock-warning-dialog",
+        okButtonText: "Cobrar sin stock",
+      });
+
+      if (!proceedAnyway) {
+        setStatusText("Cobro cancelado (sin stock)");
+        return;
       }
-      return null;
-    }
 
-    const stockError = checkCartStockProblems(cart);
-
-    if (stockError) {
-      toast(stockError, "warn", "Stock");
-      return;
+      stockOverrideProductIds = stockProblems.map((w) => w.baseProductId);
     }
 
     // 1) Modal cobro
@@ -33272,6 +33968,11 @@ async function onPayButtonClick() {
     } catch {}
 
     // 4) Enviar o encolar
+    if (stockOverrideProductIds.length) {
+      await Promise.all(
+        stockOverrideProductIds.map((id) => setProductVentasInStock(id, true)),
+      );
+    }
     const sendResult = await sendOrQueueFactura(ticketPayload);
 
     // ========= OFFLINE =========
@@ -33373,6 +34074,19 @@ async function onPayButtonClick() {
         })),
       });
       return;
+    }
+
+    // ========= FALLO (no offline/encolado, tampoco éxito) =========
+    // No es un problema de red (si lo fuera, habría caído en el bloque OFFLINE
+    // de arriba), así que no se ha creado factura en FacturaScripts: NO marcamos
+    // saleCommitted para que el catch pueda restaurar el carrito, y propagamos el
+    // error real de sendOrQueueFactura en vez de uno genérico que lo enmascaraba
+    // (eso hacía que el ticket se quedara "sin cobrar" y se pudiera volver a
+    // cobrar por duplicado en otro TPV).
+    if (!sendResult.ok) {
+      throw new Error(
+        sendResult.error || "No se pudo crear la venta en FacturaScripts.",
+      );
     }
 
     // ========= ONLINE =========
@@ -33721,6 +34435,14 @@ async function onPayButtonClick() {
     try {
       releaseParkedCheckoutLock?.();
     } catch {}
+    if (stockOverrideProductIds.length) {
+      // Pase lo que pase (venta ok, encolada offline, o fallida), el permiso
+      // de "venta sin stock" era solo para esta venta puntual: se revierte
+      // siempre, no debe quedar activado en FacturaScripts para el producto.
+      Promise.all(
+        stockOverrideProductIds.map((id) => setProductVentasInStock(id, false)),
+      ).catch(() => {});
+    }
     isPayingNow = false;
     refreshAgentGuardUI?.();
   }
@@ -33846,7 +34568,7 @@ async function apiUpdateCajaAfterSale({ totalVenta, pagos }) {
 // ===== [08] UI venta: boton eliminar todo =====
 const clearBtn = document.getElementById("clearCartBtn");
 if (clearBtn) {
-  clearBtn.onclick = () => {
+  clearBtn.onclick = async () => {
     if (isParkingNow) return;
     if (!cashSession?.open) return;
 
@@ -33879,10 +34601,16 @@ if (clearBtn) {
       }
     }
 
+    // "Salir" de un aparcado cargado: volcar antes cualquier cambio pendiente
+    // (cliente, cantidades...) que el autoguardado con retardo aun no hubiera
+    // llegado a persistir, para no perderlo al vaciar el carrito.
+    await flushPendingParkedAutoSaveBeforeModeSwitch().catch(() => {});
+
     pushCartHistoryStep("clear-cart");
     cart = [];
     renderCart();
     currentParkedTicketIndex = null;
+    restorePreParkedCustomerSelection();
     if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
       clearCurrentMesaDraft();
       renderMesasTransContextBar();
@@ -36937,6 +37665,19 @@ async function openPayModal(total) {
   payModalState.values = {};
   payModalState.selectedCodpago = null;
 
+  // Ticket a 0€ (descuento 100% / precio editado a 0): no hay importe que
+  // escribir, asi que se bloquea el teclado/importes y se cambia el boton a
+  // una confirmacion directa en vez de exigir "introduce un importe".
+  const isFreeTicket = payModalState.totalCents === 0;
+  const keypadEl = payOverlay.querySelector(".pay-keypad");
+  if (payMethodsList) payMethodsList.classList.toggle("pay-frozen", isFreeTicket);
+  if (keypadEl) keypadEl.classList.toggle("pay-frozen", isFreeTicket);
+  if (paySaveBtn) {
+    paySaveBtn.textContent = isFreeTicket
+      ? "Confirmar ticket gratuito"
+      : "Confirmar Pago";
+  }
+
   // cargar formas de pago reales
   const formas = await fetchFormasPagoActivas();
   payModalState.formas = (formas || [])
@@ -37012,77 +37753,103 @@ async function openPayModal(total) {
       paySaveBtn.onclick = () => {
         setPayError("");
 
-        // 1) Construir entregados (céntimos)
-        const entregados = [];
-        for (const fp of payModalState.formas) {
-          const raw = String(payModalState.values[fp.codpago] || "").trim();
-          const c = euroStrToCents(raw);
-          if (c > 0) {
-            entregados.push({
-              codpago: fp.codpago,
-              descripcion: fp.descripcion,
-              entregadoC: c,
+        const totalC = payModalState.totalCents || 0;
+        let pagos;
+        let pagadoEntregadoC;
+        let cambioC;
+
+        if (totalC === 0) {
+          // Ticket gratuito: no hay importe que pedir. Se confirma directo
+          // con la forma de pago seleccionada (o la primera) a 0€, por si
+          // FacturaScripts necesita alguna forma de pago igualmente.
+          const fp =
+            payModalState.formas.find(
+              (f) => f.codpago === payModalState.selectedCodpago,
+            ) || payModalState.formas[0];
+
+          pagos = fp
+            ? [
+                {
+                  codpago: fp.codpago,
+                  descripcion: fp.descripcion,
+                  importe: 0,
+                  entregado: 0,
+                },
+              ]
+            : [];
+          pagadoEntregadoC = 0;
+          cambioC = 0;
+        } else {
+          // 1) Construir entregados (céntimos)
+          const entregados = [];
+          for (const fp of payModalState.formas) {
+            const raw = String(payModalState.values[fp.codpago] || "").trim();
+            const c = euroStrToCents(raw);
+            if (c > 0) {
+              entregados.push({
+                codpago: fp.codpago,
+                descripcion: fp.descripcion,
+                entregadoC: c,
+              });
+            }
+          }
+
+          if (!entregados.length) {
+            setPayError("Introduce un importe en alguna forma de pago.");
+            return;
+          }
+
+          // 2) Validación pagado >= total
+          pagadoEntregadoC = entregados.reduce(
+            (s, p) => s + (p.entregadoC || 0),
+            0,
+          );
+
+          if (pagadoEntregadoC < totalC) {
+            setPayError("El importe pagado es inferior al total.");
+            return;
+          }
+
+          // 3) Separar cash / no-cash
+          const nonCash = [];
+          const cash = [];
+          for (const p of entregados) {
+            const isCash = isCashPago({
+              codpago: p.codpago,
+              descripcion: p.descripcion,
+            });
+            (isCash ? cash : nonCash).push(p);
+          }
+
+          // 4) Calcular cambio
+          const nonCashSumC = nonCash.reduce((s, p) => s + p.entregadoC, 0);
+          let cashNeededC = Math.max(0, totalC - nonCashSumC);
+          const cashGivenC = cash.reduce((s, p) => s + p.entregadoC, 0);
+          cambioC = Math.max(0, cashGivenC - cashNeededC);
+
+          // 5) Pagos (importe=aplicado, entregado=entregado)
+          pagos = [];
+
+          for (const p of nonCash) {
+            pagos.push({
+              codpago: p.codpago,
+              descripcion: p.descripcion,
+              importe: fromCents(p.entregadoC),
+              entregado: fromCents(p.entregadoC),
             });
           }
-        }
 
-        if (!entregados.length) {
-          setPayError("Introduce un importe en alguna forma de pago.");
-          return;
-        }
+          for (const p of cash) {
+            const aplicadoC = Math.min(p.entregadoC, cashNeededC);
+            cashNeededC -= aplicadoC;
 
-        const totalC = payModalState.totalCents || 0;
-
-        // 2) Validación pagado >= total
-        const pagadoEntregadoC = entregados.reduce(
-          (s, p) => s + (p.entregadoC || 0),
-          0,
-        );
-
-        if (pagadoEntregadoC < totalC) {
-          setPayError("El importe pagado es inferior al total.");
-          return;
-        }
-
-        // 3) Separar cash / no-cash
-        const nonCash = [];
-        const cash = [];
-        for (const p of entregados) {
-          const isCash = isCashPago({
-            codpago: p.codpago,
-            descripcion: p.descripcion,
-          });
-          (isCash ? cash : nonCash).push(p);
-        }
-
-        // 4) Calcular cambio
-        const nonCashSumC = nonCash.reduce((s, p) => s + p.entregadoC, 0);
-        let cashNeededC = Math.max(0, totalC - nonCashSumC);
-        const cashGivenC = cash.reduce((s, p) => s + p.entregadoC, 0);
-        const cambioC = Math.max(0, cashGivenC - cashNeededC);
-
-        // 5) Pagos (importe=aplicado, entregado=entregado)
-        const pagos = [];
-
-        for (const p of nonCash) {
-          pagos.push({
-            codpago: p.codpago,
-            descripcion: p.descripcion,
-            importe: fromCents(p.entregadoC),
-            entregado: fromCents(p.entregadoC),
-          });
-        }
-
-        for (const p of cash) {
-          const aplicadoC = Math.min(p.entregadoC, cashNeededC);
-          cashNeededC -= aplicadoC;
-
-          pagos.push({
-            codpago: p.codpago,
-            descripcion: p.descripcion,
-            importe: fromCents(aplicadoC),
-            entregado: fromCents(p.entregadoC),
-          });
+            pagos.push({
+              codpago: p.codpago,
+              descripcion: p.descripcion,
+              importe: fromCents(aplicadoC),
+              entregado: fromCents(p.entregadoC),
+            });
+          }
         }
 
         const selectedSerie = String(paySerie ? paySerie.value || "S" : "S")
