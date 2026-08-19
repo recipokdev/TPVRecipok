@@ -7677,6 +7677,86 @@ async function apiUpsertTerminalPresenceRemote() {
   return data?.data || null;
 }
 
+// ===== Candado de stock reservado entre TPV (ver syncReservedStockDeltaToFS) =====
+// La lectura-calculo-escritura del stock en FacturaScripts no es atomica; con
+// 2+ TPV tocando el mismo producto casi a la vez, uno puede sobrescribir el
+// ajuste del otro. Este candado (solo activo para clientes piloto en el
+// servidor, ver stock_lock_pilot_slugs) serializa esa seccion critica entre
+// terminales. Fail-open a proposito en cualquier fallo de red/API: el
+// candado es una mejora de seguridad sobre el comportamiento de hoy, no un
+// requisito para poder aparcar/cobrar -- si el servidor compartido no
+// responde, seguimos igual que siempre en vez de bloquear la venta.
+async function apiAcquireStockLock(idProducto, ttlSec = 12) {
+  const idProd = Number(idProducto || 0) || 0;
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  const lockedBy = ensureTerminalPresenceSessionId();
+  if (!idProd || !slug || !syncApiKey || !lockedBy) return { acquired: true };
+
+  try {
+    const url = `${TPV_SYNC_API_URL}?action=acquire-stock-lock`;
+    const res = await fetchWithTimeout(
+      url,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-TPV-API-KEY": syncApiKey,
+        },
+        body: JSON.stringify({ slug, idProducto: idProd, lockedBy, ttlSec }),
+      },
+      4000,
+    );
+    if (!res.ok) return { acquired: true };
+    const data = await res.json().catch(() => null);
+    return data?.data && typeof data.data.acquired === "boolean"
+      ? data.data
+      : { acquired: true };
+  } catch {
+    return { acquired: true };
+  }
+}
+
+async function apiReleaseStockLock(idProducto) {
+  const idProd = Number(idProducto || 0) || 0;
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  const lockedBy = ensureTerminalPresenceSessionId();
+  if (!idProd || !slug || !syncApiKey || !lockedBy) return;
+
+  try {
+    const url = `${TPV_SYNC_API_URL}?action=release-stock-lock`;
+    await fetchWithTimeout(
+      url,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-TPV-API-KEY": syncApiKey,
+        },
+        body: JSON.stringify({ slug, idProducto: idProd, lockedBy }),
+      },
+      4000,
+    );
+  } catch {}
+}
+
+// Reintenta unas pocas veces con un pequeño backoff si otro TPV ya tiene el
+// candado. Si se agotan los intentos, sigue igualmente (ver nota de
+// fail-open arriba): es mejor arriesgar una carrera rara y poco frecuente
+// que bloquear un cobro/aparcado real por un candado que no se libera.
+async function acquireStockLockWithRetry(idProducto, attempts = 5) {
+  let last = { acquired: true };
+  for (let i = 0; i < attempts; i++) {
+    last = await apiAcquireStockLock(idProducto);
+    if (last?.acquired) return last;
+    await sleep(200 + Math.random() * 250);
+  }
+  return last;
+}
+
 async function apiListTerminalPresenceRemote() {
   const slug = String(getCurrentSlugForReservations() || "").trim();
   const terminalId = String(currentTerminal?.id || "").trim();
@@ -31493,6 +31573,12 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "") {
       continue;
     }
 
+    // Candado por producto entre TPV (ver acquireStockLockWithRetry): sin
+    // esto, la lectura-calculo-escritura de abajo no es atomica y 2 TPV
+    // tocando el mismo producto casi a la vez pueden pisarse el ajuste sin
+    // que nadie se entere. Fail-open: si no se consigue, seguimos igual.
+    const lockInfo = await acquireStockLockWithRetry(idProd);
+
     try {
       const product = findProductByBaseId(idProd);
       const stockRowsByReference = await fetchStockRowsByProductReference(
@@ -31526,6 +31612,10 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "") {
       applyStockQtyToLocalProductsById(idProd, nextQty);
     } catch (e) {
       issues.push(`${idProd}: ${e?.message || e}`);
+    } finally {
+      if (lockInfo?.acquired) {
+        await apiReleaseStockLock(idProd).catch(() => {});
+      }
     }
   }
 

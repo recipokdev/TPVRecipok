@@ -2208,6 +2208,80 @@ mustContain(
 }
 
 console.log(
+  "\n[SMOKE] Checking 2026-08-19 cross-terminal stock lock around reserved stock sync\n",
+);
+
+// Feedback de cliente (2 TPV): syncReservedStockDeltaToFS lee el stock real
+// de FacturaScripts, calcula el nuevo valor en el propio TPV y lo vuelve a
+// escribir -- no es atomico, asi que 2 TPV tocando el mismo producto casi a
+// la vez pueden pisarse el ajuste sin que nadie se entere (descuadre real de
+// stock). Se añade un candado por producto en la base de datos compartida
+// (solo activo para clientes piloto en el servidor) que serializa esa
+// seccion critica entre terminales, con fail-open si el servidor compartido
+// no responde (no debe bloquear un cobro/aparcado real).
+
+mustContain(
+  renderer,
+  "async function apiAcquireStockLock(idProducto, ttlSec = 12)",
+  "apiAcquireStockLock helper present",
+);
+mustContain(
+  renderer,
+  "async function apiReleaseStockLock(idProducto)",
+  "apiReleaseStockLock helper present",
+);
+mustContain(
+  renderer,
+  "async function acquireStockLockWithRetry(idProducto, attempts = 5)",
+  "acquireStockLockWithRetry helper present (retries with backoff if another TPV holds it)",
+);
+
+{
+  const idx = renderer.indexOf("async function apiAcquireStockLock(idProducto, ttlSec = 12)");
+  const endIdx = idx >= 0 ? renderer.indexOf("async function apiReleaseStockLock(idProducto)", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  const failOpenCount = (scoped.match(/\{ acquired: true \}/g) || []).length;
+  if (failOpenCount >= 2) {
+    ok(
+      "apiAcquireStockLock fails open (acquired: true) on any network/API error or non-OK response, so the lock can never block a sale/park by itself",
+    );
+  } else {
+    fail(
+      "apiAcquireStockLock fails open (acquired: true) on any network/API error or non-OK response, so the lock can never block a sale/park by itself",
+    );
+  }
+}
+
+{
+  const idx = renderer.indexOf("action=acquire-stock-lock");
+  const idx2 = renderer.indexOf("action=release-stock-lock");
+  if (idx >= 0 && idx2 >= 0) {
+    ok("Client calls both the acquire-stock-lock and release-stock-lock shared-API actions");
+  } else {
+    fail("Client calls both the acquire-stock-lock and release-stock-lock shared-API actions");
+  }
+}
+
+{
+  const idx = renderer.indexOf("async function syncReservedStockDeltaToFS(deltaMap, reason");
+  const endIdx = idx >= 0 ? renderer.indexOf("function rebuildRemoteReservedByProductMap()", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("const lockInfo = await acquireStockLockWithRetry(idProd);") &&
+    scoped.includes("if (lockInfo?.acquired) {") &&
+    scoped.includes("await apiReleaseStockLock(idProd).catch(() => {});")
+  ) {
+    ok(
+      "syncReservedStockDeltaToFS acquires the per-product lock before its read-then-write against FacturaScripts stock, and releases it in a finally block",
+    );
+  } else {
+    fail(
+      "syncReservedStockDeltaToFS acquires the per-product lock before its read-then-write against FacturaScripts stock, and releases it in a finally block",
+    );
+  }
+}
+
+console.log(
   "\n[SMOKE] Checking 2026-08-18 allow 0-euro checkout only for deliberate discounts/price edits\n",
 );
 
