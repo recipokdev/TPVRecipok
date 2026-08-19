@@ -8,6 +8,14 @@
       "changes": []
     },
     {
+      "version": "0.2.18",
+      "date": "2026-08-19",
+      "title": "Release 0.2.18",
+      "changes": [
+        "Stock: en tiendas con más de un TPV, un ajuste raro de tiempos podía hacer que dos terminales tocando el mismo producto casi a la vez se pisaran el ajuste de stock reservado al aparcar/cobrar un aparcado, descuadrando el stock real. Corregido para que no puedan pisarse entre sí."
+      ]
+    },
+    {
       "version": "0.2.17",
       "date": "2026-08-18",
       "title": "Release 0.2.17",
