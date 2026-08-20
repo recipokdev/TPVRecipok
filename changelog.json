@@ -8,6 +8,16 @@
       "changes": []
     },
     {
+      "version": "0.2.19",
+      "date": "2026-08-20",
+      "title": "Release 0.2.19",
+      "changes": [
+        "Descuentos: los botones rápidos del teclado de descuento (10%, 20%, 50%, 100%...) solo rellenaban el número en pantalla; si después se tocaba fuera del teclado en vez de pulsar 'OK' (por ejemplo, al ir directo a 'Cobrar'), se cancelaba en silencio y se cobraba al precio normal, sin ningún aviso. Ahora un botón rápido aplica el descuento al momento.",
+        "Cobro: al elegir un cliente con una tarifa de precio asociada, esa tarifa se carga desde FacturaScripts en segundo plano. Si se pulsaba 'Cobrar' muy rápido justo después de elegir el cliente, el total se podía calcular antes de que la tarifa llegara a aplicarse, cobrando al precio normal en vez del de tarifa. Ahora 'Cobrar' espera a que la tarifa termine de cargar.",
+        "Ticket impreso: las cantidades con 3 decimales (ej. 0,694 o 0,834, habituales en productos que se venden por peso) se quedaban sin espacio en el ticket y se cortaba el último decimal, mostrando un número distinto al real sin ningún aviso. Ensanchada esa columna del ticket para que quepan enteras."
+      ]
+    },
+    {
       "version": "0.2.18",
       "date": "2026-08-19",
       "title": "Release 0.2.18",

@@ -27,6 +27,7 @@
         font-size: 12px;
         line-height: 1.25;
         color: #000;
+        --qty-col: 14mm; /* ancho columna Cant., ver .item-top y .item-sub */
       }
 
       .center {
@@ -69,7 +70,7 @@
       /* Cabecera tabla */
       .thead {
         display: grid;
-        grid-template-columns: 8mm 1fr 20mm; /* Cant | Ref | Total */
+        grid-template-columns: var(--qty-col) 1fr 20mm; /* Cant | Ref | Total */
         column-gap: 4px;
         align-items: start;
       }
@@ -89,7 +90,7 @@
       /* Por defecto: 3 columnas */
       .item-top {
         display: grid;
-        grid-template-columns: 8mm 1fr 20mm; /* Cant | Ref | Total */
+        grid-template-columns: var(--qty-col) 1fr 20mm; /* Cant | Ref | Total */
         column-gap: 4px;
         align-items: start;
       }
@@ -112,9 +113,12 @@
         overflow: hidden;
       }
 
-      /* Sub-línea: que no “rompa” raro y ahorra espacio */
+      /* Sub-línea: que no “rompa” raro y ahorra espacio.
+         Indentada para alinearse con la columna Ref./nombre de arriba
+         (--qty-col + el column-gap de .item-top), no con Cant. */
       .item-sub {
-        max-width: 34ch;
+        margin-left: calc(var(--qty-col) + 4px);
+        max-width: calc(100% - var(--qty-col) - 4px); /* no salirse del ticket tras el indentado */
         font-size: 10px; /* 👈 ayuda a que "Oferta de diferentes productos" no se vaya a 3 líneas */
         white-space: nowrap;
         overflow: hidden;

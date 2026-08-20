@@ -2175,20 +2175,21 @@ mustContain(
 }
 
 {
+  // Actualizado 2026-08-20 (ver bloque de mas abajo): un boton rapido ahora
+  // confirma de una en vez de dejar el valor a medio meter esperando "OK" --
+  // ver el "Checking 2026-08-20 quick-percent buttons auto-confirm..." para
+  // la prueba completa de ese cambio. Aqui solo comprobamos que sigue
+  // rellenando el valor antes de confirmar.
   const idx = renderer.indexOf('const pctBtn = e.target.closest("[data-pct]");');
-  const scoped = idx >= 0 ? renderer.slice(idx, idx + 220) : "";
+  const scoped = idx >= 0 ? renderer.slice(idx, idx + 700) : "";
   if (
     idx >= 0 &&
     scoped.includes("numPadCurrentValue = pctBtn.getAttribute") &&
     scoped.includes("updateNumPadDisplay();")
   ) {
-    ok(
-      "Tapping a quick-percent button fills the numpad value (still requires OK to confirm, same as typing)",
-    );
+    ok("Tapping a quick-percent button fills the numpad value before confirming it");
   } else {
-    fail(
-      "Tapping a quick-percent button fills the numpad value (still requires OK to confirm, same as typing)",
-    );
+    fail("Tapping a quick-percent button fills the numpad value before confirming it");
   }
 }
 
@@ -2206,6 +2207,121 @@ mustContain(
     );
   }
 }
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-20 quick-percent buttons auto-confirm instead of silently cancelable\n",
+);
+
+// Feedback de cliente real (Ben_Trempat): una venta con el cliente "Mermas"
+// (que tiene una tarifa del 100% asociada) se cobro a precio normal. Una de
+// las causas encontradas: el boton rapido "100%" del teclado de descuento
+// solo rellenaba el valor en pantalla sin confirmarlo -- un toque fuera del
+// teclado justo despues (habitual al ir a "Cobrar") se interpretaba como
+// cancelar y lo descartaba en silencio, sin avisar. Ahora un boton rapido
+// aplica el % de una, como una accion completa, no un valor a medio meter.
+{
+  const idx = renderer.indexOf('const pctBtn = e.target.closest("[data-pct]");');
+  const scoped = idx >= 0 ? renderer.slice(idx, idx + 700) : "";
+  if (idx >= 0 && scoped.includes("numPadConfirm();")) {
+    ok(
+      "Tapping a quick-percent button confirms it immediately instead of leaving it cancelable by an outside tap",
+    );
+  } else {
+    fail(
+      "Tapping a quick-percent button confirms it immediately instead of leaving it cancelable by an outside tap",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-20 checkout waits for the customer's tariff to resolve\n",
+);
+
+// Feedback de cliente real (Ben_Trempat): la otra causa encontrada para el
+// mismo caso -- refreshActiveCustomerTariffForSelection() se lanzaba "y ya
+// veremos" al elegir cliente, sin esperar la respuesta de FacturaScripts. Si
+// el cajero le daba a "Cobrar" rapido tras elegir un cliente con tarifa
+// (ej. "Mermas" al 100%), el total se calculaba antes de que la tarifa
+// llegara, cobrando al precio normal sin ningun aviso.
+mustContain(
+  renderer,
+  "let activeCustomerTariffReadyPromise = Promise.resolve();",
+  "activeCustomerTariffReadyPromise tracker present",
+);
+{
+  const idx = renderer.indexOf("function renderSelectedCustomerInCartHeader(c)");
+  const scoped = idx >= 0 ? renderer.slice(idx, idx + 600) : "";
+  if (
+    scoped.includes(
+      "activeCustomerTariffReadyPromise = refreshActiveCustomerTariffForSelection(",
+    )
+  ) {
+    ok(
+      "renderSelectedCustomerInCartHeader tracks the in-flight tariff-refresh promise instead of firing it and forgetting",
+    );
+  } else {
+    fail(
+      "renderSelectedCustomerInCartHeader tracks the in-flight tariff-refresh promise instead of firing it and forgetting",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("async function onPayButtonClick()");
+  const endIdx = idx >= 0 ? renderer.indexOf("const totalCart = round2(getCartTotal(cart));", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (scoped.includes("await activeCustomerTariffReadyPromise;")) {
+    ok(
+      "onPayButtonClick waits for any in-flight customer-tariff resolution before computing the total",
+    );
+  } else {
+    fail(
+      "onPayButtonClick waits for any in-flight customer-tariff resolution before computing the total",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-20 ticket print quantity column width\n",
+);
+
+// Feedback de cliente real (ticket impreso): cantidades con 3 decimales
+// (ej. 0,694) se cortaban por falta de espacio en la columna de cantidad,
+// mostrando un numero distinto al real sin ningun aviso. Ensanchada de
+// 8mm a 14mm via una variable CSS (probado con mockups: 14mm da margen
+// incluso para el peor caso realista, cantidad negativa de 2 digitos con
+// 3 decimales).
+mustContain(
+  ticketPrint,
+  "--qty-col: 14mm;",
+  "Ticket quantity column widened to 14mm",
+);
+mustContain(
+  ticketPrint,
+  "grid-template-columns: var(--qty-col) 1fr 20mm;",
+  "Item rows and header use the --qty-col variable (both stay in sync)",
+);
+if (ticketPrint.includes("grid-template-columns: 8mm 1fr 20mm;")) {
+  fail("Old 8mm quantity column fully replaced (no leftover reference)");
+} else {
+  ok("Old 8mm quantity column fully replaced (no leftover reference)");
+}
+
+// Feedback de cliente real: la linea de descripcion (.item-sub) siempre
+// arrancaba pegada al margen izquierdo (bajo "Cant."), no bajo "Ref." como
+// el nombre del producto de arriba. Con 8mm el desajuste apenas se notaba;
+// con 14mm quedaba un hueco raro debajo de cantidad+referencia. Indentada
+// para alinearse con la columna Ref., y su max-width recalculado para no
+// salirse del ticket con el nuevo margen.
+mustContain(
+  ticketPrint,
+  "margin-left: calc(var(--qty-col) + 4px);",
+  "item-sub is indented to align with the Ref. column, not flush under Cant.",
+);
+mustContain(
+  ticketPrint,
+  "max-width: calc(100% - var(--qty-col) - 4px);",
+  "item-sub max-width accounts for its own indent so it can't overflow the ticket",
+);
 
 console.log(
   "\n[SMOKE] Checking 2026-08-19 cross-terminal stock lock around reserved stock sync\n",

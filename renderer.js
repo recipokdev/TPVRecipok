@@ -1841,6 +1841,13 @@ let activeCustomerTariff = null;
 let activeCustomerTariffCodcliente = "";
 let tariffsLoadedOnce = false;
 let tariffOptionsBound = false;
+// Feedback de cliente (caso real: descuento del 100% "Mermas" no se aplico):
+// refreshActiveCustomerTariffForSelection() se lanzaba "y ya veremos" (sin
+// esperar) al elegir cliente -- si el cajero le daba a "Cobrar" rapido, el
+// total se calculaba antes de que la tarifa hubiera llegado de la red,
+// cobrando al precio normal sin ningun aviso. onPayButtonClick espera esta
+// promesa antes de calcular el total.
+let activeCustomerTariffReadyPromise = Promise.resolve();
 let tariffCustomersCache = [];
 let tariffAssignedCustomersByCode = {};
 let tariffAssignedServerCodesByCode = {};
@@ -6628,7 +6635,9 @@ function renderSelectedCustomerInCartHeader(c) {
   if (btnClear) btnClear.style.display = isDefault ? "none" : "";
   if (btnEdit) btnEdit.classList.toggle("hidden", isDefault);
 
-  refreshActiveCustomerTariffForSelection(c).catch(() => {});
+  activeCustomerTariffReadyPromise = refreshActiveCustomerTariffForSelection(
+    c,
+  ).catch(() => {});
 }
 
 function renderCartCustomerTariffBadge() {
@@ -14348,9 +14357,16 @@ if (numPadOverlay) {
 
     const pctBtn = e.target.closest("[data-pct]");
     if (pctBtn) {
+      // Feedback de cliente (caso real: descuento 100% "Mermas" no aplicado):
+      // antes esto solo rellenaba el valor y esperaba a "OK" -- un toque
+      // fuera del teclado justo despues (habitual al ir a "Cobrar") se
+      // interpretaba como cancelar y descartaba el % en silencio, sin aviso.
+      // Un boton rapido debe aplicar de una, no dejar un valor a medio
+      // confirmar.
       numPadCurrentValue = pctBtn.getAttribute("data-pct") || "0";
       numPadOverwriteNextDigit = true;
       updateNumPadDisplay();
+      numPadConfirm();
       return;
     }
 
@@ -33724,6 +33740,12 @@ async function onPayButtonClick() {
       toast("Debes seleccionar un terminal antes de cobrar.", "warn", "Cobrar");
       return;
     }
+
+    // Si se acaba de elegir un cliente con tarifa (ej. "Mermas" al 100%),
+    // esa tarifa se resuelve en segundo plano contra FacturaScripts; sin
+    // esperarla aqui, "Cobrar" podia calcular el total ANTES de que llegara,
+    // cobrando al precio normal sin avisar de que la tarifa no se aplico.
+    await activeCustomerTariffReadyPromise;
 
     const totalCart = round2(getCartTotal(cart));
 
