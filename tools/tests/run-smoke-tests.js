@@ -8622,6 +8622,31 @@ mustContain(
   }
 }
 
+// Tercera causa de la misma regresion (seguia pasando incluso con los dos
+// fixes anteriores): la revalidacion "justo antes de imprimir" hacia una
+// llamada extra a list-parked-reservations POR CADA mesa con delta
+// pendiente, sin pasar por el guard single-flight -- con varias mesas
+// activas a la vez saturaba el rate limit del servidor y el poll normal
+// empezaba a fallar. Se quito (2026-08-21): ahora usa directamente el delta
+// ya calculado sobre el ticket en memoria, sin ninguna llamada de red
+// adicional dentro del bucle de impresion.
+{
+  const idx = renderer.indexOf(
+    "async function maybeAutoPrintComandaFromRemoteSync()",
+  );
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nfunction openComandaModal()", idx) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (scoped && !scoped.includes("apiListParkedReservations(")) {
+    ok(
+      "maybeAutoPrintComandaFromRemoteSync does not make an extra network call per pending mesa before printing",
+    );
+  } else {
+    fail(
+      "maybeAutoPrintComandaFromRemoteSync does not make an extra network call per pending mesa before printing",
+    );
+  }
+}
+
 // Segunda causa de la misma regresion (mesa desasignada / recuentos
 // equivocados, seguia pasando incluso con el fix anterior aplicado): habia
 // ~20 sitios distintos llamando a refreshRemoteParkedReservationsOnly sin

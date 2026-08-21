@@ -42702,48 +42702,23 @@ async function maybeAutoPrintComandaOnSave(ticket) {
 // imprimiria la comanda hasta que un humano abriera la mesa en el TPV.
 //
 // Aviso de alcance: esto NO implementa un candado real entre TPV. El poll
-// remoto (refreshRemoteParkedReservationsOnly, cada 10s) corre en TODOS los
-// TPV con Modo Mesas activo y caja abierta, asi que con 2+ TPV asi a la vez
-// dos pueden ver el mismo delta pendiente casi al mismo tiempo e imprimir
-// los dos. El jitter + revalidacion de abajo reduce esa ventana de "hasta
-// 10s" a "un jitter corto + un round-trip", pero no la cierra del todo.
-// Cerrarla de verdad requiere un candado en el servidor compartido (mismo
-// patron que stock_lock_db.php/tabla stock_locks) -- pasada aparte, a
-// confirmar antes de tocar produccion.
+// remoto (refreshRemoteParkedReservationsOnly, cada 10s, ahora single-flight)
+// corre en TODOS los TPV con Modo Mesas activo y caja abierta, asi que con
+// 2+ TPV asi a la vez dos pueden ver el mismo delta pendiente casi al mismo
+// tiempo e imprimir los dos. (Hubo una version con jitter + revalidacion
+// contra el remoto justo antes de imprimir que intentaba mitigar esto desde
+// el cliente; se quito el 2026-08-21 porque esa revalidacion hacia una
+// llamada extra a list-parked-reservations POR CADA mesa con delta pendiente,
+// sin pasar por el guard single-flight de refreshRemoteParkedReservationsOnly
+// -- con varias mesas activas a la vez saturaba el limite de peticiones del
+// servidor y el poll normal empezaba a fallar, causando el mismo tipo de
+// problema -mesa "desasignada", recuentos raros- que se queria evitar. No
+// merecia la pena una mitigacion parcial que ademas era menos fiable que no
+// tener ninguna.) Cerrar esta carrera de verdad requiere un candado en el
+// servidor compartido (mismo patron que stock_lock_db.php/tabla
+// stock_locks) -- pasada aparte, a confirmar antes de tocar produccion.
 let __comandaAutoPrintRunning = false;
 const __comandaAutoPrintInFlight = new Set();
-
-async function fetchFreshComandaDeltaLinesForTicket(ticket) {
-  const variants = new Set(getParkedTicketSyncKeyVariants(ticket));
-  if (!variants.size) {
-    return getComandaDeltaLinesForTicket(ticket, ticket?.items || []);
-  }
-
-  try {
-    const rawList = await apiListParkedReservations();
-    const freshRaw = (Array.isArray(rawList) ? rawList : []).find((raw) => {
-      const normalized = normalizeRemoteParkedTicket(raw);
-      if (!normalized) return false;
-      return getParkedTicketSyncKeyVariants(normalized).some((k) =>
-        variants.has(k),
-      );
-    });
-
-    // Ya no esta en remoto (lo cobraron/borraron entretanto): nada que imprimir.
-    if (!freshRaw) return [];
-
-    const fresh = normalizeRemoteParkedTicket(freshRaw);
-    if (fresh?.paid) return [];
-    return getComandaDeltaLinesForTicket(
-      fresh,
-      fresh?.items || ticket?.items || [],
-    );
-  } catch {
-    // No se pudo revalidar (red/servidor): seguimos con el delta que ya
-    // teniamos en vez de bloquear la impresion por un fallo de verificacion.
-    return getComandaDeltaLinesForTicket(ticket, ticket?.items || []);
-  }
-}
 
 async function maybeAutoPrintComandaFromRemoteSync() {
   if (!isAutoComandaOnSaveEnabled()) return;
@@ -42768,11 +42743,11 @@ async function maybeAutoPrintComandaFromRemoteSync() {
 
       __comandaAutoPrintInFlight.add(dedupeKey);
       try {
-        // Pequeno jitter + revalidacion contra el remoto justo antes de
-        // imprimir (ver aviso de alcance arriba): si otro TPV ya se adelanto
-        // y confirmo este mismo delta, aqui ya saldra vacio y no imprimimos.
-        await sleep(200 + Math.random() * 500);
-        const lines = await fetchFreshComandaDeltaLinesForTicket(ticket);
+        // Delta recalculado sobre el ticket en memoria (ya viene fresco del
+        // sync que acaba de terminar justo antes de llamar a esta funcion;
+        // ver aviso de alcance arriba sobre por que no hay revalidacion
+        // adicional contra el remoto aqui).
+        const lines = getComandaDeltaLinesForTicket(ticket, ticket?.items || []);
         if (!lines.length) continue;
 
         const printerName = getConfiguredComandaPrinterForPrint();
