@@ -36410,6 +36410,13 @@ function normalizeRemoteParkedTicket(raw) {
       raw.comandaState && typeof raw.comandaState === "object"
         ? normalizeTicketComandaState(raw.comandaState)
         : null,
+    // comandaAutoPrintFailedAt/comandaAutoPrintFailedError NO se leen aqui a
+    // proposito: el servidor nunca las guarda (ver nota en
+    // apiSaveParkedReservation), asi que no vienen en raw. Al omitir la clave
+    // del objeto devuelto (en vez de escribir null), el merge en
+    // syncParkedTicketsFromRemote ({ ...prev, ...ticket }) conserva el valor
+    // LOCAL que ya tuviera prev en vez de borrarlo en cada poll -- mismo
+    // patron que discountSummary un poco mas abajo.
     paid: paidFlag,
     paidAt: raw.paidAt
       ? new Date(raw.paidAt)
@@ -38150,6 +38157,14 @@ async function apiSaveParkedReservation(ticket) {
               : null,
           }
         : null,
+    // NOTA: comandaAutoPrintFailedAt/comandaAutoPrintFailedError (ver
+    // maybeAutoPrintComandaFromRemoteSync) se dejan A PROPOSITO fuera de este
+    // payload: el servidor compartido (parked_reservations_db.php) tiene un
+    // esquema de columnas fijo y no tiene donde guardarlos, asi que enviarlos
+    // no los persistiria. Son estado LOCAL de este TPV (ver comentario en
+    // syncParkedTicketsFromRemote sobre por que sobreviven a los merges con
+    // remoto sin necesidad de persistirlos ahi). Visibilidad entre TPV real
+    // requeriria añadir columnas en el servidor -- pasada aparte a confirmar.
     clientName: String(ticket.clientName || ""),
     codcliente: String(ticket.codcliente || "").trim() || "1",
     // Numero corto de aparcado (max 9999) para no depender del id interno
@@ -38463,6 +38478,11 @@ async function refreshRemoteParkedReservationsOnlyImpl() {
     __parkedSyncLastOkAt = Date.now();
     __parkedSyncLastErrorMsg = "";
     syncParkedToolbarUI?.();
+    // Imprime sola la comanda de cambios detectados por este poll (p.ej.
+    // pedidos desde la app de camareros) -- ver maybeAutoPrintComandaFromRemoteSync.
+    maybeAutoPrintComandaFromRemoteSync().catch((e) => {
+      console.warn("Auto-comanda por poll remoto fallo:", e?.message || e);
+    });
     return true;
   } catch (e) {
     console.warn("No se pudieron refrescar reservas remotas:", e?.message || e);
@@ -42377,6 +42397,12 @@ function commitComandaPrintedState(ticket, sourceLines = cart) {
   };
   ticket.updatedAt = new Date();
   ticket.localRevisionAt = Date.now();
+
+  // Cualquier impresion con exito (manual o automatica, local o por poll
+  // remoto) limpia un aviso de fallo previo: si estaba fallando y ahora ha
+  // ido bien, no debe quedar el badge de aviso colgado en el plano.
+  ticket.comandaAutoPrintFailedAt = null;
+  ticket.comandaAutoPrintFailedError = null;
 }
 
 async function persistTicketAfterComandaPrint(ticket) {
@@ -42641,6 +42667,137 @@ async function maybeAutoPrintComandaOnSave(ticket) {
 
   commitComandaPrintedState(ticket, ticket?.items || []);
   await persistTicketAfterComandaPrint(ticket);
+}
+
+// ===== Auto-imprimir comanda por poll remoto (app de camareros) =====
+// maybeAutoPrintComandaOnSave (arriba) solo dispara desde un guardado local
+// en ESTE TPV. La app de camareros aparca/actualiza mesas contra el mismo
+// API compartido sin pasar por ningun guardado local aqui: sin esto, nadie
+// imprimiria la comanda hasta que un humano abriera la mesa en el TPV.
+//
+// Aviso de alcance: esto NO implementa un candado real entre TPV. El poll
+// remoto (refreshRemoteParkedReservationsOnly, cada 10s) corre en TODOS los
+// TPV con Modo Mesas activo y caja abierta, asi que con 2+ TPV asi a la vez
+// dos pueden ver el mismo delta pendiente casi al mismo tiempo e imprimir
+// los dos. El jitter + revalidacion de abajo reduce esa ventana de "hasta
+// 10s" a "un jitter corto + un round-trip", pero no la cierra del todo.
+// Cerrarla de verdad requiere un candado en el servidor compartido (mismo
+// patron que stock_lock_db.php/tabla stock_locks) -- pasada aparte, a
+// confirmar antes de tocar produccion.
+let __comandaAutoPrintRunning = false;
+const __comandaAutoPrintInFlight = new Set();
+
+async function fetchFreshComandaDeltaLinesForTicket(ticket) {
+  const variants = new Set(getParkedTicketSyncKeyVariants(ticket));
+  if (!variants.size) {
+    return getComandaDeltaLinesForTicket(ticket, ticket?.items || []);
+  }
+
+  try {
+    const rawList = await apiListParkedReservations();
+    const freshRaw = (Array.isArray(rawList) ? rawList : []).find((raw) => {
+      const normalized = normalizeRemoteParkedTicket(raw);
+      if (!normalized) return false;
+      return getParkedTicketSyncKeyVariants(normalized).some((k) =>
+        variants.has(k),
+      );
+    });
+
+    // Ya no esta en remoto (lo cobraron/borraron entretanto): nada que imprimir.
+    if (!freshRaw) return [];
+
+    const fresh = normalizeRemoteParkedTicket(freshRaw);
+    if (fresh?.paid) return [];
+    return getComandaDeltaLinesForTicket(
+      fresh,
+      fresh?.items || ticket?.items || [],
+    );
+  } catch {
+    // No se pudo revalidar (red/servidor): seguimos con el delta que ya
+    // teniamos en vez de bloquear la impresion por un fallo de verificacion.
+    return getComandaDeltaLinesForTicket(ticket, ticket?.items || []);
+  }
+}
+
+async function maybeAutoPrintComandaFromRemoteSync() {
+  if (!isAutoComandaOnSaveEnabled()) return;
+  if (__comandaAutoPrintRunning) return;
+
+  const candidates = (
+    Array.isArray(parkedTickets) ? parkedTickets : []
+  ).filter(
+    (t) =>
+      t &&
+      !t.paid &&
+      isMesasModeTicket(t) &&
+      getComandaDeltaLinesForTicket(t, t?.items || []).length > 0,
+  );
+  if (!candidates.length) return;
+
+  __comandaAutoPrintRunning = true;
+  try {
+    for (const ticket of candidates) {
+      const dedupeKey = getParkedTicketSyncKey(ticket);
+      if (!dedupeKey || __comandaAutoPrintInFlight.has(dedupeKey)) continue;
+
+      __comandaAutoPrintInFlight.add(dedupeKey);
+      try {
+        // Pequeno jitter + revalidacion contra el remoto justo antes de
+        // imprimir (ver aviso de alcance arriba): si otro TPV ya se adelanto
+        // y confirmo este mismo delta, aqui ya saldra vacio y no imprimimos.
+        await sleep(200 + Math.random() * 500);
+        const lines = await fetchFreshComandaDeltaLinesForTicket(ticket);
+        if (!lines.length) continue;
+
+        const printerName = getConfiguredComandaPrinterForPrint();
+        if (!printerName) {
+          const isNewFailure = !ticket.comandaAutoPrintFailedAt;
+          const errorMsg =
+            "Auto-comanda activa pero no hay impresora de comandas configurada.";
+          ticket.comandaAutoPrintFailedAt = new Date();
+          ticket.comandaAutoPrintFailedError = errorMsg;
+          await persistTicketAfterComandaPrint(ticket);
+          if (isNewFailure) toast(errorMsg, "warn", "Comandas");
+          continue;
+        }
+
+        const scope = resolveMesaScopeFromTicket(ticket);
+        const splitObsInfo = parseSplitInfoFromObs(ticket?.obs);
+        const obsText = String(
+          splitObsInfo?.cleanObs || ticket?.obs || "",
+        ).trim();
+        const partNumber = getNextComandaPartNumber(ticket);
+        const res = await printComandaWithContext({
+          scope,
+          lines,
+          obsText,
+          partNumber,
+          printerName,
+          successToastMessage:
+            "Comanda enviada automáticamente (pedido desde app de camareros).",
+          errorPrefix: "No se pudo imprimir la comanda automática:",
+        });
+
+        if (!res?.ok) {
+          const isNewFailure = !ticket.comandaAutoPrintFailedAt;
+          const errorMsg =
+            res?.error || "No se pudo imprimir la comanda automática.";
+          ticket.comandaAutoPrintFailedAt = new Date();
+          ticket.comandaAutoPrintFailedError = errorMsg;
+          await persistTicketAfterComandaPrint(ticket);
+          if (isNewFailure) toast(errorMsg, "err", "Comandas");
+          continue;
+        }
+
+        commitComandaPrintedState(ticket, ticket?.items || []);
+        await persistTicketAfterComandaPrint(ticket);
+      } finally {
+        __comandaAutoPrintInFlight.delete(dedupeKey);
+      }
+    }
+  } finally {
+    __comandaAutoPrintRunning = false;
+  }
 }
 
 function openComandaModal() {

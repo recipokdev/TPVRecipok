@@ -8562,6 +8562,40 @@ mustContain(
   "isVariant stays true even for the single-fake-variant case -- editing its base price must still target the variant-price API endpoint (apiUpdateVariantePrecioNet), not the plain product one, since FacturaScripts stores its real price/stock on that variant row",
 );
 
+// App de camareros (Android): la comanda debe imprimirse sola cuando el poll
+// remoto de aparcados detecta cambios en una mesa, no solo cuando se guarda
+// localmente en este mismo TPV (maybeAutoPrintComandaOnSave).
+mustContain(
+  renderer,
+  "async function maybeAutoPrintComandaFromRemoteSync()",
+  "Remote-poll auto-print-comanda function exists",
+);
+mustContain(
+  renderer,
+  "maybeAutoPrintComandaFromRemoteSync().catch(",
+  "refreshRemoteParkedReservationsOnly wires up the remote-poll auto-print",
+);
+mustContain(
+  renderer,
+  "if (__comandaAutoPrintRunning) return;",
+  "Remote-poll auto-print guards against re-entrancy from its own refresh call",
+);
+mustContain(
+  renderer,
+  "if (!dedupeKey || __comandaAutoPrintInFlight.has(dedupeKey)) continue;",
+  "Remote-poll auto-print dedupes overlapping timers for the same ticket",
+);
+mustContain(
+  renderer,
+  "ticket.comandaAutoPrintFailedAt = null;",
+  "commitComandaPrintedState clears the auto-print failure flag on success",
+);
+mustContain(
+  mesasJs,
+  'gestion-badge warn" title="No se pudo imprimir la comanda automáticamente"',
+  "Mesas map tile shows a warning badge when auto-print-comanda failed",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

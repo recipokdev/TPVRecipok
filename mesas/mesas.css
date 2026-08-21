@@ -388,6 +388,12 @@ body.embed-mode .mesas-main {
   font-weight: 800;
 }
 
+.gestion-obj.table .gestion-badge.warn {
+  background: rgba(255, 255, 255, 0.92);
+  color: #b91c1c;
+  font-weight: 800;
+}
+
 .gestion-obj.table .gestion-phase {
   margin-top: 1px;
   font-size: clamp(9px, 16%, 12px);

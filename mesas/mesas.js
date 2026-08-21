@@ -2790,11 +2790,16 @@ function renderMapCards() {
       const badgeClass =
         st.code === "reservada" ? "gestion-badge reserva" : "gestion-badge";
       const serviceOrder = Number(orderByUid.get(uid) || 0) || 0;
+      // Aviso local (ver renderer.js: maybeAutoPrintComandaFromRemoteSync) de
+      // que la comanda automatica de esta mesa no se pudo imprimir. No viaja
+      // entre TPV (el servidor no lo guarda), solo se ve en el que fallo.
+      const hasAutoPrintFailure = !!ticket?.comandaAutoPrintFailedAt;
 
       node.innerHTML = `
         <span class="gestion-name">${obj.label || "Mesa"}</span>
         ${totalText ? `<span class="gestion-total">${totalText}</span>` : ""}
         ${badgeText ? `<span class="${badgeClass}">${badgeText}</span>` : ""}
+        ${hasAutoPrintFailure ? `<span class="gestion-badge warn" title="No se pudo imprimir la comanda automáticamente">⚠ Comanda</span>` : ""}
         ${serviceOrder > 0 ? `<span class="gestion-order">${serviceOrder}</span>` : ""}
       `;
 

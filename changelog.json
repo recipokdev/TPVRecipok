@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "Modo Mesas: cuando una mesa se aparca o se actualiza desde fuera del TPV (p. ej. la app de camareros), la comanda se imprime sola en cocina en cuanto el TPV detecta el cambio, sin que nadie tenga que abrir la mesa y pulsar 'Imprimir comanda' a mano. Si la impresora de comandas falla, aparece un aviso en la mesa correspondiente dentro del plano de Mesas."
+      ]
     },
     {
       "version": "0.2.37",
