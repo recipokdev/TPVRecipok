@@ -8590,6 +8590,38 @@ mustContain(
   "ticket.comandaAutoPrintFailedAt = null;",
   "commitComandaPrintedState clears the auto-print failure flag on success",
 );
+
+// Regresion real detectada en produccion (2026-08-21): la mesa se veia
+// "desasignada" del carrito cada ~10s en cuanto habia un pedido nuevo de la
+// app de camareros. Causa: maybeAutoPrintComandaFromRemoteSync persistia con
+// la version de persistTicketAfterComandaPrint que vuelve a llamar a
+// refreshRemoteParkedReservationsOnly() -> syncParkedTicketsFromRemote()
+// MIENTRAS el poll normal de 10s que disparo todo esto seguia en curso;
+// syncParkedTicketsFromRemote no es reentrante y los dos pases pisandose
+// entre si podian dejar currentParkedTicketIndex a null. Debe usar la
+// version SIN resync (persistComandaAutoPrintStateWithoutResync) en los 3
+// sitios donde persiste (sin impresora / fallo de impresion / exito).
+{
+  const idx = renderer.indexOf(
+    "async function maybeAutoPrintComandaFromRemoteSync()",
+  );
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nfunction openComandaModal()", idx) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped &&
+    scoped.includes("persistComandaAutoPrintStateWithoutResync(ticket)") &&
+    !scoped.includes("persistTicketAfterComandaPrint(ticket)")
+  ) {
+    ok(
+      "maybeAutoPrintComandaFromRemoteSync persists without triggering a nested/overlapping remote resync",
+    );
+  } else {
+    fail(
+      "maybeAutoPrintComandaFromRemoteSync persists without triggering a nested/overlapping remote resync",
+    );
+  }
+}
+
 mustContain(
   mesasJs,
   'gestion-badge warn" title="No se pudo imprimir la comanda automáticamente"',

@@ -42425,6 +42425,32 @@ async function persistTicketAfterComandaPrint(ticket) {
   }
 }
 
+// Version SIN el refreshRemoteParkedReservationsOnly() final, para usar desde
+// dentro del propio poll remoto (maybeAutoPrintComandaFromRemoteSync).
+// syncParkedTicketsFromRemote no es reentrante (calcula prevLoadedKey/
+// currentParkedTicketIndex de forma sincrona al empezar y los reescribe al
+// terminar); llamar aqui a la version de arriba disparaba un segundo
+// syncParkedTicketsFromRemote MIENTRAS el que ya estaba en curso (el que nos
+// trajo hasta aqui) seguia sin terminar, y los dos pisandose entre si podia
+// dejar currentParkedTicketIndex a null aunque el carrito siguiera lleno --
+// la mesa se veia "desasignada" cada ~10s en cuanto habia algun pedido nuevo
+// de la app de camareros. El siguiente poll normal (10s despues) ya recoge
+// el estado guardado aqui sin necesidad de forzar un resync anidado.
+async function persistComandaAutoPrintStateWithoutResync(ticket) {
+  if (!ticket || typeof ticket !== "object") return;
+  saveParkedTicketsCache();
+
+  try {
+    await apiSaveParkedReservation(ticket);
+  } catch (e) {
+    enqueueParkedSyncOperation("upsert", ticket);
+    console.warn(
+      "No se pudo sincronizar estado de comanda (poll remoto) en ticket:",
+      e?.message || e,
+    );
+  }
+}
+
 function closeComandaModal() {
   if (comandaOverlay) comandaOverlay.classList.add("hidden");
 }
@@ -42756,7 +42782,7 @@ async function maybeAutoPrintComandaFromRemoteSync() {
             "Auto-comanda activa pero no hay impresora de comandas configurada.";
           ticket.comandaAutoPrintFailedAt = new Date();
           ticket.comandaAutoPrintFailedError = errorMsg;
-          await persistTicketAfterComandaPrint(ticket);
+          await persistComandaAutoPrintStateWithoutResync(ticket);
           if (isNewFailure) toast(errorMsg, "warn", "Comandas");
           continue;
         }
@@ -42784,13 +42810,13 @@ async function maybeAutoPrintComandaFromRemoteSync() {
             res?.error || "No se pudo imprimir la comanda automática.";
           ticket.comandaAutoPrintFailedAt = new Date();
           ticket.comandaAutoPrintFailedError = errorMsg;
-          await persistTicketAfterComandaPrint(ticket);
+          await persistComandaAutoPrintStateWithoutResync(ticket);
           if (isNewFailure) toast(errorMsg, "err", "Comandas");
           continue;
         }
 
         commitComandaPrintedState(ticket, ticket?.items || []);
-        await persistTicketAfterComandaPrint(ticket);
+        await persistComandaAutoPrintStateWithoutResync(ticket);
       } finally {
         __comandaAutoPrintInFlight.delete(dedupeKey);
       }
