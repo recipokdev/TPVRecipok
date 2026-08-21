@@ -8622,6 +8622,24 @@ mustContain(
   }
 }
 
+// Segunda causa de la misma regresion (mesa desasignada / recuentos
+// equivocados, seguia pasando incluso con el fix anterior aplicado): habia
+// ~20 sitios distintos llamando a refreshRemoteParkedReservationsOnly sin
+// ninguna coordinacion entre si, y dos llamadas solapadas podian pisarse
+// (la que TERMINABA mas tarde ganaba aunque hubiera arrancado con una foto
+// del remoto mas vieja). Ahora es "single-flight": una llamada mientras ya
+// hay otra en curso reutiliza esa misma promesa en vez de lanzar otra.
+mustContain(
+  renderer,
+  "let __refreshRemoteParkedReservationsInFlightPromise = null;",
+  "refreshRemoteParkedReservationsOnly has a single-flight in-progress guard",
+);
+mustContain(
+  renderer,
+  "async function refreshRemoteParkedReservationsOnlyImpl() {",
+  "refreshRemoteParkedReservationsOnly delegates to a wrapped impl (single-flight)",
+);
+
 mustContain(
   mesasJs,
   'gestion-badge warn" title="No se pudo imprimir la comanda automáticamente"',
