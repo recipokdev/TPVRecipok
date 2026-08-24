@@ -2779,6 +2779,46 @@ mustContain(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-24 paid ticket no longer deleted on a stale visibility check\n",
+);
+
+// Investigado a peticion del cliente ("cobro un aparcado y no se muestra
+// como cobrado / sigue pendiente"), reproducido con un script aislado
+// (repro-paid-visibility-bug.js) fuera de este repo, sin tocar ningun
+// servidor real: ensureRemoteParkedPaidVisibility() se llama justo despues
+// de cobrar, para confirmar que el servidor ya ve el ticket como pagado. Si
+// no lo encontraba por clave exacta, caia a comparar solo Number(id) ===
+// Number(id), ignorando slug/cajaId/modo. Con 2+ terminales, cada uno con su
+// propio contador LOCAL de numeros de ticket (no coordinado por el
+// servidor), dos tickets DISTINTOS pueden compartir numero -- ese fallback
+// podia confundir el ticket recien cobrado con un pedido pendiente sin
+// relacion de otro terminal, y BORRABA el que se acababa de cobrar (la
+// factura en FacturaScripts ya estaba bien hecha, pero el TPV dejaba de
+// verlo como cobrado). Ahora usa getParkedTicketSyncKeyVariants (mismo
+// criterio que el resto de la sincronizacion) y, si de verdad es el mismo
+// ticket pero el servidor no lo tiene como pagado, reintenta guardarlo en
+// vez de borrarlo.
+{
+  const idx = renderer.indexOf("async function ensureRemoteParkedPaidVisibility(ticket) {");
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nasync function ", idx + 10) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped.includes("getParkedTicketSyncKeyVariants(ticket)") &&
+    scoped.includes('mode: "resaved"') &&
+    !scoped.includes("apiDeleteParkedReservation(ticket)") &&
+    !/Number\(it\?\.id \|\| 0\) === Number\(ticket\?\.id \|\| 0\)/.test(scoped)
+  ) {
+    ok(
+      "ensureRemoteParkedPaidVisibility matches by full key variants (not bare numeric id) and retries the save instead of deleting",
+    );
+  } else {
+    fail(
+      "ensureRemoteParkedPaidVisibility matches by full key variants (not bare numeric id) and retries the save instead of deleting",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

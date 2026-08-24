@@ -33575,22 +33575,44 @@ async function ensureRemoteParkedPaidVisibility(ticket) {
     .map((it) => normalizeRemoteParkedTicket(it))
     .filter(Boolean);
 
-  const key = getParkedTicketSyncKey(ticket);
-  const byKey = key
-    ? normalized.find((it) => getParkedTicketSyncKey(it) === key)
+  // Antes se caia a comparar solo Number(id) === Number(id) cuando la clave
+  // exacta no encontraba nada -- ignorando slug/cajaId/modo. Con 2+
+  // terminales, cada uno con su propio contador LOCAL de numeros de ticket
+  // (no coordinado por el servidor), dos tickets DISTINTOS de terminales
+  // distintos pueden compartir el mismo numero. Ese fallback podia confundir
+  // el ticket que se acaba de cobrar con un pedido pendiente sin ninguna
+  // relacion de otro terminal, y terminaba borrandolo del servidor (la
+  // factura en FacturaScripts ya estaba bien hecha, pero el TPV dejaba de
+  // verlo como cobrado). Ahora se usa el mismo criterio de variantes de
+  // clave que ya usa el resto de la sincronizacion
+  // (getParkedTicketSyncKeyVariants): tolera que el cajaId de ESTE MISMO
+  // ticket haya cambiado (p.ej. al fijarse el candado de cobro), sin poder
+  // confundirlo nunca con un ticket de otro cajaId/terminal.
+  const variants = new Set(getParkedTicketSyncKeyVariants(ticket));
+  const byKey = variants.size
+    ? normalized.find((it) =>
+        getParkedTicketSyncKeyVariants(it).some((k) => variants.has(k)),
+      )
     : null;
 
-  const byId =
-    byKey ||
-    normalized.find((it) => Number(it?.id || 0) === Number(ticket?.id || 0));
-
-  if (byId?.paid) {
+  if (byKey?.paid) {
     return { ok: true, mode: "paid" };
   }
 
-  if (byId && !byId?.paid) {
-    await apiDeleteParkedReservation(ticket);
-    return { ok: true, mode: "deleted-fallback" };
+  if (byKey && !byKey?.paid) {
+    // Es de verdad este mismo ticket (misma clave), pero el servidor
+    // todavia no lo tiene marcado como pagado -- reintentar el guardado en
+    // vez de borrarlo, para no perder nunca un cobro ya facturado.
+    try {
+      await apiSaveParkedReservation(ticket);
+      return { ok: true, mode: "resaved" };
+    } catch (e) {
+      return {
+        ok: false,
+        mode: "resave-failed",
+        error: e?.message || String(e),
+      };
+    }
   }
 
   return { ok: true, mode: "missing" };
