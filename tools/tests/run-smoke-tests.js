@@ -2519,7 +2519,7 @@ console.log(
   const idx = renderer.indexOf("const preservedPaidCandidates = [");
   const scoped = idx >= 0 ? renderer.slice(idx, idx + 260) : "";
   if (
-    scoped.includes(".filter((t) => !isParkedPaidTombstoned(t));") &&
+    scoped.includes(".filter((t) => !isParkedTicketTombstoned(t));") &&
     !scoped.includes(".filter((t) => isTicketInCurrentParkingMode(t));")
   ) {
     ok(
@@ -2642,6 +2642,80 @@ console.log(
   } else {
     fail(
       "syncParkedTicketsFromRemote calls loadParkedPaidHistory() only once per sync, not twice",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-24 deleted pending tickets no longer reappear\n",
+);
+
+// Feedback de cliente real (probado en vivo en Modo Mesas, pero la funcion es
+// compartida con el TPV normal): al borrar un aparcado PENDIENTE (sin
+// cobrar), el toast decia "eliminado" pero el ticket volvia a aparecer solo
+// segundos despues. Causa: el borrado remoto (apiDeleteParkedReservation) es
+// fire-and-forget -- no se espera a que termine antes de quitar el ticket de
+// local -- y si un sync (poll de 10s, u otro TPV) llega antes de que el
+// servidor procese el borrado, todavia ve el ticket "ahi" y lo trae de
+// vuelta. Ya existia este mismo mecanismo (tombstone) para los COBRADOS
+// (antes "isParkedPaidTombstoned"/"markParkedPaidTicketAsDeleted"), pero
+// nunca se aplicaba a los pendientes. Generalizado (renombrado sin "Paid") y
+// aplicado en los 4 sitios que borran un aparcado: borrado individual,
+// borrado masivo de pendientes, limpiar cobrados, y unificar partes de un
+// ticket dividido.
+mustContain(
+  renderer,
+  "function isParkedTicketTombstoned(ticket) {",
+  "Tombstone check generalized beyond paid tickets (renamed from isParkedPaidTombstoned)",
+);
+mustContain(
+  renderer,
+  "function markParkedTicketAsDeleted(ticket) {",
+  "Tombstone marker generalized beyond paid tickets (renamed from markParkedPaidTicketAsDeleted, no longer requires ticket.paid)",
+);
+{
+  const idx = renderer.indexOf("async function deleteParkedTicketByIndex(");
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nasync function ", idx + 10) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped.includes("markParkedTicketAsDeleted(removedTicket);") &&
+    !/if \(removedTicket\?\.paid[^)]*\)\s*\{\s*markParkedTicketAsDeleted/.test(scoped)
+  ) {
+    ok(
+      "deleteParkedTicketByIndex tombstones any deleted ticket, not only paid ones",
+    );
+  } else {
+    fail(
+      "deleteParkedTicketByIndex tombstones any deleted ticket, not only paid ones",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf(
+    "async function deleteAllPendingParkedTickets(",
+  );
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nfunction ", idx + 10) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (scoped.includes("markParkedTicketAsDeleted(ticket);")) {
+    ok(
+      "deleteAllPendingParkedTickets (bulk 'Borrar pendientes') tombstones each removed ticket",
+    );
+  } else {
+    fail(
+      "deleteAllPendingParkedTickets (bulk 'Borrar pendientes') tombstones each removed ticket",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("const toDelete = sameGroupEntries.filter(");
+  const scoped = idx >= 0 ? renderer.slice(idx, idx + 700) : "";
+  if (scoped.includes("markParkedTicketAsDeleted(entry.ticket);")) {
+    ok(
+      "Merging split-ticket parts tombstones the parts it deletes",
+    );
+  } else {
+    fail(
+      "Merging split-ticket parts tombstones the parts it deletes",
     );
   }
 }
