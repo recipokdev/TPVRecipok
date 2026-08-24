@@ -2532,6 +2532,29 @@ console.log(
   }
 }
 
+// Regresion real detectada en produccion (2026-08-21, reportada por un
+// cliente con 2+ terminales trabajando a la vez): un aparcado se quedaba
+// "PENDIENTE" para siempre aunque ya se hubiera cobrado por otro lado (o el
+// ticket impreso no correspondia con el pedido real). Causa: hay ~20 sitios
+// distintos en el codigo llamando a refreshRemoteParkedReservationsOnly
+// (accion del usuario, poll de 10s, etc.) sin ninguna coordinacion entre si.
+// syncParkedTicketsFromRemote no es reentrante, y dos llamadas solapadas
+// podian pisarse -- la que TERMINABA mas tarde ganaba aunque hubiera
+// arrancado con una foto del remoto mas vieja, dejando currentParkedTicketIndex
+// a null (mesa "desasignada") o pisando parkedTickets con menos aparcados de
+// los que realmente habia. Ahora es "single-flight": una llamada mientras ya
+// hay otra en curso reutiliza esa misma promesa en vez de lanzar otra.
+mustContain(
+  renderer,
+  "let __refreshRemoteParkedReservationsInFlightPromise = null;",
+  "refreshRemoteParkedReservationsOnly has a single-flight in-progress guard",
+);
+mustContain(
+  renderer,
+  "async function refreshRemoteParkedReservationsOnlyImpl() {",
+  "refreshRemoteParkedReservationsOnly delegates to a wrapped impl (single-flight)",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

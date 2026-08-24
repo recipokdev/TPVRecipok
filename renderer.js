@@ -33528,7 +33528,36 @@ async function ensureRemoteParkedPaidVisibility(ticket) {
   return { ok: true, mode: "missing" };
 }
 
+// syncParkedTicketsFromRemote no es reentrante: calcula currentParkedTicketIndex
+// (que mesa esta cargada) a partir del parkedTickets/estado que hay AL EMPEZAR,
+// y lo reescribe al terminar. Con ~20 sitios distintos del codigo llamando a
+// refreshRemoteParkedReservationsOnly (accion del usuario, poll de 10s, auto-
+// comanda, etc.) sin ninguna coordinacion entre si, dos llamadas podian solaparse
+// y pisarse: la que TERMINABA mas tarde ganaba aunque hubiera arrancado con una
+// foto del remoto mas VIEJA, dejando currentParkedTicketIndex a null (mesa
+// "desasignada" del carrito) o pisando parkedTickets con menos aparcados de los
+// que realmente habia (recuento equivocado). Ahora se hace "single-flight": si
+// ya hay una llamada en curso, las demas esperan y reciben SU MISMO resultado
+// en vez de lanzar otra ejecucion en paralelo.
+let __refreshRemoteParkedReservationsInFlightPromise = null;
+
 async function refreshRemoteParkedReservationsOnly() {
+  if (__refreshRemoteParkedReservationsInFlightPromise) {
+    return __refreshRemoteParkedReservationsInFlightPromise;
+  }
+
+  __refreshRemoteParkedReservationsInFlightPromise = (async () => {
+    try {
+      return await refreshRemoteParkedReservationsOnlyImpl();
+    } finally {
+      __refreshRemoteParkedReservationsInFlightPromise = null;
+    }
+  })();
+
+  return __refreshRemoteParkedReservationsInFlightPromise;
+}
+
+async function refreshRemoteParkedReservationsOnlyImpl() {
   if (isTutorialGlobalPauseActive()) return false;
   if (isMesasDesignViewActive()) return false;
   if (TPV_STATE?.offline) return false;
