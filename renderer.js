@@ -31673,7 +31673,17 @@ function normalizeRemoteParkedTicket(raw) {
     raw.ticketId ?? raw.id ?? raw.ticketid ?? raw.ticket_id ?? null;
   const numTicketId = Number(rawTicketId);
 
-  const id = Number.isFinite(numTicketId) && numTicketId > 0 ? numTicketId : 0;
+  // Si el ticketId no es un numero positivo (p.ej. la app de camareros manda
+  // un id no numerico), NO lo tirabamos a 0 -- eso hacia getParkedTicketSyncKey
+  // devolver clave vacia (id falsy) y el ticket se desvinculaba del carrito en
+  // cada sincronizacion, y ademas al reenviarlo con apiSaveParkedReservation
+  // se mandaba ticketId "0" en vez del real, pudiendo crear una fila duplicada
+  // en el servidor. Conservamos el id original (como string) mientras no este
+  // vacio; solo cae a 0 si de verdad no vino ningun identificador.
+  const id =
+    Number.isFinite(numTicketId) && numTicketId > 0
+      ? numTicketId
+      : String(rawTicketId ?? "").trim() || 0;
 
   const createdAt = raw.createdAt
     ? new Date(raw.createdAt)

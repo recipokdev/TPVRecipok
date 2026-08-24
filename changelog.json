@@ -7,7 +7,8 @@
       "title": "",
       "changes": [
         "Aparcados: en tiendas con 2 o más TPV a la vez, la sincronización de aparcados con el servidor podía dispararse dos veces solapadas (por ejemplo, una acción del cajero justo durante el chequeo automático de cada 10s) y pisarse entre sí, dejando a veces la mesa/carrito 'desasignado', un aparcado ya cobrado que seguía apareciendo como pendiente, o un ticket impreso con datos que no correspondían al pedido real. Corregido para que nunca se solapen dos sincronizaciones a la vez.",
-        "Rendimiento: en tiendas con muchos tickets en el día, la sincronización de aparcados (cada 10s, y también al pulsar 'Cobrar' al cerrar una mesa) releía y procesaba el historial de cobrados dos veces por error, haciendo que todo se notara cada vez más lento a medida que avanzaba el día. Corregido para que se lea una sola vez."
+        "Rendimiento: en tiendas con muchos tickets en el día, la sincronización de aparcados (cada 10s, y también al pulsar 'Cobrar' al cerrar una mesa) releía y procesaba el historial de cobrados dos veces por error, haciendo que todo se notara cada vez más lento a medida que avanzaba el día. Corregido para que se lea una sola vez.",
+        "Modo Mesas: una mesa aparcada desde fuera del TPV con un identificador no numérico se desvinculaba del carrito cada vez que sincronizaba (los productos se quedaban puestos, pero se perdía la mesa asociada). Corregido para que ese identificador ya no se pierda al sincronizar."
       ]
     },
     {

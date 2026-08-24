@@ -2555,6 +2555,37 @@ mustContain(
   "refreshRemoteParkedReservationsOnly delegates to a wrapped impl (single-flight)",
 );
 
+// Cherry-pick de un fix general encontrado en la rama de integracion con la
+// app de camareros (2026-08-24): un ticketId no numerico (algo que esa app
+// puede mandar, aunque main hoy no genere ninguno) hacia que
+// normalizeRemoteParkedTicket lo tirara a id=0. Con id=0,
+// getParkedTicketSyncKey(t) devolvia clave VACIA (id falsy), asi que el
+// ticket se desvinculaba del carrito en cada sincronizacion -- sin ninguna
+// carrera, de forma perfectamente determinista. Ademas, al reenviarlo se
+// mandaba ticketId "0" en vez del real, arriesgando una fila duplicada en el
+// servidor. Se conserva ahora el id original (como string) en vez de
+// descartarlo a 0. No es la causa del bug de 2+ terminales reportado en main
+// (esa sigue siendo la carrera que arregla el single-flight de arriba), pero
+// es una correccion real en una funcion compartida por todo aparcado.
+{
+  const idx = renderer.indexOf("function normalizeRemoteParkedTicket(raw) {");
+  const closeIdx = idx >= 0 ? renderer.indexOf("\n  const createdAt = raw.createdAt", idx) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped &&
+    scoped.includes("String(rawTicketId ?? \"\").trim() || 0") &&
+    !/:\s*0;\s*$/.test(scoped.trim())
+  ) {
+    ok(
+      "normalizeRemoteParkedTicket preserves a non-numeric ticketId instead of collapsing it to 0",
+    );
+  } else {
+    fail(
+      "normalizeRemoteParkedTicket preserves a non-numeric ticketId instead of collapsing it to 0",
+    );
+  }
+}
+
 console.log(
   "\n[SMOKE] Checking 2026-08-22 dedupe redundant paid-history reload per sync\n",
 );
