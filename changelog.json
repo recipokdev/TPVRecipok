@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "Aparcados: en tiendas con 2 o más TPV a la vez, la sincronización de aparcados con el servidor podía dispararse dos veces solapadas (por ejemplo, una acción del cajero justo durante el chequeo automático de cada 10s) y pisarse entre sí, dejando a veces la mesa/carrito 'desasignado', un aparcado ya cobrado que seguía apareciendo como pendiente, o un ticket impreso con datos que no correspondían al pedido real. Corregido para que nunca se solapen dos sincronizaciones a la vez."
+      ]
     },
     {
       "version": "0.2.19",
