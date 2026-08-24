@@ -2519,7 +2519,7 @@ console.log(
   const idx = renderer.indexOf("const preservedPaidCandidates = [");
   const scoped = idx >= 0 ? renderer.slice(idx, idx + 260) : "";
   if (
-    scoped.includes(".filter((t) => !isParkedPaidTombstoned(t));") &&
+    scoped.includes(".filter((t) => !isParkedTicketTombstoned(t));") &&
     !scoped.includes(".filter((t) => isTicketInCurrentParkingMode(t));")
   ) {
     ok(
@@ -2554,6 +2554,68 @@ mustContain(
   "async function refreshRemoteParkedReservationsOnlyImpl() {",
   "refreshRemoteParkedReservationsOnly delegates to a wrapped impl (single-flight)",
 );
+
+// Cherry-pick de un fix general encontrado en la rama de integracion con la
+// app de camareros (2026-08-24): un ticketId no numerico (algo que esa app
+// puede mandar, aunque main hoy no genere ninguno) hacia que
+// normalizeRemoteParkedTicket lo tirara a id=0. Con id=0,
+// getParkedTicketSyncKey(t) devolvia clave VACIA (id falsy), asi que el
+// ticket se desvinculaba del carrito en cada sincronizacion -- sin ninguna
+// carrera, de forma perfectamente determinista. Ademas, al reenviarlo se
+// mandaba ticketId "0" en vez del real, arriesgando una fila duplicada en el
+// servidor. Se conserva ahora el id original (como string) en vez de
+// descartarlo a 0. No es la causa del bug de 2+ terminales reportado en main
+// (esa sigue siendo la carrera que arregla el single-flight de arriba), pero
+// es una correccion real en una funcion compartida por todo aparcado.
+
+// Otro cherry-pick de la misma rama (2026-08-24): el badge de "Pedidos"
+// parpadeaba entre el total y "1 mesa" cada ~10s en modo
+// Transacciones (2026-08-24). Causa: se filtraba por
+// mesas.js:state.selectedTableId, que es un estado de NAVEGACION DEL PLANO
+// (para resaltar una mesa en el mapa) que ensureActiveRoomAndTable
+// auto-rellena con "la primera mesa de la sala" en cuanto detecta que no hay
+// ninguna seleccionada -- y eso pasa en cada refresco del plano (cada vez
+// que el sync de aparcados escribe en localStorage, ~10s). El boton siempre
+// abre la lista COMPLETA sin filtrar (ver openParkedModal), asi que el
+// numero debe coincidir con eso siempre.
+{
+  const idx = renderer.indexOf("function updateParkedCountBadge() {");
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nfunction getParkedClosingLockAgeMs", idx) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped &&
+    scoped.includes("badge.textContent = String(pendingMesas.length);") &&
+    !scoped.includes("selectedCount") &&
+    !scoped.includes("loadMesasTablesStateForInline()")
+  ) {
+    ok(
+      "updateParkedCountBadge no longer scopes the Mesas count to mesas.js's map-selection state",
+    );
+  } else {
+    fail(
+      "updateParkedCountBadge no longer scopes the Mesas count to mesas.js's map-selection state",
+    );
+  }
+}
+
+{
+  const idx = renderer.indexOf("function normalizeRemoteParkedTicket(raw) {");
+  const closeIdx = idx >= 0 ? renderer.indexOf("\n  const createdAt = raw.createdAt", idx) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped &&
+    scoped.includes("String(rawTicketId ?? \"\").trim() || 0") &&
+    !/:\s*0;\s*$/.test(scoped.trim())
+  ) {
+    ok(
+      "normalizeRemoteParkedTicket preserves a non-numeric ticketId instead of collapsing it to 0",
+    );
+  } else {
+    fail(
+      "normalizeRemoteParkedTicket preserves a non-numeric ticketId instead of collapsing it to 0",
+    );
+  }
+}
 
 console.log(
   "\n[SMOKE] Checking 2026-08-22 dedupe redundant paid-history reload per sync\n",
@@ -2642,6 +2704,80 @@ mustContain(
   "await waitForSilentAutoSaveToSettle();",
   "Parked-ticket checkout waits for any in-flight silent auto-save before locking/closing the ticket",
 );
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-24 deleted pending tickets no longer reappear\n",
+);
+
+// Feedback de cliente real (probado en vivo en Modo Mesas, pero la funcion es
+// compartida con el TPV normal): al borrar un aparcado PENDIENTE (sin
+// cobrar), el toast decia "eliminado" pero el ticket volvia a aparecer solo
+// segundos despues. Causa: el borrado remoto (apiDeleteParkedReservation) es
+// fire-and-forget -- no se espera a que termine antes de quitar el ticket de
+// local -- y si un sync (poll de 10s, u otro TPV) llega antes de que el
+// servidor procese el borrado, todavia ve el ticket "ahi" y lo trae de
+// vuelta. Ya existia este mismo mecanismo (tombstone) para los COBRADOS
+// (antes "isParkedPaidTombstoned"/"markParkedPaidTicketAsDeleted"), pero
+// nunca se aplicaba a los pendientes. Generalizado (renombrado sin "Paid") y
+// aplicado en los 4 sitios que borran un aparcado: borrado individual,
+// borrado masivo de pendientes, limpiar cobrados, y unificar partes de un
+// ticket dividido.
+mustContain(
+  renderer,
+  "function isParkedTicketTombstoned(ticket) {",
+  "Tombstone check generalized beyond paid tickets (renamed from isParkedPaidTombstoned)",
+);
+mustContain(
+  renderer,
+  "function markParkedTicketAsDeleted(ticket) {",
+  "Tombstone marker generalized beyond paid tickets (renamed from markParkedPaidTicketAsDeleted, no longer requires ticket.paid)",
+);
+{
+  const idx = renderer.indexOf("async function deleteParkedTicketByIndex(");
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nasync function ", idx + 10) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped.includes("markParkedTicketAsDeleted(removedTicket);") &&
+    !/if \(removedTicket\?\.paid[^)]*\)\s*\{\s*markParkedTicketAsDeleted/.test(scoped)
+  ) {
+    ok(
+      "deleteParkedTicketByIndex tombstones any deleted ticket, not only paid ones",
+    );
+  } else {
+    fail(
+      "deleteParkedTicketByIndex tombstones any deleted ticket, not only paid ones",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf(
+    "async function deleteAllPendingParkedTickets(",
+  );
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nfunction ", idx + 10) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (scoped.includes("markParkedTicketAsDeleted(ticket);")) {
+    ok(
+      "deleteAllPendingParkedTickets (bulk 'Borrar pendientes') tombstones each removed ticket",
+    );
+  } else {
+    fail(
+      "deleteAllPendingParkedTickets (bulk 'Borrar pendientes') tombstones each removed ticket",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("const toDelete = sameGroupEntries.filter(");
+  const scoped = idx >= 0 ? renderer.slice(idx, idx + 700) : "";
+  if (scoped.includes("markParkedTicketAsDeleted(entry.ticket);")) {
+    ok(
+      "Merging split-ticket parts tombstones the parts it deletes",
+    );
+  } else {
+    fail(
+      "Merging split-ticket parts tombstones the parts it deletes",
+    );
+  }
+}
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 

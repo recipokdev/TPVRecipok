@@ -15349,23 +15349,21 @@ function updateParkedCountBadge() {
   }
 
   if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
-    const mesasState = loadMesasTablesStateForInline();
-    const selectedUid = String(mesasState?.selectedTableId || "").trim();
-
     const pendingMesas = (Array.isArray(parkedTickets) ? parkedTickets : [])
       .filter((t) => !t?.paid)
       .filter((t) => isMesasModeTicket(t));
 
-    if (selectedUid) {
-      const selectedCount = pendingMesas.filter(
-        (t) =>
-          String(resolveTicketMesaUid(t, mesasState) || "").trim() ===
-          selectedUid,
-      ).length;
-      badge.textContent = String(selectedCount);
-      return;
-    }
-
+    // Antes se filtraba por mesas.js:state.selectedTableId cuando habia una
+    // mesa "seleccionada" en el plano. Pero ese selectedTableId es un estado
+    // de NAVEGACION DEL PLANO (para resaltar una mesa mientras se mira el
+    // mapa), no de este flujo de Transacciones -- y ensureActiveRoomAndTable
+    // en mesas.js lo auto-rellena con "la primera mesa de la sala" en cuanto
+    // detecta que no hay ninguna seleccionada, cosa que pasa en cada refresco
+    // del plano (cada vez que este sync escribe en localStorage). Resultado:
+    // el numero parpadeaba entre el total y "1 mesa" cada ~10s sin que el
+    // usuario hubiera tocado nada. El boton siempre abre la lista completa
+    // sin filtrar (ver openParkedModal), asi que el numero debe coincidir
+    // con eso siempre, no solo cuando no hay ninguna mesa "seleccionada".
     badge.textContent = String(pendingMesas.length);
     return;
   }
@@ -17250,7 +17248,7 @@ async function clearPaidParkedHistory() {
   }
 
   removedPaid.forEach((ticket) => {
-    markParkedPaidTicketAsDeleted(ticket);
+    markParkedTicketAsDeleted(ticket);
   });
 
   parkedTickets = source.filter((t) => !(!!t?.paid && !isPedidoTpvTicket(t)));
@@ -17321,6 +17319,13 @@ async function deleteAllPendingParkedTickets({ releaseStock = true } = {}) {
   if (!removedPending.length) {
     return { removedCount: 0, queuedCount: 0 };
   }
+
+  // Mismo motivo que en deleteParkedTicketByIndex: el borrado remoto de cada
+  // ticket (mas abajo) es fire-and-forget, asi que hay que marcarlos como
+  // borrados (tombstone) antes de que un sync pueda resucitarlos.
+  removedPending.forEach((ticket) => {
+    markParkedTicketAsDeleted(ticket);
+  });
 
   parkedTickets = source.filter((t) => !(!t?.paid && !isPedidoTpvTicket(t)));
   saveParkedTicketsCache(parkedTickets);
@@ -18232,9 +18237,13 @@ async function deleteParkedTicketByIndex(
   const removedTicket = parkedTickets[idx];
   const ticketKey = getParkedTicketSyncKey(removedTicket);
 
-  if (removedTicket?.paid && !isPedidoTpvTicket(removedTicket)) {
-    markParkedPaidTicketAsDeleted(removedTicket);
-  }
+  // El borrado remoto (mas abajo) es fire-and-forget: no se espera a que
+  // termine antes de quitarlo de local. Si un sync (poll de 10s, u otro TPV)
+  // llega antes de que el servidor procese el borrado, todavia ve el ticket
+  // "ahi" y lo vuelve a traer como si fuera nuevo -- por eso hace falta
+  // marcarlo como borrado (tombstone) YA, antes de que exista esa ventana,
+  // sea cual sea su estado (antes solo se hacia para los ya cobrados).
+  markParkedTicketAsDeleted(removedTicket);
 
   parkedTickets.splice(idx, 1);
   saveParkedTicketsCache();
@@ -30977,15 +30986,23 @@ function saveParkedPaidTombstones(keys) {
   } catch {}
 }
 
-function isParkedPaidTombstoned(ticket) {
+// Nota historica: se llamaba "Paid" porque solo se usaba al borrar cobrados
+// (evitar que un sync que aun no se entera del borrado remoto lo resucite).
+// El mismo problema existia sin arreglar para pendientes sin cobrar (ver
+// markParkedTicketAsDeleted): un borrado local + llamada de borrado remoto
+// SIN ESPERAR (fire-and-forget) deja una ventana en la que un sync que
+// llegue antes de que el servidor procese el borrado ve el ticket "todavia
+// ahi" y lo vuelve a traer como si fuera nuevo. Generalizado a cualquier
+// aparcado borrado, cobrado o no; el nombre de la funcion ya no dice "Paid".
+function isParkedTicketTombstoned(ticket) {
   if (!ticket) return false;
   const key = getParkedTicketSyncKey(ticket);
   if (!key) return false;
   return new Set(loadParkedPaidTombstones()).has(key);
 }
 
-function markParkedPaidTicketAsDeleted(ticket) {
-  if (!ticket || !ticket?.paid) return;
+function markParkedTicketAsDeleted(ticket) {
+  if (!ticket) return;
   const key = getParkedTicketSyncKey(ticket);
   if (!key) return;
 
@@ -30994,7 +31011,7 @@ function markParkedPaidTicketAsDeleted(ticket) {
   saveParkedPaidTombstones(keys);
 }
 
-function purgeParkedPaidTombstonesByTickets(tickets) {
+function purgeParkedTombstonesByTickets(tickets) {
   const list = Array.isArray(tickets) ? tickets : [];
   if (!list.length) return;
 
@@ -31707,7 +31724,17 @@ function normalizeRemoteParkedTicket(raw) {
     raw.ticketId ?? raw.id ?? raw.ticketid ?? raw.ticket_id ?? null;
   const numTicketId = Number(rawTicketId);
 
-  const id = Number.isFinite(numTicketId) && numTicketId > 0 ? numTicketId : 0;
+  // Si el ticketId no es un numero positivo (p.ej. la app de camareros manda
+  // un id no numerico), NO lo tirabamos a 0 -- eso hacia getParkedTicketSyncKey
+  // devolver clave vacia (id falsy) y el ticket se desvinculaba del carrito en
+  // cada sincronizacion, y ademas al reenviarlo con apiSaveParkedReservation
+  // se mandaba ticketId "0" en vez del real, pudiendo crear una fila duplicada
+  // en el servidor. Conservamos el id original (como string) mientras no este
+  // vacio; solo cae a 0 si de verdad no vino ningun identificador.
+  const id =
+    Number.isFinite(numTicketId) && numTicketId > 0
+      ? numTicketId
+      : String(rawTicketId ?? "").trim() || 0;
 
   const createdAt = raw.createdAt
     ? new Date(raw.createdAt)
@@ -31980,7 +32007,7 @@ function loadParkedTicketsCache() {
     return arr
       .map((it) => normalizeRemoteParkedTicket(it))
       .filter(Boolean)
-      .filter((t) => !isParkedPaidTombstoned(t))
+      .filter((t) => !isParkedTicketTombstoned(t))
       .filter((t) => isTicketInCurrentParkingMode(t));
   } catch (e) {
     console.warn("No se pudo leer cache local de aparcados:", e?.message || e);
@@ -32681,7 +32708,7 @@ function syncParkedTicketsFromRemote(list) {
   const normalizedRemote = (Array.isArray(list) ? list : [])
     .map((it) => normalizeRemoteParkedTicket(it))
     .filter(Boolean)
-    .filter((t) => !isParkedPaidTombstoned(t));
+    .filter((t) => !isParkedTicketTombstoned(t));
 
   // Si remoto ya marca un ticket como pagado, debe prevalecer sobre cualquier
   // pendiente local preservado temporalmente.
@@ -32887,7 +32914,7 @@ function syncParkedTicketsFromRemote(list) {
   const nowTs = Date.now();
   previousTickets
     .filter((t) => !!t && !t?.paid)
-    .filter((t) => !isParkedPaidTombstoned(t))
+    .filter((t) => !isParkedTicketTombstoned(t))
     .filter((t) => isTicketInCurrentParkingMode(t))
     .forEach((t) => {
       const key = getParkedTicketSyncKey(t);
@@ -32945,7 +32972,7 @@ function syncParkedTicketsFromRemote(list) {
     ...paidHistory,
   ]
     .filter((t) => !!t?.paid)
-    .filter((t) => !isParkedPaidTombstoned(t));
+    .filter((t) => !isParkedTicketTombstoned(t));
 
   preservedPaidCandidates.forEach((t) => {
     const key = getParkedTicketSyncKey(t);
@@ -36137,6 +36164,15 @@ async function confirmSplitTicket() {
       (entry) => String(entry.ticket?.id || "") !== String(loaded?.id || ""),
     );
 
+    // Mismo motivo que en deleteParkedTicketByIndex: el borrado remoto de
+    // cada parte (mas abajo, fire-and-forget) puede tardar mas que el
+    // refreshRemoteParkedReservationsOnly() que se llama justo despues de
+    // unificar -- sin tombstone, ese sync podria resucitar la parte que se
+    // acaba de fusionar.
+    toDelete.forEach((entry) => {
+      markParkedTicketAsDeleted(entry.ticket);
+    });
+
     toDelete
       .sort((a, b) => b.idx - a.idx)
       .forEach((entry) => {
@@ -38349,7 +38385,7 @@ function getNextSuggestedParkTicketDisplayNo() {
   );
   const paidHistory = loadParkedPaidHistory()
     .filter((t) => !isPedidoTpvTicket(t))
-    .filter((t) => !isParkedPaidTombstoned(t))
+    .filter((t) => !isParkedTicketTombstoned(t))
     .filter((t) => isTicketInCurrentParkingMode(t));
   const allKnownTickets = [...ticketsInScope, ...paidHistory];
 
