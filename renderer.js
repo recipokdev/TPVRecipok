@@ -32626,10 +32626,17 @@ function syncParkedTicketsFromRemote(list) {
     });
   });
 
+  // loadParkedPaidHistory() lee localStorage + JSON.parse + normaliza hasta
+  // 2000 tickets cobrados; con muchos tickets en el dia, hacerlo 2 veces por
+  // sync (aqui y en preservedPaidCandidates mas abajo) se notaba en tiendas
+  // con 2+ TPV, ya que este sync corre cada 10s y ademas lo espera "Cobrar"
+  // al cerrar una mesa. Se calcula una sola vez y se reutiliza.
+  const paidHistory = loadParkedPaidHistory();
+
   const paidKeySet = new Set();
   const paidCandidates = [
     ...previousTickets.filter((t) => !!t?.paid),
-    ...loadParkedPaidHistory().filter((t) => !!t?.paid),
+    ...paidHistory.filter((t) => !!t?.paid),
   ];
   paidCandidates.forEach((ticket) => {
     getParkedTicketSyncKeyVariants(ticket).forEach((key) => {
@@ -32901,7 +32908,7 @@ function syncParkedTicketsFromRemote(list) {
   // no lo pierda de vista solo por sincronizar desde el modo "equivocado".
   const preservedPaidCandidates = [
     ...previousTickets,
-    ...loadParkedPaidHistory(),
+    ...paidHistory,
   ]
     .filter((t) => !!t?.paid)
     .filter((t) => !isParkedPaidTombstoned(t));

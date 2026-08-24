@@ -2555,6 +2555,35 @@ mustContain(
   "refreshRemoteParkedReservationsOnly delegates to a wrapped impl (single-flight)",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-22 dedupe redundant paid-history reload per sync\n",
+);
+
+// Feedback de cliente real (2+ TPV, lentitud a partir de ~80 aparcados/dia):
+// loadParkedPaidHistory() lee localStorage + JSON.parse + normaliza hasta
+// 2000 tickets cobrados, y se llamaba 2 veces dentro de la misma pasada de
+// syncParkedTicketsFromRemote (que corre cada 10s y ademas la espera
+// "Cobrar" al cerrar una mesa). Ahora se calcula una vez y se reutiliza.
+{
+  const idx = renderer.indexOf("function syncParkedTicketsFromRemote(list) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("\nfunction ", idx + 10) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("const paidHistory = loadParkedPaidHistory();") &&
+    scoped.includes("...paidHistory.filter((t) => !!t?.paid),") &&
+    scoped.includes("...paidHistory,") &&
+    !scoped.includes("...loadParkedPaidHistory()")
+  ) {
+    ok(
+      "syncParkedTicketsFromRemote calls loadParkedPaidHistory() only once per sync, not twice",
+    );
+  } else {
+    fail(
+      "syncParkedTicketsFromRemote calls loadParkedPaidHistory() only once per sync, not twice",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
