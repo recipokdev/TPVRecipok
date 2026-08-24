@@ -2584,6 +2584,65 @@ console.log(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-23 silent auto-save no longer blocks cart editing\n",
+);
+
+// Feedback de cliente real: "cuando le das un producto, hasta que no lo
+// guardas... no te deja seguir". El autoguardado de fondo con debounce
+// (scheduleMesasAutoSave/scheduleTpvAutoSave, ya existente) llamaba a
+// parkCurrentCart con silentAutoSave:true, pero esta seguia tomando
+// isParkingNow -- la misma bandera que bloquea la edicion del carrito
+// (getCartEditLockReason) -- anulando el proposito de que sea invisible.
+// Ahora un guardado silencioso usa isParkingNowSilent (no bloquea la
+// interfaz) y solo el guardado manual/explicito sigue tomando isParkingNow.
+mustContain(
+  renderer,
+  "let isParkingNowSilent = false;",
+  "isParkingNowSilent flag exists, separate from the UI-blocking isParkingNow",
+);
+{
+  const idx = renderer.indexOf("async function parkCurrentCart(name = \"\"");
+  const endIdx = idx >= 0 ? renderer.indexOf("\nasync function ", idx + 10) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("if (isParkingNow || isParkingNowSilent) return;") &&
+    scoped.includes("isParkingNowSilent = true;") &&
+    scoped.includes("isParkingNowSilent = false;")
+  ) {
+    ok(
+      "parkCurrentCart only sets isParkingNow (UI-blocking) for non-silent saves, using isParkingNowSilent for silent ones",
+    );
+  } else {
+    fail(
+      "parkCurrentCart only sets isParkingNow (UI-blocking) for non-silent saves, using isParkingNowSilent for silent ones",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("function getCartEditLockReason() {");
+  const scoped = idx >= 0 ? renderer.slice(idx, idx + 450) : "";
+  if (scoped.includes("if (isParkingNow) {") && !scoped.includes("isParkingNowSilent")) {
+    ok(
+      "getCartEditLockReason still only locks the cart for the non-silent (manual) save, not for background auto-save",
+    );
+  } else {
+    fail(
+      "getCartEditLockReason still only locks the cart for the non-silent (manual) save, not for background auto-save",
+    );
+  }
+}
+mustContain(
+  renderer,
+  "async function waitForSilentAutoSaveToSettle(maxMs = 3000) {",
+  "waitForSilentAutoSaveToSettle helper exists to avoid closing out a ticket mid-write",
+);
+mustContain(
+  renderer,
+  "await waitForSilentAutoSaveToSettle();",
+  "Parked-ticket checkout waits for any in-flight silent auto-save before locking/closing the ticket",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

@@ -15578,11 +15578,38 @@ function registerPaymentsForCurrentSession(pagos) {
   });
 }
 
+// Espera a que termine un autoguardado silencioso en curso (isParkingNowSilent),
+// sin bloquear la interfaz mientras tanto -- solo la usan flujos puntuales
+// (como cerrar/cobrar un aparcado) que necesitan estar seguros de no pisar una
+// escritura a medias. Con timeout de seguridad por si el flag se quedara
+// atascado por algun error inesperado.
+async function waitForSilentAutoSaveToSettle(maxMs = 3000) {
+  const startedAt = Date.now();
+  while (isParkingNowSilent && Date.now() - startedAt < maxMs) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 async function parkCurrentCart(name = "", obs = "", opts = {}) {
-  if (isParkingNow) return;
-  isParkingNow = true;
-  refreshParkButtonUI?.();
-  refreshAgentGuardUI?.();
+  const silentAutoSave = opts?.silentAutoSave === true;
+
+  // El autoguardado silencioso de fondo (scheduleMesasAutoSave/
+  // scheduleTpvAutoSave, con debounce ya existente) NO debe tomar isParkingNow:
+  // eso es lo que bloqueaba la edicion del carrito (getCartEditLockReason)
+  // mientras se guardaba, anulando el proposito de que sea invisible. Feedback
+  // de cliente real: "cuando le das un producto, hasta que no lo guardas...
+  // no te deja seguir" -- tenia que poder seguir añadiendo mientras el
+  // guardado de fondo terminaba. isParkingNowSilent evita que se solape con
+  // OTRO guardado (silencioso o manual) sin bloquear la interfaz.
+  if (isParkingNow || isParkingNowSilent) return;
+
+  if (silentAutoSave) {
+    isParkingNowSilent = true;
+  } else {
+    isParkingNow = true;
+    refreshParkButtonUI?.();
+    refreshAgentGuardUI?.();
+  }
 
   try {
     const labels = getParkingLabels();
@@ -15644,7 +15671,6 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
     const mesaAlerts = normalizeMesaTicketAlerts(opts?.mesaAlerts);
     const requestedDocType = normalizeParkedDocType(opts?.docType || "ticket");
     const openListAfterSave = opts?.openListAfterSave === true;
-    const silentAutoSave = opts?.silentAutoSave === true;
     const keepLoadedTicketOpen = opts?.keepLoadedTicketOpen === true;
     const skipAutoPrint = opts?.skipAutoPrint === true;
     const skipStockConfirm = opts?.skipStockConfirm === true;
@@ -16137,9 +16163,13 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
       openParkedModal();
     }
   } finally {
-    isParkingNow = false;
-    refreshParkButtonUI?.();
-    refreshAgentGuardUI?.();
+    if (silentAutoSave) {
+      isParkingNowSilent = false;
+    } else {
+      isParkingNow = false;
+      refreshParkButtonUI?.();
+      refreshAgentGuardUI?.();
+    }
   }
 }
 
@@ -30728,6 +30758,10 @@ async function validateRecibosAgainstFactura(idfactura) {
 
 let isPayingNow = false;
 let isParkingNow = false;
+// Guardado silencioso de fondo (autoguardado con debounce) en curso -- no
+// bloquea la edicion del carrito (a diferencia de isParkingNow), solo evita
+// que se solape con otro guardado. Ver parkCurrentCart.
+let isParkingNowSilent = false;
 
 function buildCashTicketMeta({ pagos, total, cambio }) {
   const pagosArr = Array.isArray(pagos) ? pagos : [];
@@ -33964,6 +33998,14 @@ async function onPayButtonClick() {
           "Ese ticket aparcado se está cobrando en otro TPV. Espera unos segundos y vuelve a intentarlo.",
         );
       }
+
+      // El autoguardado silencioso de fondo (parkCurrentCart con
+      // silentAutoSave) ya no bloquea el carrito ni el boton Cobrar (ver
+      // isParkingNowSilent), asi que en teoria se podria pulsar Cobrar justo
+      // mientras ese guardado esta escribiendo este mismo ticket en el
+      // servidor. Se espera a que termine antes de bloquearlo/cerrarlo para
+      // no arrancar el cobro sobre una escritura a medias.
+      await waitForSilentAutoSaveToSettle();
 
       releaseParkedCheckoutLock = beginParkedCheckoutLock(parkedIndexToClose);
 
