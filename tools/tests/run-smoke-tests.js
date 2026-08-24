@@ -2567,6 +2567,37 @@ mustContain(
 // descartarlo a 0. No es la causa del bug de 2+ terminales reportado en main
 // (esa sigue siendo la carrera que arregla el single-flight de arriba), pero
 // es una correccion real en una funcion compartida por todo aparcado.
+
+// Otro cherry-pick de la misma rama (2026-08-24): el badge de "Pedidos"
+// parpadeaba entre el total y "1 mesa" cada ~10s en modo
+// Transacciones (2026-08-24). Causa: se filtraba por
+// mesas.js:state.selectedTableId, que es un estado de NAVEGACION DEL PLANO
+// (para resaltar una mesa en el mapa) que ensureActiveRoomAndTable
+// auto-rellena con "la primera mesa de la sala" en cuanto detecta que no hay
+// ninguna seleccionada -- y eso pasa en cada refresco del plano (cada vez
+// que el sync de aparcados escribe en localStorage, ~10s). El boton siempre
+// abre la lista COMPLETA sin filtrar (ver openParkedModal), asi que el
+// numero debe coincidir con eso siempre.
+{
+  const idx = renderer.indexOf("function updateParkedCountBadge() {");
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nfunction getParkedClosingLockAgeMs", idx) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped &&
+    scoped.includes("badge.textContent = String(pendingMesas.length);") &&
+    !scoped.includes("selectedCount") &&
+    !scoped.includes("loadMesasTablesStateForInline()")
+  ) {
+    ok(
+      "updateParkedCountBadge no longer scopes the Mesas count to mesas.js's map-selection state",
+    );
+  } else {
+    fail(
+      "updateParkedCountBadge no longer scopes the Mesas count to mesas.js's map-selection state",
+    );
+  }
+}
+
 {
   const idx = renderer.indexOf("function normalizeRemoteParkedTicket(raw) {");
   const closeIdx = idx >= 0 ? renderer.indexOf("\n  const createdAt = raw.createdAt", idx) : -1;

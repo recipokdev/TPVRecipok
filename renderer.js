@@ -15349,23 +15349,21 @@ function updateParkedCountBadge() {
   }
 
   if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
-    const mesasState = loadMesasTablesStateForInline();
-    const selectedUid = String(mesasState?.selectedTableId || "").trim();
-
     const pendingMesas = (Array.isArray(parkedTickets) ? parkedTickets : [])
       .filter((t) => !t?.paid)
       .filter((t) => isMesasModeTicket(t));
 
-    if (selectedUid) {
-      const selectedCount = pendingMesas.filter(
-        (t) =>
-          String(resolveTicketMesaUid(t, mesasState) || "").trim() ===
-          selectedUid,
-      ).length;
-      badge.textContent = String(selectedCount);
-      return;
-    }
-
+    // Antes se filtraba por mesas.js:state.selectedTableId cuando habia una
+    // mesa "seleccionada" en el plano. Pero ese selectedTableId es un estado
+    // de NAVEGACION DEL PLANO (para resaltar una mesa mientras se mira el
+    // mapa), no de este flujo de Transacciones -- y ensureActiveRoomAndTable
+    // en mesas.js lo auto-rellena con "la primera mesa de la sala" en cuanto
+    // detecta que no hay ninguna seleccionada, cosa que pasa en cada refresco
+    // del plano (cada vez que este sync escribe en localStorage). Resultado:
+    // el numero parpadeaba entre el total y "1 mesa" cada ~10s sin que el
+    // usuario hubiera tocado nada. El boton siempre abre la lista completa
+    // sin filtrar (ver openParkedModal), asi que el numero debe coincidir
+    // con eso siempre, no solo cuando no hay ninguna mesa "seleccionada".
     badge.textContent = String(pendingMesas.length);
     return;
   }
