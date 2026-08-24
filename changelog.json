@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.21",
+      "date": "2026-08-24",
+      "title": "Release 0.2.21",
       "changes": [
         "Aparcados: en tiendas con 2 o más TPV, un pedido recién cobrado podía dejar de mostrarse como cobrado (aunque la factura ya se hubiera creado bien en FacturaScripts). Causa: una comprobación de seguridad tras cobrar podía confundir ese ticket con un pedido pendiente sin relación de otro terminal si por casualidad compartían el mismo número, y acababa borrando el que se acababa de cobrar. Corregido para que nunca pueda confundirse con el de otro terminal, y para que ante cualquier duda se reintente guardar como cobrado en vez de borrarlo."
       ]
