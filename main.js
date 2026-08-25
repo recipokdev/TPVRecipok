@@ -1737,6 +1737,40 @@ async function runAutoUpdateGate() {
   }
 }
 
+// Feedback de cliente: el primer ticket/comanda de cada sesion tarda
+// "muchisimo" en imprimir, y los siguientes van rapido. createHiddenPrintWindow
+// crea una BrowserWindow nueva por cada impresion; el coste que se nota es el
+// arranque en frio del primer proceso de renderizado de Chromium en toda la
+// vida de la app (tipico de Electron), no algo especifico de comandas/Mesas
+// -- afecta igual al primer ticket normal. Se "paga" ese coste solo, en
+// segundo plano, justo al arrancar el TPV, antes de que haya una venta real
+// esperando. printToPDF() (no print()) para no imprimir nada fisico ni
+// depender de que impresora este configurada -- ejercita el mismo motor de
+// maquetacion/impresion de Chromium que usa cualquier impresion real
+// (Windows via print(), Linux via printToPDF en renderTicketPdf).
+async function warmUpPrintPipeline() {
+  let win = null;
+  try {
+    win = new BrowserWindow({
+      show: false,
+      webPreferences: { contextIsolation: true, sandbox: false },
+    });
+    await win.loadURL(
+      "data:text/html;charset=utf-8," +
+        encodeURIComponent("<!doctype html><meta charset=\"utf-8\">"),
+    );
+    await win.webContents.printToPDF({});
+  } catch (e) {
+    console.warn("[print-warmup] fallo (no critico):", e?.message || e);
+  } finally {
+    if (win) {
+      try {
+        win.close();
+      } catch (_) {}
+    }
+  }
+}
+
 async function createHiddenPrintWindow(html) {
   const win = new BrowserWindow({
     show: false,
@@ -2243,6 +2277,11 @@ app.whenReady().then(async () => {
   if (isCustomerDisplayEnabled()) ensureCustomerWindow();
   registerShortcuts();
   closeSplash();
+
+  // De fondo, sin bloquear el arranque ni el login: ver warmUpPrintPipeline.
+  if (!IS_E2E) {
+    warmUpPrintPipeline().catch(() => {});
+  }
 });
 
 app.on("window-all-closed", () => {

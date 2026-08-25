@@ -2902,6 +2902,42 @@ console.log(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-25 print pipeline warm-up on startup\n",
+);
+
+// Feedback de cliente: el primer ticket/comanda de cada sesion tardaba
+// "muchisimo" en imprimir, luego iba rapido -- coste de arranque en frio del
+// primer proceso de renderizado de Chromium (createHiddenPrintWindow crea
+// una ventana nueva por cada impresion). Se paga ese coste solo, de fondo,
+// justo al arrancar, con un printToPDF de mentira (sin imprimir nada fisico
+// ni depender de la impresora configurada) en vez de esperar a la primera
+// venta real.
+mustContain(
+  main,
+  "async function warmUpPrintPipeline() {",
+  "warmUpPrintPipeline helper exists",
+);
+{
+  const idx = main.indexOf("async function warmUpPrintPipeline() {");
+  const closeIdx = idx >= 0 ? main.indexOf("\nasync function ", idx + 10) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? main.slice(idx, closeIdx) : "";
+  if (scoped.includes("printToPDF({})") && !scoped.includes(".print(")) {
+    ok(
+      "warmUpPrintPipeline uses printToPDF (no physical output) instead of a real print() call",
+    );
+  } else {
+    fail(
+      "warmUpPrintPipeline uses printToPDF (no physical output) instead of a real print() call",
+    );
+  }
+}
+mustContain(
+  main,
+  "warmUpPrintPipeline().catch(() => {});",
+  "Print pipeline warm-up is triggered at startup, in the background",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
