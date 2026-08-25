@@ -2938,6 +2938,65 @@ mustContain(
   "Print pipeline warm-up is triggered at startup, in the background",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-25 products/stock delta-sync (only what changed, not the whole catalog)\n",
+);
+
+// Feedback de cliente: mientras la caja estaba abierta, el TPV pedia la
+// tabla ENTERA de productos a FacturaScripts cada 10 segundos, sin ningun
+// filtro -- con catalogos grandes, un coste real que se repetia sin parar.
+// Verificado contra la API real de FacturaScripts (demo): 'productos' tiene
+// un campo 'actualizado' que si se mantiene al dia, y filter[actualizado_gt]
+// funciona de verdad. Ahora solo se pide lo que cambio desde la ultima vez
+// (marca de agua = el propio valor 'actualizado' que devuelve el servidor,
+// sin reformatear), con una recarga completa periodica como red de
+// seguridad para el caso rarisimo de un producto borrado de verdad.
+mustContain(
+  renderer,
+  "let __productsDeltaWatermark = null;",
+  "Products delta-sync watermark state exists",
+);
+mustContain(
+  renderer,
+  "function parseFsProductTimestamp(str) {",
+  "parseFsProductTimestamp helper exists",
+);
+{
+  const idx = renderer.indexOf("function startProductsStockAutoRefresh() {");
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nfunction ", idx + 10) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped.includes("__productsDeltaWatermark = null;") &&
+    scoped.includes("__productsLastFullSyncAt = 0;")
+  ) {
+    ok(
+      "startProductsStockAutoRefresh resets the delta watermark on every (re)start, so boot/reopen/reconnect always begin with a full baseline",
+    );
+  } else {
+    fail(
+      "startProductsStockAutoRefresh resets the delta watermark on every (re)start, so boot/reopen/reconnect always begin with a full baseline",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("async function refreshProductsStockOnly() {");
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nasync function ", idx + 10) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped.includes('fetchApiResourceWithParams("productos", { limit: 0 })') &&
+    scoped.includes('"filter[actualizado_gt]": __productsDeltaWatermark') &&
+    scoped.includes("if (latestRaw) __productsDeltaWatermark = latestRaw;")
+  ) {
+    ok(
+      "refreshProductsStockOnly fetches only products changed since the last known watermark instead of the full catalog every time",
+    );
+  } else {
+    fail(
+      "refreshProductsStockOnly fetches only products changed since the last known watermark instead of the full catalog every time",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

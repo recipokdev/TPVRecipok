@@ -1158,6 +1158,27 @@ let __stockRefreshTimer = null;
 let __stockRefreshStartTimeout = null;
 let __stockRefreshInFlight = false;
 
+// Feedback de cliente: el ciclo de refresco de stock pedia la tabla de
+// productos ENTERA a FacturaScripts cada 10s, sin ningun filtro -- con
+// catalogos grandes, un coste real y que se repite sin parar mientras la
+// caja este abierta. Verificado contra la API real: 'productos' tiene un
+// campo 'actualizado' (timestamp) que SI se actualiza solo con cada cambio,
+// y el filtro filter[actualizado_gt]=<fecha> funciona de verdad (probado
+// con curl contra demo). Se guarda la marca de la ultima vez que se supo
+// algo nuevo (el propio valor 'actualizado' que devuelve el servidor, tal
+// cual, sin reformatear -- evita cualquier lio de formatos de fecha) y solo
+// se pide "lo que cambio desde entonces". null = pedir la tabla completa
+// (arranque, o la red de seguridad periodica de abajo).
+let __productsDeltaWatermark = null;
+// FacturaScripts protege el borrado de productos que ya aparecen en algun
+// documento (factura/ticket) -- en la practica, un producto que el TPV ha
+// vendido alguna vez NUNCA se puede borrar de verdad. El unico caso posible
+// (uno creado y borrado sin llegar a venderse nunca) no tiene ningun riesgo
+// real si el TPV tarda en enterarse. Aun asi, una recarga completa de vez
+// en cuando sirve de red de seguridad barata para ese caso rarisimo.
+let __productsLastFullSyncAt = 0;
+const PRODUCTS_FULL_RESYNC_INTERVAL_MS = 60 * 60 * 1000; // 1 hora
+
 async function runProductsStockRefreshOnce() {
   if (isTutorialGlobalPauseActive()) return;
   if (isMesasDesignViewActive()) return;
@@ -1187,6 +1208,12 @@ const AUTO_REFRESH_STAGGER_MS = 2500;
 
 function startProductsStockAutoRefresh() {
   stopProductsStockAutoRefresh();
+
+  // Cada vez que este ciclo (re)arranca (apertura/recuperacion de caja,
+  // reconexion...) se parte de una base limpia: la primera pasada es
+  // siempre completa, y a partir de ahi ya van solo deltas.
+  __productsDeltaWatermark = null;
+  __productsLastFullSyncAt = 0;
 
   __stockRefreshStartTimeout = setTimeout(() => {
     __stockRefreshStartTimeout = null;
@@ -33793,12 +33820,65 @@ function stopParkedReservationsAutoRefresh() {
   }
 }
 
+// Parsea el formato de fecha que devuelve esta API de FacturaScripts
+// ("DD-MM-AAAA HH:MM:SS", confirmado con la API real) SOLO para poder
+// comparar y encontrar la mas reciente -- el valor que se guarda como marca
+// para la siguiente peticion es siempre la cadena tal cual la devolvio el
+// servidor, nunca una reconstruida a mano, para no arriesgarse a mezclar
+// formatos de fecha.
+function parseFsProductTimestamp(str) {
+  const m = /^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/.exec(
+    String(str || "").trim(),
+  );
+  if (!m) return null;
+  const [, dd, mm, yyyy, hh, mi, ss] = m;
+  const t = new Date(
+    Number(yyyy),
+    Number(mm) - 1,
+    Number(dd),
+    Number(hh),
+    Number(mi),
+    Number(ss),
+  ).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
 async function refreshProductsStockOnly() {
   if (TPV_STATE?.offline) return false;
 
+  // Red de seguridad: aunque tengamos marca de agua, cada
+  // PRODUCTS_FULL_RESYNC_INTERVAL_MS se fuerza una pasada completa (cubre el
+  // caso rarisimo -- ver comentario junto a la constante -- de un producto
+  // borrado de verdad, que un filtro por fecha de modificacion nunca
+  // detectaria por si solo).
+  const needsFullSync =
+    !__productsDeltaWatermark ||
+    Date.now() - __productsLastFullSyncAt > PRODUCTS_FULL_RESYNC_INTERVAL_MS;
+
   try {
-    const productosData = await fetchApiResource("productos");
+    const productosData = needsFullSync
+      ? await fetchApiResourceWithParams("productos", { limit: 0 })
+      : await fetchApiResourceWithParams("productos", {
+          limit: 0,
+          "filter[actualizado_gt]": __productsDeltaWatermark,
+        });
     const list = Array.isArray(productosData) ? productosData : [];
+
+    // Actualiza la marca de agua a la fecha mas reciente vista en esta
+    // respuesta (si no vino ninguna fila, se deja tal cual estaba -- no hay
+    // nada nuevo con lo que adelantarla, y seguir pidiendo desde el mismo
+    // punto es correcto).
+    let latestRaw = null;
+    let latestTs = -Infinity;
+    list.forEach((p) => {
+      const ts = parseFsProductTimestamp(p?.actualizado);
+      if (ts !== null && ts > latestTs) {
+        latestTs = ts;
+        latestRaw = p.actualizado;
+      }
+    });
+    if (latestRaw) __productsDeltaWatermark = latestRaw;
+    if (needsFullSync) __productsLastFullSyncAt = Date.now();
 
     const stockById = new Map();
     list.forEach((p, idx) => {
