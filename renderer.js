@@ -6761,6 +6761,30 @@ async function refreshActiveCustomerTariffForSelection(c, opts = {}) {
   }
 }
 
+// Comprobacion "en el momento de la verdad", justo antes de calcular el
+// precio final para la factura: confirma que activeCustomerTariff es de
+// verdad la tarifa del cliente ACTUALMENTE seleccionado (no la de un cliente
+// anterior). Si no coincide -- por lo que sea, no solo por el timing ya
+// cubierto por activeCustomerTariffReadyPromise -- fuerza un refresco y
+// espera antes de seguir, para no cobrar nunca sin el descuento por una
+// tarifa que se quedo desactualizada.
+async function ensureActiveCustomerTariffMatchesSelection() {
+  await activeCustomerTariffReadyPromise;
+
+  const selectedCod = String(
+    window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() || "1",
+  ).trim();
+  const activeCod = String(activeCustomerTariffCodcliente || "").trim();
+
+  if (selectedCod === activeCod) return;
+
+  activeCustomerTariffReadyPromise = refreshActiveCustomerTariffForSelection(
+    window.CUSTOMER_SELECTOR?.getSelectedCustomer?.() || { codcliente: selectedCod },
+    { forceCustomer: true },
+  ).catch(() => {});
+  await activeCustomerTariffReadyPromise;
+}
+
 function bindCartCustomerUiEvents() {
   const input = document.getElementById("cartCustomerInput");
   const btnList = document.getElementById("cartCustomerListBtn");
@@ -34116,6 +34140,20 @@ async function onPayButtonClick() {
 
       parkedIndexToClose = syncedIdx;
     }
+
+    // Feedback de cliente real (mismo caso "Mermas" 100%, seguia pasando
+    // incluso con la espera de activeCustomerTariffReadyPromise al principio
+    // de esta funcion): esa espera solo cubre el instante de pulsar "Cobrar",
+    // pero el precio final (buildTicketPayloadFromCart -> buildFsLinesFromCart)
+    // no se calcula hasta AHORA, despues del modal de pago (que puede tardar
+    // varios segundos). El codcliente que va a la factura se lee siempre en
+    // fresco del selector, pero activeCustomerTariff es una variable de fondo
+    // que puede no haberse puesto al dia con el cliente actual si hubo un
+    // cambio de cliente cerca de este momento. En vez de perseguir el
+    // timing exacto, se verifica aqui mismo, justo antes de calcular el
+    // precio, que la tarifa activa es de verdad la del cliente actualmente
+    // seleccionado -- si no, se refresca y se espera antes de seguir.
+    await ensureActiveCustomerTariffMatchesSelection();
 
     // 3) Payload factura
     const ticketPayload = buildTicketPayloadFromCart();

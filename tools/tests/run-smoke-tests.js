@@ -2819,6 +2819,58 @@ console.log(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-24 tariff freshness re-checked right before building the invoice\n",
+);
+
+// Feedback de cliente real (mismo caso "Mermas" 100%, seguia pasando incluso
+// tras el fix anterior de activeCustomerTariffReadyPromise): esa espera solo
+// cubre el instante de pulsar "Cobrar", pero el precio final no se calcula
+// hasta despues del modal de pago (que puede tardar segundos reales). El
+// codcliente que va a la factura se lee siempre en fresco del selector, pero
+// activeCustomerTariff es una variable de fondo que podia quedar
+// desactualizada respecto al cliente actual en ese momento posterior. Ahora
+// se revalida justo antes de calcular el precio (no solo al principio).
+mustContain(
+  renderer,
+  "async function ensureActiveCustomerTariffMatchesSelection() {",
+  "ensureActiveCustomerTariffMatchesSelection helper exists",
+);
+{
+  const idx = renderer.indexOf(
+    "async function ensureActiveCustomerTariffMatchesSelection() {",
+  );
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nfunction bindCartCustomerUiEvents", idx) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped.includes("getSelectedCustomerCodcliente") &&
+    scoped.includes("selectedCod === activeCod") &&
+    scoped.includes("refreshActiveCustomerTariffForSelection(")
+  ) {
+    ok(
+      "ensureActiveCustomerTariffMatchesSelection detects a mismatch between the selected customer and the active tariff, and re-resolves it",
+    );
+  } else {
+    fail(
+      "ensureActiveCustomerTariffMatchesSelection detects a mismatch between the selected customer and the active tariff, and re-resolves it",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("async function onPayButtonClick() {");
+  const closeIdx = idx >= 0 ? renderer.indexOf("const ticketPayload = buildTicketPayloadFromCart();", idx) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (scoped.includes("await ensureActiveCustomerTariffMatchesSelection();")) {
+    ok(
+      "onPayButtonClick re-verifies the active tariff right before building the invoice payload, not only when Cobrar was first clicked",
+    );
+  } else {
+    fail(
+      "onPayButtonClick re-verifies the active tariff right before building the invoice payload, not only when Cobrar was first clicked",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

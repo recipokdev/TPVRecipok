@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "Cobro: en algunos casos, cambiar a un cliente con tarifa de precio y cobrar seguía aplicando el precio normal en vez del de tarifa (por ejemplo, un 100% de descuento no dejaba el precio a 0€), aunque el cliente sí quedara bien vinculado en la factura. Añadida una comprobación justo antes de calcular el precio final que revisa que la tarifa activa corresponde de verdad al cliente actualmente seleccionado, y la corrige si no es así."
+      ]
     },
     {
       "version": "0.2.21",
