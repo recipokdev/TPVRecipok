@@ -2871,6 +2871,37 @@ mustContain(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-25 fast pre-print client name matches the real invoiced customer\n",
+);
+
+// Feedback de cliente real (misma factura de Mermas): el ticket impreso
+// decia "Cliente: Ventas tickets" aunque la factura en FacturaScripts si
+// quedo bien vinculada a "Mermas". Causa: la preimpresion rapida (imprime
+// antes de que la API confirme la venta) leia el nombre directamente del
+// campo de texto en pantalla (cartClientInput.value) -- una fuente distinta
+// de la que usa la factura real (codcliente, leido en fresco del selector).
+// getSelectedCustomerPrintMeta() ya deriva el nombre del MISMO codcliente
+// que va a la factura (mismo patron que usan los demas flujos de
+// impresion), asi que ahora no puede desajustarse.
+{
+  const idx = renderer.indexOf("function buildFastPreApiTicketDraft(ticketPayload, cartSnapshot) {");
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nfunction ", idx + 10) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped.includes("const clientName = getSelectedCustomerPrintMeta().clientName;") &&
+    !scoped.includes("(cartClientInput && (cartClientInput.value")
+  ) {
+    ok(
+      "buildFastPreApiTicketDraft gets the client name from the same codcliente used for the real invoice, not from the on-screen text input",
+    );
+  } else {
+    fail(
+      "buildFastPreApiTicketDraft gets the client name from the same codcliente used for the real invoice, not from the on-screen text input",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

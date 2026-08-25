@@ -26032,8 +26032,14 @@ function buildFastPreApiTicketDraft(ticketPayload, cartSnapshot) {
   const fecha = formatTicketPrintDate(now);
   const hora = formatTicketPrintTimeWithSeconds(now);
 
-  const clientName =
-    (cartClientInput && (cartClientInput.value || "").trim()) || "Cliente";
+  // Antes leia cartClientInput.value (el texto del campo en pantalla) --
+  // funciona la mayoria de las veces, pero es una fuente distinta de la que
+  // usa la factura real (codcliente, siempre leido en fresco del selector).
+  // getSelectedCustomerPrintMeta() ya deriva el nombre del MISMO codcliente
+  // que va a la factura (mismo patron que usan los demas flujos de
+  // impresion), asi que el nombre impreso no puede desajustarse del cliente
+  // realmente facturado.
+  const clientName = getSelectedCustomerPrintMeta().clientName;
 
   const pagos = Array.isArray(ticketPayload?._payBreakdown)
     ? ticketPayload._payBreakdown
