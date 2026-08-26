@@ -40063,10 +40063,22 @@ function renderTicketsList(tickets) {
         parkedOriginClient ||
         (parkedOriginNo ? `Ticket #${parkedOriginNo}` : "")
       : "";
+    // El aparcado de origen puede no tener nunca un numero valido (p.ej. si
+    // llego ya aparcado desde otro sitio sin ese dato) -- antes esto se
+    // mostraba como "#-" pegado al nombre, un simbolo suelto sin numero que
+    // parecia un dato roto. Si no hay numero, se omite del todo en vez de
+    // mostrar un "#" vacio.
+    const parkedOriginNoHtml = parkedOriginNo ? `#${parkedOriginNo}` : "";
     const parkedOriginHtml = parkedOrigin
-      ? `<div class="ticket-obs">Origen aparcado: ${escapeHtml(
-          parkedOriginNo ? `#${parkedOriginNo}` : "#-",
-        )}${parkedOriginText ? ` - ${escapeHtml(parkedOriginText)}` : ""}</div>`
+      ? `<div class="ticket-obs">Origen aparcado: ${
+          parkedOriginNoHtml ? escapeHtml(parkedOriginNoHtml) : ""
+        }${
+          parkedOriginText
+            ? `${parkedOriginNoHtml ? " - " : ""}${escapeHtml(parkedOriginText)}`
+            : parkedOriginNoHtml
+              ? ""
+              : "—"
+        }</div>`
       : "";
 
     if (obs || parkedOrigin) div.classList.add("ticket-has-obs");

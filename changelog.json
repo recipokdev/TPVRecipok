@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "Tickets: cuando un ticket cobrado venía de un aparcado sin número asignado (por ejemplo, llegado de otro origen), la anotación «Origen aparcado» salía con un «#-» suelto pegado al nombre del cliente. Ahora, si no hay número, simplemente no se muestra ningún símbolo roto."
+      ]
     },
     {
       "version": "0.2.23",

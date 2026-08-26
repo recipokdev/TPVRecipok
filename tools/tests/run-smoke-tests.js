@@ -3487,6 +3487,24 @@ console.log("\n[SMOKE] Checking offline sync queue (syncQueueNow) fixes\n");
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-08-26 ticket list no longer shows a broken \"#-\" for a parked origin with no display number\n");
+
+{
+  const idx = renderer.indexOf("const parkedOriginNoHtml = parkedOriginNo");
+  const closeIdx = idx >= 0 ? renderer.indexOf("if (obs || parkedOrigin)", idx) : -1;
+  const scoped = idx >= 0 && closeIdx > idx ? renderer.slice(idx, closeIdx) : "";
+
+  if (scoped && !scoped.includes('"#-"')) {
+    ok(
+      'A parked-origin ticket row with no valid display number no longer renders a bare "#-"',
+    );
+  } else {
+    fail(
+      'A parked-origin ticket row with no valid display number no longer renders a bare "#-"',
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
