@@ -3429,6 +3429,64 @@ mustContain(
   }
 }
 
+console.log("\n[SMOKE] Checking offline sync queue (syncQueueNow) fixes\n");
+
+{
+  // Bug real de cliente: varias ventas se quedaban "OFF-... ID undefined"
+  // para siempre, sin contar en el cierre de caja. Causa: si la venta MAS
+  // ANTIGUA en cola fallaba (por cualquier motivo, no solo de red), el
+  // catch de fuera hacia "break" y abandonaba TODO el resto de la cola en
+  // ese ciclo -- ninguna otra venta detras de ella tenia ninguna
+  // oportunidad de sincronizar. Ahora CREATE_FACTURACLIENTE tiene su
+  // propio try/catch (igual que CREATE_TPVCAJA_OPEN) y el catch de fuera ya
+  // no usa "break".
+  const startIdx = renderer.indexOf('if (item.type === "CREATE_FACTURACLIENTE") {');
+  const endMarker = 'if (item.type === "tpvterminal.setCodcliente") {';
+  const endIdx = renderer.indexOf(endMarker, startIdx);
+  const scoped = startIdx >= 0 && endIdx > startIdx ? renderer.slice(startIdx, endIdx) : "";
+
+  if (
+    scoped.includes('if (item.type === "CREATE_FACTURACLIENTE") {') &&
+    scoped.includes("try {\r\n            // 1) Crear factura") &&
+    scoped.includes("if (isNetworkError(e) || isProbablyNetworkError(e)) {") &&
+    scoped.includes("dropped: true,")
+  ) {
+    ok(
+      "CREATE_FACTURACLIENTE now has its own try/catch distinguishing network vs permanent errors",
+    );
+  } else {
+    fail(
+      "CREATE_FACTURACLIENTE now has its own try/catch distinguishing network vs permanent errors",
+    );
+  }
+
+  mustContain(
+    scoped,
+    "La API no devolvió un número de factura válido al crear la venta en cola.",
+    "A successful-looking response with no idfactura is now treated as a real failure, not silently marked done",
+  );
+}
+
+{
+  const idx = renderer.indexOf('async function syncQueueNow() {');
+  const closeIdx = idx >= 0 ? renderer.indexOf("const PAY_METHODS_CACHE_KEY", idx) : -1;
+  const scoped = idx >= 0 && closeIdx > idx ? renderer.slice(idx, closeIdx) : "";
+
+  // El unico "break;" que debe quedar es el de salida normal cuando la cola
+  // esta vacia (if (!next?.item) break;). El que abandonaba el resto de la
+  // cola tras el fallo de UN item ya no debe existir.
+  const breakCount = scoped ? scoped.split("break;").length - 1 : 0;
+  if (scoped && breakCount === 1 && scoped.includes("if (!next?.item) break;")) {
+    ok(
+      "syncQueueNow no longer breaks out of the queue-draining loop on a single item's failure",
+    );
+  } else {
+    fail(
+      `syncQueueNow no longer breaks out of the queue-draining loop on a single item's failure (found ${breakCount} break; occurrences, expected exactly 1)`,
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

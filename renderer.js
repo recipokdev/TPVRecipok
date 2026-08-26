@@ -46352,41 +46352,54 @@ async function syncQueueNow() {
         // 2) Ventas offline
         // =============================================================
         if (item.type === "CREATE_FACTURACLIENTE") {
-          // 1) Crear factura
-          const resp = await createTicketInFacturaScripts(item.payload);
-          const pagosOffline = Array.isArray(item.post?.pagos)
-            ? item.post.pagos
-            : [];
+          try {
+            // 1) Crear factura
+            const resp = await createTicketInFacturaScripts(item.payload);
+            const pagosOffline = Array.isArray(item.post?.pagos)
+              ? item.post.pagos
+              : [];
 
-          const facturaSyncResp =
-            resp?.doc || resp?.factura || resp?.data || resp || null;
+            const facturaSyncResp =
+              resp?.doc || resp?.factura || resp?.data || resp || null;
 
-          const doc = resp?.doc || resp?.factura || resp?.data || resp || null;
+            const doc =
+              resp?.doc || resp?.factura || resp?.data || resp || null;
 
-          const idfactura =
-            resp?.idfactura ||
-            resp?.doc?.idfactura ||
-            resp?.data?.idfactura ||
-            resp?.factura?.idfactura ||
-            null;
+            const idfactura =
+              resp?.idfactura ||
+              resp?.doc?.idfactura ||
+              resp?.data?.idfactura ||
+              resp?.factura?.idfactura ||
+              null;
 
-          // Mantener predictor al día también con ventas sincronizadas desde cola offline.
-          updateFastTicketNumberByConfirmedCode({
-            codigo: doc?.codigo,
-            codserie: item?.payload?.serie || item?.payload?.codserie,
-            numero2: item?.payload?.numero2,
-            idfactura,
-            terminalId: item?.payload?.idtpv,
-          });
+            if (!idfactura) {
+              // La API no lanzó excepción, pero tampoco devolvió un
+              // idfactura utilizable: no se puede dar esta venta por
+              // creada de verdad. Si la marcáramos "done" aquí se
+              // perdería para siempre (sin factura real y sin aviso) --
+              // se trata como un fallo para que entre por el catch de
+              // abajo (reintento o aviso según el tipo de error).
+              throw new Error(
+                "La API no devolvió un número de factura válido al crear la venta en cola.",
+              );
+            }
 
-          // Guardar timestamp local->remoto si lo usas
-          if (idfactura && item.createdAt) {
-            try {
-              saveFacturaLocalTimestamp?.(idfactura, item.createdAt);
-            } catch {}
-          }
+            // Mantener predictor al día también con ventas sincronizadas desde cola offline.
+            updateFastTicketNumberByConfirmedCode({
+              codigo: doc?.codigo,
+              codserie: item?.payload?.serie || item?.payload?.codserie,
+              numero2: item?.payload?.numero2,
+              idfactura,
+              terminalId: item?.payload?.idtpv,
+            });
 
-          if (idfactura) {
+            // Guardar timestamp local->remoto si lo usas
+            if (item.createdAt) {
+              try {
+                saveFacturaLocalTimestamp?.(idfactura, item.createdAt);
+              } catch {}
+            }
+
             // 2) ✅ PATCH packs (offline) usando desiredByPid guardado en cola
             try {
               const desired =
@@ -46551,10 +46564,35 @@ async function syncQueueNow() {
                 removeOfflineTicketFromModalByLocalId?.(item.localId);
               }
             } catch {}
-          }
 
-          // 6) Marcar como done
-          await window.TPV_QUEUE.done(item.id, { resp });
+            // 6) Marcar como done
+            await window.TPV_QUEUE.done(item.id, { resp });
+          } catch (e) {
+            // ✅ Igual que CREATE_TPVCAJA_OPEN: si es un fallo de red, se
+            // reintenta más tarde (queda "pending" con backoff). Si NO es de
+            // red (payload inválido, respuesta sin idfactura, error de
+            // FacturaScripts...) reintentar para siempre nunca lo va a
+            // arreglar solo -- eso es justo lo que dejaba tickets "OFF-..."
+            // colgados sin cobrar de verdad y sin avisar a nadie. Se marca
+            // como perdido y se avisa con un aviso que no se puede pasar
+            // por alto, para que se cobre a mano cuanto antes.
+            if (isNetworkError(e) || isProbablyNetworkError(e)) {
+              await window.TPV_QUEUE.error(item.id, e?.message || String(e));
+            } else {
+              await window.TPV_QUEUE.done(item.id, {
+                ok: false,
+                dropped: true,
+                error: e?.message || String(e),
+              });
+
+              const total = Number(item?.payload?.total || 0);
+              notifyWorkerSyncIssue(
+                `queue-dropped-${String(item.id)}`,
+                `No se pudo sincronizar una venta en cola de ${eurES(total)}. Motivo: ${String(e?.message || e).slice(0, 140)}. Cóbrala a mano cuanto antes.`,
+                { title: "Sincronizacion", modal: true, cooldownMs: 60 * 60 * 1000 },
+              );
+            }
+          }
           continue;
         }
 
@@ -46764,9 +46802,12 @@ async function syncQueueNow() {
         // =============================================================
         await window.TPV_QUEUE.done(item.id, {});
       } catch (e) {
-        // Si falla por red, marcamos error y salimos (evita bucles)
+        // Cada tipo de item ya gestiona sus propios errores arriba (red vs
+        // permanente) y hace su propio "continue". Si aun así se cae hasta
+        // aquí, marcamos error y seguimos con el resto de la cola -- un
+        // único item atascado no debe bloquear ventas totalmente distintas
+        // que sí podrían sincronizar bien.
         await window.TPV_QUEUE.error(item.id, e?.message || String(e));
-        break;
       }
     }
   } finally {
