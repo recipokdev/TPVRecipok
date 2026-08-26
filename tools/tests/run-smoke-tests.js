@@ -1577,22 +1577,83 @@ mustContain(
 
 {
   const fnStart = renderer.indexOf("async function checkCartStockProblems(cart)");
-  const fnBody = fnStart >= 0 ? renderer.slice(fnStart, fnStart + 1600) : "";
+  const fnBody = fnStart >= 0 ? renderer.slice(fnStart, fnStart + 1700) : "";
 
   if (fnStart < 0) {
     fail("checkCartStockProblems not found");
   } else if (
-    fnBody.includes("await refreshProductsStockOnly()") &&
     fnBody.includes("if (!product.stockManaged) continue;") &&
     fnBody.includes("if (product.allowSellWithoutStock) continue;") &&
     fnBody.includes("getVisibleStockForProduct(product)")
   ) {
     ok(
-      "checkCartStockProblems does a real, fresh check against stockManaged/allowSellWithoutStock/visible stock",
+      "checkCartStockProblems checks against stockManaged/allowSellWithoutStock/visible stock",
     );
   } else {
     fail(
-      "checkCartStockProblems does a real, fresh check against stockManaged/allowSellWithoutStock/visible stock",
+      "checkCartStockProblems checks against stockManaged/allowSellWithoutStock/visible stock",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-26 Cobrar opens the payment modal instantly, without an extra blocking stock refetch\n",
+);
+
+// Feedback de cliente real (video del cliente): pulsar "Cobrar" tardaba en
+// abrir el modal de pago porque checkCartStockProblems forzaba SIEMPRE una
+// peticion nueva a FacturaScripts antes de dejarlo aparecer -- aunque el
+// stock local ya estuviera fresco de sobra (el ciclo de fondo lo refresca
+// cada 10s desde el delta-sync de ayer). Ahora usa directamente el stock ya
+// cacheado en local, sin esperar a ninguna peticion de red antes de abrir
+// el modal.
+{
+  const fnStart = renderer.indexOf("async function checkCartStockProblems(cart)");
+  const fnBody = fnStart >= 0 ? renderer.slice(fnStart, fnStart + 400) : "";
+  if (fnStart >= 0 && !fnBody.includes("refreshProductsStockOnly")) {
+    ok(
+      "checkCartStockProblems no longer forces a blocking network refetch before Cobrar can open the payment modal",
+    );
+  } else {
+    fail(
+      "checkCartStockProblems no longer forces a blocking network refetch before Cobrar can open the payment modal",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-26 aparcar a customer no longer blocks the cart for the next one\n",
+);
+
+// Feedback de cliente real (video del cliente): aparcar un ticket nuevo
+// bloqueaba TODO el carrito (isParkingNow) durante dos llamadas de red
+// seguidas (crear presupuesto + guardar la reserva) -- si mientras tanto
+// llegaba el siguiente cliente, ni se le podia atender, ni siquiera se
+// avisaba (un segundo intento de aparcar se cancelaba en silencio). Ahora
+// lo local (ticket visible, carrito limpio para el siguiente) se hace ya;
+// las llamadas de red siguen en segundo plano, sin retener al operario --
+// EXCEPTO para el autoguardado silencioso, que sigue esperando de verdad
+// (tiene su propio guardia de solapamiento aparte, ver MESAS/TPV_AUTO_SAVE_IN_FLIGHT).
+{
+  const fnStart = renderer.indexOf(
+    'async function parkCurrentCart(name = "", obs = "", opts = {}) {',
+  );
+  const fnEnd = renderer.indexOf("\nfunction apiDeletePresupuesto(", fnStart);
+  const fnBody = fnStart >= 0 && fnEnd >= 0 ? renderer.slice(fnStart, fnEnd) : "";
+
+  if (
+    fnBody.includes("const finishCreateParkedTail = async () => {") &&
+    fnBody.includes("const finishUpdateParkedTail = async () => {") &&
+    (fnBody.match(/if \(silentAutoSave\) \{\s*await finish/g) || []).length === 2 &&
+    fnBody.includes("finishCreateParkedTail().catch(") &&
+    fnBody.includes("finishUpdateParkedTail().catch(")
+  ) {
+    ok(
+      "parkCurrentCart finishes its slow network tail in the background for a manual park, but still awaits it fully for silentAutoSave",
+    );
+  } else {
+    fail(
+      "parkCurrentCart finishes its slow network tail in the background for a manual park, but still awaits it fully for silentAutoSave",
     );
   }
 }
