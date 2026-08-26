@@ -1264,6 +1264,56 @@ function stopProductsStockAutoRefresh() {
   }
 }
 
+// Feedback de cliente real: las formas de pago (y las series de factura) se
+// cachean ahora para que "Cobrar" no tenga que esperar a pedirlas cada vez
+// (ver openPayModal). Pero eso significa que un cambio hecho en
+// FacturaScripts (añadir/desactivar una forma de pago) tardaria en verse en
+// el TPV -- solo se refrescaban de fondo cuando se abria el modal de pago,
+// osea 1-2 cobros de retraso. Cambian MUCHISIMO menos que el stock, asi que
+// no hace falta cada 10s como aquel: cada 5 minutos es de sobra para
+// notarlo casi en el momento sin añadir carga real.
+let __payMethodsRefreshTimer = null;
+let __payMethodsRefreshStartTimeout = null;
+const PAY_METHODS_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
+
+// ensurePaySeriesLoaded() esta pensado para "cargar una vez" (se salta la
+// peticion en cuanto PAY_SERIES_CACHE ya tiene algo) -- para el refresco
+// PERIODICO hace falta forzar la peticion de verdad cada vez, igual que ya
+// hace fetchFormasPagoActivas.
+async function forceRefreshPaySeries() {
+  try {
+    const rows = await fetchApiResource("series");
+    PAY_SERIES_CACHE = normalizePaySeriesRows(rows);
+  } catch (e) {
+    console.warn("No se pudo refrescar series de fondo:", e?.message || e);
+  }
+}
+
+function startPayMethodsAutoRefresh() {
+  stopPayMethodsAutoRefresh();
+
+  __payMethodsRefreshStartTimeout = setTimeout(() => {
+    __payMethodsRefreshStartTimeout = null;
+    fetchFormasPagoActivas().catch(() => {});
+    forceRefreshPaySeries();
+    __payMethodsRefreshTimer = setInterval(() => {
+      fetchFormasPagoActivas().catch(() => {});
+      forceRefreshPaySeries();
+    }, PAY_METHODS_REFRESH_INTERVAL_MS);
+  }, AUTO_REFRESH_STAGGER_MS * 2);
+}
+
+function stopPayMethodsAutoRefresh() {
+  if (__payMethodsRefreshStartTimeout) {
+    clearTimeout(__payMethodsRefreshStartTimeout);
+    __payMethodsRefreshStartTimeout = null;
+  }
+  if (__payMethodsRefreshTimer) {
+    clearInterval(__payMethodsRefreshTimer);
+    __payMethodsRefreshTimer = null;
+  }
+}
+
 // ===== [07] Configuracion persistida y validaciones base =====
 
 // ===== [07] Estrategia de reintentos/red + cooldown 429 =====
@@ -19713,6 +19763,18 @@ function setCurrentTerminal(terminal) {
   renderMainAgentBar?.();
   applyTerminalDefaultCustomer?.();
   refreshAgentGuardUI?.();
+
+  // Feedback de cliente real: el predictor de numero de ticket (para
+  // pre-imprimir rapido) es por terminal a proposito -- cada uno tiene su
+  // propia numeracion en FacturaScripts (ver getSalePrintTypeKey). Si se
+  // cambia de terminal CON LA CAJA YA ABIERTA (varias tiendas/almacenes
+  // compartiendo el mismo TPV), ese terminal nuevo nunca se llego a
+  // precalentar al abrir caja -- su primer cobro seria lento sin esto.
+  // Formas de pago y series no hace falta repetirlas aqui: son de toda la
+  // empresa, no cambian por terminal (ver startPayMethodsAutoRefresh).
+  if (cashSession?.open) {
+    primeFastTicketPredictorOnCashOpen().catch(() => {});
+  }
 }
 
 function getAgentsForTerminalId(terminalId) {
@@ -21367,6 +21429,7 @@ async function checkSharedCajaHealthOnce() {
     stopProductsStockAutoRefresh?.();
     stopParkedReservationsAutoRefresh?.();
     stopSharedCajaHealthMonitor?.();
+    stopPayMethodsAutoRefresh?.();
 
     try {
       localStorage.removeItem("tpv_remoteCajaId");
@@ -21566,6 +21629,14 @@ async function maybeOpenCashOrRecover() {
           startParkedReservationsAutoRefresh?.();
           scheduleParkedReservationsBurstRefresh?.("recover-cash-warmup");
           startSharedCajaHealthMonitor?.();
+          // Misma razon que en confirmCashOpening(): si la caja se recupera
+          // (reinicio de la app con caja ya abierta) en vez de abrirse de
+          // cero, el primer cobro de esta sesion tambien merece salir
+          // rapido, no solo cuando se abre caja "a mano".
+          primeFastTicketPredictorOnCashOpen().catch(() => {});
+          fetchFormasPagoActivas().catch(() => {});
+          ensurePaySeriesLoaded().catch(() => {});
+          startPayMethodsAutoRefresh?.();
           return;
         }
 
@@ -21642,6 +21713,14 @@ async function maybeOpenCashOrRecover() {
           startParkedReservationsAutoRefresh?.();
           scheduleParkedReservationsBurstRefresh?.("recover-cash-warmup");
           startSharedCajaHealthMonitor?.();
+          // Misma razon que en confirmCashOpening(): si la caja se recupera
+          // (reinicio de la app con caja ya abierta) en vez de abrirse de
+          // cero, el primer cobro de esta sesion tambien merece salir
+          // rapido, no solo cuando se abre caja "a mano".
+          primeFastTicketPredictorOnCashOpen().catch(() => {});
+          fetchFormasPagoActivas().catch(() => {});
+          ensurePaySeriesLoaded().catch(() => {});
+          startPayMethodsAutoRefresh?.();
 
           // opcional: avisar si hay más de una abierta (caso raro)
           if (openOnes.length > 1) {
@@ -23255,6 +23334,7 @@ async function confirmCashOpening() {
   startParkedReservationsAutoRefresh?.();
   scheduleParkedReservationsBurstRefresh?.("cash-open-warmup");
   startSharedCajaHealthMonitor?.();
+  startPayMethodsAutoRefresh?.();
 
   logFeatureInfo("CAJA", "apertura-ok", {
     requestId,
@@ -23365,6 +23445,7 @@ async function confirmCashClosing() {
   stopProductsStockAutoRefresh?.();
   stopParkedReservationsAutoRefresh?.();
   stopSharedCajaHealthMonitor?.();
+  stopPayMethodsAutoRefresh?.();
   pushCustomerState();
 
   cashSession.remoteCajaId = null;

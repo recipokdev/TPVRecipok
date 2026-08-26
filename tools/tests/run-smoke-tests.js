@@ -1742,6 +1742,97 @@ mustContain(
   "confirmCashOpening triggers the ticket-number warm-up in the background right when the cash session opens",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-26 formas de pago/series keep refreshing periodically, not just once\n",
+);
+
+// Feedback de cliente real: cachear formas de pago (arriba) resuelve la
+// espera al cobrar, pero si alguien cambia algo en FacturaScripts (añade
+// una forma de pago, la desactiva) a mitad de turno, el TPV tardaria en
+// enterarse -- antes solo se refrescaba de fondo cuando se abria el modal
+// de pago (1-2 cobros de retraso). Cambian mucho menos que el stock, asi
+// que no hace falta cada 10s como aquel, pero si un ciclo periodico propio
+// (cada 5 min) para no depender de que alguien cobre mientras tanto.
+mustContain(
+  renderer,
+  "function startPayMethodsAutoRefresh() {",
+  "startPayMethodsAutoRefresh helper exists",
+);
+mustContain(
+  renderer,
+  "function stopPayMethodsAutoRefresh() {",
+  "stopPayMethodsAutoRefresh helper exists",
+);
+{
+  const idx = renderer.indexOf("async function forceRefreshPaySeries() {");
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nfunction ", idx + 10) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (scoped.includes('const rows = await fetchApiResource("series");')) {
+    ok(
+      "forceRefreshPaySeries always fetches series fresh (unlike ensurePaySeriesLoaded, which only loads once), so the periodic cycle actually refreshes",
+    );
+  } else {
+    fail(
+      "forceRefreshPaySeries always fetches series fresh (unlike ensurePaySeriesLoaded, which only loads once), so the periodic cycle actually refreshes",
+    );
+  }
+}
+{
+  const occurrences = (renderer.match(/startPayMethodsAutoRefresh\?\.\(\);/g) || []).length;
+  if (occurrences >= 3) {
+    ok(
+      "startPayMethodsAutoRefresh is wired into every place the cash session becomes active (fresh open + both recovery paths), not just one of them",
+    );
+  } else {
+    fail(
+      `startPayMethodsAutoRefresh is wired into every place the cash session becomes active (found ${occurrences} call sites, expected >= 3: fresh open + 2 recovery paths)`,
+    );
+  }
+}
+{
+  const occurrences = (renderer.match(/stopPayMethodsAutoRefresh\?\.\(\);/g) || []).length;
+  if (occurrences >= 2) {
+    ok(
+      "stopPayMethodsAutoRefresh is wired into both places a cash session is detected as closed",
+    );
+  } else {
+    fail(
+      `stopPayMethodsAutoRefresh is wired into both places a cash session is detected as closed (found ${occurrences}, expected >= 2)`,
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-26 switching terminal mid-session re-warms that terminal's own ticket-number predictor\n",
+);
+
+// Feedback de cliente real (negocio con varias tiendas/almacenes
+// compartiendo el mismo TPV): el predictor de numero de ticket es por
+// terminal a proposito, cada uno tiene su propia numeracion en
+// FacturaScripts. El precalentado de hoy solo se disparaba al abrir caja
+// -- si se cambia de terminal CON LA CAJA YA ABIERTA, ese terminal nuevo
+// nunca se habria precalentado, y su primer cobro seria lento sin que
+// nadie se lo esperase. setCurrentTerminal ahora relanza el mismo
+// precalentado (solo si la caja esta abierta, y solo si el terminal
+// cambia de verdad).
+{
+  const idx = renderer.indexOf("function setCurrentTerminal(terminal) {");
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nfunction ", idx + 10) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped.includes("if (cashSession?.open) {") &&
+    scoped.includes("primeFastTicketPredictorOnCashOpen().catch(() => {});")
+  ) {
+    ok(
+      "setCurrentTerminal re-warms the ticket-number predictor for the newly-selected terminal when the cash session is already open",
+    );
+  } else {
+    fail(
+      "setCurrentTerminal re-warms the ticket-number predictor for the newly-selected terminal when the cash session is already open",
+    );
+  }
+}
+
 mustContain(
   renderer,
   "async function setProductVentasInStock(idProducto, enabled)",
