@@ -3084,6 +3084,75 @@ mustContain(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-26 the currently-open parked ticket's real identity is tracked, not just its position\n",
+);
+
+// Descubierto con un stress test de operaciones aleatorias (aparcar, abrir,
+// cambiar cliente/empleado, editar productos, cobrar, todo mezclado y con
+// reordenamientos de la lista entre medias): aunque abrir un aparcado ya
+// resolvia el ticket correcto, currentParkedTicketIndex seguia siendo solo
+// una POSICION mientras se editaba. Si la lista cambiaba de orden DESPUES de
+// abrir un ticket pero ANTES de pulsar "Cobrar" (llega uno nuevo, un sync
+// automatico...), el cobro no tenia ninguna identidad estable con la que
+// comprobarlo y confiaba ciegamente en esa posicion ya desactualizada --
+// cobrando el ticket equivocado. setCurrentParkedTicketIndex() mantiene la
+// identidad real (ACTIVE_PARKED_TICKET_SYNC_KEY/ID) sincronizada con la
+// posicion en todo momento, y onPayButtonClick ya la usa como primera fuente
+// de verdad al resolver que aparcado cerrar.
+mustContain(
+  renderer,
+  "let ACTIVE_PARKED_TICKET_SYNC_KEY = \"\";",
+  "ACTIVE_PARKED_TICKET_SYNC_KEY/ID state exists to track the real identity of the loaded parked ticket",
+);
+mustContain(
+  renderer,
+  "function setCurrentParkedTicketIndex(index) {",
+  "setCurrentParkedTicketIndex helper exists",
+);
+mustContain(
+  renderer,
+  "setCurrentParkedTicketIndex(index);",
+  "restoreParkedCartByIndex sets the current parked ticket through the identity-tracking helper",
+);
+{
+  const idx = renderer.indexOf("let parkedIndexToClose = resolveUnpaidParkedTicketIndexForCheckout({");
+  const closeIdx = idx >= 0 ? renderer.indexOf("});", idx) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped.includes("ACTIVE_PARKED_TICKET_SYNC_KEY") &&
+    scoped.includes("ACTIVE_PARKED_TICKET_ID")
+  ) {
+    ok(
+      "onPayButtonClick's initial checkout resolution prefers the tracked ACTIVE_PARKED_TICKET identity over the position alone",
+    );
+  } else {
+    fail(
+      "onPayButtonClick's initial checkout resolution prefers the tracked ACTIVE_PARKED_TICKET identity over the position alone",
+    );
+  }
+}
+{
+  // Ningun otro sitio del archivo deberia volver a asignar
+  // currentParkedTicketIndex directamente (fuera del propio helper) -- si
+  // alguien lo hace en el futuro, se pierde el seguimiento de identidad para
+  // ese caso concreto sin que nadie se entere. Solo deben quedar 2
+  // ocurrencias del patron "currentParkedTicketIndex = ": la declaracion
+  // inicial ("let currentParkedTicketIndex = null;") y la asignacion de
+  // dentro de setCurrentParkedTicketIndex.
+  const totalRawAssignments =
+    renderer.split("currentParkedTicketIndex = ").length - 1;
+  if (totalRawAssignments === 2) {
+    ok(
+      "No other place in renderer.js assigns currentParkedTicketIndex directly, bypassing the identity-tracking helper",
+    );
+  } else {
+    fail(
+      `No other place in renderer.js assigns currentParkedTicketIndex directly, bypassing the identity-tracking helper (found ${totalRawAssignments} raw assignments, expected exactly 2: the declaration and the one inside the helper)`,
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

@@ -314,6 +314,35 @@ let parkedClearPaidInFlight = false;
 let parkedClearPendingInFlight = false;
 // Índice del ticket aparcado actualmente cargado en el carrito
 let currentParkedTicketIndex = null;
+// Feedback de cliente real (stress test 2026-08-26): currentParkedTicketIndex
+// es solo una POSICION. Si la lista de aparcados cambia de orden despues de
+// abrir un ticket concreto pero ANTES de cobrarlo (llega uno nuevo, un sync
+// automatico del modal...) -- muy plausible con mucho volumen -- esa
+// posicion puede pasar a apuntar a OTRO aparcado sin que nadie se entere, y
+// se cobraria el equivocado. Estas dos variables guardan la identidad REAL
+// (estable, no la posicion) del ticket que currentParkedTicketIndex
+// representa en cada momento, para que el cobro pueda comprobarla de
+// verdad. Se mantienen siempre en sincronia con currentParkedTicketIndex a
+// traves de setCurrentParkedTicketIndex() -- no se asignan a mano en
+// ningun otro sitio.
+let ACTIVE_PARKED_TICKET_SYNC_KEY = "";
+let ACTIVE_PARKED_TICKET_ID = 0;
+
+function setCurrentParkedTicketIndex(index) {
+  currentParkedTicketIndex = index;
+  const t =
+    index != null &&
+    Array.isArray(parkedTickets) &&
+    index >= 0 &&
+    index < parkedTickets.length
+      ? parkedTickets[index]
+      : null;
+  ACTIVE_PARKED_TICKET_SYNC_KEY = t
+    ? String(getParkedTicketSyncKey(t) || "").trim()
+    : "";
+  ACTIVE_PARKED_TICKET_ID = t ? Number(t?.id || 0) || 0 : 0;
+}
+
 // Cliente seleccionado justo antes de cargar un aparcado, para restaurarlo
 // al vaciar el carrito o soltar el aparcado sin cobrar.
 let preParkedCustomerSelection = null;
@@ -2007,7 +2036,7 @@ function clearSafeTrainingSessionData() {
   cart = [];
   parkedTickets = [];
   parkedCounter = 0;
-  currentParkedTicketIndex = null;
+  setCurrentParkedTicketIndex(null);
   preParkedCustomerSelection = null;
 
   lastTicket = null;
@@ -2115,15 +2144,16 @@ function restoreSafeTrainingRuntimeSnapshot(snapshot) {
         .filter((t) => !t?.paid)
     : [];
   parkedCounter = Number(src.parkedCounter || 0) || 0;
-  currentParkedTicketIndex =
+  setCurrentParkedTicketIndex(
     src.currentParkedTicketIndex == null
       ? null
-      : Math.max(0, Number(src.currentParkedTicketIndex) || 0);
+      : Math.max(0, Number(src.currentParkedTicketIndex) || 0),
+  );
   if (
     currentParkedTicketIndex != null &&
     currentParkedTicketIndex >= parkedTickets.length
   ) {
-    currentParkedTicketIndex = null;
+    setCurrentParkedTicketIndex(null);
   }
 
   preParkedCustomerSelection = src.preParkedCustomerSelection || null;
@@ -3948,7 +3978,7 @@ async function enterSafeTrainingMode() {
 
   await saveSafeTrainingModeToggle(true);
   cart = [];
-  currentParkedTicketIndex = null;
+  setCurrentParkedTicketIndex(null);
   renderCart();
   refreshParkButtonUI?.();
   refreshParkedEditingBanner?.();
@@ -3960,10 +3990,11 @@ async function exitSafeTrainingMode() {
 
   if (!snap) return;
   cart = JSON.parse(JSON.stringify(Array.isArray(snap.cart) ? snap.cart : []));
-  currentParkedTicketIndex =
+  setCurrentParkedTicketIndex(
     snap.currentParkedTicketIndex != null
       ? Number(snap.currentParkedTicketIndex)
-      : null;
+      : null,
+  );
   safeTrainingRuntimeSnapshot = null;
   renderCart();
   refreshParkButtonUI?.();
@@ -8442,7 +8473,7 @@ function syncTpvCartWithSelectedMesa(opts = {}) {
   if (!MESAS_INLINE_ACTIVE || MESAS_INLINE_VIEW !== "transacciones") return;
   if (TPV_TUTORIAL_BLANK_MODE) {
     cart = [];
-    currentParkedTicketIndex = null;
+    setCurrentParkedTicketIndex(null);
     renderCart();
     refreshParkButtonUI?.();
     refreshParkedEditingBanner?.();
@@ -8490,7 +8521,7 @@ function syncTpvCartWithSelectedMesa(opts = {}) {
       : [];
 
     cart = hasDraftForUid ? draftItems.map((it) => ({ ...it })) : [];
-    currentParkedTicketIndex = null;
+    setCurrentParkedTicketIndex(null);
     renderCart();
     refreshParkButtonUI?.();
     refreshParkedEditingBanner?.();
@@ -8523,7 +8554,7 @@ function syncTpvCartWithSelectedMesa(opts = {}) {
 
     if (hasDraftForUid) {
       cart = draftItems.map((it) => ({ ...it }));
-      currentParkedTicketIndex = idx;
+      setCurrentParkedTicketIndex(idx);
       renderCart();
       refreshParkButtonUI?.();
       refreshParkedEditingBanner?.();
@@ -8537,7 +8568,7 @@ function syncTpvCartWithSelectedMesa(opts = {}) {
   }
 
   cart = [];
-  currentParkedTicketIndex = null;
+  setCurrentParkedTicketIndex(null);
   renderCart();
   refreshParkButtonUI?.();
   refreshParkedEditingBanner?.();
@@ -10291,7 +10322,7 @@ async function runBootFlow() {
           );
         } else {
           cart = [];
-          currentParkedTicketIndex = null;
+          setCurrentParkedTicketIndex(null);
           renderCart();
         }
       } else {
@@ -10308,7 +10339,7 @@ async function runBootFlow() {
       CART_SNAPSHOT_ARMED = true;
     } else {
       cart = [];
-      currentParkedTicketIndex = null;
+      setCurrentParkedTicketIndex(null);
       renderCart();
       renderMainUI(true);
     }
@@ -11740,7 +11771,7 @@ function tryResolvePendingParkedTicketByCartMatch() {
 
   if (idx < 0) return false;
 
-  currentParkedTicketIndex = idx;
+  setCurrentParkedTicketIndex(idx);
   applyCustomerSelectionForParkedTicket(parkedTickets[idx]);
   PENDING_RUNTIME_PARKED_SYNC_KEY = "";
   PENDING_RUNTIME_PARKED_TICKET_ID = 0;
@@ -11834,7 +11865,7 @@ function tryResolvePendingParkedTicketIndex() {
     return tryResolvePendingParkedTicketByCartMatch();
   }
 
-  currentParkedTicketIndex = idx;
+  setCurrentParkedTicketIndex(idx);
   applyCustomerSelectionForParkedTicket(parkedTickets[idx]);
   PENDING_RUNTIME_PARKED_SYNC_KEY = "";
   PENDING_RUNTIME_PARKED_TICKET_ID = 0;
@@ -12381,7 +12412,7 @@ function renderCart() {
       // Al salir/cobrar el aparcado (carrito vacio) volver al cliente que
       // estaba antes de abrirlo.
       restorePreParkedCustomerSelection();
-      currentParkedTicketIndex = null;
+      setCurrentParkedTicketIndex(null);
     }
   }
 
@@ -15956,8 +15987,9 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
             ? editingIndex
             : null;
 
-        currentParkedTicketIndex =
-          idx >= 0 ? idx : fallbackIdx !== null ? fallbackIdx : null;
+        setCurrentParkedTicketIndex(
+          idx >= 0 ? idx : fallbackIdx !== null ? fallbackIdx : null,
+        );
 
         // En autosave no reinyectamos snapshot en el carrito para evitar
         // rebobinar cambios rápidos (ej. qty 2->5 que vuelve a 3 por guardado previo).
@@ -15982,7 +16014,7 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
         // TPV normal: limpiar carrito tras aparcar/actualizar
         cart = [];
         renderCart();
-        currentParkedTicketIndex = null;
+        setCurrentParkedTicketIndex(null);
         restorePreParkedCustomerSelection();
       }
 
@@ -16148,7 +16180,7 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
         (t) =>
           String(t?.id || "") === String(localTicket?.id || "") && !t?.paid,
       );
-      currentParkedTicketIndex = idx >= 0 ? idx : null;
+      setCurrentParkedTicketIndex(idx >= 0 ? idx : null);
       cart = snapshot.map((it) => ({ ...it }));
       renderCart();
       if (currentParkedTicketIndex === null) syncTpvCartWithSelectedMesa();
@@ -16156,7 +16188,7 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
       // TPV normal: limpiar carrito tras aparcar
       cart = [];
       renderCart();
-      currentParkedTicketIndex = null;
+      setCurrentParkedTicketIndex(null);
       restorePreParkedCustomerSelection();
     }
 
@@ -17256,7 +17288,7 @@ async function resetParkedCacheAndResync() {
 
     // 2) Resetear estado en memoria.
     parkedTickets = [];
-    currentParkedTicketIndex = null;
+    setCurrentParkedTicketIndex(null);
     PENDING_RUNTIME_PARKED_SYNC_KEY = "";
     PENDING_RUNTIME_PARKED_TICKET_ID = 0;
     parkedCounter = 0;
@@ -17336,7 +17368,7 @@ async function clearPaidParkedHistory() {
     (!parkedTickets[currentParkedTicketIndex] ||
       parkedTickets[currentParkedTicketIndex]?.paid)
   ) {
-    currentParkedTicketIndex = null;
+    setCurrentParkedTicketIndex(null);
   }
 
   const pendingAfterClear = getScopedPendingParkedTickets(parkedTickets).filter(
@@ -17432,7 +17464,7 @@ async function deleteAllPendingParkedTickets({ releaseStock = true } = {}) {
     (!parkedTickets[currentParkedTicketIndex] ||
       !parkedTickets[currentParkedTicketIndex]?.paid)
   ) {
-    currentParkedTicketIndex = null;
+    setCurrentParkedTicketIndex(null);
   }
 
   parkedCounter = 0;
@@ -18311,7 +18343,7 @@ async function deleteParkedTicketByIndex(
     // carrito (el ticket ya no existe) y volver al cliente anterior.
     removedWasLoadedInCart = true;
     restorePreParkedCustomerSelection();
-    currentParkedTicketIndex = null;
+    setCurrentParkedTicketIndex(null);
   } else if (
     currentParkedTicketIndex !== null &&
     currentParkedTicketIndex > idx
@@ -18324,7 +18356,7 @@ async function deleteParkedTicketByIndex(
   if (removedWasLoadedInCart && !clearCartAfterDelete) {
     cart = [];
     renderCart();
-    currentParkedTicketIndex = null;
+    setCurrentParkedTicketIndex(null);
     if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
       clearCurrentMesaDraft();
       renderMesasTransContextBar();
@@ -18334,7 +18366,7 @@ async function deleteParkedTicketByIndex(
   if (clearCartAfterDelete) {
     cart = [];
     renderCart();
-    currentParkedTicketIndex = null;
+    setCurrentParkedTicketIndex(null);
     if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
       clearCurrentMesaDraft();
       renderMesasTransContextBar();
@@ -19047,7 +19079,7 @@ async function markParkedTicketAsPaidByIndex(
     }
 
     if (currentParkedTicketIndex === index) {
-      currentParkedTicketIndex = null;
+      setCurrentParkedTicketIndex(null);
     }
 
     updateParkedCountBadge();
@@ -19144,7 +19176,7 @@ async function markParkedTicketAsPaidByIndex(
   }
 
   if (currentParkedTicketIndex === index) {
-    currentParkedTicketIndex = null;
+    setCurrentParkedTicketIndex(null);
   }
 
   if (splitMeta) {
@@ -19360,7 +19392,7 @@ function applyCustomerSelectionForParkedTicket(ticket) {
 async function clearAllParkedForTest() {
   const all = Array.isArray(parkedTickets) ? parkedTickets.slice() : [];
   parkedTickets = [];
-  currentParkedTicketIndex = null;
+  setCurrentParkedTicketIndex(null);
   try {
     saveParkedTicketsCache(parkedTickets);
   } catch {}
@@ -19592,7 +19624,7 @@ function restoreParkedCartByIndex(index) {
 
   renderCart();
 
-  currentParkedTicketIndex = index;
+  setCurrentParkedTicketIndex(index);
 
   setStatusText(labels.loadStatus);
   refreshParkButtonUI();
@@ -26740,7 +26772,7 @@ function beginTutorialBlankMode() {
     localStorage.setItem(TPV_TUTORIAL_BLANK_MODE_KEY, "1");
   } catch {}
   cart = [];
-  currentParkedTicketIndex = null;
+  setCurrentParkedTicketIndex(null);
   renderCart();
   refreshParkButtonUI?.();
   refreshParkedEditingBanner?.();
@@ -26758,10 +26790,11 @@ function endTutorialBlankMode() {
   if (!snap) return true;
 
   cart = cloneTutorialValue(Array.isArray(snap.cart) ? snap.cart : [], []);
-  currentParkedTicketIndex =
+  setCurrentParkedTicketIndex(
     snap.currentParkedTicketIndex != null
       ? Number(snap.currentParkedTicketIndex)
-      : null;
+      : null,
+  );
   renderCart();
   refreshParkButtonUI?.();
   refreshParkedEditingBanner?.();
@@ -31371,7 +31404,7 @@ function reloadParkedTicketsForCurrentMode() {
   const hasPendingRestore =
     !!String(PENDING_RUNTIME_PARKED_SYNC_KEY || "").trim() ||
     (Number(PENDING_RUNTIME_PARKED_TICKET_ID || 0) || 0) > 0;
-  currentParkedTicketIndex = null;
+  setCurrentParkedTicketIndex(null);
   if (hasPendingRestore) {
     tryResolvePendingParkedTicketIndex();
   } else {
@@ -31385,7 +31418,7 @@ function reloadParkedTicketsForCurrentMode() {
       idx = parkedTickets.findIndex((t) => Number(t?.id || 0) === prevTicketId);
     }
     if (idx >= 0) {
-      currentParkedTicketIndex = idx;
+      setCurrentParkedTicketIndex(idx);
     }
   }
 
@@ -33197,7 +33230,7 @@ function syncParkedTicketsFromRemote(list) {
       return variants.some((k) => prevLoadedVariants.has(k));
     });
     if (nextIdx >= 0) {
-      currentParkedTicketIndex = nextIdx;
+      setCurrentParkedTicketIndex(nextIdx);
     } else if (isPayingNow) {
       // Nunca vaciar el carrito ni soltar el aparcado mientras hay un cobro en
       // curso: si un sync no lo encuentra momentaneamente, se conserva y el
@@ -33206,11 +33239,11 @@ function syncParkedTicketsFromRemote(list) {
       // El aparcado que teniamos cargado ya no existe (lo cobraron o borraron
       // en otro TPV) y no hay edicion local pendiente: vaciar el carrito para no
       // quedarnos con lineas de un ticket que ya no existe.
-      currentParkedTicketIndex = null;
+      setCurrentParkedTicketIndex(null);
       if (Array.isArray(cart) && cart.length) {
         restorePreParkedCustomerSelection();
         cart = [];
-        currentParkedTicketIndex = null;
+        setCurrentParkedTicketIndex(null);
         renderCart();
         if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
           clearCurrentMesaDraft?.();
@@ -33226,17 +33259,17 @@ function syncParkedTicketsFromRemote(list) {
   } else if (PENDING_RUNTIME_PARKED_SYNC_KEY) {
     if (!tryResolvePendingParkedTicketIndex()) {
       if (!tryResolvePendingParkedTicketByCartMatch()) {
-        currentParkedTicketIndex = null;
+        setCurrentParkedTicketIndex(null);
       }
     }
   } else if (PENDING_RUNTIME_PARKED_TICKET_ID) {
     if (!tryResolvePendingParkedTicketIndex()) {
       if (!tryResolvePendingParkedTicketByCartMatch()) {
-        currentParkedTicketIndex = null;
+        setCurrentParkedTicketIndex(null);
       }
     }
   } else {
-    currentParkedTicketIndex = null;
+    setCurrentParkedTicketIndex(null);
   }
 
   updateParkedCountBadge?.();
@@ -34169,18 +34202,28 @@ async function onPayButtonClick() {
     cartSnapshot = Array.isArray(cart) ? cart.map((i) => ({ ...i })) : [];
     saleLineIds = buildLineIdSetFromSnapshot(cartSnapshot);
 
+    // ACTIVE_PARKED_TICKET_SYNC_KEY/ID (identidad real del aparcado
+    // cargado, mantenida por setCurrentParkedTicketIndex) tiene prioridad
+    // sobre PENDING_RUNTIME_PARKED_SYNC_KEY/ID, que es solo el token de
+    // "restaurar sesion" de un solo uso -- normalmente vacio salvo justo
+    // al recuperar el estado tras un cierre inesperado.
     let parkedIndexToClose = resolveUnpaidParkedTicketIndexForCheckout({
       preferredIndex:
         currentParkedTicketIndex !== null
           ? Number(currentParkedTicketIndex)
           : null,
-      syncKey: String(PENDING_RUNTIME_PARKED_SYNC_KEY || "").trim(),
-      ticketId: Number(PENDING_RUNTIME_PARKED_TICKET_ID || 0) || 0,
+      syncKey: String(
+        ACTIVE_PARKED_TICKET_SYNC_KEY || PENDING_RUNTIME_PARKED_SYNC_KEY || "",
+      ).trim(),
+      ticketId:
+        Number(ACTIVE_PARKED_TICKET_ID || 0) ||
+        Number(PENDING_RUNTIME_PARKED_TICKET_ID || 0) ||
+        0,
       cartItems: cartSnapshot,
     });
 
     if (parkedIndexToClose != null) {
-      currentParkedTicketIndex = parkedIndexToClose;
+      setCurrentParkedTicketIndex(parkedIndexToClose);
       PENDING_RUNTIME_PARKED_SYNC_KEY = "";
       PENDING_RUNTIME_PARKED_TICKET_ID = 0;
     }
@@ -35026,7 +35069,7 @@ if (clearBtn) {
         pushCartHistoryStep("clear-cart");
         cart = [];
         renderCart();
-        currentParkedTicketIndex = linkedActiveIndex;
+        setCurrentParkedTicketIndex(linkedActiveIndex);
         if (selectedUid) {
           saveDraftCartForMesaUid(selectedUid, [], { keepEmpty: true });
         }
@@ -35046,7 +35089,7 @@ if (clearBtn) {
     pushCartHistoryStep("clear-cart");
     cart = [];
     renderCart();
-    currentParkedTicketIndex = null;
+    setCurrentParkedTicketIndex(null);
     restorePreParkedCustomerSelection();
     if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
       clearCurrentMesaDraft();
@@ -36431,7 +36474,7 @@ async function confirmSplitTicket() {
     ).findIndex(
       (t) => String(t?.id || "") === String(loaded?.id || "") && !t?.paid,
     );
-    currentParkedTicketIndex = loadedIdx >= 0 ? loadedIdx : null;
+    setCurrentParkedTicketIndex(loadedIdx >= 0 ? loadedIdx : null);
     refreshParkedEditingBanner();
     refreshParkButtonUI();
     updateParkedCountBadge();
@@ -36609,7 +36652,7 @@ async function confirmSplitTicket() {
   ).findIndex(
     (t) => String(t?.id || "") === String(loaded?.id || "") && !t?.paid,
   );
-  currentParkedTicketIndex = loadedIdx >= 0 ? loadedIdx : null;
+  setCurrentParkedTicketIndex(loadedIdx >= 0 ? loadedIdx : null);
   refreshParkedEditingBanner();
   refreshParkButtonUI();
   updateParkedCountBadge();
