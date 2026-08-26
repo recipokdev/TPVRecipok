@@ -7,7 +7,8 @@
       "title": "",
       "changes": [
         "Tickets: cuando un ticket cobrado venía de un aparcado sin número asignado (por ejemplo, llegado de otro origen), la anotación «Origen aparcado» salía con un «#-» suelto pegado al nombre del cliente. Ahora, si no hay número, simplemente no se muestra ningún símbolo roto.",
-        "Rendimiento: la primera vez que se abría «Opciones» en cada sesión, tardaba un poco más en aparecer el gestor de tarifas porque pedía en ese momento las tarifas y los clientes a FacturaScripts (las siguientes veces ya iba rápido, porque quedaban en memoria). Ahora esa primera carga se hace en segundo plano justo al abrir caja, así que para cuando se pulsa «Opciones» ya debería estar lista."
+        "Rendimiento: la primera vez que se abría «Opciones» en cada sesión, tardaba un poco más en aparecer el gestor de tarifas porque pedía en ese momento las tarifas y los clientes a FacturaScripts (las siguientes veces ya iba rápido, porque quedaban en memoria). Ahora esa primera carga se hace en segundo plano justo al abrir caja, así que para cuando se pulsa «Opciones» ya debería estar lista.",
+        "Rendimiento: «Opciones» tardaba un rato en terminar de cargar (banner «Cargando opciones...» visible varios instantes) porque los cerca de 30 ajustes guardados se pedían uno detrás de otro. Ahora se piden en grupos a la vez, así que el tiempo total ya no es la suma de todos sino solo el del más lento de cada grupo."
       ]
     },
     {

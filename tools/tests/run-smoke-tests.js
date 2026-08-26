@@ -1162,7 +1162,7 @@ mustContain(
 );
 mustContain(
   renderer,
-  "await loadVirtualKeyboardToggle();",
+  "loadVirtualKeyboardToggle(),",
   "openOptions() loads the virtual keyboard toggle",
 );
 
@@ -1209,7 +1209,7 @@ mustContain(
 );
 mustContain(
   renderer,
-  "await loadParkedCustomerResetModeSetting();",
+  "loadParkedCustomerResetModeSetting(),",
   "openOptions() loads the parked-customer-reset-mode select",
 );
 
@@ -3527,6 +3527,52 @@ console.log("\n[SMOKE] Checking 2026-08-26 Options tariff/customer data is warme
   } else {
     fail(
       `Options tariff-customers data (loadTariffCustomersCache) is warmed up alongside it (found ${customerWarmupCallSites}, expected >= 3)`,
+    );
+  }
+}
+
+console.log("\n[SMOKE] Checking 2026-08-26 openOptions loads its ~30 settings in parallel batches, not one by one\n");
+
+{
+  const idx = renderer.indexOf("async function openOptions() {");
+  const endIdx = idx >= 0 ? renderer.indexOf("function closeOptions()", idx) : -1;
+  const scoped = idx >= 0 && endIdx > idx ? renderer.slice(idx, endIdx) : "";
+
+  const promiseAllBatches = scoped.split("await Promise.all([").length - 1;
+  if (promiseAllBatches >= 3) {
+    ok(
+      `openOptions batches its independent settings loaders into parallel Promise.all groups (found ${promiseAllBatches}) instead of awaiting ~30 of them one by one`,
+    );
+  } else {
+    fail(
+      `openOptions batches its independent settings loaders into parallel Promise.all groups (found ${promiseAllBatches}, expected >= 3)`,
+    );
+  }
+
+  if (
+    scoped.includes("loadPriceEditModeFromCfg?.(),") &&
+    scoped.indexOf("refreshPriceEditToggleUI?.();") >
+      scoped.indexOf("loadPriceEditModeFromCfg?.(),")
+  ) {
+    ok(
+      "refreshPriceEditToggleUI still runs after loadPriceEditModeFromCfg's batch, not before it",
+    );
+  } else {
+    fail(
+      "refreshPriceEditToggleUI still runs after loadPriceEditModeFromCfg's batch, not before it",
+    );
+  }
+
+  if (
+    scoped.includes("const st = await loadOptionsAccordionState();") &&
+    scoped.includes("await applyOptionsAccordionState(st);")
+  ) {
+    ok(
+      "loadOptionsAccordionState -> applyOptionsAccordionState(st) stays a sequential, chained pair (real data dependency, not batched)",
+    );
+  } else {
+    fail(
+      "loadOptionsAccordionState -> applyOptionsAccordionState(st) stays a sequential, chained pair (real data dependency, not batched)",
     );
   }
 }

@@ -26828,21 +26828,30 @@ async function openOptions() {
   optionsLoadingBanner?.classList.remove("hidden");
   optionsAccordionEl?.classList.add("opt-loading");
 
-  await loadPriceEditModeFromCfg?.();
-  await loadProductDiscountConfig?.();
-  await loadProductManualOrderConfig?.();
-  await loadProductSortModeSetting?.();
-  await loadProductReorderModeSetting?.();
-  await loadInfoBarVisibilitySettings?.();
-
+  // Cada "load...()" de aqui abajo es una llamada independiente (cada
+  // ajuste vive en su propia clave, ninguno depende del resultado de otro)
+  // pero antes se esperaban una detras de otra: ~30 idas y vueltas de IPC
+  // seguidas (cfg:get) a la ventana principal, lo que se notaba como el
+  // banner "Cargando opciones..." tardando un rato en desaparecer. Se
+  // agrupan en tandas paralelas (Promise.all) -- cada tanda tarda lo que
+  // tarde su ajuste mas lento, no la suma de todos. Los "bind...Once()" son
+  // solo enganchar el listener del control (no necesitan el valor cargado
+  // para nada), asi que pueden ir todos antes, sin esperar a nada.
   bindVirtualKeyboardToggleOnce();
-  await loadVirtualKeyboardToggle();
-
   bindParkedCustomerResetModeOnce();
-  await loadParkedCustomerResetModeSetting();
-
   bindDiscountQuickPctsSaveOnce();
-  await loadDiscountQuickPercentsSetting();
+
+  await Promise.all([
+    loadPriceEditModeFromCfg?.(),
+    loadProductDiscountConfig?.(),
+    loadProductManualOrderConfig?.(),
+    loadProductSortModeSetting?.(),
+    loadProductReorderModeSetting?.(),
+    loadInfoBarVisibilitySettings?.(),
+    loadVirtualKeyboardToggle(),
+    loadParkedCustomerResetModeSetting(),
+    loadDiscountQuickPercentsSetting(),
+  ]);
 
   applyAdminOnlyUI?.();
   refreshOptionsUI?.();
@@ -26850,47 +26859,39 @@ async function openOptions() {
   bindPriceEditToggleOnce?.();
 
   bindCustomerDisplayToggleOnce();
-  await loadCustomerDisplayToggle();
-
   bindProductStockToggleOnce();
-  await loadProductStockToggle();
-
   bindProductStockEditionToggleOnce();
-  await loadProductStockEditionToggle();
-
   bindAllowCloseWithParkedToggleOnce();
-  await loadAllowCloseWithParkedToggle();
-
   bindMesasDinersFamilyRuleControlsOnce();
-  await loadMesasDinersFamilyRules();
-
   bindMesasComandaFamilyRuleControlsOnce();
-  await loadMesasComandaFamilyRules();
   bindParkStockWarningToggleOnce();
-  await loadParkStockWarningToggle();
-
   bindAskStockBulkDeletePendingToggleOnce();
-  await loadAskStockBulkDeletePendingToggle();
-
   bindPrintCajaAutoLogToggleOnce();
-  await loadPrintCajaAutoLogToggle();
-
   bindPrintCajaDrawerOpenLogsToggleOnce();
-  await loadPrintCajaDrawerOpenLogsToggle();
-
   bindProductTileResizeModeToggleOnce();
-  await loadProductTileResizeModeToggle();
-
   bindScaleManualCaptureToggleOnce();
-  await loadScaleManualCaptureModeToggle();
-
   bindCartDiscountToolsToggleOnce();
-  await loadCartDiscountToolsToggle();
   bindSafeTrainingModeToggleOnce();
-  await loadSafeTrainingModeToggle();
   bindCartGlobalDiscountButtonsOnce();
   bindTariffOptionsOnce();
-  await loadTariffManagerOptionsData();
+
+  await Promise.all([
+    loadCustomerDisplayToggle(),
+    loadProductStockToggle(),
+    loadProductStockEditionToggle(),
+    loadAllowCloseWithParkedToggle(),
+    loadMesasDinersFamilyRules(),
+    loadMesasComandaFamilyRules(),
+    loadParkStockWarningToggle(),
+    loadAskStockBulkDeletePendingToggle(),
+    loadPrintCajaAutoLogToggle(),
+    loadPrintCajaDrawerOpenLogsToggle(),
+    loadProductTileResizeModeToggle(),
+    loadScaleManualCaptureModeToggle(),
+    loadCartDiscountToolsToggle(),
+    loadSafeTrainingModeToggle(),
+    loadTariffManagerOptionsData(),
+  ]);
 
   bindProductSortModeOnce();
   bindProductReorderModeOnce();
@@ -26898,14 +26899,16 @@ async function openOptions() {
   bindInfoBarVisibilityOnce();
 
   bindProductTileSizeResetButtonOnce();
-  await loadProductTileSizeSetting();
   bindCartWidthControlsToggleOnce();
   bindCartWidthDragHandleOnce();
-  await loadCartPanelWidthSetting();
-  await loadCartWidthControlsToggle();
-
   bindAutostartToggleOnce();
-  await loadAutostartToggle();
+
+  await Promise.all([
+    loadProductTileSizeSetting(),
+    loadCartPanelWidthSetting(),
+    loadCartWidthControlsToggle(),
+    loadAutostartToggle(),
+  ]);
 
   bindBackgroundUpdateOptionsOnce();
   refreshBackgroundUpdateOptionsUI();
