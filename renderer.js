@@ -40163,7 +40163,12 @@ function renderTicketsList(tickets) {
     }
 
     div.onclick = async () => {
-      await openTicketInfoForFactura(t);
+      try {
+        await openTicketInfoForFactura(t);
+      } catch (e) {
+        console.warn("No se pudo abrir la informacion del ticket:", e?.message || e);
+        toast("No se pudo cargar el ticket.", "err", "Tickets");
+      }
     };
 
     mountEl.appendChild(div);
@@ -44182,7 +44187,21 @@ async function openTicketInfoForFactura(facturaRow, options = {}) {
   const idfactura = Number(facturaRow?.idfactura || 0);
   if (!(idfactura > 0)) throw new Error("Factura invalida.");
 
-  const lineasAll = await fetchLineasFactura(idfactura);
+  // Feedback de cliente real: tocar un ticket en la lista tardaba unos
+  // segundos en abrir "Informacion de ticket" (dos peticiones a
+  // FacturaScripts, lineas y recibos) SIN ningun aviso mientras tanto -- el
+  // cliente pensaba que se habia quedado colgado. Un aviso inmediato basta
+  // para que se sepa que esta cargando. De paso, esas dos peticiones son
+  // independientes entre si (ninguna necesita el resultado de la otra) y se
+  // pedian una detras de otra: pedirlas a la vez recorta la espera real
+  // aproximadamente a la mitad.
+  toast("Cargando ticket...", "info", "Tickets");
+  const lineasAllPromise = fetchLineasFactura(idfactura);
+  const recibosOriginalesPromise = fetchRecibosByFactura(idfactura).catch(
+    () => [],
+  );
+
+  const lineasAll = await lineasAllPromise;
   const parkedOrigin = getPaidTicketParkedOriginForTicketRow(facturaRow);
   const snapshotTicket =
     options && typeof options === "object" ? options.snapshotTicket : null;
@@ -44216,12 +44235,7 @@ async function openTicketInfoForFactura(facturaRow, options = {}) {
     : [];
   const originSnapshotTotal = Number(parkedOrigin?.snapshotTotal || 0);
 
-  let recibosOriginales = [];
-  try {
-    recibosOriginales = await fetchRecibosByFactura(idfactura);
-  } catch {
-    recibosOriginales = [];
-  }
+  const recibosOriginales = await recibosOriginalesPromise;
 
   // Fallback (factura FS sin snapshot local): antes se descartaban las lineas a
   // 0 EUR, que son justo los HIJOS de un pack/oferta -> el modal solo mostraba

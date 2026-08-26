@@ -1833,6 +1833,46 @@ console.log(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-26 opening a ticket's info shows a loading notice and fetches in parallel\n",
+);
+
+// Feedback de cliente real: tocar un ticket en la lista de Tickets tardaba
+// unos segundos en abrir "Informacion de ticket" (dos peticiones a
+// FacturaScripts, lineas y recibos, una detras de otra) SIN ningun aviso --
+// el cliente penso que se habia quedado colgado. Ahora avisa al instante
+// (toast) y pide ambas cosas a la vez en vez de en fila, recortando tambien
+// la espera real a la mitad.
+{
+  const idx = renderer.indexOf(
+    "async function openTicketInfoForFactura(facturaRow, options = {}) {",
+  );
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nfunction ", idx + 10) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped.includes('toast("Cargando ticket...", "info", "Tickets");') &&
+    scoped.includes("const lineasAllPromise = fetchLineasFactura(idfactura);") &&
+    scoped.includes(
+      "const recibosOriginalesPromise = fetchRecibosByFactura(idfactura).catch(",
+    ) &&
+    scoped.indexOf("const lineasAllPromise") <
+      scoped.indexOf("const lineasAll = await lineasAllPromise")
+  ) {
+    ok(
+      "openTicketInfoForFactura shows an immediate loading toast and fetches lineas+recibos in parallel instead of sequentially",
+    );
+  } else {
+    fail(
+      "openTicketInfoForFactura shows an immediate loading toast and fetches lineas+recibos in parallel instead of sequentially",
+    );
+  }
+}
+mustContain(
+  renderer,
+  'toast("No se pudo cargar el ticket.", "err", "Tickets");',
+  "Clicking a ticket row surfaces a clear error if loading its info fails, instead of failing silently",
+);
+
 mustContain(
   renderer,
   "async function setProductVentasInStock(idProducto, enabled)",
