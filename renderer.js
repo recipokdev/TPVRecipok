@@ -15933,46 +15933,16 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
       saveParkedTicketsCache();
       linkMesaSelectionWithTicketId(existing?.id || null);
 
-      try {
-        await apiSaveParkedReservation(existing);
-        await refreshRemoteParkedReservationsOnly();
-      } catch (e) {
-        enqueueParkedSyncOperation("upsert", existing);
-        console.warn(
-          "No se pudo guardar la reserva remota al actualizar:",
-          e?.message || e,
-        );
-
-        if (isParkedSyncTransientError(e)) {
-          toast(
-            `Sin internet: actualizacion de ${labels.item} guardada en cola.`,
-            "warn",
-            labels.featureTitle,
-          );
-        }
-      }
-
-      if (reservedDelta.size > 0) {
-        try {
-          await syncReservedStockDeltaToFS(
-            reservedDelta,
-            "actualizar aparcado",
-          );
-        } catch (e) {
-          console.warn(
-            "No se pudo sincronizar stock al actualizar aparcado:",
-            e?.message || e,
-          );
-          toast(
-            "Aparcado actualizado, pero no se pudo sincronizar stock en FacturaScripts.",
-            "warn",
-            "Stock",
-          );
-        }
-      }
-
-      // opcional: si quieres actualizar presupuesto remoto más adelante, aquí irá
-
+      // Feedback de cliente real: aparcar/actualizar bloqueaba TODO el
+      // carrito (isParkingNow) hasta que terminaban las llamadas de red
+      // (guardar la reserva, resincronizar, imprimir...) -- si mientras
+      // tanto llegaba el siguiente cliente, no se le podia atender. Lo
+      // local (el propio ticket ya actualizado, el carrito limpio, los
+      // avisos) se hace YA, aqui mismo; lo que de verdad depende de la red
+      // sigue exactamente igual (mismos reintentos/cola de siempre en
+      // enqueueParkedSyncOperation) pero en segundo plano, sin retener al
+      // operario. El autoguardado silencioso sigue esperando a que termine
+      // de verdad (ya tenia su propio guardia de solapamiento aparte).
       if (keepActiveMesasTicket || keepLoadedTicketOpen) {
         const idx = (
           Array.isArray(parkedTickets) ? parkedTickets : []
@@ -16051,23 +16021,76 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
         lineas: snapshot.length,
       });
 
-      if (!skipAutoPrint) {
-        maybeAutoPrintComandaOnSave(existing).catch((e) => {
+      const finishUpdateParkedTail = async () => {
+        try {
+          await apiSaveParkedReservation(existing);
+          await refreshRemoteParkedReservationsOnly();
+        } catch (e) {
+          enqueueParkedSyncOperation("upsert", existing);
           console.warn(
-            "No se pudo auto-imprimir comanda al actualizar:",
+            "No se pudo guardar la reserva remota al actualizar:",
+            e?.message || e,
+          );
+
+          if (isParkedSyncTransientError(e)) {
+            toast(
+              `Sin internet: actualizacion de ${labels.item} guardada en cola.`,
+              "warn",
+              labels.featureTitle,
+            );
+          }
+        }
+
+        if (reservedDelta.size > 0) {
+          try {
+            await syncReservedStockDeltaToFS(
+              reservedDelta,
+              "actualizar aparcado",
+            );
+          } catch (e) {
+            console.warn(
+              "No se pudo sincronizar stock al actualizar aparcado:",
+              e?.message || e,
+            );
+            toast(
+              "Aparcado actualizado, pero no se pudo sincronizar stock en FacturaScripts.",
+              "warn",
+              "Stock",
+            );
+          }
+        }
+
+        // opcional: si quieres actualizar presupuesto remoto más adelante, aquí irá
+
+        if (!skipAutoPrint) {
+          maybeAutoPrintComandaOnSave(existing).catch((e) => {
+            console.warn(
+              "No se pudo auto-imprimir comanda al actualizar:",
+              e?.message || e,
+            );
+          });
+          await maybeAutoPrintPedidoOnSave(existing).catch((e) => {
+            console.warn(
+              "No se pudo auto-imprimir pedido al actualizar:",
+              e?.message || e,
+            );
+          });
+        }
+        if (!keepActiveMesasTicket && openListAfterSave) {
+          focusParkedListOnPendingToday();
+          openParkedModal();
+        }
+      };
+
+      if (silentAutoSave) {
+        await finishUpdateParkedTail();
+      } else {
+        finishUpdateParkedTail().catch((e) => {
+          console.warn(
+            "Fondo de actualizar aparcado fallo:",
             e?.message || e,
           );
         });
-        await maybeAutoPrintPedidoOnSave(existing).catch((e) => {
-          console.warn(
-            "No se pudo auto-imprimir pedido al actualizar:",
-            e?.message || e,
-          );
-        });
-      }
-      if (!keepActiveMesasTicket && openListAfterSave) {
-        focusParkedListOnPendingToday();
-        openParkedModal();
       }
       return;
     }
@@ -16115,65 +16138,20 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
       clearMesaScopeFromTicket(localTicket);
     }
 
-    if (requestedDocType !== "pedido") {
-      try {
-        const remote = await apiCreatePresupuestoFromCart(observation);
-        if (remote && (remote.doc || remote.data)) {
-          const doc = remote.doc || remote.data;
-          localTicket.fs = {
-            idpresupuesto: doc.idpresupuesto ?? doc.id ?? null,
-            codigo: doc.codigo ?? null,
-          };
-        }
-      } catch (e) {
-        // Si FS falla, mantenemos el aparcado local/remoto de reservas para no perder operativa.
-        console.warn(
-          "No se pudo crear presupuesto en FS al aparcar:",
-          e?.message || e,
-        );
-      }
-    }
-
+    // Feedback de cliente real: aparcar un ticket nuevo bloqueaba TODO el
+    // carrito (isParkingNow) durante DOS llamadas de red seguidas (crear el
+    // presupuesto en FacturaScripts + guardar la reserva) -- si mientras
+    // tanto llegaba el siguiente cliente, no se le podia atender, y ni
+    // siquiera se avisaba: un segundo intento de aparcar se cancelaba en
+    // silencio. Lo local (el ticket ya visible en la lista, el carrito
+    // limpio y listo para el siguiente) se hace YA; el presupuesto y el
+    // guardado remoto (con los mismos reintentos/cola de siempre) siguen en
+    // segundo plano sin retener al operario.
     parkedTickets.push(localTicket);
     saveParkedTicketsCache();
     linkMesaSelectionWithTicketId(localTicket?.id || null);
 
     const reservedDelta = buildReservedQtyDeltaMap(snapshot, []);
-
-    try {
-      await apiSaveParkedReservation(localTicket);
-      await refreshRemoteParkedReservationsOnly();
-    } catch (e) {
-      enqueueParkedSyncOperation("upsert", localTicket);
-      console.warn(
-        "No se pudo guardar la reserva remota al aparcar:",
-        e?.message || e,
-      );
-
-      if (isParkedSyncTransientError(e)) {
-        toast(
-          `Sin internet: ${labels.item} guardado en cola.`,
-          "warn",
-          labels.featureTitle,
-        );
-      }
-    }
-
-    if (reservedDelta.size > 0) {
-      try {
-        await syncReservedStockDeltaToFS(reservedDelta, "crear aparcado");
-      } catch (e) {
-        console.warn(
-          "No se pudo sincronizar stock al crear aparcado:",
-          e?.message || e,
-        );
-        toast(
-          "Ticket aparcado, pero no se pudo sincronizar stock en FacturaScripts.",
-          "warn",
-          "Stock",
-        );
-      }
-    }
 
     if (keepActiveMesasTicket) {
       const idx = (Array.isArray(parkedTickets) ? parkedTickets : []).findIndex(
@@ -16226,22 +16204,87 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
       lineas: snapshot.length,
     });
 
-    if (!skipAutoPrint) {
-      maybeAutoPrintComandaOnSave(localTicket).catch((e) => {
+    const finishCreateParkedTail = async () => {
+      if (requestedDocType !== "pedido") {
+        try {
+          const remote = await apiCreatePresupuestoFromCart(observation);
+          if (remote && (remote.doc || remote.data)) {
+            const doc = remote.doc || remote.data;
+            localTicket.fs = {
+              idpresupuesto: doc.idpresupuesto ?? doc.id ?? null,
+              codigo: doc.codigo ?? null,
+            };
+            saveParkedTicketsCache();
+          }
+        } catch (e) {
+          // Si FS falla, mantenemos el aparcado local/remoto de reservas para no perder operativa.
+          console.warn(
+            "No se pudo crear presupuesto en FS al aparcar:",
+            e?.message || e,
+          );
+        }
+      }
+
+      try {
+        await apiSaveParkedReservation(localTicket);
+        await refreshRemoteParkedReservationsOnly();
+      } catch (e) {
+        enqueueParkedSyncOperation("upsert", localTicket);
         console.warn(
-          "No se pudo auto-imprimir comanda al guardar:",
+          "No se pudo guardar la reserva remota al aparcar:",
           e?.message || e,
         );
+
+        if (isParkedSyncTransientError(e)) {
+          toast(
+            `Sin internet: ${labels.item} guardado en cola.`,
+            "warn",
+            labels.featureTitle,
+          );
+        }
+      }
+
+      if (reservedDelta.size > 0) {
+        try {
+          await syncReservedStockDeltaToFS(reservedDelta, "crear aparcado");
+        } catch (e) {
+          console.warn(
+            "No se pudo sincronizar stock al crear aparcado:",
+            e?.message || e,
+          );
+          toast(
+            "Ticket aparcado, pero no se pudo sincronizar stock en FacturaScripts.",
+            "warn",
+            "Stock",
+          );
+        }
+      }
+
+      if (!skipAutoPrint) {
+        maybeAutoPrintComandaOnSave(localTicket).catch((e) => {
+          console.warn(
+            "No se pudo auto-imprimir comanda al guardar:",
+            e?.message || e,
+          );
+        });
+        await maybeAutoPrintPedidoOnSave(localTicket).catch((e) => {
+          console.warn(
+            "No se pudo auto-imprimir pedido al guardar:",
+            e?.message || e,
+          );
+        });
+      }
+      if (!keepActiveMesasTicket && openListAfterSave) {
+        openParkedModal();
+      }
+    };
+
+    if (silentAutoSave) {
+      await finishCreateParkedTail();
+    } else {
+      finishCreateParkedTail().catch((e) => {
+        console.warn("Fondo de aparcar (crear) fallo:", e?.message || e);
       });
-      await maybeAutoPrintPedidoOnSave(localTicket).catch((e) => {
-        console.warn(
-          "No se pudo auto-imprimir pedido al guardar:",
-          e?.message || e,
-        );
-      });
-    }
-    if (!keepActiveMesasTicket && openListAfterSave) {
-      openParkedModal();
     }
   } finally {
     if (silentAutoSave) {
@@ -23134,6 +23177,7 @@ async function confirmCashOpening() {
   cashSession.open = true;
   cashSession.openedAt = new Date().toISOString();
   pushCustomerState();
+  primeFastTicketPredictorOnCashOpen().catch(() => {});
 
   let openQueued = false;
   try {
@@ -25878,6 +25922,55 @@ function isFastTicketPredictorConfirmedThisSession() {
 // el ultimo numero real antes de pre-imprimir.
 function resetFastTicketPredictorConfirmation() {
   fastPreprintReadyThisSession = false;
+}
+
+// Feedback de cliente real: el primer cobro de cada sesion de caja siempre
+// era mas lento de imprimir (a proposito -- ver comentario de
+// fastPreprintReadyThisSession: no se fia del numero en cache hasta
+// confirmar uno real, por si otro terminal avanzo la numeracion mientras la
+// caja estaba cerrada). En vez de esperar a esa primera venta real para
+// enterarse del ultimo numero, se pregunta a FacturaScripts en segundo
+// plano justo AL ABRIR CAJA (antes de que llegue el primer cliente), para
+// las 2 unicas series que usa este TPV (ver normalizePaySeriesRows: "S"
+// Simplificada y "A" General). Si se consigue, el primer cobro de esa
+// sesion ya puede pre-imprimir rapido tambien. Si algo falla (sin
+// internet, sin facturas previas en esa serie...) no pasa nada: ese primer
+// cobro sigue el camino de siempre -- este precalentamiento solo puede
+// acelerar, nunca predecir mal, porque usa el mismo
+// updateFastTicketNumberByConfirmedCode que ya usa una venta real.
+async function primeFastTicketPredictorOnCashOpen() {
+  const terminalId = currentTerminal?.id || null;
+  if (!terminalId) return;
+
+  let anyPrimed = false;
+
+  for (const codserie of ["S", "A"]) {
+    try {
+      const rows = await fetchApiResourceWithParams("facturaclientes", {
+        "filter[codserie]": codserie,
+        limit: 1,
+        "sort[idfactura]": "DESC",
+      });
+      const last = Array.isArray(rows) ? rows[0] : null;
+      if (!last || !last.codigo) continue;
+
+      updateFastTicketNumberByConfirmedCode({
+        codigo: last.codigo,
+        codserie,
+        numero2: "",
+        idfactura: last.idfactura || null,
+        terminalId,
+      });
+      anyPrimed = true;
+    } catch (e) {
+      console.warn(
+        `No se pudo precalentar el numero de ticket (serie ${codserie}) al abrir caja:`,
+        e?.message || e,
+      );
+    }
+  }
+
+  if (anyPrimed) markFastTicketPredictorConfirmed();
 }
 
 const optionsBtn = document.getElementById("optionsBtn");
@@ -33376,14 +33469,19 @@ async function setProductVentasInStock(idProducto, enabled) {
   }
 }
 
-// Comprueba, con el stock mas fresco posible, si el carrito intenta vender
-// mas cantidad de la disponible en algun producto que en FacturaScripts NO
-// tiene permitido vender sin stock. Devuelve null si todo bien, o la lista
-// de productos problematicos (para poder ofrecer el override "cobrar sin
-// stock" y saber a que productos aplicarlo).
+// Comprueba, con el stock ya cacheado en local, si el carrito intenta
+// vender mas cantidad de la disponible en algun producto que en
+// FacturaScripts NO tiene permitido vender sin stock. Devuelve null si todo
+// bien, o la lista de productos problematicos (para poder ofrecer el
+// override "cobrar sin stock" y saber a que productos aplicarlo).
 async function checkCartStockProblems(cart) {
-  await refreshProductsStockOnly().catch(() => {});
-
+  // Feedback de cliente real: pulsar "Cobrar" tardaba en abrir el modal de
+  // pago porque, antes de dejarlo aparecer, se forzaba SIEMPRE una peticion
+  // nueva a FacturaScripts para refrescar el stock -- aunque el ciclo de
+  // fondo (cada 10s, con delta-sync) ya lo tuviera fresco de sobra. El
+  // stock local ya nunca tiene mas de ~10s de antiguedad; usarlo tal cual
+  // deja abrir el modal al instante, con el mismo margen de "alguien vende
+  // la ultima unidad justo ahora" que ya existia con el propio ciclo.
   const requestedByProduct = new Map();
 
   (Array.isArray(cart) ? cart : []).forEach((item) => {
