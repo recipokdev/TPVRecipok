@@ -1622,6 +1622,48 @@ console.log(
 }
 
 console.log(
+  "\n[SMOKE] Checking 2026-08-26 the payment modal itself no longer waits on a formas-de-pago refetch every time\n",
+);
+
+// Feedback de cliente real, tras probarlo en real: quitar el refresco de
+// stock (arriba) no bastaba -- el propio modal de cobro (openPayModal)
+// esperaba ADEMAS a pedir las formas de pago (efectivo, tarjeta...) a
+// FacturaScripts en CADA cobro, aunque casi nunca cambian. Ahora usa la
+// copia ya guardada en cache (si existe) al instante, y la refresca de
+// fondo para la proxima vez -- solo la primerisima vez (cache vacia de
+// verdad) espera a la red, igual que ya hacia ensurePaySeriesLoaded con
+// las series.
+{
+  const idx = renderer.indexOf("async function openPayModal(total) {");
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nasync function ", idx + 10) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped.includes("const cachedFormasPago = loadPayMethodsCache();") &&
+    scoped.includes("formas = cachedFormasPago;") &&
+    scoped.includes("fetchFormasPagoActivas().catch(") &&
+    scoped.includes("formas = await fetchFormasPagoActivas();")
+  ) {
+    ok(
+      "openPayModal uses the cached formas de pago instantly when available, refreshing in the background, and only awaits a real fetch the very first time",
+    );
+  } else {
+    fail(
+      "openPayModal uses the cached formas de pago instantly when available, refreshing in the background, and only awaits a real fetch the very first time",
+    );
+  }
+}
+mustContain(
+  renderer,
+  "fetchFormasPagoActivas().catch(() => {});",
+  "confirmCashOpening also warms up formas de pago in the background at cash-open, so even the very first payment of the session can be instant",
+);
+mustContain(
+  renderer,
+  "ensurePaySeriesLoaded().catch(() => {});",
+  "confirmCashOpening also warms up the invoice series list in the background at cash-open",
+);
+
+console.log(
   "\n[SMOKE] Checking 2026-08-26 aparcar a customer no longer blocks the cart for the next one\n",
 );
 

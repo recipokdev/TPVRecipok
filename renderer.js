@@ -23178,6 +23178,13 @@ async function confirmCashOpening() {
   cashSession.openedAt = new Date().toISOString();
   pushCustomerState();
   primeFastTicketPredictorOnCashOpen().catch(() => {});
+  // Mismo motivo que arriba: que el modal de "Cobrar" no tenga que esperar
+  // a pedir formas de pago/series a FacturaScripts ni siquiera la primera
+  // vez de la sesion. Ambas ya se cachean solas (formas de pago en
+  // localStorage, series en memoria) para las siguientes veces; esto solo
+  // adelanta esa primera carga a antes de que llegue el primer cliente.
+  fetchFormasPagoActivas().catch(() => {});
+  ensurePaySeriesLoaded().catch(() => {});
 
   let openQueued = false;
   try {
@@ -38265,8 +38272,30 @@ async function openPayModal(total) {
       : "Confirmar Pago";
   }
 
-  // cargar formas de pago reales
-  const formas = await fetchFormasPagoActivas();
+  // Feedback de cliente real: el modal de cobro no se hacia visible hasta
+  // terminar de pedir las formas de pago a FacturaScripts -- otro viaje de
+  // red obligatorio en CADA cobro, aunque las formas de pago (efectivo,
+  // tarjeta...) casi nunca cambian de un cobro a otro. Si ya hay una copia
+  // en la cache persistente (de un cobro anterior, esta misma sesion o una
+  // pasada), se usa esa YA, sin esperar nada, y se refresca de fondo para
+  // la proxima vez. Solo si no hay nada en cache todavia (primerisima vez)
+  // hay que esperar de verdad -- igual que ya se hace para las series.
+  const cachedFormasPago = loadPayMethodsCache();
+  let formas;
+  if (Array.isArray(cachedFormasPago) && cachedFormasPago.length) {
+    formas = cachedFormasPago;
+    CASH_CODPAGOS = buildCashCodpagosFromFormapagos(cachedFormasPago);
+    window.__CASH_CODPAGOS__ = Array.from(CASH_CODPAGOS);
+    fetchFormasPagoActivas().catch((e) => {
+      console.warn(
+        "No se pudo refrescar formas de pago de fondo:",
+        e?.message || e,
+      );
+    });
+  } else {
+    formas = await fetchFormasPagoActivas();
+  }
+
   payModalState.formas = (formas || [])
     .map((f) => ({
       codpago: String(f.codpago || "").trim(),
