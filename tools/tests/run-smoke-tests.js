@@ -1658,6 +1658,48 @@ console.log(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-26 first sale of a cash session can also print fast, not just the second one\n",
+);
+
+// Feedback de cliente real: el primer cobro de cada sesion de caja era mas
+// lento de imprimir a proposito (no se fiaba del numero en cache hasta
+// confirmar uno real con FacturaScripts). Ahora, al abrir caja, se pregunta
+// en segundo plano cual es el ultimo numero real para las 2 series que usa
+// este TPV (S y A), asi que el primer cobro tambien puede pre-imprimir
+// rapido si eso funciona -- y si falla (sin internet, sin historico), no
+// rompe nada, simplemente no acelera ese primer cobro.
+mustContain(
+  renderer,
+  "async function primeFastTicketPredictorOnCashOpen() {",
+  "primeFastTicketPredictorOnCashOpen helper exists",
+);
+{
+  const idx = renderer.indexOf(
+    "async function primeFastTicketPredictorOnCashOpen() {",
+  );
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nasync function ", idx + 10) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped.includes('for (const codserie of ["S", "A"]) {') &&
+    scoped.includes("updateFastTicketNumberByConfirmedCode({") &&
+    scoped.includes("if (anyPrimed) markFastTicketPredictorConfirmed();")
+  ) {
+    ok(
+      "primeFastTicketPredictorOnCashOpen warms up both series (S and A) using the same confirmation path a real sale uses, and only marks the session confirmed if at least one succeeded",
+    );
+  } else {
+    fail(
+      "primeFastTicketPredictorOnCashOpen warms up both series (S and A) using the same confirmation path a real sale uses, and only marks the session confirmed if at least one succeeded",
+    );
+  }
+}
+mustContain(
+  renderer,
+  "primeFastTicketPredictorOnCashOpen().catch(() => {});",
+  "confirmCashOpening triggers the ticket-number warm-up in the background right when the cash session opens",
+);
+
 mustContain(
   renderer,
   "async function setProductVentasInStock(idProducto, enabled)",

@@ -23177,6 +23177,7 @@ async function confirmCashOpening() {
   cashSession.open = true;
   cashSession.openedAt = new Date().toISOString();
   pushCustomerState();
+  primeFastTicketPredictorOnCashOpen().catch(() => {});
 
   let openQueued = false;
   try {
@@ -25921,6 +25922,55 @@ function isFastTicketPredictorConfirmedThisSession() {
 // el ultimo numero real antes de pre-imprimir.
 function resetFastTicketPredictorConfirmation() {
   fastPreprintReadyThisSession = false;
+}
+
+// Feedback de cliente real: el primer cobro de cada sesion de caja siempre
+// era mas lento de imprimir (a proposito -- ver comentario de
+// fastPreprintReadyThisSession: no se fia del numero en cache hasta
+// confirmar uno real, por si otro terminal avanzo la numeracion mientras la
+// caja estaba cerrada). En vez de esperar a esa primera venta real para
+// enterarse del ultimo numero, se pregunta a FacturaScripts en segundo
+// plano justo AL ABRIR CAJA (antes de que llegue el primer cliente), para
+// las 2 unicas series que usa este TPV (ver normalizePaySeriesRows: "S"
+// Simplificada y "A" General). Si se consigue, el primer cobro de esa
+// sesion ya puede pre-imprimir rapido tambien. Si algo falla (sin
+// internet, sin facturas previas en esa serie...) no pasa nada: ese primer
+// cobro sigue el camino de siempre -- este precalentamiento solo puede
+// acelerar, nunca predecir mal, porque usa el mismo
+// updateFastTicketNumberByConfirmedCode que ya usa una venta real.
+async function primeFastTicketPredictorOnCashOpen() {
+  const terminalId = currentTerminal?.id || null;
+  if (!terminalId) return;
+
+  let anyPrimed = false;
+
+  for (const codserie of ["S", "A"]) {
+    try {
+      const rows = await fetchApiResourceWithParams("facturaclientes", {
+        "filter[codserie]": codserie,
+        limit: 1,
+        "sort[idfactura]": "DESC",
+      });
+      const last = Array.isArray(rows) ? rows[0] : null;
+      if (!last || !last.codigo) continue;
+
+      updateFastTicketNumberByConfirmedCode({
+        codigo: last.codigo,
+        codserie,
+        numero2: "",
+        idfactura: last.idfactura || null,
+        terminalId,
+      });
+      anyPrimed = true;
+    } catch (e) {
+      console.warn(
+        `No se pudo precalentar el numero de ticket (serie ${codserie}) al abrir caja:`,
+        e?.message || e,
+      );
+    }
+  }
+
+  if (anyPrimed) markFastTicketPredictorConfirmed();
 }
 
 const optionsBtn = document.getElementById("optionsBtn");
