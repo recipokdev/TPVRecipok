@@ -34213,12 +34213,108 @@ async function refreshProductsStockOnly() {
   }
 }
 
+// ===== Cola serial de procesamiento de ventas confirmadas =====
+// apiUpdateCajaAfterSale calcula el nuevo total acumulado de caja en LOCAL
+// y lo SOBREESCRIBE entero con un PUT (no es un incremento en el
+// servidor). Si dos ventas lo llamaran a la vez y sus respuestas llegaran
+// desordenadas, la que llega despues podria pisar/perder el importe de la
+// que llego antes, sin ningun aviso. Por eso el procesamiento de cada venta
+// confirmada (todo lo que va DESPUES de que el carrito ya se vacio para el
+// siguiente cliente) se encola aqui y se procesa una detras de otra, nunca
+// dos a la vez, aunque el operario haya confirmado varios cobros seguidos.
+let __saleProcessingQueue = Promise.resolve();
+function enqueueSaleProcessing(taskFn) {
+  const run = __saleProcessingQueue.then(() => taskFn());
+  __saleProcessingQueue = run.catch(() => {});
+  return run;
+}
+
+// Si una venta encolada falla DESPUES de que el operario ya haya seguido
+// con el siguiente cliente (el carrito ya no es el de esta venta), no se
+// puede "devolver" sus productos al carrito EN VIVO como se hacia antes --
+// se mezclarian con lo que el operario este montando ahora mismo. En vez de
+// eso, se recupera como un aparcado nuevo (con los mismos datos que iban a
+// facturarse) para que se pueda revisar y volver a cobrar sin perder nada
+// ni tocar el carrito actual.
+async function parkFailedSaleForRetry(cartSnapshot, ticketPayload, reason) {
+  try {
+    const items = Array.isArray(cartSnapshot)
+      ? cartSnapshot.map((i) => ({ ...i }))
+      : [];
+    if (!items.length) return null;
+
+    const nextDisplayNo = getNextSuggestedParkTicketDisplayNo();
+    const nextTicketId = getNextSuggestedParkTicketId();
+    parkedCounter = nextDisplayNo;
+    saveParkedGlobalCounter(parkedCounter);
+    saveParkedGlobalIdCounter(nextTicketId);
+
+    const total = Number(
+      ticketPayload?.total || getCartTotal(items) || 0,
+    );
+
+    const localTicket = {
+      id: nextTicketId,
+      displayNo: nextDisplayNo,
+      slug: String(getCurrentSlugForReservations() || "").trim(),
+      cajaId: String(getCajaIdSafe?.() || currentTerminal?.id || "").trim(),
+      createdAt: new Date(),
+      updatedAt: null,
+      localRevisionAt: Date.now(),
+      items,
+      total,
+      codcliente: String(ticketPayload?.codcliente || "1").trim() || "1",
+      clientName: "Cliente",
+      docType: "ticket",
+      name: `Cobro fallido #${nextDisplayNo}`,
+      obs: `Recuperado automaticamente tras un fallo al cobrar: ${String(reason || "").slice(0, 200)}`,
+      parkingMode: PARKED_MODE_TPV,
+      modoMesas: 0,
+      modeMesas: 0,
+      paid: false,
+      paidAt: null,
+      paidTicketCode: null,
+      paidTicketId: null,
+      fs: null,
+    };
+    clearMesaScopeFromTicket(localTicket);
+
+    parkedTickets.push(localTicket);
+    saveParkedTicketsCache();
+    refreshParkButtonUI();
+    updateParkedCountBadge();
+
+    try {
+      await apiSaveParkedReservation(localTicket);
+    } catch (e) {
+      enqueueParkedSyncOperation("upsert", localTicket);
+      console.warn(
+        "No se pudo guardar en el servidor la venta fallida recuperada como aparcado (se reintentara en segundo plano):",
+        e?.message || e,
+      );
+    }
+
+    logFeatureWarn("COBRO", "fallo-recuperado-como-aparcado", {
+      id: localTicket.id,
+      total,
+      reason: String(reason || "").slice(0, 200),
+    });
+
+    return localTicket;
+  } catch (e) {
+    console.error(
+      "No se pudo recuperar automaticamente una venta fallida como aparcado:",
+      e?.message || e,
+    );
+    return null;
+  }
+}
+
 async function onPayButtonClick() {
   const requestId = createRequestId("PAY");
 
   let cartSnapshot = [];
   let saleLineIds = new Set();
-  let saleCommitted = false;
   let didFastAutoPrint = false;
   let fastPreApiPrintedNumber = "";
   let releaseParkedCheckoutLock = null;
@@ -34625,6 +34721,107 @@ async function onPayButtonClick() {
       window.CUSTOMER_SELECTOR?.resetToDefault?.();
     } catch {}
 
+    // A partir de aqui el carrito ya esta libre para el siguiente cliente.
+    // Mandar la factura de verdad, recibos, actualizar caja, imprimir y
+    // marcar el aparcado como cobrado se procesa en segundo plano, en la
+    // cola serial (ver enqueueSaleProcessing arriba), sin bloquear al
+    // operario para nada de esto.
+    enqueueSaleProcessing(() =>
+      processConfirmedSale({
+        requestId,
+        ticketPayload,
+        cartSnapshot,
+        saleLineIds,
+        pagosFinal,
+        primary,
+        tpv_cambio,
+        tpv_efectivo,
+        cashTicketMeta,
+        totalCart,
+        payResult,
+        stockOverrideProductIds,
+        parkedTicketFallbackForMark,
+        resolveParkedIndexForMark,
+        releaseParkedCheckoutLock,
+        didFastAutoPrint,
+        fastPreApiPrintedNumber,
+      }),
+    );
+
+    return;
+  } catch (err) {
+    logFeatureError("COBRO", "error-fase1", err, {
+      requestId,
+      cartLines: cartSnapshot.length,
+      cajaId: getCajaIdSafe(),
+      terminalId: currentTerminal?.id || null,
+    });
+    console.error("Error al cobrar:", err);
+
+    // La fase 1 (validaciones, modal de pago, resolucion del aparcado...)
+    // nunca llega a tocar el carrito -- eso solo pasa justo antes de
+    // encolar la fase 2, un poco mas arriba. Si algo falla aqui, el
+    // carrito sigue intacto tal cual estaba: no hay nada que restaurar.
+    customerSetMode("CART");
+    let msg = String(err?.message || err || "Error desconocido").trim();
+    let errCode = "E_COBRO";
+
+    if (msg.toLowerCase().includes("stock")) {
+      errCode = "E_COBRO_STOCK";
+      msg =
+        "No se puede cobrar porque uno o varios productos no tienen stock disponible.";
+    } else if (msg.includes("E_COBRO_RESP_INVALIDA")) {
+      errCode = "E_COBRO_RESP_INVALIDA";
+      msg = msg.replace(/^E_COBRO_RESP_INVALIDA:\s*/i, "");
+    } else if (msg.toLowerCase().includes("429")) {
+      errCode = "E_COBRO_RATE_LIMIT";
+    } else if (msg.toLowerCase().includes("timeout")) {
+      errCode = "E_COBRO_TIMEOUT";
+    }
+
+    toast(`[${errCode}] ${msg}`, "err", "Cobrar");
+    setStatusText("Error al cobrar");
+
+    try {
+      releaseParkedCheckoutLock?.();
+    } catch {}
+    if (stockOverrideProductIds.length) {
+      // La fase 2 nunca llego a recibir estos recursos (el fallo fue antes
+      // de encolarla), asi que le toca a esta fase liberarlos.
+      Promise.all(
+        stockOverrideProductIds.map((id) => setProductVentasInStock(id, false)),
+      ).catch(() => {});
+    }
+  } finally {
+    isPayingNow = false;
+    refreshAgentGuardUI?.();
+  }
+}
+
+async function processConfirmedSale(ctx) {
+  const {
+    requestId,
+    ticketPayload,
+    cartSnapshot,
+    saleLineIds,
+    pagosFinal,
+    primary,
+    tpv_cambio,
+    tpv_efectivo,
+    cashTicketMeta,
+    totalCart,
+    payResult,
+    stockOverrideProductIds,
+    parkedTicketFallbackForMark,
+    resolveParkedIndexForMark,
+    releaseParkedCheckoutLock,
+    didFastAutoPrint,
+    fastPreApiPrintedNumber,
+  } = ctx;
+
+  let saleCommitted = false;
+
+  try {
     // 4) Enviar o encolar
     if (stockOverrideProductIds.length) {
       await Promise.all(
@@ -34741,7 +34938,8 @@ async function onPayButtonClick() {
     // ========= FALLO (no offline/encolado, tampoco éxito) =========
     // No es un problema de red (si lo fuera, habría caído en el bloque OFFLINE
     // de arriba), así que no se ha creado factura en FacturaScripts: NO marcamos
-    // saleCommitted para que el catch pueda restaurar el carrito, y propagamos el
+    // saleCommitted, para que el catch recupere esta venta como aparcado (ver
+    // parkFailedSaleForRetry) en vez de darla por cobrada. Propagamos el
     // error real de sendOrQueueFactura en vez de uno genérico que lo enmascaraba
     // (eso hacía que el ticket se quedara "sin cobrar" y se pudiera volver a
     // cobrar por duplicado en otro TPV).
@@ -35065,14 +35263,8 @@ async function onPayButtonClick() {
       cajaId: getCajaIdSafe(),
       terminalId: currentTerminal?.id || null,
     });
-    console.error("Error al cobrar:", err);
+    console.error("Error al cobrar (fase 2, en cola):", err);
 
-    if (!saleCommitted && cartSnapshot.length) {
-      restoreCartSnapshotWithoutDuplicates(cartSnapshot);
-      renderCart();
-    }
-
-    customerSetMode("CART");
     let msg = String(err?.message || err || "Error desconocido").trim();
     let errCode = "E_COBRO";
 
@@ -35089,13 +35281,30 @@ async function onPayButtonClick() {
       errCode = "E_COBRO_TIMEOUT";
     }
 
-    toast(`[${errCode}] ${msg}`, "err", "Cobrar");
-    setStatusText("Error al cobrar");
+    // El carrito EN VIVO, a estas alturas, ya no es el de esta venta -- el
+    // operario puede llevar rato con el siguiente cliente. Restaurarlo aqui
+    // (como se hacia antes de la cola) mezclaria los productos de esta
+    // venta fallida con lo que el operario este montando ahora mismo. En su
+    // lugar, se recupera como un aparcado nuevo para poder revisarlo y
+    // volver a cobrarlo cuando quieran, sin tocar el carrito actual.
+    let recoveredTicket = null;
+    if (!saleCommitted && cartSnapshot.length) {
+      recoveredTicket = await parkFailedSaleForRetry(
+        cartSnapshot,
+        ticketPayload,
+        msg,
+      );
+    }
 
-    // Si falló el cobro, limpiar estado pendiente para no imprimir borradores o tickets previos.
-    window.__POSTPAY_PENDING__ = null;
-    if (isPostPayOpen()) {
-      setPostPayPrintEnabled(!!lastTicket);
+    if (recoveredTicket) {
+      showMessageModal(
+        "Cobro fallido -- venta recuperada",
+        `No se pudo completar un cobro de ${eurES(Number(recoveredTicket.total || 0))} que se estaba procesando en segundo plano.\n\n` +
+          `Motivo: [${errCode}] ${msg}\n\n` +
+          `Se ha guardado como aparcado ("${recoveredTicket.name}") para revisarlo y volver a cobrarlo cuando quieras.`,
+      );
+    } else {
+      toast(`[${errCode}] ${msg}`, "err", "Cobrar");
     }
   } finally {
     try {
@@ -35109,8 +35318,6 @@ async function onPayButtonClick() {
         stockOverrideProductIds.map((id) => setProductVentasInStock(id, false)),
       ).catch(() => {});
     }
-    isPayingNow = false;
-    refreshAgentGuardUI?.();
   }
 }
 
