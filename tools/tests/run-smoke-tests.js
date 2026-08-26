@@ -3505,6 +3505,32 @@ console.log("\n[SMOKE] Checking 2026-08-26 ticket list no longer shows a broken 
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-08-26 Options tariff/customer data is warmed up on cash open\n");
+
+{
+  const warmupCallSites = renderer.split("ensureCustomerTariffsLoaded().catch(() => {});").length - 1;
+  if (warmupCallSites >= 3) {
+    ok(
+      `Options tariff data (ensureCustomerTariffsLoaded) is warmed up in the background at all cash-open/recovery sites (found ${warmupCallSites})`,
+    );
+  } else {
+    fail(
+      `Options tariff data (ensureCustomerTariffsLoaded) is warmed up in the background at all cash-open/recovery sites (found ${warmupCallSites}, expected >= 3)`,
+    );
+  }
+
+  const customerWarmupCallSites = renderer.split("loadTariffCustomersCache().catch(() => {});").length - 1;
+  if (customerWarmupCallSites >= 3) {
+    ok(
+      `Options tariff-customers data (loadTariffCustomersCache) is warmed up alongside it (found ${customerWarmupCallSites})`,
+    );
+  } else {
+    fail(
+      `Options tariff-customers data (loadTariffCustomersCache) is warmed up alongside it (found ${customerWarmupCallSites}, expected >= 3)`,
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

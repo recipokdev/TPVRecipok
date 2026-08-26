@@ -21636,6 +21636,8 @@ async function maybeOpenCashOrRecover() {
           primeFastTicketPredictorOnCashOpen().catch(() => {});
           fetchFormasPagoActivas().catch(() => {});
           ensurePaySeriesLoaded().catch(() => {});
+          ensureCustomerTariffsLoaded().catch(() => {});
+          loadTariffCustomersCache().catch(() => {});
           startPayMethodsAutoRefresh?.();
           return;
         }
@@ -21720,6 +21722,8 @@ async function maybeOpenCashOrRecover() {
           primeFastTicketPredictorOnCashOpen().catch(() => {});
           fetchFormasPagoActivas().catch(() => {});
           ensurePaySeriesLoaded().catch(() => {});
+          ensureCustomerTariffsLoaded().catch(() => {});
+          loadTariffCustomersCache().catch(() => {});
           startPayMethodsAutoRefresh?.();
 
           // opcional: avisar si hay más de una abierta (caso raro)
@@ -23264,6 +23268,14 @@ async function confirmCashOpening() {
   // adelanta esa primera carga a antes de que llegue el primer cliente.
   fetchFormasPagoActivas().catch(() => {});
   ensurePaySeriesLoaded().catch(() => {});
+  // Misma idea, para "Opciones": las tarifas de cliente (para el gestor de
+  // tarifas dentro de Opciones) tambien se cargan una vez y se quedan en
+  // memoria (ver tariffsLoadedOnce), pero antes esa primera carga real solo
+  // se disparaba al abrir Opciones por primera vez -- de ahi que la primera
+  // vez tardara un poco mas que las siguientes. Adelantandola aqui, para
+  // cuando se abra Opciones ya deberia estar lista.
+  ensureCustomerTariffsLoaded().catch(() => {});
+  loadTariffCustomersCache().catch(() => {});
 
   let openQueued = false;
   try {
