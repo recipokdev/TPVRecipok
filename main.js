@@ -2047,6 +2047,21 @@ if (process.platform === "linux") {
   app.commandLine.appendSwitch("disable-setuid-sandbox");
 }
 
+if (IS_E2E) {
+  // Los runners de E2E (sandboxed, sin GPU real) hacen que el proceso de
+  // GPU (y a veces el de red) de Electron se caiga a media prueba ("Target
+  // crashed"). Nunca pasa en un PC real (esto solo se activa con
+  // TPV_E2E=1, que el instalador normal jamas pone), asi que desactivar
+  // aceleracion por hardware y el sandbox de Chromium aqui es seguro y no
+  // cambia nada del comportamiento en produccion.
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch("disable-gpu");
+  app.commandLine.appendSwitch("disable-software-rasterizer");
+  app.commandLine.appendSwitch("no-sandbox");
+  app.commandLine.appendSwitch("disable-setuid-sandbox");
+  app.commandLine.appendSwitch("disable-dev-shm-usage");
+}
+
 if (process.platform === "win32") {
   const ch = readChannel();
   app.setAppUserModelId(
