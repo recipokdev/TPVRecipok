@@ -40,6 +40,7 @@ const mesasJsPath = ensureFileExists("mesas/mesas.js");
 const customerSelectorPath = ensureFileExists(
   "js/tpv/ui/customer_selector/customer_selector.js",
 );
+const scaleUiPath = ensureFileExists("js/tpv/scale/scale-ui.js");
 const checklistPath = ensureFileExists("tools/tests/cash-smoke-checklist.md");
 
 if (
@@ -51,6 +52,7 @@ if (
   !ticketPrintPath ||
   !mesasJsPath ||
   !customerSelectorPath ||
+  !scaleUiPath ||
   !checklistPath
 ) {
   process.exit(1);
@@ -64,6 +66,7 @@ const preload = fs.readFileSync(preloadPath, "utf8");
 const ticketPrint = fs.readFileSync(ticketPrintPath, "utf8");
 const customerSelector = fs.readFileSync(customerSelectorPath, "utf8");
 const mesasJs = fs.readFileSync(mesasJsPath, "utf8");
+const scaleUi = fs.readFileSync(scaleUiPath, "utf8");
 
 console.log("\n[SMOKE] Checking key flows in renderer.js\n");
 
@@ -3576,6 +3579,49 @@ console.log("\n[SMOKE] Checking 2026-08-26 openOptions loads its ~30 settings in
     );
   }
 }
+
+console.log("\n[SMOKE] Checking 2026-08-26 scale serial-port list is cached, not re-queried every time Options opens\n");
+
+mustContain(
+  scaleUi,
+  "let __scalePortsCache = null;",
+  "Scale ports cache state exists",
+);
+mustContain(
+  scaleUi,
+  "async function warmUpScalePorts() {",
+  "warmUpScalePorts helper exists",
+);
+mustContain(
+  renderer,
+  "window.warmUpScalePorts?.()?.catch(() => {});",
+  "runBootFlow warms up the scale port list in the background at boot, not just when Options opens",
+);
+
+{
+  const idx = scaleUi.indexOf('async function refreshScalePorts(selectedPath = "", opts = {}) {');
+  const endIdx = idx >= 0 ? scaleUi.indexOf("function renderScalePortsOptions(", idx) : -1;
+  const scoped = idx >= 0 && endIdx > idx ? scaleUi.slice(idx, endIdx) : "";
+
+  if (
+    scoped.includes("if (!force && Array.isArray(__scalePortsCache)) {") &&
+    scoped.includes("const ports = await fetchScalePorts();")
+  ) {
+    ok(
+      "refreshScalePorts reuses the cached port list by default, only calling the OS-level listPorts() when forced or uncached",
+    );
+  } else {
+    fail(
+      "refreshScalePorts reuses the cached port list by default, only calling the OS-level listPorts() when forced or uncached",
+    );
+  }
+}
+
+mustContain(
+  scaleUi,
+  "await refreshScalePorts(current, { force: true });",
+  "The manual 'Refrescar puertos' button still forces a real OS-level re-query, bypassing the cache",
+);
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 

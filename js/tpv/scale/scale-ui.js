@@ -19,6 +19,14 @@
   let unsubscribeScaleState = null;
   let scaleUiInitialized = false;
   let scaleAdvancedOpen = false;
+  // Listar puertos serie es una llamada al SO (enumera dispositivos COM/USB)
+  // que puede tardar segundos en maquinas con varios perifericos. Los
+  // puertos disponibles casi nunca cambian mientras el TPV esta arrancado,
+  // asi que se cachea aqui: se precalienta una vez al arrancar (ver
+  // warmUpScalePorts) y "Opciones" reutiliza ese resultado en vez de volver
+  // a preguntar al SO cada vez que se abre. El boton "Refrescar puertos" SI
+  // fuerza una consulta real, por si se acaba de enchufar algo.
+  let __scalePortsCache = null;
 
   function $id(id) {
     return document.getElementById(id);
@@ -279,15 +287,37 @@
     if (rawEl) rawEl.textContent = state.lastRaw || "—";
   }
 
-  async function refreshScalePorts(selectedPath = "") {
+  async function fetchScalePorts() {
+    const res = await window.TPV_SCALE.listPorts();
+    return Array.isArray(res?.ports) ? res.ports : [];
+  }
+
+  async function warmUpScalePorts() {
+    try {
+      __scalePortsCache = await fetchScalePorts();
+    } catch (e) {
+      console.warn("No se pudo precalentar la lista de puertos serie:", e?.message || e);
+    }
+  }
+
+  async function refreshScalePorts(selectedPath = "", opts = {}) {
     const select = $id("scalePortSelect");
     if (!select) return;
 
     const currentValue = selectedPath || String(select.value || "").trim();
 
-    const res = await window.TPV_SCALE.listPorts();
-    const ports = Array.isArray(res?.ports) ? res.ports : [];
+    const force = !!opts?.force;
+    if (!force && Array.isArray(__scalePortsCache)) {
+      renderScalePortsOptions(select, __scalePortsCache, currentValue);
+      return;
+    }
 
+    const ports = await fetchScalePorts();
+    __scalePortsCache = ports;
+    renderScalePortsOptions(select, ports, currentValue);
+  }
+
+  function renderScalePortsOptions(select, ports, currentValue) {
     select.innerHTML = "";
 
     const emptyOpt = document.createElement("option");
@@ -529,7 +559,7 @@
 
       refreshBtn.addEventListener("click", async () => {
         const current = String(portEl.value || "").trim();
-        await refreshScalePorts(current);
+        await refreshScalePorts(current, { force: true });
       });
 
       reconnectBtn.addEventListener("click", async () => {
@@ -554,4 +584,5 @@
   }
 
   window.initScaleOptionsUI = initScaleOptionsUI;
+  window.warmUpScalePorts = warmUpScalePorts;
 })();
