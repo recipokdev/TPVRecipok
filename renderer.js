@@ -10317,14 +10317,6 @@ async function runBootFlow() {
     const okLogin = await ensureLoginAutoOrPrompt();
     if (!okLogin) return false;
 
-    // Listar puertos serie (para la báscula) es una consulta al SO que
-    // puede tardar varios segundos en máquinas con varios periféricos, y
-    // "Opciones" la repetía cada vez que se abría aunque los puertos
-    // disponibles no cambien mientras el TPV está arrancado. Se precalienta
-    // aquí, en segundo plano (sin esperarla), para que para cuando se abra
-    // Opciones ya esté en caché -- ver __scalePortsCache en scale-ui.js.
-    window.warmUpScalePorts?.()?.catch(() => {});
-
     // Cargar preferencia de visibilidad de stock antes de pintar UI principal.
     await loadProductStockToggle?.();
     await loadProductStockEditionToggle?.();
@@ -26709,6 +26701,14 @@ function bindOptionsAccordionOnce() {
 
     const isOpen = sec.dataset.open === "1";
     sec.dataset.open = isOpen ? "0" : "1";
+
+    // Enumerar los puertos serie (para la bascula) es lento y la mayoria de
+    // clientes no tiene bascula -- initScaleOptionsUI ya lo deja pendiente
+    // si esta seccion no estaba abierta al entrar en Opciones. Si es justo
+    // ahora cuando se despliega, se resuelve esa carga pendiente.
+    if (key === "bascula" && !isOpen) {
+      window.ensureScalePortsLoadedOnSectionOpen?.()?.catch(() => {});
+    }
 
     // persistir
     const state = await loadOptionsAccordionState();

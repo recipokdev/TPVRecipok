@@ -22,10 +22,12 @@
   // Listar puertos serie es una llamada al SO (enumera dispositivos COM/USB)
   // que puede tardar segundos en maquinas con varios perifericos. Los
   // puertos disponibles casi nunca cambian mientras el TPV esta arrancado,
-  // asi que se cachea aqui: se precalienta una vez al arrancar (ver
-  // warmUpScalePorts) y "Opciones" reutiliza ese resultado en vez de volver
-  // a preguntar al SO cada vez que se abre. El boton "Refrescar puertos" SI
-  // fuerza una consulta real, por si se acaba de enchufar algo.
+  // asi que se cachea aqui la primera vez que de verdad hace falta (al
+  // abrir/desplegar la seccion "Bascula" en Opciones -- ver
+  // ensureScalePortsLoadedOnSectionOpen), no para todos los clientes al
+  // arrancar (la mayoria no tiene bascula y nunca abre esa seccion). El
+  // boton "Refrescar puertos" SI fuerza una consulta real, por si se acaba
+  // de enchufar algo.
   let __scalePortsCache = null;
 
   function $id(id) {
@@ -292,14 +294,6 @@
     return Array.isArray(res?.ports) ? res.ports : [];
   }
 
-  async function warmUpScalePorts() {
-    try {
-      __scalePortsCache = await fetchScalePorts();
-    } catch (e) {
-      console.warn("No se pudo precalentar la lista de puertos serie:", e?.message || e);
-    }
-  }
-
   async function refreshScalePorts(selectedPath = "", opts = {}) {
     const select = $id("scalePortSelect");
     if (!select) return;
@@ -399,9 +393,19 @@
     }
   }
 
-  async function syncScaleUiFromStoredConfig() {
+  // Rellenar el formulario con lo guardado es una simple lectura local
+  // (cfg:get) -- rapida, y se hace siempre que se abre "Opciones". Lo unico
+  // lento de verdad es enumerar los puertos serie del SO (refreshScalePorts,
+  // salvo que ya este en cache) y el intento de reconexion -- eso solo hace
+  // falta si el operario de verdad va a mirar/tocar la seccion "Bascula",
+  // asi que se separa en su propia funcion (ver ensureScalePortsLoadedAndConnected).
+  async function applyScaleFormFromStoredConfig() {
     const cfg = await getStoredScaleConfig();
     applyConfigToForm(cfg);
+    return cfg;
+  }
+
+  async function ensureScalePortsLoadedAndConnected(cfg) {
     await refreshScalePorts(cfg.portPath);
 
     if (cfg.enabled && cfg.portPath) {
@@ -428,6 +432,26 @@
     if (stateRes?.ok && stateRes.state) {
       updateScaleStateUi(stateRes.state);
     }
+  }
+
+  async function syncScaleUiFromStoredConfig() {
+    const cfg = await applyScaleFormFromStoredConfig();
+    await ensureScalePortsLoadedAndConnected(cfg);
+  }
+
+  // Config pendiente de la parte lenta (puertos + reconexion) cuando
+  // "Opciones" se abre con la seccion "Bascula" todavia cerrada -- se
+  // resuelve en cuanto el operario la abra (ver ensureScalePortsLoadedOnSectionOpen,
+  // enganchado desde el acordeon de Opciones en renderer.js). La conexion
+  // real de la bascula (para pesar en el carrito) NO depende de esto: la
+  // mantiene aparte, siempre, el monitor de reconexion del proceso principal.
+  let __pendingScaleConfigForLazyLoad = null;
+
+  async function ensureScalePortsLoadedOnSectionOpen() {
+    if (!__pendingScaleConfigForLazyLoad) return;
+    const cfg = __pendingScaleConfigForLazyLoad;
+    __pendingScaleConfigForLazyLoad = null;
+    await ensureScalePortsLoadedAndConnected(cfg);
   }
 
   async function initScaleOptionsUI() {
@@ -580,9 +604,24 @@
     }
 
     setScaleAdvancedOpen(false);
-    await syncScaleUiFromStoredConfig();
+
+    const cfg = await applyScaleFormFromStoredConfig();
+
+    // La mayoria de clientes no tienen bascula y nunca abren esta seccion:
+    // no tiene sentido que paguen el coste de enumerar puertos serie cada
+    // vez que abren "Opciones". Si la seccion ya esta desplegada ahora
+    // mismo, se carga ya; si no, se deja pendiente para cuando el operario
+    // la abra de verdad.
+    const bascSection = document.querySelector(
+      '#optionsAccordion .opt-sec[data-sec="bascula"]',
+    );
+    if (bascSection?.dataset?.open === "1") {
+      await ensureScalePortsLoadedAndConnected(cfg);
+    } else {
+      __pendingScaleConfigForLazyLoad = cfg;
+    }
   }
 
   window.initScaleOptionsUI = initScaleOptionsUI;
-  window.warmUpScalePorts = warmUpScalePorts;
+  window.ensureScalePortsLoadedOnSectionOpen = ensureScalePortsLoadedOnSectionOpen;
 })();

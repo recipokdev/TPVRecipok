@@ -3580,7 +3580,7 @@ console.log("\n[SMOKE] Checking 2026-08-26 openOptions loads its ~30 settings in
   }
 }
 
-console.log("\n[SMOKE] Checking 2026-08-26 scale serial-port list is cached, not re-queried every time Options opens\n");
+console.log("\n[SMOKE] Checking 2026-08-26 scale serial-port list is only queried lazily, when the Bascula section is actually opened\n");
 
 mustContain(
   scaleUi,
@@ -3589,14 +3589,89 @@ mustContain(
 );
 mustContain(
   scaleUi,
-  "async function warmUpScalePorts() {",
-  "warmUpScalePorts helper exists",
+  "async function applyScaleFormFromStoredConfig() {",
+  "applyScaleFormFromStoredConfig (fast, local-only) exists separately from the slow port-listing path",
 );
 mustContain(
-  renderer,
-  "window.warmUpScalePorts?.()?.catch(() => {});",
-  "runBootFlow warms up the scale port list in the background at boot, not just when Options opens",
+  scaleUi,
+  "async function ensureScalePortsLoadedAndConnected(cfg) {",
+  "ensureScalePortsLoadedAndConnected (the slow OS-level port listing + reconnect) exists as its own function",
 );
+mustContain(
+  scaleUi,
+  "let __pendingScaleConfigForLazyLoad = null;",
+  "Scale port loading can be deferred until the Bascula section is actually opened",
+);
+mustContain(
+  scaleUi,
+  "async function ensureScalePortsLoadedOnSectionOpen() {",
+  "ensureScalePortsLoadedOnSectionOpen helper exists, exposed for the accordion click handler",
+);
+mustContain(
+  scaleUi,
+  "window.ensureScalePortsLoadedOnSectionOpen = ensureScalePortsLoadedOnSectionOpen;",
+  "ensureScalePortsLoadedOnSectionOpen is exposed on window for renderer.js's accordion handler",
+);
+
+{
+  // Ningun cliente sin bascula deberia pagar el coste de enumerar puertos
+  // serie solo por abrir "Opciones" -- initScaleOptionsUI solo debe cargar
+  // los puertos si la seccion Bascula ya esta desplegada, dejandolo
+  // pendiente en caso contrario.
+  const idx = scaleUi.indexOf("async function initScaleOptionsUI() {");
+  const endIdx = idx >= 0 ? scaleUi.indexOf("window.initScaleOptionsUI = initScaleOptionsUI;", idx) : -1;
+  const scoped = idx >= 0 && endIdx > idx ? scaleUi.slice(idx, endIdx) : "";
+
+  if (
+    scoped.includes('data-sec="bascula"') &&
+    scoped.includes('bascSection?.dataset?.open === "1"') &&
+    scoped.includes("await ensureScalePortsLoadedAndConnected(cfg);") &&
+    scoped.includes("__pendingScaleConfigForLazyLoad = cfg;")
+  ) {
+    ok(
+      "initScaleOptionsUI only does the slow port-listing work if the Bascula section is already open, deferring it otherwise",
+    );
+  } else {
+    fail(
+      "initScaleOptionsUI only does the slow port-listing work if the Bascula section is already open, deferring it otherwise",
+    );
+  }
+}
+
+{
+  const idx = renderer.indexOf("function bindOptionsAccordionOnce() {");
+  const endIdx = idx >= 0 ? renderer.indexOf("let autostartToggleBound", idx) : -1;
+  const scoped = idx >= 0 && endIdx > idx ? renderer.slice(idx, endIdx) : "";
+
+  if (
+    scoped.includes('if (key === "bascula" && !isOpen) {') &&
+    scoped.includes("window.ensureScalePortsLoadedOnSectionOpen?.()?.catch(() => {});")
+  ) {
+    ok(
+      "Opening the Bascula accordion section in Options triggers the deferred scale-port load",
+    );
+  } else {
+    fail(
+      "Opening the Bascula accordion section in Options triggers the deferred scale-port load",
+    );
+  }
+}
+
+{
+  const idx = renderer.indexOf("async function runBootFlow() {");
+  const endIdx = idx >= 0 ? renderer.indexOf("await loadDataFromApi();", idx) : -1;
+  const scoped = idx >= 0 && endIdx > idx ? renderer.slice(idx, endIdx) : "";
+
+  if (!scoped.includes("warmUpScalePorts")) {
+    ok(
+      "runBootFlow no longer eagerly warms up scale ports for every client, including those without a scale",
+    );
+  } else {
+    fail(
+      "runBootFlow no longer eagerly warms up scale ports for every client, including those without a scale",
+    );
+  }
+}
 
 {
   const idx = scaleUi.indexOf('async function refreshScalePorts(selectedPath = "", opts = {}) {');
