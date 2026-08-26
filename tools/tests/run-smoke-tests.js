@@ -3698,6 +3698,86 @@ mustContain(
   "The manual 'Refrescar puertos' button still forces a real OS-level re-query, bypassing the cache",
 );
 
+console.log("\n[SMOKE] Checking cobro en cola (serial background sale processing)\n");
+
+mustContain(
+  renderer,
+  "let __saleProcessingQueue = Promise.resolve();",
+  "A serial sale-processing queue exists",
+);
+mustContain(
+  renderer,
+  "function enqueueSaleProcessing(taskFn) {",
+  "enqueueSaleProcessing helper exists",
+);
+
+{
+  // onPayButtonClick debe encolar el resto del cobro (fase 2) justo despues
+  // de vaciar el carrito para el siguiente cliente, y devolver el control
+  // enseguida (return), en vez de esperar (await) a que la fase 2 termine --
+  // si no, "encolar en segundo plano" no seria real.
+  const idx = renderer.indexOf("async function onPayButtonClick() {");
+  const endIdx = idx >= 0 ? renderer.indexOf("async function processConfirmedSale(ctx) {", idx) : -1;
+  const scoped = idx >= 0 && endIdx > idx ? renderer.slice(idx, endIdx) : "";
+
+  if (
+    scoped.includes("enqueueSaleProcessing(() =>") &&
+    scoped.includes("processConfirmedSale({") &&
+    !scoped.includes("await enqueueSaleProcessing")
+  ) {
+    ok(
+      "onPayButtonClick enqueues the rest of the sale (processConfirmedSale) without awaiting it, right after freeing the cart",
+    );
+  } else {
+    fail(
+      "onPayButtonClick enqueues the rest of the sale (processConfirmedSale) without awaiting it, right after freeing the cart",
+    );
+  }
+
+  if (!scoped.includes("restoreCartSnapshotWithoutDuplicates")) {
+    ok(
+      "onPayButtonClick's own (phase 1) catch no longer restores the cart snapshot -- phase 1 never touches the live cart before handoff, so there's nothing to restore",
+    );
+  } else {
+    fail(
+      "onPayButtonClick's own (phase 1) catch no longer restores the cart snapshot -- phase 1 never touches the live cart before handoff, so there's nothing to restore",
+    );
+  }
+}
+
+{
+  const idx = renderer.indexOf("async function processConfirmedSale(ctx) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("function calcExpectedCash(", idx) : -1;
+  const scoped = idx >= 0 && endIdx > idx ? renderer.slice(idx, endIdx) : "";
+
+  mustContain(
+    scoped,
+    "recoveredTicket = await parkFailedSaleForRetry(",
+    "A failed queued sale is recovered via parkFailedSaleForRetry instead of being restored into the live cart",
+  );
+
+  if (!scoped.includes("restoreCartSnapshotWithoutDuplicates")) {
+    ok(
+      "processConfirmedSale never puts a failed sale's items back into the live cart (which may already belong to a different, later customer by the time it fails)",
+    );
+  } else {
+    fail(
+      "processConfirmedSale never puts a failed sale's items back into the live cart (which may already belong to a different, later customer by the time it fails)",
+    );
+  }
+}
+
+mustContain(
+  renderer,
+  "async function parkFailedSaleForRetry(cartSnapshot, ticketPayload, reason) {",
+  "parkFailedSaleForRetry helper exists",
+);
+mustContain(
+  renderer,
+  'parkingMode: PARKED_MODE_TPV,',
+  "parkFailedSaleForRetry creates a real standalone parked ticket (not a live-cart mutation) from the failed sale's snapshot",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
