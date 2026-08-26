@@ -18823,7 +18823,39 @@ function renderParkedTicketsModal() {
         return;
       }
 
-      restoreParkedCartByIndex(realIndex);
+      // Feedback de cliente real (tickets aparcados que se quedaban
+      // "pendientes" tras cobrarlos, con mucho movimiento en el TPV):
+      // "realIndex" se calculo UNA VEZ al pintar esta tarjeta. Si la lista
+      // cambio de orden entre pintarla y hacer clic (llega un aparcado nuevo,
+      // un sync automatico del modal...) -- muy plausible con mucho volumen
+      // de tickets -- esa posicion ya puede pertenecer a OTRO aparcado
+      // distinto, y se cargaria ese por error, sin ningun aviso: el operario
+      // edita y cobra pensando que es el que vio en pantalla, y el que
+      // realmente queria cerrar se queda pendiente para siempre. Se
+      // resuelve el indice EN FRESCO por identidad estable justo antes de
+      // abrir, igual que ya hace el boton de borrar (🗑) de aqui al lado.
+      const ticketKey = getParkedTicketSyncKey(t);
+      const freshIndex = (() => {
+        if (ticketKey) {
+          const byKey = parkedTickets.findIndex(
+            (x) => getParkedTicketSyncKey(x) === ticketKey,
+          );
+          if (byKey >= 0) return byKey;
+        }
+        return parkedTickets.findIndex((x) => x === t);
+      })();
+
+      if (freshIndex < 0) {
+        toast(
+          `Ese ${labels.itemCap.toLowerCase()} ya no esta disponible (puede haberse cobrado o borrado).`,
+          "warn",
+          labels.featureTitle,
+        );
+        renderParkedTicketsModal();
+        return;
+      }
+
+      restoreParkedCartByIndex(freshIndex);
       closeParkedModal();
     };
 
@@ -18934,12 +18966,39 @@ function renderParkedTicketsModal() {
   });
 }
 
-async function markParkedTicketAsPaidByIndex(index, paidInfo = {}) {
+async function markParkedTicketAsPaidByIndex(
+  index,
+  paidInfo = {},
+  fallbackTicket = null,
+) {
   const labels = getParkingLabels();
-  if (!Array.isArray(parkedTickets) || !parkedTickets.length) return false;
-  if (index == null || index < 0 || index >= parkedTickets.length) return false;
+  if (!Array.isArray(parkedTickets)) parkedTickets = [];
 
-  const ticket = parkedTickets[index];
+  let ticket =
+    index != null && index >= 0 && index < parkedTickets.length
+      ? parkedTickets[index]
+      : null;
+
+  // Feedback de cliente real (tickets aparcados que se quedaban "pendientes"
+  // aunque ya se hubiera cobrado de verdad): cuando esta funcion se llama,
+  // la venta YA esta confirmada (factura creada en FacturaScripts) -- pero
+  // entre que empezo el cobro y este momento pueden haber pasado varios
+  // segundos reales (crear la factura, recibos...), tiempo de sobra para que
+  // el aparcado ya no este en la lista local por lo que sea (sync, edicion
+  // concurrente). Antes, eso hacia que la funcion se rindiera aqui mismo, en
+  // silencio, sin marcar nunca el aparcado como cobrado y sin dejar ningun
+  // rastro. Ahora, si tenemos un ultimo dato conocido de ese mismo ticket
+  // (capturado al principio del cobro, antes de que empezaran las llamadas
+  // lentas), se usa para reconstruirlo en vez de perder el aviso.
+  if (!ticket && fallbackTicket) {
+    logFeatureWarn("APARCADOS", "mark-paid-ticket-not-found-in-list", {
+      ticketId: fallbackTicket?.id || null,
+      syncKey: String(getParkedTicketSyncKey(fallbackTicket) || ""),
+    });
+    ticket = fallbackTicket;
+    parkedTickets.push(ticket);
+  }
+
   if (!ticket) return false;
   if (ticket.paid) return true;
 
@@ -33947,6 +34006,7 @@ async function onPayButtonClick() {
   let stockOverrideProductIds = [];
   let parkedSyncKeyToClose = "";
   let parkedIdToClose = 0;
+  let parkedTicketFallbackForMark = null;
 
   try {
     if (isPayingNow || isParkingNow) return;
@@ -34225,6 +34285,12 @@ async function onPayButtonClick() {
       }
 
       parkedIndexToClose = syncedIdx;
+
+      // Ultimo dato conocido y confirmado de este ticket antes de entrar en
+      // la parte lenta del cobro (crear la factura, recibos...). Si al final
+      // ya no lo encontramos en la lista local, markParkedTicketAsPaidByIndex
+      // usa esto para no perder el aviso de que se cobro (ver su comentario).
+      parkedTicketFallbackForMark = syncedTicket;
     }
 
     // Feedback de cliente real (mismo caso "Mermas" 100%, seguia pasando
@@ -34412,14 +34478,18 @@ async function onPayButtonClick() {
         });
       }
 
-      await markParkedTicketAsPaidByIndex(resolveParkedIndexForMark(), {
-        idfactura: null,
-        codigo:
-          lastTicket?.numero ||
-          `OFF-${String(sendResult.localId || "")
-            .slice(0, 6)
-            .toUpperCase()}`,
-      });
+      await markParkedTicketAsPaidByIndex(
+        resolveParkedIndexForMark(),
+        {
+          idfactura: null,
+          codigo:
+            lastTicket?.numero ||
+            `OFF-${String(sendResult.localId || "")
+              .slice(0, 6)
+              .toUpperCase()}`,
+        },
+        parkedTicketFallbackForMark,
+      );
 
       applyLocalStockDecrementForSale(cartSnapshot);
 
@@ -34708,10 +34778,14 @@ async function onPayButtonClick() {
       });
     }
 
-    await markParkedTicketAsPaidByIndex(resolveParkedIndexForMark(), {
-      idfactura: facturaResp?.idfactura || null,
-      codigo: lastTicket?.numero || facturaResp?.codigo || null,
-    });
+    await markParkedTicketAsPaidByIndex(
+      resolveParkedIndexForMark(),
+      {
+        idfactura: facturaResp?.idfactura || null,
+        codigo: lastTicket?.numero || facturaResp?.codigo || null,
+      },
+      parkedTicketFallbackForMark,
+    );
 
     removeCartLinesByIdSet(saleLineIds);
     renderCart();

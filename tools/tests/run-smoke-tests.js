@@ -2997,6 +2997,93 @@ mustContain(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-26 opening a parked ticket resolves it by stable identity, not by its stale render-time position\n",
+);
+
+// Feedback de cliente real (aparcados que se quedaban "PENDIENTE" aunque ya
+// se hubieran cobrado, en un local de mucho movimiento): cada tarjeta de la
+// lista de aparcados memorizaba su posicion en el array al pintarse. Si esa
+// lista cambiaba de orden (llegaba un ticket nuevo, un sync automatico...)
+// antes de que el operario hiciera clic, podia abrirse OTRO ticket distinto
+// del que se veia en pantalla, sin ningun aviso -- y el que de verdad se
+// queria cerrar se quedaba pendiente para siempre. El boton de borrar (🗑)
+// de esa misma lista ya resolvia el ticket por su identidad estable
+// (getParkedTicketSyncKey) en vez de por posicion; el clic para abrir ahora
+// hace lo mismo.
+{
+  const idx = renderer.indexOf("div.onclick = () => {");
+  const closeIdx = idx >= 0 ? renderer.indexOf("\n    return div;", idx) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped.includes("const ticketKey = getParkedTicketSyncKey(t);") &&
+    scoped.includes("parkedTickets.findIndex(") &&
+    scoped.includes("restoreParkedCartByIndex(freshIndex);") &&
+    !scoped.includes("restoreParkedCartByIndex(realIndex);")
+  ) {
+    ok(
+      "Opening a parked ticket from the list re-resolves it by stable identity right before loading, instead of trusting the position captured when the card was rendered",
+    );
+  } else {
+    fail(
+      "Opening a parked ticket from the list re-resolves it by stable identity right before loading, instead of trusting the position captured when the card was rendered",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-26 a confirmed sale is never silently lost if its parked ticket vanished from the local list mid-checkout\n",
+);
+
+// Feedback de cliente real: markParkedTicketAsPaidByIndex se llama DESPUES
+// de confirmar que la factura ya se creo en FacturaScripts. Si para entonces
+// el aparcado ya no estaba en la lista local (por cualquier motivo: sync,
+// edicion concurrente...), la funcion se rendia en silencio -- ni error, ni
+// aviso, ni reintento -- dejando el aparcado "pendiente" para siempre aunque
+// la venta ya se hubiera cobrado de verdad. Ahora, si no lo encuentra por
+// indice, usa el ultimo dato conocido y confirmado de ese ticket (capturado
+// justo antes de empezar la parte lenta del cobro) para no perder el aviso.
+mustContain(
+  renderer,
+  "let parkedTicketFallbackForMark = null;",
+  "Payment flow keeps a last-known snapshot of the parked ticket being closed, captured before the slow invoice-creation calls",
+);
+{
+  const idx = renderer.indexOf(
+    "async function markParkedTicketAsPaidByIndex(",
+  );
+  const closeIdx = idx >= 0 ? renderer.indexOf("\nasync function ", idx + 10) : -1;
+  const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
+  if (
+    scoped.includes("fallbackTicket = null") &&
+    scoped.includes("if (!ticket && fallbackTicket) {") &&
+    scoped.includes("logFeatureWarn(") &&
+    scoped.includes("parkedTickets.push(ticket);")
+  ) {
+    ok(
+      "markParkedTicketAsPaidByIndex falls back to the last-known ticket snapshot (and logs it) instead of silently giving up when the ticket can't be found by index",
+    );
+  } else {
+    fail(
+      "markParkedTicketAsPaidByIndex falls back to the last-known ticket snapshot (and logs it) instead of silently giving up when the ticket can't be found by index",
+    );
+  }
+}
+{
+  const occurrences = renderer.split("parkedTicketFallbackForMark").length - 1;
+  // 1 declaracion + 1 asignacion (syncedTicket) + 2 usos al llamar
+  // markParkedTicketAsPaidByIndex (rama offline y rama online) = 4.
+  if (occurrences >= 4) {
+    ok(
+      "Both markParkedTicketAsPaidByIndex call sites (offline and online) pass the fallback ticket snapshot",
+    );
+  } else {
+    fail(
+      `Both markParkedTicketAsPaidByIndex call sites (offline and online) pass the fallback ticket snapshot (found ${occurrences} usages, expected >= 4)`,
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

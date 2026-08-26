@@ -5,7 +5,10 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "Aparcados: en TPV con mucho movimiento, abrir un ticket aparcado de la lista podía cargar por error otro ticket distinto (sobre todo si no era el último de la lista y justo entraba uno nuevo o se sincronizaba en ese momento), sin ningún aviso. Si luego se modificaba y se cobraba, el ticket que se marcaba como pagado no era el que se veía en pantalla, y el que de verdad se quería cerrar se quedaba «pendiente» para siempre aunque ya estuviera cobrado. Corregido para que abrir un aparcado siempre localice el ticket correcto, no una posición que puede haber cambiado.",
+        "Aparcados: en el caso raro de que un aparcado dejara de estar disponible localmente justo en el rato en que se estaba creando la factura (varios segundos, con caja muy activa), el aviso de «cobrado» se perdía en silencio: la venta quedaba bien hecha, pero el aparcado seguía en «pendiente» sin que nada lo indicara. Ahora ese aviso ya no se pierde."
+      ]
     },
     {
       "version": "0.2.22",
