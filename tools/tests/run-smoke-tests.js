@@ -1859,7 +1859,7 @@ console.log(
       "const recibosOriginalesPromise = fetchRecibosByFactura(idfactura).catch(",
     ) &&
     scoped.indexOf("const lineasAllPromise") <
-      scoped.indexOf("const lineasAll = await lineasAllPromise")
+      scoped.indexOf("lineasAll = await lineasAllPromise")
   ) {
     ok(
       "openTicketInfoForFactura shows an immediate loading toast and fetches lineas+recibos in parallel instead of sequentially",
@@ -3801,6 +3801,39 @@ mustContain(
   renderer,
   'parkingMode: PARKED_MODE_TPV,',
   "parkFailedSaleForRetry creates a real standalone parked ticket (not a live-cart mutation) from the failed sale's snapshot",
+);
+
+console.log("\n[SMOKE] Checking 2026-08-27 ticket info (lineas/recibos) is cached, not re-fetched every time the same ticket is reopened\n");
+
+mustContain(
+  renderer,
+  "const TICKET_INFO_CACHE = new Map();",
+  "TICKET_INFO_CACHE exists",
+);
+
+{
+  const idx = renderer.indexOf("async function openTicketInfoForFactura(facturaRow, options = {}) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("const parkedOrigin = getPaidTicketParkedOriginForTicketRow(facturaRow);", idx) : -1;
+  const scoped = idx >= 0 && endIdx > idx ? renderer.slice(idx, endIdx) : "";
+
+  if (
+    scoped.includes("const cached = TICKET_INFO_CACHE.get(idfactura);") &&
+    scoped.includes("TICKET_INFO_CACHE.set(idfactura, { lineasAll, recibosOriginales });")
+  ) {
+    ok(
+      "openTicketInfoForFactura reuses a cached ticket's lineas/recibos instead of re-fetching them from FacturaScripts every time it's reopened",
+    );
+  } else {
+    fail(
+      "openTicketInfoForFactura reuses a cached ticket's lineas/recibos instead of re-fetching them from FacturaScripts every time it's reopened",
+    );
+  }
+}
+
+mustContain(
+  renderer,
+  "TICKET_INFO_CACHE.delete(Number(facturaRow?.idfactura || 0));",
+  "Confirming a refund invalidates that invoice's cached ticket info, so the next open fetches fresh data instead of showing stale pre-refund state",
 );
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");

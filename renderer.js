@@ -44415,6 +44415,13 @@ function openRefundOverlayForViewOnly({
   }
 }
 
+// Lineas y recibos de una factura ya emitida no cambian solos -- lo unico
+// que los invalida de verdad es una devolucion (ver su borrado explicito en
+// el confirmBtn.onclick de openRefundForFactura). Cachear evita volver a
+// pedirselos a FacturaScripts cada vez que se reabre el mismo ticket en la
+// misma sesion (p.ej. tocarlo, cerrar, tocarlo otra vez).
+const TICKET_INFO_CACHE = new Map();
+
 async function openTicketInfoForFactura(facturaRow, options = {}) {
   const idfactura = Number(facturaRow?.idfactura || 0);
   if (!(idfactura > 0)) throw new Error("Factura invalida.");
@@ -44428,12 +44435,22 @@ async function openTicketInfoForFactura(facturaRow, options = {}) {
   // pedian una detras de otra: pedirlas a la vez recorta la espera real
   // aproximadamente a la mitad.
   toast("Cargando ticket...", "info", "Tickets");
-  const lineasAllPromise = fetchLineasFactura(idfactura);
-  const recibosOriginalesPromise = fetchRecibosByFactura(idfactura).catch(
-    () => [],
-  );
 
-  const lineasAll = await lineasAllPromise;
+  const cached = TICKET_INFO_CACHE.get(idfactura);
+  let lineasAll, recibosOriginales;
+  if (cached) {
+    lineasAll = cached.lineasAll;
+    recibosOriginales = cached.recibosOriginales;
+  } else {
+    const lineasAllPromise = fetchLineasFactura(idfactura);
+    const recibosOriginalesPromise = fetchRecibosByFactura(idfactura).catch(
+      () => [],
+    );
+    lineasAll = await lineasAllPromise;
+    recibosOriginales = await recibosOriginalesPromise;
+    TICKET_INFO_CACHE.set(idfactura, { lineasAll, recibosOriginales });
+  }
+
   const parkedOrigin = getPaidTicketParkedOriginForTicketRow(facturaRow);
   const snapshotTicket =
     options && typeof options === "object" ? options.snapshotTicket : null;
@@ -44466,8 +44483,6 @@ async function openTicketInfoForFactura(facturaRow, options = {}) {
     ? parkedOrigin.snapshotLines
     : [];
   const originSnapshotTotal = Number(parkedOrigin?.snapshotTotal || 0);
-
-  const recibosOriginales = await recibosOriginalesPromise;
 
   // Fallback (factura FS sin snapshot local): antes se descartaban las lineas a
   // 0 EUR, que son justo los HIJOS de un pack/oferta -> el modal solo mostraba
@@ -44861,6 +44876,11 @@ async function openRefundForFactura(facturaRow) {
           refundState.lineas,
           refundState.lineasAll,
         );
+
+        // La devolucion cambia los recibos (y a veces las lineas) de la
+        // factura original -- invalidar su cache de "Informacion de
+        // ticket" para que la proxima vez que se abra se pidan frescos.
+        TICKET_INFO_CACHE.delete(Number(facturaRow?.idfactura || 0));
 
         toast("Devolución creada ✅", "ok", "Devolución");
         overlay.classList.add("hidden");
