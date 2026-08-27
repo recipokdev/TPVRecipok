@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.24",
+      "date": "2026-08-27",
+      "title": "Release 0.2.24",
       "changes": [
         "Tickets: cuando un ticket cobrado venía de un aparcado sin número asignado (por ejemplo, llegado de otro origen), la anotación «Origen aparcado» salía con un «#-» suelto pegado al nombre del cliente. Ahora, si no hay número, simplemente no se muestra ningún símbolo roto.",
         "Rendimiento: la primera vez que se abría «Opciones» en cada sesión, tardaba un poco más en aparecer el gestor de tarifas porque pedía en ese momento las tarifas y los clientes a FacturaScripts (las siguientes veces ya iba rápido, porque quedaban en memoria). Ahora esa primera carga se hace en segundo plano justo al abrir caja, así que para cuando se pulsa «Opciones» ya debería estar lista.",
