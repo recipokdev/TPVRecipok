@@ -4529,6 +4529,84 @@ console.log(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-27 a sale is attributed to the agent who actually made it, not whoever is active when it finally syncs\n",
+);
+
+// Cliente real (Los Argentinos): aparecian ventas en el cierre de caja
+// atribuidas a un "Agente —" vacio que nadie habia cargado, de forma
+// recurrente en el tiempo. Causa: la fase 2 de cada venta (processConfirmedSale,
+// enqueueSaleProcessing) se procesa en una cola serial en segundo plano --
+// para cuando le toca el turno, currentAgent/currentTerminal (variables
+// EN VIVO) ya pueden ser de OTRO cliente/agente, o estar momentaneamente
+// vacias (p.ej. justo tras un corte de red). Arreglo: se toma una foto fija
+// del agente/almacen en el momento REAL de cobrar (fase 1, junto a
+// _payNick) y esa foto es la que se usa despues, nunca el estado en vivo.
+mustContain(
+  renderer,
+  "ticketPayload._payCodAgente = String(currentAgent?.codagente || \"\").trim();",
+  "onPayButtonClick snapshots the active agent's codagente at confirm time (phase 1), same as it already did for _payNick",
+);
+mustContain(
+  renderer,
+  "ticketPayload._payCodAlmacen = String(",
+  "onPayButtonClick also snapshots the terminal's codalmacen at confirm time",
+);
+{
+  const idx = renderer.indexOf("// Update factura (tpv_efectivo=entregado cash, tpv_cambio=cambio)");
+  const endIdx = idx >= 0 ? renderer.indexOf("await updateFacturaCliente(idfactura, upd);", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("idtpv: ticketPayload.idtpv || \"\",") &&
+    scoped.includes("codalmacen: ticketPayload._payCodAlmacen || \"\",") &&
+    scoped.includes("if (ticketPayload._payCodAgente) upd.codagente = ticketPayload._payCodAgente;") &&
+    !scoped.includes("idtpv: currentTerminal?.id || \"\",") &&
+    !scoped.includes("if (currentAgent?.codagente) upd.codagente = currentAgent.codagente;")
+  ) {
+    ok(
+      "processConfirmedSale's post-creation factura update uses the phase-1 snapshot (idtpv/codalmacen/codagente), not the live currentTerminal/currentAgent",
+    );
+  } else {
+    fail(
+      "processConfirmedSale's post-creation factura update uses the phase-1 snapshot (idtpv/codalmacen/codagente), not the live currentTerminal/currentAgent",
+    );
+  }
+}
+{
+  const occurrences = (
+    renderer.match(
+      /agentCode: ticketPayload\._payCodAgente \|\| "",\r?\n\s*agentName: ticketPayload\._payNick \|\| "",/g,
+    ) || []
+  ).length;
+  if (occurrences >= 2) {
+    ok(
+      "Both appendPaymentsToCashLedger calls in processConfirmedSale (offline-queued and online) use the phase-1 agent snapshot too",
+    );
+  } else {
+    fail(
+      `Both appendPaymentsToCashLedger calls in processConfirmedSale (offline-queued and online) use the phase-1 agent snapshot too (found ${occurrences}, expected >= 2)`,
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("async function sendOrQueueFactura(payload) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("await window.TPV_QUEUE.enqueue(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, renderer.indexOf("createdAt: new Date().toISOString(),", idx)) : "";
+  if (
+    scoped.includes("terminal: payload?.idtpv") &&
+    scoped.includes("agente: payload?._payCodAgente") &&
+    !scoped.includes("terminal: currentTerminal\r\n          ? { id: currentTerminal.id")
+  ) {
+    ok(
+      "The offline-queue enqueue path (sendOrQueueFactura) also stores the phase-1 agent/terminal snapshot, not live state read whenever the network happens to fail",
+    );
+  } else {
+    fail(
+      "The offline-queue enqueue path (sendOrQueueFactura) also stores the phase-1 agent/terminal snapshot, not live state read whenever the network happens to fail",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

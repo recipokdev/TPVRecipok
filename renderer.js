@@ -34917,6 +34917,21 @@ async function onPayButtonClick() {
       getLoginUser?.() ||
       "Ventas"
     ).toString();
+    // Foto fija del agente/almacen en el momento de cobrar, igual que
+    // _payNick. La fase 2 (processConfirmedSale) se procesa en segundo
+    // plano, en cola serial -- si el operario cambia de agente (o de
+    // terminal) mientras una venta anterior sigue procesandose, esta venta
+    // NO debe heredar ese cambio. Feedback de cliente real: aparecian
+    // ventas atribuidas a un "Agente —" vacio que nadie habia seleccionado
+    // -- la fase 2 leia currentAgent EN VIVO (no esta foto) al actualizar
+    // la factura, asi que si currentAgent ya era otro (o estaba
+    // momentaneamente null, p.ej. justo tras un corte de red) para cuando
+    // le tocaba el turno en la cola, la factura se quedaba con el agente
+    // equivocado o sin ninguno.
+    ticketPayload._payCodAgente = String(currentAgent?.codagente || "").trim();
+    ticketPayload._payCodAlmacen = String(
+      currentTerminal?.codalmacen || "",
+    ).trim();
 
     const hasFastPredictorHistory = hasFastTicketPredictorHistory({
       codserie: ticketPayload?.codserie || ticketPayload?.serie,
@@ -35083,8 +35098,8 @@ async function processConfirmedSale(ctx) {
         kind: "sale",
         ticketRef: sendResult.localId || "OFFLINE",
         source: "offline",
-        agentCode: currentAgent?.codagente || "",
-        agentName: currentAgent?.name || currentAgent?.nick || "",
+        agentCode: ticketPayload._payCodAgente || "",
+        agentName: ticketPayload._payNick || "",
       });
 
       try {
@@ -35290,6 +35305,12 @@ async function processConfirmedSale(ctx) {
 
     // Update factura (tpv_efectivo=entregado cash, tpv_cambio=cambio)
     if (idfactura) {
+      // OJO: usar SIEMPRE la foto fija de ticketPayload (tomada en el
+      // momento de cobrar, fase 1), nunca currentAgent/currentTerminal en
+      // vivo -- esta actualizacion corre en la cola serial de fondo, y para
+      // cuando le toca el turno el operario puede ya haber cambiado de
+      // agente o de terminal para el SIGUIENTE cliente. Ver el comentario
+      // junto a ticketPayload._payCodAgente (fase 1) para el porque.
       const upd = {
         idestado: 11,
         pagada: 1,
@@ -35297,13 +35318,13 @@ async function processConfirmedSale(ctx) {
         tpv_efectivo: Number(tpv_efectivo.toFixed(2)),
         tpv_cambio: Number(tpv_cambio.toFixed(2)),
         codpago: ticketPayload.codpago || "",
-        idtpv: currentTerminal?.id || "",
-        codalmacen: currentTerminal?.codalmacen || "",
+        idtpv: ticketPayload.idtpv || "",
+        codalmacen: ticketPayload._payCodAlmacen || "",
         observaciones: (payResult?.observaciones || "").toString(),
         numero2: (payResult?.numero ?? "").toString(),
         nick: ticketPayload._payNick || "Ventas",
       };
-      if (currentAgent?.codagente) upd.codagente = currentAgent.codagente;
+      if (ticketPayload._payCodAgente) upd.codagente = ticketPayload._payCodAgente;
       await updateFacturaCliente(idfactura, upd);
     }
 
@@ -35348,8 +35369,8 @@ async function processConfirmedSale(ctx) {
       kind: "sale",
       ticketRef: facturaResp?.codigo || idfactura || "",
       source: "runtime",
-      agentCode: currentAgent?.codagente || "",
-      agentName: currentAgent?.name || currentAgent?.nick || "",
+      agentCode: ticketPayload._payCodAgente || "",
+      agentName: ticketPayload._payNick || "",
     });
 
     // completar código si hace falta
@@ -46608,10 +46629,19 @@ async function sendOrQueueFactura(payload) {
         cambio: payload?._payCambio ?? 0,
         numero: payload?._payNumero2 ?? "",
         nick: payload?._payNick ?? "",
-        terminal: currentTerminal
-          ? { id: currentTerminal.id, codalmacen: currentTerminal.codalmacen }
+        // OJO: nunca currentTerminal/currentAgent en vivo -- este item puede
+        // quedarse en la cola offline un buen rato (justo el caso de "se
+        // corto internet"), y para cuando le toque sincronizarse el
+        // operario ya puede haber cambiado de agente o terminal para el
+        // siguiente cliente. Usar la foto fija del payload (fase 1, ver
+        // ticketPayload._payCodAgente) evita que la venta se atribuya al
+        // agente equivocado -- o a ninguno.
+        terminal: payload?.idtpv
+          ? { id: payload.idtpv, codalmacen: payload._payCodAlmacen || "" }
           : null,
-        agente: currentAgent ? { codagente: currentAgent.codagente } : null,
+        agente: payload?._payCodAgente
+          ? { codagente: payload._payCodAgente }
+          : null,
         codpago: payload?.codpago || "",
         observaciones: (payload?.observaciones || "").toString(),
 
