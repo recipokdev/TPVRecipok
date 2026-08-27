@@ -4272,6 +4272,109 @@ mustContain(
   "The real cobro flow passes the cart's explicit (non-pack-child) product ids into the pack reconciliation",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-27 same 0€-product protection extended to refunds and payment-method changes\n",
+);
+
+// El mismo hueco (un producto suelto a 0€ podia borrarse por confundirse
+// con un resto de pack) tambien existia en devoluciones y en el cambio de
+// forma de pago de un ticket (ambos crean documentos nuevos y reconcilian
+// packs por separado). Mismo arreglo: pasar los idproducto explicitos de
+// esa operacion para que nunca se borren, sea cual sea su precio.
+mustContain(
+  renderer,
+  "function buildExplicitProductIdsFromFacturaLines(lines) {",
+  "buildExplicitProductIdsFromFacturaLines helper exists (for refund/reissue flows, which work from real FS lines, not a cartSnapshot)",
+);
+{
+  const idx = renderer.indexOf("async function createRefundInFacturaScriptsPackAware(");
+  const endIdx = idx >= 0 ? renderer.indexOf("No pude parchear hijos pack en rectificativa", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes(
+      "explicitProductIds: buildExplicitProductIdsFromFacturaLines(outLines),",
+    )
+  ) {
+    ok(
+      "Refunds (createRefundInFacturaScriptsPackAware) protect the explicit lines being refunded from being pruned as pack leftovers",
+    );
+  } else {
+    fail(
+      "Refunds (createRefundInFacturaScriptsPackAware) protect the explicit lines being refunded from being pruned as pack leftovers",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("async function changeTicketPaymentMethodByReissue(");
+  const endIdx = idx >= 0 ? renderer.indexOf("async function createRefundInFacturaScriptsPackAware(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  const occurrences = (
+    scoped.match(
+      /explicitProductIds: buildExplicitProductIdsFromFacturaLines\(lineasFactura\),/g,
+    ) || []
+  ).length;
+  if (occurrences >= 2) {
+    ok(
+      "Changing a ticket's payment method (both the rectificativa and the new reissued ticket) protects explicit lines from being pruned as pack leftovers",
+    );
+  } else {
+    fail(
+      `Changing a ticket's payment method (both the rectificativa and the new reissued ticket) protects explicit lines from being pruned as pack leftovers (found ${occurrences}, expected >= 2)`,
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-27 refunding a 0€ ticket is possible again, and 'cambiar pago' hides on it\n",
+);
+
+// Cuarto bug de la misma familia: la lista de lineas SELECCIONABLES en el
+// dialogo de devolucion ocultaba cualquier linea a 0€ (pensado para no
+// dejar marcar hijos de pack sueltos), asi que en un ticket donde TODO vale
+// 0€ (tarifa -100%) la lista quedaba vacia y no se podia devolver nada --
+// ni para ajustar stock, que es justo para lo que sirve devolver un ticket
+// gratuito (no hay dinero que devolver). Ahora solo se ocultan los hijos
+// REALES de un pack (comprobado contra la definicion del pack, no solo por
+// precio); un producto suelto a 0€ se puede seleccionar y devolver igual
+// que cualquier otro.
+{
+  const idx = renderer.indexOf("async function openRefundForFactura(facturaRow) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("refundState.factura = facturaRow;", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("const isLikelyPackChildLine = (l) => {") &&
+    scoped.includes(
+      "const lineasUI = lineasPendientesAll.filter((l) => !isLikelyPackChildLine(l));",
+    )
+  ) {
+    ok(
+      "openRefundForFactura only hides genuine pack children from the selectable list, not every 0€ line",
+    );
+  } else {
+    fail(
+      "openRefundForFactura only hides genuine pack children from the selectable list, not every 0€ line",
+    );
+  }
+}
+
+// Peticion de cliente: devolver un ticket a 0€ es para ajustar stock, no
+// para devolver dinero -- y cambiar la forma de pago de un ticket a 0€ no
+// tiene sentido (no hay pago que cambiar), asi que ese boton no deberia ni
+// aparecer en un ticket asi.
+{
+  const idx = renderer.indexOf('<button type="button" class="ticket-btn ticket-payedit"');
+  const scoped = idx >= 0 ? renderer.slice(Math.max(0, idx - 200), idx) : "";
+  if (scoped.includes("Math.abs(totalNum) < 0.00001")) {
+    ok(
+      "The 'cambiar pago' (💳) button is omitted entirely for a 0€ ticket, not just left clickable",
+    );
+  } else {
+    fail(
+      "The 'cambiar pago' (💳) button is omitted entirely for a 0€ ticket, not just left clickable",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

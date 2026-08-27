@@ -6533,6 +6533,24 @@ function buildExplicitProductIdsFromCart(cartSnapshot) {
   return Array.from(out);
 }
 
+// Igual que buildExplicitProductIdsFromCart, pero para lineas YA en formato
+// FacturaScripts (idproducto directo) -- usado por las devoluciones y el
+// cambio de forma de pago (reemision), que no parten de un cartSnapshot
+// sino de las lineas reales de una factura existente. Se pasa tal cual
+// (sin excluir hijos de pack): incluir un hijo de pack aqui no hace daño,
+// solo lo deja fuera de la reconciliacion de esa pasada en concreto.
+function buildExplicitProductIdsFromFacturaLines(lines) {
+  const out = new Set();
+  const arr = Array.isArray(lines) ? lines : [];
+
+  for (const l of arr) {
+    const idp = Number(l?.idproducto || 0);
+    if (idp) out.add(idp);
+  }
+
+  return Array.from(out);
+}
+
 async function patchPackChildrenLinesInFacturaByDesired({
   idfactura,
   desiredByPid,
@@ -21087,6 +21105,7 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
     await patchPackChildrenLinesInFacturaByDesired({
       idfactura: rectId,
       desiredByPid: desiredRect,
+      explicitProductIds: buildExplicitProductIdsFromFacturaLines(lineasFactura),
     });
   } catch (e) {
     console.warn(
@@ -21160,6 +21179,7 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
     await patchPackChildrenLinesInFacturaByDesired({
       idfactura: newId,
       desiredByPid: desiredBaseByPid,
+      explicitProductIds: buildExplicitProductIdsFromFacturaLines(lineasFactura),
     });
   } catch (e) {
     console.warn(
@@ -40483,7 +40503,11 @@ function renderTicketsList(tickets) {
               : `<button type="button" class="ticket-btn ticket-refund" title="Devolver">↩</button>`
           }
 
-          <button type="button" class="ticket-btn ticket-payedit" title="Cambiar pago">💳</button>
+          ${
+            Math.abs(totalNum) < 0.00001
+              ? ""
+              : `<button type="button" class="ticket-btn ticket-payedit" title="Cambiar pago">💳</button>`
+          }
         </div>
       </div>
     `;
@@ -44944,11 +44968,54 @@ async function openRefundForFactura(facturaRow) {
     })
     .filter((l) => Number(l._remainingQty || 0) > 0);
 
-  // ✅ UI: ocultamos 0€ (pero NO las perdemos, quedan en lineasAll)
-  const lineasUI = lineasPendientesAll.filter((l) => {
+  // Antes se ocultaban de la lista seleccionable todas las lineas a 0€,
+  // pensado para no dejar marcar hijos de pack sueltos por separado (basta
+  // con devolver el padre, los hijos se reconcilian solos) -- pero eso
+  // tambien ocultaba productos normales vendidos a 0€ (p.ej. tarifa -100%),
+  // dejando la lista VACIA en un ticket donde todo vale 0€ y bloqueando la
+  // devolucion por completo (aunque solo sea para descontar/ajustar stock,
+  // que es para lo que sirve devolver un ticket gratuito -- no hay dinero
+  // que devolver). Ahora solo se ocultan los hijos REALES de un pack
+  // presente en este ticket (comprobado contra la definicion del pack, no
+  // solo por precio), para no ofrecerlos duplicados junto a su padre; un
+  // producto suelto a 0€ se ve y se puede seleccionar igual que cualquier
+  // otro.
+  try {
+    if (!PACKS_STATE?.ready && typeof warmupPacksData === "function") {
+      await warmupPacksData();
+    }
+  } catch {}
+
+  const normRef = (s) =>
+    String(s || "")
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, " ");
+
+  const packChildRefSets = [];
+  for (const l of lineasPendientesAll) {
+    const pid = Number(l?.idproducto || 0);
+    if (!pid || !isOfferPackProductById(pid)) continue;
+    const pack = PACKS_STATE?.packsByOfferProductId?.get(pid);
+    if (!pack) continue;
+    const packLines = PACKS_STATE?.linesByPackId?.get(pack.id) || [];
+    const refs = packLines.map((x) => normRef(x.reference)).filter(Boolean);
+    if (refs.length) packChildRefSets.push(new Set(refs));
+  }
+
+  const isLikelyPackChildLine = (l) => {
     const u = Number(lineGrossUnit(l) || 0);
-    return u > 0.00001;
-  });
+    if (u > 0.00001) return false;
+    const pid = Number(l?.idproducto || 0);
+    if (pid && isOfferPackProductById(pid)) return false;
+    const r = normRef(l?.referencia);
+    const d = normRef(l?.descripcion);
+    return packChildRefSets.some(
+      (set) => set.has(r) || Array.from(set).some((rr) => rr && d.includes(rr)),
+    );
+  };
+
+  const lineasUI = lineasPendientesAll.filter((l) => !isLikelyPackChildLine(l));
 
   refundState.factura = facturaRow;
   refundState.lineas = lineasUI;
@@ -45218,6 +45285,7 @@ async function createRefundInFacturaScriptsPackAware(
       await patchPackChildrenLinesInFacturaByDesired({
         idfactura: rectId,
         desiredByPid,
+        explicitProductIds: buildExplicitProductIdsFromFacturaLines(outLines),
       });
     }
   } catch (e) {
