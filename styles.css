@@ -2748,6 +2748,10 @@ body.cart-width-dragging .cart-width-drag-handle {
   background: #2ecc71;
   color: #fff;
 }
+.cart-btn-pay.cart-btn-pay-needs-agent {
+  background: #e67e22;
+  color: #fff;
+}
 .cart-btn-print {
   background: #ffffff;
   border: 2px solid #34495e;
@@ -6287,6 +6291,11 @@ body.theme-dark #parkObsOverlay .park-quick-flag.is-active {
 .pay-btn-green {
   background: #22c55e;
   color: #fff;
+}
+.pay-btn-free {
+  padding: 20px 18px;
+  font-size: 17px;
+  line-height: 1.25;
 }
 
 .pay-footer-left {

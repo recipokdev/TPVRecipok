@@ -6204,9 +6204,27 @@ async function requireAssignedAgentOrBlock({ showModal = true } = {}) {
   return false;
 }
 
+// Si falta agente asignado, "Cobrar" NO se deshabilita como las demas
+// razones (caja cerrada, sin terminal, carrito vacio...) -- un boton
+// disabled no dispara click, asi que el aviso claro que ya existe
+// (requireAssignedAgentOrBlock, con su modal y su selector) nunca llegaba a
+// verse. En su lugar se deja pulsable con un color/texto claramente
+// distintos ("Asignar agente") para que se note que no es el "Cobrar"
+// normal, y al tocarlo abre directamente el selector de agente.
+function payButtonNeedsAgentAssignment() {
+  return (
+    hasActiveLoginSession() &&
+    !!cashSession?.open &&
+    !!currentTerminal?.id &&
+    !hasAssignedAgent()
+  );
+}
+
 function updatePayButtonEnabledState() {
   const btn = document.getElementById("payBtn");
   if (!btn) return;
+
+  btn.classList.remove("cart-btn-pay-needs-agent");
 
   btn.textContent = isPayingNow
     ? "Cobrando..."
@@ -6223,6 +6241,15 @@ function updatePayButtonEnabledState() {
   if (isParkingNow) {
     btn.disabled = true;
     btn.title = "Hay un guardado de aparcado en curso. Espera a que termine.";
+    return;
+  }
+
+  if (payButtonNeedsAgentAssignment()) {
+    btn.disabled = false;
+    btn.textContent = "Asignar agente";
+    btn.title = "Este terminal no tiene agente asignado. Toca para elegirlo.";
+    btn.classList.add("cart-btn-pay-needs-agent");
+    refreshPreprintButtonUI();
     return;
   }
 
@@ -24773,17 +24800,12 @@ if (agentNameEl) {
     const tpvs = Array.isArray(terminals) ? terminals : [];
     if (tpvs.length === 0) return false;
 
-    // si hay múltiples TPVs, abrimos siempre (para poder elegir un TPV con agentes)
-    if (tpvs.length > 1) {
-      showTerminalOverlay("agentSwitch");
-      return true;
-    }
-
-    // si solo hay 1 TPV, solo abrimos si hay agentes
-    const terminalId = currentTerminal?.id || tpvs[0]?.id;
-    const list = getAgentsForTerminalId(terminalId);
-    if (!list || list.length === 0) return false;
-
+    // Antes, con un unico TPV y 0 agentes, no se abria nada -- un toque en
+    // "cambiar agente" no hacia absolutamente nada, sin ningun aviso. El
+    // propio overlay (modo agentSwitch) ya sabe mostrar "Este terminal no
+    // tiene agentes asignados." cuando la lista esta vacia, asi que ahora se
+    // abre siempre que haya al menos un terminal, para que ese aviso llegue
+    // a verse.
     showTerminalOverlay("agentSwitch");
     return true;
   };
@@ -29752,7 +29774,14 @@ function buildFsLinesFromCart(cartArr) {
 
         // Importante: FacturaScripts debe recibir el precio final descontado
         // para que total/base/IVA y tickets guardados cuadren con el carrito.
-        const unitGross = Number(pricing?.unitGross || getUnitGross(item) || 0);
+        // OJO: "||" trata un 0 legitimo (p.ej. tarifa -100%, precio final
+        // gratis) como "vacio" y caeria al precio SIN descontar -- por eso
+        // se cobraba gratis en el TPV pero la factura real de FacturaScripts
+        // se creaba con el precio completo. Number.isFinite si distingue un
+        // 0 real de "no hay pricing.unitGross".
+        const unitGross = Number.isFinite(pricing?.unitGross)
+          ? pricing.unitGross
+          : Number(getUnitGross(item) || 0);
 
         // Convertimos a NETO para FS
         const tax = Number(item.taxRate || 0);
@@ -35545,6 +35574,10 @@ const cartActionGridEl = document.getElementById("cartActionGrid");
 if (payBtn) {
   payBtn.onclick = () => {
     if (isParkingNow) return;
+    if (payButtonNeedsAgentAssignment()) {
+      requireAssignedAgentOrBlock({ showModal: true });
+      return;
+    }
     onPayButtonClick();
   };
 }
@@ -38604,6 +38637,7 @@ async function openPayModal(total) {
     paySaveBtn.textContent = isFreeTicket
       ? "Confirmar ticket gratuito"
       : "Confirmar Pago";
+    paySaveBtn.classList.toggle("pay-btn-free", isFreeTicket);
   }
 
   // Feedback de cliente real: el modal de cobro no se hacia visible hasta
@@ -42103,7 +42137,11 @@ function buildCustomerItemsFromCart(cartArr) {
 
   return visible.map((item) => {
     const pricing = getCartLinePricing(item);
-    const unitPrice = Number(pricing?.unitGross || getUnitGross(item) || 0);
+    // Mismo cuidado que en buildFsLinesFromCart: un 0 real (p.ej. tarifa
+    // -100%) no debe caer al precio sin descontar solo por ser falsy.
+    const unitPrice = Number.isFinite(pricing?.unitGross)
+      ? pricing.unitGross
+      : Number(getUnitGross(item) || 0);
     const qty = Number(item.qty || 0);
     const lineTotal = Number(pricing?.lineTotal || unitPrice * qty);
     const baseUnitPrice = Number(pricing?.baseUnitGross || unitPrice);

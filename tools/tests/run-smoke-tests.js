@@ -4017,6 +4017,159 @@ mustContain(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-27 'Cobrar' no longer dead-ends when no agent is assigned\n",
+);
+
+// Cliente real: con caja abierta y terminal seleccionado pero sin agente
+// asignado, "Cobrar" salia deshabilitado (gris) y, al ser un boton
+// disabled, tocarlo no disparaba ningun click -- el aviso claro que ya
+// existia (requireAssignedAgentOrBlock) nunca llegaba a mostrarse.
+{
+  const idx = renderer.indexOf("function payButtonNeedsAgentAssignment() {");
+  const scoped = idx >= 0 ? renderer.slice(idx, idx + 400) : "";
+  if (
+    scoped.includes("hasActiveLoginSession() &&") &&
+    scoped.includes("!!cashSession?.open &&") &&
+    scoped.includes("!!currentTerminal?.id &&") &&
+    scoped.includes("!hasAssignedAgent()")
+  ) {
+    ok(
+      "payButtonNeedsAgentAssignment() detects the specific 'missing agent only' blocking reason",
+    );
+  } else {
+    fail(
+      "payButtonNeedsAgentAssignment() detects the specific 'missing agent only' blocking reason",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("function updatePayButtonEnabledState() {");
+  const endIdx = idx >= 0 ? renderer.indexOf("refreshPreprintButtonUI();\r\n}", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("if (payButtonNeedsAgentAssignment()) {") &&
+    scoped.includes("btn.disabled = false;") &&
+    scoped.includes('btn.textContent = "Asignar agente";') &&
+    scoped.includes('btn.classList.add("cart-btn-pay-needs-agent");')
+  ) {
+    ok(
+      "'Cobrar' stays enabled (with a distinct look and text) instead of disabled when the only missing thing is the agent",
+    );
+  } else {
+    fail(
+      "'Cobrar' stays enabled (with a distinct look and text) instead of disabled when the only missing thing is the agent",
+    );
+  }
+}
+mustContain(
+  styles,
+  ".cart-btn-pay.cart-btn-pay-needs-agent {",
+  "'Cobrar' gets a visually distinct color (not the normal green, not the normal disabled gray) in the needs-agent state",
+);
+{
+  const idx = renderer.indexOf("payBtn.onclick = () => {");
+  const scoped = idx >= 0 ? renderer.slice(idx, idx + 300) : "";
+  if (
+    scoped.includes("if (payButtonNeedsAgentAssignment()) {") &&
+    scoped.includes("requireAssignedAgentOrBlock({ showModal: true });")
+  ) {
+    ok(
+      "Tapping 'Cobrar' in the needs-agent state opens the agent picker directly, instead of running the normal checkout guards",
+    );
+  } else {
+    fail(
+      "Tapping 'Cobrar' in the needs-agent state opens the agent picker directly, instead of running the normal checkout guards",
+    );
+  }
+}
+{
+  // Antes, con un solo terminal y 0 agentes asignados, tocar el nombre del
+  // agente para cambiarlo no abria nada -- ahora el propio overlay
+  // (agentSwitch) es quien decide que mostrar, incluido el aviso "Este
+  // terminal no tiene agentes asignados." que ya existia pero nunca se veia.
+  const idx = renderer.indexOf("const tryShowAgentSwitchOverlay = () => {");
+  const endIdx = idx >= 0 ? renderer.indexOf("};", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes('showTerminalOverlay("agentSwitch");') &&
+    scoped.includes("return true;") &&
+    !scoped.includes("if (!list || list.length === 0) return false;")
+  ) {
+    ok(
+      "Changing agent no longer silently no-ops when the terminal has zero agents -- the overlay opens and shows its own 'sin agentes' message",
+    );
+  } else {
+    fail(
+      "Changing agent no longer silently no-ops when the terminal has zero agents -- the overlay opens and shows its own 'sin agentes' message",
+    );
+  }
+}
+mustContain(
+  renderer,
+  '"Este terminal no tiene agentes asignados.";',
+  "The agentSwitch overlay itself still shows a clear message when the selected terminal has zero agents",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-27 a 100%-off tariff line no longer bills full price\n",
+);
+
+// Cliente real: con una tarifa de cliente al -100%, el carrito y el modal de
+// cobro mostraban 0,00 EUR (correcto), pero la factura real creada en
+// FacturaScripts se guardaba con el precio COMPLETO sin descuento. Causa:
+// "pricing.unitGross || getUnitGross(item)" trata un 0 legitimo (precio
+// final gratis) como "vacio" por ser falsy en JS, y cae al precio sin
+// descontar. Afecta solo a descuentos que llevan el precio EXACTAMENTE a 0
+// (tarifa -100%, o precio manual a 0), no a descuentos parciales.
+{
+  const idx = renderer.indexOf("function buildFsLinesFromCart(cartArr) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("\r\n}\r\n", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("Number.isFinite(pricing?.unitGross)") &&
+    scoped.includes("? pricing.unitGross") &&
+    !scoped.includes("Number(pricing?.unitGross || getUnitGross(item) || 0)")
+  ) {
+    ok(
+      "buildFsLinesFromCart (the real sale/invoice line builder) no longer treats a legitimate 0 price as missing",
+    );
+  } else {
+    fail(
+      "buildFsLinesFromCart (the real sale/invoice line builder) no longer treats a legitimate 0 price as missing",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("function buildCustomerItemsFromCart(cartArr) {");
+  const scoped = idx >= 0 ? renderer.slice(idx, idx + 600) : "";
+  if (
+    scoped.includes("Number.isFinite(pricing?.unitGross)") &&
+    !scoped.includes("Number(pricing?.unitGross || getUnitGross(item) || 0)")
+  ) {
+    ok(
+      "buildCustomerItemsFromCart (customer-facing display) has the same 0-price fix, not just the invoice builder",
+    );
+  } else {
+    fail(
+      "buildCustomerItemsFromCart (customer-facing display) has the same 0-price fix, not just the invoice builder",
+    );
+  }
+}
+
+// Feedback de cliente real: el texto "Confirmar ticket gratuito" se veia muy
+// pequeño/apretado en el boton normal de "Confirmar Pago".
+mustContain(
+  styles,
+  ".pay-btn-free {",
+  "'Confirmar ticket gratuito' gets its own, taller/bigger button style",
+);
+mustContain(
+  renderer,
+  'paySaveBtn.classList.toggle("pay-btn-free", isFreeTicket);',
+  "The free-ticket button style is toggled based on isFreeTicket",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
