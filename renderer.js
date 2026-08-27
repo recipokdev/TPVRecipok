@@ -7115,36 +7115,65 @@ async function initCustomerSelectorOnce() {
   }
 }
 
-async function loadClientesForTerminalSelect() {
-  // 1) Intento online
-  try {
-    const data = await fetchApiResource("clientes");
-    if (Array.isArray(data)) {
-      const list = data
-        .filter((c) => !c?.debaja)
-        .map((c) => ({
-          codcliente: String(c.codcliente || "").trim(),
-          nombre: String(c.nombre || "").trim(),
-        }))
-        .filter((c) => c.codcliente);
+async function fetchClientesOnlineForTerminalSelect() {
+  const data = await fetchApiResource("clientes");
+  if (!Array.isArray(data)) return null;
 
-      list.sort((a, b) => Number(a.codcliente) - Number(b.codcliente));
-      return list;
-    }
+  const list = data
+    .filter((c) => !c?.debaja)
+    .map((c) => ({
+      codcliente: String(c.codcliente || "").trim(),
+      nombre: String(c.nombre || "").trim(),
+    }))
+    .filter((c) => c.codcliente);
+
+  list.sort((a, b) => Number(a.codcliente) - Number(b.codcliente));
+  return list;
+}
+
+async function loadClientesForTerminalSelect() {
+  // Peticion de cliente: "Opciones" seguia notandose un poco al abrir,
+  // incluso despues de agilizar todo lo demas. Esta funcion pedia SIEMPRE
+  // el listado COMPLETO de clientes a FacturaScripts de cero, cuando
+  // CUSTOMER_SELECTOR ya tiene ese mismo listado cargado en memoria desde
+  // el arranque (lo usa el propio selector de clientes del carrito).
+  // OJO: ese listado en memoria solo se refresca solo cuando se
+  // crea/edita/borra un cliente DESDE este TPV -- si se cambia algo
+  // directamente en FacturaScripts (u otro TPV), se quedaria desactualizado
+  // para siempre sin este refresco de fondo. Por eso: se devuelve YA lo que
+  // haya en memoria (para que Opciones abra al instante), pero de fondo se
+  // pide la version online real y se deja en memoria (window.CUSTOMER_SELECTOR
+  // tambien la usara) para que la proxima vez ya este al dia.
+  const mem = window.CUSTOMER_SELECTOR?.listCustomers?.();
+  const hasMem = Array.isArray(mem) && mem.length;
+
+  if (hasMem) {
+    fetchClientesOnlineForTerminalSelect()
+      .then((fresh) => {
+        if (Array.isArray(fresh) && fresh.length && window.CUSTOMER_SELECTOR) {
+          window.CUSTOMER_SELECTOR._customers = fresh;
+        }
+      })
+      .catch(() => {});
+
+    return mem
+      .map((c) => ({
+        codcliente: String(c.codcliente || "").trim(),
+        nombre: String(c.nombre || "").trim(),
+      }))
+      .filter((c) => c.codcliente)
+      .sort((a, b) => Number(a.codcliente) - Number(b.codcliente));
+  }
+
+  // Sin nada en memoria todavia (arranque muy temprano): pedirlo online.
+  try {
+    const list = await fetchClientesOnlineForTerminalSelect();
+    if (list) return list;
   } catch (e) {
     // seguimos abajo
   }
 
-  // 2) Fallback offline: memoria del selector
-  const mem = window.CUSTOMER_SELECTOR?.listCustomers?.();
-  if (Array.isArray(mem) && mem.length) {
-    return mem.map((c) => ({
-      codcliente: String(c.codcliente || "").trim(),
-      nombre: String(c.nombre || "").trim(),
-    }));
-  }
-
-  // 3) Último fallback: solo el default
+  // Último fallback: solo el default
   return [{ codcliente: "1", nombre: "Ventas tickets" }];
 }
 

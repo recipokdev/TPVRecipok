@@ -4425,6 +4425,42 @@ mustContain(
   "The 'series' fetch (used by both ensurePaySeriesLoaded and forceRefreshPaySeries) also tracks an in-flight request",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-27 Opciones no longer re-fetches the whole client list every time it opens\n",
+);
+
+// Cliente real: Opciones seguia notandose al abrir. loadClientesForTerminalSelect
+// (para el select de "cliente por defecto del terminal") pedia SIEMPRE el
+// listado COMPLETO de clientes a FacturaScripts de cero, aunque
+// CUSTOMER_SELECTOR ya tiene ese mismo listado cargado en memoria desde el
+// arranque. Ahora lo reutiliza para abrir al instante, y de fondo pide la
+// version online real y la deja en memoria para la proxima vez -- para no
+// perder frescura si un cliente cambia algo directamente en FacturaScripts
+// (sin pasar por este TPV).
+mustContain(
+  renderer,
+  "async function fetchClientesOnlineForTerminalSelect() {",
+  "fetchClientesOnlineForTerminalSelect (the real online fetch) exists as its own function",
+);
+{
+  const idx = renderer.indexOf("async function loadClientesForTerminalSelect() {");
+  const endIdx = idx >= 0 ? renderer.indexOf("\r\n}\r\n", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("const mem = window.CUSTOMER_SELECTOR?.listCustomers?.();") &&
+    scoped.includes("fetchClientesOnlineForTerminalSelect()") &&
+    scoped.includes("window.CUSTOMER_SELECTOR._customers = fresh;")
+  ) {
+    ok(
+      "loadClientesForTerminalSelect returns the already-loaded CUSTOMER_SELECTOR list instantly, and refreshes it online in the background for next time",
+    );
+  } else {
+    fail(
+      "loadClientesForTerminalSelect returns the already-loaded CUSTOMER_SELECTOR list instantly, and refreshes it online in the background for next time",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
