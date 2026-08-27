@@ -609,14 +609,19 @@
 
     // La mayoria de clientes no tienen bascula y nunca abren esta seccion:
     // no tiene sentido que paguen el coste de enumerar puertos serie cada
-    // vez que abren "Opciones". Si la seccion ya esta desplegada ahora
-    // mismo, se carga ya; si no, se deja pendiente para cuando el operario
-    // la abra de verdad.
+    // vez que abren "Opciones". Si la seccion quedo desplegada de una vez
+    // anterior (ese estado se guarda, sobrevive a reinicios), NO se espera
+    // aqui tampoco -- "esperar" seria justo lo que se queria evitar: volver
+    // a bloquear "Opciones" con el banner de carga por culpa de la bascula.
+    // Se lanza en segundo plano (si toca) y, si no, se deja pendiente para
+    // cuando el operario la abra de verdad.
     const bascSection = document.querySelector(
       '#optionsAccordion .opt-sec[data-sec="bascula"]',
     );
     if (bascSection?.dataset?.open === "1") {
-      await ensureScalePortsLoadedAndConnected(cfg);
+      ensureScalePortsLoadedAndConnected(cfg).catch((e) => {
+        console.warn("No se pudo cargar bascula en segundo plano:", e?.message || e);
+      });
     } else {
       __pendingScaleConfigForLazyLoad = cfg;
     }

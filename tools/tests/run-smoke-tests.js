@@ -3534,7 +3534,7 @@ console.log("\n[SMOKE] Checking 2026-08-26 Options tariff/customer data is warme
   }
 }
 
-console.log("\n[SMOKE] Checking 2026-08-26 openOptions loads its ~30 settings in parallel batches, not one by one\n");
+console.log("\n[SMOKE] Checking 2026-08-27 openOptions loads its ~29 settings in a single parallel batch\n");
 
 {
   const idx = renderer.indexOf("async function openOptions() {");
@@ -3542,40 +3542,64 @@ console.log("\n[SMOKE] Checking 2026-08-26 openOptions loads its ~30 settings in
   const scoped = idx >= 0 && endIdx > idx ? renderer.slice(idx, endIdx) : "";
 
   const promiseAllBatches = scoped.split("await Promise.all([").length - 1;
-  if (promiseAllBatches >= 3) {
+  if (promiseAllBatches === 1) {
     ok(
-      `openOptions batches its independent settings loaders into parallel Promise.all groups (found ${promiseAllBatches}) instead of awaiting ~30 of them one by one`,
+      "openOptions batches every independent settings loader into a single parallel Promise.all instead of several sequential batches or ~30 one-by-one awaits",
     );
   } else {
     fail(
-      `openOptions batches its independent settings loaders into parallel Promise.all groups (found ${promiseAllBatches}, expected >= 3)`,
+      `openOptions batches every independent settings loader into a single parallel Promise.all (found ${promiseAllBatches} Promise.all call(s), expected exactly 1)`,
     );
   }
 
   if (
     scoped.includes("loadPriceEditModeFromCfg?.(),") &&
     scoped.indexOf("refreshPriceEditToggleUI?.();") >
-      scoped.indexOf("loadPriceEditModeFromCfg?.(),")
+      scoped.indexOf("await Promise.all([")
   ) {
     ok(
-      "refreshPriceEditToggleUI still runs after loadPriceEditModeFromCfg's batch, not before it",
+      "refreshPriceEditToggleUI still runs after the whole batch (including loadPriceEditModeFromCfg) resolves, not before it",
     );
   } else {
     fail(
-      "refreshPriceEditToggleUI still runs after loadPriceEditModeFromCfg's batch, not before it",
+      "refreshPriceEditToggleUI still runs after the whole batch (including loadPriceEditModeFromCfg) resolves, not before it",
     );
   }
 
   if (
-    scoped.includes("const st = await loadOptionsAccordionState();") &&
-    scoped.includes("await applyOptionsAccordionState(st);")
+    scoped.includes("const [st] = await Promise.all([\r\n    loadOptionsAccordionState(),") &&
+    scoped.includes("await applyOptionsAccordionState(st);") &&
+    scoped.indexOf("await applyOptionsAccordionState(st);") >
+      scoped.indexOf("await Promise.all([")
   ) {
     ok(
-      "loadOptionsAccordionState -> applyOptionsAccordionState(st) stays a sequential, chained pair (real data dependency, not batched)",
+      "loadOptionsAccordionState joins the single batch, and applyOptionsAccordionState(st) still runs only after its real result is known",
     );
   } else {
     fail(
-      "loadOptionsAccordionState -> applyOptionsAccordionState(st) stays a sequential, chained pair (real data dependency, not batched)",
+      "loadOptionsAccordionState joins the single batch, and applyOptionsAccordionState(st) still runs only after its real result is known",
+    );
+  }
+}
+
+console.log("\n[SMOKE] Checking 2026-08-27 Bascula section left open from a previous session no longer blocks Options from opening instantly\n");
+
+{
+  const idx = scaleUi.indexOf("async function initScaleOptionsUI() {");
+  const endIdx = idx >= 0 ? scaleUi.indexOf("window.initScaleOptionsUI = initScaleOptionsUI;", idx) : -1;
+  const scoped = idx >= 0 && endIdx > idx ? scaleUi.slice(idx, endIdx) : "";
+
+  if (
+    scoped.includes('bascSection?.dataset?.open === "1"') &&
+    !scoped.includes("await ensureScalePortsLoadedAndConnected(cfg);") &&
+    scoped.includes("ensureScalePortsLoadedAndConnected(cfg).catch(")
+  ) {
+    ok(
+      "initScaleOptionsUI never awaits the slow port-listing work, even when the Bascula section was already left open from a previous session",
+    );
+  } else {
+    fail(
+      "initScaleOptionsUI never awaits the slow port-listing work, even when the Bascula section was already left open from a previous session",
     );
   }
 }
@@ -3615,9 +3639,11 @@ mustContain(
 
 {
   // Ningun cliente sin bascula deberia pagar el coste de enumerar puertos
-  // serie solo por abrir "Opciones" -- initScaleOptionsUI solo debe cargar
-  // los puertos si la seccion Bascula ya esta desplegada, dejandolo
-  // pendiente en caso contrario.
+  // serie solo por abrir "Opciones", y ni siquiera un cliente que SI la usa
+  // deberia quedarse esperando ese coste si la seccion Bascula ya estaba
+  // desplegada de una sesion anterior -- ver el bloque "2026-08-27" mas
+  // arriba, que reemplaza a este chequeo (antes exigia un "await" ahi que
+  // resulto ser la causa exacta de que "Opciones" siguiera notandose lenta).
   const idx = scaleUi.indexOf("async function initScaleOptionsUI() {");
   const endIdx = idx >= 0 ? scaleUi.indexOf("window.initScaleOptionsUI = initScaleOptionsUI;", idx) : -1;
   const scoped = idx >= 0 && endIdx > idx ? scaleUi.slice(idx, endIdx) : "";
@@ -3625,7 +3651,6 @@ mustContain(
   if (
     scoped.includes('data-sec="bascula"') &&
     scoped.includes('bascSection?.dataset?.open === "1"') &&
-    scoped.includes("await ensureScalePortsLoadedAndConnected(cfg);") &&
     scoped.includes("__pendingScaleConfigForLazyLoad = cfg;")
   ) {
     ok(

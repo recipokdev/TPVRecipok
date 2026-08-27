@@ -26837,35 +26837,16 @@ async function openOptions() {
   optionsAccordionEl?.classList.add("opt-loading");
 
   // Cada "load...()" de aqui abajo es una llamada independiente (cada
-  // ajuste vive en su propia clave, ninguno depende del resultado de otro)
-  // pero antes se esperaban una detras de otra: ~30 idas y vueltas de IPC
-  // seguidas (cfg:get) a la ventana principal, lo que se notaba como el
-  // banner "Cargando opciones..." tardando un rato en desaparecer. Se
-  // agrupan en tandas paralelas (Promise.all) -- cada tanda tarda lo que
-  // tarde su ajuste mas lento, no la suma de todos. Los "bind...Once()" son
-  // solo enganchar el listener del control (no necesitan el valor cargado
-  // para nada), asi que pueden ir todos antes, sin esperar a nada.
+  // ajuste vive en su propia clave, ninguno depende del resultado de otro),
+  // asi que van TODAS en una unica tanda paralela: el tiempo total pasa a
+  // ser el del ajuste mas lento de todos, no la suma. (Antes iban en 3
+  // tandas seguidas -- separarlas no aportaba nada, ninguna depende de la
+  // anterior, solo sumaba idas y vueltas). Los "bind...Once()" son solo
+  // enganchar el listener del control (no necesitan el valor cargado para
+  // nada), asi que van todos antes, sin esperar a nada.
   bindVirtualKeyboardToggleOnce();
   bindParkedCustomerResetModeOnce();
   bindDiscountQuickPctsSaveOnce();
-
-  await Promise.all([
-    loadPriceEditModeFromCfg?.(),
-    loadProductDiscountConfig?.(),
-    loadProductManualOrderConfig?.(),
-    loadProductSortModeSetting?.(),
-    loadProductReorderModeSetting?.(),
-    loadInfoBarVisibilitySettings?.(),
-    loadVirtualKeyboardToggle(),
-    loadParkedCustomerResetModeSetting(),
-    loadDiscountQuickPercentsSetting(),
-  ]);
-
-  applyAdminOnlyUI?.();
-  refreshOptionsUI?.();
-  refreshPriceEditToggleUI?.();
-  bindPriceEditToggleOnce?.();
-
   bindCustomerDisplayToggleOnce();
   bindProductStockToggleOnce();
   bindProductStockEditionToggleOnce();
@@ -26882,8 +26863,27 @@ async function openOptions() {
   bindSafeTrainingModeToggleOnce();
   bindCartGlobalDiscountButtonsOnce();
   bindTariffOptionsOnce();
+  bindProductSortModeOnce();
+  bindProductReorderModeOnce();
+  bindProductManualOrderResetButtonOnce();
+  bindInfoBarVisibilityOnce();
+  bindProductTileSizeResetButtonOnce();
+  bindCartWidthControlsToggleOnce();
+  bindCartWidthDragHandleOnce();
+  bindAutostartToggleOnce();
+  bindOptionsAccordionOnce();
 
-  await Promise.all([
+  const [st] = await Promise.all([
+    loadOptionsAccordionState(),
+    loadPriceEditModeFromCfg?.(),
+    loadProductDiscountConfig?.(),
+    loadProductManualOrderConfig?.(),
+    loadProductSortModeSetting?.(),
+    loadProductReorderModeSetting?.(),
+    loadInfoBarVisibilitySettings?.(),
+    loadVirtualKeyboardToggle(),
+    loadParkedCustomerResetModeSetting(),
+    loadDiscountQuickPercentsSetting(),
     loadCustomerDisplayToggle(),
     loadProductStockToggle(),
     loadProductStockEditionToggle(),
@@ -26899,30 +26899,20 @@ async function openOptions() {
     loadCartDiscountToolsToggle(),
     loadSafeTrainingModeToggle(),
     loadTariffManagerOptionsData(),
-  ]);
-
-  bindProductSortModeOnce();
-  bindProductReorderModeOnce();
-  bindProductManualOrderResetButtonOnce();
-  bindInfoBarVisibilityOnce();
-
-  bindProductTileSizeResetButtonOnce();
-  bindCartWidthControlsToggleOnce();
-  bindCartWidthDragHandleOnce();
-  bindAutostartToggleOnce();
-
-  await Promise.all([
     loadProductTileSizeSetting(),
     loadCartPanelWidthSetting(),
     loadCartWidthControlsToggle(),
     loadAutostartToggle(),
   ]);
 
+  applyAdminOnlyUI?.();
+  refreshOptionsUI?.();
+  refreshPriceEditToggleUI?.();
+  bindPriceEditToggleOnce?.();
+
   bindBackgroundUpdateOptionsOnce();
   refreshBackgroundUpdateOptionsUI();
 
-  bindOptionsAccordionOnce();
-  const st = await loadOptionsAccordionState();
   await applyOptionsAccordionState(st);
 
   await window.initScaleOptionsUI?.();

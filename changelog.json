@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "Rendimiento: si se había dejado desplegada la sección «Báscula» dentro de Opciones en una sesión anterior, la siguiente vez que se abría Opciones sí volvía a esperar a consultar los puertos serie antes de dejar ver nada — justo el caso que se quería evitar. Ahora nunca espera a eso, esté la sección abierta o no. De paso, los ajustes de Opciones se piden todos en una sola tanda en vez de en varias seguidas, así que abre todavía más rápido."
+      ]
     },
     {
       "version": "0.2.24",
