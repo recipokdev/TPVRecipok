@@ -34498,7 +34498,13 @@ async function parkFailedSaleForRetry(cartSnapshot, ticketPayload, reason) {
       id: nextTicketId,
       displayNo: nextDisplayNo,
       slug: String(getCurrentSlugForReservations() || "").trim(),
-      cajaId: String(getCajaIdSafe?.() || currentTerminal?.id || "").trim(),
+      // Igual que el codagente/idtpv de la factura (ver ticketPayload._payCodAgente):
+      // preferir la foto fija del momento del cobro antes que el terminal
+      // EN VIVO -- para cuando una venta fallida se recupera como aparcado
+      // (fase 2, en cola), el operario ya puede haber cambiado de terminal.
+      cajaId: String(
+        ticketPayload?.idtpv || getCajaIdSafe?.() || currentTerminal?.id || "",
+      ).trim(),
       createdAt: new Date(),
       updatedAt: null,
       localRevisionAt: Date.now(),

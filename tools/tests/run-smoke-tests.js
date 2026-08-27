@@ -4607,6 +4607,34 @@ mustContain(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-27 same live-state fix also applied to failed-sale recovery\n",
+);
+
+// Auditoria pedida tras el arreglo del agente fantasma: parkFailedSaleForRetry
+// tambien corre en la cola serial de fondo (dentro de processConfirmedSale),
+// y tambien leia el terminal EN VIVO (como fallback) para decidir a que
+// caja pertenece el aparcado recuperado. Mismo arreglo: preferir la foto
+// fija (ticketPayload.idtpv) primero.
+{
+  const idx = renderer.indexOf("async function parkFailedSaleForRetry(cartSnapshot, ticketPayload, reason) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("createdAt: new Date(),", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes(
+      "ticketPayload?.idtpv || getCajaIdSafe?.() || currentTerminal?.id || \"\",",
+    )
+  ) {
+    ok(
+      "parkFailedSaleForRetry prefers the phase-1 terminal snapshot over the live currentTerminal when recovering a failed queued sale as a parked ticket",
+    );
+  } else {
+    fail(
+      "parkFailedSaleForRetry prefers the phase-1 terminal snapshot over the live currentTerminal when recovering a failed queued sale as a parked ticket",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
