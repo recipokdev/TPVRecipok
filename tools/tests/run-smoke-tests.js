@@ -4461,6 +4461,74 @@ mustContain(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-27 Opciones: tarifas/clientes por defecto ya no se piden en fila\n",
+);
+
+// Medido en real: abrir Opciones justo tras abrir/recuperar caja (con las
+// cachés de tarifas y clientes-por-tarifa todavia sin calentar) tardaba
+// 6.8s en total. Dos causas, ambas del mismo tipo (peticiones
+// independientes pedidas una detras de otra en vez de a la vez):
+{
+  const idx = renderer.indexOf("async function renderTariffCustomerSelectForTariff(codtarifa, opts = {}) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("const search = getTariffCustomerSearchText();", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("if (!Array.isArray(serverAssignedCodes) && !force) {") &&
+    scoped.includes(
+      '.filter((c) => String(c.codtarifa || "") === cod)',
+    )
+  ) {
+    ok(
+      "renderTariffCustomerSelectForTariff computes 'which customers use this tariff' locally from the already-loaded customer list, instead of always re-fetching from FacturaScripts",
+    );
+  } else {
+    fail(
+      "renderTariffCustomerSelectForTariff computes 'which customers use this tariff' locally from the already-loaded customer list, instead of always re-fetching from FacturaScripts",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("async function loadTariffManagerOptionsData(opts = {}) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("async function updateClienteCodtarifa(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes(
+      "const customersPreloadPromise = loadTariffCustomersCache({ force }).catch(",
+    ) &&
+    scoped.includes("await customersPreloadPromise;")
+  ) {
+    ok(
+      "loadTariffManagerOptionsData fetches the tariff list and the customer list in parallel, instead of the customer fetch only starting after the tariff list resolves",
+    );
+  } else {
+    fail(
+      "loadTariffManagerOptionsData fetches the tariff list and the customer list in parallel, instead of the customer fetch only starting after the tariff list resolves",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("async function openOptions(");
+  const endIdx = idx >= 0 ? renderer.indexOf("function closeOptions() {", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes(
+      "const defaultCustomerRefreshPromise = maybeRefreshTerminalDefaultCustomer(",
+    ) &&
+    scoped.includes("await defaultCustomerRefreshPromise;") &&
+    scoped.indexOf("const defaultCustomerRefreshPromise") <
+      scoped.indexOf("const [st] = await Promise.all([")
+  ) {
+    ok(
+      "openOptions starts refreshing the terminal's default customer up front (parallel with the ~30 settings loaders), instead of waiting until after all of them finish",
+    );
+  } else {
+    fail(
+      "openOptions starts refreshing the terminal's default customer up front (parallel with the ~30 settings loaders), instead of waiting until after all of them finish",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

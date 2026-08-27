@@ -3392,7 +3392,22 @@ async function renderTariffCustomerSelectForTariff(codtarifa, opts = {}) {
   const customers = await loadTariffCustomersCache({ force });
 
   let serverAssignedCodes = tariffAssignedServerCodesByCode[cod];
-  if (!Array.isArray(serverAssignedCodes) || force) {
+  if (!Array.isArray(serverAssignedCodes) && !force) {
+    // "customers" (justo arriba) ya trae el codtarifa de CADA cliente --
+    // calcular quien esta asignado a esta tarifa es un filtro local
+    // instantaneo, no hace falta pedirlo de nuevo a FacturaScripts. Antes
+    // esto se pedia SIEMPRE por red la primera vez que se abria Opciones
+    // con una tarifa seleccionada, y era la parte mas lenta de todas (3.5s+
+    // medido en real) -- el propio fallback de la peticion de red (mas
+    // abajo) ya hacia este mismo filtro local, asi que usarlo primero es
+    // exactamente igual de correcto.
+    serverAssignedCodes = customers
+      .filter((c) => String(c.codtarifa || "") === cod)
+      .map((c) => String(c.codcliente || "").trim())
+      .filter(Boolean);
+    tariffAssignedServerCodesByCode[cod] =
+      getUniqueTariffCustomerCodes(serverAssignedCodes);
+  } else if (!Array.isArray(serverAssignedCodes) || force) {
     try {
       const rows = await fetchApiResourceWithParams("clientes", {
         "filter[codtarifa]": cod,
@@ -3500,6 +3515,19 @@ async function loadTariffManagerOptionsData(opts = {}) {
   const force = !!opts?.force;
   const prev = getSelectedTariffCodeInOptions();
 
+  // ensureCustomerTariffsLoaded (lista de tarifas) y loadTariffCustomersCache
+  // (lista de clientes, para saber quien esta asignado a cada tarifa) no
+  // dependen una de la otra para EMPEZAR -- solo renderTariffCustomerSelectForTariff,
+  // mas abajo, necesita el resultado de ambas. Antes se pedian una detras
+  // de otra (primero tarifas, y la de clientes solo arrancaba DESPUES,
+  // dentro de renderTariffCustomerSelectForTariff): con la caja recien
+  // abierta y ninguna de las dos en cache todavia, eran dos viajes de red
+  // reales seguidos (~4.6s medido en real). Arrancarlas a la vez corta eso
+  // a la mitad.
+  const customersPreloadPromise = loadTariffCustomersCache({ force }).catch(
+    () => {},
+  );
+
   try {
     await ensureCustomerTariffsLoaded({ force });
   } catch (e) {
@@ -3507,6 +3535,8 @@ async function loadTariffManagerOptionsData(opts = {}) {
   }
 
   renderTariffSelectOptions(prev);
+
+  await customersPreloadPromise;
 
   const codtarifa = getSelectedTariffCodeInOptions();
   await renderTariffCustomerSelectForTariff(codtarifa, { force });
@@ -27041,6 +27071,14 @@ async function openOptions() {
   bindAutostartToggleOnce();
   bindOptionsAccordionOnce();
 
+  // No depende de ninguno de los ~30 ajustes de abajo (solo necesita
+  // currentTerminal, que ya esta resuelto a estas alturas) -- se arranca ya
+  // en vez de esperar a que termine todo lo demas para empezar a pedirlo.
+  const defaultCustomerRefreshPromise = maybeRefreshTerminalDefaultCustomer(
+    "open-options",
+    { minIntervalMs: 2000 },
+  ).catch(() => {});
+
   const [st] = await Promise.all([
     loadOptionsAccordionState(),
     loadPriceEditModeFromCfg?.(),
@@ -27088,9 +27126,7 @@ async function openOptions() {
 
   bindTerminalDefaultCustomerSave();
 
-  await maybeRefreshTerminalDefaultCustomer("open-options", {
-    minIntervalMs: 2000,
-  }).catch(() => {});
+  await defaultCustomerRefreshPromise;
 
   await renderTerminalDefaultCustomerSelect();
 
