@@ -4170,6 +4170,34 @@ mustContain(
   "The free-ticket button style is toggled based on isFreeTicket",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-27 the 0-price-tariff fix didn't wipe non-pack sales\n",
+);
+
+// Segundo bug, descubierto justo despues de arreglar el primero: una vez
+// las lineas con tarifa -100% llegan de verdad a FacturaScripts como 0€,
+// patchPackChildrenLinesInFacturaByDesired (pensada solo para limpiar
+// "hijos de pack" sobrantes a 0€) las confundia con hijos de pack huerfanos
+// y BORRABA TODA LA FACTURA (0 lineas, total 0€) en cualquier venta sin
+// ningun pack. Antes del primer fix esto nunca se disparaba porque ninguna
+// linea llegaba a FS como 0€ de verdad.
+{
+  const idx = renderer.indexOf(
+    "async function patchPackChildrenLinesInFacturaByDesired({",
+  );
+  const endIdx = idx >= 0 ? renderer.indexOf("const raw = await fetchLineasFacturaCliente(idfactura);", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (scoped.includes("if (!desired.size) return;")) {
+    ok(
+      "patchPackChildrenLinesInFacturaByDesired skips entirely (no fetch, no deletes) when the cart had zero pack children",
+    );
+  } else {
+    fail(
+      "patchPackChildrenLinesInFacturaByDesired skips entirely (no fetch, no deletes) when the cart had zero pack children",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

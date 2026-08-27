@@ -6535,6 +6535,18 @@ async function patchPackChildrenLinesInFacturaByDesired({
     desired.set(pid, want);
   }
 
+  // Si el carrito no tenia NINGUN hijo de pack, no hay nada que reconciliar
+  // aqui -- seguir de largo (en vez de pedir las lineas reales y "limpiar"
+  // las que no esten en `desired`) es CRITICO: mas abajo cualquier linea a
+  // 0€ que no aparezca en `desired` se borra por considerarse "hijo de pack
+  // sobrante". Un cliente con una tarifa al 100% de descuento (precio final
+  // 0€ en TODAS sus lineas, sin tener ningun pack) haria que esa "limpieza"
+  // borrara la factura entera -- paso justo lo que reporto un cliente real
+  // el 2026-08-27, justo despues de arreglar el bug de "0€ se facturaba
+  // como precio completo" (antes, como ninguna linea llegaba a FS como 0€
+  // de verdad, este problema nunca se disparaba).
+  if (!desired.size) return;
+
   const raw = await fetchLineasFacturaCliente(idfactura);
   const lines = Array.isArray(raw) ? raw : [];
 
