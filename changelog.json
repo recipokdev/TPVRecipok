@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.25",
+      "date": "2026-08-27",
+      "title": "Release 0.2.25",
       "changes": [
         "Rendimiento: si se había dejado desplegada la sección «Báscula» dentro de Opciones en una sesión anterior, la siguiente vez que se abría Opciones sí volvía a esperar a consultar los puertos serie antes de dejar ver nada — justo el caso que se quería evitar. Ahora nunca espera a eso, esté la sección abierta o no. De paso, los ajustes de Opciones se piden todos en una sola tanda en vez de en varias seguidas, así que abre todavía más rápido.",
         "Rendimiento: al tocar la información de un ticket, seguía tardando un poco porque volvía a pedir sus líneas y recibos a FacturaScripts cada vez, aunque ya se hubieran consultado antes en la misma sesión. Ahora, si ya se habían pedido, se muestran al instante sin volver a preguntarle a FacturaScripts — y si ese ticket se devuelve después, la próxima vez que se mire sí se pide de nuevo, para no quedarse con datos viejos.",
