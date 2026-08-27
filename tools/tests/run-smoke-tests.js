@@ -1770,7 +1770,7 @@ mustContain(
   const idx = renderer.indexOf("async function forceRefreshPaySeries() {");
   const closeIdx = idx >= 0 ? renderer.indexOf("\nfunction ", idx + 10) : -1;
   const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
-  if (scoped.includes('const rows = await fetchApiResource("series");')) {
+  if (scoped.includes("const rows = await fetchPaySeriesOnce();")) {
     ok(
       "forceRefreshPaySeries always fetches series fresh (unlike ensurePaySeriesLoaded, which only loads once), so the periodic cycle actually refreshes",
     );
@@ -1780,6 +1780,11 @@ mustContain(
     );
   }
 }
+mustContain(
+  renderer,
+  "async function fetchPaySeriesOnce() {",
+  "fetchPaySeriesOnce coalesces concurrent 'series' fetches (ensurePaySeriesLoaded + forceRefreshPaySeries) into one shared request instead of firing duplicates",
+);
 {
   const occurrences = (renderer.match(/startPayMethodsAutoRefresh\?\.\(\);/g) || []).length;
   if (occurrences >= 3) {
@@ -4374,6 +4379,51 @@ console.log(
     );
   }
 }
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-27 the very first cobro of a session no longer stacks duplicate requests\n",
+);
+
+// Cliente real: aunque el primer cobro de la sesion ya precalentaba formas
+// de pago/series al abrir/recuperar caja, ese precalentamiento y el propio
+// modal de cobro (si el cliente llegaba rapido) podian disparar VARIAS
+// peticiones identicas en paralelo al mismo endpoint lento -- medido en
+// real: hasta 4 peticiones simultaneas a "formapagos", cada una tardando
+// 2s+ por su cuenta, y el modal de cobro esperando a la suya propia en vez
+// de aprovechar una que ya estuviera en vuelo (~6s hasta ver el modal).
+// Ahora todas comparten la misma peticion en curso.
+mustContain(
+  renderer,
+  "let __formasPagoInFlight = null;",
+  "fetchFormasPagoActivas tracks an in-flight request to share across callers",
+);
+mustContain(
+  renderer,
+  "async function fetchFormasPagoActivasOnline() {",
+  "The real online fetch was split into its own function so fetchFormasPagoActivas can dedupe around it",
+);
+{
+  const idx = renderer.indexOf("async function fetchFormasPagoActivas(opts = {}) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("async function fetchFormasPagoActivasOnline", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("if (__formasPagoInFlight) return __formasPagoInFlight;") &&
+    scoped.includes("__formasPagoInFlight = fetchFormasPagoActivasOnline();")
+  ) {
+    ok(
+      "fetchFormasPagoActivas reuses an already in-flight request instead of firing a duplicate one",
+    );
+  } else {
+    fail(
+      "fetchFormasPagoActivas reuses an already in-flight request instead of firing a duplicate one",
+    );
+  }
+}
+mustContain(
+  renderer,
+  "let __paySeriesInFlight = null;",
+  "The 'series' fetch (used by both ensurePaySeriesLoaded and forceRefreshPaySeries) also tracks an in-flight request",
+);
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 

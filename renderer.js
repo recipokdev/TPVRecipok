@@ -1280,9 +1280,25 @@ const PAY_METHODS_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
 // peticion en cuanto PAY_SERIES_CACHE ya tiene algo) -- para el refresco
 // PERIODICO hace falta forzar la peticion de verdad cada vez, igual que ya
 // hace fetchFormasPagoActivas.
+// Compartido con ensurePaySeriesLoaded() (mas abajo): si una de las dos ya
+// tiene una peticion de "series" en vuelo, la otra la reutiliza en vez de
+// lanzar una peticion identica en paralelo -- mismo motivo que
+// __formasPagoInFlight arriba.
+let __paySeriesInFlight = null;
+
+async function fetchPaySeriesOnce() {
+  if (__paySeriesInFlight) return __paySeriesInFlight;
+  __paySeriesInFlight = fetchApiResource("series");
+  try {
+    return await __paySeriesInFlight;
+  } finally {
+    __paySeriesInFlight = null;
+  }
+}
+
 async function forceRefreshPaySeries() {
   try {
-    const rows = await fetchApiResource("series");
+    const rows = await fetchPaySeriesOnce();
     PAY_SERIES_CACHE = normalizePaySeriesRows(rows);
   } catch (e) {
     console.warn("No se pudo refrescar series de fondo:", e?.message || e);
@@ -23935,6 +23951,16 @@ async function canCallApiResource(resourceName, opts = {}) {
   return { known: true, ok: true, missing: [] };
 }
 
+// Al abrir caja, recuperar sesion Y abrir el modal de cobro llaman los tres,
+// por su cuenta, a fetchFormasPagoActivas() para precalentarla -- si los
+// tres pasan casi a la vez (p.ej. primer cliente justo tras abrir caja),
+// antes se disparaban 3 peticiones identicas en paralelo compitiendo por
+// la misma respuesta lenta del servidor, y el modal de cobro tenia que
+// esperar a SU PROPIA copia en vez de aprovechar una que ya estuviera en
+// vuelo. Ahora, si ya hay una peticion online en curso, todo el mundo
+// espera esa misma en vez de lanzar otra.
+let __formasPagoInFlight = null;
+
 async function fetchFormasPagoActivas(opts = {}) {
   const { forceOnlineIfPossible = false } = opts;
 
@@ -23944,6 +23970,17 @@ async function fetchFormasPagoActivas(opts = {}) {
     return Array.isArray(cached) ? cached : [];
   }
 
+  if (__formasPagoInFlight) return __formasPagoInFlight;
+
+  __formasPagoInFlight = fetchFormasPagoActivasOnline();
+  try {
+    return await __formasPagoInFlight;
+  } finally {
+    __formasPagoInFlight = null;
+  }
+}
+
+async function fetchFormasPagoActivasOnline() {
   try {
     // Online: pedir al endpoint
     const data = await fetchApiResourceWithParams("formapagos", {
@@ -38234,7 +38271,7 @@ async function ensurePaySeriesLoaded() {
   }
 
   try {
-    const rows = await fetchApiResource("series");
+    const rows = await fetchPaySeriesOnce();
     PAY_SERIES_CACHE = normalizePaySeriesRows(rows);
   } catch (e) {
     console.warn("No se pudo cargar series de facturas:", e?.message || e);
