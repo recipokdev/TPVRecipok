@@ -6515,9 +6515,28 @@ function buildDesiredPackQtyByIdProducto(cartSnapshot) {
   return out;
 }
 
+// idproducto de todo lo que el carrito pidio de verdad, EXCLUYENDO los
+// hijos de pack (esos van por buildDesiredPackQtyByIdProducto). Sirve para
+// que patchPackChildrenLinesInFacturaByDesired nunca confunda un producto
+// suelto vendido a 0€ (p.ej. tarifa -100%) con un resto de pack, aunque el
+// mismo carrito lleve tambien una oferta de verdad.
+function buildExplicitProductIdsFromCart(cartSnapshot) {
+  const out = new Set();
+  const arr = Array.isArray(cartSnapshot) ? cartSnapshot : [];
+
+  for (const it of arr) {
+    if (it?.meta?.includedInPack) continue;
+    const idp = Number(it.baseProductId || it.id || 0);
+    if (idp) out.add(idp);
+  }
+
+  return Array.from(out);
+}
+
 async function patchPackChildrenLinesInFacturaByDesired({
   idfactura,
   desiredByPid,
+  explicitProductIds,
 }) {
   const desiredRaw =
     desiredByPid && typeof desiredByPid === "object" ? desiredByPid : {};
@@ -6547,15 +6566,28 @@ async function patchPackChildrenLinesInFacturaByDesired({
   // de verdad, este problema nunca se disparaba).
   if (!desired.size) return;
 
+  // idproducto de todo lo que el carrito pidio EXPLICITAMENTE (no como hijo
+  // de pack). Si el carrito, ADEMAS de un pack, tambien lleva un producto
+  // suelto que da la casualidad de valer 0€ (misma tarifa -100%), ese
+  // producto NUNCA debe tratarse como "hijo de pack sobrante" solo por
+  // coincidir en precio -- lo pedimos nosotros, a proposito.
+  const explicitPids = new Set(
+    (Array.isArray(explicitProductIds) ? explicitProductIds : [])
+      .map((x) => Number(x))
+      .filter((x) => x > 0),
+  );
+
   const raw = await fetchLineasFacturaCliente(idfactura);
   const lines = Array.isArray(raw) ? raw : [];
 
-  // Hijos gratis (0€) que NO sean el pack parent
+  // Hijos gratis (0€) que NO sean el pack parent ni un producto pedido a
+  // proposito por el carrito.
   const free = lines.filter((l) => {
     const unit = Number(l?.pvpunitario ?? 0);
     if (!isZero(unit)) return false;
 
     const pid = Number(l?.idproducto || 0);
+    if (pid && explicitPids.has(pid)) return false;
     if (
       pid &&
       typeof isOfferPackProductById === "function" &&
@@ -35098,6 +35130,7 @@ async function processConfirmedSale(ctx) {
         await patchPackChildrenLinesInFacturaByDesired({
           idfactura,
           desiredByPid,
+          explicitProductIds: buildExplicitProductIdsFromCart(cartSnapshot),
         });
       } catch (e) {
         console.warn("No pude parchear líneas pack en FS:", e?.message || e);
@@ -44578,6 +44611,12 @@ async function openTicketInfoForFactura(facturaRow, options = {}) {
   // la linea del pack. Ahora agrupamos padre+hijos con preparePrintableTicket
   // (como el ticket impreso) y conservamos los hijos para poder ver el contenido
   // de la oferta.
+  // OJO: descartar toda linea con precio 0€ que no fuera "hijo de pack" daba
+  // por hecho que un 0€ SIEMPRE era un resto de oferta -- con una tarifa de
+  // cliente al 100% de descuento, un producto normal (no-pack) tambien queda
+  // a 0€ de verdad, y este filtro lo escondia entero del ticket (ticket
+  // "vacio" aunque la venta si tuviera productos). Ahora solo se descartan
+  // lineas sin cantidad real; el precio (0€ o no) ya no decide si se ve.
   let fsFallbackLines = [];
   if (!preferredSnapshotLines.length && !originSnapshotLines.length) {
     let fsLines = Array.isArray(lineasAll) ? lineasAll : [];
@@ -44588,13 +44627,9 @@ async function openTicketInfoForFactura(facturaRow, options = {}) {
       const norm = preparePrintableTicket({ lineas: fsLines });
       fsLines = Array.isArray(norm?.lineas) ? norm.lineas : fsLines;
     } catch {}
-    fsFallbackLines = fsLines.filter((l) => {
-      const qty = Math.abs(Number(l?.cantidad || 0));
-      if (qty <= 0.00001) return false;
-      if (isPackChildForPrint(l)) return true; // hijos del pack (0 EUR): mantener
-      const unit = Number(lineGrossUnit(l) || 0);
-      return unit > 0.00001;
-    });
+    fsFallbackLines = fsLines.filter(
+      (l) => Math.abs(Number(l?.cantidad || 0)) > 0.00001,
+    );
   }
 
   const lineasInfo = preferredSnapshotLines.length

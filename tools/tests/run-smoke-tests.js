@@ -4198,6 +4198,80 @@ console.log(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-27 a 0€ product no longer disappears from the ticket-info modal\n",
+);
+
+// El mismo dia, el cliente probo el arreglo anterior y confirmo que la
+// factura real quedaba bien (linea guardada a 0€, no borrada) -- pero el
+// modal "Informacion de ticket" mostraba la venta VACIA. Otro filtro
+// distinto ("solo mostrar lineas con precio > 0, salvo que sean hijos de
+// pack") tenia la misma suposicion equivocada: un producto normal a 0€ por
+// tarifa no es ni "hijo de pack" ni "precio > 0", asi que desaparecia del
+// todo.
+{
+  const idx = renderer.indexOf(
+    "let fsFallbackLines = [];",
+  );
+  const endIdx = idx >= 0 ? renderer.indexOf("const lineasInfo =", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes(
+      "Math.abs(Number(l?.cantidad || 0)) > 0.00001",
+    ) &&
+    !scoped.includes("return unit > 0.00001;")
+  ) {
+    ok(
+      "openTicketInfoForFactura's fallback line list keeps a 0€ product line as long as it has real quantity",
+    );
+  } else {
+    fail(
+      "openTicketInfoForFactura's fallback line list keeps a 0€ product line as long as it has real quantity",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-27 a real 0€ product doesn't get pruned as a pack leftover when the cart also has a real pack\n",
+);
+
+// Hueco conocido dejado a proposito tras el fix anterior: si el MISMO
+// carrito lleva un pack de verdad Y un producto suelto que tambien vale 0€
+// (misma tarifa -100%), ese producto suelto podia seguir borrandose --
+// "desired" (hijos de pack deseados) no esta vacio en ese caso, asi que el
+// guard de "sin packs, no tocar nada" no protege. Arreglo: la funcion nunca
+// borra un producto que el carrito pidio EXPLICITAMENTE (no como hijo de
+// pack), sea cual sea su precio.
+{
+  const idx = renderer.indexOf(
+    "async function patchPackChildrenLinesInFacturaByDesired({",
+  );
+  const endIdx = idx >= 0 ? renderer.indexOf("// Agrupar por idproducto", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("explicitProductIds") &&
+    scoped.includes("if (pid && explicitPids.has(pid)) return false;")
+  ) {
+    ok(
+      "patchPackChildrenLinesInFacturaByDesired never deletes a line for a product the cart explicitly asked for, regardless of its price",
+    );
+  } else {
+    fail(
+      "patchPackChildrenLinesInFacturaByDesired never deletes a line for a product the cart explicitly asked for, regardless of its price",
+    );
+  }
+}
+mustContain(
+  renderer,
+  "function buildExplicitProductIdsFromCart(cartSnapshot) {",
+  "buildExplicitProductIdsFromCart helper exists",
+);
+mustContain(
+  renderer,
+  "explicitProductIds: buildExplicitProductIdsFromCart(cartSnapshot),",
+  "The real cobro flow passes the cart's explicit (non-pack-child) product ids into the pack reconciliation",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
