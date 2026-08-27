@@ -5987,11 +5987,13 @@ function renderTerminalFamiliesList() {
 }
 
 async function saveTerminalFamiliesDialog() {
-  const okHidden = await saveTerminalFamilyHiddenMap(
-    terminalFamiliesDraftHiddenMap,
-  );
-  const okMode = await saveTerminalFamilyModeMap(terminalFamiliesDraftModeMap);
-  const okColors = await saveFamilyColorsMap(familyColorsCache);
+  // Cada uno guarda una clave de configuracion distinta e independiente --
+  // van a la vez en vez de en fila.
+  const [okHidden, okMode, okColors] = await Promise.all([
+    saveTerminalFamilyHiddenMap(terminalFamiliesDraftHiddenMap),
+    saveTerminalFamilyModeMap(terminalFamiliesDraftModeMap),
+    saveFamilyColorsMap(familyColorsCache),
+  ]);
 
   if (!okHidden || !okMode || !okColors) {
     toast?.("No se pudo guardar la configuración.", "err", "Familias");
@@ -15184,9 +15186,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireQwertyInputs();
   cashWrapInputsWithSteppers();
 
-  await reloadTerminalFamilyHiddenCache().catch(() => {});
-  await reloadTerminalFamilyModeCache().catch(() => {});
-  await reloadFamilyColorsCache().catch(() => {});
+  await Promise.all([
+    reloadTerminalFamilyHiddenCache().catch(() => {}),
+    reloadTerminalFamilyModeCache().catch(() => {}),
+    reloadFamilyColorsCache().catch(() => {}),
+  ]);
 
   setupTerminalFamiliesUi();
 });
@@ -22788,22 +22792,22 @@ function openCashOpenDialog(mode = "open") {
         cashSession.closeFacturasSnapshot = facturasCajaList;
         cashSession.closeRecibosByFacturaSnapshot = recibosByFactura;
 
-        // ✅ tickets reales de la caja
-        await hydrateCloseTicketStatsForCaja(cajaId, facturasCajaList);
-
-        // Métodos (TOTAL)
-        await hydratePaymentsByMethodForClose(
-          cajaId,
-          facturasCajaList,
-          recibosByFactura,
-        );
-
-        // Agentes + métodos por agente
-        cashSession.agentSalesSummary = await buildAgentSalesSummaryForCaja(
-          cajaId,
-          facturasCajaList,
-          recibosByFactura,
-        );
+        // Las tres construyen resumenes distintos a partir de los MISMOS
+        // datos ya obtenidos arriba (facturasCajaList/recibosByFactura), sin
+        // que ninguna necesite el resultado de otra -- van a la vez.
+        const [, , agentSalesSummary] = await Promise.all([
+          // ✅ tickets reales de la caja
+          hydrateCloseTicketStatsForCaja(cajaId, facturasCajaList),
+          // Métodos (TOTAL)
+          hydratePaymentsByMethodForClose(
+            cajaId,
+            facturasCajaList,
+            recibosByFactura,
+          ),
+          // Agentes + métodos por agente
+          buildAgentSalesSummaryForCaja(cajaId, facturasCajaList, recibosByFactura),
+        ]);
+        cashSession.agentSalesSummary = agentSalesSummary;
 
         // 4) pintar UI en el orden correcto
         renderCashCloseTotalMeta(); // ✅ TOTAL + (Agente si solo 1)
@@ -27852,8 +27856,13 @@ async function openChangelogDialog({
   onlyCurrentVersion = false,
   versionsToShow = null,
 } = {}) {
-  const entries = await loadChangelogEntries();
-  const currentVersion = normalizeVersionTag(await getCurrentAppVersionText());
+  // Independientes entre si (una lee el changelog estatico, la otra la
+  // version instalada por IPC) -- van a la vez.
+  const [entries, currentVersionRaw] = await Promise.all([
+    loadChangelogEntries(),
+    getCurrentAppVersionText(),
+  ]);
+  const currentVersion = normalizeVersionTag(currentVersionRaw);
 
   // Modo acumulado (aviso tras actualizar): lista concreta de versiones nuevas,
   // como acordeon, con la mas reciente abierta por defecto.
@@ -27895,8 +27904,11 @@ async function openChangelogDialog({
 }
 
 async function maybeShowChangelogAfterUpdate() {
-  const entries = await loadChangelogEntries();
-  const currentVersion = normalizeVersionTag(await getCurrentAppVersionText());
+  const [entries, currentVersionRaw] = await Promise.all([
+    loadChangelogEntries(),
+    getCurrentAppVersionText(),
+  ]);
+  const currentVersion = normalizeVersionTag(currentVersionRaw);
   if (!currentVersion || currentVersion === "desconocida") return;
 
   const hasChanges = (it) =>
@@ -30280,9 +30292,13 @@ async function getPrintableTicketMeta(ticket) {
         };
       }
 
-      // ✅ solo aquí evaluamos devoluciones reales
-      const origLines = await fetchLineasFacturaCliente(idfactura);
-      const refundedMap = await buildRefundedQtyMapForOriginal(idfactura);
+      // ✅ solo aquí evaluamos devoluciones reales -- las dos peticiones son
+      // independientes (ninguna usa el resultado de la otra), asi que van a
+      // la vez en vez de una detras de otra.
+      const [origLines, refundedMap] = await Promise.all([
+        fetchLineasFacturaCliente(idfactura),
+        buildRefundedQtyMapForOriginal(idfactura),
+      ]);
 
       let soldTotal = 0;
       let refundedTotal = 0;
@@ -30363,10 +30379,15 @@ async function printTicket(ticket) {
       ticket.hora ||
       now.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
 
-    await enrichTicketClientForGeneral(ticket);
+    // Independientes entre si: enrichTicketClientForGeneral solo escribe
+    // ticket.clientName/clientFiscalId/clientAddress, y getPrintableTicketMeta
+    // nunca lee esos campos -- van a la vez en vez de en fila.
+    const [, baseMetaPrint] = await Promise.all([
+      enrichTicketClientForGeneral(ticket),
+      getPrintableTicketMeta(ticket),
+    ]);
 
     // 2) Tipo de ticket
-    const baseMetaPrint = await getPrintableTicketMeta(ticket);
     const isPreprint = !!ticket?._preprint;
     const metaPrint = isPreprint
       ? {
@@ -38582,9 +38603,10 @@ async function openPayModal(total) {
   // la proxima vez. Solo si no hay nada en cache todavia (primerisima vez)
   // hay que esperar de verdad -- igual que ya se hace para las series.
   const cachedFormasPago = loadPayMethodsCache();
-  let formas;
-  if (Array.isArray(cachedFormasPago) && cachedFormasPago.length) {
-    formas = cachedFormasPago;
+  const hasFormasCache =
+    Array.isArray(cachedFormasPago) && cachedFormasPago.length;
+  let formasPromise;
+  if (hasFormasCache) {
     CASH_CODPAGOS = buildCashCodpagosFromFormapagos(cachedFormasPago);
     window.__CASH_CODPAGOS__ = Array.from(CASH_CODPAGOS);
     fetchFormasPagoActivas().catch((e) => {
@@ -38593,9 +38615,16 @@ async function openPayModal(total) {
         e?.message || e,
       );
     });
+    formasPromise = Promise.resolve(cachedFormasPago);
   } else {
-    formas = await fetchFormasPagoActivas();
+    formasPromise = fetchFormasPagoActivas();
   }
+
+  // ensurePaySeriesLoaded es independiente de las formas de pago (pide otro
+  // recurso, "series") -- si tambien tocara pedirla de verdad (primerisimo
+  // cobro de la sesion, sin cache de ninguna de las dos todavia), va a la
+  // vez en vez de esperar a las formas de pago primero.
+  const [formas] = await Promise.all([formasPromise, ensurePaySeriesLoaded()]);
 
   payModalState.formas = (formas || [])
     .map((f) => ({
@@ -38610,8 +38639,6 @@ async function openPayModal(total) {
       { codpago: "CONT", descripcion: "Efectivo", imprimir: true },
     ];
   }
-
-  await ensurePaySeriesLoaded();
 
   renderPayMethods();
 
@@ -44781,26 +44808,22 @@ async function openRefundForFactura(facturaRow) {
     errorEl.style.color = "";
   }
 
-  // ✅ IMPORTANTE: traer líneas reales de FS (incluye 0€)
-  const lineasAll = await fetchLineasFactura(facturaRow.idfactura);
-
-  // ✅ NUEVO: traer recibos reales del ticket (información para el trabajador)
-  let recibosOriginales = [];
-  try {
-    recibosOriginales = await fetchRecibosByFactura(facturaRow.idfactura);
-  } catch (e) {
-    console.warn("No se pudieron leer recibos del ticket:", e?.message || e);
-    recibosOriginales = [];
-  }
-
-  // Map cantidades ya devueltas (por clave consistente)
-  let refundedMap = {};
-  try {
-    refundedMap = await buildRefundedQtyMapForOriginal(facturaRow.idfactura);
-  } catch (e) {
-    console.warn("No se pudo calcular devoluciones previas:", e?.message || e);
-    refundedMap = {};
-  }
+  // Las tres peticiones son independientes (ninguna necesita el resultado
+  // de otra), asi que van a la vez en vez de en fila.
+  const [lineasAll, recibosOriginales, refundedMap] = await Promise.all([
+    // ✅ IMPORTANTE: traer líneas reales de FS (incluye 0€)
+    fetchLineasFactura(facturaRow.idfactura),
+    // ✅ NUEVO: traer recibos reales del ticket (información para el trabajador)
+    fetchRecibosByFactura(facturaRow.idfactura).catch((e) => {
+      console.warn("No se pudieron leer recibos del ticket:", e?.message || e);
+      return [];
+    }),
+    // Map cantidades ya devueltas (por clave consistente)
+    buildRefundedQtyMapForOriginal(facturaRow.idfactura).catch((e) => {
+      console.warn("No se pudo calcular devoluciones previas:", e?.message || e);
+      return {};
+    }),
+  ]);
 
   // Pendientes (para TODAS las líneas)
   const lineasPendientesAll = (lineasAll || [])

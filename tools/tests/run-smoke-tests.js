@@ -1541,7 +1541,7 @@ console.log(
 
 mustContain(
   renderer,
-  "await hydrateCloseTicketStatsForCaja(cajaId, facturasCajaList);",
+  "hydrateCloseTicketStatsForCaja(cajaId, facturasCajaList),",
   "Cash-close flow passes the already-fetched invoice list into hydrateCloseTicketStatsForCaja instead of triggering a second full fetch",
 );
 
@@ -1642,9 +1642,9 @@ console.log(
   const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
   if (
     scoped.includes("const cachedFormasPago = loadPayMethodsCache();") &&
-    scoped.includes("formas = cachedFormasPago;") &&
+    scoped.includes("formasPromise = Promise.resolve(cachedFormasPago);") &&
     scoped.includes("fetchFormasPagoActivas().catch(") &&
-    scoped.includes("formas = await fetchFormasPagoActivas();")
+    scoped.includes("formasPromise = fetchFormasPagoActivas();")
   ) {
     ok(
       "openPayModal uses the cached formas de pago instantly when available, refreshing in the background, and only awaits a real fetch the very first time",
@@ -3835,6 +3835,139 @@ mustContain(
   "TICKET_INFO_CACHE.delete(Number(facturaRow?.idfactura || 0));",
   "Confirming a refund invalidates that invoice's cached ticket info, so the next open fetches fresh data instead of showing stale pre-refund state",
 );
+
+console.log("\n[SMOKE] Checking 2026-08-27 broader sweep of sequential-await -> Promise.all parallelization\n");
+
+{
+  const idx = renderer.indexOf("async function getPrintableTicketMeta(ticket) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("let soldTotal = 0;", idx) : -1;
+  const scoped = idx >= 0 && endIdx > idx ? renderer.slice(idx, endIdx) : "";
+  mustContain(
+    scoped,
+    "const [origLines, refundedMap] = await Promise.all([",
+    "getPrintableTicketMeta (on the cobro/print critical path) fetches original lines and the refunded-qty map in parallel",
+  );
+}
+
+{
+  const idx = renderer.indexOf("async function openRefundForFactura(facturaRow) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("// Pendientes (para TODAS las líneas)", idx) : -1;
+  const scoped = idx >= 0 && endIdx > idx ? renderer.slice(idx, endIdx) : "";
+  mustContain(
+    scoped,
+    "const [lineasAll, recibosOriginales, refundedMap] = await Promise.all([",
+    "openRefundForFactura fetches lineas/recibos/refunded-map in parallel instead of one after another, keeping each call's own error fallback",
+  );
+}
+
+{
+  const idx = renderer.indexOf("async function saveTerminalFamiliesDialog() {");
+  const endIdx = idx >= 0 ? renderer.indexOf("if (!okHidden ||", idx) : -1;
+  const scoped = idx >= 0 && endIdx > idx ? renderer.slice(idx, endIdx) : "";
+  mustContain(
+    scoped,
+    "const [okHidden, okMode, okColors] = await Promise.all([",
+    "saveTerminalFamiliesDialog saves its 3 independent settings keys in parallel",
+  );
+}
+
+mustContain(
+  renderer,
+  "const [entries, currentVersionRaw] = await Promise.all([\r\n    loadChangelogEntries(),\r\n    getCurrentAppVersionText(),\r\n  ]);",
+  "Changelog loading and current-version lookup run in parallel (present in both openChangelogDialog and maybeShowChangelogAfterUpdate)",
+);
+
+{
+  const count = renderer
+    .split(
+      "const [entries, currentVersionRaw] = await Promise.all([\r\n    loadChangelogEntries(),\r\n    getCurrentAppVersionText(),\r\n  ]);",
+    ).length - 1;
+  if (count === 2) {
+    ok(
+      "Both changelog-loading call sites (openChangelogDialog and maybeShowChangelogAfterUpdate) were parallelized, not just one",
+    );
+  } else {
+    fail(
+      `Both changelog-loading call sites (openChangelogDialog and maybeShowChangelogAfterUpdate) were parallelized, not just one (found ${count}, expected 2)`,
+    );
+  }
+}
+
+mustContain(
+  renderer,
+  "reloadTerminalFamilyHiddenCache().catch(() => {}),\r\n    reloadTerminalFamilyModeCache().catch(() => {}),\r\n    reloadFamilyColorsCache().catch(() => {}),",
+  "The boot-time terminal-family/color cache reloads run in parallel instead of one after another",
+);
+
+{
+  const idx = renderer.indexOf("async function printTicket(ticket) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("const isPreprint = !!ticket?._preprint;", idx) : -1;
+  const scoped = idx >= 0 && endIdx > idx ? renderer.slice(idx, endIdx) : "";
+  mustContain(
+    scoped,
+    "const [, baseMetaPrint] = await Promise.all([\r\n      enrichTicketClientForGeneral(ticket),\r\n      getPrintableTicketMeta(ticket),\r\n    ]);",
+    "printTicket runs enrichTicketClientForGeneral and getPrintableTicketMeta in parallel (they touch disjoint ticket fields)",
+  );
+}
+
+{
+  const idx = renderer.indexOf("async function openPayModal(total) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("payModalState.formas = (formas || [])", idx) : -1;
+  const scoped = idx >= 0 && endIdx > idx ? renderer.slice(idx, endIdx) : "";
+
+  if (
+    scoped.includes("formasPromise = Promise.resolve(cachedFormasPago);") &&
+    scoped.includes("formasPromise = fetchFormasPagoActivas();") &&
+    scoped.includes(
+      "const [formas] = await Promise.all([formasPromise, ensurePaySeriesLoaded()]);",
+    )
+  ) {
+    ok(
+      "openPayModal runs formas-de-pago resolution and ensurePaySeriesLoaded in parallel, even on the cold-cache (first payment of session) path",
+    );
+  } else {
+    fail(
+      "openPayModal runs formas-de-pago resolution and ensurePaySeriesLoaded in parallel, even on the cold-cache (first payment of session) path",
+    );
+  }
+
+  if (!scoped.includes("await ensurePaySeriesLoaded();\r\n") || scoped.split("ensurePaySeriesLoaded()").length - 1 <= 2) {
+    ok(
+      "openPayModal no longer has a leftover duplicate ensurePaySeriesLoaded() call after the merge",
+    );
+  } else {
+    fail(
+      "openPayModal no longer has a leftover duplicate ensurePaySeriesLoaded() call after the merge",
+    );
+  }
+}
+
+{
+  // Cierre de caja: los 3 resumenes (tickets por agente, importes por
+  // metodo, ventas por agente) se calculan a la vez a partir de los mismos
+  // datos ya obtenidos (facturasCajaList/recibosByFactura).
+  const idx = renderer.indexOf("const [, , agentSalesSummary] = await Promise.all([");
+  if (idx >= 0) {
+    const scoped = renderer.slice(idx, idx + 500);
+    if (
+      scoped.includes("hydrateCloseTicketStatsForCaja(cajaId, facturasCajaList),") &&
+      scoped.includes("hydratePaymentsByMethodForClose(") &&
+      scoped.includes("buildAgentSalesSummaryForCaja(cajaId, facturasCajaList, recibosByFactura),")
+    ) {
+      ok(
+        "Cash-close builds its 3 independent summaries (ticket stats, payment methods, agent sales) in parallel",
+      );
+    } else {
+      fail(
+        "Cash-close builds its 3 independent summaries (ticket stats, payment methods, agent sales) in parallel",
+      );
+    }
+  } else {
+    fail(
+      "Cash-close builds its 3 independent summaries (ticket stats, payment methods, agent sales) in parallel",
+    );
+  }
+}
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
