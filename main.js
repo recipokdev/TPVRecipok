@@ -27,6 +27,11 @@ let lastScaleReconnectAttemptAt = 0;
 const IS_E2E = String(process.env.TPV_E2E || "") === "1";
 const IS_E2E_BACKGROUND =
   IS_E2E && String(process.env.TPV_E2E_BACKGROUND || "") === "1";
+// Igual que IS_E2E_BACKGROUND (ventana minimizada, sin robar el foco), pero
+// para un arranque REAL (login/empresa/caja de verdad, sin bootstrap E2E
+// sintetico) -- para poder probar cosas en la sesion real ya guardada sin
+// que la ventana se ponga delante de lo que el usuario este haciendo.
+const IS_REAL_BACKGROUND = String(process.env.TPV_RUN_BACKGROUND || "") === "1";
 // Modo multi-instancia REAL (no E2E): permite abrir 2 instancias del TPV normal
 // en el mismo PC (userData aislado) para probar a mano la sincronizacion entre
 // TPV "espejo" contra demo, cobrando de verdad. NO activa E2E, asi que funciona
@@ -401,7 +406,7 @@ function applyKioskMode(win, enabled) {
 function createWindow() {
   if (appIsInstallingUpdate) return;
   const isDev = !app.isPackaged;
-  const e2eBackground = IS_E2E_BACKGROUND;
+  const e2eBackground = IS_E2E_BACKGROUND || IS_REAL_BACKGROUND;
   const kioskMode = isKioskMode();
 
   mainWin = new BrowserWindow({

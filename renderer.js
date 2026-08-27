@@ -22752,7 +22752,22 @@ function openCashOpenDialog(mode = "open") {
     }
     cashCloseSummaryReadyPromise = (async () => {
       try {
-        const remoteCaja = await apiReadCurrentCaja();
+        // cashSession.remoteCajaId ya se conoce en cuanto la caja esta
+        // abierta (apiReadCurrentCaja lo usa como su propio idcaja de
+        // entrada), asi que no hace falta esperar a remoteCaja para poder
+        // pedir ya las facturas de la caja -- se piden las 3 cosas a la vez
+        // en vez de una detras de otra.
+        const cajaIdHint = cashSession.remoteCajaId || null;
+        const [remoteCaja, , facturasCajaEarly] = await Promise.all([
+          apiReadCurrentCaja(),
+          ensurePayMethodLabelsLoaded(),
+          cajaIdHint
+            ? fetchApiResourceWithParams("facturaclientes", {
+                "filter[idcaja]": cajaIdHint,
+                limit: 0,
+              })
+            : Promise.resolve(null),
+        ]);
         if (!remoteCaja) {
           updateCloseSummary(Number(cashSession.closingTotal || 0));
           return;
@@ -22763,19 +22778,16 @@ function openCashOpenDialog(mode = "open") {
         fillCashObsTextareaFromRemote(remoteCaja);
         renderCashCloseHeaderCard(remoteCaja);
 
-        // 2) labels
-        await ensurePayMethodLabelsLoaded();
-
-        // 3) construir resúmenes (IMPORTANTE: sin duplicar)
+        // 2) construir resúmenes (IMPORTANTE: sin duplicar)
         const cajaId = cashSession.remoteCajaId || remoteCaja.idcaja;
 
-        const facturasCaja = await fetchApiResourceWithParams(
-          "facturaclientes",
-          {
-            "filter[idcaja]": cajaId,
-            limit: 0,
-          },
-        );
+        const facturasCaja =
+          cajaIdHint === cajaId && Array.isArray(facturasCajaEarly)
+            ? facturasCajaEarly
+            : await fetchApiResourceWithParams("facturaclientes", {
+                "filter[idcaja]": cajaId,
+                limit: 0,
+              });
         const facturasCajaList = Array.isArray(facturasCaja)
           ? facturasCaja
           : [];

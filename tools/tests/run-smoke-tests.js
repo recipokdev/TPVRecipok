@@ -2183,6 +2183,22 @@ mustContain(
   }
 }
 
+// Herramienta de pruebas: TPV_RUN_BACKGROUND=1 permite lanzar la app en modo
+// real (sin TPV_E2E) reutilizando el mismo comportamiento de ventana oculta
+// (showInactive + minimize) que ya existia solo para IS_E2E_BACKGROUND, para
+// poder probar contra datos reales sin que la ventana tape lo que el usuario
+// esta haciendo.
+mustContain(
+  main,
+  'const IS_REAL_BACKGROUND = String(process.env.TPV_RUN_BACKGROUND || "") === "1";',
+  "main.js reads TPV_RUN_BACKGROUND into IS_REAL_BACKGROUND",
+);
+mustContain(
+  main,
+  "const e2eBackground = IS_E2E_BACKGROUND || IS_REAL_BACKGROUND;",
+  "createWindow() hides the window for a real background-launched session too, not just E2E",
+);
+
 mustContain(
   main,
   "function spawnPostUpdateSplash()",
@@ -3965,6 +3981,38 @@ mustContain(
   } else {
     fail(
       "Cash-close builds its 3 independent summaries (ticket stats, payment methods, agent sales) in parallel",
+    );
+  }
+}
+
+{
+  // Cierre de caja: apiReadCurrentCaja + ensurePayMethodLabelsLoaded + la
+  // primera lectura de facturaclientes (usando el remoteCajaId ya conocido)
+  // se piden a la vez, no una detras de otra -- eran ~3 idas y vueltas
+  // reales secuenciales antes de poder empezar a calcular el resumen.
+  const idx = renderer.indexOf(
+    "cashCloseSummaryReadyPromise = (async () => {",
+  );
+  const endIdx =
+    idx >= 0 ? renderer.indexOf("const facturasCajaList", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("const cajaIdHint = cashSession.remoteCajaId || null;") &&
+    scoped.includes(
+      "const [remoteCaja, , facturasCajaEarly] = await Promise.all([",
+    ) &&
+    scoped.includes("apiReadCurrentCaja(),") &&
+    scoped.includes("ensurePayMethodLabelsLoaded(),") &&
+    scoped.includes(
+      "cajaIdHint === cajaId && Array.isArray(facturasCajaEarly)",
+    )
+  ) {
+    ok(
+      "Cash-close fetches the remote caja, pay-method labels, and the caja's facturas up front, in parallel",
+    );
+  } else {
+    fail(
+      "Cash-close fetches the remote caja, pay-method labels, and the caja's facturas up front, in parallel",
     );
   }
 }
