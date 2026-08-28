@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.26",
+      "date": "2026-08-28",
+      "title": "Release 0.2.26",
       "changes": [
         "Modo Mesas: nuevo botón «Cambiar de mesa» para mover el pedido de una mesa a otra libre (por ejemplo, cuando unos clientes que estaban sentados en una mesa deciden cambiarse a otra). Se pulsa en la mesa de origen, se toca la mesa destino en «Otras Mesas» y el pedido (con todo su carrito) pasa a la nueva mesa, quedando la de origen libre. El botón solo se activa si la mesa tiene un pedido pendiente.",
         "Rendimiento: el resumen de «Cierre de caja» (tickets, importes por método, ventas por agente) ya no se calcula por primera vez al pulsar «Cerrar caja» esperando a FacturaScripts en pantalla. Mientras la caja está abierta se recalcula periódicamente en segundo plano y se guarda en local, así que al abrir el cierre se ven los números al instante y se refrescan por detrás antes de dejar cerrar de verdad, sin arriesgar cerrar con datos anticuados.",
