@@ -4554,7 +4554,7 @@ mustContain(
 );
 {
   const idx = renderer.indexOf("// Update factura (tpv_efectivo=entregado cash, tpv_cambio=cambio)");
-  const endIdx = idx >= 0 ? renderer.indexOf("await updateFacturaCliente(idfactura, upd);", idx) : -1;
+  const endIdx = idx >= 0 ? renderer.indexOf("await retryFacturaFollowupStep(() => updateFacturaCliente(idfactura, upd));", idx) : -1;
   const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
   if (
     scoped.includes("idtpv: ticketPayload.idtpv || \"\",") &&
@@ -4781,6 +4781,322 @@ mustContain(
     );
   }
 }
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-28 facturas huérfanas: reintento y aviso claro tras crearFacturaCliente\n",
+);
+
+// Cliente real (los_argentinos y otras instalaciones): crearFacturaCliente
+// ya deja la factura creada y pagada=1 antes de que se le añada el agente,
+// el efectivo/cambio o los recibos. Si ese paso posterior fallaba, no habia
+// reintento y el catch (con saleCommitted ya en true) mostraba un aviso
+// generico, dejando la factura huerfana para siempre -- y el cajero, al ver
+// un error generico, volvia a cobrar el mismo pedido desde cero,
+// duplicandolo. Esto comprueba que ahora se reintenta, y que si aun asi
+// falla, el aviso identifica la factura real en vez de ser generico.
+mustContain(
+  renderer,
+  "async function retryFacturaFollowupStep(fn, { attempts = 4 } = {}) {",
+  "retryFacturaFollowupStep helper exists to retry the post-invoice-creation steps",
+);
+mustContain(
+  renderer,
+  "await retryFacturaFollowupStep(() => updateFacturaCliente(idfactura, upd));",
+  "The agente/efectivo/cambio update (updateFacturaCliente) is retried instead of failing on the first error",
+);
+{
+  const idx = renderer.indexOf("// Recibos");
+  const endIdx = idx >= 0 ? renderer.indexOf("Cleanup/validate:", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("retryFacturaFollowupStep(() =>") &&
+    scoped.includes("createReciboCliente({")
+  ) {
+    ok("Recibo creation is also retried instead of failing on the first error");
+  } else {
+    fail("Recibo creation is also retried instead of failing on the first error");
+  }
+}
+mustContain(
+  renderer,
+  "committedFacturaId = idfactura;",
+  "processConfirmedSale tracks the committed invoice's real id/codigo once crearFacturaCliente succeeds",
+);
+
+{
+  const idx = renderer.indexOf("} else if (saleCommitted && committedFacturaId) {");
+  const endIdx = idx >= 0 ? renderer.indexOf('toast(`[${errCode}] ${msg}`, "err", "Cobrar");', idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("NO vuelvas a cobrar este pedido") &&
+    scoped.includes("facturaRef") &&
+    scoped.includes('type: "COMPLETE_FACTURACLIENTE"') &&
+    scoped.includes("queuedForAutoRetry = true;")
+  ) {
+    ok(
+      "When a follow-up step still fails after retries, the sale is queued as COMPLETE_FACTURACLIENTE for automatic background retry, and the cashier is told the real invoice number and warned NOT to re-ring the sale",
+    );
+  } else {
+    fail(
+      "When a follow-up step still fails after retries, the sale is queued as COMPLETE_FACTURACLIENTE for automatic background retry, and the cashier is told the real invoice number and warned NOT to re-ring the sale",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-28 facturas huérfanas: cola persistente de auto-completado\n",
+);
+
+// El usuario pidio explicitamente que, a ser posible, nunca se llegue al
+// aviso de "venta incompleta" -- en vez de rendirse tras los reintentos
+// inmediatos, se reutiliza la MISMA cola persistente (con backoff 1/2/5/10
+// min, sobrevive a reinicios) que ya usan las ventas offline, para que la
+// factura se autocomplete sola en cuanto se pueda.
+{
+  const idx = renderer.indexOf('if (item.type === "COMPLETE_FACTURACLIENTE") {');
+  const endIdx = idx >= 0 ? renderer.indexOf('if (item.type === "tpvterminal.setCodcliente") {', idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("retryFacturaFollowupStep(() =>\n              updateFacturaCliente(idfactura, upd)") ||
+    (scoped.includes("retryFacturaFollowupStep(() =>") && scoped.includes("updateFacturaCliente(idfactura, upd)"))
+  ) {
+    if (
+      scoped.includes("createReciboCliente({") &&
+      scoped.includes("await window.TPV_QUEUE.done(item.id, { ok: true, idfactura });") &&
+      scoped.includes("await window.TPV_QUEUE.error(item.id, e?.message || String(e));")
+    ) {
+      ok(
+        "syncQueueNow handles COMPLETE_FACTURACLIENTE items: retries the agente/efectivo update and recibos, marks done on success, and re-queues (with the queue's own backoff) on failure instead of dropping it",
+      );
+    } else {
+      fail(
+        "syncQueueNow handles COMPLETE_FACTURACLIENTE items: retries the agente/efectivo update and recibos, marks done on success, and re-queues (with the queue's own backoff) on failure instead of dropping it",
+      );
+    }
+  } else {
+    fail(
+      "syncQueueNow handles COMPLETE_FACTURACLIENTE items: retries the agente/efectivo update and recibos, marks done on success, and re-queues (with the queue's own backoff) on failure instead of dropping it",
+    );
+  }
+}
+
+{
+  // La misma vulnerabilidad (fallo silencioso sin reintento) existia en el
+  // propio drenado de la cola offline (una venta que se quedo sin internet
+  // y se sincroniza mas tarde) -- no solo en el flujo online.
+  const idx = renderer.indexOf("// 3) Emitir y marcar pagada (tpv_efectivo/tpv_cambio/etc.)");
+  const endIdx = idx >= 0 ? renderer.indexOf("// 4) Recibos por método", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("retryFacturaFollowupStep(() =>") &&
+    scoped.includes("offlineFollowupFailed = true;")
+  ) {
+    ok(
+      "The offline sync queue's own agente/efectivo update is also retried, and failures are tracked instead of just logged and forgotten",
+    );
+  } else {
+    fail(
+      "The offline sync queue's own agente/efectivo update is also retried, and failures are tracked instead of just logged and forgotten",
+    );
+  }
+}
+
+mustContain(
+  renderer,
+  "if (offlineFollowupFailed && offlineUpd) {",
+  "A persistently-failing offline sale's follow-up step gets queued as COMPLETE_FACTURACLIENTE too, not silently dropped",
+);
+
+mustContain(
+  renderer,
+  "const pendingCompletions = pending.filter(",
+  "evaluateQueueHealthAndWarn also watches COMPLETE_FACTURACLIENTE items, so a truly-stuck completion (not just a fixable transient one) eventually surfaces a real notification",
+);
+
+// Cliente real: si el aparcado de origen solo se marcaba "cobrado" DESPUES
+// del agente/efectivo/recibos, un cajero podia ver ese pedido todavia como
+// "pendiente" en la lista (aunque la factura ya existiera de verdad) justo
+// mientras esos pasos fallaban/reintentaban -- y volver a cobrarlo desde
+// cero, duplicando la factura. Ahora se marca cobrado nada mas confirmarse
+// la factura, antes de esos pasos que pueden fallar y reintentar.
+{
+  const markIdx = renderer.indexOf("codigo: facturaResp?.codigo || null,");
+  const retryIdx = renderer.indexOf(
+    "await retryFacturaFollowupStep(() => updateFacturaCliente(idfactura, upd));",
+  );
+  if (markIdx >= 0 && retryIdx >= 0 && markIdx < retryIdx) {
+    ok(
+      "The originating parked ticket is marked as paid right after the invoice is confirmed created, BEFORE the agente/efectivo/recibos steps that can fail and need retrying",
+    );
+  } else {
+    fail(
+      "The originating parked ticket is marked as paid right after the invoice is confirmed created, BEFORE the agente/efectivo/recibos steps that can fail and need retrying",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-28 ticket 100% descuento (0€) usa la forma de pago del terminal, no la primera alfabetica\n",
+);
+
+// Cliente real: una venta de 0€ (tarifa -100%) siempre caia en
+// payModalState.formas[0] -- la primera forma de pago activa por orden
+// alfabetico en FacturaScripts, no necesariamente "Al contado". Un codigo
+// residual que ordenara antes (ej. "1") se colaba como metodo de pago real
+// en facturas de 0€ (confirmado en la BD real: idfactura=11881, codpago="1").
+{
+  const idx = renderer.indexOf("if (totalC === 0) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("pagadoEntregadoC = 0;", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("currentTerminal?.codpago") &&
+    scoped.includes("window.RECIPOK_API?.defaultCodPagoTPV") &&
+    scoped.includes("terminalDefaultCodpago")
+  ) {
+    ok(
+      "A 0€ (100% discount) ticket prefers the terminal's own default forma de pago (or the app-wide default) before falling back to the first alphabetical one",
+    );
+  } else {
+    fail(
+      "A 0€ (100% discount) ticket prefers the terminal's own default forma de pago (or the app-wide default) before falling back to the first alphabetical one",
+    );
+  }
+}
+
+mustContain(
+  renderer,
+  "codpago: String(t.codpago || \"\").trim() || null,",
+  "Terminal objects carry their real FacturaScripts codpago (the 'Forma de pago en efectivo' field), instead of discarding it like before",
+);
+
+// Cliente real, tras el primer arreglo: el modal seguia pre-seleccionando
+// (visualmente Y en los datos) la primera forma de pago por orden alfabetico
+// ("6OT") porque renderPayMethods() la auto-seleccionaba SIEMPRE al abrir el
+// modal, ANTES de que corriera el codigo del branch de 0€ -- asi que
+// payModalState.selectedCodpago ya "coincidia" con esa primera forma cuando
+// se comprobaba luego, y el fallback al metodo del terminal nunca se llegaba
+// a usar. Habia que arreglar la seleccion inicial, no solo el branch de 0€.
+{
+  const idx = renderer.indexOf("Selección inicial: la forma de pago por defecto del terminal");
+  const endIdx = idx >= 0 ? renderer.indexOf("renderPayHeaderTotals();", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("currentTerminal?.codpago") &&
+    scoped.includes("window.RECIPOK_API?.defaultCodPagoTPV") &&
+    scoped.includes("if (defaultForma) {")
+  ) {
+    ok(
+      "The pay modal's initial payment-method selection (which drives both the visual highlight AND payModalState.selectedCodpago) also prefers the terminal's default, not just the 0€-confirm fallback",
+    );
+  } else {
+    fail(
+      "The pay modal's initial payment-method selection (which drives both the visual highlight AND payModalState.selectedCodpago) also prefers the terminal's default, not just the 0€-confirm fallback",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-28 no reintentar un fallo que nunca se va a arreglar solo\n",
+);
+
+// Cliente real: un nick que ya no existe como usuario en FacturaScripts
+// (foreign key) produce SIEMPRE el mismo error, reintentar no cambia nada.
+// Antes se gastaban los 4 intentos inmediatos y luego se reintentaba cada
+// 10 min para siempre en la cola -- ahora se detecta como no-reintentable
+// (isRetryableQueueSyncError) y se avisa de inmediato en vez de fingir que
+// "se arreglará solo".
+{
+  const idx = renderer.indexOf("async function retryFacturaFollowupStep(fn, { attempts = 4 } = {}) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("throw lastErr;", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (scoped.includes("if (!isRetryableQueueSyncError(e)) throw e;")) {
+    ok(
+      "retryFacturaFollowupStep gives up immediately (no wasted retries/backoff) on a permanent data error, instead of always burning all 4 attempts",
+    );
+  } else {
+    fail(
+      "retryFacturaFollowupStep gives up immediately (no wasted retries/backoff) on a permanent data error, instead of always burning all 4 attempts",
+    );
+  }
+}
+
+{
+  const idx = renderer.indexOf("const isPermanentError = !isRetryableQueueSyncError(err);");
+  const endIdx = idx >= 0 ? renderer.indexOf("showMessageModal(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("if (committedUpd && !isPermanentError) {") &&
+    scoped.includes("if (isPermanentError) {") &&
+    scoped.includes("notifyWorkerSyncIssue(")
+  ) {
+    ok(
+      "When the follow-up step fails for a permanent (non-network) reason, the sale is NOT queued for pointless auto-retry -- the cashier/admin is alerted immediately instead",
+    );
+  } else {
+    fail(
+      "When the follow-up step fails for a permanent (non-network) reason, the sale is NOT queued for pointless auto-retry -- the cashier/admin is alerted immediately instead",
+    );
+  }
+}
+
+{
+  const idx = renderer.indexOf('if (item.type === "COMPLETE_FACTURACLIENTE") {');
+  const endIdx = idx >= 0 ? renderer.indexOf('if (item.type === "tpvterminal.setCodcliente") {', idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("if (isRetryableQueueSyncError(e)) {") &&
+    scoped.includes("dropped: true,") &&
+    scoped.includes("notifyWorkerSyncIssue(")
+  ) {
+    ok(
+      "syncQueueNow's COMPLETE_FACTURACLIENTE handler also stops re-queuing (and alerts instead) once it recognizes the error as permanent, instead of retrying every 10 minutes forever",
+    );
+  } else {
+    fail(
+      "syncQueueNow's COMPLETE_FACTURACLIENTE handler also stops re-queuing (and alerts instead) once it recognizes the error as permanent, instead of retrying every 10 minutes forever",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-28 aparcado en pantalla no se pierde por una venta distinta en cola de fondo\n",
+);
+
+// Cliente real: "cuando sale el cartelito verde de venta cobrada [de OTRA
+// venta procesandose en la cola de fondo], desaparece el cliente
+// automaticamente... eso ya hace que se cobre y se quede en aparcado como
+// si no hubiera sido rescatado." markParkedTicketAsPaidByIndex (llamada
+// desde la fase 2, en cola serial de fondo) comparaba
+// currentParkedTicketIndex === index -- una POSICION en el array, no una
+// identidad -- asi que si el cajero ya habia cargado OTRO aparcado distinto
+// que por sync/orden cayera en el mismo indice, se le borraba la referencia
+// sin motivo. Ahora se compara por identidad estable (sync key / id).
+mustContain(
+  renderer,
+  "function isCurrentlyLoadedParkedTicket(ticket) {",
+  "isCurrentlyLoadedParkedTicket helper exists to compare by stable identity, not array position",
+);
+
+{
+  const occurrences = (
+    renderer.match(/if \(isCurrentlyLoadedParkedTicket\(ticket\)\) \{/g) || []
+  ).length;
+  if (occurrences >= 2) {
+    ok(
+      "Both sites in markParkedTicketAsPaidByIndex (pedido TPV and regular ticket) use the stable-identity check instead of comparing currentParkedTicketIndex to a raw array position",
+    );
+  } else {
+    fail(
+      "Both sites in markParkedTicketAsPaidByIndex (pedido TPV and regular ticket) use the stable-identity check instead of comparing currentParkedTicketIndex to a raw array position",
+    );
+  }
+}
+
+mustContain(
+  renderer,
+  "if (currentParkedTicketIndex === idx) {",
+  "The synchronous, same-tick delete-parked-ticket flow keeps its direct index comparison (safe there -- no background delay/reordering risk)",
+);
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 

@@ -343,6 +343,30 @@ function setCurrentParkedTicketIndex(index) {
   ACTIVE_PARKED_TICKET_ID = t ? Number(t?.id || 0) || 0 : 0;
 }
 
+// Cliente real: al cobrar un aparcado desde la cola de fondo (Phase 2, que
+// puede correr segundos/minutos despues de confirmar el cobro), el cajero
+// puede haber cargado YA otro aparcado distinto en pantalla mientras tanto
+// -- y ese, por sync/orden de la lista, puede caer justo en el MISMO indice
+// que ocupaba el aparcado que se acaba de cobrar. Comparar por posicion
+// (currentParkedTicketIndex === index) borraba entonces la identidad del
+// aparcado que el cajero tenia realmente abierto (el cliente desaparecia
+// del banner aunque el carrito seguia intacto), dejandolo sin vinculo con
+// su aparcado de origen -- si luego se cobraba, se quedaba "aparcado" sin
+// más aunque ya se hubiera cobrado de verdad. Se compara por identidad
+// estable (sync key / id), no por posicion.
+function isCurrentlyLoadedParkedTicket(ticket) {
+  if (!ticket) return false;
+  const key = String(getParkedTicketSyncKey(ticket) || "").trim();
+  if (key && ACTIVE_PARKED_TICKET_SYNC_KEY) {
+    return key === ACTIVE_PARKED_TICKET_SYNC_KEY;
+  }
+  const id = Number(ticket?.id || 0) || 0;
+  if (id && ACTIVE_PARKED_TICKET_ID) {
+    return id === ACTIVE_PARKED_TICKET_ID;
+  }
+  return false;
+}
+
 // Cliente seleccionado justo antes de cargar un aparcado, para restaurarlo
 // al vaciar el carrito o soltar el aparcado sin cobrar.
 let preParkedCustomerSelection = null;
@@ -19404,7 +19428,7 @@ async function markParkedTicketAsPaidByIndex(
       );
     }
 
-    if (currentParkedTicketIndex === index) {
+    if (isCurrentlyLoadedParkedTicket(ticket)) {
       setCurrentParkedTicketIndex(null);
     }
 
@@ -19501,7 +19525,7 @@ async function markParkedTicketAsPaidByIndex(
     }
   }
 
-  if (currentParkedTicketIndex === index) {
+  if (isCurrentlyLoadedParkedTicket(ticket)) {
     setCurrentParkedTicketIndex(null);
   }
 
@@ -25592,6 +25616,7 @@ async function loadDataFromApi(opts = {}) {
             codalmacen: t.codalmacen || null,
             productlimit: t.productlimit || null,
             codcliente: String(t.codcliente || "1"),
+            codpago: String(t.codpago || "").trim() || null,
           };
         })
       : [];
@@ -25990,6 +26015,7 @@ async function refreshTerminalsAndAgents() {
           name: t.name || t.descripcion || `TPV ${id}`,
           codalmacen: t.codalmacen || null,
           productlimit: t.productlimit || null,
+          codpago: String(t.codpago || "").trim() || null,
         };
       });
     } else {
@@ -35252,6 +35278,39 @@ async function onPayButtonClick() {
   }
 }
 
+// Reintenta con un pequeño backoff. Se usa para los pasos de processConfirmedSale
+// que corren DESPUES de que la factura ya se ha creado y marcado pagada en
+// FacturaScripts (saleCommitted=true): agente/efectivo (updateFacturaCliente)
+// y los recibos (createReciboCliente). Si esos pasos fallan y no se
+// reintentan, la factura se queda huerfana para siempre -- el catch de mas
+// abajo ya no puede recuperarla como aparcado porque la factura real ya
+// existe. Reintentar aqui es seguro: updateFacturaCliente es un PUT
+// idempotente, y un createReciboCliente duplicado por un reintento ya se
+// limpia despues via cleanupRecibosFactura.
+async function retryFacturaFollowupStep(fn, { attempts = 4 } = {}) {
+  let lastErr = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      // Si el error no es de los que se arreglan solos con el tiempo (red,
+      // 429, 5xx) sino un fallo de datos real (p.ej. una restriccion de
+      // clave foranea porque el "nick" no existe como usuario en
+      // FacturaScripts), reintentar con el MISMO payload va a fallar
+      // exactamente igual las veces que haga falta -- es mejor rendirse ya
+      // y dejar que quien llama decida (aviso inmediato / cola con backoff
+      // largo), en vez de gastar los reintentos rapidos en algo que nunca
+      // va a funcionar.
+      if (!isRetryableQueueSyncError(e)) throw e;
+      if (i < attempts - 1) {
+        await sleep(400 + i * 400 + Math.random() * 250);
+      }
+    }
+  }
+  throw lastErr;
+}
+
 async function processConfirmedSale(ctx) {
   const {
     requestId,
@@ -35274,6 +35333,25 @@ async function processConfirmedSale(ctx) {
   } = ctx;
 
   let saleCommitted = false;
+  // Una vez la factura existe en FacturaScripts (saleCommitted=true), un
+  // fallo en los pasos siguientes (agente/efectivo, recibos) ya no se puede
+  // recuperar aparcando la venta -- la factura real ya está ahí. Guardamos
+  // su identidad para poder dar un aviso util (no generico) si, pese a los
+  // reintentos, ese fallo persiste: sin esto, la factura se queda huerfana
+  // en silencio y el cajero, al ver un error generico, vuelve a cobrar el
+  // mismo pedido desde cero, duplicandolo.
+  let committedFacturaId = null;
+  let committedFacturaCodigo = null;
+  // Capturados justo antes de intentar el paso que puede fallar, para poder
+  // encolar un "COMPLETE_FACTURACLIENTE" (mismo mecanismo que la cola
+  // offline, con reintentos automaticos en 1/2/5/10 min) si ese paso agota
+  // sus reintentos inmediatos -- asi la venta se autocompleta sola en vez
+  // de quedar huerfana esperando a que alguien la revise a mano.
+  let committedUpd = null;
+  let committedCodcliente = null;
+  let committedIdempresa = null;
+  let committedCodigofactura = null;
+  let committedCoddivisa = null;
 
   try {
     // 4) Enviar o encolar
@@ -35424,6 +35502,8 @@ async function processConfirmedSale(ctx) {
     }
 
     const idfactura = facturaResp?.idfactura || null;
+    committedFacturaId = idfactura;
+    committedFacturaCodigo = String(facturaResp?.codigo || "").trim() || null;
 
     const confirmedTicketCode = String(facturaResp?.codigo || "").trim();
     const hadFastPreprintCode = String(fastPreApiPrintedNumber || "").trim();
@@ -35472,10 +35552,31 @@ async function processConfirmedSale(ctx) {
       }
     }
 
+    // Marcar el aparcado de origen como cobrado AQUI, justo tras confirmar
+    // que la factura ya existe -- no mas abajo, tras el agente/efectivo/
+    // recibos. Esos pasos pueden tardar, fallar y necesitar reintentos (ver
+    // retryFacturaFollowupStep mas abajo); si el aparcado seguia marcado
+    // "pendiente" mientras tanto, el cajero podia verlo sin cobrar en la
+    // lista y volver a cobrarlo desde cero -- creando una factura duplicada
+    // de verdad. La factura YA existe desde este punto, así que el aparcado
+    // debe reflejarlo ya, pase lo que pase despues con esos otros pasos.
+    await markParkedTicketAsPaidByIndex(
+      resolveParkedIndexForMark(),
+      {
+        idfactura,
+        codigo: facturaResp?.codigo || null,
+      },
+      parkedTicketFallbackForMark,
+    );
+
     const codcliente = facturaResp?.codcliente;
     const idempresa = facturaResp?.idempresa;
     const coddivisa = facturaResp?.coddivisa;
     const codigofactura = facturaResp?.codigo;
+    committedCodcliente = codcliente;
+    committedIdempresa = idempresa;
+    committedCoddivisa = coddivisa;
+    committedCodigofactura = codigofactura;
 
     const facturaTotalFS =
       Math.round(
@@ -35523,7 +35624,8 @@ async function processConfirmedSale(ctx) {
         nick: ticketPayload._payNick || "Ventas",
       };
       if (ticketPayload._payCodAgente) upd.codagente = ticketPayload._payCodAgente;
-      await updateFacturaCliente(idfactura, upd);
+      committedUpd = upd;
+      await retryFacturaFollowupStep(() => updateFacturaCliente(idfactura, upd));
     }
 
     // Recibos
@@ -35533,17 +35635,19 @@ async function processConfirmedSale(ctx) {
         const importe = Number(Number(p.importe || 0).toFixed(2));
         if (!(importe > 0)) continue;
 
-        await createReciboCliente({
-          idfactura,
-          codcliente,
-          codpago: p.codpago,
-          importe,
-          fechapago: today,
-          fecha: today,
-          idempresa,
-          codigofactura,
-          coddivisa,
-        });
+        await retryFacturaFollowupStep(() =>
+          createReciboCliente({
+            idfactura,
+            codcliente,
+            codpago: p.codpago,
+            importe,
+            fechapago: today,
+            fecha: today,
+            idempresa,
+            codigofactura,
+            coddivisa,
+          }),
+        );
       }
     }
 
@@ -35666,14 +35770,9 @@ async function processConfirmedSale(ctx) {
       });
     }
 
-    await markParkedTicketAsPaidByIndex(
-      resolveParkedIndexForMark(),
-      {
-        idfactura: facturaResp?.idfactura || null,
-        codigo: lastTicket?.numero || facturaResp?.codigo || null,
-      },
-      parkedTicketFallbackForMark,
-    );
+    // El aparcado ya se marco como cobrado mas arriba, justo tras confirmar
+    // la factura (ver comentario junto a retryFacturaFollowupStep) -- no
+    // hace falta repetirlo aqui.
 
     removeCartLinesByIdSet(saleLineIds);
     renderCart();
@@ -35763,6 +35862,80 @@ async function processConfirmedSale(ctx) {
         `No se pudo completar un cobro de ${eurES(Number(recoveredTicket.total || 0))} que se estaba procesando en segundo plano.\n\n` +
           `Motivo: [${errCode}] ${msg}\n\n` +
           `Se ha guardado como aparcado ("${recoveredTicket.name}") para revisarlo y volver a cobrarlo cuando quieras.`,
+      );
+    } else if (saleCommitted && committedFacturaId) {
+      // La factura YA existe en FacturaScripts y quedo marcada como pagada
+      // (crearFacturaCliente ya se completo), pero un paso posterior
+      // (agente/efectivo o recibos) fallo incluso tras varios reintentos
+      // inmediatos. No se puede recuperar como aparcado -- eso duplicaria
+      // la venta. En vez de dejarla huerfana para siempre, se encola como
+      // "COMPLETE_FACTURACLIENTE" en la MISMA cola persistente que ya usan
+      // las ventas offline (ver syncQueueNow): se reintentara sola cada
+      // pocos segundos mientras haya conexion, con backoff creciente
+      // (1/2/5/10 min) si sigue fallando, y sobrevive incluso a un cierre
+      // de la app. Solo si eso TAMBIEN falla en encolarse (caso extremo)
+      // queda de verdad pendiente de revisar a mano.
+      const facturaRef = committedFacturaCodigo || `#${committedFacturaId}`;
+      logFeatureError(
+        "COBRO",
+        "factura-incompleta-tras-reintentos",
+        err,
+        { requestId, idfactura: committedFacturaId, codigo: committedFacturaCodigo },
+      );
+
+      // Si el motivo del fallo NO es de los que se arreglan solos con el
+      // tiempo (red, 429, 5xx) sino un fallo de datos real -- p.ej. el nick
+      // ya no existe como usuario en FacturaScripts -- encolarlo igualmente
+      // no sirve de nada: fallaria exactamente igual en cada reintento. En
+      // ese caso se avisa YA de que hace falta revisarlo a mano, en vez de
+      // dar una falsa sensacion de "se arregla solo".
+      const isPermanentError = !isRetryableQueueSyncError(err);
+
+      let queuedForAutoRetry = false;
+      if (committedUpd && !isPermanentError) {
+        try {
+          await window.TPV_QUEUE.enqueue({
+            type: "COMPLETE_FACTURACLIENTE",
+            payload: {
+              idfactura: committedFacturaId,
+              upd: committedUpd,
+              pagos: pagosFinal,
+              codcliente: committedCodcliente,
+              idempresa: committedIdempresa,
+              codigofactura: committedCodigofactura,
+              coddivisa: committedCoddivisa,
+            },
+          });
+          queuedForAutoRetry = true;
+        } catch (qe) {
+          console.warn(
+            "No se pudo encolar el completado automatico de la factura:",
+            qe?.message || qe,
+          );
+        }
+      }
+
+      if (isPermanentError) {
+        notifyWorkerSyncIssue(
+          `factura-incompleta-${String(committedFacturaId)}`,
+          `La factura ${facturaRef} se registró pero no se pudo completar el agente/efectivo, y el motivo no se va a arreglar reintentando (${msg.slice(0, 140)}). Complétala a mano en FacturaScripts.`,
+          { title: "Cobrar", modal: false, cooldownMs: 60 * 60 * 1000 },
+        );
+      }
+
+      showMessageModal(
+        queuedForAutoRetry
+          ? "Venta registrada, terminando en segundo plano"
+          : "Venta registrada pero incompleta",
+        `La venta YA se ha registrado en FacturaScripts como factura ${facturaRef}, pero no se pudo terminar de completar ` +
+          `(agente, efectivo o el recibo de pago).\n\n` +
+          `Motivo: [${errCode}] ${msg}\n\n` +
+          (queuedForAutoRetry
+            ? `Se ha dejado en cola para completarse sola en segundo plano en cuanto se pueda -- no hace falta hacer nada.\n\n`
+            : isPermanentError
+              ? `Este motivo concreto no se arregla reintentando solo -- avisa para revisarla y completarla a mano cuanto antes.\n\n`
+              : `No se pudo dejar en cola para reintentarlo solo -- avisa para revisarla y completarla a mano.\n\n`) +
+          `Eso sí: NO vuelvas a cobrar este pedido -- ya existe la factura.`,
       );
     } else {
       toast(`[${errCode}] ${msg}`, "err", "Cobrar");
@@ -38820,10 +38993,27 @@ function renderPayMethods() {
     payMethodsList.appendChild(row);
   });
 
-  // Selección inicial: primera forma
-  if (!payModalState.selectedCodpago && payModalState.formas[0]) {
-    selectPayInput(payModalState.formas[0].codpago);
-  } else if (payModalState.selectedCodpago) {
+  // Selección inicial: la forma de pago por defecto del terminal (su
+  // "Forma de pago en efectivo" en FacturaScripts), si existe entre las
+  // activas. Antes se elegia siempre payModalState.formas[0] -- la primera
+  // por orden alfabetico de FacturaScripts, no necesariamente "Al contado"
+  // -- asi que un codigo residual que ordenara antes (ej. "6OT") quedaba
+  // pre-seleccionado por defecto en CUALQUIER cobro, no solo en los de 0€.
+  if (!payModalState.selectedCodpago) {
+    const terminalDefaultCodpago = String(
+      currentTerminal?.codpago || window.RECIPOK_API?.defaultCodPagoTPV || "",
+    )
+      .trim()
+      .toUpperCase();
+    const defaultForma = payModalState.formas.find(
+      (f) => String(f.codpago || "").trim().toUpperCase() === terminalDefaultCodpago,
+    );
+    if (defaultForma) {
+      selectPayInput(defaultForma.codpago);
+    } else if (payModalState.formas[0]) {
+      selectPayInput(payModalState.formas[0].codpago);
+    }
+  } else {
     selectPayInput(payModalState.selectedCodpago);
   }
 
@@ -39135,13 +39325,29 @@ async function openPayModal(total) {
         let cambioC;
 
         if (totalC === 0) {
-          // Ticket gratuito: no hay importe que pedir. Se confirma directo
-          // con la forma de pago seleccionada (o la primera) a 0€, por si
-          // FacturaScripts necesita alguna forma de pago igualmente.
+          // Ticket gratuito: no hay importe que pedir, y como no hay nada
+          // que cobrar el selector de forma de pago queda bloqueado (nunca
+          // llega un click real que fije selectedCodpago) -- ver clase
+          // "pay-frozen". Antes esto caia siempre en payModalState.formas[0],
+          // que es simplemente la primera forma de pago activa por orden
+          // alfabetico en FacturaScripts (no necesariamente "Al contado");
+          // un codigo raro que ordene antes (p.ej. "1") se colaba en
+          // facturas reales de 0€. Se usa el efectivo por defecto del
+          // terminal (mismo campo "Forma de pago en efectivo" de su ficha en
+          // FacturaScripts) como fallback real antes de caer en la primera.
+          const terminalDefaultCodpago = String(
+            currentTerminal?.codpago || window.RECIPOK_API?.defaultCodPagoTPV || "",
+          )
+            .trim()
+            .toUpperCase();
           const fp =
             payModalState.formas.find(
               (f) => f.codpago === payModalState.selectedCodpago,
-            ) || payModalState.formas[0];
+            ) ||
+            payModalState.formas.find(
+              (f) => String(f.codpago || "").trim().toUpperCase() === terminalDefaultCodpago,
+            ) ||
+            payModalState.formas[0];
 
           pagos = fp
             ? [
@@ -47026,6 +47232,41 @@ async function evaluateQueueHealthAndWarn({ online = false } = {}) {
       }
     }
 
+    // Facturas ya creadas y pagadas a las que solo les falta completar el
+    // agente/efectivo/recibo (ver COMPLETE_FACTURACLIENTE): a diferencia de
+    // una venta sin sincronizar, aqui el dinero YA esta en la factura real,
+    // asi que no urge tanto -- pero si sigue atascada mucho tiempo, sí hay
+    // que avisar (es el caso "de verdad no se puede arreglar sola").
+    const pendingCompletions = pending.filter(
+      (it) => it?.type === "COMPLETE_FACTURACLIENTE",
+    );
+
+    if (pendingCompletions.length) {
+      let oldestMinutes = 0;
+      let maxAttempts = 0;
+
+      for (const it of pendingCompletions) {
+        oldestMinutes = Math.max(oldestMinutes, minutesSinceIso(it?.createdAt));
+        maxAttempts = Math.max(maxAttempts, Number(it?.attempts || 0) || 0);
+      }
+
+      if (
+        oldestMinutes >= QUEUE_STUCK_MIN_AGE_MIN ||
+        maxAttempts >= QUEUE_STUCK_MIN_ATTEMPTS
+      ) {
+        const refs = pendingCompletions
+          .map((it) => it?.payload?.idfactura)
+          .filter(Boolean)
+          .slice(0, 5)
+          .join(", ");
+        notifyWorkerSyncIssue(
+          "queue-completions-stuck",
+          `Hay ${pendingCompletions.length} factura(s) ya cobradas a las que les falta completar el agente/efectivo (${Math.floor(oldestMinutes)} min intentándolo solo)${refs ? `: ${refs}` : ""}. Revísalas a mano en FacturaScripts.`,
+          { title: "Sincronizacion" },
+        );
+      }
+    }
+
     const recentDone = done.slice(0, 20);
     const dropped = recentDone.filter(
       (it) =>
@@ -47191,6 +47432,8 @@ async function syncQueueNow() {
             }
 
             // 3) Emitir y marcar pagada (tpv_efectivo/tpv_cambio/etc.)
+            let offlineUpd = null;
+            let offlineFollowupFailed = false;
             try {
               // efectivo = ENTREGADO en efectivo (como tu criterio en online)
               const tpv_efectivo = pagosOffline
@@ -47207,7 +47450,7 @@ async function syncQueueNow() {
 
               const tpv_cambio = moneyToNumber(item.post?.cambio || 0);
 
-              await updateFacturaCliente(idfactura, {
+              offlineUpd = {
                 idestado: 11,
                 pagada: 1,
 
@@ -47244,12 +47487,16 @@ async function syncQueueNow() {
                   : currentAgent?.codagente
                     ? { codagente: currentAgent.codagente }
                     : {}),
-              });
+              };
+              await retryFacturaFollowupStep(() =>
+                updateFacturaCliente(idfactura, offlineUpd),
+              );
             } catch (e) {
               console.warn(
-                "No se pudo emitir/pagar factura offline:",
+                "No se pudo emitir/pagar factura offline tras reintentar:",
                 e?.message || e,
               );
+              offlineFollowupFailed = true;
             }
 
             // 4) Recibos por método + cleanup
@@ -47262,17 +47509,19 @@ async function syncQueueNow() {
                   const importe = Number(Number(p?.importe || 0).toFixed(2));
                   if (!(importe > 0)) continue;
 
-                  await createReciboCliente({
-                    idfactura,
-                    codcliente: fc.codcliente,
-                    codpago: String(p?.codpago || "").trim(),
-                    importe,
-                    fechapago: today,
-                    fecha: today,
-                    idempresa: fc.idempresa,
-                    codigofactura: fc.codigo || fc.codigofactura || "",
-                    coddivisa: fc.coddivisa,
-                  });
+                  await retryFacturaFollowupStep(() =>
+                    createReciboCliente({
+                      idfactura,
+                      codcliente: fc.codcliente,
+                      codpago: String(p?.codpago || "").trim(),
+                      importe,
+                      fechapago: today,
+                      fecha: today,
+                      idempresa: fc.idempresa,
+                      codigofactura: fc.codigo || fc.codigofactura || "",
+                      coddivisa: fc.coddivisa,
+                    }),
+                  );
                 }
 
                 await cleanupRecibosFactura(idfactura, pagosOffline);
@@ -47284,9 +47533,40 @@ async function syncQueueNow() {
               }
             } catch (e) {
               console.warn(
-                "No se pudieron crear/limpiar recibos offline:",
+                "No se pudieron crear/limpiar recibos offline tras reintentar:",
                 e?.message || e,
               );
+              offlineFollowupFailed = true;
+            }
+
+            // Si el paso 3 y/o 4 agotaron sus reintentos inmediatos, se
+            // encola un COMPLETE_FACTURACLIENTE (mismo mecanismo que usa el
+            // flujo online para este mismo caso) en vez de dejarlo
+            // silenciosamente huerfano -- se reintentara solo con backoff
+            // creciente hasta que se complete.
+            if (offlineFollowupFailed && offlineUpd) {
+              try {
+                await window.TPV_QUEUE.enqueue({
+                  type: "COMPLETE_FACTURACLIENTE",
+                  payload: {
+                    idfactura,
+                    upd: offlineUpd,
+                    pagos: pagosOffline,
+                    codcliente: facturaSyncResp?.codcliente || null,
+                    idempresa: facturaSyncResp?.idempresa || null,
+                    codigofactura:
+                      facturaSyncResp?.codigo ||
+                      facturaSyncResp?.codigofactura ||
+                      "",
+                    coddivisa: facturaSyncResp?.coddivisa || null,
+                  },
+                });
+              } catch (qe) {
+                console.warn(
+                  "No se pudo encolar el completado automatico de una venta offline:",
+                  qe?.message || qe,
+                );
+              }
             }
 
             // 4.5) Sincronizar acumulados de caja (simetría con flujo online)
@@ -47359,6 +47639,93 @@ async function syncQueueNow() {
               notifyWorkerSyncIssue(
                 `queue-dropped-${String(item.id)}`,
                 `No se pudo sincronizar una venta en cola de ${eurES(total)}. Motivo: ${String(e?.message || e).slice(0, 140)}. Cóbrala a mano cuanto antes.`,
+                { title: "Sincronizacion", modal: true, cooldownMs: 60 * 60 * 1000 },
+              );
+            }
+          }
+          continue;
+        }
+
+        // =============================================================
+        // 2.5) Completar factura ya creada (agente/efectivo/recibos) --
+        // se encola cuando esos pasos fallan tras los reintentos
+        // inmediatos, tanto para ventas online como offline. La factura ya
+        // existe y esta pagada; solo falta rellenar estos campos. Reintenta
+        // con el mismo backoff de la cola (1/2/5/10 min) hasta lograrlo.
+        // =============================================================
+        if (item.type === "COMPLETE_FACTURACLIENTE") {
+          try {
+            const {
+              idfactura,
+              upd,
+              pagos,
+              codcliente,
+              idempresa,
+              codigofactura,
+              coddivisa,
+            } = item.payload || {};
+
+            if (!idfactura || !upd) {
+              await window.TPV_QUEUE.done(item.id, {
+                ok: false,
+                error: "payload-invalido",
+              });
+              continue;
+            }
+
+            await retryFacturaFollowupStep(() =>
+              updateFacturaCliente(idfactura, upd),
+            );
+
+            if (codcliente && Array.isArray(pagos) && pagos.length) {
+              const today = new Date().toISOString().slice(0, 10);
+              for (const p of pagos) {
+                const importe = Number(Number(p?.importe || 0).toFixed(2));
+                if (!(importe > 0)) continue;
+
+                await retryFacturaFollowupStep(() =>
+                  createReciboCliente({
+                    idfactura,
+                    codcliente,
+                    codpago: p.codpago,
+                    importe,
+                    fechapago: today,
+                    fecha: today,
+                    idempresa,
+                    codigofactura,
+                    coddivisa,
+                  }),
+                );
+              }
+
+              try {
+                await cleanupRecibosFactura(idfactura, pagos);
+              } catch {}
+              try {
+                await validateRecibosAgainstFactura?.(idfactura);
+              } catch {}
+            }
+
+            await window.TPV_QUEUE.done(item.id, { ok: true, idfactura });
+          } catch (e) {
+            // Igual que en CREATE_FACTURACLIENTE: si es un error de datos
+            // real (p.ej. el "nick" guardado en su momento ya no existe
+            // como usuario en FacturaScripts) reintentar cada pocos minutos
+            // para siempre nunca lo va a arreglar solo -- se avisa YA, en
+            // vez de dejarlo en la cola reintentando en silencio.
+            if (isRetryableQueueSyncError(e)) {
+              await window.TPV_QUEUE.error(item.id, e?.message || String(e));
+            } else {
+              await window.TPV_QUEUE.done(item.id, {
+                ok: false,
+                dropped: true,
+                error: e?.message || String(e),
+              });
+
+              const idfacturaRef = item?.payload?.idfactura || "";
+              notifyWorkerSyncIssue(
+                `queue-completion-dropped-${String(item.id)}`,
+                `No se pudo completar el agente/efectivo de la factura ${idfacturaRef} y el motivo no se va a arreglar reintentando (${String(e?.message || e).slice(0, 140)}). Complétala a mano en FacturaScripts.`,
                 { title: "Sincronizacion", modal: true, cooldownMs: 60 * 60 * 1000 },
               );
             }
