@@ -4635,6 +4635,72 @@ console.log(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-08-28 Modo Mesas: cambiar de mesa (mover un pedido a otra mesa libre)\n",
+);
+
+// moveMesaPendingTicket(sourceUid, targetUid) ya existia y funcionaba, pero
+// no habia ningun boton que la disparase: MESAS_TRANS_TABLE_MOVE_SOURCE_UID
+// nunca se asignaba. Esto comprueba que el nuevo boton "Cambiar de mesa"
+// entra en modo "elige destino" y que el manejador de "Otras Mesas" sigue
+// completando el movimiento cuando ese modo esta activo.
+mustContain(
+  index,
+  'id="mesasTransActionMoveTable"',
+  '"Cambiar de mesa" button exists in the mesas transacciones sidebar',
+);
+
+{
+  const idx = renderer.indexOf('"mesasTransActionMoveTable",');
+  const endIdx = idx >= 0 ? renderer.indexOf('"mesasTransOtherTables",', idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("flushLoadedParkedTicketChangesSync();") &&
+    scoped.includes("getMesasPendingTicketByUid(") &&
+    scoped.includes("MESAS_TRANS_TABLE_MOVE_SOURCE_UID = uid;")
+  ) {
+    ok(
+      "Clicking \"Cambiar de mesa\" flushes pending edits, refuses to move an empty table, and arms move-mode for the selected table",
+    );
+  } else {
+    fail(
+      "Clicking \"Cambiar de mesa\" flushes pending edits, refuses to move an empty table, and arms move-mode for the selected table",
+    );
+  }
+}
+
+mustContain(
+  renderer,
+  "MESAS_TRANS_TABLE_MOVE_SOURCE_UID === uid",
+  '"Cambiar de mesa" clicked again while armed cancels move-mode instead of re-arming it',
+);
+
+{
+  const idx = renderer.indexOf("function updateMesasSelectionFromContext(");
+  const endIdx = idx >= 0 ? renderer.indexOf("saveCurrentCartAsMesaDraft();", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (scoped.includes('MESAS_TRANS_TABLE_MOVE_SOURCE_UID = "";')) {
+    ok(
+      "Selecting a table through any other path (dropdown, quick switch) cancels a stale move-mode instead of leaving it armed against a table the user never confirmed",
+    );
+  } else {
+    fail(
+      "Selecting a table through any other path (dropdown, quick switch) cancels a stale move-mode instead of leaving it armed against a table the user never confirmed",
+    );
+  }
+}
+
+mustContain(
+  renderer,
+  '"Elige la mesa destino"',
+  "The sidebar gives clear visual feedback (title + button label change) while move-mode is active",
+);
+mustContain(
+  renderer,
+  '"Cancelar cambio ✕"',
+  'The move button itself relabels to "Cancelar cambio" while armed',
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

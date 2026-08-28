@@ -9309,6 +9309,10 @@ function refreshMesasTransSidebar() {
   const selectedStatusEl = document.getElementById("mesasTransSelectedStatus");
   const selectedTotalEl = document.getElementById("mesasTransSelectedTotal");
   const otherTablesEl = document.getElementById("mesasTransOtherTables");
+  const otherTablesTitleEl = document.getElementById(
+    "mesasTransOtherTablesTitle",
+  );
+  const moveTableBtnEl = document.getElementById("mesasTransActionMoveTable");
   const dinersBtnValEl = document.getElementById(
     "mesasTransActionPersonasValue",
   );
@@ -9366,6 +9370,22 @@ function refreshMesasTransSidebar() {
     dinersBtnValEl.textContent = String(
       Math.max(0, Math.round(selectedDiners)),
     );
+  }
+
+  const moveModeActive = !!MESAS_TRANS_TABLE_MOVE_SOURCE_UID;
+  const moveModeForThisTable =
+    moveModeActive && MESAS_TRANS_TABLE_MOVE_SOURCE_UID === uid;
+  if (moveTableBtnEl) {
+    moveTableBtnEl.classList.toggle("is-active", moveModeForThisTable);
+    moveTableBtnEl.textContent = moveModeForThisTable
+      ? "Cancelar cambio ✕"
+      : "Cambiar de mesa";
+    moveTableBtnEl.disabled = !uid || (!selectedTicket && !moveModeForThisTable);
+  }
+  if (otherTablesTitleEl) {
+    otherTablesTitleEl.textContent = moveModeActive
+      ? "Elige la mesa destino"
+      : "Otras Mesas";
   }
 
   const reservationName = String(
@@ -9633,6 +9653,7 @@ function updateMesasSelectionFromContext(
   if (!preserveReturnView) {
     MESAS_RETURN_TO_VIEW_AFTER_PARK = "";
   }
+  MESAS_TRANS_TABLE_MOVE_SOURCE_UID = "";
   saveCurrentCartAsMesaDraft();
 
   const state = loadMesasTablesStateForInline();
@@ -10134,6 +10155,50 @@ function bindMesasInlineEventsOnce() {
         "Comensales",
         "qty",
       );
+    });
+  }
+
+  const mesasTransActionMoveTable = document.getElementById(
+    "mesasTransActionMoveTable",
+  );
+  if (mesasTransActionMoveTable) {
+    mesasTransActionMoveTable.addEventListener("click", () => {
+      if (!(MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones")) {
+        return;
+      }
+
+      const mesasState = loadMesasTablesStateForInline();
+      const uid = String(mesasState?.selectedTableId || "").trim();
+      if (!uid) {
+        toast("Selecciona una mesa primero.", "warn", "Mesas");
+        return;
+      }
+
+      if (MESAS_TRANS_TABLE_MOVE_SOURCE_UID === uid) {
+        MESAS_TRANS_TABLE_MOVE_SOURCE_UID = "";
+        refreshMesasTransSidebar();
+        toast("Cambio de mesa cancelado.", "info", "Mesas");
+        return;
+      }
+
+      flushLoadedParkedTicketChangesSync();
+
+      const pendingTicket = getMesasPendingTicketByUid(
+        loadMesasTablesStateForInline(),
+        uid,
+      );
+      if (!pendingTicket) {
+        toast(
+          "Esta mesa no tiene ningún pedido para cambiar de sitio.",
+          "warn",
+          "Mesas",
+        );
+        return;
+      }
+
+      MESAS_TRANS_TABLE_MOVE_SOURCE_UID = uid;
+      refreshMesasTransSidebar();
+      toast('Toca la mesa de destino en "Otras Mesas".', "info", "Mesas");
     });
   }
 
