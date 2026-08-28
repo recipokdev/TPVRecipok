@@ -22760,6 +22760,187 @@ async function buildAgentSalesSummaryForCaja(
   return Object.values(map).sort((a, b) => (b.total || 0) - (a.total || 0));
 }
 
+// ---- Cache local del resumen de cierre de caja ----
+//
+// El calculo de arriba (facturas + recibos + desgloses por metodo/agente)
+// puede tardar varios segundos si la caja tiene muchos tickets, porque pide
+// datos reales a FacturaScripts. En vez de recalcularlo solo al pulsar
+// "Cerrar caja" (con la pantalla esperando mientras tanto), se recalcula
+// periodicamente en segundo plano mientras la caja esta abierta y se guarda
+// el resultado en local, para poder abrir el dialogo de cierre mostrando
+// esos numeros al instante. FacturaScripts sigue siendo la fuente de verdad:
+// al abrir el dialogo se refresca igualmente en segundo plano por si algo
+// cambio desde el ultimo calculo periodico, antes de dejar cerrar de verdad.
+const CASH_CLOSE_CACHE_KEY = "cashCloseCache";
+const CASH_CLOSE_CACHE_REFRESH_MS = 4 * 60 * 1000;
+const CASH_CLOSE_CACHE_MAX_AGE_MS = 20 * 60 * 1000;
+
+async function loadCashCloseCache(cajaId) {
+  try {
+    const entry = await window.TPV_CFG?.get?.(CASH_CLOSE_CACHE_KEY);
+    if (!entry || typeof entry !== "object") return null;
+    if (String(entry.cajaId || "") !== String(cajaId || "")) return null;
+    if (
+      Date.now() - Number(entry.computedAt || 0) >
+      CASH_CLOSE_CACHE_MAX_AGE_MS
+    ) {
+      return null;
+    }
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
+async function persistCashCloseCache(entry) {
+  try {
+    await window.TPV_CFG?.set?.(CASH_CLOSE_CACHE_KEY, entry);
+  } catch (e) {
+    console.warn(
+      "No se pudo guardar la caché local del cierre de caja:",
+      e?.message || e,
+    );
+  }
+}
+
+function applyCashCloseCacheEntry(entry) {
+  if (!entry || !entry.remoteCaja || !entry.session) return false;
+
+  applyRemoteCajaToSession(entry.remoteCaja);
+  fillCashObsTextareaFromRemote(entry.remoteCaja);
+  renderCashCloseHeaderCard(entry.remoteCaja);
+
+  Object.assign(cashSession, entry.session);
+
+  renderCashCloseTotalMeta();
+  renderPayMethodsSummary();
+  renderMixedTicketsSummary();
+  renderAgentSalesSummary();
+  updateCloseSummary(Number(cashSession.closingTotal || 0));
+  if (cashDirectTotalEl) {
+    cashDirectTotalEl.value = formatCashDirectAmount(
+      Number(cashSession.closingTotal || 0),
+    );
+  }
+  return true;
+}
+
+// Calcula el resumen real de cierre desde FacturaScripts. Con applyToUI
+// (por defecto true) tambien lo pinta en el dialogo de cierre, igual que
+// siempre; el refresco periodico en segundo plano pasa applyToUI:false para
+// no pisar cosas que el usuario pueda estar editando en el dialogo (p.ej.
+// las observaciones) mientras este abierto. En ambos casos deja una copia
+// en la cache local para la proxima vez.
+async function runCashCloseSummaryComputation({ applyToUI = true } = {}) {
+  const cajaIdHint = cashSession.remoteCajaId || null;
+  const [remoteCaja, , facturasCajaEarly] = await Promise.all([
+    apiReadCurrentCaja(),
+    ensurePayMethodLabelsLoaded(),
+    cajaIdHint
+      ? fetchApiResourceWithParams("facturaclientes", {
+          "filter[idcaja]": cajaIdHint,
+          limit: 0,
+        })
+      : Promise.resolve(null),
+  ]);
+  if (!remoteCaja) {
+    if (applyToUI) updateCloseSummary(Number(cashSession.closingTotal || 0));
+    return null;
+  }
+
+  if (applyToUI) {
+    applyRemoteCajaToSession(remoteCaja);
+    fillCashObsTextareaFromRemote(remoteCaja);
+    renderCashCloseHeaderCard(remoteCaja);
+  }
+
+  const cajaId = cashSession.remoteCajaId || remoteCaja.idcaja;
+
+  const facturasCaja =
+    cajaIdHint === cajaId && Array.isArray(facturasCajaEarly)
+      ? facturasCajaEarly
+      : await fetchApiResourceWithParams("facturaclientes", {
+          "filter[idcaja]": cajaId,
+          limit: 0,
+        });
+  const facturasCajaList = Array.isArray(facturasCaja) ? facturasCaja : [];
+
+  const idsFacturasCaja = facturasCajaList
+    .map((f) => Number(f?.idfactura || 0))
+    .filter((n) => Number.isFinite(n) && n > 0);
+
+  const recibosCaja = idsFacturasCaja.length
+    ? await fetchRecibosByFacturasMulti(idsFacturasCaja)
+    : [];
+  const recibosByFactura = buildRecibosByFacturaMap(recibosCaja);
+
+  cashSession.closeFacturasSnapshot = facturasCajaList;
+  cashSession.closeRecibosByFacturaSnapshot = recibosByFactura;
+
+  const [, , agentSalesSummary] = await Promise.all([
+    hydrateCloseTicketStatsForCaja(cajaId, facturasCajaList),
+    hydratePaymentsByMethodForClose(
+      cajaId,
+      facturasCajaList,
+      recibosByFactura,
+    ),
+    buildAgentSalesSummaryForCaja(cajaId, facturasCajaList, recibosByFactura),
+  ]);
+  cashSession.agentSalesSummary = agentSalesSummary;
+
+  if (applyToUI) {
+    renderCashCloseTotalMeta();
+    renderPayMethodsSummary();
+    renderMixedTicketsSummary();
+    renderAgentSalesSummary();
+
+    updateCloseSummary(Number(cashSession.closingTotal || 0));
+    if (cashDirectTotalEl) {
+      cashDirectTotalEl.value = formatCashDirectAmount(
+        Number(cashSession.closingTotal || 0),
+      );
+    }
+  }
+
+  const cacheEntry = {
+    cajaId,
+    computedAt: Date.now(),
+    remoteCaja,
+    session: {
+      closeFacturasSnapshot: facturasCajaList,
+      closeRecibosByFacturaSnapshot: recibosByFactura,
+      paymentsByMethod: cashSession.paymentsByMethod,
+      totalPaymentUses: cashSession.totalPaymentUses,
+      numtickets: cashSession.numtickets,
+      ticketCountByAgent: cashSession.ticketCountByAgent,
+      agentSalesSummary,
+    },
+  };
+  await persistCashCloseCache(cacheEntry);
+
+  return cacheEntry;
+}
+
+let __cashCloseCacheRefreshInFlight = false;
+(function startCashCloseCacheRefreshTimer() {
+  setInterval(() => {
+    if (__cashCloseCacheRefreshInFlight) return;
+    if (!cashSession?.open || !cashSession?.remoteCajaId) return;
+
+    __cashCloseCacheRefreshInFlight = true;
+    runCashCloseSummaryComputation({ applyToUI: false })
+      .catch((e) => {
+        console.warn(
+          "No se pudo refrescar en segundo plano la caché del cierre de caja:",
+          e?.message || e,
+        );
+      })
+      .finally(() => {
+        __cashCloseCacheRefreshInFlight = false;
+      });
+  }, CASH_CLOSE_CACHE_REFRESH_MS);
+})();
+
 // ---- Apertura / cierre de caja ----
 
 function closeCashOpenDialog() {
@@ -22984,87 +23165,33 @@ function openCashOpenDialog(mode = "open") {
     cashCloseSummaryReadyPromise = (async () => {
       try {
         // cashSession.remoteCajaId ya se conoce en cuanto la caja esta
-        // abierta (apiReadCurrentCaja lo usa como su propio idcaja de
-        // entrada), asi que no hace falta esperar a remoteCaja para poder
-        // pedir ya las facturas de la caja -- se piden las 3 cosas a la vez
-        // en vez de una detras de otra.
+        // abierta. Si hay una caché reciente para esta misma caja (del
+        // refresco periódico en segundo plano), se pinta al instante y solo
+        // se refresca por detrás, en vez de esperar a FacturaScripts con la
+        // pantalla en "Cargando...".
         const cajaIdHint = cashSession.remoteCajaId || null;
-        const [remoteCaja, , facturasCajaEarly] = await Promise.all([
-          apiReadCurrentCaja(),
-          ensurePayMethodLabelsLoaded(),
-          cajaIdHint
-            ? fetchApiResourceWithParams("facturaclientes", {
-                "filter[idcaja]": cajaIdHint,
-                limit: 0,
-              })
-            : Promise.resolve(null),
-        ]);
-        if (!remoteCaja) {
-          updateCloseSummary(Number(cashSession.closingTotal || 0));
+        const cached = cajaIdHint ? await loadCashCloseCache(cajaIdHint) : null;
+
+        if (cached) {
+          applyCashCloseCacheEntry(cached);
+          // Los números ya se ven; no hace falta seguir bloqueando el botón
+          // mientras se confirma en segundo plano que siguen al día (el
+          // cierre real sigue esperando a cashCloseSummaryReadyPromise antes
+          // de dejar cerrar, así que no se puede cerrar con datos viejos).
+          if (cashOpenOkBtn && cashDialogMode === "close") {
+            cashOpenOkBtn.disabled = false;
+            cashOpenOkBtn.textContent = "Cerrar caja";
+          }
+          await runCashCloseSummaryComputation().catch((e) => {
+            console.warn(
+              "No se pudo refrescar el resumen de cierre:",
+              e?.message || e,
+            );
+          });
           return;
         }
 
-        // 1) aplicar caja remota
-        applyRemoteCajaToSession(remoteCaja);
-        fillCashObsTextareaFromRemote(remoteCaja);
-        renderCashCloseHeaderCard(remoteCaja);
-
-        // 2) construir resúmenes (IMPORTANTE: sin duplicar)
-        const cajaId = cashSession.remoteCajaId || remoteCaja.idcaja;
-
-        const facturasCaja =
-          cajaIdHint === cajaId && Array.isArray(facturasCajaEarly)
-            ? facturasCajaEarly
-            : await fetchApiResourceWithParams("facturaclientes", {
-                "filter[idcaja]": cajaId,
-                limit: 0,
-              });
-        const facturasCajaList = Array.isArray(facturasCaja)
-          ? facturasCaja
-          : [];
-
-        const idsFacturasCaja = facturasCajaList
-          .map((f) => Number(f?.idfactura || 0))
-          .filter((n) => Number.isFinite(n) && n > 0);
-
-        const recibosCaja = idsFacturasCaja.length
-          ? await fetchRecibosByFacturasMulti(idsFacturasCaja)
-          : [];
-        const recibosByFactura = buildRecibosByFacturaMap(recibosCaja);
-
-        cashSession.closeFacturasSnapshot = facturasCajaList;
-        cashSession.closeRecibosByFacturaSnapshot = recibosByFactura;
-
-        // Las tres construyen resumenes distintos a partir de los MISMOS
-        // datos ya obtenidos arriba (facturasCajaList/recibosByFactura), sin
-        // que ninguna necesite el resultado de otra -- van a la vez.
-        const [, , agentSalesSummary] = await Promise.all([
-          // ✅ tickets reales de la caja
-          hydrateCloseTicketStatsForCaja(cajaId, facturasCajaList),
-          // Métodos (TOTAL)
-          hydratePaymentsByMethodForClose(
-            cajaId,
-            facturasCajaList,
-            recibosByFactura,
-          ),
-          // Agentes + métodos por agente
-          buildAgentSalesSummaryForCaja(cajaId, facturasCajaList, recibosByFactura),
-        ]);
-        cashSession.agentSalesSummary = agentSalesSummary;
-
-        // 4) pintar UI en el orden correcto
-        renderCashCloseTotalMeta(); // ✅ TOTAL + (Agente si solo 1)
-        renderPayMethodsSummary(); // ✅ TOTAL por métodos
-        renderMixedTicketsSummary(); // ✅ detalle de tickets mixtos
-        renderAgentSalesSummary(); // ✅ por agente (solo si >1)
-
-        // 5) resumen superior (cifra esperada, etc.)
-        updateCloseSummary(Number(cashSession.closingTotal || 0));
-        if (cashDirectTotalEl) {
-          cashDirectTotalEl.value = formatCashDirectAmount(
-            Number(cashSession.closingTotal || 0),
-          );
-        }
+        await runCashCloseSummaryComputation();
       } catch (e) {
         console.warn("No se pudo leer la caja remota:", e);
         updateCloseSummary(Number(cashSession.closingTotal || 0));

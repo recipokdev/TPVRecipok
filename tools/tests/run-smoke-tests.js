@@ -3996,7 +3996,7 @@ mustContain(
   // se piden a la vez, no una detras de otra -- eran ~3 idas y vueltas
   // reales secuenciales antes de poder empezar a calcular el resumen.
   const idx = renderer.indexOf(
-    "cashCloseSummaryReadyPromise = (async () => {",
+    "async function runCashCloseSummaryComputation({ applyToUI = true } = {}) {",
   );
   const endIdx =
     idx >= 0 ? renderer.indexOf("const facturasCajaList", idx) : -1;
@@ -4700,6 +4700,87 @@ mustContain(
   '"Cancelar cambio ✕"',
   'The move button itself relabels to "Cancelar cambio" while armed',
 );
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-28 cierre de caja: caché local del resumen\n",
+);
+
+// El calculo del resumen de cierre (facturas + recibos + desgloses) podia
+// tardar varios segundos con una caja concurrida, porque siempre pedia todo
+// de nuevo a FacturaScripts justo al pulsar "Cerrar caja". Ahora se
+// recalcula periodicamente en segundo plano mientras la caja esta abierta y
+// se guarda en local (TPV_CFG), para poder pintar el dialogo al instante con
+// esos datos y refrescar por detras, sin dejar de esperar esa confirmacion
+// antes de permitir cerrar de verdad.
+mustContain(
+  renderer,
+  "async function runCashCloseSummaryComputation({ applyToUI = true } = {}) {",
+  "runCashCloseSummaryComputation exists and can skip UI writes (background mode)",
+);
+mustContain(
+  renderer,
+  "function applyCashCloseCacheEntry(entry) {",
+  "applyCashCloseCacheEntry exists to instantly repaint the close dialog from a cached snapshot",
+);
+
+{
+  const idx = renderer.indexOf("(function startCashCloseCacheRefreshTimer() {");
+  const endIdx = idx >= 0 ? renderer.indexOf("})();", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("if (!cashSession?.open || !cashSession?.remoteCajaId) return;") &&
+    scoped.includes("runCashCloseSummaryComputation({ applyToUI: false })")
+  ) {
+    ok(
+      "A background timer periodically refreshes the cash-close cache while (and only while) the caja is open, without touching the visible dialog",
+    );
+  } else {
+    fail(
+      "A background timer periodically refreshes the cash-close cache while (and only while) the caja is open, without touching the visible dialog",
+    );
+  }
+}
+
+{
+  const idx = renderer.indexOf("async function loadCashCloseCache(cajaId) {");
+  const scoped = idx >= 0 ? renderer.slice(idx, idx + 600) : "";
+  if (
+    scoped.includes('String(entry.cajaId || "") !== String(cajaId || "")') &&
+    scoped.includes("CASH_CLOSE_CACHE_MAX_AGE_MS")
+  ) {
+    ok(
+      "loadCashCloseCache refuses a cached entry that belongs to a different caja or is too old to trust",
+    );
+  } else {
+    fail(
+      "loadCashCloseCache refuses a cached entry that belongs to a different caja or is too old to trust",
+    );
+  }
+}
+
+{
+  // Al abrir el dialogo de cierre: si hay caché válida se pinta al instante
+  // y se libera el botón, pero cashCloseSummaryReadyPromise sigue esperando
+  // al refresco real en segundo plano -- así el cierre de verdad (mas abajo,
+  // en el guard de cashCloseSummaryLoading) nunca se dispara con datos de
+  // caché sin confirmar por FacturaScripts.
+  const idx = renderer.indexOf("const cached = cajaIdHint ? await loadCashCloseCache(cajaIdHint) : null;");
+  const endIdx = idx >= 0 ? renderer.indexOf("await runCashCloseSummaryComputation();", idx + 1) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("applyCashCloseCacheEntry(cached);") &&
+    scoped.includes('cashOpenOkBtn.textContent = "Cerrar caja";') &&
+    scoped.includes("await runCashCloseSummaryComputation().catch((e) => {")
+  ) {
+    ok(
+      "Opening the close dialog paints instantly from cache when available, re-enables the button right away, but still awaits a real background refresh before cashCloseSummaryReadyPromise resolves",
+    );
+  } else {
+    fail(
+      "Opening the close dialog paints instantly from cache when available, re-enables the button right away, but still awaits a real background refresh before cashCloseSummaryReadyPromise resolves",
+    );
+  }
+}
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
