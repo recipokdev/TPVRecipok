@@ -13645,8 +13645,38 @@ function confirmModal(title, text, options = {}) {
   });
 }
 
+// Feedback de cliente real: si el programa se queda colgado a mitad de un
+// cobro (p.ej. una peticion de red que nunca resuelve), este mismo guard
+// dejaba al cajero sin salida -- no podia cobrar (por la incidencia) NI
+// cerrar el programa para reiniciarlo (porque el guard exige cerrar la caja
+// / resolver los aparcados primero, y eso tambien pasa por cobrar). Se
+// ofrece aqui, en el propio aviso, una salida de emergencia explicita: no
+// toca la caja ni los aparcados (viven en el servidor, no se pierden), solo
+// cierra y reabre el programa para poder seguir trabajando.
+const EMERGENCY_EXIT_RESULT = "emergency-exit";
+
 window.TPV_UI?.onGuard?.(async ({ title, text }) => {
-  await confirmModal(title || "Aviso", text || "");
+  const choice = await confirmModal(
+    title || "Aviso",
+    `${text || ""}\n\n¿El programa no responde y necesitas salir igualmente? La caja y los aparcados seguirán tal cual -- no se pierde nada -- solo se reiniciará el programa.`,
+    {
+      okButtonText: "Entendido",
+      middleButtonText: "Salir sin cerrar caja (incidencia)",
+      middleButtonResult: EMERGENCY_EXIT_RESULT,
+    },
+  );
+
+  if (choice !== EMERGENCY_EXIT_RESULT) return;
+
+  const reallyExit = await confirmModal(
+    "Salida de emergencia",
+    "El programa se cerrará ahora sin cerrar la caja ni cobrar los aparcados -- ambos seguirán exactamente igual que ahora. Vuelve a abrir el programa en cuanto puedas para seguir trabajando.\n\nUsa esto solo si el programa de verdad no responde.",
+    { okButtonText: "Sí, salir de emergencia" },
+  );
+
+  if (reallyExit) {
+    await window.TPV_APP?.emergencyRestart?.();
+  }
 });
 
 // ===== [09] Feedback UI: toasts =====
@@ -15979,6 +16009,22 @@ async function waitForSilentAutoSaveToSettle(maxMs = 3000) {
 
 async function parkCurrentCart(name = "", obs = "", opts = {}) {
   const silentAutoSave = opts?.silentAutoSave === true;
+
+  // Real de cliente 2026-09-01 (Asador el gallo): "quito el medio pollo y
+  // pongo el entero, pero el medio sigue sumando en el stock aunque ya no
+  // aparece en ningun sitio". Causa real: si el autoguardado silencioso de
+  // fondo (scheduleTpvAutoSave, debounce ~420ms) estaba en marcha justo
+  // cuando el cajero terminaba de editar y esta funcion se llamaba de
+  // verdad (no en modo silencioso), el guard de abajo se rendia en
+  // silencio -- SIN esperar ni avisar -- descartando ese guardado con los
+  // datos ya correctos. Lo que quedaba grabado era el autoguardado anterior,
+  // que podia haberse disparado con el pack todavia puesto. Una llamada NO
+  // silenciosa ahora espera a que termine el autoguardado en marcha (que ya
+  // lee el carrito en vivo, asi que esperar no pierde ningun cambio) en vez
+  // de rendirse sin mas.
+  if (!silentAutoSave) {
+    await waitForSilentAutoSaveToSettle();
+  }
 
   // El autoguardado silencioso de fondo (scheduleMesasAutoSave/
   // scheduleTpvAutoSave, con debounce ya existente) NO debe tomar isParkingNow:
@@ -29345,6 +29391,49 @@ async function createTicketInFacturaScripts(ticketPayload) {
     }
   };
 
+  // Real de cliente 2026-08-31 (asador_el_gallo, domingo con mucho volumen y
+  // 2 terminales cobrando a la vez): varias ventas reales fallaron con este
+  // 422 y el mensaje generico de FacturaScripts ("Ha ocurrido un error
+  // mientras se guardaban los datos"). Revisando los logs del propio
+  // servidor, la causa NO era un dato invalido sino pura contencion de base
+  // de datos entre los dos terminales: "Duplicate entry ... uniq_codigo_
+  // facturascli" (el numero de factura autogenerado colisiono) y "Deadlock
+  // found when trying to get lock". Ambos son transitorios por definicion --
+  // en el segundo intento la transaccion que colisionaba ya ha terminado --
+  // pero como no habia ningun reintento aqui, cada tropiezo tiraba la venta
+  // entera al flujo de "cobro fallido" (aparcado nuevo a revisar a mano),
+  // con el cliente ya habiendose ido pensando que estaba cobrado. Reintentar
+  // unas pocas veces con un pequeño backoff, comprobando primero por
+  // numero2 (igual que ya se hace para el caso de 5xx de abajo) para nunca
+  // duplicar la factura, resuelve la inmensa mayoria de estos casos solo.
+  const isGenericSaveError = (data) =>
+    String(data?.message || "").trim().toLowerCase() ===
+    "ha ocurrido un error mientras se guardaban los datos";
+
+  let genericSaveErrorAttempts = 0;
+  while (
+    !submit.res.ok &&
+    submit.res.status === 422 &&
+    isGenericSaveError(submit.data) &&
+    genericSaveErrorAttempts < 3
+  ) {
+    genericSaveErrorAttempts++;
+    await sleep(300 + genericSaveErrorAttempts * 400 + Math.random() * 200);
+
+    const recovered = await tryRecoverExistingFactura();
+    if (recovered) {
+      console.warn(
+        `[crearFacturaCliente] 422 generico pero ya existía una factura con numero2=${ticketPayload.numero2} tras reintento -- usando esa.`,
+      );
+      return { doc: recovered, dedup: true, recovered: true };
+    }
+
+    console.warn(
+      `[crearFacturaCliente] 422 generico (probable colision/deadlock transitorio), reintento ${genericSaveErrorAttempts}/3`,
+    );
+    submit = await doPost(bodyParams);
+  }
+
   if (!submit.res.ok) {
     if (submit.res.status >= 500) {
       const recovered = await tryRecoverExistingFactura();
@@ -31478,6 +31567,16 @@ function isRetryableQueueSyncError(err) {
   if (/error http\s*5\d\d/i.test(msg)) return true;
   if (low.includes("tempor") && low.includes("error")) return true;
 
+  // Mensaje generico de FacturaScripts para CUALQUIER excepcion no
+  // controlada al guardar (ver crearFacturaCliente): confirmado en real
+  // (asador_el_gallo, 2026-08-31) que esto envuelve tanto colisiones de
+  // numero de factura duplicado como deadlocks de MySQL bajo varios
+  // terminales a la vez -- ambos transitorios. Aplica tambien a los pasos
+  // posteriores (agente/efectivo, recibos) por si tropiezan con la misma
+  // contencion.
+  if (low.includes("ha ocurrido un error mientras se guardaban los datos"))
+    return true;
+
   return false;
 }
 
@@ -31555,6 +31654,18 @@ async function validateRecibosAgainstFactura(idfactura) {
 }
 
 let isPayingNow = false;
+// Red de seguridad (feedback de cliente real: "el TPV se quedó colgado
+// cobrando un ticket y no permitía hacer ningún cobro", solo se pudo
+// recuperar reiniciando -- y ni siquiera eso era facil, ver el guard de
+// cierre). isPayingNow solo se libera en el finally de onPayButtonClick: si
+// ALGO por el medio (una peticion de red sin timeout, por ejemplo) se queda
+// esperando para siempre sin resolver ni fallar nunca, ese finally nunca
+// llega a correr y el boton "Cobrar" queda inutil el resto de la sesion. Ya
+// se ha corregido el caso concreto que se encontro (fetchApiResourceWithParams
+// sin timeout), pero en vez de perseguir cada posible punto de cuelgue uno a
+// uno, este vigilante libera el bloqueo solo, avisando claramente, si
+// "Cobrar" lleva demasiado tiempo sin terminar -- pase lo que pase por dentro.
+let isPayingNowWatchdogTimer = null;
 let isParkingNow = false;
 // Guardado silencioso de fondo (autoguardado con debounce) en curso -- no
 // bloquea la edicion del carrito (a diferencia de isParkingNow), solo evita
@@ -34695,7 +34806,12 @@ function enqueueSaleProcessing(taskFn) {
 // eso, se recupera como un aparcado nuevo (con los mismos datos que iban a
 // facturarse) para que se pueda revisar y volver a cobrar sin perder nada
 // ni tocar el carrito actual.
-async function parkFailedSaleForRetry(cartSnapshot, ticketPayload, reason) {
+async function parkFailedSaleForRetry(
+  cartSnapshot,
+  ticketPayload,
+  reason,
+  originTicket = null,
+) {
   try {
     const items = Array.isArray(cartSnapshot)
       ? cartSnapshot.map((i) => ({ ...i }))
@@ -34711,6 +34827,28 @@ async function parkFailedSaleForRetry(cartSnapshot, ticketPayload, reason) {
     const total = Number(
       ticketPayload?.total || getCartTotal(items) || 0,
     );
+
+    // Real de cliente 2026-08-31: cuando la venta que fallo venia de un
+    // aparcado o una mesa ya identificados (originTicket, la misma foto fija
+    // que usa markParkedTicketAsPaidByIndex), este aparcado de recuperacion
+    // se creaba SIEMPRE como "Cliente" generico sin ningun rastro de mesa u
+    // origen -- el cajero tenia que adivinar a que cliente pertenecia mirando
+    // solo el numero de ticket. Si tenemos ese origen, se conserva el nombre
+    // real y se anota la mesa en las observaciones (sin re-engancharlo al
+    // modo Mesas de verdad -- ver clearMesaScopeFromTicket mas abajo -- para
+    // no complicar un flujo que ya es de por si una recuperacion de emergencia).
+    const originClientName = String(originTicket?.clientName || "").trim();
+    const originMesaLabel = [
+      originTicket?.mesaRoomName,
+      originTicket?.mesaTableName,
+    ]
+      .filter((v) => String(v || "").trim())
+      .join(" - ");
+
+    const obsParts = [
+      `Recuperado automaticamente tras un fallo al cobrar: ${String(reason || "").slice(0, 200)}`,
+    ];
+    if (originMesaLabel) obsParts.push(`Mesa de origen: ${originMesaLabel}`);
 
     const localTicket = {
       id: nextTicketId,
@@ -34728,11 +34866,13 @@ async function parkFailedSaleForRetry(cartSnapshot, ticketPayload, reason) {
       localRevisionAt: Date.now(),
       items,
       total,
-      codcliente: String(ticketPayload?.codcliente || "1").trim() || "1",
-      clientName: "Cliente",
+      codcliente:
+        String(originTicket?.codcliente || ticketPayload?.codcliente || "1").trim() ||
+        "1",
+      clientName: originClientName || "Cliente",
       docType: "ticket",
       name: `Cobro fallido #${nextDisplayNo}`,
-      obs: `Recuperado automaticamente tras un fallo al cobrar: ${String(reason || "").slice(0, 200)}`,
+      obs: obsParts.join(" | "),
       parkingMode: PARKED_MODE_TPV,
       modoMesas: 0,
       modeMesas: 0,
@@ -34755,6 +34895,31 @@ async function parkFailedSaleForRetry(cartSnapshot, ticketPayload, reason) {
       enqueueParkedSyncOperation("upsert", localTicket);
       console.warn(
         "No se pudo guardar en el servidor la venta fallida recuperada como aparcado (se reintentara en segundo plano):",
+        e?.message || e,
+      );
+    }
+
+    // Real de cliente 2026-08-31: este aparcado se crea SIN pasar por el
+    // flujo normal de "aparcar" (crear aparcado), que es el que reserva
+    // stock en FacturaScripts (ver syncReservedStockDeltaToFS, "crear
+    // aparcado"). Pero markParkedTicketAsPaidByIndex y deleteParkedTicketByIndex
+    // SIEMPRE liberan esa reserva al cobrar/borrar cualquier aparcado, sin
+    // distinguir de donde vino. Sin este paso, cuando este aparcado se
+    // resuelva (se cobre o se borre), se liberaria una reserva que nunca se
+    // hizo -- sumando stock de mas que nunca se resto, exactamente el "stock
+    // no me coincide" que reporto el cliente. Reservar aqui, igual que un
+    // aparcado normal, deja el balance correcto pase lo que pase despues.
+    try {
+      const reservedDelta = buildReservedQtyDeltaMap(items, []);
+      if (reservedDelta.size > 0) {
+        await syncReservedStockDeltaToFS(
+          reservedDelta,
+          "crear aparcado (venta fallida recuperada)",
+        );
+      }
+    } catch (e) {
+      console.warn(
+        "No se pudo reservar stock para la venta fallida recuperada como aparcado:",
         e?.message || e,
       );
     }
@@ -34792,6 +34957,29 @@ async function onPayButtonClick() {
     if (isPayingNow || isParkingNow) return;
     isPayingNow = true;
     refreshAgentGuardUI?.();
+
+    // Ver declaracion de isPayingNowWatchdogTimer: si "Cobrar" no termina
+    // (ni en exito ni en error) en un tiempo razonable, algo esta colgado de
+    // verdad -- se libera el bloqueo solo en vez de dejar el TPV inutil el
+    // resto del turno.
+    if (isPayingNowWatchdogTimer) clearTimeout(isPayingNowWatchdogTimer);
+    isPayingNowWatchdogTimer = setTimeout(() => {
+      isPayingNowWatchdogTimer = null;
+      if (!isPayingNow) return;
+      isPayingNow = false;
+      refreshAgentGuardUI?.();
+      logFeatureError(
+        "COBRO",
+        "watchdog-isPayingNow-liberado",
+        new Error("onPayButtonClick no termino a tiempo"),
+        { requestId },
+      );
+      showMessageModal(
+        "Cobrar se ha desbloqueado solo",
+        "El botón «Cobrar» llevaba demasiado tiempo sin responder (probable problema de red) y se ha liberado automáticamente para que puedas seguir vendiendo.\n\n" +
+          "IMPORTANTE: antes de volver a cobrar este mismo ticket, comprueba en «Tickets» o en FacturaScripts si esa venta ya se llegó a registrar -- para no cobrarla dos veces.",
+      );
+    }, 45000);
 
     window.__POSTPAY_PENDING__ = null;
 
@@ -35273,6 +35461,10 @@ async function onPayButtonClick() {
       ).catch(() => {});
     }
   } finally {
+    if (isPayingNowWatchdogTimer) {
+      clearTimeout(isPayingNowWatchdogTimer);
+      isPayingNowWatchdogTimer = null;
+    }
     isPayingNow = false;
     refreshAgentGuardUI?.();
   }
@@ -35853,6 +36045,7 @@ async function processConfirmedSale(ctx) {
         cartSnapshot,
         ticketPayload,
         msg,
+        parkedTicketFallbackForMark,
       );
     }
 
@@ -42312,7 +42505,16 @@ async function fetchApiResourceWithParams(resource, params = {}) {
 
   const url = `${base}/${resource}${sp.toString() ? "?" + sp.toString() : ""}`;
 
-  const res = await fetch(url, {
+  // Feedback de cliente real: el TPV se quedaba colgado a mitad de un cobro
+  // ("no permitia hacer ningun cobro") y solo se recuperaba reiniciando --
+  // encajaba con isPayingNow atascado en true para siempre porque algo en
+  // medio del cobro nunca resolvia ni fallaba. Este fetch (usado por 40
+  // sitios distintos, incluida la resolucion de tarifa del cliente que se
+  // hace justo antes de facturar) no tenia ningun timeout: en una red
+  // inestable de verdad puede quedarse esperando para siempre sin que fetch
+  // ni resuelva ni rechace nunca. Mismo fix que ya se aplico en su momento a
+  // otros fetches sueltos (ver fetchWithTimeout).
+  const res = await fetchWithTimeout(url, {
     headers: { Accept: "application/json", Token: cfg.apiKey },
     cache: "no-store",
   });

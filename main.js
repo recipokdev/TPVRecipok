@@ -20,6 +20,16 @@ let lastCustomerState = null;
 let allowCustomerClose = false;
 let lastSecondInstanceUpdateCheckAt = 0;
 let forceRelaunchForUpdate = false;
+// Feedback de cliente real (incidencia con el TPV colgado a mitad de un
+// cobro): el guard de cierre (caja abierta / aparcados pendientes) es
+// correcto en el 99% de los casos, pero durante una incidencia de verdad
+// (el programa deja de responder al cobrar) se convertia en un callejon sin
+// salida -- no podian cobrar (por la incidencia) NI cerrar el programa para
+// reiniciarlo (por el guard), ya que ambos requerian que el cobro
+// funcionara. Este flag permite saltarse el guard sin tocar la caja ni los
+// aparcados (que viven en el servidor, no en la ventana que se cierra) --
+// ver tpv:emergencyRestart.
+let forceEmergencyRestart = false;
 const scaleManager = new ScaleManager();
 let scaleReconnectMonitorTimer = null;
 let scaleReconnectInFlight = false;
@@ -441,8 +451,9 @@ function createWindow() {
     // Si el cierre viene “permitido” (ej: app.quit controlado), dejamos pasar
     if (allowMainClose) return;
 
-    // Cierre especial para actualización manual/programática.
-    if (appIsInstallingUpdate || forceRelaunchForUpdate) {
+    // Cierre especial para actualización manual/programática, o para la
+    // salida de emergencia (ver tpv:emergencyRestart).
+    if (appIsInstallingUpdate || forceRelaunchForUpdate || forceEmergencyRestart) {
       allowMainClose = true;
       return;
     }
@@ -2638,6 +2649,46 @@ ipcMain.handle("updater:relaunchForUpdate", async () => {
     return {
       ok: false,
       reason: "relaunch-failed",
+      message: e?.message || String(e),
+    };
+  }
+});
+
+// Salida de emergencia (ver forceEmergencyRestart mas arriba): cierra y
+// reabre el programa SIN pasar por el guard de caja abierta / aparcados
+// pendientes. No toca la caja ni los aparcados -- ambos viven en el
+// servidor (FacturaScripts / la cola de sincronizacion), no en esta
+// ventana, asi que cerrar el proceso local no los pierde ni los altera.
+// Pensado solo para cuando el programa deja de responder y el cajero
+// necesita reiniciar sin poder primero cobrar/cerrar caja normalmente.
+ipcMain.handle("tpv:emergencyRestart", async () => {
+  try {
+    forceEmergencyRestart = true;
+
+    stopPreCashUpdateRetries();
+    destroyCustomerWindow();
+
+    if (mainWin && !mainWin.isDestroyed()) {
+      try {
+        mainWin.close();
+      } catch {}
+    }
+
+    app.relaunch();
+
+    setTimeout(() => {
+      try {
+        app.exit(0);
+      } catch {}
+    }, 20000);
+
+    app.quit();
+    return { ok: true };
+  } catch (e) {
+    forceEmergencyRestart = false;
+    return {
+      ok: false,
+      reason: "emergency-restart-failed",
       message: e?.message || String(e),
     };
   }

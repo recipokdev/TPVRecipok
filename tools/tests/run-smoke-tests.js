@@ -1073,8 +1073,10 @@ console.log(
   } else if (
     scoped.includes("const tryRecoverExistingFactura = async () =>") &&
     scoped.includes("submit.res.status >= 500") &&
+    // 3 desde 2026-08-31: las 2 de siempre (dedup inicial + recuperacion en
+    // el 5xx ambiguo) mas la nueva del reintento del 422 generico transitorio.
     (scoped.match(/return \{ doc: recovered, dedup: true, recovered: true \};/g) || [])
-      .length === 2
+      .length === 3
   ) {
     ok(
       "createTicketInFacturaScripts reconciles by numero2 before failing on an ambiguous response",
@@ -1899,7 +1901,7 @@ mustContain(
 
 {
   const fnStart = renderer.indexOf("async function onPayButtonClick()");
-  const fnBody = fnStart >= 0 ? renderer.slice(fnStart, fnStart + 4500) : "";
+  const fnBody = fnStart >= 0 ? renderer.slice(fnStart, fnStart + 5500) : "";
 
   if (fnStart < 0) {
     fail("onPayButtonClick not found");
@@ -3815,7 +3817,7 @@ mustContain(
 
 mustContain(
   renderer,
-  "async function parkFailedSaleForRetry(cartSnapshot, ticketPayload, reason) {",
+  "async function parkFailedSaleForRetry(",
   "parkFailedSaleForRetry helper exists",
 );
 mustContain(
@@ -4617,7 +4619,7 @@ console.log(
 // caja pertenece el aparcado recuperado. Mismo arreglo: preferir la foto
 // fija (ticketPayload.idtpv) primero.
 {
-  const idx = renderer.indexOf("async function parkFailedSaleForRetry(cartSnapshot, ticketPayload, reason) {");
+  const idx = renderer.indexOf("async function parkFailedSaleForRetry(");
   const endIdx = idx >= 0 ? renderer.indexOf("createdAt: new Date(),", idx) : -1;
   const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
   if (
@@ -5097,6 +5099,280 @@ mustContain(
   "if (currentParkedTicketIndex === idx) {",
   "The synchronous, same-tick delete-parked-ticket flow keeps its direct index comparison (safe there -- no background delay/reordering risk)",
 );
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-31 asador_el_gallo: reintento de crearFacturaCliente ante colision/deadlock transitorio\n",
+);
+
+// Cliente real (asador_el_gallo, domingo con mucho volumen y 2 terminales a
+// la vez): varias ventas reales fallaron con 422 "Ha ocurrido un error
+// mientras se guardaban los datos". Los logs del propio FacturaScripts
+// confirmaron que la causa era contencion de base de datos (numero de
+// factura duplicado / deadlock de MySQL entre los 2 terminales), no un dato
+// invalido -- pero como crearFacturaCliente no reintentaba nunca, cada
+// tropiezo tiraba la venta entera al aparcado "Cobro fallido", con el
+// cliente ya habiendose ido. Ahora se reintenta unas pocas veces antes de
+// rendirse, comprobando primero por numero2 para no duplicar la factura.
+{
+  const idx = renderer.indexOf("const tryRecoverExistingFactura = async () => {");
+  const endIdx = idx >= 0 ? renderer.indexOf("if (!submit.res.ok) {", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes('"ha ocurrido un error mientras se guardaban los datos"') &&
+    scoped.includes("genericSaveErrorAttempts < 3") &&
+    scoped.includes("await tryRecoverExistingFactura();") &&
+    scoped.includes("submit = await doPost(bodyParams);")
+  ) {
+    ok(
+      "createTicketInFacturaScripts retries the generic 422 save-error a few times (checking for an already-created invoice via numero2 first) instead of failing the sale on the first transient collision",
+    );
+  } else {
+    fail(
+      "createTicketInFacturaScripts retries the generic 422 save-error a few times (checking for an already-created invoice via numero2 first) instead of failing the sale on the first transient collision",
+    );
+  }
+}
+
+mustContain(
+  renderer,
+  'if (low.includes("ha ocurrido un error mientras se guardaban los datos"))',
+  "isRetryableQueueSyncError also recognizes FacturaScripts's generic save-error message as retryable, so the post-invoice follow-up steps and offline queue benefit too",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-31 asador_el_gallo: aparcado de venta fallida no descuadra el stock\n",
+);
+
+// Mismo cliente, mismo dia: el cajero reporto que el stock "no le cuadraba"
+// tras varios "Cobro fallido". parkFailedSaleForRetry crea un aparcado SIN
+// pasar por el flujo normal de "aparcar" (que reserva/descuenta stock), pero
+// markParkedTicketAsPaidByIndex y deleteParkedTicketByIndex SIEMPRE liberan
+// (suman) esa reserva al resolver cualquier aparcado, sin distinguir de
+// donde vino -- liberando una reserva que nunca se hizo e inflando el stock.
+// Ahora la recuperacion reserva stock igual que un aparcado normal.
+{
+  const idx = renderer.indexOf("async function parkFailedSaleForRetry(");
+  const endIdx = idx >= 0 ? renderer.indexOf('logFeatureWarn("COBRO", "fallo-recuperado-como-aparcado", {', idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("buildReservedQtyDeltaMap(items, [])") &&
+    scoped.includes("syncReservedStockDeltaToFS(") &&
+    scoped.includes('"crear aparcado (venta fallida recuperada)"')
+  ) {
+    ok(
+      "parkFailedSaleForRetry reserves stock for the recovery ticket just like a normal park, so the later release-on-pay/release-on-delete stays balanced instead of inflating stock",
+    );
+  } else {
+    fail(
+      "parkFailedSaleForRetry reserves stock for the recovery ticket just like a normal park, so the later release-on-pay/release-on-delete stays balanced instead of inflating stock",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-31 asador_el_gallo: aparcado de venta fallida conserva el cliente/mesa de origen\n",
+);
+
+// Mismo cliente: "no pone donde esta el origen, solamente el numero del
+// ticket que ha fallado" y "no borra a los clientes que han fallado". Si la
+// venta fallida venia de un aparcado/mesa ya identificados, ahora se
+// conserva ese nombre de cliente real (en vez de "Cliente" generico) y se
+// anota la mesa de origen en las observaciones.
+{
+  const idx = renderer.indexOf("async function parkFailedSaleForRetry(");
+  const endIdx = idx >= 0 ? renderer.indexOf("clearMesaScopeFromTicket(localTicket);", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("originTicket = null,") &&
+    scoped.includes("clientName: originClientName || \"Cliente\",") &&
+    scoped.includes('obsParts.push(`Mesa de origen: ${originMesaLabel}`);')
+  ) {
+    ok(
+      "parkFailedSaleForRetry preserves the real customer name and annotates the origin table when the failed sale came from an identified parked/mesa ticket",
+    );
+  } else {
+    fail(
+      "parkFailedSaleForRetry preserves the real customer name and annotates the origin table when the failed sale came from an identified parked/mesa ticket",
+    );
+  }
+}
+
+{
+  const idx = renderer.indexOf("recoveredTicket = await parkFailedSaleForRetry(");
+  const endIdx = idx >= 0 ? renderer.indexOf(");", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx + 2) : "";
+  if (scoped.includes("parkedTicketFallbackForMark")) {
+    ok(
+      "The failed-sale recovery call passes through the same origin ticket snapshot already used to mark parked tickets as paid",
+    );
+  } else {
+    fail(
+      "The failed-sale recovery call passes through the same origin ticket snapshot already used to mark parked tickets as paid",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-31: cobrar sin timeout podia colgar el TPV para siempre\n",
+);
+
+// Cliente real (otro cliente distinto): "El TPV se quedó colgado cobrando un
+// ticket y no permitía hacer ningún cobro." Encajaba con isPayingNow atascado
+// en true para siempre porque algun fetch por el medio nunca resolvia ni
+// fallaba -- fetchApiResourceWithParams (usado en 40 sitios, incluida la
+// resolucion de tarifa del cliente justo antes de facturar) no tenia ningun
+// timeout. Se corrige ese punto concreto, y ademas se añade un vigilante
+// generico que libera el bloqueo solo si "Cobrar" no termina a tiempo, pase
+// lo que pase por dentro.
+{
+  const idx = renderer.indexOf("async function fetchApiResourceWithParams(");
+  const endIdx = idx >= 0 ? renderer.indexOf("\n}", renderer.indexOf("return data;", idx)) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (scoped.includes("await fetchWithTimeout(url,") && !scoped.includes("await fetch(url,")) {
+    ok(
+      "fetchApiResourceWithParams (used by 40 call sites, including customer-tariff resolution right before invoicing) now uses fetchWithTimeout instead of a raw fetch that could hang forever",
+    );
+  } else {
+    fail(
+      "fetchApiResourceWithParams (used by 40 call sites, including customer-tariff resolution right before invoicing) now uses fetchWithTimeout instead of a raw fetch that could hang forever",
+    );
+  }
+}
+
+mustContain(
+  renderer,
+  "let isPayingNowWatchdogTimer = null;",
+  "A watchdog timer variable exists to auto-release a stuck isPayingNow flag",
+);
+
+{
+  const idx = renderer.indexOf("async function onPayButtonClick()");
+  const endIdx = idx >= 0 ? renderer.indexOf("window.__POSTPAY_PENDING__ = null;", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("isPayingNowWatchdogTimer = setTimeout(() => {") &&
+    scoped.includes("isPayingNow = false;") &&
+    scoped.includes("showMessageModal(")
+  ) {
+    ok(
+      "onPayButtonClick arms a watchdog that force-releases isPayingNow (with a clear warning to check for a possible duplicate charge) if the payment flow never completes",
+    );
+  } else {
+    fail(
+      "onPayButtonClick arms a watchdog that force-releases isPayingNow (with a clear warning to check for a possible duplicate charge) if the payment flow never completes",
+    );
+  }
+}
+
+{
+  const idx = renderer.indexOf("} finally {\n    if (isPayingNowWatchdogTimer)");
+  const idxLoose = idx >= 0 ? idx : renderer.indexOf("if (isPayingNowWatchdogTimer) {");
+  const scoped = idxLoose >= 0 ? renderer.slice(idxLoose, idxLoose + 400) : "";
+  if (scoped.includes("clearTimeout(isPayingNowWatchdogTimer)") && scoped.includes("isPayingNow = false;")) {
+    ok(
+      "The watchdog timer is cleared on normal completion, so it never fires for a payment that finished fine",
+    );
+  } else {
+    fail(
+      "The watchdog timer is cleared on normal completion, so it never fires for a payment that finished fine",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-08-31: salida de emergencia si el TPV se cuelga con la caja abierta\n",
+);
+
+// Mismo cliente: si el programa se cuelga a mitad de un cobro, el guard de
+// cierre (caja abierta / aparcados pendientes) dejaba sin salida -- no podian
+// cobrar (por el cuelgue) NI cerrar el programa para reiniciar (el guard
+// exige resolver caja/aparcados primero, que tambien pasa por cobrar). Se
+// añade una salida de emergencia explicita que no toca la caja ni los
+// aparcados (viven en el servidor) -- solo cierra y reabre el programa.
+mustContain(
+  main,
+  'let forceEmergencyRestart = false;',
+  "main.js tracks a dedicated emergency-restart flag, separate from the update-relaunch flag",
+);
+mustContain(
+  main,
+  "appIsInstallingUpdate || forceRelaunchForUpdate || forceEmergencyRestart",
+  "The window close guard also lets the emergency-restart flag bypass the cash-open/parked-tickets block",
+);
+{
+  const idx = main.indexOf('ipcMain.handle("tpv:emergencyRestart"');
+  const endIdx = idx >= 0 ? main.indexOf("});", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? main.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("forceEmergencyRestart = true;") &&
+    scoped.includes("mainWin.close();") &&
+    scoped.includes("app.relaunch();") &&
+    scoped.includes("app.quit();")
+  ) {
+    ok(
+      "tpv:emergencyRestart closes and relaunches the app the same proven way as the update-relaunch flow, bypassing the cash/parked guard entirely",
+    );
+  } else {
+    fail(
+      "tpv:emergencyRestart closes and relaunches the app the same proven way as the update-relaunch flow, bypassing the cash/parked guard entirely",
+    );
+  }
+}
+mustContain(
+  preload,
+  'emergencyRestart: () => ipcRenderer.invoke("tpv:emergencyRestart")',
+  "preload.js exposes emergencyRestart to the renderer under TPV_APP",
+);
+{
+  const idx = renderer.indexOf("window.TPV_UI?.onGuard?.(async ({ title, text }) => {");
+  const endIdx = idx >= 0 ? renderer.indexOf("\n});", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("EMERGENCY_EXIT_RESULT") &&
+    scoped.includes("middleButtonText:") &&
+    scoped.includes("window.TPV_APP?.emergencyRestart?.()")
+  ) {
+    ok(
+      "The cash-open/parked-tickets guard dialog now offers a clearly-confirmed emergency-exit path instead of leaving the cashier with no way out",
+    );
+  } else {
+    fail(
+      "The cash-open/parked-tickets guard dialog now offers a clearly-confirmed emergency-exit path instead of leaving the cashier with no way out",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-01: guardado de aparcado no se pierde si choca con el autoguardado\n",
+);
+
+// Cliente real (Asador el gallo): "quito el medio pollo y pongo el entero,
+// pero el medio sigue sumando en el stock aunque ya no aparece en ningun
+// sitio." Reproducido en real (con estado sintetizado identico a un pack de
+// verdad): al editar un aparcado ya cargado (quitar una linea, añadir otra)
+// y volver a guardar, si el autoguardado silencioso de fondo estaba en
+// marcha justo en ese instante, el guardado explicito con los datos ya
+// correctos se descartaba EN SILENCIO -- quedaba grabado el autoguardado
+// anterior, que podia tener la linea quitada todavia puesta. Ahora una
+// llamada no silenciosa espera a que termine el autoguardado en marcha
+// antes de seguir, en vez de rendirse sin avisar.
+{
+  const idx = renderer.indexOf("async function parkCurrentCart(name = \"\", obs = \"\", opts = {}) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("if (silentAutoSave) {", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("if (!silentAutoSave) {") &&
+    scoped.includes("await waitForSilentAutoSaveToSettle();")
+  ) {
+    ok(
+      "parkCurrentCart waits for any in-flight silent autosave to settle before an explicit (non-silent) save, instead of silently dropping the explicit save's up-to-date data",
+    );
+  } else {
+    fail(
+      "parkCurrentCart waits for any in-flight silent autosave to settle before an explicit (non-silent) save, instead of silently dropping the explicit save's up-to-date data",
+    );
+  }
+}
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
