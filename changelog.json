@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.28",
+      "date": "2026-09-01",
+      "title": "Release 0.2.28",
       "changes": [
         "IMPORTANTE: arreglado un descuadre de stock real: al borrar un aparcado que YA ESTABA COBRADO (por ejemplo, para hacer limpieza de la lista), el stock de sus productos volvía a subir como si esa venta se cancelara — aunque la venta ya era real y su stock ya se había descontado correctamente al cobrar. Ahora borrar un aparcado ya cobrado no toca el stock para nada, solo elimina el registro de la lista.",
         "IMPORTANTE: arreglado un fallo relacionado por el que, si se editaba un aparcado (añadir/quitar un producto) y se cobraba justo después, el cobro podía calcular mal cuánto stock liberar porque el guardado de esa edición todavía se estaba terminando de aplicar en segundo plano. Ahora cobrar un aparcado espera primero a que termine cualquier guardado pendiente de ese mismo ticket."
