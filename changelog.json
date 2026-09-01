@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.27",
+      "date": "2026-09-01",
+      "title": "Release 0.2.27",
       "changes": [
         "IMPORTANTE: identificado y arreglado el origen de la ola de «Cobro fallido» del fin de semana pasado (varias ventas reales fallaron y quedaron aparcadas para revisar a mano). En los registros del propio servidor se confirmó que la causa era pura coincidencia de dos terminales cobrando casi a la vez (un número de factura duplicado o un bloqueo pasajero de la base de datos), no ningún dato incorrecto. Ahora, si crear la factura falla por este motivo, se reintenta automáticamente antes de rendirse — la inmensa mayoría de estos casos se resuelven solos sin que el cliente ni el cajero lleguen a notarlo.",
         "IMPORTANTE: corregido un descuadre de stock que podía darse tras un «Cobro fallido»: al recuperarlo como aparcado no se reservaba stock (a diferencia de un aparcado normal), pero al cobrarlo o borrarlo más tarde sí se liberaba esa reserva — que nunca se había hecho — sumando stock de más del que correspondía. Ahora el aparcado de recuperación reserva stock igual que cualquier otro, así el balance siempre queda correcto.",
