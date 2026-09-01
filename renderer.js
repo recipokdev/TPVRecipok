@@ -16007,6 +16007,44 @@ async function waitForSilentAutoSaveToSettle(maxMs = 3000) {
   }
 }
 
+// Real de cliente 2026-09-01 (Asador el gallo): "recupero un ticket, le
+// añado cualquier otro artículo y al cobrarlo vuelve a restar lo que ya
+// tenía" -- confirmado en los logs reales del propio servidor (cada cambio
+// de stock queda registrado con hora exacta via el webhook de WooCommerce):
+// el stock de ese producto quedo con un descuadre justo en los segundos
+// entre editar el aparcado y cobrarlo.
+//
+// Causa real: al ACTUALIZAR un aparcado ya cargado de forma explicita (no
+// en modo autoguardado silencioso), la sincronizacion de stock en
+// FacturaScripts se lanza en segundo plano SIN esperar a que termine (ver
+// finishUpdateParkedTail/finishCreateParkedTail arriba, "aparcar/actualizar
+// bloqueaba TODO el carrito... si mientras tanto llegaba el siguiente
+// cliente, no se le podia atender" -- una mejora de UX intencionada). Eso
+// esta bien para el caso normal, pero si justo despues se cobra ESE MISMO
+// ticket, el paso de "liberar la reserva de stock" (cobrar aparcado) podia
+// arrancar mientras esa sincronizacion de la edicion anterior seguia en
+// vuelo -- dos lecturas-calculo-escritura del mismo producto casi a la vez,
+// y la que terminaba mas tarde se comia el resultado de la otra.
+//
+// Esto NO vuelve a bloquear el flujo normal de aparcar/actualizar (que sigue
+// exactamente igual de rapido); solo hace que COBRAR esa misma reserva
+// espere a que termine su propia sincronizacion de stock pendiente, si la
+// hubiera, antes de calcular que liberar.
+let __pendingParkedStockSyncTail = null;
+async function waitForPendingParkedStockSyncTail(maxMs = 5000) {
+  const tail = __pendingParkedStockSyncTail;
+  if (!tail) return;
+  try {
+    await Promise.race([
+      tail,
+      new Promise((resolve) => setTimeout(resolve, maxMs)),
+    ]);
+  } catch {
+    // Si la sincronizacion de fondo termino en error, no hay nada que
+    // esperar de mas -- seguir es mas seguro que colgarse aqui.
+  }
+}
+
 async function parkCurrentCart(name = "", obs = "", opts = {}) {
   const silentAutoSave = opts?.silentAutoSave === true;
 
@@ -16438,7 +16476,7 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
       if (silentAutoSave) {
         await finishUpdateParkedTail();
       } else {
-        finishUpdateParkedTail().catch((e) => {
+        __pendingParkedStockSyncTail = finishUpdateParkedTail().catch((e) => {
           console.warn(
             "Fondo de actualizar aparcado fallo:",
             e?.message || e,
@@ -16635,7 +16673,7 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
     if (silentAutoSave) {
       await finishCreateParkedTail();
     } else {
-      finishCreateParkedTail().catch((e) => {
+      __pendingParkedStockSyncTail = finishCreateParkedTail().catch((e) => {
         console.warn("Fondo de aparcar (crear) fallo:", e?.message || e);
       });
     }
@@ -18805,7 +18843,16 @@ async function deleteParkedTicketByIndex(
     }
 
     try {
-      if (releaseStock) {
+      // Real de cliente 2026-09-01: un aparcado ya COBRADO ya no tiene
+      // ninguna reserva de stock pendiente que liberar -- esa reserva se
+      // libero de verdad en el momento de cobrar (ver "cobrar aparcado" en
+      // markParkedTicketAsPaidByIndex), justo antes de que la factura real
+      // descontara el stock de verdad. Este ticket, una vez cobrado, es solo
+      // un registro/historial en la lista de aparcados; borrarlo mas tarde
+      // no deberia tocar el stock para nada. Liberar aqui TAMBIEN (como
+      // hacia antes, sin distinguir) sumaba stock que ya se habia
+      // descontado de verdad -- justo el descuadre que reporto el cliente.
+      if (releaseStock && !removedTicket?.paid) {
         const releaseDelta = buildReservedQtyDeltaMap(
           [],
           removedTicket?.items || [],
@@ -19429,6 +19476,20 @@ async function markParkedTicketAsPaidByIndex(
 
   if (!ticket) return false;
   if (ticket.paid) return true;
+
+  // Ver waitForPendingParkedStockSyncTail / waitForSilentAutoSaveToSettle: si
+  // justo antes de cobrar este mismo aparcado se le edito (añadir/quitar un
+  // producto), su sincronizacion de stock puede seguir en marcha en segundo
+  // plano -- ya sea el autoguardado silencioso (si se disparo DESPUES del
+  // primer chequeo de onPayButtonClick, p.ej. mientras el cajero rellenaba
+  // el modal de cobro) o el guardado explicito (que nunca espera a su propia
+  // sincronizacion, a proposito, para no bloquear al operario). Sin esperar
+  // a que termine cualquiera de los dos aqui, la lectura de stock de abajo
+  // (para liberar la reserva) podia chocar con esa escritura todavia en
+  // vuelo y una de las dos se perdia -- el descuadre real que reporto el
+  // cliente.
+  await waitForSilentAutoSaveToSettle();
+  await waitForPendingParkedStockSyncTail();
 
   const reservedItems = Array.isArray(ticket?.items) ? ticket.items : [];
   const reservedDelta = buildReservedQtyDeltaMap([], reservedItems);

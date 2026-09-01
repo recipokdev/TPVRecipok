@@ -5374,6 +5374,86 @@ console.log(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-01: borrar un aparcado ya cobrado no debe volver a liberar su stock\n",
+);
+
+// Cliente real (Asador el gallo): "recupero un ticket, le añado un artículo,
+// al cobrarlo vuelve a restar lo que ya tenía". Investigado con los propios
+// logs de stock del servidor (con hora exacta via el plugin de WooCommerce):
+// se confirmó un descuadre real en la zona de aparcar/editar/cobrar/borrar.
+// La causa concreta demostrada en real: al borrar un aparcado que YA ESTABA
+// COBRADO, se liberaba su stock reservado igual que si nunca se hubiera
+// cobrado -- pero esa reserva ya se habia liberado de verdad en el momento
+// de cobrar. El resultado es que el stock se sumaba de mas cada vez que se
+// borraba (a mano o via limpieza) un aparcado ya cobrado. Verificado en real
+// contra demo: sin el arreglo, borrar el aparcado cobrado subia el stock
+// otra vez; con el arreglo, el stock se queda exactamente igual.
+{
+  const idx = renderer.indexOf("async function deleteParkedTicketByIndex(");
+  const endIdx = idx >= 0 ? renderer.indexOf("if (issues.length)", renderer.indexOf("No se pudo sincronizar stock al eliminar aparcado", idx)) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (scoped.includes("if (releaseStock && !removedTicket?.paid) {")) {
+    ok(
+      "deleteParkedTicketByIndex no libera stock al borrar un aparcado que ya está cobrado (su reserva ya se liberó de verdad al cobrarlo)",
+    );
+  } else {
+    fail(
+      "deleteParkedTicketByIndex no libera stock al borrar un aparcado que ya está cobrado (su reserva ya se liberó de verdad al cobrarlo)",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-01: cobrar un aparcado espera a que termine cualquier guardado de stock pendiente\n",
+);
+
+// Misma investigación: si justo antes de cobrar un aparcado se le habia
+// editado (guardado explicito, que lanza su sincronizacion de stock en
+// segundo plano sin esperarla, a proposito, para no bloquear al operario),
+// cobrar ese mismo aparcado podia arrancar mientras esa sincronizacion
+// seguia en vuelo. Ahora markParkedTicketAsPaidByIndex espera a que termine
+// cualquier autoguardado silencioso Y cualquier guardado explicito pendiente
+// antes de calcular que liberar.
+{
+  const idx = renderer.indexOf("async function markParkedTicketAsPaidByIndex(");
+  const endIdx = idx >= 0 ? renderer.indexOf("const reservedItems = Array.isArray", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("await waitForSilentAutoSaveToSettle();") &&
+    scoped.includes("await waitForPendingParkedStockSyncTail();")
+  ) {
+    ok(
+      "markParkedTicketAsPaidByIndex waits for both a pending silent autosave and a pending explicit-save stock sync before computing what to release",
+    );
+  } else {
+    fail(
+      "markParkedTicketAsPaidByIndex waits for both a pending silent autosave and a pending explicit-save stock sync before computing what to release",
+    );
+  }
+}
+
+mustContain(
+  renderer,
+  "let __pendingParkedStockSyncTail = null;",
+  "A tracked promise exists for the fire-and-forget explicit-save stock sync tail, so other flows can wait for it",
+);
+
+{
+  const occurrences = (
+    renderer.match(/__pendingParkedStockSyncTail = finish(Update|Create)ParkedTail\(\)\.catch/g) || []
+  ).length;
+  if (occurrences === 2) {
+    ok(
+      "Both the create-parked and update-parked explicit-save tails record their promise instead of firing fully untracked",
+    );
+  } else {
+    fail(
+      "Both the create-parked and update-parked explicit-save tails record their promise instead of firing fully untracked",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
