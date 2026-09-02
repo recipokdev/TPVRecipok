@@ -5421,7 +5421,7 @@ console.log(
   const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
   if (
     scoped.includes("await waitForSilentAutoSaveToSettle();") &&
-    scoped.includes("await waitForPendingParkedStockSyncTail();")
+    scoped.includes("await waitForPendingParkedStockSyncTail(ticket?.id);")
   ) {
     ok(
       "markParkedTicketAsPaidByIndex waits for both a pending silent autosave and a pending explicit-save stock sync before computing what to release",
@@ -5433,26 +5433,64 @@ console.log(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-03: editar 2+ aparcados a la vez no debe mezclar sus sincronizaciones de stock pendientes\n",
+);
+
+// Cliente real (Asador el gallo): tras editar/guardar el ticket "Prueba"
+// (quitar y volver a poner un pack), editar TAMBIEN otro ticket distinto
+// mientras tanto, y cobrar el primero justo despues, el stock quedaba
+// descontado de mas. Causa: el arreglo de 2026-09-01 (esperar la
+// sincronizacion de stock pendiente antes de cobrar) usaba UNA SOLA variable
+// global para "la ultima sincronizacion pendiente" -- si se editaba otro
+// ticket B mientras la de A seguia en vuelo, B pisaba la referencia a la de
+// A, y cobrar A ya no esperaba a la sincronizacion correcta. Ahora se guarda
+// una promesa por CADA ticket (por su id) en un Map, para que cobrar
+// cualquiera de ellos espere siempre a SU PROPIA sincronizacion pendiente.
 mustContain(
   renderer,
-  "let __pendingParkedStockSyncTail = null;",
-  "A tracked promise exists for the fire-and-forget explicit-save stock sync tail, so other flows can wait for it",
+  "const __pendingParkedStockSyncTailByTicketId = new Map();",
+  "A per-ticket Map tracks each ticket's own pending explicit-save stock sync tail, instead of a single shared variable that different tickets could overwrite",
 );
 
 {
   const occurrences = (
-    renderer.match(/__pendingParkedStockSyncTail = finish(Update|Create)ParkedTail\(\)\.catch/g) || []
+    renderer.match(/__pendingParkedStockSyncTailByTicketId\.set\(__(update|create)TicketKey, __(update|create)Tail\)/g) || []
   ).length;
   if (occurrences === 2) {
     ok(
-      "Both the create-parked and update-parked explicit-save tails record their promise instead of firing fully untracked",
+      "Both the create-parked and update-parked explicit-save tails are stored keyed by their own ticket id, not a single shared slot",
     );
   } else {
     fail(
-      "Both the create-parked and update-parked explicit-save tails record their promise instead of firing fully untracked",
+      "Both the create-parked and update-parked explicit-save tails are stored keyed by their own ticket id, not a single shared slot",
     );
   }
 }
+
+{
+  const idx = renderer.indexOf("async function waitForPendingParkedStockSyncTail(ticketId, maxMs = 5000) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("async function parkCurrentCart(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    idx >= 0 &&
+    scoped.includes("__pendingParkedStockSyncTailByTicketId.get(key)")
+  ) {
+    ok(
+      "waitForPendingParkedStockSyncTail looks up the pending tail by the specific ticket id it's waiting on",
+    );
+  } else {
+    fail(
+      "waitForPendingParkedStockSyncTail looks up the pending tail by the specific ticket id it's waiting on",
+    );
+  }
+}
+
+mustContain(
+  renderer,
+  "await waitForPendingParkedStockSyncTail(ticket?.id);",
+  "markParkedTicketAsPaidByIndex waits for the pending stock sync tail of THIS SPECIFIC ticket, not whichever ticket was edited most recently",
+);
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 

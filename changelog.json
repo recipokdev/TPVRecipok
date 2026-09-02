@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "IMPORTANTE: arreglado otro descuadre de stock relacionado con el anterior: si se editaba un aparcado, se editaba TAMBIÉN otro aparcado distinto mientras tanto, y se volvía a cobrar el primero, el cobro podía esperar al guardado pendiente del ticket equivocado (el otro que se había tocado más recientemente) en vez de al suyo propio, calculando mal cuánto stock liberar. Ahora cada ticket aparcado controla su propio guardado pendiente por separado, así que cobrar cualquiera de ellos siempre espera al que realmente le corresponde."
+      ]
     },
     {
       "version": "0.2.28",

@@ -16030,9 +16030,21 @@ async function waitForSilentAutoSaveToSettle(maxMs = 3000) {
 // exactamente igual de rapido); solo hace que COBRAR esa misma reserva
 // espere a que termine su propia sincronizacion de stock pendiente, si la
 // hubiera, antes de calcular que liberar.
-let __pendingParkedStockSyncTail = null;
-async function waitForPendingParkedStockSyncTail(maxMs = 5000) {
-  const tail = __pendingParkedStockSyncTail;
+//
+// Real de cliente 2026-09-03: una sola variable global para "la ultima
+// sincronizacion pendiente" no basta -- si mientras se prueba/edita el
+// ticket A se edita TAMBIEN otro ticket B (muy realista con varias mesas o
+// tickets a la vez), la sincronizacion de B pisaba la referencia a la de A
+// en esta variable. Si luego se cobraba A justo en ese momento, se esperaba
+// a la sincronizacion de B (irrelevante) en vez de a la de A -- que seguia
+// en vuelo sin que nadie la esperara, dejando exactamente el mismo hueco de
+// carrera que este mismo arreglo pretendia cerrar. Ahora se guarda una
+// promesa por CADA ticket (por su id), no una sola global.
+const __pendingParkedStockSyncTailByTicketId = new Map();
+async function waitForPendingParkedStockSyncTail(ticketId, maxMs = 5000) {
+  const key = String(ticketId || "").trim();
+  if (!key) return;
+  const tail = __pendingParkedStockSyncTailByTicketId.get(key);
   if (!tail) return;
   try {
     await Promise.race([
@@ -16042,6 +16054,12 @@ async function waitForPendingParkedStockSyncTail(maxMs = 5000) {
   } catch {
     // Si la sincronizacion de fondo termino en error, no hay nada que
     // esperar de mas -- seguir es mas seguro que colgarse aqui.
+  } finally {
+    // Solo la limpiamos si sigue siendo LA MISMA promesa (no una mas nueva
+    // que haya llegado mientras esperabamos esta).
+    if (__pendingParkedStockSyncTailByTicketId.get(key) === tail) {
+      __pendingParkedStockSyncTailByTicketId.delete(key);
+    }
   }
 }
 
@@ -16476,12 +16494,16 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
       if (silentAutoSave) {
         await finishUpdateParkedTail();
       } else {
-        __pendingParkedStockSyncTail = finishUpdateParkedTail().catch((e) => {
+        const __updateTicketKey = String(existing?.id || "").trim();
+        const __updateTail = finishUpdateParkedTail().catch((e) => {
           console.warn(
             "Fondo de actualizar aparcado fallo:",
             e?.message || e,
           );
         });
+        if (__updateTicketKey) {
+          __pendingParkedStockSyncTailByTicketId.set(__updateTicketKey, __updateTail);
+        }
       }
       return;
     }
@@ -16673,9 +16695,13 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
     if (silentAutoSave) {
       await finishCreateParkedTail();
     } else {
-      __pendingParkedStockSyncTail = finishCreateParkedTail().catch((e) => {
+      const __createTicketKey = String(localTicket?.id || "").trim();
+      const __createTail = finishCreateParkedTail().catch((e) => {
         console.warn("Fondo de aparcar (crear) fallo:", e?.message || e);
       });
+      if (__createTicketKey) {
+        __pendingParkedStockSyncTailByTicketId.set(__createTicketKey, __createTail);
+      }
     }
   } finally {
     if (silentAutoSave) {
@@ -19489,7 +19515,7 @@ async function markParkedTicketAsPaidByIndex(
   // vuelo y una de las dos se perdia -- el descuadre real que reporto el
   // cliente.
   await waitForSilentAutoSaveToSettle();
-  await waitForPendingParkedStockSyncTail();
+  await waitForPendingParkedStockSyncTail(ticket?.id);
 
   const reservedItems = Array.isArray(ticket?.items) ? ticket.items : [];
   const reservedDelta = buildReservedQtyDeltaMap([], reservedItems);
