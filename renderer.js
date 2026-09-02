@@ -17855,9 +17855,25 @@ async function clearPaidParkedHistory() {
 // encima del real).
 async function deleteAllPendingParkedTickets({ releaseStock = true } = {}) {
   const source = Array.isArray(parkedTickets) ? parkedTickets : [];
-  const removedPending = source.filter(
-    (t) => !t?.paid && !isPedidoTpvTicket(t),
-  );
+
+  // Real de cliente 2026-09-03 (investigacion de ticket.paid): un aparcado
+  // que se esta cobrando AHORA MISMO en otro terminal (o en este) sigue
+  // teniendo paid=false durante los pocos segundos que tarda en crearse la
+  // factura real y liberarse su reserva -- eso ya esta protegido en las
+  // listas que ve el cajero (getScopedAllParkedTickets oculta cualquier
+  // ticket con closingInProgress mientras se cobra), pero "Borrar
+  // pendientes" filtraba directamente sobre parkedTickets sin pasar por esa
+  // proteccion. Si alguien pulsaba "Borrar pendientes" justo en ese hueco,
+  // el ticket que se estaba cobrando se incluia igualmente y su stock se
+  // liberaba DOS VECES (una aqui, otra al terminar de cobrar de verdad) --
+  // el mismo descuadre (stock de mas) que el resto de arreglos de esta
+  // semana, pero disparable con una accion normal de un segundo terminal.
+  const isEligibleForBulkDelete = (t) => {
+    releaseStaleParkedClosingLock(t);
+    return !t?.paid && !t?.closingInProgress && !isPedidoTpvTicket(t);
+  };
+
+  const removedPending = source.filter(isEligibleForBulkDelete);
 
   if (!removedPending.length) {
     return { removedCount: 0, queuedCount: 0 };
@@ -17870,12 +17886,12 @@ async function deleteAllPendingParkedTickets({ releaseStock = true } = {}) {
     markParkedTicketAsDeleted(ticket);
   });
 
-  parkedTickets = source.filter((t) => !(!t?.paid && !isPedidoTpvTicket(t)));
+  parkedTickets = source.filter((t) => !isEligibleForBulkDelete(t));
   saveParkedTicketsCache(parkedTickets);
 
   REMOTE_PARKED_RESERVATIONS = (
     Array.isArray(REMOTE_PARKED_RESERVATIONS) ? REMOTE_PARKED_RESERVATIONS : []
-  ).filter((t) => !(!t?.paid && !isPedidoTpvTicket(t)));
+  ).filter((t) => !isEligibleForBulkDelete(t));
 
   updateParkedCountBadge?.();
   refreshParkButtonUI?.();
@@ -18720,6 +18736,24 @@ async function deleteParkedTicketByIndex(
 
   const ticket = parkedTickets[idx];
   if (!ticket) return false;
+
+  // Real de cliente 2026-09-03: un aparcado que se esta cobrando AHORA MISMO
+  // (en este terminal o en otro) sigue con paid=false durante los pocos
+  // segundos que tarda en crearse la factura real -- borrarlo en ese hueco
+  // duplicaria la liberacion de su stock (una aqui, otra al terminar de
+  // cobrar). La lista que ve el cajero ya oculta estos tickets mientras
+  // tanto (ver getScopedAllParkedTickets); este guard es la misma proteccion
+  // por si esta funcion se llama alguna vez con un indice que no vino de esa
+  // lista filtrada.
+  releaseStaleParkedClosingLock(ticket);
+  if (ticket.closingInProgress) {
+    toast(
+      `Ese ${labels.item} se está cobrando ahora mismo, espera a que termine.`,
+      "warn",
+      labels.featureTitle,
+    );
+    return false;
+  }
 
   const displayNo =
     getParkedTicketDisplayNumber(ticket) ||
@@ -46963,11 +46997,11 @@ async function openDrawerNow({ source = "MAIN" } = {}) {
 
     const res = await window.TPV_PRINT.openCashDrawer(printerName);
     if (!res || !res.ok) {
-      toast(
-        "No se pudo abrir el cajón: " + (res?.error || "error"),
-        "err",
-        "Cajón",
-      );
+      // El detalle tecnico (codigo de error del ejecutable de bajo nivel que
+      // abre el cajon) no le dice nada util al cajero/cliente -- se queda en
+      // consola para quien investigue, y el toast muestra solo el aviso claro.
+      console.warn("No se pudo abrir el cajón:", res?.error || "error");
+      toast("No se pudo abrir el cajón.", "err", "Cajón");
       return false;
     }
 
@@ -46994,7 +47028,8 @@ async function openDrawerNow({ source = "MAIN" } = {}) {
     toast("Cajón abierto ✅", "ok", "Cajón");
     return true;
   } catch (e) {
-    toast("Error abriendo cajón: " + (e?.message || e), "err", "Cajón");
+    console.warn("Error abriendo cajón:", e?.message || e);
+    toast("No se pudo abrir el cajón.", "err", "Cajón");
     return false;
   }
 }

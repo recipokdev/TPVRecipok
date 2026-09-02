@@ -5492,6 +5492,53 @@ mustContain(
   "markParkedTicketAsPaidByIndex waits for the pending stock sync tail of THIS SPECIFIC ticket, not whichever ticket was edited most recently",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-03: borrar pendientes no debe tocar un aparcado que se esta cobrando\n",
+);
+
+// Investigacion de ticket.paid: un aparcado sigue con paid=false durante los
+// pocos segundos que tarda su factura real en crearse, aunque ya tenga
+// closingInProgress=true (candado de cobro puesto en beginParkedCheckoutLock).
+// La lista que ve el cajero ya ocultaba estos tickets (getScopedAllParkedTickets
+// filtra por closingInProgress), pero "Borrar pendientes" en bloque y el borrado
+// individual por indice filtraban solo por "paid", sin mirar ese candado -- una
+// segunda persona pulsando "Borrar pendientes" justo en ese hueco liberaba el
+// stock de ese ticket una segunda vez (la primera, real, al terminar de cobrar).
+{
+  const idx = renderer.indexOf("async function deleteAllPendingParkedTickets(");
+  const endIdx = idx >= 0 ? renderer.indexOf("function ensureParkedToolbar(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("!t?.paid && !t?.closingInProgress && !isPedidoTpvTicket(t)")
+  ) {
+    ok(
+      "deleteAllPendingParkedTickets (borrar pendientes en bloque) excludes tickets currently mid-checkout (closingInProgress) from its candidate set",
+    );
+  } else {
+    fail(
+      "deleteAllPendingParkedTickets (borrar pendientes en bloque) excludes tickets currently mid-checkout (closingInProgress) from its candidate set",
+    );
+  }
+}
+
+{
+  const idx = renderer.indexOf("async function deleteParkedTicketByIndex(");
+  const endIdx = idx >= 0 ? renderer.indexOf("const displayNo =", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("if (ticket.closingInProgress) {") &&
+    scoped.includes("return false;")
+  ) {
+    ok(
+      "deleteParkedTicketByIndex also refuses to delete a ticket that is currently mid-checkout (closingInProgress), as defense in depth",
+    );
+  } else {
+    fail(
+      "deleteParkedTicketByIndex also refuses to delete a ticket that is currently mid-checkout (closingInProgress), as defense in depth",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

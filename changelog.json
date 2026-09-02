@@ -6,7 +6,9 @@
       "date": "",
       "title": "",
       "changes": [
-        "IMPORTANTE: arreglado otro descuadre de stock relacionado con el anterior: si se editaba un aparcado, se editaba TAMBIÉN otro aparcado distinto mientras tanto, y se volvía a cobrar el primero, el cobro podía esperar al guardado pendiente del ticket equivocado (el otro que se había tocado más recientemente) en vez de al suyo propio, calculando mal cuánto stock liberar. Ahora cada ticket aparcado controla su propio guardado pendiente por separado, así que cobrar cualquiera de ellos siempre espera al que realmente le corresponde."
+        "IMPORTANTE: arreglado otro descuadre de stock relacionado con el anterior: si se editaba un aparcado, se editaba TAMBIÉN otro aparcado distinto mientras tanto, y se volvía a cobrar el primero, el cobro podía esperar al guardado pendiente del ticket equivocado (el otro que se había tocado más recientemente) en vez de al suyo propio, calculando mal cuánto stock liberar. Ahora cada ticket aparcado controla su propio guardado pendiente por separado, así que cobrar cualquiera de ellos siempre espera al que realmente le corresponde.",
+        "IMPORTANTE: arreglado un riesgo relacionado, encontrado al investigar a fondo lo anterior (no confirmado como ya ocurrido, pero posible con 2+ terminales): durante los pocos segundos que tarda en crearse la factura real de un cobro, ese aparcado técnicamente seguía figurando como \"pendiente\". Si en ese preciso momento alguien pulsaba \"Borrar pendientes\" (o se borraba ese mismo aparcado por índice), se liberaba su stock una segunda vez, aunque ya se estuviera cobrando de verdad. Ahora tanto \"Borrar pendientes\" como el borrado individual respetan el candado de cobro y no tocan ningún aparcado que se esté cobrando en ese instante.",
+        "El aviso de \"no se pudo abrir el cajón\" ya no muestra un código de error técnico sin sentido para el cliente/cajero; el detalle técnico se sigue registrando para quien lo necesite investigar."
       ]
     },
     {
