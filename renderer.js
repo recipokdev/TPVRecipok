@@ -8074,6 +8074,48 @@ async function apiReleaseStockLock(idProducto) {
   } catch {}
 }
 
+// Registro observacional de cada delta de stock reservado que aplicamos
+// (ver reconcileStockLedgerDb en el servidor): permite detectar, por lotes y
+// a posteriori, si algun aparcado termino su vida sin sumar 0 en sus propios
+// movimientos -- sin depender del stock absoluto de FacturaScripts, que
+// tambien cambia por motivos legitimos ajenos al TPV. Puramente informativo:
+// nunca debe poder afectar al cobro/aparcado real que lo origina, por eso
+// fail-open silencioso igual que el candado de stock, y solo esta activo
+// para los clientes piloto configurados en el servidor (stock_ledger_pilot_slugs).
+async function apiLogStockLedgerEntry({ ticketId, idProducto, delta, reason }) {
+  const idProd = Number(idProducto || 0) || 0;
+  const ticket = String(ticketId || "").trim();
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!idProd || !ticket || !slug || !syncApiKey || !Number.isFinite(delta)) {
+    return;
+  }
+
+  try {
+    const url = `${TPV_SYNC_API_URL}?action=log-stock-delta`;
+    await fetchWithTimeout(
+      url,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-TPV-API-KEY": syncApiKey,
+        },
+        body: JSON.stringify({
+          slug,
+          ticketId: ticket,
+          idProducto: idProd,
+          delta,
+          reason: String(reason || "").slice(0, 120),
+          terminalId: ensureTerminalPresenceSessionId(),
+        }),
+      },
+      3000,
+    );
+  } catch {}
+}
+
 // Reintenta unas pocas veces con un pequeño backoff si otro TPV ya tiene el
 // candado. Si se agotan los intentos, sigue igualmente (ver nota de
 // fail-open arriba): es mejor arriesgar una carrera rara y poco frecuente
@@ -16455,6 +16497,7 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
             await syncReservedStockDeltaToFS(
               reservedDelta,
               "actualizar aparcado",
+              existing?.id,
             );
           } catch (e) {
             console.warn(
@@ -16659,7 +16702,11 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
 
       if (reservedDelta.size > 0) {
         try {
-          await syncReservedStockDeltaToFS(reservedDelta, "crear aparcado");
+          await syncReservedStockDeltaToFS(
+            reservedDelta,
+            "crear aparcado",
+            localTicket?.id,
+          );
         } catch (e) {
           console.warn(
             "No se pudo sincronizar stock al crear aparcado:",
@@ -17923,6 +17970,7 @@ async function deleteAllPendingParkedTickets({ releaseStock = true } = {}) {
             await syncReservedStockDeltaToFS(
               releaseDelta,
               "borrado masivo de pendientes",
+              ticket?.id,
             );
           }
         } catch (e) {
@@ -18918,7 +18966,11 @@ async function deleteParkedTicketByIndex(
           removedTicket?.items || [],
         );
         if (releaseDelta.size > 0) {
-          await syncReservedStockDeltaToFS(releaseDelta, "eliminar aparcado");
+          await syncReservedStockDeltaToFS(
+            releaseDelta,
+            "eliminar aparcado",
+            removedTicket?.id,
+          );
         }
       }
     } catch (e) {
@@ -19556,7 +19608,11 @@ async function markParkedTicketAsPaidByIndex(
 
   if (reservedDelta.size > 0) {
     try {
-      await syncReservedStockDeltaToFS(reservedDelta, "cobrar aparcado");
+      await syncReservedStockDeltaToFS(
+        reservedDelta,
+        "cobrar aparcado",
+        ticket?.id,
+      );
     } catch (e) {
       console.warn(
         "No se pudo sincronizar stock al cobrar aparcado:",
@@ -32644,7 +32700,7 @@ function isReservedStockSyncedToFsEnabled() {
   return !!cfgVal;
 }
 
-async function syncReservedStockDeltaToFS(deltaMap, reason = "") {
+async function syncReservedStockDeltaToFS(deltaMap, reason = "", ticketId = null) {
   if (!isReservedStockSyncedToFsEnabled()) return true;
   if (!(deltaMap instanceof Map) || deltaMap.size === 0) return true;
   if (TPV_STATE?.offline || TPV_STATE?.locked) {
@@ -32698,6 +32754,13 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "") {
 
       await updateStockRowCantidad(stockRow, nextQty);
       applyStockQtyToLocalProductsById(idProd, nextQty);
+
+      // Fire-and-forget a proposito: es un registro de apoyo para revisar
+      // despues por lotes (ver reconcileStockLedgerDb), nunca debe anadir
+      // latencia al aparcar/cobrar real ni poder hacerlo fallar.
+      apiLogStockLedgerEntry({ ticketId, idProducto: idProd, delta, reason }).catch(
+        () => {},
+      );
     } catch (e) {
       issues.push(`${idProd}: ${e?.message || e}`);
     } finally {
@@ -35036,6 +35099,7 @@ async function parkFailedSaleForRetry(
         await syncReservedStockDeltaToFS(
           reservedDelta,
           "crear aparcado (venta fallida recuperada)",
+          localTicket?.id,
         );
       }
     } catch (e) {

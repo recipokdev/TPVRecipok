@@ -5584,6 +5584,75 @@ console.log(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-03: red de seguridad -- ledger observacional de sincronizacion de stock\n",
+);
+
+// Cada delta que aplicamos al stock reservado (aparcar/editar/cobrar/borrar)
+// se registra ahora, ademas, en un ledger en el servidor compartido (tabla
+// stock_sync_ledger, ver storage/sql en el repo del backend) para poder
+// detectar despues, por lotes, si algun aparcado termino su vida sin sumar 0
+// en sus propios movimientos -- sin depender del stock absoluto de
+// FacturaScripts. Puramente observacional: fail-open silencioso, nunca debe
+// poder afectar al cobro/aparcado real. Verificado en real contra demo:
+// aparcar+editar+cobrar un ticket genero 4 filas que suman exactamente 0, y
+// el endpoint de reconciliacion no lo marco como anomalia.
+mustContain(
+  renderer,
+  "async function apiLogStockLedgerEntry({ ticketId, idProducto, delta, reason }) {",
+  "apiLogStockLedgerEntry exists to send each applied stock delta to the observational ledger",
+);
+
+{
+  const idx = renderer.indexOf("async function syncReservedStockDeltaToFS(deltaMap, reason = \"\", ticketId = null) {");
+  if (idx >= 0) {
+    ok(
+      "syncReservedStockDeltaToFS accepts a ticketId so each delta it applies can be attributed to the ticket that caused it",
+    );
+  } else {
+    fail(
+      "syncReservedStockDeltaToFS accepts a ticketId so each delta it applies can be attributed to the ticket that caused it",
+    );
+  }
+}
+
+{
+  const idx = renderer.indexOf("async function syncReservedStockDeltaToFS(");
+  const endIdx = idx >= 0 ? renderer.indexOf("function rebuildRemoteReservedByProductMap(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("apiLogStockLedgerEntry({ ticketId, idProducto: idProd, delta, reason })") &&
+    scoped.includes(".catch(")
+  ) {
+    ok(
+      "Every successful stock write also fire-and-forgets a ledger entry, without awaiting it (never adds latency to a real park/pay/delete)",
+    );
+  } else {
+    fail(
+      "Every successful stock write also fire-and-forgets a ledger entry, without awaiting it (never adds latency to a real park/pay/delete)",
+    );
+  }
+}
+
+{
+  // Los 5 sitios que aplican deltas reales de verdad (parkCurrentCart update,
+  // parkCurrentCart create, borrado masivo, borrado individual, cobrar) --
+  // el 6o call site (venta fallida recuperada) usa localTicket?.id, mismo
+  // patron, contado aparte para no acoplar el test a un orden concreto.
+  const withTicketId = (
+    renderer.match(/syncReservedStockDeltaToFS\(\s*[\s\S]{0,80}?,\s*\n?\s*"[^"]+",\s*\n?\s*(existing|localTicket|ticket|removedTicket)\?\.id,?\s*\)/g) || []
+  ).length;
+  if (withTicketId >= 6) {
+    ok(
+      "All call sites of syncReservedStockDeltaToFS pass through the relevant ticket's id, so the ledger can attribute every delta correctly",
+    );
+  } else {
+    fail(
+      `All call sites of syncReservedStockDeltaToFS pass through the relevant ticket's id, so the ledger can attribute every delta correctly (found ${withTicketId}, expected >= 6)`,
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
