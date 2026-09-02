@@ -46977,6 +46977,29 @@ function cashOpenNumPadForInput(input) {
 
 const DRAWER_LOG_SOURCES = new Set(["MAIN", "OPTIONS", "POSTPAY"]);
 
+// El ejecutable de bajo nivel que abre el cajon (tools/open-drawer/Program.cs)
+// solo puede fallar en 2 puntos bien diferenciados por texto (nunca por el
+// codigo de error de Windows, que no le dice nada al cajero/cliente):
+//   - "OpenPrinter failed": ni siquiera encuentra esa impresora/cajon en
+//     Windows -- lo mas probable es que no este conectado o encendido.
+//   - "StartDocPrinter/StartPagePrinter/WritePrinter failed": la impresora SI
+//     existe pero no respondio al enviarle el comando -- tambien apunta a que
+//     esta apagada, desconectada o con el USB/cable suelto.
+// En ambos casos el consejo practico es el mismo, asi que un unico aviso mas
+// concreto que el generico de antes ya ayuda sin inventarse una causa que no
+// se puede confirmar desde aqui.
+function friendlyDrawerErrorMessage(rawError) {
+  const msg = String(rawError || "");
+  if (
+    /OpenPrinter failed|StartDocPrinter failed|StartPagePrinter failed|WritePrinter failed/i.test(
+      msg,
+    )
+  ) {
+    return "No se pudo abrir el cajón: no responde. Comprueba que esté conectado y encendido.";
+  }
+  return "No se pudo abrir el cajón.";
+}
+
 /*Abrir Cajon*/
 async function openDrawerNow({ source = "MAIN" } = {}) {
   try {
@@ -46997,11 +47020,11 @@ async function openDrawerNow({ source = "MAIN" } = {}) {
 
     const res = await window.TPV_PRINT.openCashDrawer(printerName);
     if (!res || !res.ok) {
-      // El detalle tecnico (codigo de error del ejecutable de bajo nivel que
-      // abre el cajon) no le dice nada util al cajero/cliente -- se queda en
-      // consola para quien investigue, y el toast muestra solo el aviso claro.
+      // El detalle tecnico (codigo de error de Windows) no le dice nada util
+      // al cajero/cliente -- se queda en consola para quien investigue, y el
+      // toast muestra un aviso mas concreto segun en que punto fallo.
       console.warn("No se pudo abrir el cajón:", res?.error || "error");
-      toast("No se pudo abrir el cajón.", "err", "Cajón");
+      toast(friendlyDrawerErrorMessage(res?.error), "err", "Cajón");
       return false;
     }
 
@@ -47029,7 +47052,7 @@ async function openDrawerNow({ source = "MAIN" } = {}) {
     return true;
   } catch (e) {
     console.warn("Error abriendo cajón:", e?.message || e);
-    toast("No se pudo abrir el cajón.", "err", "Cajón");
+    toast(friendlyDrawerErrorMessage(e?.message), "err", "Cajón");
     return false;
   }
 }

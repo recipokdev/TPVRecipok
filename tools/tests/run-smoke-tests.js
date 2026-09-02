@@ -5539,6 +5539,51 @@ console.log(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-03: aviso de cajón no abierto no debe mostrar codigos tecnicos\n",
+);
+
+// Feedback de cliente real: "no se pudo abrir el cajón" mostraba el codigo de
+// error de Windows tal cual (ej. "OpenPrinter failed (1801)"), que no le dice
+// nada util al cajero/cliente. Ahora se categoriza por el texto fijo que
+// emite open-drawer.exe (tools/open-drawer/Program.cs) en un aviso mas
+// concreto ("no responde, comprueba que este conectado y encendido") sin
+// exponer el codigo de Windows.
+{
+  const idx = renderer.indexOf("function friendlyDrawerErrorMessage(rawError) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("/*Abrir Cajon*/", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    idx >= 0 &&
+    scoped.includes("OpenPrinter failed") &&
+    scoped.includes("StartDocPrinter failed") &&
+    scoped.includes("WritePrinter failed")
+  ) {
+    ok(
+      "friendlyDrawerErrorMessage recognizes open-drawer.exe's known failure points and returns a concrete, non-technical message",
+    );
+  } else {
+    fail(
+      "friendlyDrawerErrorMessage recognizes open-drawer.exe's known failure points and returns a concrete, non-technical message",
+    );
+  }
+}
+
+{
+  const occurrences = (
+    renderer.match(/toast\(friendlyDrawerErrorMessage\(/g) || []
+  ).length;
+  if (occurrences === 2) {
+    ok(
+      "Both cash-drawer failure paths (the exe's own error and an unexpected exception) route through friendlyDrawerErrorMessage instead of showing a raw technical string",
+    );
+  } else {
+    fail(
+      "Both cash-drawer failure paths (the exe's own error and an unexpected exception) route through friendlyDrawerErrorMessage instead of showing a raw technical string",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
