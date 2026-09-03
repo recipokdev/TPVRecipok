@@ -5653,6 +5653,91 @@ mustContain(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-03: el numero de stock no debe bajar de mas en pantalla al cobrar\n",
+);
+
+// Feedback de cliente real: al cobrar, el numero de stock mostrado del
+// producto bajaba, bajaba OTRA VEZ de mas, y luego subia solo -- aunque el
+// stock real en FacturaScripts siempre fue correcto. Causa: markParkedTicketAsPaidByIndex
+// ya deja el numero local en su valor final correcto (lee el stock real,
+// que para entonces ya incluye el descuento de la factura, y libera la
+// reserva sobre ese valor), pero applyLocalStockDecrementForSale se
+// llamaba justo despues y volvia a restar lo vendido -- una segunda vez,
+// solo en pantalla. Ahora esa funcion no hace nada si la reserva de stock
+// esta activa (el caso normal), que es cuando el release ya se encargo.
+{
+  const idx = renderer.indexOf("function applyLocalStockDecrementForSale(items) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("function isReservedStockSyncedToFsEnabled", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (scoped.includes("if (isReservedStockSyncedToFsEnabled()) return;")) {
+    ok(
+      "applyLocalStockDecrementForSale skips the redundant local decrement when reserved-stock-sync is active (the release already settled the display correctly)",
+    );
+  } else {
+    fail(
+      "applyLocalStockDecrementForSale skips the redundant local decrement when reserved-stock-sync is active (the release already settled the display correctly)",
+    );
+  }
+}
+
+{
+  const idx = renderer.indexOf("async function syncReservedStockDeltaToFS(");
+  const endIdx = idx >= 0 ? renderer.indexOf("function rebuildRemoteReservedByProductMap(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("applyStockQtyToLocalProductsById(idProd, nextQty, { skipRender: true });") &&
+    scoped.includes("if (anyChanged) {")
+  ) {
+    ok(
+      "syncReservedStockDeltaToFS batches its screen repaint into a single render after the whole loop, instead of once per product",
+    );
+  } else {
+    fail(
+      "syncReservedStockDeltaToFS batches its screen repaint into a single render after the whole loop, instead of once per product",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-03: saltar de un aparcado a otro sin guardar debe reservar el stock igual que un guardado normal\n",
+);
+
+// Cliente real (Asador el gallo): "aparco un pollo, edito el ticket
+// (añado otra cosa) y salgo tranquilamente [a otro aparcado] -- al cobrar,
+// vuelve a descontar el pollo otra vez". Causa raiz real, confirmada contra
+// demo con el ledger de sincronizacion de stock: flushLoadedParkedTicketChangesSync
+// (la funcion que guarda el aparcado que se abandona al saltar directamente
+// a otro sin pulsar "Aparcar") guardaba los items nuevos pero NUNCA
+// reservaba su stock -- por diseno explicito ("no repite la logica de
+// stock"). Al cobrar/borrar ese aparcado mas tarde, SI se libera la reserva
+// de todos sus items (leyendo ticket.items, que ya incluye lo añadido aqui)
+// -- liberando una reserva que nunca se hizo. Esa liberacion de mas
+// cancelaba justo el descuento real de la factura, dejando ese producto sin
+// bajar de stock nunca pese a haberse vendido. Verificado en real contra
+// demo: sin el arreglo, el producto añadido aqui aparecia en el ledger con
+// solo una fila "cobrar aparcado" y ninguna reserva previa; con el arreglo,
+// aparecen ambas y suman 0.
+{
+  const idx = renderer.indexOf("function flushLoadedParkedTicketChangesSync() {");
+  const endIdx = idx >= 0 ? renderer.indexOf("function ensureMesaLinkedTicketLoaded(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("const prevItems = Array.isArray(ticket.items) ? ticket.items : [];") &&
+    scoped.includes("buildReservedQtyDeltaMap(snapshot, prevItems)") &&
+    scoped.includes("syncReservedStockDeltaToFS(") &&
+    scoped.includes("__pendingParkedStockSyncTailByTicketId.set(ticketKey, tail)")
+  ) {
+    ok(
+      "flushLoadedParkedTicketChangesSync now syncs the reserved-stock delta (fire-and-forget, tracked per ticket) when jumping directly to another parked ticket, instead of silently skipping stock entirely",
+    );
+  } else {
+    fail(
+      "flushLoadedParkedTicketChangesSync now syncs the reserved-stock delta (fire-and-forget, tracked per ticket) when jumping directly to another parked ticket, instead of silently skipping stock entirely",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

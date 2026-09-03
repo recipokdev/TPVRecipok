@@ -5,7 +5,10 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "IMPORTANTE: arreglado un descuadre de stock real (confirmado con el propio cliente Asador el Gallo): si se abría un aparcado, se le añadía un producto y se salía directamente a otro aparcado sin pulsar \"Aparcar\" (por ejemplo, para echar un vistazo a otro ticket), ese producto añadido se guardaba en el ticket pero su stock nunca llegaba a reservarse. Al cobrar o borrar ese aparcado más tarde, sí se liberaba esa reserva que nunca existió — anulando el descuento real de la venta y dejando ese producto sin bajar nunca de stock pese a haberse vendido de verdad. Ahora ese salto rápido entre aparcados reserva el stock igual que un guardado normal.",
+        "El número de stock del producto ya no baja de más y luego sube solo justo después de cobrar (se veía, por ejemplo, bajar, bajar otra vez, y subir en cuestión de segundos). El stock real en FacturaScripts siempre fue correcto; era solo el número en pantalla el que se corregía a sí mismo con un pequeño retraso."
+      ]
     },
     {
       "version": "0.2.29",

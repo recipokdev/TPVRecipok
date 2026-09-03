@@ -8909,8 +8909,23 @@ function hasUnsavedChangesForLoadedParkedTicket(ticket) {
 // del ticket que se abandonaba se perdía en silencio. Esto vuelca ese ticket
 // de forma síncrona (sin awaits) justo antes de pisarlo, para que no dependa
 // de que el temporizador del autoguardado normal llegue a tiempo. No repite
-// toda la lógica de parkCurrentCart (stock, mesas, presupuesto...): solo
-// persiste lo que hasUnsavedChangesForLoadedParkedTicket vigila.
+// toda la lógica de parkCurrentCart (mesas, presupuesto...), pero SÍ debe
+// sincronizar el stock reservado igual que ella.
+//
+// Real de cliente 2026-09-03: esta funcion NO tocaba el stock reservado en
+// absoluto -- se guardaban los items nuevos (p.ej. un producto añadido) sin
+// reservar nada para ellos. Al cobrar/borrar mas tarde ese mismo aparcado,
+// markParkedTicketAsPaidByIndex/deleteParkedTicketByIndex SI intentan
+// liberar la reserva de TODOS sus items (leyendo ticket.items, que ya
+// incluye lo añadido aqui) -- liberando una reserva que nunca se hizo. Esa
+// liberacion de mas (+1 stock) cancelaba justo el descuento real de la
+// factura para ese producto, dejando su stock sin bajar nunca de verdad
+// pese a haberse vendido. Confirmado en real contra demo con el ledger de
+// sincronizacion de stock (una fila "cobrar aparcado" sin ninguna fila de
+// reserva previa para ese producto). Ahora se calcula el mismo delta que
+// usaria un guardado explicito y se sincroniza en segundo plano (sin
+// bloquear el salto al otro aparcado), rastreado igual que el resto de
+// guardados no silenciosos para que cobrar/borrar mas tarde lo esperen.
 function flushLoadedParkedTicketChangesSync() {
   const idx = currentParkedTicketIndex;
   if (idx == null || !Array.isArray(parkedTickets) || !parkedTickets[idx]) {
@@ -8930,6 +8945,7 @@ function flushLoadedParkedTicketChangesSync() {
 
   const currentGlobalPct = getCartGlobalDiscountPercent();
   const snapshot = freezeGlobalDiscountOnLines(cart, currentGlobalPct);
+  const prevItems = Array.isArray(ticket.items) ? ticket.items : [];
 
   ticket.items = snapshot;
   ticket.total = getCartTotal(snapshot);
@@ -8949,6 +8965,24 @@ function flushLoadedParkedTicketChangesSync() {
         e?.message || e,
       );
     });
+
+  const reservedDelta = buildReservedQtyDeltaMap(snapshot, prevItems);
+  if (reservedDelta.size > 0) {
+    const ticketKey = String(ticket?.id || "").trim();
+    const tail = syncReservedStockDeltaToFS(
+      reservedDelta,
+      "actualizar aparcado (cambio rapido de aparcado)",
+      ticket?.id,
+    ).catch((e) => {
+      console.warn(
+        "No se pudo sincronizar stock al cambiar rapido de aparcado:",
+        e?.message || e,
+      );
+    });
+    if (ticketKey) {
+      __pendingParkedStockSyncTailByTicketId.set(ticketKey, tail);
+    }
+  }
 }
 
 function ensureMesaLinkedTicketLoaded() {
@@ -32660,7 +32694,17 @@ function findProductByBaseId(idProd) {
   return products.find((p) => getProductBaseId(p) === id) || null;
 }
 
-function applyStockQtyToLocalProductsById(idProd, qty) {
+// skipRender: cuando una misma accion del cajero (aparcar, cobrar...) toca
+// varios productos o pasos seguidos (ver syncReservedStockDeltaToFS,
+// applyLocalStockDecrementForSale), llamar aqui una vez por paso repintaba la
+// pantalla cada vez -- el numero de stock del producto se veia subir y bajar
+// varias veces en pantalla durante un solo cobro (p.ej. 5 -> 4 -> 5), aunque
+// el resultado final siempre fue correcto. Feedback de cliente real: eso
+// preocupaba porque parecia que el stock "iba mal", cuando solo era la
+// reserva temporal ajustandose paso a paso antes de asentarse en el valor
+// definitivo. Con skipRender=true se actualiza el dato pero NO se repinta;
+// el que llama repinta una sola vez al terminar toda la operacion.
+function applyStockQtyToLocalProductsById(idProd, qty, { skipRender = false } = {}) {
   const baseId = Number(idProd || 0) || 0;
   if (!baseId || !Array.isArray(products) || !products.length) return;
 
@@ -32673,15 +32717,32 @@ function applyStockQtyToLocalProductsById(idProd, qty) {
     };
   });
 
-  renderProducts?.();
-  updateRenderedProductStocks?.();
+  if (!skipRender) {
+    renderProducts?.();
+    updateRenderedProductStocks?.();
+  }
 }
 
 // Tras cobrar, descuenta en local solo lo vendido en vez de refrescar todo el
 // catalogo por red (eso ya lo cubre el temporizador periodico de 10s, pensado
 // para el caso raro de que otro producto se edite desde FacturaScripts).
+//
+// Feedback de cliente real 2026-09-03: si la reserva de stock esta activa
+// (caso normal), markParkedTicketAsPaidByIndex YA deja el numero local en su
+// valor final correcto justo antes de llegar aqui (lee el stock real de
+// FacturaScripts -- que para entonces ya incluye el descuento de la factura
+// -- y libera la reserva sobre ese valor). Volver a restar aqui lo vendido
+// resta una segunda vez SOLO en pantalla (nunca en FacturaScripts): el
+// numero visible bajaba de mas durante unos segundos, hasta que el
+// refresco periodico de 10s lo corregia de vuelta -- justo el "baja, baja
+// de mas, sube" que describio el cliente. Si la reserva esta desactivada
+// (syncReservedStockToFS=false), en cambio, nadie mas actualiza el numero
+// local tras la venta -- ahi esta funcion sigue haciendo falta.
 function applyLocalStockDecrementForSale(items) {
+  if (isReservedStockSyncedToFsEnabled()) return;
+
   const qtyByProduct = buildReservedQtyByProductMap(items);
+  let anyChanged = false;
 
   qtyByProduct.forEach((qtySold, idProd) => {
     const product = findProductByBaseId(idProd);
@@ -32690,8 +32751,16 @@ function applyLocalStockDecrementForSale(items) {
     const currentStock = parseManagedStockValue(product.stockfis);
     if (currentStock === null) return; // sin gestion de stock
 
-    applyStockQtyToLocalProductsById(idProd, currentStock - qtySold);
+    applyStockQtyToLocalProductsById(idProd, currentStock - qtySold, {
+      skipRender: true,
+    });
+    anyChanged = true;
   });
+
+  if (anyChanged) {
+    renderProducts?.();
+    updateRenderedProductStocks?.();
+  }
 }
 
 function isReservedStockSyncedToFsEnabled() {
@@ -32708,6 +32777,7 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "", ticketId = null
   }
 
   const issues = [];
+  let anyChanged = false;
 
   for (const [idProdRaw, deltaRaw] of deltaMap.entries()) {
     const idProd = Number(idProdRaw || 0) || 0;
@@ -32753,7 +32823,8 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "", ticketId = null
       const nextQty = roundQty3(currentQty - delta);
 
       await updateStockRowCantidad(stockRow, nextQty);
-      applyStockQtyToLocalProductsById(idProd, nextQty);
+      applyStockQtyToLocalProductsById(idProd, nextQty, { skipRender: true });
+      anyChanged = true;
 
       // Fire-and-forget a proposito: es un registro de apoyo para revisar
       // despues por lotes (ver reconcileStockLedgerDb), nunca debe anadir
@@ -32768,6 +32839,15 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "", ticketId = null
         await apiReleaseStockLock(idProd).catch(() => {});
       }
     }
+  }
+
+  // Un solo repintado al final, no uno por producto: con varios productos en
+  // el mismo ticket, cada aparcar/editar/cobrar mostraba el numero de cada
+  // uno cambiando por separado en vez de todos a la vez -- mas parpadeo del
+  // necesario para lo que, de cara al cajero, es una unica accion.
+  if (anyChanged) {
+    renderProducts?.();
+    updateRenderedProductStocks?.();
   }
 
   if (issues.length) {
