@@ -8671,6 +8671,44 @@ mustContain(
   "Mesas map tile shows a warning badge when auto-print-comanda failed",
 );
 
+console.log("\n[SMOKE] Checking 2026-09-03: pantalla de vinculacion de tablet (Opciones > Modo Mesas)\n");
+
+mustContain(
+  renderer,
+  "async function apiCreatePairingCode() {",
+  "apiCreatePairingCode() calls the pairing-code endpoint",
+);
+mustContain(
+  renderer,
+  "action=create-pairing-code",
+  "apiCreatePairingCode() targets the create-pairing-code server action",
+);
+mustContain(
+  renderer,
+  "function bindPairingCodeOptionsOnce() {",
+  "Pairing-code button wiring present",
+);
+mustContain(
+  renderer,
+  "startPairingCodeCountdown(Date.now() + ttlSec * 1000)",
+  "Pairing-code countdown starts from the server's own ttlSec, not a hardcoded guess",
+);
+mustContain(
+  index,
+  'id="pairingCodeGenerateBtn"',
+  "\"Generar codigo\" button present in Modo Mesas options",
+);
+mustContain(
+  index,
+  'id="pairingCodeValue"',
+  "Pairing-code display element present in Modo Mesas options",
+);
+mustContain(
+  styles,
+  ".pairing-code-value",
+  "Pairing-code display styling present",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

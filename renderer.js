@@ -9095,6 +9095,40 @@ async function apiLogCobroFollowupIssue({ idfactura, codigo, step, message }) {
   } catch {}
 }
 
+// Pide un codigo de emparejamiento nuevo para este negocio (app de
+// camareros). A diferencia de los demas api* de esta zona, esto SI debe
+// fallar de forma visible (no fail-open): si no se puede generar, quien
+// pulso el boton necesita saberlo, no un codigo silenciosamente ausente.
+async function apiCreatePairingCode() {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("Falta configuracion de sincronizacion de este TPV.");
+  }
+
+  const url = `${TPV_SYNC_API_URL}?action=create-pairing-code`;
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      body: JSON.stringify({ slug }),
+    },
+    8000,
+  );
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok || !data?.data?.code) {
+    throw new Error(data?.error || "No se pudo generar el codigo, intentalo de nuevo.");
+  }
+
+  return data.data;
+}
+
 // Reintenta unas pocas veces con un pequeño backoff si otro TPV ya tiene el
 // candado. Si se agotan los intentos, sigue igualmente (ver nota de
 // fail-open arriba): es mejor arriesgar una carrera rara y poco frecuente
@@ -30110,6 +30144,8 @@ async function openOptions() {
   bindBackgroundUpdateOptionsOnce();
   refreshBackgroundUpdateOptionsUI();
 
+  bindPairingCodeOptionsOnce();
+
   await applyOptionsAccordionState(st);
 
   await window.initScaleOptionsUI?.();
@@ -31595,6 +31631,91 @@ async function runBackgroundUpdateAvailabilityCheck(reason = "timer") {
   } finally {
     backgroundUpdateCheckInFlight = false;
   }
+}
+
+let pairingCodeOptionsBound = false;
+let pairingCodeCountdownTimer = null;
+let pairingCodeExpiresAt = 0;
+
+function formatPairingCodeCountdown(msRemaining) {
+  const totalSec = Math.max(0, Math.ceil(msRemaining / 1000));
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return `${min}:${String(sec).padStart(2, "0")}`;
+}
+
+function stopPairingCodeCountdown() {
+  if (pairingCodeCountdownTimer) {
+    clearInterval(pairingCodeCountdownTimer);
+    pairingCodeCountdownTimer = null;
+  }
+}
+
+function tickPairingCodeCountdown() {
+  const countdownEl = document.getElementById("pairingCodeCountdown");
+  const generateBtn = document.getElementById("pairingCodeGenerateBtn");
+  if (!countdownEl) {
+    stopPairingCodeCountdown();
+    return;
+  }
+
+  const msRemaining = pairingCodeExpiresAt - Date.now();
+  if (msRemaining <= 0) {
+    countdownEl.textContent = "Codigo caducado, genera uno nuevo.";
+    countdownEl.classList.add("pairing-code-expired");
+    stopPairingCodeCountdown();
+    if (generateBtn) generateBtn.disabled = false;
+    return;
+  }
+
+  countdownEl.textContent = `Caduca en ${formatPairingCodeCountdown(msRemaining)}`;
+}
+
+function startPairingCodeCountdown(expiresAtMs) {
+  stopPairingCodeCountdown();
+  pairingCodeExpiresAt = expiresAtMs;
+  document
+    .getElementById("pairingCodeCountdown")
+    ?.classList.remove("pairing-code-expired");
+  tickPairingCodeCountdown();
+  pairingCodeCountdownTimer = setInterval(tickPairingCodeCountdown, 1000);
+}
+
+function bindPairingCodeOptionsOnce() {
+  if (pairingCodeOptionsBound) return;
+  pairingCodeOptionsBound = true;
+
+  const generateBtn = document.getElementById("pairingCodeGenerateBtn");
+  const resultBox = document.getElementById("pairingCodeResult");
+  const valueEl = document.getElementById("pairingCodeValue");
+
+  generateBtn?.addEventListener("click", async () => {
+    generateBtn.disabled = true;
+    const prevLabel = generateBtn.textContent;
+    generateBtn.textContent = "Generando...";
+
+    try {
+      const data = await apiCreatePairingCode();
+      if (valueEl) valueEl.textContent = String(data.code || "------");
+      resultBox?.classList.remove("hidden");
+      const ttlSec = Number(data.ttlSec) > 0 ? Number(data.ttlSec) : 600;
+      startPairingCodeCountdown(Date.now() + ttlSec * 1000);
+      toast(
+        "Codigo generado. Introducelo en la app de camareros antes de que caduque.",
+        "ok",
+        "Vincular tablet",
+      );
+    } catch (e) {
+      toast(
+        e?.message || "No se pudo generar el codigo, intentalo de nuevo.",
+        "error",
+        "Vincular tablet",
+      );
+    } finally {
+      generateBtn.disabled = false;
+      generateBtn.textContent = prevLabel;
+    }
+  });
 }
 
 function refreshBackgroundUpdateOptionsUI() {

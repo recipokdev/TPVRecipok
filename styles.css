@@ -7599,6 +7599,36 @@ body.theme-dark .opt-preview-item.is-on {
   align-items: center;
 }
 
+.pairing-code-result {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 14px;
+  width: 100%;
+  border: 1px dashed #93c5fd;
+  border-radius: 10px;
+  background: #eff6ff;
+}
+.pairing-code-value {
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: 6px;
+  font-family: "Courier New", monospace;
+  color: #1d4ed8;
+}
+.pairing-code-countdown {
+  font-size: 12px;
+  color: #1e40af;
+  opacity: 0.8;
+}
+.pairing-code-countdown.pairing-code-expired {
+  color: #b91c1c;
+  font-weight: 700;
+  opacity: 1;
+}
+
 /* 5 campos de porcentaje para los accesos rapidos de descuento: cada uno
    solo necesita sitio para 2-3 digitos, no el ancho por defecto de un input
    numerico normal. */
@@ -9065,6 +9095,20 @@ body.theme-dark .opt-chip-item {
 
 body.theme-dark .opt-chip-list-empty {
   color: #9ca3af;
+}
+
+body.theme-dark .pairing-code-result {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(96, 165, 250, 0.5);
+}
+body.theme-dark .pairing-code-value {
+  color: #93c5fd;
+}
+body.theme-dark .pairing-code-countdown {
+  color: #bfdbfe;
+}
+body.theme-dark .pairing-code-countdown.pairing-code-expired {
+  color: #fca5a5;
 }
 
 body.theme-dark #terminalSelectWrapper {
