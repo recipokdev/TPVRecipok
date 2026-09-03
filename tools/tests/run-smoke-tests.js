@@ -8685,6 +8685,16 @@ mustContain(
 );
 mustContain(
   renderer,
+  "TPV_CAMAREROS_API_URL",
+  "Pairing code hits its own isolated server file, not index.php",
+);
+mustContain(
+  renderer,
+  'TPV_SYNC_API_URL.replace(/index\\.php$/, "camareros.php")',
+  "Camareros API URL defaults to camareros.php, isolated from index.php",
+);
+mustContain(
+  renderer,
   "function bindPairingCodeOptionsOnce() {",
   "Pairing-code button wiring present",
 );

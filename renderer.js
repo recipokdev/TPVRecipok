@@ -923,6 +923,13 @@ const TPV_SYNC_API_URL =
   window.TPV_CONFIG?.tpvSyncApiUrl ||
   "https://plus.recipok.com/tpv/api/index.php";
 
+// Fichero de servidor propio para todo lo de la app de camareros
+// (emparejamiento + proxy FS), deliberadamente separado de index.php para
+// que un fallo ahi nunca pueda afectar al resto de la API TPV.
+const TPV_CAMAREROS_API_URL =
+  window.TPV_CONFIG?.tpvCamarerosApiUrl ||
+  TPV_SYNC_API_URL.replace(/index\.php$/, "camareros.php");
+
 function getTpvSyncApiKey() {
   const fromCfg = String(window.TPV_CONFIG?.tpvApiKey || "").trim();
   if (fromCfg) return fromCfg;
@@ -9106,7 +9113,7 @@ async function apiCreatePairingCode() {
     throw new Error("Falta configuracion de sincronizacion de este TPV.");
   }
 
-  const url = `${TPV_SYNC_API_URL}?action=create-pairing-code`;
+  const url = `${TPV_CAMAREROS_API_URL}?action=create-pairing-code`;
   const res = await fetchWithTimeout(
     url,
     {
