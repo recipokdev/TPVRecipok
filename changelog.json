@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "IMPORTANTE: si tras cobrar fallaba algún paso administrativo posterior (marcar el agente/efectivo, crear el recibo de pago, o actualizar el total de caja), salía un aviso pidiendo \"completarlo a mano en FacturaScripts\" — algo que confundía y preocupaba sin necesidad, ya que la venta y la factura ya eran reales en ese momento. Ahora ese aviso ya no aparece nunca: la venta se completa con normalidad (ticket, recibo en pantalla, todo), esos pasos se siguen reintentando solos en segundo plano como hasta ahora, y si alguno necesita revisión de verdad, queda registrado para nosotros en vez de mostrarse al cliente."
+      ]
     },
     {
       "version": "0.2.30",

@@ -8116,6 +8116,44 @@ async function apiLogStockLedgerEntry({ ticketId, idProducto, delta, reason }) {
   } catch {}
 }
 
+// Feedback de cliente real 2026-09-14: cuando la factura ya se ha creado y
+// cobrado de verdad pero un paso posterior (marcar agente/efectivo, crear el
+// recibo, o actualizar el total de caja) falla, el cliente/cajero NO debe
+// enterarse ni tener que "completarlo a mano" -- no hay nada real que puedan
+// hacer con eso, y solo consigue preocuparles ("¿se ha roto el TPV?"). Este
+// registro es puramente observacional (igual que apiLogStockLedgerEntry):
+// deja constancia en el servidor para que lo revisemos nosotros, nunca
+// bloquea ni informa al cajero.
+async function apiLogCobroFollowupIssue({ idfactura, codigo, step, message }) {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey || !step) return;
+
+  try {
+    const url = `${TPV_SYNC_API_URL}?action=log-cobro-issue`;
+    await fetchWithTimeout(
+      url,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-TPV-API-KEY": syncApiKey,
+        },
+        body: JSON.stringify({
+          slug,
+          idfactura: Number(idfactura || 0) || 0,
+          codigo: codigo ? String(codigo).slice(0, 60) : "",
+          step: String(step).slice(0, 60),
+          message: String(message || "").slice(0, 500),
+          terminalId: ensureTerminalPresenceSessionId(),
+        }),
+      },
+      3000,
+    );
+  } catch {}
+}
+
 // Reintenta unas pocas veces con un pequeño backoff si otro TPV ya tiene el
 // candado. Si se agotan los intentos, sigue igualmente (ver nota de
 // fail-open arriba): es mejor arriesgar una carrera rara y poco frecuente
@@ -36059,52 +36097,110 @@ async function processConfirmedSale(ctx) {
       };
     }
 
-    // Update factura (tpv_efectivo=entregado cash, tpv_cambio=cambio)
+    // Update factura (tpv_efectivo=entregado cash, tpv_cambio=cambio) + Recibos
+    //
+    // Feedback de cliente real 2026-09-14: si estos pasos fallaban (incluso
+    // tras reintentos), el cajero veia un aviso bloqueante ("Venta
+    // registrada pero incompleta") pidiendole "completarlo a mano en
+    // FacturaScripts" -- algo que NUNCA deberia ver el cliente/cajero: no
+    // hay nada real que puedan hacer con eso, y solo consigue asustarles
+    // ("¿se ha roto el TPV?", llamando a soporte sin necesidad). La venta ya
+    // es real en este punto (la factura ya existe, el stock ya se libero);
+    // lo unico que puede faltar es la marca de agente/efectivo o el recibo,
+    // que YA se reintentan solos en segundo plano (cola
+    // COMPLETE_FACTURACLIENTE, ver mas abajo). Si ni eso se puede encolar,
+    // se registra para que lo revisemos NOSOTROS (nunca el cliente) y el
+    // cobro sigue su curso normal (ticket, pantalla de "gracias", etc.) como
+    // si nada hubiera pasado desde el punto de vista del cajero.
     if (idfactura) {
-      // OJO: usar SIEMPRE la foto fija de ticketPayload (tomada en el
-      // momento de cobrar, fase 1), nunca currentAgent/currentTerminal en
-      // vivo -- esta actualizacion corre en la cola serial de fondo, y para
-      // cuando le toca el turno el operario puede ya haber cambiado de
-      // agente o de terminal para el SIGUIENTE cliente. Ver el comentario
-      // junto a ticketPayload._payCodAgente (fase 1) para el porque.
-      const upd = {
-        idestado: 11,
-        pagada: 1,
-        tpv_venta: 1,
-        tpv_efectivo: Number(tpv_efectivo.toFixed(2)),
-        tpv_cambio: Number(tpv_cambio.toFixed(2)),
-        codpago: ticketPayload.codpago || "",
-        idtpv: ticketPayload.idtpv || "",
-        codalmacen: ticketPayload._payCodAlmacen || "",
-        observaciones: (payResult?.observaciones || "").toString(),
-        numero2: (payResult?.numero ?? "").toString(),
-        nick: ticketPayload._payNick || "Ventas",
-      };
-      if (ticketPayload._payCodAgente) upd.codagente = ticketPayload._payCodAgente;
-      committedUpd = upd;
-      await retryFacturaFollowupStep(() => updateFacturaCliente(idfactura, upd));
-    }
+      try {
+        // OJO: usar SIEMPRE la foto fija de ticketPayload (tomada en el
+        // momento de cobrar, fase 1), nunca currentAgent/currentTerminal en
+        // vivo -- esta actualizacion corre en la cola serial de fondo, y para
+        // cuando le toca el turno el operario puede ya haber cambiado de
+        // agente o de terminal para el SIGUIENTE cliente. Ver el comentario
+        // junto a ticketPayload._payCodAgente (fase 1) para el porque.
+        const upd = {
+          idestado: 11,
+          pagada: 1,
+          tpv_venta: 1,
+          tpv_efectivo: Number(tpv_efectivo.toFixed(2)),
+          tpv_cambio: Number(tpv_cambio.toFixed(2)),
+          codpago: ticketPayload.codpago || "",
+          idtpv: ticketPayload.idtpv || "",
+          codalmacen: ticketPayload._payCodAlmacen || "",
+          observaciones: (payResult?.observaciones || "").toString(),
+          numero2: (payResult?.numero ?? "").toString(),
+          nick: ticketPayload._payNick || "Ventas",
+        };
+        if (ticketPayload._payCodAgente) upd.codagente = ticketPayload._payCodAgente;
+        committedUpd = upd;
+        await retryFacturaFollowupStep(() => updateFacturaCliente(idfactura, upd));
 
-    // Recibos
-    if (idfactura && codcliente) {
-      const today = new Date().toISOString().slice(0, 10);
-      for (const p of pagosFinal) {
-        const importe = Number(Number(p.importe || 0).toFixed(2));
-        if (!(importe > 0)) continue;
+        if (codcliente) {
+          const today = new Date().toISOString().slice(0, 10);
+          for (const p of pagosFinal) {
+            const importe = Number(Number(p.importe || 0).toFixed(2));
+            if (!(importe > 0)) continue;
 
-        await retryFacturaFollowupStep(() =>
-          createReciboCliente({
-            idfactura,
-            codcliente,
-            codpago: p.codpago,
-            importe,
-            fechapago: today,
-            fecha: today,
-            idempresa,
-            codigofactura,
-            coddivisa,
-          }),
-        );
+            await retryFacturaFollowupStep(() =>
+              createReciboCliente({
+                idfactura,
+                codcliente,
+                codpago: p.codpago,
+                importe,
+                fechapago: today,
+                fecha: today,
+                idempresa,
+                codigofactura,
+                coddivisa,
+              }),
+            );
+          }
+        }
+      } catch (e) {
+        logFeatureError("COBRO", "factura-followup-fallo", e, {
+          requestId,
+          idfactura,
+          codigo: codigofactura,
+        });
+        apiLogCobroFollowupIssue({
+          idfactura,
+          codigo: codigofactura,
+          step: "agente-efectivo-recibo",
+          message: e?.message || String(e),
+        }).catch(() => {});
+
+        let queuedForFollowupRetry = false;
+        if (isRetryableQueueSyncError(e)) {
+          try {
+            await window.TPV_QUEUE.enqueue({
+              type: "COMPLETE_FACTURACLIENTE",
+              payload: {
+                idfactura,
+                upd: committedUpd,
+                pagos: pagosFinal,
+                codcliente,
+                idempresa,
+                codigofactura,
+                coddivisa,
+              },
+            });
+            queuedForFollowupRetry = true;
+          } catch (qe) {
+            console.warn(
+              "No se pudo encolar el completado automatico de la factura:",
+              qe?.message || qe,
+            );
+          }
+        }
+
+        if (!queuedForFollowupRetry) {
+          console.warn(
+            `Factura ${codigofactura || idfactura} incompleta (agente/efectivo/recibo), no se pudo encolar para reintento -- revisar en FacturaScripts:`,
+            e?.message || e,
+          );
+        }
       }
     }
 
@@ -36170,7 +36266,27 @@ async function processConfirmedSale(ctx) {
           e?.message || e,
         );
       } else {
-        throw e;
+        // Real de cliente 2026-09-14: esto ya NO debe interrumpir el cobro
+        // ni avisar al cajero. El total que se manda aqui es siempre el
+        // ACUMULADO completo (no un incremento), calculado a partir de
+        // cashSession -- que ya se actualizo en memoria un poco mas arriba
+        // independientemente de si esta llamada tiene exito. Por eso, un
+        // fallo aqui se autocorrige solo en la siguiente venta (que volvera
+        // a mandar el total ya correcto, incluyendo esta venta) -- lo unico
+        // que queda desactualizado mientras tanto es la "foto" que se ve
+        // en FacturaScripts si alguien mira el total de caja en ese preciso
+        // instante. Se registra para nosotros por si acaso, nunca se
+        // bloquea ni se avisa al cajero.
+        console.warn(
+          "No se pudo actualizar el total de caja tras la venta (se autocorrige en la siguiente venta):",
+          e?.message || e,
+        );
+        apiLogCobroFollowupIssue({
+          idfactura,
+          codigo: codigofactura,
+          step: "caja-totales",
+          message: e?.message || String(e),
+        }).catch(() => {});
       }
     }
 
@@ -36322,17 +36438,18 @@ async function processConfirmedSale(ctx) {
           `Se ha guardado como aparcado ("${recoveredTicket.name}") para revisarlo y volver a cobrarlo cuando quieras.`,
       );
     } else if (saleCommitted && committedFacturaId) {
-      // La factura YA existe en FacturaScripts y quedo marcada como pagada
-      // (crearFacturaCliente ya se completo), pero un paso posterior
-      // (agente/efectivo o recibos) fallo incluso tras varios reintentos
-      // inmediatos. No se puede recuperar como aparcado -- eso duplicaria
-      // la venta. En vez de dejarla huerfana para siempre, se encola como
-      // "COMPLETE_FACTURACLIENTE" en la MISMA cola persistente que ya usan
-      // las ventas offline (ver syncQueueNow): se reintentara sola cada
-      // pocos segundos mientras haya conexion, con backoff creciente
-      // (1/2/5/10 min) si sigue fallando, y sobrevive incluso a un cierre
-      // de la app. Solo si eso TAMBIEN falla en encolarse (caso extremo)
-      // queda de verdad pendiente de revisar a mano.
+      // La factura YA existe en FacturaScripts (crearFacturaCliente ya se
+      // completo) y algo mas, inesperado, fallo despues -- normalmente esto
+      // ya lo captura el try/catch propio de "agente/efectivo/recibo" un
+      // poco mas arriba, asi que llegar aqui es el caso raro no previsto.
+      //
+      // Real de cliente 2026-09-14: el cliente/cajero NUNCA debe ver un
+      // aviso de "venta incompleta" ni que "hace falta completarla a mano"
+      // -- no hay nada que puedan hacer con eso y solo consigue asustarles.
+      // La venta ya es real; se encola igual que antes para completarse
+      // sola en segundo plano, y se registra para que lo revisemos
+      // nosotros -- nunca se le muestra nada al cajero mas alla de la
+      // confirmacion normal de que la venta se ha cobrado.
       const facturaRef = committedFacturaCodigo || `#${committedFacturaId}`;
       logFeatureError(
         "COBRO",
@@ -36341,16 +36458,8 @@ async function processConfirmedSale(ctx) {
         { requestId, idfactura: committedFacturaId, codigo: committedFacturaCodigo },
       );
 
-      // Si el motivo del fallo NO es de los que se arreglan solos con el
-      // tiempo (red, 429, 5xx) sino un fallo de datos real -- p.ej. el nick
-      // ya no existe como usuario en FacturaScripts -- encolarlo igualmente
-      // no sirve de nada: fallaria exactamente igual en cada reintento. En
-      // ese caso se avisa YA de que hace falta revisarlo a mano, en vez de
-      // dar una falsa sensacion de "se arregla solo".
-      const isPermanentError = !isRetryableQueueSyncError(err);
-
       let queuedForAutoRetry = false;
-      if (committedUpd && !isPermanentError) {
+      if (committedUpd && isRetryableQueueSyncError(err)) {
         try {
           await window.TPV_QUEUE.enqueue({
             type: "COMPLETE_FACTURACLIENTE",
@@ -36373,27 +36482,24 @@ async function processConfirmedSale(ctx) {
         }
       }
 
-      if (isPermanentError) {
-        notifyWorkerSyncIssue(
-          `factura-incompleta-${String(committedFacturaId)}`,
-          `La factura ${facturaRef} se registró pero no se pudo completar el agente/efectivo, y el motivo no se va a arreglar reintentando (${msg.slice(0, 140)}). Complétala a mano en FacturaScripts.`,
-          { title: "Cobrar", modal: false, cooldownMs: 60 * 60 * 1000 },
+      apiLogCobroFollowupIssue({
+        idfactura: committedFacturaId,
+        codigo: committedFacturaCodigo,
+        step: "post-cobro-inesperado",
+        message: msg,
+      }).catch(() => {});
+
+      if (!queuedForAutoRetry) {
+        console.warn(
+          `Factura ${facturaRef} incompleta, no se pudo encolar para reintento -- revisar en FacturaScripts:`,
+          msg,
         );
       }
 
-      showMessageModal(
-        queuedForAutoRetry
-          ? "Venta registrada, terminando en segundo plano"
-          : "Venta registrada pero incompleta",
-        `La venta YA se ha registrado en FacturaScripts como factura ${facturaRef}, pero no se pudo terminar de completar ` +
-          `(agente, efectivo o el recibo de pago).\n\n` +
-          `Motivo: [${errCode}] ${msg}\n\n` +
-          (queuedForAutoRetry
-            ? `Se ha dejado en cola para completarse sola en segundo plano en cuanto se pueda -- no hace falta hacer nada.\n\n`
-            : isPermanentError
-              ? `Este motivo concreto no se arregla reintentando solo -- avisa para revisarla y completarla a mano cuanto antes.\n\n`
-              : `No se pudo dejar en cola para reintentarlo solo -- avisa para revisarla y completarla a mano.\n\n`) +
-          `Eso sí: NO vuelvas a cobrar este pedido -- ya existe la factura.`,
+      toast(
+        `Venta cobrada ✅ (factura ${facturaRef})`,
+        "ok",
+        "Cobrar",
       );
     } else {
       toast(`[${errCode}] ${msg}`, "err", "Cobrar");

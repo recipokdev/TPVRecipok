@@ -4807,8 +4807,8 @@ mustContain(
   "The agente/efectivo/cambio update (updateFacturaCliente) is retried instead of failing on the first error",
 );
 {
-  const idx = renderer.indexOf("// Recibos");
-  const endIdx = idx >= 0 ? renderer.indexOf("Cleanup/validate:", idx) : -1;
+  const idx = renderer.indexOf("// Update factura (tpv_efectivo=entregado cash, tpv_cambio=cambio) + Recibos");
+  const endIdx = idx >= 0 ? renderer.indexOf("// Cleanup/validate:", idx) : -1;
   const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
   if (
     scoped.includes("retryFacturaFollowupStep(() =>") &&
@@ -4825,22 +4825,28 @@ mustContain(
   "processConfirmedSale tracks the committed invoice's real id/codigo once crearFacturaCliente succeeds",
 );
 
+// Actualizado 2026-09-14 (feedback de cliente real): cuando un paso
+// posterior al cobro (agente/efectivo/recibo) sigue fallando tras
+// reintentar, YA NO se le dice nada al cajero (ni siquiera "se completará
+// sola en segundo plano") -- se sigue encolando igual para reintentarlo
+// solo, pero de forma puramente silenciosa; lo unico visible es que el
+// incidente se registra para que lo revisemos nosotros.
 {
-  const idx = renderer.indexOf("} else if (saleCommitted && committedFacturaId) {");
-  const endIdx = idx >= 0 ? renderer.indexOf('toast(`[${errCode}] ${msg}`, "err", "Cobrar");', idx) : -1;
+  const idx = renderer.indexOf("// Update factura (tpv_efectivo=entregado cash, tpv_cambio=cambio) + Recibos");
+  const endIdx = idx >= 0 ? renderer.indexOf("// Cleanup/validate:", idx) : -1;
   const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
   if (
-    scoped.includes("NO vuelvas a cobrar este pedido") &&
-    scoped.includes("facturaRef") &&
     scoped.includes('type: "COMPLETE_FACTURACLIENTE"') &&
-    scoped.includes("queuedForAutoRetry = true;")
+    scoped.includes("queuedForFollowupRetry = true;") &&
+    scoped.includes("apiLogCobroFollowupIssue({") &&
+    !scoped.includes("showMessageModal(")
   ) {
     ok(
-      "When a follow-up step still fails after retries, the sale is queued as COMPLETE_FACTURACLIENTE for automatic background retry, and the cashier is told the real invoice number and warned NOT to re-ring the sale",
+      "When a follow-up step still fails after retries, the sale is queued as COMPLETE_FACTURACLIENTE for automatic, silent background retry -- the cashier is never shown anything about it",
     );
   } else {
     fail(
-      "When a follow-up step still fails after retries, the sale is queued as COMPLETE_FACTURACLIENTE for automatic background retry, and the cashier is told the real invoice number and warned NOT to re-ring the sale",
+      "When a follow-up step still fails after retries, the sale is queued as COMPLETE_FACTURACLIENTE for automatic, silent background retry -- the cashier is never shown anything about it",
     );
   }
 }
@@ -5022,21 +5028,28 @@ console.log(
   }
 }
 
+// Actualizado 2026-09-14: este es el catch exterior de seguridad (algo
+// inesperado, fuera de los 2 pasos que ya se manejan en su propio try/catch
+// mas arriba). Un motivo permanente ya no evita encolar por evitar "false
+// hope" mostrada al cajero -- simplemente ya no se le muestra nada en
+// ningun caso; solo se registra para nosotros y, si es reintentable, se
+// encola igualmente.
 {
-  const idx = renderer.indexOf("const isPermanentError = !isRetryableQueueSyncError(err);");
-  const endIdx = idx >= 0 ? renderer.indexOf("showMessageModal(", idx) : -1;
+  const idx = renderer.indexOf('} else if (saleCommitted && committedFacturaId) {');
+  const endIdx = idx >= 0 ? renderer.indexOf("    } else {\r\n      toast(", idx) : -1;
   const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
   if (
-    scoped.includes("if (committedUpd && !isPermanentError) {") &&
-    scoped.includes("if (isPermanentError) {") &&
-    scoped.includes("notifyWorkerSyncIssue(")
+    scoped.includes("if (committedUpd && isRetryableQueueSyncError(err)) {") &&
+    scoped.includes("apiLogCobroFollowupIssue({") &&
+    !scoped.includes("showMessageModal(") &&
+    !scoped.includes("notifyWorkerSyncIssue(")
   ) {
     ok(
-      "When the follow-up step fails for a permanent (non-network) reason, the sale is NOT queued for pointless auto-retry -- the cashier/admin is alerted immediately instead",
+      "The outer safety-net catch only queues a follow-up retry for retryable errors, logs every case for us, and never shows the cashier anything about it",
     );
   } else {
     fail(
-      "When the follow-up step fails for a permanent (non-network) reason, the sale is NOT queued for pointless auto-retry -- the cashier/admin is alerted immediately instead",
+      "The outer safety-net catch only queues a follow-up retry for retryable errors, logs every case for us, and never shows the cashier anything about it",
     );
   }
 }
@@ -5734,6 +5747,78 @@ console.log(
   } else {
     fail(
       "flushLoadedParkedTicketChangesSync now syncs the reserved-stock delta (fire-and-forget, tracked per ticket) when jumping directly to another parked ticket, instead of silently skipping stock entirely",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-14: fallos tras cobrar (agente/efectivo/recibo/caja) ya no asustan al cliente\n",
+);
+
+// Feedback de cliente real: al fallar un paso posterior al cobro (marcar
+// agente/efectivo, crear el recibo, o actualizar el total de caja), el
+// cajero veia un aviso bloqueante ("Venta registrada pero incompleta")
+// pidiendole "completarlo a mano en FacturaScripts" -- pero no hay nada que
+// el cliente/cajero pueda hacer con eso, y solo consigue preocuparle. Ahora
+// esos fallos se registran para revisarlos nosotros (nunca al cliente) y el
+// cobro sigue su curso normal.
+mustContain(
+  renderer,
+  "async function apiLogCobroFollowupIssue({ idfactura, codigo, step, message }) {",
+  "apiLogCobroFollowupIssue exists to report post-cobro follow-up failures to us, observationally",
+);
+
+{
+  const idx = renderer.indexOf("// Update factura (tpv_efectivo=entregado cash, tpv_cambio=cambio) + Recibos");
+  const endIdx = idx >= 0 ? renderer.indexOf("// Cleanup/validate:", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("apiLogCobroFollowupIssue({") &&
+    !scoped.includes("showMessageModal(")
+  ) {
+    ok(
+      "The agente/efectivo/recibo follow-up step catches its own failure, logs it for us, and does NOT show any client-facing modal",
+    );
+  } else {
+    fail(
+      "The agente/efectivo/recibo follow-up step catches its own failure, logs it for us, and does NOT show any client-facing modal",
+    );
+  }
+}
+
+{
+  const idx = renderer.indexOf("await apiUpdateCajaAfterSale({");
+  const endIdx = idx >= 0 ? renderer.indexOf("applyLocalStockDecrementForSale(cartSnapshot);", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("apiLogCobroFollowupIssue({") &&
+    !scoped.includes("throw e;")
+  ) {
+    ok(
+      "A failed caja-totals update after a sale is logged and swallowed (self-corrects on the next sale), never re-thrown to alarm the cashier",
+    );
+  } else {
+    fail(
+      "A failed caja-totals update after a sale is logged and swallowed (self-corrects on the next sale), never re-thrown to alarm the cashier",
+    );
+  }
+}
+
+{
+  const idx = renderer.indexOf('} else if (saleCommitted && committedFacturaId) {');
+  const endIdx = idx >= 0 ? renderer.indexOf("    } else {\r\n      toast(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("apiLogCobroFollowupIssue({") &&
+    !scoped.includes("showMessageModal(") &&
+    !scoped.includes("notifyWorkerSyncIssue(")
+  ) {
+    ok(
+      "The outer post-cobro safety-net catch also logs instead of showing the old 'Venta registrada pero incompleta' modal to the cashier",
+    );
+  } else {
+    fail(
+      "The outer post-cobro safety-net catch also logs instead of showing the old 'Venta registrada pero incompleta' modal to the cashier",
     );
   }
 }
