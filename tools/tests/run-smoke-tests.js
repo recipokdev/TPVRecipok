@@ -5823,6 +5823,43 @@ mustContain(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-14: el pedido del siguiente cliente ya no puede fusionarse con el que se acaba de cobrar\n",
+);
+
+// Confirmado en real contra demo: un ticket recien cobrado sigue con
+// paid=false durante la fase 2 en segundo plano (factura real, recibos,
+// liberar stock), que con el plugin de stock real de asador_el_gallo puede
+// tardar varios segundos. Si el cajero aparcaba el pedido del SIGUIENTE
+// cliente en ese hueco (misma mesa, cosa normal en un turno rapido),
+// parkCurrentCart lo confundia con el mismo ticket todavia editable y lo
+// guardaba como ACTUALIZACION en vez de crear uno nuevo -- dos facturas
+// reales por lo que deberia ser un pedido y su edicion, con la segunda
+// venta invisible para el registro de stock. Dos capas de proteccion:
+mustContain(
+  renderer,
+  "!parkedTickets[editingIndex].closingInProgress",
+  "parkCurrentCart's editingTicket resolution also excludes a ticket that is currently mid-checkout (closingInProgress), not just already-paid, so the next order on the same table can't be saved as an edit of it",
+);
+
+{
+  const idx = renderer.indexOf("async function onPayButtonClick(");
+  const endIdx = idx >= 0 ? renderer.indexOf("// A partir de aqui el carrito ya esta libre", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("isSameTicketBeingClosed") &&
+    scoped.includes("setCurrentParkedTicketIndex(null);")
+  ) {
+    ok(
+      "onPayButtonClick clears currentParkedTicketIndex synchronously in phase 1 (right when the cart clears), identity-checked by sync key/id rather than raw index",
+    );
+  } else {
+    fail(
+      "onPayButtonClick clears currentParkedTicketIndex synchronously in phase 1 (right when the cart clears), identity-checked by sync key/id rather than raw index",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

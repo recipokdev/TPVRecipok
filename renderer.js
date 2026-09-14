@@ -16346,11 +16346,22 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
       }
     }
 
+    // Real de cliente 2026-09-14 (asador_el_gallo): un ticket que ya esta
+    // siendo cobrado (closingInProgress, ver beginParkedCheckoutLock) sigue
+    // con paid=false hasta que termina la fase lenta de fondo del cobro
+    // (factura, recibos, liberar stock). Si en ese hueco se aparcaba el
+    // pedido del SIGUIENTE cliente en la misma mesa, este chequeo -- que
+    // solo miraba "paid" -- lo confundia con el mismo ticket todavia
+    // editable y lo GUARDABA COMO ACTUALIZACION del que se estaba cobrando,
+    // en vez de crear uno nuevo. Confirmado en real contra demo: dos
+    // facturas reales distintas por lo que deberia haber sido un pedido y
+    // su edicion, con la segunda venta invisible para el registro de stock.
     const editingTicket =
       editingIndex !== null &&
       Array.isArray(parkedTickets) &&
       parkedTickets[editingIndex] &&
-      !parkedTickets[editingIndex].paid
+      !parkedTickets[editingIndex].paid &&
+      !parkedTickets[editingIndex].closingInProgress
         ? parkedTickets[editingIndex]
         : null;
 
@@ -35691,6 +35702,33 @@ async function onPayButtonClick() {
     try {
       window.CUSTOMER_SELECTOR?.resetToDefault?.();
     } catch {}
+
+    // Real de cliente 2026-09-14: currentParkedTicketIndex no se soltaba
+    // aqui -- solo dentro de markParkedTicketAsPaidByIndex, que corre en
+    // segundo plano (fase 2: factura real, recibos, liberar stock...). Si el
+    // cajero aparcaba el pedido del SIGUIENTE cliente antes de que esa fase 2
+    // terminara, ese pedido nuevo podia acabar pareciendo una edicion del
+    // ticket recien cobrado en vez de uno nuevo. Se suelta aqui, en el mismo
+    // instante en que se libera el carrito, comparando por id/clave de
+    // sincronizacion (nunca por indice bruto, que puede haberse reordenado
+    // entre tanto). Si aun quedan lineas en el carrito (venta parcial, p.ej.
+    // dividir cuenta en Mesas), no se suelta: ese aparcado sigue siendo el
+    // que toca seguir editando para el resto.
+    if (!(Array.isArray(cart) && cart.length > 0) && currentParkedTicketIndex != null) {
+      const stillLoadedTicket = parkedTickets?.[currentParkedTicketIndex];
+      const stillLoadedKey = String(
+        getParkedTicketSyncKey(stillLoadedTicket) || "",
+      ).trim();
+      const stillLoadedId = Number(stillLoadedTicket?.id || 0) || 0;
+
+      const isSameTicketBeingClosed =
+        (parkedSyncKeyToClose && stillLoadedKey === parkedSyncKeyToClose) ||
+        (parkedIdToClose > 0 && stillLoadedId === parkedIdToClose);
+
+      if (isSameTicketBeingClosed) {
+        setCurrentParkedTicketIndex(null);
+      }
+    }
 
     // A partir de aqui el carrito ya esta libre para el siguiente cliente.
     // Mandar la factura de verdad, recibos, actualizar caja, imprimir y
