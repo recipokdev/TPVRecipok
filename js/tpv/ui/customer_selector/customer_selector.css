@@ -197,6 +197,43 @@
   height: 28px;
 }
 
+.csx-trash-modal {
+  width: min(760px, calc(100vw - 16px));
+}
+
+.csx-trash-row .csx-row-actions {
+  gap: 8px;
+}
+
+.csx-del-text {
+  border: none;
+  border-radius: 10px;
+  height: 32px;
+  padding: 0 12px;
+  background: #ef4444;
+  color: #fff;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.csx-del-text:hover {
+  filter: brightness(0.95);
+}
+
+.csx-del-text:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.csx-trash-empty,
+.csx-trash-loading {
+  padding: 30px 10px;
+  text-align: center;
+  color: #64748b;
+  font-size: 13px;
+}
+
 .csx-foot {
   border-top: 1px solid #e5e7eb;
   padding: 8px 14px;

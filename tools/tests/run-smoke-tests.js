@@ -5860,6 +5860,118 @@ mustContain(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-14: papelera de clientes (borrar cliente ya no toca FacturaScripts)\n",
+);
+
+// Cliente real (asador_el_gallo): "como puedo borrar un cliente, me da error
+// siempre que lo intento". Causa: el boton de borrar hacia un DELETE real
+// contra FacturaScripts, que la propia BD rechaza (ON DELETE RESTRICT) en
+// cuanto el cliente tiene una factura/pedido/presupuesto -- practicamente
+// siempre, para un cliente real. Ahora "borrar" solo esconde al cliente en
+// una papelera propia del TPV (nunca toca FacturaScripts); el borrado
+// definitivo desde la papelera intenta el DELETE real de siempre y, si
+// FacturaScripts lo rechaza, ofrece "dar de baja" (campo nativo de
+// FacturaScripts) como alternativa.
+mustContain(
+  customerSelector,
+  'Los clientes borrados se meterán en la papelera',
+  "The delete confirmation explains the papelera behavior in the exact wording the client asked for",
+);
+
+{
+  const idx = customerSelector.indexOf('body.querySelectorAll("[data-csx-del]")');
+  const endIdx = idx >= 0 ? customerSelector.indexOf('_renderTrashList()', idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? customerSelector.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("await this._hideCustomerByCode(cod);") &&
+    !scoped.includes("await this._deleteCustomerByCode(cod);")
+  ) {
+    ok(
+      "The customer picker's ✖ button now hides the customer (papelera) instead of deleting it for real in FacturaScripts",
+    );
+  } else {
+    fail(
+      "The customer picker's ✖ button now hides the customer (papelera) instead of deleting it for real in FacturaScripts",
+    );
+  }
+}
+
+mustContain(
+  customerSelector,
+  "async _loadHiddenCustomers()",
+  "customer_selector.js has a method to load the TPV's own hidden-customers list from the shared server",
+);
+mustContain(
+  customerSelector,
+  "async _hideCustomerByCode(cod)",
+  "customer_selector.js has a method to hide a customer in the TPV-only papelera",
+);
+mustContain(
+  customerSelector,
+  "async _unhideCustomerByCode(cod)",
+  "customer_selector.js has a method to reactivate a hidden customer",
+);
+
+{
+  const idx = customerSelector.indexOf("async _daBajaCustomer(cod)");
+  const endIdx = idx >= 0 ? customerSelector.indexOf("async _loadCustomers()", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? customerSelector.slice(idx, endIdx) : "";
+  if (scoped.includes('this._updateForm("clientes", cod, { debaja: 1, fechabaja: today })')) {
+    ok(
+      "_daBajaCustomer sets FacturaScripts's own native debaja/fechabaja fields (a real FacturaScripts change), reusing the existing _updateForm PATCH->PUT helper",
+    );
+  } else {
+    fail(
+      "_daBajaCustomer sets FacturaScripts's own native debaja/fechabaja fields (a real FacturaScripts change), reusing the existing _updateForm PATCH->PUT helper",
+    );
+  }
+}
+
+{
+  const idx = customerSelector.indexOf("async _loadHiddenCustomers()");
+  const endIdx = idx >= 0 ? customerSelector.indexOf("async _hideCustomerByCode(cod)", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? customerSelector.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("catch (error) {") &&
+    scoped.includes("return this._hiddenEntries || [];")
+  ) {
+    ok(
+      "_loadHiddenCustomers fails open on read (a broken/unavailable papelera never blocks the customer picker itself)",
+    );
+  } else {
+    fail(
+      "_loadHiddenCustomers fails open on read (a broken/unavailable papelera never blocks the customer picker itself)",
+    );
+  }
+}
+
+mustContain(
+  customerSelector,
+  "async openTrash()",
+  "customer_selector.js exposes an openTrash() entry point for the papelera view",
+);
+mustContain(
+  customerSelector,
+  "Dar de baja en FacturaScripts",
+  "The blocked-permanent-delete flow offers 'dar de baja' as a fallback, worded as a real FacturaScripts action (not just a TPV-side hide)",
+);
+
+{
+  const idx = renderer.indexOf("await window.CUSTOMER_SELECTOR.mount({");
+  const endIdx = idx >= 0 ? renderer.indexOf("bindTerminalDefaultCustomerSave();", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (scoped.includes("getTerminalInfo: () => (")) {
+    ok(
+      "initCustomerSelectorOnce passes getTerminalInfo to CUSTOMER_SELECTOR.mount(), so hidden-customer entries can record which terminal hid them",
+    );
+  } else {
+    fail(
+      "initCustomerSelectorOnce passes getTerminalInfo to CUSTOMER_SELECTOR.mount(), so hidden-customer entries can record which terminal hid them",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

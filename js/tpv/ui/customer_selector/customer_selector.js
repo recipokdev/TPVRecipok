@@ -72,6 +72,17 @@
   const CSX = {
     _cfg: null,
     _customers: [],
+    // Superset sin filtrar por papelera (pero ya sin los "de baja" de
+    // FacturaScripts) -- solo para poder mostrar el nombre real de un
+    // cliente oculto dentro de la propia papelera.
+    _customersAll: [],
+    // Entradas crudas de la papelera del TPV (ver _loadHiddenCustomers):
+    // [{codcliente, hiddenAt, hiddenByTerminalId, hiddenByTerminalName}].
+    _hiddenEntries: [],
+    // Callback opcional fijado en mount() -- este componente no conoce
+    // currentTerminal (vive en renderer.js), asi que se lo pide a quien lo
+    // monta en vez de duplicar ese estado aqui.
+    _getTerminalInfo: null,
     _selected: null,
     _defaultCod: "1",
     _defaultCustomer: { codcliente: "1", nombre: "Ventas tickets" },
@@ -86,6 +97,12 @@
       overlay: null,
       listModal: null,
       createModal: null,
+      trashModal: null,
+      trashBody: null,
+      trashCount: null,
+      trashBtn: null,
+      closeTrashBtn: null,
+      backListFromTrashBtn: null,
       search: null,
       listBody: null,
       listCount: null,
@@ -122,6 +139,29 @@
         cifnif: String(c?.cifnif || ""),
         _raw: c || null,
       };
+    },
+
+    // Config del servidor compartido del TPV (parked_tpv_shared -- el mismo
+    // que ya usan aparcados/ledger de stock), NO el de FacturaScripts. Copia
+    // local a proposito del mismo mecanismo real de renderer.js
+    // (TPV_SYNC_API_URL/getTpvSyncApiKey/getCurrentSlugForReservations) --
+    // este componente es autocontenido y no depende de renderer.js.
+    _getSyncCfg() {
+      const syncApiUrl = String(
+        window.TPV_CONFIG?.tpvSyncApiUrl ||
+          "https://plus.recipok.com/tpv/api/index.php",
+      ).replace(/\/+$/, "");
+
+      const syncApiKey =
+        String(window.TPV_CONFIG?.tpvApiKey || "").trim() ||
+        String(window.RECIPOK_API?.apiKey || "").trim() ||
+        String(localStorage.getItem("tpv_sync_api_key") || "").trim();
+
+      const baseUrl = String(this._cfg?.baseUrl || "");
+      const m = baseUrl.match(/plus\.recipok\.com\/([^/]+)\/api\/\d+/i);
+      const slug = m ? String(m[1]).trim() : "";
+
+      return { syncApiUrl, syncApiKey, slug };
     },
 
     async _fetchJson(url) {
@@ -291,6 +331,118 @@
       return data;
     },
 
+    // Papelera del TPV: "borrar" un cliente desde el TPV NUNCA toca
+    // FacturaScripts -- solo lo esconde de este selector via una tabla
+    // propia en el servidor compartido del TPV (parked_tpv_shared). Lectura
+    // fail-open (si falla, se trata como papelera vacia y el selector sigue
+    // funcionando con normalidad); escritura fail-closed (si falla, se
+    // avisa y NO se cae de vuelta al borrado real antiguo).
+    async _loadHiddenCustomers() {
+      const { syncApiUrl, syncApiKey, slug } = this._getSyncCfg();
+      if (!slug || !syncApiKey) return this._hiddenEntries || [];
+
+      try {
+        const url = `${syncApiUrl}?action=list-hidden-customers&slug=${encodeURIComponent(slug)}`;
+        const res = await fetch(url, {
+          headers: { Accept: "application/json", "X-TPV-API-KEY": syncApiKey },
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || data?.ok === false) {
+          throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+        }
+
+        const list = Array.isArray(data?.data) ? data.data : [];
+        this._hiddenEntries = list
+          .map((e) => ({
+            codcliente: String(e?.codcliente || "").trim(),
+            hiddenAt: e?.hidden_at || null,
+            hiddenByTerminalId: String(e?.hidden_by_terminal_id || ""),
+            hiddenByTerminalName: String(e?.hidden_by_terminal_name || ""),
+          }))
+          .filter((e) => e.codcliente);
+      } catch (error) {
+        this.log(
+          "No se pudo cargar la papelera de clientes (fail-open):",
+          error?.message || error,
+        );
+      }
+
+      return this._hiddenEntries || [];
+    },
+
+    async _hideCustomerByCode(cod) {
+      const code = String(cod || "").trim();
+      if (!code) throw new Error("Código de cliente inválido.");
+
+      const { syncApiUrl, syncApiKey, slug } = this._getSyncCfg();
+      if (!slug || !syncApiKey) {
+        throw new Error(
+          "La papelera de clientes no está disponible en esta instalación.",
+        );
+      }
+
+      const terminal =
+        typeof this._getTerminalInfo === "function"
+          ? this._getTerminalInfo() || {}
+          : {};
+
+      const res = await fetch(`${syncApiUrl}?action=hide-customer`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-TPV-API-KEY": syncApiKey,
+        },
+        body: JSON.stringify({
+          slug,
+          codcliente: code,
+          terminalId: String(terminal.id || ""),
+          terminalName: String(terminal.name || ""),
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || data?.ok === false) {
+        throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+      }
+    },
+
+    async _unhideCustomerByCode(cod) {
+      const code = String(cod || "").trim();
+      if (!code) throw new Error("Código de cliente inválido.");
+
+      const { syncApiUrl, syncApiKey, slug } = this._getSyncCfg();
+      if (!slug || !syncApiKey) {
+        throw new Error(
+          "La papelera de clientes no está disponible en esta instalación.",
+        );
+      }
+
+      const res = await fetch(`${syncApiUrl}?action=unhide-customer`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-TPV-API-KEY": syncApiKey,
+        },
+        body: JSON.stringify({ slug, codcliente: code }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || data?.ok === false) {
+        throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+      }
+    },
+
+    // Fallback cuando el borrado definitivo falla (el cliente tiene
+    // historial en FacturaScripts): "dar de baja" es un campo NATIVO de
+    // FacturaScripts (fechabaja/debaja) -- a diferencia de la papelera, esto
+    // SI es un cambio real y visible dentro de FacturaScripts. Se reutiliza
+    // _updateForm (ya hace PATCH->PUT fallback).
+    async _daBajaCustomer(cod) {
+      const today = new Date().toISOString().slice(0, 10);
+      await this._updateForm("clientes", cod, { debaja: 1, fechabaja: today });
+      await this._unhideCustomerByCode(cod).catch(() => {});
+    },
+
     async _loadCustomers() {
       const baseUrl = String(this._cfg?.baseUrl || "").replace(/\/+$/, "");
       if (!baseUrl) return [];
@@ -304,6 +456,44 @@
         .map((customer) => this._normalizeCustomer(customer));
       list.sort((a, b) => Number(a.codcliente) - Number(b.codcliente));
       return list;
+    },
+
+    // Recarga la lista real de FacturaScripts y le aplica el filtro de la
+    // papelera del TPV. _customersAll conserva el superset (sin el filtro de
+    // papelera) para poder mostrar el nombre real de un cliente oculto
+    // dentro de la propia papelera; _customers es la vista ya filtrada que
+    // usa el selector normal.
+    async _refreshCustomers() {
+      try {
+        this._customersAll = await this._loadCustomers();
+      } catch (error) {
+        this.log("No pude cargar clientes:", error?.message || error);
+        this._customersAll = [];
+      }
+
+      const hiddenSet = new Set(
+        (this._hiddenEntries || []).map((e) => e.codcliente),
+      );
+      const list = this._customersAll.filter(
+        (c) => !hiddenSet.has(String(c.codcliente)),
+      );
+
+      const hasDefault = list.some(
+        (customer) => String(customer.codcliente) === String(this._defaultCod),
+      );
+      if (!hasDefault) {
+        list.push({
+          codcliente: String(this._defaultCod),
+          nombre: String(this._defaultCustomer?.nombre || "Ventas tickets"),
+          razonsocial: "",
+          cifnif: "",
+          _raw: null,
+        });
+      }
+
+      list.sort((a, b) => Number(a.codcliente) - Number(b.codcliente));
+      this._customers = list;
+      return this._customers;
     },
 
     _buildKeyboardHtml() {
@@ -359,6 +549,7 @@
             <div class="csx-title">Seleccionar cliente</div>
             <input class="csx-search" type="text" placeholder="Buscar por nombre, CIF o código..." />
             <button class="csx-btn" type="button" data-csx-search-kb="1" title="Teclado">⌨</button>
+            <button class="csx-btn" type="button" data-csx-open-trash="1" title="Papelera de clientes">🗑</button>
             <button class="csx-btn csx-btn-plus" type="button" data-csx-open-create="1" title="Nuevo cliente">+</button>
             <button class="csx-close" type="button" title="Cerrar">✕</button>
           </div>
@@ -472,6 +663,19 @@
             <button class="csx-btn csx-btn-primary" type="button" data-csx-save-create="1">Guardar</button>
           </div>
         </div>
+
+        <div class="csx-modal csx-trash-modal csx-hidden" role="dialog" aria-modal="true">
+          <div class="csx-head">
+            <div class="csx-title">Papelera de clientes</div>
+            <button class="csx-btn" type="button" data-csx-back-list-from-trash="1">Clientes</button>
+            <button class="csx-close" type="button" data-csx-close-trash="1" title="Cerrar">✕</button>
+          </div>
+          <div class="csx-body csx-trash-body"></div>
+          <div class="csx-foot">
+            <div class="csx-foot-left"></div>
+            <div class="csx-foot-right">Ocultos del selector del TPV</div>
+          </div>
+        </div>
       `;
 
       document.body.appendChild(overlay);
@@ -479,6 +683,16 @@
       this._els.overlay = overlay;
       this._els.listModal = overlay.querySelector(".csx-list-modal");
       this._els.createModal = overlay.querySelector(".csx-create-modal");
+      this._els.trashModal = overlay.querySelector(".csx-trash-modal");
+      this._els.trashBody = overlay.querySelector(".csx-trash-body");
+      this._els.trashCount = this._els.trashModal.querySelector(
+        ".csx-foot-left",
+      );
+      this._els.trashBtn = overlay.querySelector("[data-csx-open-trash]");
+      this._els.closeTrashBtn = overlay.querySelector("[data-csx-close-trash]");
+      this._els.backListFromTrashBtn = overlay.querySelector(
+        "[data-csx-back-list-from-trash]",
+      );
       this._els.search = overlay.querySelector(".csx-search");
       this._els.listBody = overlay.querySelector(".csx-body");
       this._els.listCount = overlay.querySelector(".csx-foot-left");
@@ -509,6 +723,9 @@
       this._els.createModal.addEventListener("click", (event) =>
         event.stopPropagation(),
       );
+      this._els.trashModal.addEventListener("click", (event) =>
+        event.stopPropagation(),
+      );
 
       this._els.search.addEventListener("focus", () => {
         this._activeInput = this._els.search;
@@ -523,6 +740,11 @@
         this.openCreate(),
       );
       this._els.backToListBtn.addEventListener("click", () => this.open());
+      this._els.trashBtn.addEventListener("click", () => this.openTrash());
+      this._els.closeTrashBtn.addEventListener("click", () => this.close());
+      this._els.backListFromTrashBtn.addEventListener("click", () =>
+        this.open(),
+      );
 
       this._els.createCloseBtns.forEach((button) => {
         button.addEventListener("click", () => this.close());
@@ -575,6 +797,7 @@
     _showListMode() {
       this._els.listModal.classList.remove("csx-hidden");
       this._els.createModal.classList.add("csx-hidden");
+      this._els.trashModal.classList.add("csx-hidden");
       this._setCreateError("");
       this._activeInput = this._els.search;
     },
@@ -582,6 +805,7 @@
     _showCreateMode() {
       this._els.createModal.classList.remove("csx-hidden");
       this._els.listModal.classList.add("csx-hidden");
+      this._els.trashModal.classList.add("csx-hidden");
       this._setCreateError("");
 
       const isEdit = this._createMode === "edit";
@@ -605,19 +829,31 @@
       }
     },
 
-    async _confirmDeleteCustomer(customer) {
+    _showTrashMode() {
+      this._els.trashModal.classList.remove("csx-hidden");
+      this._els.listModal.classList.add("csx-hidden");
+      this._els.createModal.classList.add("csx-hidden");
+    },
+
+    // "Borrar" desde el selector normal nunca toca FacturaScripts -- solo
+    // esconde al cliente en la papelera del TPV (ver _hideCustomerByCode).
+    async _confirmHideCustomer(customer) {
       const name = String(
         customer?.nombre || customer?.razonsocial || "",
       ).trim();
       const code = String(customer?.codcliente || "").trim();
       const label = name ? `${name}` : `cliente ${code}`;
 
+      const msg =
+        `Los clientes borrados se meterán en la papelera, puedes volver a ` +
+        `activarlos; mientras estén en la papelera no los verás para ` +
+        `poder seleccionarlos.\n\n¿Borrar a "${label}"?`;
+
       if (typeof window.confirmModal === "function") {
-        const msg = `¿Estas seguro de borrar el cliente "${label}"?`;
         return !!(await window.confirmModal("Borrar cliente", msg));
       }
 
-      return window.confirm(`¿Estas seguro de borrar el cliente "${label}"?`);
+      return window.confirm(msg);
     },
 
     _setCreateError(text) {
@@ -725,25 +961,179 @@
             (item) => String(item.codcliente) === String(cod),
           );
 
-          const confirmed = await this._confirmDeleteCustomer(customer);
+          const confirmed = await this._confirmHideCustomer(customer);
           if (!confirmed) return;
 
           button.disabled = true;
           try {
-            await this._deleteCustomerByCode(cod);
-            this._customers = await this._loadCustomers();
+            await this._hideCustomerByCode(cod);
+            this._hiddenEntries = (this._hiddenEntries || []).filter(
+              (e) => e.codcliente !== String(cod),
+            );
+            this._hiddenEntries.push({ codcliente: String(cod) });
+            await this._refreshCustomers();
             this._renderList(this._els.search.value);
+            if (typeof window.toast === "function") {
+              window.toast("Cliente movido a la papelera 🗑", "ok", "Clientes");
+            }
           } catch (error) {
+            const msg = `No se pudo borrar el cliente: ${error?.message || error}`;
             if (typeof window.confirmModal === "function") {
-              await window.confirmModal(
-                "No se pudo borrar",
-                `No se pudo borrar el cliente: ${error?.message || error}`,
-              );
+              await window.confirmModal("No se pudo borrar", msg);
             } else {
-              alert(`No se pudo borrar cliente: ${error?.message || error}`);
+              alert(msg);
             }
           } finally {
             button.disabled = false;
+          }
+        });
+      });
+    },
+
+    _renderTrashList() {
+      const body = this._els.trashBody;
+      const foot = this._els.trashCount;
+      const entries = this._hiddenEntries || [];
+
+      foot.textContent = `${entries.length} cliente${entries.length === 1 ? "" : "s"} en la papelera`;
+
+      body.innerHTML =
+        entries
+          .map((entry) => {
+            const customer = (this._customersAll || []).find(
+              (c) => String(c.codcliente) === entry.codcliente,
+            );
+            const name = customer?.nombre || "(no encontrado en FacturaScripts)";
+            const meta = [entry.hiddenAt, entry.hiddenByTerminalName]
+              .filter(Boolean)
+              .join(" · ");
+
+            return `
+              <div class="csx-row csx-trash-row" data-cod="${this._escape(entry.codcliente)}">
+                <div class="csx-cod">${this._escape(entry.codcliente)}</div>
+                <div class="csx-row-main">
+                  <div class="csx-name">${this._escape(name)}</div>
+                  ${meta ? `<div class="csx-sub">${this._escape(meta)}</div>` : ""}
+                </div>
+                <div class="csx-row-actions">
+                  <button type="button" class="csx-btn csx-btn-secondary" data-csx-reactivar="${this._escape(entry.codcliente)}">Reactivar</button>
+                  <button type="button" class="csx-del-text" data-csx-borrar-def="${this._escape(entry.codcliente)}">Borrar definitivamente</button>
+                </div>
+              </div>
+            `;
+          })
+          .join("") || `<div class="csx-trash-empty">La papelera está vacía.</div>`;
+
+      this._wireTrashRowActions(body);
+    },
+
+    _wireTrashRowActions(body) {
+      body.querySelectorAll("[data-csx-reactivar]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const cod = btn.getAttribute("data-csx-reactivar") || "";
+          btn.disabled = true;
+          try {
+            await this._unhideCustomerByCode(cod);
+            this._hiddenEntries = (this._hiddenEntries || []).filter(
+              (e) => e.codcliente !== cod,
+            );
+            await this._refreshCustomers();
+            this._renderTrashList();
+            if (typeof window.toast === "function") {
+              window.toast("Cliente reactivado ✅", "ok", "Clientes");
+            }
+          } catch (error) {
+            await window.confirmModal?.(
+              "No se pudo reactivar",
+              error?.message || String(error),
+            );
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      });
+
+      body.querySelectorAll("[data-csx-borrar-def]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const cod = btn.getAttribute("data-csx-borrar-def") || "";
+          const customer = (this._customersAll || []).find(
+            (c) => String(c.codcliente) === cod,
+          );
+          const label = customer?.nombre || `cliente ${cod}`;
+
+          const confirmed = await window.confirmModal(
+            "Borrar definitivamente",
+            `Vas a intentar borrar a "${label}" de FacturaScripts de forma ` +
+              `permanente. Esta acción no se puede deshacer. ¿Continuar?`,
+          );
+          if (!confirmed) return;
+
+          btn.disabled = true;
+          try {
+            await this._deleteCustomerByCode(cod);
+            await this._unhideCustomerByCode(cod).catch(() => {});
+            this._hiddenEntries = (this._hiddenEntries || []).filter(
+              (e) => e.codcliente !== cod,
+            );
+            this._customersAll = (this._customersAll || []).filter(
+              (c) => String(c.codcliente) !== cod,
+            );
+            this._renderTrashList();
+            if (typeof window.toast === "function") {
+              window.toast(
+                "Cliente borrado definitivamente ✅",
+                "ok",
+                "Clientes",
+              );
+            }
+          } catch (error) {
+            const choice = await window.confirmModal(
+              "No se pudo borrar definitivamente",
+              `FacturaScripts ha rechazado el borrado de "${label}" (motivo ` +
+                `más probable: tiene facturas, presupuestos, pedidos o ` +
+                `albaranes asociados). Puedes darlo de baja en ` +
+                `FacturaScripts en su lugar: mantiene todo su historial, ` +
+                `pero a diferencia del borrado o de esconderlo en la ` +
+                `papelera del TPV, esto SÍ es un cambio real y visible ` +
+                `dentro de FacturaScripts (aparecerá "de baja" allí ` +
+                `también).`,
+              {
+                middleButtonText: "Dar de baja en FacturaScripts",
+                middleButtonResult: "baja",
+                okButtonText: "Entendido",
+              },
+            );
+
+            if (choice === "baja") {
+              const reallyConfirm = await window.confirmModal(
+                "Confirmar baja en FacturaScripts",
+                `Esto modificará a "${label}" DENTRO de FacturaScripts (no ` +
+                  `solo en el TPV). ¿Seguro?`,
+              );
+              if (reallyConfirm) {
+                try {
+                  await this._daBajaCustomer(cod);
+                  this._hiddenEntries = (this._hiddenEntries || []).filter(
+                    (e) => e.codcliente !== cod,
+                  );
+                  this._renderTrashList();
+                  if (typeof window.toast === "function") {
+                    window.toast(
+                      "Cliente dado de baja en FacturaScripts ✅",
+                      "ok",
+                      "Clientes",
+                    );
+                  }
+                } catch (e2) {
+                  await window.confirmModal(
+                    "No se pudo dar de baja",
+                    e2?.message || String(e2),
+                  );
+                }
+              }
+            }
+          } finally {
+            btn.disabled = false;
           }
         });
       });
@@ -872,7 +1262,7 @@
 
       try {
         await this._updateForm("clientes", cod, payload);
-        this._customers = await this._loadCustomers();
+        await this._refreshCustomers();
 
         const refreshed = this._customers.find(
           (customer) => String(customer.codcliente) === cod,
@@ -935,7 +1325,7 @@
           created = this._normalizeCustomer(createdRaw);
         }
 
-        this._customers = await this._loadCustomers();
+        await this._refreshCustomers();
 
         if (!created) {
           created = this._customers.find(
@@ -1141,6 +1531,15 @@
       this._showCreateMode();
     },
 
+    async openTrash() {
+      this._ensureModalDom();
+      this._els.overlay.classList.add("csx-open");
+      this._showTrashMode();
+      this._els.trashBody.innerHTML = `<div class="csx-trash-loading">Cargando…</div>`;
+      await this._loadHiddenCustomers();
+      this._renderTrashList();
+    },
+
     close() {
       if (!this._els.overlay) return;
       this._els.overlay.classList.remove("csx-open");
@@ -1153,6 +1552,7 @@
       apiKey,
       defaultCodcliente = "1",
       onChange,
+      getTerminalInfo,
       debug = false,
     }) {
       this._cfg = {
@@ -1161,31 +1561,14 @@
       };
       this._defaultCod = String(defaultCodcliente || "1");
       this._onChange = onChange;
+      this._getTerminalInfo =
+        typeof getTerminalInfo === "function" ? getTerminalInfo : null;
       this._debug = !!debug;
 
       this._ensureModalDom();
 
-      this._customers = await this._loadCustomers().catch((error) => {
-        console.warn("[CSX] No pude cargar clientes:", error?.message || error);
-        return [];
-      });
-
-      const hasDefault = this._customers.some(
-        (customer) => String(customer.codcliente) === String(this._defaultCod),
-      );
-      if (!hasDefault) {
-        this._customers.push({
-          codcliente: String(this._defaultCod),
-          nombre: String(this._defaultCustomer?.nombre || "Ventas tickets"),
-          razonsocial: "",
-          cifnif: "",
-          _raw: null,
-        });
-      }
-
-      this._customers.sort(
-        (a, b) => Number(a.codcliente) - Number(b.codcliente),
-      );
+      this._hiddenEntries = await this._loadHiddenCustomers().catch(() => []);
+      await this._refreshCustomers();
       this._emitChange();
     },
   };

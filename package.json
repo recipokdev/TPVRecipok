@@ -16,6 +16,7 @@
     "test:e2e:allmodes": "npm run test:e2e:tx && npm run test:e2e:mesas",
     "test:2tpv": "node tools/tests/run-two-tpv.js",
     "test:e2e:real-demo": "node tools/tests/run-e2e-real-demo.js",
+    "test:e2e:customer-papelera": "node tools/tests/run-e2e-customer-papelera.js",
     "hooks:install": "git config core.hooksPath .githooks",
     "test:e2e:demo": "node tools/tests/run-e2e-demo.js",
     "test:e2e:demo:resilience": "set TPV_E2E_RUN_RESILIENCE=1&& node tools/tests/run-e2e-demo.js",

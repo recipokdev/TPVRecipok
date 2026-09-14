@@ -7146,6 +7146,10 @@ async function initCustomerSelectorOnce() {
       scheduleMesasAutoSave?.();
       scheduleTpvAutoSave?.();
     },
+    getTerminalInfo: () => ({
+      id: currentTerminal?.id || "",
+      name: currentTerminal?.name || "",
+    }),
     debug: false,
   });
 
