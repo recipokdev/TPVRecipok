@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.33",
+      "date": "2026-09-15",
+      "title": "Release 0.2.33",
       "changes": [
         "IMPORTANTE: al cerrar caja, en ciertos momentos podía salir un aviso de \"la caja se cerró en otro TPV\" aunque hubiera sido el propio terminal quien la acababa de cerrar — una falsa alarma provocada por una comprobación automática que coincidía justo con el propio cierre. Ya no puede pasar: esa comprobación se detiene en el instante en que se confirma el cierre.",
         "IMPORTANTE: el \"Total esperado\" del cierre de caja no tenía en cuenta el dinero con el que se había abierto la caja si no había habido ninguna venta — por ejemplo, abrir con 2€ y cerrar sin vender nada mostraba \"Total esperado: 0€\" en vez de 2€. Ahora se calcula correctamente a partir de lo que el propio TPV lleva registrado durante esa caja (apertura, ventas y movimientos reales), en vez de un dato de FacturaScripts que nunca se actualiza."
