@@ -89,6 +89,18 @@
   line-height: 1;
 }
 
+.csx-btn-trash {
+  border-radius: 999px;
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: #fff;
+  font-size: 15px;
+  line-height: 1;
+}
+
 .csx-btn-secondary {
   background: #0ea5e9;
   color: #fff;

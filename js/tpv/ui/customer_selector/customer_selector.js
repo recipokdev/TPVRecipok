@@ -549,7 +549,7 @@
             <div class="csx-title">Seleccionar cliente</div>
             <input class="csx-search" type="text" placeholder="Buscar por nombre, CIF o código..." />
             <button class="csx-btn" type="button" data-csx-search-kb="1" title="Teclado">⌨</button>
-            <button class="csx-btn" type="button" data-csx-open-trash="1" title="Papelera de clientes">🗑</button>
+            <button class="csx-btn csx-btn-trash" type="button" data-csx-open-trash="1" title="Papelera de clientes">🗑</button>
             <button class="csx-btn csx-btn-plus" type="button" data-csx-open-create="1" title="Nuevo cliente">+</button>
             <button class="csx-close" type="button" title="Cerrar">✕</button>
           </div>
