@@ -21991,8 +21991,18 @@ async function apiReadLastOpenCajaGlobal() {
   return Array.isArray(list) && list[0] ? list[0] : null;
 }
 
+// A diferencia de checkSharedCajaStateOnce (que SI mira cualquier caja del
+// cliente, sea de la terminal que sea -- eso es lo que debe quedar apagado
+// por defecto, ver isSharedCashModeEnabled), esta funcion solo comprueba
+// SU PROPIO idcaja (getCajaIdSafe). Eso es seguro y util para cualquier
+// cliente, este o no en modo compartido: cubre tanto a alguien que cierra
+// esa misma caja desde FacturaScripts directamente, como el caso real de
+// dos maquinas configuradas con el MISMO idtpv (misma tienda, dos
+// ordenadores) -- ahi comparten la misma caja de verdad (via
+// apiReadLastOpenCajaForTpv, que ya funciona sin necesidad de modo
+// compartido) y closing en una debe reflejarse en la otra. Por eso esta
+// funcion NO se apaga con isSharedCashModeEnabled.
 async function checkSharedCajaHealthOnce() {
-  if (!isSharedCashModeEnabled()) return true;
   if (TPV_STATE?.offline || TPV_STATE?.locked) return true;
   if (!cashSession?.open) return true;
 
@@ -22130,11 +22140,10 @@ function stopSharedCajaStateMonitor() {
 function startSharedCajaHealthMonitor() {
   stopSharedCajaHealthMonitor();
 
-  if (!isSharedCashModeEnabled()) {
-    startTerminalPresenceMonitor();
-    return;
-  }
-
+  // Este monitor comprueba SU PROPIA caja (ver checkSharedCajaHealthOnce),
+  // asi que corre siempre, este o no el cliente en modo compartido -- cubre
+  // tanto un cierre hecho desde FacturaScripts como dos maquinas con el
+  // mismo idtpv que comparten caja de verdad.
   __sharedCajaHealthStartTimeout = setTimeout(() => {
     __sharedCajaHealthStartTimeout = null;
     startTerminalPresenceMonitor();

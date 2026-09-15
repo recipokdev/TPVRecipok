@@ -5987,12 +5987,56 @@ console.log(
 // todas las cajas reales quedaban a nombre de uno solo, y cerrar en
 // cualquiera de los dos cerraba la misma caja real. Verificado en vivo
 // contra demo con dos terminales (idtpv 1 y 2): con el fix, el segundo
-// terminal abre su propia caja real, distinta e independiente.
+// terminal abre su propia caja real, distinta e independiente -- salvo que
+// dos maquinas compartan EL MISMO idtpv (misma tienda, dos ordenadores), en
+// cuyo caso siguen encontrando y compartiendo la misma caja de verdad via
+// apiReadLastOpenCajaForTpv (nunca dependio del modo compartido).
 mustContain(
   renderer,
   "if (cfgVal == null) return false;",
   "isSharedCashModeEnabled defaults to false (each terminal gets its own caja) when unconfigured, instead of silently sharing one caja across every terminal of a client",
 );
+
+// Comprobar que sigue open una caja que se cerro (desde FacturaScripts, o
+// desde otra maquina con el MISMO idtpv que de verdad comparte esa caja) no
+// depende de isSharedCashModeEnabled -- si se dejara detras de ese
+// interruptor, apagarlo (el fix de arriba) tambien apagaria sin querer este
+// aviso para todos los clientes, incluidos los que nunca tuvieron el bug.
+{
+  const idx = renderer.indexOf("async function checkSharedCajaHealthOnce()");
+  const endIdx = idx >= 0 ? renderer.indexOf("async function checkSharedCajaStateOnce(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped &&
+    !scoped.includes("if (!isSharedCashModeEnabled())")
+  ) {
+    ok(
+      "checkSharedCajaHealthOnce (detects THIS terminal's own caja being closed elsewhere) always runs, independent of isSharedCashModeEnabled -- covers same-idtpv sharing without depending on the cross-terminal opt-in",
+    );
+  } else {
+    fail(
+      "checkSharedCajaHealthOnce (detects THIS terminal's own caja being closed elsewhere) always runs, independent of isSharedCashModeEnabled -- covers same-idtpv sharing without depending on the cross-terminal opt-in",
+    );
+  }
+}
+
+{
+  const idx = renderer.indexOf("function startSharedCajaHealthMonitor()");
+  const endIdx = idx >= 0 ? renderer.indexOf("function stopSharedCajaHealthMonitor()", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped &&
+    !scoped.includes("if (!isSharedCashModeEnabled())")
+  ) {
+    ok(
+      "startSharedCajaHealthMonitor always starts the own-caja health poll, not just when isSharedCashModeEnabled is on",
+    );
+  } else {
+    fail(
+      "startSharedCajaHealthMonitor always starts the own-caja health poll, not just when isSharedCashModeEnabled is on",
+    );
+  }
+}
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
