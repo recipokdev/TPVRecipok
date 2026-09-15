@@ -21952,9 +21952,21 @@ function isCajaOpen(remoteCaja) {
   return ff == null || String(ff).trim() === "";
 }
 
+// Cliente real (Ben_Trempat, 2026-09-15): añadieron una segunda tienda/
+// terminal (Inca01) bajo la misma cuenta de FacturaScripts que la ya
+// existente (PortP01). Con este interruptor sin configurar en ningun sitio
+// (no existe en config.js ni hay forma de fijarlo por cliente todavia),
+// el default en "true" hacia que TODOS los clientes, sin haberlo pedido
+// nunca, compartieran una unica caja entre sus terminales -- confirmado
+// contra la BD real: desde que se añadio Inca01, todas las cajas reales
+// quedaron a nombre de PortP01 (el primer terminal en abrir cada dia),
+// asi que cerrar en cualquiera de los dos cerraba la misma caja real.
+// Ningun cliente depende hoy de que esto este activo (nunca se ha llegado
+// a fijar `sharedCashMode` en ningun sitio), asi que el default seguro es
+// que cada terminal tenga su propia caja salvo que se active a proposito.
 function isSharedCashModeEnabled() {
   const cfgVal = window.TPV_CONFIG?.sharedCashMode;
-  if (cfgVal == null) return true;
+  if (cfgVal == null) return false;
   return !!cfgVal;
 }
 

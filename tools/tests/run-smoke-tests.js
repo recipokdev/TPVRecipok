@@ -5972,6 +5972,28 @@ mustContain(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-15: caja compartida por defecto entre terminales del mismo cliente\n",
+);
+
+// Cliente real (Ben_Trempat): añadió una segunda tienda/terminal (Inca01)
+// bajo la misma cuenta que la ya existente (PortP01). isSharedCashModeEnabled
+// nunca se configura en ningun sitio (no existe en config.js ni hay forma de
+// fijarlo por cliente todavia), asi que su valor por defecto ES el valor
+// real para TODOS los clientes. Con el default en true, el terminal que
+// abre caja en segundo lugar cada dia se limitaba a reutilizar la caja ya
+// abierta por el otro (apiReadLastOpenCajaGlobal, sin filtrar por idtpv) --
+// confirmado contra la BD real: desde que se añadio el segundo terminal,
+// todas las cajas reales quedaban a nombre de uno solo, y cerrar en
+// cualquiera de los dos cerraba la misma caja real. Verificado en vivo
+// contra demo con dos terminales (idtpv 1 y 2): con el fix, el segundo
+// terminal abre su propia caja real, distinta e independiente.
+mustContain(
+  renderer,
+  "if (cfgVal == null) return false;",
+  "isSharedCashModeEnabled defaults to false (each terminal gets its own caja) when unconfigured, instead of silently sharing one caja across every terminal of a client",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
