@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.32",
+      "date": "2026-09-15",
+      "title": "Release 0.2.32",
       "changes": [
         "IMPORTANTE: la corrección de terminales independientes de la versión anterior no bastaba para terminales que ya venían \"contaminados\" por el fallo antiguo — al arrancar, el TPV seguía recuperando ciegamente la caja guardada de la última vez, sin comprobar si esa caja pertenecía de verdad a ese terminal o a otro. Ahora, al recuperar la caja al arrancar, se comprueba que sea realmente la de ese terminal; si no lo es, se descarta y se trata como si no hubiera ninguna caja abierta (pidiendo abrir una nueva, correctamente independiente)."
       ]
