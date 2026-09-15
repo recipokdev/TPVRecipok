@@ -6071,6 +6071,68 @@ console.log(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-15 (urgente): cerrar caja no debe disparar un falso aviso de \"cerrada en otro TPV\"\n",
+);
+
+// Cliente real (Ben_Trempat): al cerrar caja, leer/imprimir el resumen
+// tarda unos segundos -- tiempo de sobra para que el sondeo de "sigue
+// abierta mi caja" (cada 10s, corre siempre desde el fix anterior) se
+// dispare justo en medio del propio cierre, viendo la caja ya cerrada por
+// el mismisimo terminal y avisando de "cerrada en otro TPV" por error.
+{
+  const idx = renderer.indexOf("async function confirmCashClosing()");
+  const endIdx = idx >= 0 ? renderer.indexOf("const idcaja = getCajaIdSafe();", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (scoped.includes("stopSharedCajaHealthMonitor?.();")) {
+    ok(
+      "confirmCashClosing stops the own-caja health poll immediately on confirming close, before the slow read/print/close sequence, so it can't race and misfire a false \"closed elsewhere\" warning",
+    );
+  } else {
+    fail(
+      "confirmCashClosing stops the own-caja health poll immediately on confirming close, before the slow read/print/close sequence, so it can't race and misfire a false \"closed elsewhere\" warning",
+    );
+  }
+}
+
+mustContain(
+  renderer,
+  "if (cashSession?.open) startSharedCajaHealthMonitor?.();",
+  "If the close attempt fails (caja stays genuinely open), confirmCashClosing restarts the health poll it stopped, instead of leaving this terminal unmonitored",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-15 (urgente): \"Total esperado\" en el cierre de caja no debe ignorar el dinero de apertura\n",
+);
+
+// Cliente real (Ben_Trempat): abrieron caja con 2€, sin ninguna venta, y
+// "Total esperado" mostraba 0€ en vez de 2€. Causa: FacturaScripts nunca
+// recalcula ingresos/totalmovi/totalcaja/totaltickets de tpvsneo_cajas al
+// escribir/leer por la API generica (setTotals(), que si lo haria bien,
+// solo corre dentro de su propio panel web) -- confirmado en real contra
+// una caja recien creada con dineroini=2: totalcaja seguia devolviendo 0.
+{
+  const idx = renderer.indexOf("function applyRemoteCajaToSession(remoteCaja)");
+  const endIdx = idx >= 0 ? renderer.indexOf("// Actualizamos las etiquetas inferiores", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("const cashIncome = Number(cashSession.cashSalesTotal || 0);") &&
+    scoped.includes("const movements = Number(cashSession.cashMovementsTotal || 0);") &&
+    scoped.includes("const expectedCash = opening + cashIncome + movements;") &&
+    !scoped.includes("Number(remoteCaja.ingresos || 0)") &&
+    !scoped.includes("Number(remoteCaja.totalmovi || 0)") &&
+    !scoped.includes("remoteCaja.totalcaja != null")
+  ) {
+    ok(
+      "applyRemoteCajaToSession computes the expected cash total from opening + the TPV's own live-tracked income/movements, instead of trusting FacturaScripts's own ingresos/totalmovi/totalcaja fields (which are never recalculated via the generic API)",
+    );
+  } else {
+    fail(
+      "applyRemoteCajaToSession computes the expected cash total from opening + the TPV's own live-tracked income/movements, instead of trusting FacturaScripts's own ingresos/totalmovi/totalcaja fields (which are never recalculated via the generic API)",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

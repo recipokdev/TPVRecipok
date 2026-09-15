@@ -20869,21 +20869,28 @@ function updateCloseSummary(countedTotal) {
 function applyRemoteCajaToSession(remoteCaja) {
   if (!remoteCaja) return;
 
+  // Real de cliente (Ben_Trempat, 2026-09-15): FacturaScripts NUNCA
+  // recalcula ingresos/totalmovi/totalcaja/totaltickets de tpvsneo_cajas al
+  // escribir/leer por la API generica -- ese calculo (setTotals() en el
+  // propio plugin) solo corre dentro de su panel web, nunca via la API
+  // REST que usa el TPV. Confirmado contra un caja real recien creada: con
+  // dineroini=2 y sin ninguna venta, "totalcaja" seguia devolviendo 0.
+  // Usar esos campos hacia que "Total esperado" mostrara 0€ nada mas abrir
+  // caja con dinero inicial, antes de cualquier venta. dineroini SI es
+  // fiable (campo real, no calculado). Para el resto, se mantiene lo que
+  // el propio TPV ya lleva sumado en vivo durante esta sesion
+  // (cashSession.cashSalesTotal/cashMovementsTotal/totalSales, que se
+  // actualizan en cada cobro/movimiento real -- ver processConfirmedSale),
+  // en vez de pisarlo con datos del servidor que nunca reflejan la
+  // realidad.
   const opening = Number(remoteCaja.dineroini || 0);
-  const cashIncome = Number(remoteCaja.ingresos || 0);
-  const movements = Number(remoteCaja.totalmovi || 0);
-  const expectedCash = Number(
-    remoteCaja.totalcaja != null
-      ? remoteCaja.totalcaja
-      : opening + cashIncome + movements,
-  );
-  const totalSales = Number(remoteCaja.totaltickets || 0);
+  const cashIncome = Number(cashSession.cashSalesTotal || 0);
+  const movements = Number(cashSession.cashMovementsTotal || 0);
+  const expectedCash = opening + cashIncome + movements;
+  const totalSales = Number(cashSession.totalSales || 0);
 
   // Guardamos en sesión para que updateCloseSummary use estos valores
   cashSession.openingTotal = opening;
-  cashSession.cashSalesTotal = cashIncome;
-  cashSession.cashMovementsTotal = movements;
-  cashSession.totalSales = totalSales;
   cashSession.expectedCashFS = expectedCash; // 👈 nuevo campo
 
   // Actualizamos las etiquetas inferiores (sin contar todavía el conteo de caja)
@@ -24123,6 +24130,17 @@ async function confirmCashClosing() {
     if (cashOpenOkBtn) cashOpenOkBtn.disabled = true;
   } catch {}
 
+  // Cliente real (Ben_Trempat, 2026-09-15): al confirmar el cierre, leer la
+  // caja para imprimir el resumen y luego cerrarla de verdad tarda unos
+  // segundos (imprimir incluido) -- tiempo de sobra para que el sondeo de
+  // "sigue abierta mi caja" (cada 10s, corre siempre) se dispare justo en
+  // medio. En ese momento la caja YA esta cerrada en FacturaScripts (el
+  // propio cierre la acaba de cerrar), asi que ese sondeo la ve cerrada y
+  // avisa de "Caja cerrada en otro TPV" -- un falso aviso, ya que es este
+  // mismo terminal quien la esta cerrando. Se para aqui, nada mas confirmar,
+  // para que no pueda dispararse durante el propio cierre.
+  stopSharedCajaHealthMonitor?.();
+
   const idcaja = getCajaIdSafe();
 
   let remoteCaja = null;
@@ -24198,6 +24216,11 @@ async function confirmCashClosing() {
       cajaId: idcaja || null,
     });
     toast("No se pudo cerrar la caja. Reintenta.", "warn", "Caja");
+    // El cierre no se llego a confirmar -- la caja sigue realmente abierta,
+    // asi que hay que reanudar el sondeo que se paro arriba antes de
+    // intentarlo (si no, este terminal se quedaria sin detectar un cierre
+    // real desde otro sitio mientras tanto).
+    if (cashSession?.open) startSharedCajaHealthMonitor?.();
     try {
       if (cashOpenOkBtn) cashOpenOkBtn.disabled = false;
     } catch {}
