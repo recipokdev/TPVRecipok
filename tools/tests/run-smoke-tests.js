@@ -6038,6 +6038,39 @@ mustContain(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-15 (urgente): recuperar caja al arrancar no debe adoptar la de OTRO terminal\n",
+);
+
+// Cliente real (Inca01/PortP01), URGENTE: tras el fix anterior (cada
+// terminal abre su propia caja), Inca01 seguia "viendo" la caja de PortP01
+// al intentar cerrar. Causa: el ID de caja guardado en el propio
+// localStorage de esa maquina quedo contaminado con la caja de PortP01
+// desde ANTES del fix (por el bug viejo) -- y maybeOpenCashOrRecover, en su
+// paso 1 (recuperar por ID guardado), nunca comprobaba de quien era esa
+// caja antes de recuperarla, saltandose por completo la logica correcta
+// por idtpv del paso 2. Confirmado en vivo: con un ID guardado que
+// pertenece a OTRO idtpv, ya no se recupera como propio, y se limpia para
+// que el paso 2 (busqueda correcta por terminal) tome el relevo.
+{
+  const idx = renderer.indexOf("async function maybeOpenCashOrRecover()");
+  const endIdx = idx >= 0 ? renderer.indexOf("// 2) Si NO hay caja guardada", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("const remoteIdtpv = Number(remoteCaja?.idtpv || 0) || 0;") &&
+    scoped.includes("const storedCajaIsMine =") &&
+    scoped.includes("if (remoteCaja && isCajaOpen(remoteCaja) && storedCajaIsMine) {")
+  ) {
+    ok(
+      "maybeOpenCashOrRecover's saved-id recovery step checks the caja's own idtpv before adopting it as this terminal's own, instead of blindly trusting any still-open stored id",
+    );
+  } else {
+    fail(
+      "maybeOpenCashOrRecover's saved-id recovery step checks the caja's own idtpv before adopting it as this terminal's own, instead of blindly trusting any still-open stored id",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

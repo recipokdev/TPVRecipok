@@ -22201,7 +22201,23 @@ async function maybeOpenCashOrRecover() {
       try {
         const remoteCaja = await apiReadCajaById(storedId);
 
-        if (remoteCaja && isCajaOpen(remoteCaja)) {
+        // Cliente real (Inca01/PortP01, 2026-09-15, tras el fix de terminales
+        // independientes): el ID guardado localmente puede venir de ANTES del
+        // fix -- si este terminal llego a "heredar" la caja de otro por el
+        // bug viejo, ese ID contaminado se quedo grabado en su propio
+        // localStorage para siempre, y actualizar la app no lo limpia solo.
+        // Sin este chequeo, este paso 1 recuperaba esa caja ciegamente
+        // (nunca miraba de quien era) ANTES de llegar al paso 2, que si
+        // busca correctamente por idtpv -- por eso el terminal seguia
+        // "viendo" la caja de la otra tienda pese a tener ya el codigo
+        // arreglado. Con modo compartido (mismo idtpv en dos maquinas) esto
+        // no aplica: ahi la caja de otro terminal físico con el MISMO idtpv
+        // si es, genuinamente, la propia.
+        const remoteIdtpv = Number(remoteCaja?.idtpv || 0) || 0;
+        const storedCajaIsMine =
+          isSharedCashModeEnabled() || !idtpv || !remoteIdtpv || remoteIdtpv === idtpv;
+
+        if (remoteCaja && isCajaOpen(remoteCaja) && storedCajaIsMine) {
           // ✅ recuperable
           cashSession.remoteCajaId = Number(remoteCaja.idcaja || storedId);
           cashSession.open = true;
@@ -22232,11 +22248,18 @@ async function maybeOpenCashOrRecover() {
           return;
         }
 
-        // ❌ estaba cerrada (o no existe)
-        console.warn(
-          "[TPV] Caja guardada no está abierta. Limpiando:",
-          storedId,
-        );
+        if (remoteCaja && isCajaOpen(remoteCaja) && !storedCajaIsMine) {
+          console.warn(
+            "[TPV] Caja guardada pertenece a otro terminal (idtpv distinto). Descartando:",
+            { storedId, remoteIdtpv, idtpv },
+          );
+        } else {
+          // ❌ estaba cerrada (o no existe)
+          console.warn(
+            "[TPV] Caja guardada no está abierta. Limpiando:",
+            storedId,
+          );
+        }
       } catch (e) {
         if (isConnectivityLikeError(e)) {
           shouldClearStoredId = false;
