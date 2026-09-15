@@ -60,6 +60,12 @@ let products = [];
 let managedStockProductIds = new Set();
 let managedStockCatalogLoaded = false;
 
+// Precio por almacen (mismo producto, precio distinto por tienda): mapa
+// idproducto -> precio neto, SOLO del almacen activo ahora mismo (ver
+// getCurrentWarehouseCode). Vive puramente en nuestro servidor, nunca en
+// FacturaScripts -- ver loadAlmacenPriceOverrides.
+let almacenPriceOverrides = {};
+
 // Mapa codimpuesto -> porcentaje real de IVA
 let taxRatesByCode = {};
 
@@ -10757,6 +10763,11 @@ async function runBootFlow() {
     // 4) Terminal+Agente por defecto (NO overlay)
     await ensureTerminalAgentDefaults();
 
+    // Precio por almacen: depende de currentTerminal.codalmacen, asi que se
+    // carga justo despues de fijar el terminal, antes de que se pueda
+    // montar ningun carrito con precios.
+    await loadAlmacenPriceOverrides();
+
     // 5) Caja (recupera o abre modal)
     await maybeOpenCashOrRecover();
 
@@ -11708,7 +11719,15 @@ function makeLineId() {
 
 function buildCartLine(product, quantity) {
   const taxRate = getTaxRateForProduct(product);
-  const priceNet = product.price || 0;
+  // Precio por almacen (ver loadAlmacenPriceOverrides): si este producto
+  // tiene un precio especial para el almacen activo, sustituye al precio
+  // normal de FacturaScripts AQUI, antes de fijar "original" -- el cambio
+  // manual del cajero en el carrito (grossPriceOverride) sigue pudiendo
+  // pisarlo por encima como ya hacia, sin tocar esa cadena para nada.
+  const almacenOverrideNet =
+    almacenPriceOverrides[Number(product.baseProductId || product.id || 0)];
+  const priceNet =
+    almacenOverrideNet != null ? Number(almacenOverrideNet) : product.price || 0;
   const priceGross = priceNet * (1 + taxRate / 100);
 
   return {
@@ -20361,6 +20380,13 @@ function setCurrentTerminal(terminal) {
   renderMainAgentBar?.();
   applyTerminalDefaultCustomer?.();
   refreshAgentGuardUI?.();
+
+  // Precio por almacen: cambiar de terminal puede cambiar el almacen activo
+  // (getCurrentWarehouseCode depende de currentTerminal.codalmacen) -- hay
+  // que recargar el mapa de precios especiales para el almacen nuevo.
+  loadAlmacenPriceOverrides()
+    .then(() => renderProducts?.())
+    .catch(() => {});
 
   // Feedback de cliente real: el predictor de numero de ticket (para
   // pre-imprimir rapido) es por terminal a proposito -- cada uno tiene su
@@ -43057,6 +43083,134 @@ function getCurrentWarehouseCode() {
   ).trim();
 }
 
+// Precio por almacen: mismo producto, precio distinto por tienda, sin
+// duplicar nada en FacturaScripts (que no soporta esto de forma nativa --
+// el precio vive una sola vez en el producto/variante, solo el stock esta
+// separado por almacen). Se guarda en nuestro servidor compartido
+// (parked_tpv_shared), gateado por cliente piloto igual que la papelera de
+// clientes. Fail-open en lectura: si no esta disponible, el mapa queda
+// vacio y el TPV sigue con el precio normal de FacturaScripts para todos.
+async function loadAlmacenPriceOverrides() {
+  const codalmacen = getCurrentWarehouseCode();
+  if (!codalmacen) {
+    almacenPriceOverrides = {};
+    return almacenPriceOverrides;
+  }
+
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    almacenPriceOverrides = {};
+    return almacenPriceOverrides;
+  }
+
+  try {
+    const url = `${TPV_SYNC_API_URL}?action=list-almacen-prices&slug=${encodeURIComponent(slug)}&codalmacen=${encodeURIComponent(codalmacen)}`;
+    const res = await fetchWithTimeout(
+      url,
+      {
+        headers: { Accept: "application/json", "X-TPV-API-KEY": syncApiKey },
+      },
+      5000,
+    );
+    const data = await res.json().catch(() => null);
+    if (!res.ok || data?.ok === false) {
+      throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+    }
+
+    const list = Array.isArray(data?.data) ? data.data : [];
+    const map = {};
+    list.forEach((entry) => {
+      const idp = Number(entry?.idproducto || 0);
+      if (idp > 0) map[idp] = Number(entry?.precio_net || 0);
+    });
+    almacenPriceOverrides = map;
+  } catch (e) {
+    console.warn(
+      "No se pudieron cargar los precios por almacen (fail-open):",
+      e?.message || e,
+    );
+    almacenPriceOverrides = {};
+  }
+
+  return almacenPriceOverrides;
+}
+
+async function apiSetAlmacenPriceOverride(idproducto, precioNet) {
+  const idp = Number(idproducto || 0);
+  if (!idp) throw new Error("idproducto inválido");
+
+  const codalmacen = getCurrentWarehouseCode();
+  if (!codalmacen) throw new Error("Este terminal no tiene almacén configurado.");
+
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("El precio por almacén no está disponible en esta instalación.");
+  }
+
+  const res = await fetchWithTimeout(
+    `${TPV_SYNC_API_URL}?action=set-almacen-price`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      body: JSON.stringify({
+        slug,
+        codalmacen,
+        idproducto: idp,
+        precioNet: Number(precioNet || 0),
+        terminalId: String(currentTerminal?.id || ""),
+        terminalName: String(currentTerminal?.name || ""),
+      }),
+    },
+    8000,
+  );
+  const data = await res.json().catch(() => null);
+  if (!res.ok || data?.ok === false) {
+    throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+  }
+
+  almacenPriceOverrides[idp] = Number(precioNet || 0);
+}
+
+async function apiUnsetAlmacenPriceOverride(idproducto) {
+  const idp = Number(idproducto || 0);
+  if (!idp) throw new Error("idproducto inválido");
+
+  const codalmacen = getCurrentWarehouseCode();
+  if (!codalmacen) throw new Error("Este terminal no tiene almacén configurado.");
+
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("El precio por almacén no está disponible en esta instalación.");
+  }
+
+  const res = await fetchWithTimeout(
+    `${TPV_SYNC_API_URL}?action=unset-almacen-price`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      body: JSON.stringify({ slug, codalmacen, idproducto: idp }),
+    },
+    8000,
+  );
+  const data = await res.json().catch(() => null);
+  if (!res.ok || data?.ok === false) {
+    throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+  }
+
+  delete almacenPriceOverrides[idp];
+}
+
 function pickStockRowByWarehouse(rows, warehouseCode = "") {
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) return null;
@@ -49739,6 +49893,27 @@ function openPriceEditForProduct(p) {
   if (orderPriorityInp) orderPriorityInp.value = String(currentOrderPriority);
   if (err) err.textContent = "";
 
+  // Precio por almacen: mostrar si este producto ya tiene un precio
+  // especial en el almacen activo, y mostrar/ocultar los botones de
+  // guardar/quitar segun corresponda. Sin almacen configurado en este
+  // terminal, la funcion entera queda oculta (se comporta como siempre).
+  const almacenInfoEl = document.getElementById("priceEditAlmacenInfo");
+  const saveHereBtn = document.getElementById("priceEditSaveHereBtn");
+  const removeHereBtn = document.getElementById("priceEditRemoveAlmacenBtn");
+  const codalmacen = getCurrentWarehouseCode();
+  const baseProductId = Number(p.baseProductId || p.id || 0);
+  const hasAlmacenOverride =
+    !!codalmacen && almacenPriceOverrides[baseProductId] != null;
+
+  if (almacenInfoEl) {
+    almacenInfoEl.textContent = hasAlmacenOverride
+      ? `Precio especial en este almacén: ${eur2(round2(Number(almacenPriceOverrides[baseProductId]) * (1 + taxRate / 100)))}`
+      : "";
+  }
+  if (saveHereBtn) saveHereBtn.classList.toggle("hidden", !codalmacen);
+  if (removeHereBtn)
+    removeHereBtn.classList.toggle("hidden", !hasAlmacenOverride);
+
   if (inp) inp.oninput = updateDerived;
 
   if (orderPriorityInp) {
@@ -49802,6 +49977,28 @@ function openPriceEditForProduct(p) {
         await confirmAndSaveProductPrice();
       } finally {
         saveBtn.disabled = false;
+      }
+    };
+  }
+
+  if (saveHereBtn) {
+    saveHereBtn.onclick = async () => {
+      saveHereBtn.disabled = true;
+      try {
+        await confirmAndSaveAlmacenPriceOverride();
+      } finally {
+        saveHereBtn.disabled = false;
+      }
+    };
+  }
+
+  if (removeHereBtn) {
+    removeHereBtn.onclick = async () => {
+      removeHereBtn.disabled = true;
+      try {
+        await confirmAndRemoveAlmacenPriceOverride();
+      } finally {
+        removeHereBtn.disabled = false;
       }
     };
   }
@@ -49911,6 +50108,93 @@ async function confirmAndSaveProductPrice() {
 
   renderProducts?.();
   toast?.("Precio base actualizado correctamente ✅", "ok", "Productos");
+  document.getElementById("priceEditOverlay")?.classList.add("hidden");
+}
+
+// Precio por almacen: a diferencia de confirmAndSaveProductPrice (que
+// cambia el precio base en FacturaScripts para SIEMPRE y para TODOS los
+// almacenes), esto guarda un precio especial que solo aplica al almacen
+// activo ahora mismo, sin tocar FacturaScripts en absoluto -- ver
+// loadAlmacenPriceOverrides/buildCartLine.
+async function confirmAndSaveAlmacenPriceOverride() {
+  const p = priceEditState.product;
+  if (!p) return;
+
+  const err = document.getElementById("priceEditError");
+  if (err) err.textContent = "";
+
+  const codalmacen = getCurrentWarehouseCode();
+  if (!codalmacen) {
+    if (err) err.textContent = "Este terminal no tiene almacén configurado.";
+    return;
+  }
+
+  const inp = document.getElementById("priceEditInput");
+  const raw = String(inp?.value ?? "")
+    .trim()
+    .replace(",", ".");
+  const baseGross = round2(Number(raw));
+  if (!isFinite(baseGross) || baseGross < 0) {
+    if (err) err.textContent = "Precio no válido.";
+    return;
+  }
+
+  const taxRate = getTaxRateForProduct(p);
+  const newNet = grossToNet(baseGross, taxRate);
+  const baseProductId = Number(p.baseProductId || p.id || 0);
+
+  const ok = await confirmModal(
+    "Precio especial de este almacén",
+    `Vas a fijar un precio especial de "${p.name}" SOLO para este almacén (${codalmacen}):\n\n` +
+      `${baseGross.toFixed(2)} € (IVA incl.)\n\n` +
+      `Esto NO cambia el precio en FacturaScripts ni en el resto de almacenes/tiendas.\n\n` +
+      `¿Continuar?`,
+  );
+  if (!ok) return;
+
+  try {
+    await apiSetAlmacenPriceOverride(baseProductId, newNet);
+  } catch (e) {
+    console.error(e);
+    if (err)
+      err.textContent = e?.message || "No se pudo guardar el precio especial.";
+    toast?.("No se pudo guardar el precio especial.", "err", "Productos");
+    return;
+  }
+
+  renderProducts?.();
+  toast?.("Precio especial de este almacén guardado ✅", "ok", "Productos");
+  document.getElementById("priceEditOverlay")?.classList.add("hidden");
+}
+
+async function confirmAndRemoveAlmacenPriceOverride() {
+  const p = priceEditState.product;
+  if (!p) return;
+
+  const err = document.getElementById("priceEditError");
+  if (err) err.textContent = "";
+
+  const codalmacen = getCurrentWarehouseCode();
+  const baseProductId = Number(p.baseProductId || p.id || 0);
+
+  const ok = await confirmModal(
+    "Quitar precio especial",
+    `"${p.name}" volverá a usar el precio normal de FacturaScripts en este almacén (${codalmacen}). ¿Continuar?`,
+  );
+  if (!ok) return;
+
+  try {
+    await apiUnsetAlmacenPriceOverride(baseProductId);
+  } catch (e) {
+    console.error(e);
+    if (err)
+      err.textContent = e?.message || "No se pudo quitar el precio especial.";
+    toast?.("No se pudo quitar el precio especial.", "err", "Productos");
+    return;
+  }
+
+  renderProducts?.();
+  toast?.("Precio especial quitado ✅", "ok", "Productos");
   document.getElementById("priceEditOverlay")?.classList.add("hidden");
 }
 

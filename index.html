@@ -3745,6 +3745,10 @@
           <div style="margin-top: 6px">
             Actual (IVA incl.): <strong id="priceEditCurrent">—</strong>
           </div>
+          <div
+            id="priceEditAlmacenInfo"
+            style="margin-top: 6px; font-size: 13px; color: #b45309"
+          ></div>
 
           <div style="margin-top: 12px">
             <div style="font-size: 12px; opacity: 0.75; margin-bottom: 6px">
@@ -3813,7 +3817,18 @@
             justify-content: flex-end;
           "
         >
+          <button
+            type="button"
+            id="priceEditRemoveAlmacenBtn"
+            class="small-btn hidden"
+            style="margin-right: auto"
+          >
+            Quitar precio especial
+          </button>
           <button type="button" id="priceEditCancelBtn">Cancelar</button>
+          <button type="button" id="priceEditSaveHereBtn" class="small-btn hidden">
+            Guardar solo en este almacén
+          </button>
           <button
             type="button"
             id="priceEditSaveBtn"

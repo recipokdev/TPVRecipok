@@ -6169,6 +6169,93 @@ mustContain(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-15: precio por almacen (mismo producto, precio distinto por tienda)\n",
+);
+
+// Cliente real (Ben_Trempat, 2 tiendas): pregunto si hacia falta duplicar un
+// producto para venderlo a precios distintos en cada tienda. FacturaScripts
+// no soporta esto de forma nativa (confirmado contra su BD real: el precio
+// vive una vez en el producto/variante, solo el stock esta separado por
+// almacen) -- se guarda en nuestro servidor, sin tocar ni duplicar nada en
+// FacturaScripts. Prioridad verificada en vivo: cambio manual del cajero >
+// precio de almacen > precio normal de FacturaScripts.
+mustContain(
+  renderer,
+  "let almacenPriceOverrides = {};",
+  "renderer.js tracks a per-warehouse price-override map (only for the currently active almacén)",
+);
+
+{
+  const idx = renderer.indexOf("function buildCartLine(product, quantity)");
+  const endIdx = idx >= 0 ? renderer.indexOf("return {", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("almacenPriceOverrides[Number(product.baseProductId || product.id || 0)]") &&
+    scoped.includes("almacenOverrideNet != null ? Number(almacenOverrideNet) : product.price || 0")
+  ) {
+    ok(
+      "buildCartLine resolves a per-almacén price override before falling back to FacturaScripts's product.price, so the existing manual-override/tariff/discount chain still layers on top unchanged",
+    );
+  } else {
+    fail(
+      "buildCartLine resolves a per-almacén price override before falling back to FacturaScripts's product.price, so the existing manual-override/tariff/discount chain still layers on top unchanged",
+    );
+  }
+}
+
+mustContain(
+  renderer,
+  "async function loadAlmacenPriceOverrides()",
+  "loadAlmacenPriceOverrides exists to fetch the current almacén's price-override map from the shared server",
+);
+
+{
+  const idx = renderer.indexOf("async function loadAlmacenPriceOverrides()");
+  const endIdx = idx >= 0 ? renderer.indexOf("async function apiSetAlmacenPriceOverride", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("if (!codalmacen) {") &&
+    scoped.includes("almacenPriceOverrides = {};")
+  ) {
+    ok(
+      "loadAlmacenPriceOverrides fails open (empty map, no request) when this terminal has no almacén configured, matching today's behavior for clients who never set one",
+    );
+  } else {
+    fail(
+      "loadAlmacenPriceOverrides fails open (empty map, no request) when this terminal has no almacén configured, matching today's behavior for clients who never set one",
+    );
+  }
+}
+
+mustContain(
+  renderer,
+  "loadAlmacenPriceOverrides()\r\n    .then(() => renderProducts?.())",
+  "setCurrentTerminal reloads the price-override map when the terminal (and therefore possibly the almacén) changes",
+);
+
+mustContain(
+  index,
+  'id="priceEditSaveHereBtn"',
+  "The existing price-edit modal gets a new 'save only for this almacén' button, reusing its numpad/permission-gate instead of a separate screen",
+);
+mustContain(
+  index,
+  'id="priceEditRemoveAlmacenBtn"',
+  "The price-edit modal also gets a 'remove special price' button for when this product already has an almacén override",
+);
+
+mustContain(
+  renderer,
+  "async function confirmAndSaveAlmacenPriceOverride()",
+  "confirmAndSaveAlmacenPriceOverride saves a per-almacén price without ever writing to FacturaScripts (unlike confirmAndSaveProductPrice)",
+);
+mustContain(
+  renderer,
+  "async function confirmAndRemoveAlmacenPriceOverride()",
+  "confirmAndRemoveAlmacenPriceOverride exists to clear a product's per-almacén special price",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
