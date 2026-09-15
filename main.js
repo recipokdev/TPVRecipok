@@ -10,6 +10,16 @@ const https = require("https");
 const dns = require("dns");
 const { ScaleManager } = require("./js/tpv/scale/scale-manager");
 
+// Feedback real (pruebas de desarrollo, 2026-09-15): pararlo con Ctrl+C
+// (npm start) mataba el proceso en seco, sin pasar por el cierre normal de
+// Electron -- la ventana nunca llegaba a disparar su aviso de "me cierro"
+// (ver el listener de beforeunload en renderer.js), asi que el servidor
+// seguia pensando que este terminal seguia activo hasta que esa marca
+// caducaba sola. Con esto, Ctrl+C/kill piden un cierre normal (app.quit())
+// en vez de matar el proceso al instante, dando tiempo a ese aviso.
+process.on("SIGINT", () => app.quit());
+process.on("SIGTERM", () => app.quit());
+
 let isRecreatingWindow = false;
 let mainWin = null;
 let splashWin = null;

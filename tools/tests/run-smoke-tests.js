@@ -6133,6 +6133,42 @@ console.log(
   }
 }
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-15: Ctrl+C (npm start) no debe dejar un falso \"segundo TPV\" activo\n",
+);
+
+// Solo desarrollo (npm start + Ctrl+C), no afecta a clientes reales: matar
+// el proceso en seco no daba tiempo a avisar al servidor de presencia de
+// terminal de que se cerraba, asi que la fila se quedaba "viva" hasta que
+// caducaba sola (hasta 35s) -- y relanzar el TPV en ese hueco avisaba de un
+// segundo TPV que ya no existia. Ahora Ctrl+C/kill piden un cierre normal
+// (app.quit()), que dispara el beforeunload del renderer, y este manda un
+// aviso best-effort (keepalive, sobrevive al cierre de la pagina) para
+// borrar su propia fila de presencia.
+mustContain(
+  main,
+  'process.on("SIGINT", () => app.quit());',
+  "Ctrl+C (SIGINT) triggers a normal Electron quit instead of an abrupt process kill, so the renderer gets a chance to fire its cleanup",
+);
+
+{
+  const idx = renderer.indexOf('window.addEventListener("beforeunload"');
+  const endIdx = idx >= 0 ? renderer.indexOf("async function checkTerminalPresenceOnce(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("action=clear-terminal-presence") &&
+    scoped.includes("keepalive: true")
+  ) {
+    ok(
+      "renderer.js has a beforeunload handler that best-effort clears this terminal's presence row (keepalive, survives page teardown) on any normal app close",
+    );
+  } else {
+    fail(
+      "renderer.js has a beforeunload handler that best-effort clears this terminal's presence row (keepalive, survives page teardown) on any normal app close",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

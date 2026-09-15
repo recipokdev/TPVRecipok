@@ -8230,6 +8230,37 @@ async function apiClearTerminalPresenceRemote() {
   return data?.data || null;
 }
 
+// Feedback real (pruebas propias, 2026-09-15): parar el TPV con Ctrl+C
+// (npm start) mata el proceso sin darle tiempo a avisar al servidor de que
+// se ha cerrado -- la fila de presencia de este terminal se queda "viva"
+// hasta que caduca sola (hasta 35s, ver ttl_sec en terminal_presence_db.php
+// del servidor), y si se relanza el TPV antes de eso, avisa de un "segundo
+// TPV" que en realidad ya no existe. `keepalive: true` deja que el
+// navegador termine esta peticion aunque la pagina/proceso ya se este
+// cerrando, sin tener que esperarla -- mejor esfuerzo, no garantizado al
+// 100%, pero cubre el caso normal de cerrar la ventana o el proceso con
+// tiempo de sobra para que salga la peticion.
+window.addEventListener("beforeunload", () => {
+  try {
+    const slug = String(getCurrentSlugForReservations() || "").trim();
+    const terminalId = String(currentTerminal?.id || "").trim();
+    const syncApiKey = getTpvSyncApiKey();
+    const sessionId = ensureTerminalPresenceSessionId();
+    if (!slug || !terminalId || !syncApiKey || !sessionId) return;
+
+    fetch(`${TPV_SYNC_API_URL}?action=clear-terminal-presence`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      body: JSON.stringify({ slug, terminalId, sessionId }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch {}
+});
+
 async function checkTerminalPresenceOnce({ notify = true } = {}) {
   if (TPV_STATE?.offline || TPV_STATE?.locked) return null;
   if (!cashSession?.open) return null;
