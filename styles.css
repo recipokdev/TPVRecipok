@@ -7629,6 +7629,47 @@ body.theme-dark .opt-preview-item.is-on {
   opacity: 1;
 }
 
+.paired-devices-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.paired-device-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+.paired-device-row.revoked {
+  opacity: 0.55;
+}
+.paired-device-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.paired-device-name {
+  font-weight: 700;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.paired-device-meta {
+  font-size: 11px;
+  color: #6b7280;
+}
+.paired-device-revoked-tag {
+  font-size: 11px;
+  font-weight: 700;
+  color: #b91c1c;
+  white-space: nowrap;
+}
+
 /* 5 campos de porcentaje para los accesos rapidos de descuento: cada uno
    solo necesita sitio para 2-3 digitos, no el ancho por defecto de un input
    numerico normal. */
@@ -9108,6 +9149,17 @@ body.theme-dark .pairing-code-countdown {
   color: #bfdbfe;
 }
 body.theme-dark .pairing-code-countdown.pairing-code-expired {
+  color: #fca5a5;
+}
+
+body.theme-dark .paired-device-row {
+  background: #1f2937;
+  border-color: #374151;
+}
+body.theme-dark .paired-device-meta {
+  color: #9ca3af;
+}
+body.theme-dark .paired-device-revoked-tag {
   color: #fca5a5;
 }
 

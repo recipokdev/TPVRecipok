@@ -9064,6 +9064,65 @@ async function apiLogStockLedgerEntry({ ticketId, idProducto, delta, reason }) {
   } catch {}
 }
 
+// Lista las tablets emparejadas de este negocio (para la pantalla de
+// gestion en Opciones). Igual que apiCreatePairingCode, falla de forma
+// visible -- es una vista de gestion, no un camino silencioso.
+async function apiListPairedDevices() {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("Falta configuracion de sincronizacion de este TPV.");
+  }
+
+  const url = `${TPV_CAMAREROS_API_URL}?action=list-paired-devices&slug=${encodeURIComponent(slug)}`;
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+    },
+    8000,
+  );
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok || !Array.isArray(data?.data)) {
+    throw new Error(data?.error || "No se pudo cargar la lista de tablets.");
+  }
+
+  return data.data;
+}
+
+async function apiRevokePairedDevice(deviceId) {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("Falta configuracion de sincronizacion de este TPV.");
+  }
+
+  const url = `${TPV_CAMAREROS_API_URL}?action=revoke-paired-device`;
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      body: JSON.stringify({ slug, id: Number(deviceId) || 0 }),
+    },
+    8000,
+  );
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok) {
+    throw new Error(data?.error || "No se pudo revocar el dispositivo, intentalo de nuevo.");
+  }
+}
+
 // Feedback de cliente real 2026-09-14: cuando la factura ya se ha creado y
 // cobrado de verdad pero un paso posterior (marcar agente/efectivo, crear el
 // recibo, o actualizar el total de caja) falla, el cliente/cajero NO debe
@@ -30152,6 +30211,8 @@ async function openOptions() {
   refreshBackgroundUpdateOptionsUI();
 
   bindPairingCodeOptionsOnce();
+  bindPairedDevicesOptionsOnce();
+  refreshPairedDevicesList().catch(() => {});
 
   await applyOptionsAccordionState(st);
 
@@ -31721,6 +31782,113 @@ function bindPairingCodeOptionsOnce() {
     } finally {
       generateBtn.disabled = false;
       generateBtn.textContent = prevLabel;
+    }
+  });
+}
+
+let pairedDevicesOptionsBound = false;
+
+function renderPairedDevicesList(devices) {
+  const listEl = document.getElementById("pairedDevicesList");
+  if (!listEl) return;
+
+  if (!Array.isArray(devices) || !devices.length) {
+    listEl.innerHTML =
+      '<div class="opt-chip-list-empty">No hay tablets emparejadas todavia.</div>';
+    return;
+  }
+
+  listEl.innerHTML = devices
+    .map((d) => {
+      const name = d.deviceInfo
+        ? String(d.deviceInfo).replace(/</g, "&lt;")
+        : "Tablet sin nombre";
+      const paired = d.pairedAt
+        ? formatDateTimeES(new Date(d.pairedAt))
+        : "?";
+      const lastSeen = d.lastSeenAt
+        ? formatDateTimeES(new Date(d.lastSeenAt))
+        : "nunca";
+      const metaText = `Emparejada: ${paired} · Ultimo uso: ${lastSeen}`;
+
+      if (d.revoked) {
+        return `<div class="paired-device-row revoked">
+          <div class="paired-device-info">
+            <div class="paired-device-name">${name}</div>
+            <div class="paired-device-meta">${metaText}</div>
+          </div>
+          <span class="paired-device-revoked-tag">Revocada</span>
+        </div>`;
+      }
+
+      return `<div class="paired-device-row">
+        <div class="paired-device-info">
+          <div class="paired-device-name">${name}</div>
+          <div class="paired-device-meta">${metaText}</div>
+        </div>
+        <button type="button" class="small-btn paired-device-revoke-btn" data-device-id="${d.id}">
+          Revocar
+        </button>
+      </div>`;
+    })
+    .join("");
+}
+
+async function refreshPairedDevicesList() {
+  const listEl = document.getElementById("pairedDevicesList");
+  const refreshBtn = document.getElementById("pairedDevicesRefreshBtn");
+  if (!listEl) return;
+
+  if (refreshBtn) refreshBtn.disabled = true;
+  try {
+    const devices = await apiListPairedDevices();
+    renderPairedDevicesList(devices);
+  } catch (e) {
+    listEl.innerHTML = `<div class="opt-chip-list-empty">${
+      e?.message || "No se pudo cargar la lista de tablets."
+    }</div>`;
+  } finally {
+    if (refreshBtn) refreshBtn.disabled = false;
+  }
+}
+
+function bindPairedDevicesOptionsOnce() {
+  if (pairedDevicesOptionsBound) return;
+  pairedDevicesOptionsBound = true;
+
+  const refreshBtn = document.getElementById("pairedDevicesRefreshBtn");
+  const listEl = document.getElementById("pairedDevicesList");
+
+  refreshBtn?.addEventListener("click", () => refreshPairedDevicesList());
+
+  listEl?.addEventListener("click", async (ev) => {
+    const btn = ev.target?.closest?.(".paired-device-revoke-btn");
+    if (!btn) return;
+
+    const deviceId = btn.getAttribute("data-device-id");
+    const deviceName =
+      btn.closest(".paired-device-row")?.querySelector(".paired-device-name")
+        ?.textContent || "esta tablet";
+
+    const confirmed = await confirmModal(
+      "Revocar dispositivo",
+      `¿Seguro que quieres revocar el acceso de "${deviceName}"? Necesitará un código nuevo para volver a emparejarse.`,
+      { okButtonText: "Revocar" },
+    );
+    if (!confirmed) return;
+
+    btn.disabled = true;
+    try {
+      await apiRevokePairedDevice(deviceId);
+      toast("Dispositivo revocado.", "ok", "Vincular tablet");
+      await refreshPairedDevicesList();
+    } catch (e) {
+      toast(
+        e?.message || "No se pudo revocar el dispositivo, intentalo de nuevo.",
+        "error",
+        "Vincular tablet",
+      );
+      btn.disabled = false;
     }
   });
 }

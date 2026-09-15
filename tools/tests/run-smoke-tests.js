@@ -8719,6 +8719,44 @@ mustContain(
   "Pairing-code display styling present",
 );
 
+console.log("\n[SMOKE] Checking 2026-09-15: emparejamiento permanente con revocacion (tablets emparejadas)\n");
+
+mustContain(
+  renderer,
+  "async function apiListPairedDevices() {",
+  "apiListPairedDevices() calls list-paired-devices",
+);
+mustContain(
+  renderer,
+  "async function apiRevokePairedDevice(deviceId) {",
+  "apiRevokePairedDevice() calls revoke-paired-device",
+);
+mustContain(
+  renderer,
+  "function bindPairedDevicesOptionsOnce() {",
+  "Paired-devices list wiring (refresh + revoke) present",
+);
+mustContain(
+  renderer,
+  "const confirmed = await confirmModal(",
+  "Revoking a device asks for confirmation first, not a bare click",
+);
+mustContain(
+  index,
+  'id="pairedDevicesList"',
+  "Paired-devices list container present in Modo Mesas options",
+);
+mustContain(
+  index,
+  'id="pairedDevicesRefreshBtn"',
+  "Paired-devices refresh button present in Modo Mesas options",
+);
+mustContain(
+  styles,
+  ".paired-device-row",
+  "Paired-device row styling present",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

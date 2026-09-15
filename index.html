@@ -3108,8 +3108,11 @@
                   <div class="opt-row-title">Vincular tablet de camarero</div>
                   <div class="opt-row-sub">
                     Genera un código de un solo uso para introducir en la app
-                    de camareros y emparejar esa tablet con este negocio.
-                    Caduca a los 10 minutos si no se usa.
+                    de camareros. Una vez introducido, esa tablet queda
+                    emparejada de forma permanente con este negocio -- no
+                    hace falta volver a introducir ningún código al abrir la
+                    app. El código en sí caduca a los 10 minutos si no se
+                    usa.
                   </div>
                 </div>
                 <div class="opt-row-actions">
@@ -3129,6 +3132,27 @@
                     Caduca en 10:00
                   </div>
                 </div>
+              </div>
+
+              <div class="opt-row opt-row-stack">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Tablets emparejadas</div>
+                  <div class="opt-row-sub">
+                    Dispositivos con acceso permanente a este negocio. Revoca
+                    uno si se pierde, se vende, o ya no debería tener acceso
+                    -- necesitará un código nuevo para volver a emparejarse.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <button
+                    type="button"
+                    id="pairedDevicesRefreshBtn"
+                    class="small-btn"
+                  >
+                    Actualizar lista
+                  </button>
+                </div>
+                <div id="pairedDevicesList" class="paired-devices-list"></div>
               </div>
             </div>
           </section>
