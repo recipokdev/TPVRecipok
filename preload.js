@@ -105,6 +105,13 @@ contextBridge.exposeInMainWorld("TPV_UPDATER", {
   relaunchForUpdate: () => ipcRenderer.invoke("updater:relaunchForUpdate"),
   getStartupNoInternetFlag: () =>
     ipcRenderer.invoke("updater:getStartupNoInternetFlag"),
+  prefetchDownload: () => ipcRenderer.invoke("updater:prefetchDownload"),
+  pauseBackgroundDownload: () =>
+    ipcRenderer.invoke("updater:pauseBackgroundDownload"),
+  resumeBackgroundDownload: () =>
+    ipcRenderer.invoke("updater:resumeBackgroundDownload"),
+  getBackgroundPrefetchStatus: () =>
+    ipcRenderer.invoke("updater:getBackgroundPrefetchStatus"),
 });
 
 contextBridge.exposeInMainWorld("TPV_SETUP", {

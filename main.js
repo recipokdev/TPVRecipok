@@ -552,6 +552,17 @@ let preCashUpdateTimer = null;
 let preCashUpdateRunning = false;
 let manualUpdateCheckRunning = false;
 
+// Descarga en 2º plano mientras el TPV sigue en uso (ver
+// runBackgroundPrefetchDownload) -- nunca instala sola, solo deja el
+// instalador ya descargado y validado para que "Actualizar" sea casi
+// instantaneo. `backgroundPrefetchPaused` se activa/desactiva desde
+// renderer.js justo antes/despues de la peticion real a FacturaScripts de un
+// cobro, para no competir con ella por ancho de banda en conexiones malas.
+let backgroundPrefetchRunning = false;
+let backgroundPrefetchPaused = false;
+let backgroundPrefetchPercent = 0;
+let backgroundUpdateReadyVersion = "";
+
 async function isCashOpenSafe() {
   if (!mainWin || mainWin.isDestroyed()) return false;
   try {
@@ -821,6 +832,197 @@ function startPreCashUpdateRetries() {
 function stopPreCashUpdateRetries() {
   if (preCashUpdateTimer) clearInterval(preCashUpdateTimer);
   preCashUpdateTimer = null;
+}
+
+function pauseBackgroundPrefetch() {
+  backgroundPrefetchPaused = true;
+}
+
+function resumeBackgroundPrefetch() {
+  backgroundPrefetchPaused = false;
+}
+
+// Tras terminar de descargar en 2º plano, vuelve a preguntar si esa version
+// sigue siendo la ultima -- por si se publico una version mas nueva mientras
+// bajaba (electron-updater no lo detecta solo a mitad de una descarga ya en
+// marcha). Fail-open: si esta comprobacion falla, no bloqueamos dar la
+// descarga por buena solo por esto.
+async function isDownloadedVersionStillLatest(downloadedVersion) {
+  try {
+    autoUpdater.removeAllListeners();
+    const result = await new Promise((resolve) => {
+      let finished = false;
+      const done = (r) => {
+        if (finished) return;
+        finished = true;
+        try {
+          autoUpdater.removeAllListeners();
+        } catch {}
+        resolve(r);
+      };
+
+      autoUpdater.once("update-not-available", () => done(true));
+      autoUpdater.once("update-available", (info) => {
+        const v = String(info?.version || "").trim();
+        done(!v || v === downloadedVersion);
+      });
+      autoUpdater.once("error", () => done(true));
+
+      try {
+        autoUpdater.checkForUpdates();
+      } catch {
+        done(true);
+      }
+
+      setTimeout(() => done(true), 15000);
+    });
+    return result;
+  } catch {
+    return true;
+  }
+}
+
+// Descarga (nunca instala) una actualizacion disponible mientras el TPV
+// sigue en uso -- para que pulsar "Actualizar" mas tarde, o el siguiente
+// arranque, sea casi instantaneo en vez de tener que bajar el instalador
+// entero (~140MB) con la app ya cerrada. Comparte el mismo singleton
+// `autoUpdater` que runUpdateCheckOncePreCash/runManualUpdateAvailabilityCheck/
+// runAutoUpdateGate -- por eso respeta sus mismas banderas de "ocupado"
+// (solo puede haber un listener activo sobre autoUpdater a la vez).
+async function runBackgroundPrefetchDownload() {
+  if (!app.isPackaged) return { ok: false, reason: "dev-mode" };
+  if (backgroundPrefetchPaused) return { ok: false, reason: "paused" };
+  if (
+    backgroundPrefetchRunning ||
+    preCashUpdateRunning ||
+    manualUpdateCheckRunning ||
+    appIsInstallingUpdate
+  ) {
+    return { ok: false, reason: "busy" };
+  }
+
+  backgroundPrefetchRunning = true;
+  backgroundPrefetchPercent = 0;
+
+  try {
+    autoUpdater.removeAllListeners();
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = false;
+
+    const channel = readChannel();
+    autoUpdater.allowPrerelease = channel === "beta";
+    try {
+      delete autoUpdater.channel;
+    } catch {}
+
+    const policy = await loadUpdatePolicy(channel);
+    const currentVersion = app.getVersion();
+    autoUpdater.allowDowngrade = shouldAllowDowngrade(policy, currentVersion);
+
+    logUpdateEventRemote("prefetch-start");
+
+    const result = await new Promise((resolve) => {
+      let finished = false;
+      const done = (r) => {
+        if (finished) return;
+        finished = true;
+        try {
+          autoUpdater.removeAllListeners();
+        } catch {}
+        resolve(r);
+      };
+
+      const onProgress = (p) => {
+        backgroundPrefetchPercent =
+          typeof p?.percent === "number"
+            ? p.percent
+            : backgroundPrefetchPercent;
+      };
+
+      autoUpdater.once("error", (err) => {
+        logUpdateEventRemote("prefetch-error", {
+          message: err?.message || String(err),
+        });
+        done({ ok: false, reason: "error" });
+      });
+
+      autoUpdater.once("update-not-available", () => {
+        done({ ok: true, updateAvailable: false });
+      });
+
+      autoUpdater.once("update-available", (info) => {
+        const targetVersion = String(info?.version || "").trim();
+        if (isTargetVersionBlocked(policy, targetVersion)) {
+          return done({
+            ok: true,
+            updateAvailable: false,
+            blockedByPolicy: true,
+          });
+        }
+
+        // Ya la tenemos descargada y validada de un ciclo anterior: nada que
+        // hacer, seguimos "listos" tal cual.
+        if (targetVersion && targetVersion === backgroundUpdateReadyVersion) {
+          return done({
+            ok: true,
+            downloaded: true,
+            alreadyReady: true,
+            targetVersion,
+          });
+        }
+
+        logUpdateEventRemote("prefetch-download-start", { targetVersion });
+        try {
+          autoUpdater.downloadUpdate();
+        } catch {
+          done({ ok: false, reason: "download-throw" });
+        }
+      });
+
+      autoUpdater.on("download-progress", onProgress);
+
+      autoUpdater.once("update-downloaded", (info) => {
+        done({
+          ok: true,
+          downloaded: true,
+          targetVersion: String(info?.version || "").trim(),
+        });
+      });
+
+      try {
+        autoUpdater.checkForUpdates();
+      } catch {
+        done({ ok: false, reason: "throw" });
+      }
+    });
+
+    if (result?.downloaded && !result.alreadyReady) {
+      // Puede que, mientras bajaba, se haya publicado una version mas nueva
+      // -- no lo sabriamos hasta volver a preguntar.
+      const stillLatest = await isDownloadedVersionStillLatest(
+        result.targetVersion,
+      );
+
+      if (stillLatest) {
+        backgroundUpdateReadyVersion = result.targetVersion;
+        backgroundPrefetchPercent = 100;
+        logUpdateEventRemote("prefetch-ready", {
+          targetVersion: result.targetVersion,
+        });
+      } else {
+        backgroundUpdateReadyVersion = "";
+        logUpdateEventRemote("prefetch-superseded", {
+          targetVersion: result.targetVersion,
+        });
+        backgroundPrefetchRunning = false;
+        return runBackgroundPrefetchDownload();
+      }
+    }
+
+    return result;
+  } finally {
+    backgroundPrefetchRunning = false;
+  }
 }
 
 function createSplashWindow() {
@@ -1162,6 +1364,78 @@ function logUpdater(...args) {
   } catch {}
 }
 
+// Mismas credenciales que usa renderer.js (TPV_SYNC_API_URL/tpvApiKey en
+// config.js), leidas aqui a mano porque main.js (proceso Node) no tiene
+// "window" -- config.js solo declara globals de navegador.
+function readTpvSyncConfig() {
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, "config.js"), "utf8");
+    const urlMatch = raw.match(/tpvSyncApiUrl:\s*"([^"]+)"/);
+    const keyMatch = raw.match(/tpvApiKey:\s*"([^"]+)"/);
+    return {
+      url:
+        (urlMatch && urlMatch[1]) ||
+        "https://plus.recipok.com/tpv/api/index.php",
+      apiKey: (keyMatch && keyMatch[1]) || "",
+    };
+  } catch {
+    return { url: "https://plus.recipok.com/tpv/api/index.php", apiKey: "" };
+  }
+}
+
+// Mismo patron que getCurrentSlugForReservations() en renderer.js.
+function getSlugFromBaseUrl(baseUrl) {
+  const m = String(baseUrl || "").match(
+    /plus\.recipok\.com\/([^/]+)\/api\/\d+/i,
+  );
+  return m ? String(m[1]).trim() : "";
+}
+
+// Aviso best-effort a nuestro propio servidor (tabla audit_log, ya usada por
+// terminal-presence/reservas) de cada etapa relevante del ciclo de
+// actualizacion -- para poder diagnosticar en remoto un arranque lento sin
+// depender de que el cliente nos pase el log local (updater.log). Caso real
+// que motiva esto: Sabor 100x100, 2026-09-16, ~20 min de espera sin ningun
+// rastro consultable en remoto de en que fase se habia quedado. Nunca debe
+// retrasar ni romper el flujo real de actualizacion: fire-and-forget, nunca
+// lanza, timeout corto.
+function logUpdateEventRemote(event, extra = {}) {
+  try {
+    const { baseUrl } = getCompanyFromCfgForMain();
+    const slug = getSlugFromBaseUrl(baseUrl);
+    if (!slug) return;
+
+    const { url, apiKey } = readTpvSyncConfig();
+    if (!url || !apiKey) return;
+
+    const u = new URL(`${url}?action=log-update-event`);
+    const body = JSON.stringify({
+      slug,
+      event: String(event || ""),
+      currentVersion: app.getVersion(),
+      ...extra,
+    });
+
+    const req = https.request(
+      {
+        method: "POST",
+        hostname: u.hostname,
+        path: u.pathname + (u.search || ""),
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body),
+          "X-TPV-API-KEY": apiKey,
+        },
+        timeout: 4000,
+      },
+      (res) => res.resume(),
+    );
+    req.on("timeout", () => req.destroy());
+    req.on("error", () => {});
+    req.end(body);
+  } catch {}
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -1470,16 +1744,18 @@ const SLOW_RETRY_HINT_MS = 20_000;
 // reintentando para siempre (es justo el caso que la comprobacion protege).
 const NO_INTERNET_BYPASS_MS = 50_000;
 
+// Texto pensado para el cajero (nada tecnico: sin numero de intento ni
+// segundos en crudo) -- el detalle fino de cuanto lleva esperando y en que
+// intento va se manda al log remoto (ver logUpdateEventRemote), no a la
+// pantalla.
 function elapsedRetryHint(startedAt) {
   const elapsedMs = Date.now() - startedAt;
   if (elapsedMs < SLOW_RETRY_HINT_MS) return "";
-  const elapsedSec = Math.floor(elapsedMs / 1000);
-  return ` (llevas ${elapsedSec}s esperando; comprueba tu conexión a internet)`;
+  return " Esto puede tardar unos minutos. No cierres el programa.";
 }
 
 async function waitForInternetAndApiGate() {
   // 1) Internet real (evita "wifi con portal cautivo" o sin salida)
-  let attempt = 0;
   const internetCheckStartedAt = Date.now();
 
   // Probes: si alguno responde, consideramos "hay salida"
@@ -1494,12 +1770,13 @@ async function waitForInternetAndApiGate() {
   ];
 
   while (true) {
-    attempt++;
-
     if (Date.now() - internetCheckStartedAt >= NO_INTERNET_BYPASS_MS) {
       logUpdater(
         "[GATE] Sin internet tras espera razonable, se abre con la version actual.",
       );
+      logUpdateEventRemote("update-gate-no-internet-bypass", {
+        elapsedMs: Date.now() - internetCheckStartedAt,
+      });
       splashSet(
         "Sin conexión: abriendo con la versión actual...",
         20,
@@ -1509,7 +1786,7 @@ async function waitForInternetAndApiGate() {
     }
 
     splashSet(
-      `Comprobando internet... (intento ${attempt})${elapsedRetryHint(internetCheckStartedAt)}`,
+      `Comprobando tu conexión a internet...${elapsedRetryHint(internetCheckStartedAt)}`,
       10,
     );
 
@@ -1567,12 +1844,11 @@ async function waitForInternetAndApiGate() {
     return { ok: true };
   }
 
-  let apiAttempt = 0;
+  logUpdateEventRemote("update-gate-api-connecting");
   const apiCheckStartedAt = Date.now();
   while (true) {
-    apiAttempt++;
     splashSet(
-      `Conectando con servidor... (${email || "empresa"}) (intento ${apiAttempt})${elapsedRetryHint(apiCheckStartedAt)}`,
+      `Conectando con el servidor (${email || "tu empresa"})...${elapsedRetryHint(apiCheckStartedAt)}`,
       55,
     );
 
@@ -1625,6 +1901,7 @@ async function runAutoUpdateGate() {
 
   createSplashWindow();
   splashSet("Comprobando conexión…", 5);
+  logUpdateEventRemote("update-gate-start");
 
   // Bloquea hasta internet + API si hay cfg
   const netGate = await waitForInternetAndApiGate();
@@ -1653,11 +1930,13 @@ async function runAutoUpdateGate() {
   const RETRY_WAIT_MS = 5_000; // espera entre intentos
   let attempt = 0;
   const updateCheckStartedAt = Date.now();
+  logUpdateEventRemote("update-gate-searching");
+  let lastLoggedDownloadPct = -1;
 
   while (true) {
     attempt++;
     splashSet(
-      `Buscando actualizaciones... (intento ${attempt})${elapsedRetryHint(updateCheckStartedAt)}`,
+      `Buscando actualizaciones...${elapsedRetryHint(updateCheckStartedAt)}`,
       25,
     );
 
@@ -1679,13 +1958,25 @@ async function runAutoUpdateGate() {
       const onProgress = (p) => {
         const pct = typeof p?.percent === "number" ? p.percent : 0;
         splashSet("Descargando actualización…", pct);
+
+        const milestone = Math.floor(pct / 25) * 25;
+        if (milestone > lastLoggedDownloadPct) {
+          lastLoggedDownloadPct = milestone;
+          logUpdateEventRemote("update-gate-download-progress", {
+            percent: milestone,
+          });
+        }
       };
 
-      autoUpdater.once("error", () => {
+      autoUpdater.once("error", (err) => {
+        logUpdateEventRemote("update-gate-error", {
+          message: err?.message || String(err),
+        });
         done({ ok: false, reason: "error" });
       });
 
       autoUpdater.once("update-not-available", () => {
+        logUpdateEventRemote("update-gate-no-update");
         done({ ok: true, updatedOrReady: true, updated: false });
       });
 
@@ -1699,6 +1990,9 @@ async function runAutoUpdateGate() {
           logUpdater(
             `[POLICY] blocked update startup: ${currentVersion} -> ${targetVersion}`,
           );
+          logUpdateEventRemote("update-gate-blocked-by-policy", {
+            targetVersion,
+          });
           return done({
             ok: true,
             updatedOrReady: true,
@@ -1708,6 +2002,7 @@ async function runAutoUpdateGate() {
           });
         }
 
+        logUpdateEventRemote("update-gate-update-found", { targetVersion });
         splashSet("Actualización encontrada. Descargando…", 30);
         try {
           autoUpdater.downloadUpdate();
@@ -1720,6 +2015,7 @@ async function runAutoUpdateGate() {
 
       autoUpdater.once("update-downloaded", () => {
         appIsInstallingUpdate = true;
+        logUpdateEventRemote("update-gate-installing");
         splashSet("Instalando actualización…", 100);
         spawnPostUpdateSplash();
         setTimeout(() => autoUpdater.quitAndInstall(true, true), 600);
@@ -1750,8 +2046,12 @@ async function runAutoUpdateGate() {
     if (result?.installing) return result;
 
     // Si falló/timeout -> esperar y reintentar
+    logUpdateEventRemote("update-gate-retry", {
+      attempt,
+      reason: result?.reason || "",
+    });
     splashSet(
-      `Conexión lenta / servidor ocupado. Reintentando…${elapsedRetryHint(updateCheckStartedAt)}`,
+      `Actualizando el programa, no lo cierres...${elapsedRetryHint(updateCheckStartedAt)}`,
       25,
     );
     await sleep(RETRY_WAIT_MS);
@@ -2662,6 +2962,37 @@ ipcMain.handle("updater:relaunchForUpdate", async () => {
       message: e?.message || String(e),
     };
   }
+});
+
+ipcMain.handle("updater:prefetchDownload", async () => {
+  try {
+    return await runBackgroundPrefetchDownload();
+  } catch (e) {
+    return {
+      ok: false,
+      reason: "exception",
+      message: e?.message || String(e),
+    };
+  }
+});
+
+ipcMain.handle("updater:pauseBackgroundDownload", async () => {
+  pauseBackgroundPrefetch();
+  return { ok: true };
+});
+
+ipcMain.handle("updater:resumeBackgroundDownload", async () => {
+  resumeBackgroundPrefetch();
+  return { ok: true };
+});
+
+ipcMain.handle("updater:getBackgroundPrefetchStatus", async () => {
+  return {
+    ready: !!backgroundUpdateReadyVersion,
+    readyVersion: backgroundUpdateReadyVersion,
+    percent: backgroundPrefetchPercent,
+    running: backgroundPrefetchRunning,
+  };
 });
 
 // Salida de emergencia (ver forceEmergencyRestart mas arriba): cierra y

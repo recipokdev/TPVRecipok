@@ -28982,6 +28982,17 @@ function ensureBackgroundUpdateNoticeUi() {
         margin-bottom: 10px;
       }
 
+      .update-passive-subtext {
+        font-size: 12px;
+        line-height: 1.3;
+        color: #5a6b8c;
+        margin: -4px 0 10px;
+      }
+
+      .update-passive-subtext:empty {
+        display: none;
+      }
+
       .update-passive-actions {
         display: flex;
         gap: 8px;
@@ -29013,6 +29024,7 @@ function ensureBackgroundUpdateNoticeUi() {
   root.innerHTML = `
     <div class="update-passive-title">Nueva version disponible</div>
     <div class="update-passive-text" id="updatePassiveNoticeText"></div>
+    <div class="update-passive-subtext" id="updatePassiveNoticeSubtext"></div>
     <div class="update-passive-actions">
       <button type="button" class="update-passive-btn" id="updatePassiveNoticeLaterBtn">Mas tarde</button>
       <button type="button" class="update-passive-btn primary" id="updatePassiveNoticeNowBtn">Actualizar</button>
@@ -29043,6 +29055,39 @@ function ensureBackgroundUpdateNoticeUi() {
   return root;
 }
 
+let __bgPrefetchSubtextTimer = null;
+
+function stopBackgroundPrefetchSubtextPoll() {
+  if (__bgPrefetchSubtextTimer) {
+    clearInterval(__bgPrefetchSubtextTimer);
+    __bgPrefetchSubtextTimer = null;
+  }
+}
+
+// Deja claro en el propio aviso si la descarga en 2º plano ya esta lista
+// (pulsar "Actualizar" sera casi instantaneo) o todavia va a medias (sigue
+// funcionando igual, solo que tardara un poco mas al reiniciar) -- para que
+// el cajero nunca se lleve una sorpresa.
+async function refreshBackgroundPrefetchSubtext() {
+  const subEl = document.getElementById("updatePassiveNoticeSubtext");
+  if (!subEl) return;
+
+  try {
+    const status = await window.TPV_UPDATER?.getBackgroundPrefetchStatus?.();
+    if (status?.ready) {
+      subEl.textContent = "Ya descargada: actualizar sera casi instantaneo.";
+      stopBackgroundPrefetchSubtextPoll();
+    } else if (status?.running) {
+      const pct = Math.round(Number(status.percent || 0));
+      subEl.textContent = `Descargando en segundo plano... ${pct}%`;
+    } else {
+      subEl.textContent = "";
+    }
+  } catch {
+    subEl.textContent = "";
+  }
+}
+
 function showBackgroundUpdateNotice({ targetVersion = "" } = {}) {
   const root = ensureBackgroundUpdateNoticeUi();
   const textEl = document.getElementById("updatePassiveNoticeText");
@@ -29056,9 +29101,14 @@ function showBackgroundUpdateNotice({ targetVersion = "" } = {}) {
   }
 
   root.classList.add("is-visible");
+
+  refreshBackgroundPrefetchSubtext();
+  stopBackgroundPrefetchSubtextPoll();
+  __bgPrefetchSubtextTimer = setInterval(refreshBackgroundPrefetchSubtext, 4000);
 }
 
 function hideBackgroundUpdateNotice() {
+  stopBackgroundPrefetchSubtextPoll();
   const root = document.getElementById("updatePassiveNotice");
   if (!root) return;
   root.classList.remove("is-visible");
@@ -29166,6 +29216,12 @@ async function runBackgroundUpdateAvailabilityCheck(reason = "timer") {
     }
 
     const targetVersion = String(check?.targetVersion || "").trim();
+
+    // Descarga en 2º plano (nunca instala sola) para que pulsar "Actualizar"
+    // mas tarde sea casi instantaneo -- ver feature_background_update_prefetch.
+    // No se espera aqui a que termine (puede tardar minutos): es fire-and-forget.
+    window.TPV_UPDATER?.prefetchDownload?.().catch(() => {});
+
     if (isBackgroundUpdateSnoozed(targetVersion)) return;
 
     showBackgroundUpdateNotice({ targetVersion });
@@ -35993,6 +36049,12 @@ async function processConfirmedSale(ctx) {
     fastPreApiPrintedNumber,
   } = ctx;
 
+  // No arrancar/reanudar la descarga en 2º plano de una actualizacion
+  // mientras esta venta habla con FacturaScripts (crearFacturaCliente) --
+  // en una conexion mala, esa peticion no deberia competir por ancho de
+  // banda con una descarga de ~140MB.
+  window.TPV_UPDATER?.pauseBackgroundDownload?.().catch(() => {});
+
   let saleCommitted = false;
   // Una vez la factura existe en FacturaScripts (saleCommitted=true), un
   // fallo en los pasos siguientes (agente/efectivo, recibos) ya no se puede
@@ -36682,6 +36744,7 @@ async function processConfirmedSale(ctx) {
         stockOverrideProductIds.map((id) => setProductVentasInStock(id, false)),
       ).catch(() => {});
     }
+    window.TPV_UPDATER?.resumeBackgroundDownload?.().catch(() => {});
   }
 }
 

@@ -20,6 +20,14 @@ function mustContain(haystack, needle, label) {
   ok(label);
 }
 
+function mustNotContain(haystack, needle, label) {
+  if (haystack.includes(needle)) {
+    fail(`${label} (should not contain: ${needle})`);
+    return;
+  }
+  ok(label);
+}
+
 function ensureFileExists(relPath) {
   const abs = path.join(root, relPath);
   if (!fs.existsSync(abs)) {
@@ -6254,6 +6262,175 @@ mustContain(
   renderer,
   "async function confirmAndRemoveAlmacenPriceOverride()",
   "confirmAndRemoveAlmacenPriceOverride exists to clear a product's per-almacén special price",
+);
+
+console.log("\n[SMOKE] Checking update system improvements (remote logs, simpler text, background prefetch)\n");
+
+mustContain(
+  main,
+  "function logUpdateEventRemote(event, extra = {})",
+  "logUpdateEventRemote exists to report update-lifecycle checkpoints to our own server (audit_log), for remote diagnosis of slow-startup incidents like Sabor 100x100 (2026-09-16)",
+);
+mustContain(
+  main,
+  'logUpdateEventRemote("update-gate-start")',
+  "The boot update gate logs its start remotely",
+);
+mustContain(
+  main,
+  'logUpdateEventRemote("update-gate-download-progress"',
+  "The boot update gate logs rounded download-progress milestones remotely",
+);
+mustContain(
+  main,
+  'logUpdateEventRemote("update-gate-no-internet-bypass"',
+  "The boot update gate logs when it bypasses the internet-wait gate",
+);
+
+mustNotContain(
+  main,
+  "(intento ${attempt})",
+  "The connectivity/update splash text no longer exposes raw attempt counters to the cashier (moved to the remote log instead)",
+);
+mustNotContain(
+  main,
+  "(intento ${apiAttempt})",
+  "The API-connect splash text no longer exposes raw attempt counters to the cashier",
+);
+mustNotContain(
+  main,
+  "llevas ${elapsedSec}s esperando",
+  "elapsedRetryHint no longer exposes raw elapsed seconds to the cashier -- shows a plain reassurance instead",
+);
+
+mustContain(
+  main,
+  "let backgroundUpdateReadyVersion",
+  "Background prefetch state exists (tracks a fully-downloaded, still-latest version ready to install almost instantly)",
+);
+mustContain(
+  main,
+  "async function runBackgroundPrefetchDownload()",
+  "runBackgroundPrefetchDownload exists: downloads (never installs) an available update while the TPV keeps working",
+);
+mustContain(
+  main,
+  "async function isDownloadedVersionStillLatest(downloadedVersion)",
+  "isDownloadedVersionStillLatest re-checks after a background download finishes, in case a newer version was published meanwhile",
+);
+mustContain(
+  main,
+  "function pauseBackgroundPrefetch()",
+  "pauseBackgroundPrefetch exists so renderer.js can avoid starting a background download while a real sale is being processed",
+);
+mustContain(
+  main,
+  "function resumeBackgroundPrefetch()",
+  "resumeBackgroundPrefetch exists to resume normal background-download attempts after a sale finishes",
+);
+
+{
+  const idx = main.indexOf("async function runBackgroundPrefetchDownload()");
+  const endIdx = idx >= 0 ? main.indexOf("function createSplashWindow()", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? main.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("if (!app.isPackaged) return") &&
+    scoped.includes("if (backgroundPrefetchPaused) return") &&
+    scoped.includes("preCashUpdateRunning ||") &&
+    scoped.includes("manualUpdateCheckRunning ||")
+  ) {
+    ok(
+      "runBackgroundPrefetchDownload never runs in dev mode, respects the pause flag, and shares the same 'busy' guard as the other 3 places that already touch the autoUpdater singleton",
+    );
+  } else {
+    fail(
+      "runBackgroundPrefetchDownload never runs in dev mode, respects the pause flag, and shares the same 'busy' guard as the other 3 places that already touch the autoUpdater singleton",
+    );
+  }
+}
+
+mustContain(
+  main,
+  'ipcMain.handle("updater:prefetchDownload"',
+  "IPC handler for triggering a background prefetch exists",
+);
+mustContain(
+  main,
+  'ipcMain.handle("updater:pauseBackgroundDownload"',
+  "IPC handler for pausing the background prefetch exists",
+);
+mustContain(
+  main,
+  'ipcMain.handle("updater:resumeBackgroundDownload"',
+  "IPC handler for resuming the background prefetch exists",
+);
+mustContain(
+  main,
+  'ipcMain.handle("updater:getBackgroundPrefetchStatus"',
+  "IPC handler for querying background prefetch status (ready/percent) exists, used by the passive notice's subtext",
+);
+
+mustContain(
+  preload,
+  "prefetchDownload: () => ipcRenderer.invoke(\"updater:prefetchDownload\")",
+  "TPV_UPDATER.prefetchDownload is exposed to the renderer",
+);
+mustContain(
+  preload,
+  "pauseBackgroundDownload: () =>",
+  "TPV_UPDATER.pauseBackgroundDownload is exposed to the renderer",
+);
+mustContain(
+  preload,
+  "resumeBackgroundDownload: () =>",
+  "TPV_UPDATER.resumeBackgroundDownload is exposed to the renderer",
+);
+mustContain(
+  preload,
+  "getBackgroundPrefetchStatus: () =>",
+  "TPV_UPDATER.getBackgroundPrefetchStatus is exposed to the renderer",
+);
+
+mustContain(
+  renderer,
+  "window.TPV_UPDATER?.prefetchDownload?.()",
+  "The existing passive background-update check now also triggers a background prefetch download when it finds a new version",
+);
+mustContain(
+  renderer,
+  "window.TPV_UPDATER?.pauseBackgroundDownload?.()",
+  "processConfirmedSale pauses the background prefetch before talking to FacturaScripts, so it never competes for bandwidth with a real sale on a slow connection",
+);
+mustContain(
+  renderer,
+  "window.TPV_UPDATER?.resumeBackgroundDownload?.()",
+  "processConfirmedSale resumes the background prefetch in its finally block, regardless of whether the sale succeeded or failed",
+);
+
+{
+  const idx = renderer.indexOf("async function processConfirmedSale(ctx)");
+  const pauseIdx = idx >= 0 ? renderer.indexOf("pauseBackgroundDownload", idx) : -1;
+  const resumeIdx = idx >= 0 ? renderer.indexOf("resumeBackgroundDownload", idx) : -1;
+  if (idx >= 0 && pauseIdx > idx && resumeIdx > pauseIdx) {
+    ok(
+      "processConfirmedSale pauses the prefetch near its start and resumes it in its finally block (correct order)",
+    );
+  } else {
+    fail(
+      "processConfirmedSale pauses the prefetch near its start and resumes it in its finally block (correct order)",
+    );
+  }
+}
+
+mustContain(
+  renderer,
+  'id="updatePassiveNoticeSubtext"',
+  "The passive update notice has a subtext element to show background-prefetch progress/ready state",
+);
+mustContain(
+  renderer,
+  "async function refreshBackgroundPrefetchSubtext()",
+  "refreshBackgroundPrefetchSubtext exists to keep the passive notice's subtext in sync with the background download's real status",
 );
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
