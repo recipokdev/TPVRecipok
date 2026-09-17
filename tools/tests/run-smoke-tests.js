@@ -6532,6 +6532,72 @@ mustContain(
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-09-17: bloqueo optimista al guardar aparcados (evitar sobrescrituras silenciosas entre TPV/camareros)\n");
+
+mustContain(
+  renderer,
+  "_serverUpdatedAtIso: raw.updatedAt || null,",
+  "normalizeRemoteParkedTicket tracks the last updated_at actually confirmed by the server, separate from the locally-overloaded updatedAt field",
+);
+mustContain(
+  renderer,
+  "expectedUpdatedAt: ticket?._serverUpdatedAtIso || null,",
+  "apiSaveParkedReservation sends expectedUpdatedAt so the server can detect a stale overwrite (optimistic locking)",
+);
+mustContain(
+  renderer,
+  "async function buildStaleParkedWriteError(res)",
+  "buildStaleParkedWriteError exists to turn a 412 response into a distinguishable error",
+);
+mustContain(
+  renderer,
+  "function handleStaleParkedWriteConflict(ticket, err)",
+  "handleStaleParkedWriteConflict exists, reusing the existing registerParkedSyncConflict + 'Incidencias sync' toast instead of inventing a new UX",
+);
+
+{
+  const idx = renderer.indexOf("async function apiSaveParkedReservation(ticket)");
+  const endIdx = idx >= 0 ? renderer.indexOf("async function apiDeleteParkedReservation", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  const idx412 = scoped.indexOf("res.status === 412");
+  const idxCompat409 = scoped.indexOf('res.status === 409 || res.status === 422 || res.status === 404');
+  if (idx412 >= 0 && idxCompat409 >= 0 && idx412 < idxCompat409) {
+    ok(
+      "The 412 (stale write) check is handled BEFORE the existing 409/422/404 'retry as update' compat branch, so a stale-write conflict is never blindly resent with the same expired expectedUpdatedAt",
+    );
+  } else {
+    fail(
+      "The 412 (stale write) check must come BEFORE the 409/422/404 compat retry branch in apiSaveParkedReservation",
+    );
+  }
+
+  if (scoped.includes("if (retryRes.status === 412) {")) {
+    ok(
+      "The update-parked-reservation retry path also checks for a fresh 412, not just the initial create attempt",
+    );
+  } else {
+    fail(
+      "The update-parked-reservation retry path must also check for a fresh 412",
+    );
+  }
+}
+
+mustContain(
+  renderer,
+  "if (e?.staleParkedWrite) {\r\n            handleStaleParkedWriteConflict(existing, e);",
+  "finishUpdateParkedTail routes a stale-write conflict to the dedicated handler instead of silently re-queueing it forever",
+);
+mustContain(
+  renderer,
+  "if (e?.staleParkedWrite) {\r\n          handleStaleParkedWriteConflict(localTicket, e);",
+  "finishCreateParkedTail routes a stale-write conflict to the dedicated handler instead of silently re-queueing it forever",
+);
+mustContain(
+  renderer,
+  'registerParkedSyncConflict(entry, e.remoteData || null, "stale-write");',
+  "processParkedSyncQueue's own retry loop also recognizes a stale-write conflict and registers it (reusing the existing conflict list/toast) instead of re-queueing the same doomed write forever",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

@@ -16751,18 +16751,22 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
           await apiSaveParkedReservation(existing);
           await refreshRemoteParkedReservationsOnly();
         } catch (e) {
-          enqueueParkedSyncOperation("upsert", existing);
-          console.warn(
-            "No se pudo guardar la reserva remota al actualizar:",
-            e?.message || e,
-          );
-
-          if (isParkedSyncTransientError(e)) {
-            toast(
-              `Sin internet: actualizacion de ${labels.item} guardada en cola.`,
-              "warn",
-              labels.featureTitle,
+          if (e?.staleParkedWrite) {
+            handleStaleParkedWriteConflict(existing, e);
+          } else {
+            enqueueParkedSyncOperation("upsert", existing);
+            console.warn(
+              "No se pudo guardar la reserva remota al actualizar:",
+              e?.message || e,
             );
+
+            if (isParkedSyncTransientError(e)) {
+              toast(
+                `Sin internet: actualizacion de ${labels.item} guardada en cola.`,
+                "warn",
+                labels.featureTitle,
+              );
+            }
           }
         }
 
@@ -16959,18 +16963,22 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
         await apiSaveParkedReservation(localTicket);
         await refreshRemoteParkedReservationsOnly();
       } catch (e) {
-        enqueueParkedSyncOperation("upsert", localTicket);
-        console.warn(
-          "No se pudo guardar la reserva remota al aparcar:",
-          e?.message || e,
-        );
-
-        if (isParkedSyncTransientError(e)) {
-          toast(
-            `Sin internet: ${labels.item} guardado en cola.`,
-            "warn",
-            labels.featureTitle,
+        if (e?.staleParkedWrite) {
+          handleStaleParkedWriteConflict(localTicket, e);
+        } else {
+          enqueueParkedSyncOperation("upsert", localTicket);
+          console.warn(
+            "No se pudo guardar la reserva remota al aparcar:",
+            e?.message || e,
           );
+
+          if (isParkedSyncTransientError(e)) {
+            toast(
+              `Sin internet: ${labels.item} guardado en cola.`,
+              "warn",
+              labels.featureTitle,
+            );
+          }
         }
       }
 
@@ -33345,6 +33353,14 @@ function normalizeRemoteParkedTicket(raw) {
     cajaId: String(raw.cajaId || raw.cajaid || "").trim(),
     createdAt,
     updatedAt,
+    // Distinto de `updatedAt`: ese se sobreescribe con new Date() en cada
+    // edicion LOCAL (marca "cuando lo toque yo"), asi que no sirve para
+    // bloqueo optimista. Este otro solo se rellena aqui, desde el propio
+    // servidor -- es "la ultima version que confirme que el servidor tiene",
+    // para poder mandarla de vuelta como expectedUpdatedAt al guardar (ver
+    // apiSaveParkedReservation) sin arriesgar falsos rechazos por ediciones
+    // locales que nunca tocaron el servidor.
+    _serverUpdatedAtIso: raw.updatedAt || null,
     items,
     total: Number(raw.total || 0),
     codcliente:
@@ -34161,6 +34177,16 @@ async function processParkedSyncQueue() {
           }
         }
       } catch (e) {
+        // Bloqueo optimista: NUNCA reencolar esto -- reintentaria con el
+        // mismo expectedUpdatedAt ya caducado y chocaria igual para siempre.
+        // Se cuenta como un conflicto mas (mismo resumen/aviso de mas abajo
+        // que ya existia para "remoto mas reciente").
+        if (e?.staleParkedWrite) {
+          skippedConflicts += 1;
+          registerParkedSyncConflict(entry, e.remoteData || null, "stale-write");
+          continue;
+        }
+
         // Sin este log, un elemento de la cola que falla siempre por el mismo
         // motivo (p.ej. un error de validacion del servidor) queda
         // reintentando en silencio para siempre sin ninguna pista de por que.
@@ -34886,6 +34912,60 @@ async function apiListParkedReservations() {
   return Array.isArray(data?.data) ? data.data : [];
 }
 
+// Construye el error marcado que dispara la rama de "conflicto de bloqueo
+// optimista" en quien llame a apiSaveParkedReservation, en vez de la rama
+// generica de "fallo de red -> encolar y reintentar" (que reintentaria con el
+// mismo expectedUpdatedAt ya caducado y volveria a chocar para siempre).
+async function buildStaleParkedWriteError(res) {
+  const body = await res.json().catch(() => null);
+  const err = new Error(
+    body?.error ||
+      "La reserva se modificó en otro dispositivo mientras tanto.",
+  );
+  err.staleParkedWrite = true;
+  err.remoteData = body?.data || null;
+  return err;
+}
+
+// Punto unico para reaccionar a un rechazo por bloqueo optimista (ver
+// buildStaleParkedWriteError), sea que haya saltado en el guardado en vivo
+// (parkCurrentCart) o al drenar la cola de reintentos. Reutiliza EXACTAMENTE
+// el mismo aviso que ya existia para "el remoto parecia mas reciente"
+// (registerParkedSyncConflict + "Incidencias sync") en vez de inventar uno
+// nuevo, para que el cajero solo tenga una cosa que aprender. A diferencia de
+// un fallo de red, esto NUNCA se debe encolar para reintentar: reenviaria el
+// mismo expectedUpdatedAt ya caducado y volveria a chocar para siempre.
+function handleStaleParkedWriteConflict(ticket, err) {
+  try {
+    const key = getParkedTicketSyncKey(ticket);
+    registerParkedSyncConflict(
+      { key, ticket },
+      err?.remoteData || null,
+      "stale-write",
+    );
+
+    syncParkedToolbarUI?.();
+    if (
+      parkedTicketsOverlay &&
+      !parkedTicketsOverlay.classList.contains("hidden")
+    ) {
+      renderParkedTicketsModal?.();
+    }
+
+    toast(
+      'Incidencias de sincronización detectadas: esta reserva se modificó en otro dispositivo. Revisa "Incidencias sync" en aparcados.',
+      "warn",
+      "Aparcados",
+    );
+  } catch (e) {
+    console.warn("No se pudo registrar el conflicto de bloqueo optimista:", e);
+  }
+
+  // Trae el estado real del servidor -- el ticket cargado localmente puede
+  // llevar datos que ya no coinciden con lo que hay guardado de verdad.
+  refreshRemoteParkedReservationsOnly?.().catch(() => {});
+}
+
 async function apiSaveParkedReservation(ticket) {
   const slug = String(ticket?.slug || getCurrentSlugForReservations() || "");
   const cajaId = String(
@@ -35013,6 +35093,12 @@ async function apiSaveParkedReservation(ticket) {
           meta: it?.meta && typeof it.meta === "object" ? it.meta : null,
         }))
       : [],
+    // Bloqueo optimista (server-side en saveParkedReservationDb): si esto no
+    // coincide con lo que el servidor tiene guardado AHORA MISMO, rechaza en
+    // vez de sobreescribir -- ver _serverUpdatedAtIso en
+    // normalizeRemoteParkedTicket. null en un aparcado que este cliente nunca
+    // vio confirmado por el servidor: sin comprobacion, igual que siempre.
+    expectedUpdatedAt: ticket?._serverUpdatedAtIso || null,
   };
 
   rememberTicketParkingMode(ticket, payload.parkingMode);
@@ -35033,6 +35119,15 @@ async function apiSaveParkedReservation(ticket) {
     return await res.json().catch(() => ({}));
   }
 
+  // Bloqueo optimista (ver expectedUpdatedAt arriba): el servidor rechazo el
+  // guardado porque otro dispositivo lo toco entre medias. Nunca tratar esto
+  // como el caso "compat" de abajo (409 = ya existe, reintenta como update)
+  // -- reenviar el MISMO payload (con el mismo expectedUpdatedAt ya
+  // caducado) a update-parked-reservation solo chocaria otra vez igual.
+  if (res.status === 412) {
+    throw await buildStaleParkedWriteError(res);
+  }
+
   // Compat: if backend expects update for existing rows, retry once.
   if (res.status === 409 || res.status === 422 || res.status === 404) {
     const updateUrl = `${TPV_SYNC_API_URL}?action=update-parked-reservation`;
@@ -35049,6 +35144,10 @@ async function apiSaveParkedReservation(ticket) {
 
     if (retryRes.ok) {
       return await retryRes.json().catch(() => ({}));
+    }
+
+    if (retryRes.status === 412) {
+      throw await buildStaleParkedWriteError(retryRes);
     }
   }
 
