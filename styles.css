@@ -864,7 +864,7 @@ body.mesas-inline-trans-mode .product-footer {
 }
 
 body.mesas-inline-trans-mode .product-name {
-  font-size: 12px;
+  font-size: var(--product-name-font-size, 12px);
   line-height: 1.15;
 }
 
@@ -1039,7 +1039,7 @@ body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode)
 }
 
 body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode) .product-name {
-  font-size: 12px;
+  font-size: var(--product-name-font-size, 12px);
   line-height: 1.15;
 }
 
@@ -1997,7 +1997,7 @@ body.theme-dark .products-grid-parking-overlay {
 
 /* Nombre */
 .product-name {
-  font-size: 13px;
+  font-size: var(--product-name-font-size, 12px);
   font-weight: 700;
   line-height: 1.2;
   white-space: normal;
@@ -2146,6 +2146,29 @@ body.theme-dark .products-grid-parking-overlay {
 
 body.mesas-inline-trans-mode .product-tile-resize-handle {
   width: 28px;
+  height: 28px;
+}
+
+.product-tile-fontsize-handle {
+  position: absolute;
+  left: 2px;
+  bottom: 2px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 4px;
+  border-radius: 5px;
+  z-index: 8;
+  cursor: ns-resize;
+  touch-action: none;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(30, 41, 59, 0.25);
+  color: #0f172a;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+body.mesas-inline-trans-mode .product-tile-fontsize-handle {
   height: 28px;
 }
 

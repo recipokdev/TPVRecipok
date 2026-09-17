@@ -6433,6 +6433,105 @@ mustContain(
   "refreshBackgroundPrefetchSubtext exists to keep the passive notice's subtext in sync with the background download's real status",
 );
 
+console.log("\n[SMOKE] Checking 2026-09-16: computeLineNetFirst IVA rounding matches FacturaScripts's real Calculator.php\n");
+
+{
+  const idx = renderer.indexOf("function computeLineNetFirst(unitGross, qty, taxRate)");
+  const endIdx = idx >= 0 ? renderer.indexOf("function eurTicket(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("const rawNet = netUnit * q;") &&
+    scoped.includes("const iva = round2(rawNet * (rate / 100));") &&
+    scoped.includes("const total = round2(base + iva);")
+  ) {
+    ok(
+      "computeLineNetFirst rounds IVA from the unrounded net*qty amount (matching FacturaScripts's Calculator.php getSubtotals, verified against a real invoice: Ben_Trempat FAC2026S5793), instead of rounding a combined total and deriving IVA by subtraction",
+    );
+  } else {
+    fail(
+      "computeLineNetFirst rounds IVA from the unrounded net*qty amount (matching FacturaScripts's Calculator.php getSubtotals, verified against a real invoice: Ben_Trempat FAC2026S5793), instead of rounding a combined total and deriving IVA by subtraction",
+    );
+  }
+}
+
+{
+  const idx = mesasJs.indexOf("function computeLineTotalNetFirst(line, qty)");
+  const endIdx = idx >= 0 ? mesasJs.indexOf("function computeTicketTotalFromItems", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? mesasJs.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("const rawNet = netUnit * qty;") &&
+    scoped.includes("const iva = round2Mesas(rawNet * (rate / 100));")
+  ) {
+    ok(
+      "mesas.js's local copy of the net-first calculation was fixed the same way as renderer.js's computeLineNetFirst, so Mesas totals don't drift from the main TPV/FacturaScripts",
+    );
+  } else {
+    fail(
+      "mesas.js's local copy of the net-first calculation was fixed the same way as renderer.js's computeLineNetFirst, so Mesas totals don't drift from the main TPV/FacturaScripts",
+    );
+  }
+}
+
+console.log("\n[SMOKE] Checking 2026-09-16: tamaño de letra de productos ajustable arrastrando (live preview)\n");
+
+mustContain(
+  renderer,
+  "function applyProductNameFontSizeCssVar()",
+  "applyProductNameFontSizeCssVar exists to push the live font-size onto --product-name-font-size",
+);
+mustContain(
+  renderer,
+  "function bindProductNameFontSizeHandle(handle)",
+  "bindProductNameFontSizeHandle exists, mirroring bindProductTileResizeHandle's live-drag pattern for font size instead of tile size",
+);
+mustContain(
+  renderer,
+  'fontSizeHandle.className = "product-tile-fontsize-handle";',
+  "The font-size drag handle ('Aa') is created alongside the existing tile-resize handle, gated the same way (admin + resize mode)",
+);
+mustContain(
+  renderer,
+  "function bindProductNameFontSizeResetButtonOnce()",
+  "A reset-to-default button exists for the font size, mirroring the tile-size reset button",
+);
+
+{
+  const idx = renderer.indexOf("function bindProductNameFontSizeHandle(handle)");
+  const endIdx = idx >= 0 ? renderer.indexOf("function bindCustomerDisplayToggleOnce", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("setProductNameFontSize(next, { persist: false, rerender: false })") &&
+    scoped.includes("saveProductNameFontSizeSetting().catch(() => {});")
+  ) {
+    ok(
+      "Dragging updates the font size live (persist:false) on every pointermove, and only writes to cfg once on pointerup -- same live-preview-then-persist pattern as the tile-size handle",
+    );
+  } else {
+    fail(
+      "Dragging updates the font size live (persist:false) on every pointermove, and only writes to cfg once on pointerup -- same live-preview-then-persist pattern as the tile-size handle",
+    );
+  }
+}
+
+mustContain(
+  styles,
+  "font-size: var(--product-name-font-size, 12px);",
+  "The actual active .product-name rules (both the plain grid and the mesas-inline-trans-mode variant) read from the CSS variable instead of a hardcoded font-size",
+);
+
+{
+  const count = (styles.match(/font-size: var\(--product-name-font-size, 12px\);/g) || []).length;
+  if (count >= 2) {
+    ok(
+      "Both real .product-name rules (normal grid AND mesas-inline-trans-mode, which have higher CSS specificity than the base .product-name rule and would otherwise silently override it) were fixed, not just the lower-specificity one",
+    );
+  } else {
+    fail(
+      `Both real .product-name rules (normal grid AND mesas-inline-trans-mode) must read the CSS variable -- found only ${count} occurrence(s), a higher-specificity rule may still hardcode the font size and silently override the setting`,
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

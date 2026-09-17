@@ -1954,6 +1954,13 @@ const PRODUCT_NAME_COLLATOR = new Intl.Collator("es", {
 const PRODUCT_TILE_MIN_SIZE_DEFAULT = 150;
 const PRODUCT_TILE_MIN_SIZE_MIN = 110;
 const PRODUCT_TILE_MIN_SIZE_MAX = 360;
+const OPTIONS_PRODUCT_NAME_FONT_SIZE_KEY = "ui.productNameFontSize";
+// 12px es el tamaño real que ya se veía (styles.css, regla de mayor
+// especificidad que la de .product-name a secas) -- se usa el mismo aquí
+// para que nadie note ningún cambio hasta que arrastre el tirador.
+const PRODUCT_NAME_FONT_SIZE_DEFAULT = 12;
+const PRODUCT_NAME_FONT_SIZE_MIN = 9;
+const PRODUCT_NAME_FONT_SIZE_MAX = 26;
 const CART_PANEL_WIDTH_PX_MIN = 280;
 const CART_PANEL_WIDTH_PX_MAX = 520;
 const LS_ALLOW_CLOSE_WITH_PARKED_KEY = "tpv_allowCloseWithParkedTickets";
@@ -2006,6 +2013,7 @@ let tariffAssignedServerCodesByCode = {};
 let tariffEditBaselineByCode = {};
 let tariffInputKeyboardBound = false;
 let productTileMinSize = PRODUCT_TILE_MIN_SIZE_DEFAULT;
+let productNameFontSize = PRODUCT_NAME_FONT_SIZE_DEFAULT;
 let productTileResizeMode = false;
 let scaleManualCaptureMode = false;
 let productsFilterStockOnly = false;
@@ -2901,6 +2909,25 @@ function applyProductTileMinSizeCssVar() {
     grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${nextSizePx}, ${nextSizePx}))`;
     grid.style.justifyContent = "start";
   }
+}
+
+function clampProductNameFontSize(value) {
+  const n = Math.round(Number(value) || PRODUCT_NAME_FONT_SIZE_DEFAULT);
+  return Math.max(
+    PRODUCT_NAME_FONT_SIZE_MIN,
+    Math.min(PRODUCT_NAME_FONT_SIZE_MAX, n),
+  );
+}
+
+function applyProductNameFontSizeCssVar() {
+  const nextSizePx = `${clampProductNameFontSize(productNameFontSize)}px`;
+  document.documentElement.style.setProperty(
+    "--product-name-font-size",
+    nextSizePx,
+  );
+
+  const grid = document.getElementById("productsGrid");
+  if (grid) grid.style.setProperty("--product-name-font-size", nextSizePx);
 }
 
 function parseBoolLike(value, fallback = false) {
@@ -4849,6 +4876,37 @@ async function setProductTileMinSize(nextSize, opts = {}) {
   if (rerender) renderProducts?.();
 }
 
+async function loadProductNameFontSizeSetting() {
+  const raw = await window.TPV_CFG?.get?.(OPTIONS_PRODUCT_NAME_FONT_SIZE_KEY);
+  const parsed = Number(raw);
+  if (isFinite(parsed)) {
+    productNameFontSize = clampProductNameFontSize(parsed);
+  } else {
+    productNameFontSize = PRODUCT_NAME_FONT_SIZE_DEFAULT;
+  }
+
+  applyProductNameFontSizeCssVar();
+}
+
+async function saveProductNameFontSizeSetting() {
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_PRODUCT_NAME_FONT_SIZE_KEY,
+      clampProductNameFontSize(productNameFontSize),
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar tamaño de letra de productos:", e);
+  }
+}
+
+async function setProductNameFontSize(nextSize, opts = {}) {
+  const { persist = true, rerender = false } = opts;
+  productNameFontSize = clampProductNameFontSize(nextSize);
+  applyProductNameFontSizeCssVar();
+  if (persist) await saveProductNameFontSizeSetting();
+  if (rerender) renderProducts?.();
+}
+
 async function loadProductTileResizeModeToggle() {
   const el = document.getElementById("productTileResizeModeToggle");
   let enabled = false;
@@ -5420,6 +5478,7 @@ let parkStockWarningToggleBound = false;
 let productTileResizeModeToggleBound = false;
 let scaleManualCaptureToggleBound = false;
 let productTileSizeResetBtnBound = false;
+let productNameFontSizeResetBtnBound = false;
 let productSortModeBound = false;
 let productReorderModeBound = false;
 let productManualOrderResetBtnBound = false;
@@ -5566,6 +5625,22 @@ function bindProductTileSizeResetButtonOnce() {
       rerender: false,
     });
     toast?.("Tamaño de productos restablecido.", "ok", "Productos");
+  });
+}
+
+function bindProductNameFontSizeResetButtonOnce() {
+  if (productNameFontSizeResetBtnBound) return;
+  productNameFontSizeResetBtnBound = true;
+
+  const btn = document.getElementById("productNameFontSizeResetBtn");
+  if (!btn) return;
+
+  btn.addEventListener("click", async () => {
+    await setProductNameFontSize(PRODUCT_NAME_FONT_SIZE_DEFAULT, {
+      persist: true,
+      rerender: false,
+    });
+    toast?.("Tamaño de letra restablecido.", "ok", "Productos");
   });
 }
 
@@ -5734,6 +5809,53 @@ function bindProductTileResizeHandle(handle) {
       window.removeEventListener("pointerup", onPointerEnd);
       window.removeEventListener("pointercancel", onPointerEnd);
       saveProductTileSizeSetting().catch(() => {});
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerEnd);
+    window.addEventListener("pointercancel", onPointerEnd);
+  });
+}
+
+// Mismo patron que bindProductTileResizeHandle (arrastrar, ver el resultado
+// en vivo sobre los propios productos, guardar solo al soltar), pero para el
+// tamaño de letra del nombre en vez del tamaño de la tarjeta -- peticion de
+// un cliente real que no tenia ninguna forma de ajustarlo.
+function bindProductNameFontSizeHandle(handle) {
+  if (!handle || handle.dataset.bound) return;
+  handle.dataset.bound = "1";
+
+  handle.addEventListener("pointerdown", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    const pointerId = ev.pointerId;
+    const startY = ev.clientY;
+    const startSize = clampProductNameFontSize(productNameFontSize);
+
+    try {
+      handle.setPointerCapture(pointerId);
+    } catch {}
+
+    const onPointerMove = (moveEv) => {
+      if (moveEv.pointerId !== pointerId) return;
+      // Arrastrar hacia arriba agranda la letra (como "subir" el tamaño);
+      // dividido entre 4 para que todo el rango (9-26px) cubra un gesto
+      // comodo, no solo unos pocos pixeles de recorrido.
+      const dy = startY - moveEv.clientY;
+      const next = clampProductNameFontSize(startSize + dy / 4);
+
+      setProductNameFontSize(next, { persist: false, rerender: false }).catch(
+        () => {},
+      );
+    };
+
+    const onPointerEnd = (endEv) => {
+      if (endEv.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerEnd);
+      window.removeEventListener("pointercancel", onPointerEnd);
+      saveProductNameFontSizeSetting().catch(() => {});
     };
 
     window.addEventListener("pointermove", onPointerMove);
@@ -11586,6 +11708,21 @@ function renderProducts() {
 
       bindProductTileResizeHandle(resizeHandle);
       tile.appendChild(resizeHandle);
+
+      const fontSizeHandle = document.createElement("button");
+      fontSizeHandle.type = "button";
+      fontSizeHandle.className = "product-tile-fontsize-handle";
+      fontSizeHandle.textContent = "Aa";
+      fontSizeHandle.title = "Arrastra para cambiar el tamaño de letra";
+      fontSizeHandle.ariaLabel = "Cambiar tamaño de letra de productos";
+
+      fontSizeHandle.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      };
+
+      bindProductNameFontSizeHandle(fontSizeHandle);
+      tile.appendChild(fontSizeHandle);
     }
 
     grid.appendChild(tile);
@@ -27718,6 +27855,7 @@ async function openOptions() {
   bindProductManualOrderResetButtonOnce();
   bindInfoBarVisibilityOnce();
   bindProductTileSizeResetButtonOnce();
+  bindProductNameFontSizeResetButtonOnce();
   bindCartWidthControlsToggleOnce();
   bindCartWidthDragHandleOnce();
   bindAutostartToggleOnce();
@@ -27758,6 +27896,7 @@ async function openOptions() {
     loadSafeTrainingModeToggle(),
     loadTariffManagerOptionsData(),
     loadProductTileSizeSetting(),
+    loadProductNameFontSizeSetting(),
     loadCartPanelWidthSetting(),
     loadCartWidthControlsToggle(),
     loadAutostartToggle(),
@@ -30741,15 +30880,27 @@ function round2(n) {
   return Math.round((v + Number.EPSILON) * 100) / 100;
 }
 
-// Calculo por linea replicando EXACTAMENTE a FacturaScripts (verificado contra
-// la factura real). FS recibe el precio NETO y hace:
-//   neto  = round2(netoUnit * cant)
-//   total = round2(netoUnit * cant * (1 + tasa/100))   <- redondea el TOTAL, no el IVA
-//   iva   = total - neto                                <- el IVA es la diferencia
+// Calculo por linea replicando EXACTAMENTE a FacturaScripts -- verificado
+// linea por linea contra Core/Lib/Calculator.php (metodo getSubtotals) del
+// servidor real y contra una factura real (Ben_Trempat, FAC2026S5793,
+// 2026-09-16: cantidad 0.318, pvpunitario neto 25.36363636 -> FS guardo
+// neto=8.07, totaliva=0.81, total=8.88). FS acumula el neto y el IVA de cada
+// linea SIN redondear nada, y solo al final redondea neto e IVA POR
+// SEPARADO (nunca el total combinado, y el IVA nunca sale de restar o de
+// multiplicar la base YA redondeada):
+//   neto = round2(netoUnit * cant)
+//   iva  = round2(netoUnit * cant * tasa/100)   <- redondeado desde el bruto SIN redondear, no desde `neto`
+//   total = neto + iva
+// La version anterior redondeaba el TOTAL combinado y sacaba el IVA por
+// diferencia (total=round2(netoUnit*cant*(1+tasa/100)); iva=total-neto), lo
+// que en este caso real daba total=8.87 en vez de 8.88 -- un redondeo
+// distinto al de FS siempre que el precio neto no es "redondo" (frecuente en
+// productos por peso). La version distinta de antes de eso (iva=round2(base
+// YA redondeada * tasa)) tambien era incorrecta (daba 16,01/1,46 en vez de
+// 16,00/1,45 en su caso) por la misma razon: redondear desde algo que ya se
+// redondeo antes, en vez de desde el importe original sin redondear.
 // El TPV debe calcular igual para que carrito/cobro/ticket coincidan con FS y
 // tambien funcione OFFLINE (sin depender de la respuesta de la API).
-// (Antes hacia iva=round2(base*tasa) y total=base+iva: doble redondeo que daba
-// p.ej. 16,01 en vez de 16,00, o 1,46 de IVA en vez de 1,45.)
 // unitGross es el bruto unitario ya ajustado (tarifa/descuento); netoUnit sale
 // de dividirlo por el factor de impuesto, igual que el neto que se envia a FS.
 function computeLineNetFirst(unitGross, qty, taxRate) {
@@ -30758,9 +30909,10 @@ function computeLineNetFirst(unitGross, qty, taxRate) {
   const divisor = 1 + rate / 100;
   const netUnit =
     divisor > 0 ? Number(unitGross || 0) / divisor : Number(unitGross || 0);
-  const base = round2(netUnit * q);
-  const total = round2(netUnit * q * divisor);
-  const iva = round2(total - base);
+  const rawNet = netUnit * q;
+  const base = round2(rawNet);
+  const iva = round2(rawNet * (rate / 100));
+  const total = round2(base + iva);
   return { base, iva, total, netUnit };
 }
 

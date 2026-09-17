@@ -1887,16 +1887,19 @@ function round2Mesas(n) {
   return Math.round((v + Number.EPSILON) * 100) / 100;
 }
 
-// "Neto primero" como FacturaScripts (y como el TPV principal), para que el
-// total de la mesa coincida con lo que se cobra/factura:
-// base = round2(neto*qty); iva = round2(base*tasa/100); total = base+iva.
+// "Neto primero" como FacturaScripts (y como el TPV principal) -- ver
+// computeLineNetFirst en renderer.js para el porque exacto (verificado
+// contra Core/Lib/Calculator.php y una factura real, 2026-09-16): el IVA se
+// redondea desde el importe SIN redondear (netUnit*qty*tasa), nunca desde la
+// base ya redondeada, y el total es base+iva ya redondeados por separado.
 function computeLineTotalNetFirst(line, qty) {
   const gross = getLineUnitForTotals(line);
   const rate = Number(line?.taxRate) || 0;
   const divisor = 1 + rate / 100;
   const netUnit = divisor > 0 ? gross / divisor : gross;
-  const base = round2Mesas(netUnit * qty);
-  const iva = round2Mesas(base * (rate / 100));
+  const rawNet = netUnit * qty;
+  const base = round2Mesas(rawNet);
+  const iva = round2Mesas(rawNet * (rate / 100));
   return round2Mesas(base + iva);
 }
 
