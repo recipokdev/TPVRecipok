@@ -6600,6 +6600,22 @@ let terminalFamiliesDraftHiddenMap = {};
 let terminalFamiliesCurrentTerminalId = null;
 let terminalFamilyHiddenCache = {};
 
+// Tablets de camareros emparejadas: mismo dialogo, mismo arbol de familias,
+// pero la restriccion vive en el servidor (paired_devices), no en la config
+// local del TPV -- ver apiUpdatePairedDeviceFamilies. El valor del <select>
+// para una tablet es "device:<id>" para distinguirlo de un id de terminal.
+const DEVICE_FAMILIES_TARGET_PREFIX = "device:";
+let pairedDevicesForFamiliesDialog = [];
+let pairedDeviceFamiliesDraftHiddenMap = {};
+
+function isDeviceFamiliesTarget(value) {
+  return String(value || "").startsWith(DEVICE_FAMILIES_TARGET_PREFIX);
+}
+
+function getDeviceIdFromFamiliesTarget(value) {
+  return String(value || "").slice(DEVICE_FAMILIES_TARGET_PREFIX.length);
+}
+
 async function getTerminalFamilyHiddenMap() {
   try {
     const raw = await window.TPV_CFG?.get?.(TERMINAL_FAMILY_HIDDEN_CFG_KEY);
@@ -6655,6 +6671,38 @@ async function openTerminalFamiliesDialog() {
     select.appendChild(opt);
   });
 
+  // Tablets de camareros emparejadas (solo si Modo Mesas esta activo -- si
+  // no, ni siquiera existe el emparejamiento). Fallo silencioso si no se
+  // puede cargar: el dialogo sigue funcionando igual para terminales.
+  pairedDevicesForFamiliesDialog = [];
+  pairedDeviceFamiliesDraftHiddenMap = {};
+  if (MESAS_MODULE_ENABLED) {
+    try {
+      const devices = await apiListPairedDevices();
+      pairedDevicesForFamiliesDialog = (devices || []).filter((d) => !d.revoked);
+    } catch {
+      pairedDevicesForFamiliesDialog = [];
+    }
+  }
+
+  if (pairedDevicesForFamiliesDialog.length) {
+    const group = document.createElement("optgroup");
+    group.label = "Tablets de camareros";
+    pairedDevicesForFamiliesDialog.forEach((d) => {
+      pairedDeviceFamiliesDraftHiddenMap[String(d.id)] = Array.isArray(
+        d.hiddenFamilies,
+      )
+        ? d.hiddenFamilies.map(String)
+        : [];
+
+      const opt = document.createElement("option");
+      opt.value = `${DEVICE_FAMILIES_TARGET_PREFIX}${d.id}`;
+      opt.textContent = d.deviceInfo || "Tablet sin nombre";
+      group.appendChild(opt);
+    });
+    select.appendChild(group);
+  }
+
   terminalFamiliesCurrentTerminalId = String(
     currentTerminal?.id || terminals?.[0]?.id || "",
   );
@@ -6679,16 +6727,22 @@ function renderTerminalFamiliesList() {
   const select = document.getElementById("terminalFamiliesSelect");
   if (!listEl || !select) return;
 
-  const terminalId = String(select.value || "");
-  terminalFamiliesCurrentTerminalId = terminalId;
+  const rawValue = String(select.value || "");
+  const isDevice = isDeviceFamiliesTarget(rawValue);
+  const targetKey = isDevice ? getDeviceIdFromFamiliesTarget(rawValue) : rawValue;
+  const activeDraftMap = isDevice
+    ? pairedDeviceFamiliesDraftHiddenMap
+    : terminalFamiliesDraftHiddenMap;
+
+  if (!isDevice) terminalFamiliesCurrentTerminalId = targetKey;
 
   listEl.innerHTML = "";
 
   const allCats = getAllCategoriesSorted();
   const rootCats = allCats.filter((c) => !c.parentId);
 
-  const hiddenIds = Array.isArray(terminalFamiliesDraftHiddenMap[terminalId])
-    ? terminalFamiliesDraftHiddenMap[terminalId].map(String)
+  const hiddenIds = Array.isArray(activeDraftMap[targetKey])
+    ? activeDraftMap[targetKey].map(String)
     : [];
 
   const hiddenSet = new Set(hiddenIds);
@@ -6715,8 +6769,8 @@ function renderTerminalFamiliesList() {
 
   const updateHiddenForTerminal = (catId, visible) => {
     const currentHidden = new Set(
-      Array.isArray(terminalFamiliesDraftHiddenMap[terminalId])
-        ? terminalFamiliesDraftHiddenMap[terminalId].map(String)
+      Array.isArray(activeDraftMap[targetKey])
+        ? activeDraftMap[targetKey].map(String)
         : [],
     );
 
@@ -6725,8 +6779,8 @@ function renderTerminalFamiliesList() {
 
     const arr = Array.from(currentHidden);
 
-    if (!arr.length) delete terminalFamiliesDraftHiddenMap[terminalId];
-    else terminalFamiliesDraftHiddenMap[terminalId] = arr;
+    if (!arr.length) delete activeDraftMap[targetKey];
+    else activeDraftMap[targetKey] = arr;
   };
 
   const buildColorPicker = (catId) => {
@@ -6785,15 +6839,13 @@ function renderTerminalFamiliesList() {
     const rootActions = document.createElement("div");
     rootActions.className = "terminal-family-actions";
 
-    const rootColor = buildColorPicker(root.id);
-
     const rootSwitch = buildSwitch(rootVisible, (e) => {
       const nextVisible = e.target.checked;
 
       const children = getChildren(root.id);
       const currentHidden = new Set(
-        Array.isArray(terminalFamiliesDraftHiddenMap[terminalId])
-          ? terminalFamiliesDraftHiddenMap[terminalId].map(String)
+        Array.isArray(activeDraftMap[targetKey])
+          ? activeDraftMap[targetKey].map(String)
           : [],
       );
 
@@ -6807,13 +6859,17 @@ function renderTerminalFamiliesList() {
 
       const arr = Array.from(currentHidden);
 
-      if (!arr.length) delete terminalFamiliesDraftHiddenMap[terminalId];
-      else terminalFamiliesDraftHiddenMap[terminalId] = arr;
+      if (!arr.length) delete activeDraftMap[targetKey];
+      else activeDraftMap[targetKey] = arr;
 
       renderTerminalFamiliesList();
     });
 
-    rootActions.appendChild(rootColor);
+    // El color por familia es un ajuste puramente visual del TPV -- no
+    // tiene sentido para una tablet, que pinta con su propio estilo.
+    if (!isDevice) {
+      rootActions.appendChild(buildColorPicker(root.id));
+    }
     rootActions.appendChild(rootSwitch);
 
     rootRow.appendChild(rootText);
@@ -6845,14 +6901,14 @@ function renderTerminalFamiliesList() {
           const childActions = document.createElement("div");
           childActions.className = "terminal-family-actions";
 
-          const childColor = buildColorPicker(child.id);
-
           const childSwitch = buildSwitch(childVisible, (e) => {
             updateHiddenForTerminal(child.id, e.target.checked);
             renderTerminalFamiliesList();
           });
 
-          childActions.appendChild(childColor);
+          if (!isDevice) {
+            childActions.appendChild(buildColorPicker(child.id));
+          }
           childActions.appendChild(childSwitch);
 
           childRow.appendChild(childText);
@@ -6870,14 +6926,27 @@ function renderTerminalFamiliesList() {
 
 async function saveTerminalFamiliesDialog() {
   // Cada uno guarda una clave de configuracion distinta e independiente --
-  // van a la vez en vez de en fila.
-  const [okHidden, okMode, okColors] = await Promise.all([
+  // van a la vez en vez de en fila. Las tablets van por su cuenta (piden al
+  // servidor, no a la config local) -- se guardan TODAS las que aparecen en
+  // el dialogo, no solo las que se tocaron, para no perder un "quitar toda
+  // restriccion" (que borra la clave del mapa en vez de dejarla vacia).
+  const [okHidden, okMode, okColors, okDevices] = await Promise.all([
     saveTerminalFamilyHiddenMap(terminalFamiliesDraftHiddenMap),
     saveTerminalFamilyModeMap(terminalFamiliesDraftModeMap),
     saveFamilyColorsMap(familyColorsCache),
+    Promise.all(
+      pairedDevicesForFamiliesDialog.map((d) =>
+        apiUpdatePairedDeviceFamilies(
+          d.id,
+          pairedDeviceFamiliesDraftHiddenMap[String(d.id)] || [],
+        )
+          .then(() => true)
+          .catch(() => false),
+      ),
+    ).then((results) => results.every(Boolean)),
   ]);
 
-  if (!okHidden || !okMode || !okColors) {
+  if (!okHidden || !okMode || !okColors || !okDevices) {
     toast?.("No se pudo guardar la configuración.", "err", "Familias");
     return;
   }
@@ -6950,12 +7019,18 @@ function setupTerminalFamiliesUi() {
   if (checkAllBtn && checkAllBtn.dataset.bound !== "1") {
     checkAllBtn.dataset.bound = "1";
     checkAllBtn.addEventListener("click", () => {
-      const terminalId = String(
+      const rawValue = String(
         document.getElementById("terminalFamiliesSelect")?.value || "",
       );
-      if (!terminalId) return;
+      if (!rawValue) return;
 
-      delete terminalFamiliesDraftHiddenMap[terminalId];
+      if (isDeviceFamiliesTarget(rawValue)) {
+        delete pairedDeviceFamiliesDraftHiddenMap[
+          getDeviceIdFromFamiliesTarget(rawValue)
+        ];
+      } else {
+        delete terminalFamiliesDraftHiddenMap[rawValue];
+      }
       renderTerminalFamiliesList();
     });
   }
@@ -6963,14 +7038,19 @@ function setupTerminalFamiliesUi() {
   if (uncheckAllBtn && uncheckAllBtn.dataset.bound !== "1") {
     uncheckAllBtn.dataset.bound = "1";
     uncheckAllBtn.addEventListener("click", () => {
-      const terminalId = String(
+      const rawValue = String(
         document.getElementById("terminalFamiliesSelect")?.value || "",
       );
-      if (!terminalId) return;
+      if (!rawValue) return;
 
-      terminalFamiliesDraftHiddenMap[terminalId] = (categories || []).map((c) =>
-        String(c.id),
-      );
+      const allIds = (categories || []).map((c) => String(c.id));
+      if (isDeviceFamiliesTarget(rawValue)) {
+        pairedDeviceFamiliesDraftHiddenMap[
+          getDeviceIdFromFamiliesTarget(rawValue)
+        ] = allIds;
+      } else {
+        terminalFamiliesDraftHiddenMap[rawValue] = allIds;
+      }
 
       renderTerminalFamiliesList();
     });
@@ -7048,10 +7128,22 @@ function getTerminalModeSync(terminalId) {
 function renderTerminalFamiliesModeUi() {
   const select = document.getElementById("terminalFamiliesSelect");
   const toggle = document.getElementById("terminalFamiliesShowAllToggle");
+  const showAllSection = document.getElementById(
+    "terminalFamiliesShowAllSection",
+  );
   if (!select || !toggle) return;
 
-  const terminalId = String(select.value || "");
-  const mode = getTerminalModeFromMap(terminalFamiliesDraftModeMap, terminalId);
+  const rawValue = String(select.value || "");
+
+  // "Mostrar todos" es un concepto de terminal (config local); no aplica a
+  // una tablet, cuya restriccion vive solo en el servidor.
+  if (isDeviceFamiliesTarget(rawValue)) {
+    showAllSection?.classList.add("hidden");
+    return;
+  }
+  showAllSection?.classList.remove("hidden");
+
+  const mode = getTerminalModeFromMap(terminalFamiliesDraftModeMap, rawValue);
 
   toggle.checked = mode === "all";
 }
@@ -9120,6 +9212,44 @@ async function apiRevokePairedDevice(deviceId) {
   const data = await res.json().catch(() => null);
   if (!res.ok || !data?.ok) {
     throw new Error(data?.error || "No se pudo revocar el dispositivo, intentalo de nuevo.");
+  }
+}
+
+// "Familias visibles en esta tablet" -- reutiliza el mismo patron que
+// apiRevokePairedDevice. hiddenFamilies vacio = sin restriccion (ve todo).
+async function apiUpdatePairedDeviceFamilies(deviceId, hiddenFamilies) {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("Falta configuracion de sincronizacion de este TPV.");
+  }
+
+  const url = `${TPV_CAMAREROS_API_URL}?action=update-paired-device-families`;
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      body: JSON.stringify({
+        slug,
+        id: Number(deviceId) || 0,
+        hiddenFamilies: Array.isArray(hiddenFamilies)
+          ? hiddenFamilies.map(String)
+          : [],
+      }),
+    },
+    8000,
+  );
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok) {
+    throw new Error(
+      data?.error || "No se pudieron guardar las familias visibles, intentalo de nuevo.",
+    );
   }
 }
 

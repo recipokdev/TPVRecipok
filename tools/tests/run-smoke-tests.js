@@ -3903,8 +3903,13 @@ console.log("\n[SMOKE] Checking 2026-08-27 broader sweep of sequential-await -> 
   const scoped = idx >= 0 && endIdx > idx ? renderer.slice(idx, endIdx) : "";
   mustContain(
     scoped,
-    "const [okHidden, okMode, okColors] = await Promise.all([",
-    "saveTerminalFamiliesDialog saves its 3 independent settings keys in parallel",
+    "const [okHidden, okMode, okColors, okDevices] = await Promise.all([",
+    "saveTerminalFamiliesDialog saves its 4 independent settings keys in parallel (terminals local config + paired-device families on the server)",
+  );
+  mustContain(
+    scoped,
+    "pairedDevicesForFamiliesDialog.map((d) =>",
+    "Every paired device shown in the dialog is re-saved on Guardar, not just the ones touched -- so clearing a restriction to empty isn't silently lost",
   );
 }
 
@@ -8755,6 +8760,52 @@ mustContain(
   styles,
   ".paired-device-row",
   "Paired-device row styling present",
+);
+
+console.log("\n[SMOKE] Checking 2026-09-17: familias visibles por tablet (reutiliza el dialogo de Terminales)\n");
+
+mustContain(
+  renderer,
+  "async function apiUpdatePairedDeviceFamilies(deviceId, hiddenFamilies) {",
+  "apiUpdatePairedDeviceFamilies() calls update-paired-device-families",
+);
+mustContain(
+  renderer,
+  "function isDeviceFamiliesTarget(value) {",
+  "Terminal-families dialog can distinguish a paired-device target from a real terminal",
+);
+mustContain(
+  renderer,
+  "pairedDevicesForFamiliesDialog = (devices || []).filter((d) => !d.revoked);",
+  "openTerminalFamiliesDialog loads paired devices (excluding revoked ones) alongside real terminals",
+);
+mustContain(
+  renderer,
+  'group.label = "Tablets de camareros";',
+  "Paired devices appear as a separate optgroup in the terminal/tablet picker",
+);
+{
+  const idx = renderer.indexOf("function renderTerminalFamiliesList() {");
+  const endIdx = idx >= 0 ? renderer.indexOf("async function saveTerminalFamiliesDialog", idx) : -1;
+  const scoped = idx >= 0 && endIdx > idx ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("const activeDraftMap = isDevice") &&
+    scoped.includes("if (!isDevice) {\r\n      rootActions.appendChild(buildColorPicker(root.id));") &&
+    scoped.includes("if (!isDevice) {\r\n            childActions.appendChild(buildColorPicker(child.id));")
+  ) {
+    ok(
+      "renderTerminalFamiliesList reads/writes the device draft map (not local terminal config) for a tablet target, and skips the per-terminal color picker for it",
+    );
+  } else {
+    fail(
+      "renderTerminalFamiliesList reads/writes the device draft map (not local terminal config) for a tablet target, and skips the per-terminal color picker for it",
+    );
+  }
+}
+mustContain(
+  renderer,
+  'showAllSection?.classList.add("hidden");',
+  '"Mostrar todos los productos" (a terminal-only concept) is hidden when a tablet is selected',
 );
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
