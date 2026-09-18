@@ -160,6 +160,7 @@
           autocomplete="off"
         />
         <button id="searchClearBtn" class="search-btn">✕</button>
+        <div id="searchBarActionsSlot" class="search-bar-actions"></div>
       </div>
 
       <!-- Categorías con flechas -->
@@ -200,6 +201,13 @@
             <span class="products-grid-parking-spinner"></span>
             Aparcando...
           </div>
+        </div>
+        <div id="openCajaPrompt" class="open-caja-prompt hidden">
+          <div class="open-caja-prompt-icon">🔒</div>
+          <div class="open-caja-prompt-text">La caja está cerrada</div>
+          <button type="button" id="openCajaPromptBtn" class="open-caja-prompt-btn">
+            Abrir caja
+          </button>
         </div>
       </div>
       <div id="statusBar" class="status-bar">
@@ -1194,6 +1202,45 @@
           <button id="msgCancelBtn">Cancelar</button>
           <button id="msgMidBtn" class="hidden">Revisar</button>
           <button id="msgOkBtn">Aceptar</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="invoiceEmailOverlay" class="simple-overlay hidden">
+      <div class="simple-dialog">
+        <h2>Enviar factura</h2>
+        <p style="margin-bottom: 8px; font-size: 13px" id="invoiceEmailClientName"></p>
+        <input
+          type="email"
+          id="invoiceEmailInput"
+          placeholder="email@cliente.com"
+          style="
+            width: 100%;
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            font-size: 14px;
+            margin-bottom: 8px;
+            box-sizing: border-box;
+          "
+        />
+        <textarea
+          id="invoiceEmailMessageInput"
+          placeholder="Mensaje (opcional)"
+          rows="3"
+          style="
+            width: 100%;
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            font-size: 13px;
+            box-sizing: border-box;
+            resize: vertical;
+          "
+        ></textarea>
+        <div class="dialog-actions">
+          <button id="invoiceEmailCancelBtn">Cancelar</button>
+          <button id="invoiceEmailSendBtn">Enviar</button>
         </div>
       </div>
     </div>
@@ -3401,7 +3448,12 @@
               <span class="opt-sec-chev">▾</span>
             </button>
             <div class="opt-sec-preview">
-              Visibilidad de familias de productos por terminal
+              Visibilidad de familias de productos por terminal,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="familyButtonResizeModeToggle"
+                >modo redimensionar familias</span
+              >
             </div>
             <div class="opt-sec-b">
               <div class="opt-row">
@@ -3424,6 +3476,39 @@
                     Configurar
                   </button>
                 </div>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Modo redimensionar familias</div>
+                  <div class="opt-row-sub">
+                    Muestra un asa ("Aa") sobre cada botón de familia/grupo
+                    para arrastrar y ver el cambio de tamaño de letra al
+                    momento, igual que con los productos. Afecta a todas las
+                    familias.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="familyButtonResizeModeToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Restablecer tamaño de familias
+                  </div>
+                  <div class="opt-row-sub">
+                    Vuelve al tamaño de letra por defecto de los botones de
+                    familia.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  id="familyButtonFontSizeResetBtn"
+                  class="small-btn"
+                >
+                  Restablecer
+                </button>
               </div>
             </div>
           </section>
@@ -3476,6 +3561,33 @@
                   <input type="checkbox" id="customerDisplayToggle" />
                   <span class="slider"></span>
                 </label>
+              </div>
+              <div class="opt-row" id="customerDisplayPickerRow" hidden>
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Pantalla a usar</div>
+                  <div class="opt-row-sub" id="customerDisplayPickerHint">
+                    Elige en qué pantalla física se muestra la pantalla de
+                    cliente. Usa "Identificar" para ver qué número le
+                    corresponde a cada monitor.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <select id="customerDisplaySelect" class="opt-select"></select>
+                  <button
+                    type="button"
+                    id="customerDisplayIdentifyBtn"
+                    class="small-btn"
+                  >
+                    Identificar
+                  </button>
+                  <button
+                    type="button"
+                    id="customerDisplayRefreshBtn"
+                    class="small-btn"
+                  >
+                    Actualizar
+                  </button>
+                </div>
               </div>
               <div class="opt-row">
                 <div class="opt-row-txt">

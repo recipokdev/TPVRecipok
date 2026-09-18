@@ -67,6 +67,12 @@ contextBridge.exposeInMainWorld("TPV_PRINT", {
     }
     return await ipcRenderer.invoke("tpv:openCashDrawer", { deviceName });
   },
+  renderInvoicePdf: ({ html }) => {
+    if (TPV_E2E_MODE) {
+      return Promise.resolve({ ok: true, mocked: true, e2e: true, pdfBase64: "" });
+    }
+    return ipcRenderer.invoke("invoice:renderPdf", { html });
+  },
 });
 
 contextBridge.exposeInMainWorld("TPV_APP", {
@@ -80,6 +86,8 @@ contextBridge.exposeInMainWorld("TPV_APP", {
 
 contextBridge.exposeInMainWorld("TPV_UI", {
   onGuard: (cb) => ipcRenderer.on("tpv:guard", (_e, payload) => cb(payload)),
+  onCustomerForceClosed: (cb) =>
+    ipcRenderer.on("customer:forceClosed", () => cb()),
 });
 
 contextBridge.exposeInMainWorld("TPV_UI_MODE", {
@@ -179,6 +187,9 @@ contextBridge.exposeInMainWorld("TPV_CUSTOMER_CTRL", {
   setEnabled: (val) => ipcRenderer.invoke("customer:setEnabled", !!val),
   getTheme: () => ipcRenderer.invoke("customer:getTheme"),
   setTheme: (mode) => ipcRenderer.invoke("customer:setTheme", mode),
+  listDisplays: () => ipcRenderer.invoke("customer:listDisplays"),
+  setDisplayId: (id) => ipcRenderer.invoke("customer:setDisplayId", id),
+  identifyDisplays: () => ipcRenderer.invoke("customer:identifyDisplays"),
 });
 
 contextBridge.exposeInMainWorld("TPV_CLIPBOARD", {

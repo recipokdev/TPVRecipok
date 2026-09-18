@@ -700,6 +700,9 @@ const agentButtonsOverlay = document.getElementById("agentButtonsOverlay");
 
 // Barra de agentes en la pantalla principal
 const mainAgentBar = document.getElementById("mainAgentBar");
+// Con 0/1 agente, renderMainAgentBar() mueve aqui los botones fijos
+// (mesas/actualizar/cajon) en vez de dejarlos en una fila propia casi vacia.
+const searchBarActionsSlot = document.getElementById("searchBarActionsSlot");
 
 // Apertura / cierre de caja
 const cashOpenOverlay = document.getElementById("cashOpenOverlay");
@@ -1905,6 +1908,19 @@ function normalizeHexColor(hex) {
   return "#ffffff";
 }
 
+// Atajo de emergencia Control+Alt+Shift+P (main.js) -- avisa y sincroniza el
+// toggle si alguien lo usa para desatascar una pantalla de cliente que se
+// hubiera quedado tapando el TPV.
+window.TPV_UI?.onCustomerForceClosed?.(() => {
+  const el = document.getElementById("customerDisplayToggle");
+  if (el) el.checked = false;
+  toast(
+    "Se ha desactivado la pantalla de cliente (atajo de emergencia Ctrl+Alt+Mayús+P).",
+    "warn",
+    "Pantalla cliente",
+  );
+});
+
 // ===== [09] Opciones: pantalla de cliente =====
 async function loadCustomerDisplayToggle() {
   const el = document.getElementById("customerDisplayToggle");
@@ -1923,6 +1939,55 @@ async function loadCustomerDisplayToggle() {
     }
   } catch (e) {
     console.error("[OPTIONS] load customer display failed:", e);
+  }
+
+  await refreshCustomerDisplayOptions();
+}
+
+// El selector de pantalla se muestra siempre (activada o no la pantalla de
+// cliente) -- si solo hubiera pantalla cuando el toggle ya esta encendido, no
+// habria forma de elegir una pantalla explicita ANTES de encenderlo, que es
+// justo lo que hace falta cuando solo hay 1 pantalla conectada (ver guarda en
+// main.js resolveCustomerDisplayChoice).
+async function refreshCustomerDisplayOptions() {
+  const row = document.getElementById("customerDisplayPickerRow");
+  const select = document.getElementById("customerDisplaySelect");
+  const hint = document.getElementById("customerDisplayPickerHint");
+  if (!row || !select || !window.TPV_CUSTOMER_CTRL?.listDisplays) return;
+
+  try {
+    const r = await window.TPV_CUSTOMER_CTRL.listDisplays();
+    if (!r?.ok) return;
+
+    const displays = r.displays || [];
+    row.hidden = false;
+
+    select.innerHTML = "";
+    displays.forEach((d, idx) => {
+      const opt = document.createElement("option");
+      opt.value = String(d.id);
+      opt.textContent =
+        `Pantalla ${idx + 1} (${d.width}x${d.height}` +
+        (d.isPrimary ? ", principal — la usa el TPV)" : ")");
+      select.appendChild(opt);
+    });
+
+    const savedId = r.savedId;
+    if (savedId && displays.some((d) => String(d.id) === String(savedId))) {
+      select.value = String(savedId);
+    } else if (displays.length) {
+      const nonPrimary = displays.find((d) => !d.isPrimary);
+      select.value = String((nonPrimary || displays[0]).id);
+    }
+
+    if (hint) {
+      hint.textContent =
+        displays.length <= 1
+          ? "Windows solo detecta 1 pantalla en este equipo. Si activas la pantalla de cliente se abrirá encima de la pantalla principal (tapando el TPV) — actívalo solo si es justo lo que quieres."
+          : 'Elige en qué pantalla física se muestra la pantalla de cliente. Usa "Identificar" para ver qué número le corresponde a cada monitor.';
+    }
+  } catch (e) {
+    console.error("[OPTIONS] listDisplays failed:", e);
   }
 }
 
@@ -1961,6 +2026,13 @@ const OPTIONS_PRODUCT_NAME_FONT_SIZE_KEY = "ui.productNameFontSize";
 const PRODUCT_NAME_FONT_SIZE_DEFAULT = 12;
 const PRODUCT_NAME_FONT_SIZE_MIN = 9;
 const PRODUCT_NAME_FONT_SIZE_MAX = 26;
+const OPTIONS_FAMILY_BUTTON_RESIZE_MODE_KEY = "ui.familyButtonResizeMode";
+const OPTIONS_FAMILY_BUTTON_FONT_SIZE_KEY = "ui.familyButtonFontSize";
+// 16px es el tamaño real que ya tenia .category-btn en styles.css -- mismo
+// valor aqui para que nadie note ningun cambio hasta que arrastre el tirador.
+const FAMILY_BUTTON_FONT_SIZE_DEFAULT = 16;
+const FAMILY_BUTTON_FONT_SIZE_MIN = 12;
+const FAMILY_BUTTON_FONT_SIZE_MAX = 30;
 const CART_PANEL_WIDTH_PX_MIN = 280;
 const CART_PANEL_WIDTH_PX_MAX = 520;
 const LS_ALLOW_CLOSE_WITH_PARKED_KEY = "tpv_allowCloseWithParkedTickets";
@@ -2015,6 +2087,8 @@ let tariffInputKeyboardBound = false;
 let productTileMinSize = PRODUCT_TILE_MIN_SIZE_DEFAULT;
 let productNameFontSize = PRODUCT_NAME_FONT_SIZE_DEFAULT;
 let productTileResizeMode = false;
+let familyButtonFontSize = FAMILY_BUTTON_FONT_SIZE_DEFAULT;
+let familyButtonResizeMode = false;
 let scaleManualCaptureMode = false;
 let productsFilterStockOnly = false;
 let productsFilterIncludeUnmanaged = true;
@@ -2928,6 +3002,22 @@ function applyProductNameFontSizeCssVar() {
 
   const grid = document.getElementById("productsGrid");
   if (grid) grid.style.setProperty("--product-name-font-size", nextSizePx);
+}
+
+function clampFamilyButtonFontSize(value) {
+  const n = Math.round(Number(value) || FAMILY_BUTTON_FONT_SIZE_DEFAULT);
+  return Math.max(
+    FAMILY_BUTTON_FONT_SIZE_MIN,
+    Math.min(FAMILY_BUTTON_FONT_SIZE_MAX, n),
+  );
+}
+
+function applyFamilyButtonFontSizeCssVar() {
+  const nextSizePx = `${clampFamilyButtonFontSize(familyButtonFontSize)}px`;
+  document.documentElement.style.setProperty(
+    "--category-btn-font-size",
+    nextSizePx,
+  );
 }
 
 function parseBoolLike(value, fallback = false) {
@@ -4907,6 +4997,64 @@ async function setProductNameFontSize(nextSize, opts = {}) {
   if (rerender) renderProducts?.();
 }
 
+async function loadFamilyButtonResizeModeToggle() {
+  const el = document.getElementById("familyButtonResizeModeToggle");
+  let enabled = false;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(
+      OPTIONS_FAMILY_BUTTON_RESIZE_MODE_KEY,
+    );
+    enabled = parseBoolLike(cfgVal, false);
+  } catch {}
+
+  familyButtonResizeMode = !!enabled;
+  if (el) el.checked = familyButtonResizeMode;
+}
+
+async function saveFamilyButtonResizeModeToggle(enabled) {
+  familyButtonResizeMode = !!enabled;
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_FAMILY_BUTTON_RESIZE_MODE_KEY,
+      familyButtonResizeMode,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar modo redimensionar familias:", e);
+  }
+}
+
+async function loadFamilyButtonFontSizeSetting() {
+  const raw = await window.TPV_CFG?.get?.(OPTIONS_FAMILY_BUTTON_FONT_SIZE_KEY);
+  const parsed = Number(raw);
+  if (isFinite(parsed)) {
+    familyButtonFontSize = clampFamilyButtonFontSize(parsed);
+  } else {
+    familyButtonFontSize = FAMILY_BUTTON_FONT_SIZE_DEFAULT;
+  }
+
+  applyFamilyButtonFontSizeCssVar();
+}
+
+async function saveFamilyButtonFontSizeSetting() {
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_FAMILY_BUTTON_FONT_SIZE_KEY,
+      clampFamilyButtonFontSize(familyButtonFontSize),
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar tamaño de letra de familias:", e);
+  }
+}
+
+async function setFamilyButtonFontSize(nextSize, opts = {}) {
+  const { persist = true, rerender = false } = opts;
+  familyButtonFontSize = clampFamilyButtonFontSize(nextSize);
+  applyFamilyButtonFontSizeCssVar();
+  if (persist) await saveFamilyButtonFontSizeSetting();
+  if (rerender) renderCategories?.();
+}
+
 async function loadProductTileResizeModeToggle() {
   const el = document.getElementById("productTileResizeModeToggle");
   let enabled = false;
@@ -5864,6 +6012,81 @@ function bindProductNameFontSizeHandle(handle) {
   });
 }
 
+// Mismo patron que bindProductNameFontSizeHandle, pero para el tamaño de
+// letra de los botones de familia/grupo -- pedido explicito de un cliente
+// real ("igual que los productos, arrastrando un icono").
+function bindFamilyButtonFontSizeHandle(handle) {
+  if (!handle || handle.dataset.bound) return;
+  handle.dataset.bound = "1";
+
+  handle.addEventListener("pointerdown", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    const pointerId = ev.pointerId;
+    const startY = ev.clientY;
+    const startSize = clampFamilyButtonFontSize(familyButtonFontSize);
+
+    try {
+      handle.setPointerCapture(pointerId);
+    } catch {}
+
+    const onPointerMove = (moveEv) => {
+      if (moveEv.pointerId !== pointerId) return;
+      const dy = startY - moveEv.clientY;
+      const next = clampFamilyButtonFontSize(startSize + dy / 4);
+
+      setFamilyButtonFontSize(next, { persist: false, rerender: false }).catch(
+        () => {},
+      );
+    };
+
+    const onPointerEnd = (endEv) => {
+      if (endEv.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerEnd);
+      window.removeEventListener("pointercancel", onPointerEnd);
+      saveFamilyButtonFontSizeSetting().catch(() => {});
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerEnd);
+    window.addEventListener("pointercancel", onPointerEnd);
+  });
+}
+
+let familyButtonResizeModeToggleBound = false;
+function bindFamilyButtonResizeModeToggleOnce() {
+  if (familyButtonResizeModeToggleBound) return;
+  familyButtonResizeModeToggleBound = true;
+
+  const el = document.getElementById("familyButtonResizeModeToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+    await saveFamilyButtonResizeModeToggle(wanted);
+    renderCategories?.();
+  });
+}
+
+let familyButtonFontSizeResetBtnBound = false;
+function bindFamilyButtonFontSizeResetButtonOnce() {
+  if (familyButtonFontSizeResetBtnBound) return;
+  familyButtonFontSizeResetBtnBound = true;
+
+  const btn = document.getElementById("familyButtonFontSizeResetBtn");
+  if (!btn) return;
+
+  btn.addEventListener("click", async () => {
+    await setFamilyButtonFontSize(FAMILY_BUTTON_FONT_SIZE_DEFAULT, {
+      persist: true,
+      rerender: false,
+    });
+    toast?.("Tamaño de letra de familias restablecido.", "ok", "Familias");
+  });
+}
+
 function bindCustomerDisplayToggleOnce() {
   if (customerDisplayToggleBound) return;
   customerDisplayToggleBound = true;
@@ -5889,9 +6112,16 @@ function bindCustomerDisplayToggleOnce() {
 
       if (!r?.ok) {
         el.checked = !wanted;
-        if (String(r?.error || "").toUpperCase() === "FORBIDDEN") {
+        const errCode = String(r?.error || "").toUpperCase();
+        if (errCode === "FORBIDDEN") {
           toast(
             "No tienes permisos para cambiar este ajuste.",
+            "warn",
+            "Pantalla cliente",
+          );
+        } else if (errCode === "NO_SECOND_DISPLAY") {
+          toast(
+            "Este equipo solo tiene 1 pantalla conectada. Elige explícitamente una pantalla justo abajo y vuelve a activarlo.",
             "warn",
             "Pantalla cliente",
           );
@@ -5906,6 +6136,54 @@ function bindCustomerDisplayToggleOnce() {
       console.error("[OPTIONS] set customer display error:", e);
     }
   });
+}
+
+let customerDisplayPickerBound = false;
+function bindCustomerDisplayPickerOnce() {
+  if (customerDisplayPickerBound) return;
+  customerDisplayPickerBound = true;
+
+  const select = document.getElementById("customerDisplaySelect");
+  const identifyBtn = document.getElementById("customerDisplayIdentifyBtn");
+  const refreshBtn = document.getElementById("customerDisplayRefreshBtn");
+
+  if (select) {
+    select.addEventListener("change", async () => {
+      const id = select.value;
+      if (!id) return;
+      try {
+        const r = await window.TPV_CUSTOMER_CTRL?.setDisplayId?.(id);
+        if (!r?.ok) {
+          const errCode = String(r?.error || "").toUpperCase();
+          toast(
+            errCode === "FORBIDDEN"
+              ? "No tienes permisos para cambiar este ajuste."
+              : "No se pudo cambiar la pantalla de cliente.",
+            "warn",
+            "Pantalla cliente",
+          );
+        }
+      } catch (e) {
+        console.error("[OPTIONS] setDisplayId failed:", e);
+      }
+    });
+  }
+
+  if (identifyBtn) {
+    identifyBtn.addEventListener("click", async () => {
+      try {
+        await window.TPV_CUSTOMER_CTRL?.identifyDisplays?.();
+      } catch (e) {
+        console.error("[OPTIONS] identifyDisplays failed:", e);
+      }
+    });
+  }
+
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", async () => {
+      await refreshCustomerDisplayOptions();
+    });
+  }
 }
 
 // ===== [09] Opciones: visibilidad de familias por terminal =====
@@ -6373,6 +6651,13 @@ function renderTerminalFamiliesModeUi() {
 }
 
 // ===== [08] Guardas operativas: agente obligatorio para cobrar =====
+// Este terminal no tiene NINGUN agente asignado en FacturaScripts (tabla
+// tpvagentes, plugin TPVneo) -- no es un fallo del TPV, es un paso de
+// configuracion que falta ahi: Agentes -> editar el empleado -> pestana
+// "Terminal TPV" -> asignarle este terminal.
+const AGENT_NOT_ASSIGNED_HINT =
+  'Este terminal no tiene ningún agente asignado en FacturaScripts. Para arreglarlo: en FacturaScripts ve a "Agentes", abre el empleado que va a usar este TPV y en la pestaña "Terminal TPV" asígnale este terminal.';
+
 function hasAssignedAgent() {
   return !!(currentAgent && String(currentAgent.codagente || "").trim());
 }
@@ -6380,12 +6665,17 @@ function hasAssignedAgent() {
 async function requireAssignedAgentOrBlock({ showModal = true } = {}) {
   if (hasAssignedAgent()) return true;
 
+  // El terminal puede tener agente(s) asignados de verdad en FacturaScripts
+  // pero, por lo que sea (cambio de terminal reciente, etc.), la sesion
+  // todavia no tiene ninguno vinculado -- en ese caso hay que auto-elegir
+  // uno en silencio y dejar cobrar, SIN aviso: el aviso "Falta Agente" debe
+  // reservarse para cuando de verdad no hay ningun agente que elegir.
+  ensureActiveAgentIfPossible?.();
+  if (hasAssignedAgent()) return true;
+
   // aviso constante (si quieres) + bloqueo acción
   if (showModal) {
-    await confirmModal(
-      "Falta Agente",
-      "No hay un agente asignado a este terminal.\n\nSelecciona un agente para poder cobrar.",
-    );
+    await confirmModal("Falta Agente", AGENT_NOT_ASSIGNED_HINT);
   }
 
   // abre selector directamente (si te interesa)
@@ -10864,6 +11154,8 @@ async function runBootFlow() {
     await loadInfoBarVisibilitySettings?.();
     await loadProductTileSizeSetting?.();
     await loadProductTileResizeModeToggle?.();
+    await loadFamilyButtonResizeModeToggle?.();
+    await loadFamilyButtonFontSizeSetting?.();
     await loadCartPanelWidthSetting?.();
     await loadCartWidthControlsToggle?.();
     await loadPrintCajaAutoLogToggle?.();
@@ -11102,17 +11394,31 @@ function syncCashClosedUiState() {
   }
 
   const badge = document.getElementById("parkedCountBadge");
-  if (!badge) return;
-
-  if (!cashOpen) {
-    badge.textContent = "0";
-    return;
+  if (badge) {
+    if (!cashOpen) {
+      badge.textContent = "0";
+    } else {
+      const pendingCount = (
+        Array.isArray(parkedTickets) ? parkedTickets : []
+      ).filter((t) => !t.paid).length;
+      badge.textContent = String(pendingCount);
+    }
   }
 
-  const pendingCount = (
-    Array.isArray(parkedTickets) ? parkedTickets : []
-  ).filter((t) => !t.paid).length;
-  badge.textContent = String(pendingCount);
+  updateOpenCajaPrompt(cashOpen, hasLogin);
+}
+
+// Instalacion real 2026-09-18: al arrancar un TPV nuevo por primera vez, con
+// la caja cerrada, el dueño confundio la zona de productos vacia-de-accion
+// con "no hay productos" -- este aviso, grande y con boton, deja claro cual
+// es el problema real y lo resuelve en un toque (reutiliza el mismo flujo
+// que el boton de caja de la cabecera).
+function updateOpenCajaPrompt(cashOpen, hasLogin) {
+  const el = document.getElementById("openCajaPrompt");
+  if (!el) return;
+
+  const show = !cashOpen && hasLogin && !TPV_LOADING && !TPV_STATE?.locked;
+  el.classList.toggle("hidden", !show);
 }
 
 // ===== [08] UI venta: categorias/familias =====
@@ -11173,6 +11479,29 @@ function renderCategories() {
     btn.style.color = textColor;
   };
 
+  const canResizeFamilies = isAdminUser() && !!familyButtonResizeMode;
+
+  const appendFamilyResizeHandle = (btn) => {
+    if (!canResizeFamilies) return;
+
+    btn.style.position = "relative";
+
+    const handle = document.createElement("button");
+    handle.type = "button";
+    handle.className = "category-btn-fontsize-handle";
+    handle.textContent = "Aa";
+    handle.title = "Arrastra para cambiar el tamaño de letra";
+    handle.ariaLabel = "Cambiar tamaño de letra de las familias";
+
+    handle.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    bindFamilyButtonFontSizeHandle(handle);
+    btn.appendChild(handle);
+  };
+
   const inDrillDown = !!activeFamilyParentId;
 
   if (!inDrillDown) {
@@ -11193,6 +11522,7 @@ function renderCategories() {
       }
 
       applyFamilyButtonColor(btn, cat, isActive);
+      appendFamilyResizeHandle(btn);
 
       btn.onclick = () => {
         const children = visibleCategories.filter((c) => c.parentId === cat.id);
@@ -11252,6 +11582,7 @@ function renderCategories() {
     }
 
     applyFamilyButtonColor(b, child, isActive);
+    appendFamilyResizeHandle(b);
 
     b.onclick = () => {
       activeSubfamilyId = activeSubfamilyId === child.id ? null : child.id;
@@ -13120,6 +13451,10 @@ function updateSessionLockUi() {
 
   if (mainAgentBar) {
     mainAgentBar.classList.toggle("session-agentbar-hidden", locked);
+  }
+
+  if (locked && searchBarActionsSlot) {
+    searchBarActionsSlot.innerHTML = "";
   }
 
   if (agentNameEl) {
@@ -20610,13 +20945,13 @@ function renderMainAgentBar() {
   if (!hasActiveLoginSession()) {
     mainAgentBar.innerHTML = "";
     mainAgentBar.classList.add("session-agentbar-hidden");
+    if (searchBarActionsSlot) searchBarActionsSlot.innerHTML = "";
     if (agentNameEl) agentNameEl.textContent = "---";
     return;
   }
 
-  mainAgentBar.classList.remove("session-agentbar-hidden");
-
   mainAgentBar.innerHTML = "";
+  if (searchBarActionsSlot) searchBarActionsSlot.innerHTML = "";
 
   // Estructura principal:
   // [ agentListWrap -> agentList ] [ agentActions ]
@@ -20633,9 +20968,6 @@ function renderMainAgentBar() {
   modeSwitchWrap.className = "agent-mode-switch";
 
   agentListWrap.appendChild(agentList);
-  mainAgentBar.appendChild(agentListWrap);
-  mainAgentBar.appendChild(modeSwitchWrap);
-  mainAgentBar.appendChild(agentActions);
 
   const createRefreshBtn = () => {
     const refreshBtn = document.createElement("button");
@@ -20687,20 +21019,9 @@ function renderMainAgentBar() {
   };
 
   const showMesasBtn = MESAS_MODULE_ENABLED || MESAS_INLINE_ACTIVE;
-
-  // Si no hay terminal, mostrar solo acciones
-  if (!currentTerminal) {
-    if (showMesasBtn) {
-      modeSwitchWrap.appendChild(createTablesBtn());
-    }
-    agentActions.appendChild(createRefreshBtn());
-    agentActions.appendChild(createDrawerBtn());
-
-    if (agentNameEl) agentNameEl.textContent = "---";
-    return;
-  }
-
-  const list = getAgentsForTerminalId(currentTerminal.id) || [];
+  const list = currentTerminal
+    ? getAgentsForTerminalId(currentTerminal.id) || []
+    : [];
 
   if (list.length) {
     list.forEach((agent) => {
@@ -20757,6 +21078,34 @@ function renderMainAgentBar() {
   }
   agentActions.appendChild(createRefreshBtn());
   agentActions.appendChild(createDrawerBtn());
+
+  // Con 0 o 1 agente no hay nada que elegir en esta barra -- el nombre del
+  // agente activo ya se ve en la cabecera de info (#agentName), asi que en
+  // vez de una fila entera casi vacia (el agentListWrap con flex:1 empujaba
+  // los 3 botones fijos al extremo derecho, dejando un hueco enorme en
+  // medio, ver captura real de una instalacion en produccion 2026-09-18), la
+  // barra se colapsa del todo y esos 3 botones pasan, mas pequeños, a la
+  // propia barra de busqueda. Con 2+ agentes se mantiene la barra completa
+  // de siempre, sin tocar nada.
+  const compactMode = list.length <= 1;
+
+  if (compactMode) {
+    mainAgentBar.classList.add("session-agentbar-hidden");
+    if (searchBarActionsSlot) {
+      searchBarActionsSlot.appendChild(modeSwitchWrap);
+      searchBarActionsSlot.appendChild(agentActions);
+    }
+  } else {
+    mainAgentBar.classList.remove("session-agentbar-hidden");
+    mainAgentBar.appendChild(agentListWrap);
+    mainAgentBar.appendChild(modeSwitchWrap);
+    mainAgentBar.appendChild(agentActions);
+  }
+
+  if (!currentTerminal) {
+    if (agentNameEl) agentNameEl.textContent = "---";
+    return;
+  }
 
   if (agentNameEl) {
     agentNameEl.textContent = currentAgent ? currentAgent.name : "---";
@@ -20862,8 +21211,7 @@ function showTerminalOverlay(mode = "session") {
         if (agentNameEl) agentNameEl.textContent = "---";
         if (agentSelectWrapper) agentSelectWrapper.style.display = "none";
         if (agentButtonsOverlay) agentButtonsOverlay.innerHTML = "";
-        terminalErrorEl.textContent =
-          "Este terminal no tiene agentes asignados.";
+        terminalErrorEl.textContent = AGENT_NOT_ASSIGNED_HINT;
         return;
       }
 
@@ -24455,6 +24803,7 @@ async function confirmCashClosing() {
   refreshLoggedUserUI();
 
   if (mainAgentBar) mainAgentBar.innerHTML = "";
+  if (searchBarActionsSlot) searchBarActionsSlot.innerHTML = "";
 
   selectedCategory = null;
   activeFamilyParentId = null;
@@ -24965,8 +25314,7 @@ if (terminalOkBtn) {
 
       // 2) Si ese terminal no tiene agentes, no permitimos continuar
       if (!list || list.length === 0) {
-        terminalErrorEl.textContent =
-          "Este terminal no tiene agentes asignados.";
+        terminalErrorEl.textContent = AGENT_NOT_ASSIGNED_HINT;
         return;
       }
 
@@ -25744,6 +26092,14 @@ async function handleCashHeaderAction(opts = {}) {
 
 if (cashHeaderBtn) {
   cashHeaderBtn.onclick = async () => {
+    if (TPV_LOADING) return;
+    await handleCashHeaderAction({ auto: false });
+  };
+}
+
+const openCajaPromptBtn = document.getElementById("openCajaPromptBtn");
+if (openCajaPromptBtn) {
+  openCajaPromptBtn.onclick = async () => {
     if (TPV_LOADING) return;
     await handleCashHeaderAction({ auto: false });
   };
@@ -27843,6 +28199,7 @@ async function openOptions() {
   bindParkedCustomerResetModeOnce();
   bindDiscountQuickPctsSaveOnce();
   bindCustomerDisplayToggleOnce();
+  bindCustomerDisplayPickerOnce();
   bindProductStockToggleOnce();
   bindProductStockEditionToggleOnce();
   bindAllowCloseWithParkedToggleOnce();
@@ -27853,6 +28210,8 @@ async function openOptions() {
   bindPrintCajaAutoLogToggleOnce();
   bindPrintCajaDrawerOpenLogsToggleOnce();
   bindProductTileResizeModeToggleOnce();
+  bindFamilyButtonResizeModeToggleOnce();
+  bindFamilyButtonFontSizeResetButtonOnce();
   bindScaleManualCaptureToggleOnce();
   bindCartDiscountToolsToggleOnce();
   bindSafeTrainingModeToggleOnce();
@@ -27905,6 +28264,8 @@ async function openOptions() {
     loadTariffManagerOptionsData(),
     loadProductTileSizeSetting(),
     loadProductNameFontSizeSetting(),
+    loadFamilyButtonResizeModeToggle(),
+    loadFamilyButtonFontSizeSetting(),
     loadCartPanelWidthSetting(),
     loadCartWidthControlsToggle(),
     loadAutostartToggle(),
@@ -29940,7 +30301,47 @@ async function createTicketInFacturaScripts(ticketPayload) {
     return { res, data, rawText };
   };
 
-  let submit = await doPost(bodyParams);
+  // Si la respuesta es ambigua (5xx, cuerpo vacío/no-JSON con status ok, o el
+  // fetch ni siquiera llega a responder -- timeout), no sabemos si
+  // FacturaScripts llegó a crear la factura antes de fallar. Comprobamos por
+  // numero2 antes de dar el cobro por fallido: si ya existe, la usamos (igual
+  // que el dedup de arriba) en vez de arriesgarnos a que el ticket se quede
+  // como "no cobrado" y se vuelva a cobrar por duplicado.
+  const tryRecoverExistingFactura = async () => {
+    if (!ticketPayload.numero2) return null;
+    try {
+      return await findExistingFacturaByNumero2(
+        cfg,
+        ticketPayload.numero2,
+        ticketPayload.idtpv,
+      );
+    } catch {
+      return null;
+    }
+  };
+
+  // Real de cliente 2026-09-18 (Los Argentinos): un timeout de red NO
+  // significa que FacturaScripts no llegara a crear la factura -- puede
+  // haberla creado y solo tardar en responder. Antes, este caso se propagaba
+  // directo como excepcion sin pasar por ninguna comprobacion de numero2 (a
+  // diferencia de los casos de 5xx/respuesta vacia de mas abajo, que ya lo
+  // hacian bien) -- el reintento (automatico via cola offline, o manual del
+  // cajero) generaba entonces una factura GEMELA con un numero2 nuevo,
+  // dejando la primera huerfana (Boceto, sin agente) pero ya con un recibo
+  // real detras. Mismo chequeo que ya existia para los demas casos ambiguos.
+  let submit;
+  try {
+    submit = await doPost(bodyParams);
+  } catch (err) {
+    const recovered = await tryRecoverExistingFactura();
+    if (recovered) {
+      console.warn(
+        `[crearFacturaCliente] ${err?.message || err} pero ya existía una factura con numero2=${ticketPayload.numero2} -- usando esa en vez de crear otra.`,
+      );
+      return { doc: recovered, dedup: true, recovered: true };
+    }
+    throw err;
+  }
 
   // Antes, un 422 "error-calculating-totals" (casi siempre stock insuficiente
   // en un producto sin "venta sin stock" en FacturaScripts) se resolvia
@@ -29963,24 +30364,6 @@ async function createTicketInFacturaScripts(ticketPayload) {
         "Es un bloqueo temporal por seguridad; espera unos minutos antes de seguir usando el TPV.",
     );
   }
-
-  // Si la respuesta es ambigua (5xx, o cuerpo vacío/no-JSON con status ok),
-  // no sabemos si FacturaScripts llegó a crear la factura antes de fallar.
-  // Comprobamos por numero2 antes de dar el cobro por fallido: si ya existe,
-  // la usamos (igual que el dedup de arriba) en vez de arriesgarnos a que el
-  // ticket se quede como "no cobrado" y se vuelva a cobrar en otro TPV.
-  const tryRecoverExistingFactura = async () => {
-    if (!ticketPayload.numero2) return null;
-    try {
-      return await findExistingFacturaByNumero2(
-        cfg,
-        ticketPayload.numero2,
-        ticketPayload.idtpv,
-      );
-    } catch {
-      return null;
-    }
-  };
 
   // Real de cliente 2026-08-31 (asador_el_gallo, domingo con mucho volumen y
   // 2 terminales cobrando a la vez): varias ventas reales fallaron con este
@@ -31114,6 +31497,326 @@ async function renderPayments(doc, ticket, totalToShow) {
     if (cashRow) cashRow.style.display = "none";
     if (changeRow) changeRow.style.display = "none";
   }
+}
+
+// ===== Enviar factura por email (PDF propio, no el de FacturaScripts -- ver
+// memoria del proyecto: FacturaScripts no expone su generacion de PDF ni su
+// envio nativo por la API REST, solo por su panel web autenticado. Esto
+// imita su plantilla -- misma info fiscal, mismos colores/texto legal leidos
+// de settings/plantillaspdf -- sin depender de su panel. =====
+
+// Datos fiscales del cliente para la factura: si el ticket viene del
+// historico de Tickets, normalmente solo trae nombre/total (ver
+// mapFacturaRowToTicketRow) -- se pide clientes/{codcliente} fresco siempre,
+// para que un documento oficial nunca use datos fiscales potencialmente
+// desactualizados en cache.
+async function getInvoiceCustomerBillingInfo(ticket) {
+  const fallback = {
+    clientName: String(ticket?.clientName || "Cliente").trim() || "Cliente",
+    clientFiscalId: "",
+    clientAddress: "",
+  };
+
+  const codcliente = String(
+    ticket?.codcliente || ticket?._raw?.codcliente || "",
+  ).trim();
+  if (!codcliente) return fallback;
+
+  let cli = null;
+  try {
+    cli = await refreshCustomerPrintCacheByCod(codcliente);
+  } catch {}
+  if (!cli) return fallback;
+
+  const clientName =
+    String(cli.razonsocial || cli.nombre || "").trim() || fallback.clientName;
+  const clientFiscalId = String(cli.cifnif || cli.cif || "").trim();
+  const clientAddress = [
+    String(cli.direccion || "").trim(),
+    String(cli.codpostal || "").trim(),
+    String(cli.ciudad || "").trim(),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  return { clientName, clientFiscalId, clientAddress };
+}
+
+function renderInvoiceLineRowsHtml(doc, lineas) {
+  const box = doc.getElementById("items");
+  if (!box) return;
+
+  const rowsHtml = (Array.isArray(lineas) ? lineas : [])
+    .map((l) => {
+      const qty = parseQtyValue(l?.qty ?? l?.cantidad, 0);
+      if (!qty) return "";
+
+      const unitGross = Number(getUnitGrossForPrint(l) || 0);
+      const rate = getTaxRateForLine(l);
+      const { total } = computeLineNetFirst(unitGross, qty, rate);
+
+      const ref = escapeHtml(
+        String(l?.referencia ?? l?.ref ?? l?.codigo ?? "").trim(),
+      );
+      const desc = escapeHtml(
+        String(l?.descripcion ?? l?.name ?? l?.nombre ?? "").trim(),
+      );
+
+      return `<tr>
+        <td>${ref}</td>
+        <td>${desc}</td>
+        <td class="num">${qty}</td>
+        <td class="num">${eurTicket(unitGross)} €</td>
+        <td class="num">${rate}%</td>
+        <td class="num">${eurTicket(total)} €</td>
+      </tr>`;
+    })
+    .join("");
+
+  box.innerHTML = rowsHtml;
+}
+
+function renderInvoiceTaxSummaryHtml(doc, taxMap) {
+  const box = doc.getElementById("taxSummary");
+  if (!box) return;
+
+  const rates = Object.keys(taxMap || {}).sort(
+    (a, b) => Number(a) - Number(b),
+  );
+
+  box.innerHTML = rates
+    .map((rate) => {
+      const t = taxMap[rate] || {};
+      return `
+        <div class="totals-row"><div>Base ${rate}%</div><div>${eurTicket(t.base)} €</div></div>
+        <div class="totals-row"><div>IVA ${rate}%</div><div>${eurTicket(t.iva)} €</div></div>
+      `;
+    })
+    .join("");
+}
+
+// Construye el HTML completo de la factura (mismo patron que el ticket:
+// fetch de la plantilla -> DOMParser -> rellenar por id -> volver a
+// serializar), lista para pasar a TPV_PRINT.renderInvoicePdf.
+async function buildFacturaEmailHtml(ticket) {
+  const lineas = await getFacturaLinesForPrint(ticket);
+  const { totalToShow, taxMap } = calcTotalsAndTaxMap(lineas, false);
+  const billing = await getInvoiceCustomerBillingInfo(ticket);
+
+  let plantillaProps = {};
+  try {
+    const plantilla = await fetchApiResource("settings/plantillaspdf");
+    plantillaProps = JSON.parse(plantilla?.properties || "{}") || {};
+  } catch {
+    plantillaProps = {};
+  }
+
+  const res = await fetch("factura_print.html", { cache: "no-store" });
+  if (!res.ok) {
+    throw new Error(`No se pudo cargar factura_print.html (HTTP ${res.status})`);
+  }
+  const templateHtml = await res.text();
+  const doc = new DOMParser().parseFromString(templateHtml, "text/html");
+
+  const root = doc.getElementById("invoice");
+  if (root) {
+    if (plantillaProps.color1)
+      root.style.setProperty("--color1", plantillaProps.color1);
+    if (plantillaProps.color2)
+      root.style.setProperty("--color2", plantillaProps.color2);
+    if (plantillaProps.color3)
+      root.style.setProperty("--color3", plantillaProps.color3);
+  }
+
+  const emp = companyInfo || {};
+  const logoEl = doc.getElementById("companyLogo");
+  if (logoEl && companyLogoUrl) {
+    logoEl.setAttribute("src", companyLogoUrl);
+    logoEl.style.display = "inline-block";
+  }
+  setText(doc, "companyShortName", emp?.nombrecorto || "—");
+  setText(doc, "companyLegalName", emp?.nombre || "");
+  setText(doc, "companyAddress", emp?.direccion || "");
+  setText(doc, "companyZip", emp?.codpostal ? emp.codpostal + ", " : "");
+  setText(doc, "companyCity", emp?.ciudad || "");
+  setText(doc, "companyCif", emp?.cifnif || "—");
+  const phones = [emp?.telefono1, emp?.telefono2]
+    .map((p) => String(p || "").trim())
+    .filter(Boolean);
+  const phoneRow = doc.getElementById("companyPhoneRow");
+  if (phones.length > 0) {
+    setText(doc, "companyPhone", `Tel.: ${phones.join(" / ")}`);
+    if (phoneRow) phoneRow.style.display = "block";
+  }
+
+  const isRect =
+    Number(ticket?.idfacturarect || ticket?._raw?.idfacturarect || 0) > 0;
+  setText(doc, "invoiceLabel", isRect ? "Factura Rectificativa" : "Factura");
+  setText(
+    doc,
+    "invoiceNumber",
+    ticket?.numero ?? ticket?._raw?.codigo ?? ticket?.numero2 ?? "—",
+  );
+  const fecha = String(ticket?.fecha || "").trim();
+  const hora = String(ticket?.hora || "").trim();
+  setText(doc, "invoiceDate", [fecha, hora].filter(Boolean).join(" ") || "—");
+
+  setText(doc, "clientName", billing.clientName);
+  const clientFiscalRow = doc.getElementById("clientFiscalRow");
+  const clientAddressRow = doc.getElementById("clientAddressRow");
+  if (billing.clientFiscalId && clientFiscalRow) {
+    setText(doc, "clientFiscal", billing.clientFiscalId);
+    clientFiscalRow.style.display = "block";
+  }
+  if (billing.clientAddress && clientAddressRow) {
+    setText(doc, "clientAddress", billing.clientAddress);
+    clientAddressRow.style.display = "block";
+  }
+
+  renderInvoiceLineRowsHtml(doc, lineas);
+  renderInvoiceTaxSummaryHtml(doc, taxMap);
+  setText(doc, "grandTotal", `${eurTicket(totalToShow)} €`);
+  setText(doc, "legalFooter", plantillaProps.endtext || "");
+
+  return "<!doctype html>\n" + doc.documentElement.outerHTML;
+}
+
+async function apiSendInvoiceEmail({ toEmail, subject, message, pdfBase64 }) {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("Falta configuración del TPV para enviar el correo.");
+  }
+
+  const res = await fetchWithTimeout(
+    `${TPV_SYNC_API_URL}?action=send-invoice-email`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      body: JSON.stringify({
+        slug,
+        toEmail,
+        subject,
+        message,
+        pdfBase64,
+        fromName: String(companyInfo?.nombrecorto || "").trim(),
+      }),
+      timeoutMs: 30000,
+    },
+  );
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok) {
+    throw new Error(data?.error || `HTTP ${res.status} al enviar el correo.`);
+  }
+  return data;
+}
+
+// Punto de entrada desde el boton "Enviar factura" en el modal de Tickets:
+// pide email/mensaje, genera el PDF (via IPC, nunca toca el disco desde el
+// renderer) y lo manda.
+async function sendInvoiceEmailForTicket(ticket) {
+  const prefill = await getInvoiceCustomerBillingInfo(ticket).catch(() => null);
+  const overlayResult = await openSendInvoiceEmailModal({
+    ticket,
+    prefillEmail: "",
+    prefillName: prefill?.clientName || ticket?.clientName || "",
+  });
+  if (!overlayResult) return;
+
+  const { toEmail, message } = overlayResult;
+
+  toast("Generando factura…", "info", "Enviar factura");
+
+  let html;
+  try {
+    html = await buildFacturaEmailHtml(ticket);
+  } catch (e) {
+    toast(
+      "No se pudo generar la factura: " + (e?.message || e),
+      "err",
+      "Enviar factura",
+    );
+    return;
+  }
+
+  const pdfResult = await window.TPV_PRINT?.renderInvoicePdf?.({ html });
+  if (!pdfResult?.ok) {
+    toast(
+      "No se pudo generar el PDF: " + (pdfResult?.error || "error"),
+      "err",
+      "Enviar factura",
+    );
+    return;
+  }
+
+  try {
+    await apiSendInvoiceEmail({
+      toEmail,
+      subject: `Factura ${ticket?.numero ?? ""}`.trim(),
+      message,
+      pdfBase64: pdfResult.pdfBase64,
+    });
+    toast("Factura enviada ✅", "ok", "Enviar factura");
+  } catch (e) {
+    toast(
+      "No se pudo enviar la factura: " + (e?.message || e),
+      "err",
+      "Enviar factura",
+    );
+  }
+}
+
+function openSendInvoiceEmailModal({ prefillEmail = "", prefillName = "" } = {}) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById("invoiceEmailOverlay");
+    const emailInput = document.getElementById("invoiceEmailInput");
+    const messageInput = document.getElementById("invoiceEmailMessageInput");
+    const nameEl = document.getElementById("invoiceEmailClientName");
+    const okBtn = document.getElementById("invoiceEmailSendBtn");
+    const cancelBtn = document.getElementById("invoiceEmailCancelBtn");
+
+    if (!overlay || !emailInput || !okBtn || !cancelBtn) {
+      // Fallback minimo si el HTML del modal no esta disponible.
+      const email = window.prompt("Email del cliente para enviar la factura:", prefillEmail || "");
+      if (!email) return resolve(null);
+      return resolve({ toEmail: email.trim(), message: "" });
+    }
+
+    emailInput.value = prefillEmail || "";
+    if (messageInput) messageInput.value = "";
+    if (nameEl) nameEl.textContent = prefillName || "";
+
+    overlay.classList.remove("hidden");
+    emailInput.focus();
+
+    const cleanup = () => {
+      overlay.classList.add("hidden");
+      okBtn.onclick = null;
+      cancelBtn.onclick = null;
+    };
+
+    okBtn.onclick = () => {
+      const toEmail = String(emailInput.value || "").trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) {
+        toast("Escribe un email válido.", "warn", "Enviar factura");
+        return;
+      }
+      const message = String(messageInput?.value || "").trim();
+      cleanup();
+      resolve({ toEmail, message });
+    };
+
+    cancelBtn.onclick = () => {
+      cleanup();
+      resolve(null);
+    };
+  });
 }
 
 function buildEscposTicketBytes(ticket, lineas, totalToShow) {
@@ -42067,6 +42770,7 @@ function renderTicketsList(tickets) {
 
         <div class="ticket-actions">
           <button type="button" class="ticket-btn ticket-print" title="Imprimir">🖨</button>
+          <button type="button" class="ticket-btn ticket-send-invoice" title="Enviar factura por email">✉️</button>
 
           ${
             hasRefunds && isFullyRefunded
@@ -42088,6 +42792,14 @@ function renderTicketsList(tickets) {
       printBtn.onclick = async (e) => {
         e.stopPropagation();
         await imprimirFacturaHistorica(t);
+      };
+    }
+
+    const sendInvoiceBtn = div.querySelector(".ticket-send-invoice");
+    if (sendInvoiceBtn) {
+      sendInvoiceBtn.onclick = async (e) => {
+        e.stopPropagation();
+        await sendInvoiceEmailForTicket(t);
       };
     }
 
@@ -48704,44 +49416,58 @@ async function syncQueueNow() {
               offlineFollowupFailed = true;
             }
 
-            // 4) Recibos por método + cleanup
-            try {
-              const today = new Date().toISOString().slice(0, 10);
-              const fc = await fetchFacturaClienteById(idfactura);
+            // 4) Recibos por método + cleanup -- SOLO si el paso 3 (emitir +
+            // marcar pagada/agente) salió bien. Cliente real (Los
+            // Argentinos, 2026-09-18): estos dos pasos corrían siempre los
+            // dos, sin depender uno del otro -- si el paso 3 fallaba (p.ej.
+            // otro corte de red justo al reintentar), el recibo se creaba
+            // igual, y FacturaScripts marca la factura como "pagada" solo
+            // porque tiene un recibo cubriendo el importe. Resultado: una
+            // factura real, cobrada de cara al "Total vendido" del cierre,
+            // pero sin agente y sin pasar nunca de Boceto a Emitida -- ni un
+            // euro real detras. El flujo online (processConfirmedSale) ya
+            // hacia esto bien (misma cadena de try, un fallo del paso 3
+            // salta directo al catch sin crear el recibo); aqui faltaba el
+            // mismo gate.
+            if (!offlineFollowupFailed) {
+              try {
+                const today = new Date().toISOString().slice(0, 10);
+                const fc = await fetchFacturaClienteById(idfactura);
 
-              if (fc?.codcliente && pagosOffline.length) {
-                for (const p of pagosOffline) {
-                  const importe = Number(Number(p?.importe || 0).toFixed(2));
-                  if (!(importe > 0)) continue;
+                if (fc?.codcliente && pagosOffline.length) {
+                  for (const p of pagosOffline) {
+                    const importe = Number(Number(p?.importe || 0).toFixed(2));
+                    if (!(importe > 0)) continue;
 
-                  await retryFacturaFollowupStep(() =>
-                    createReciboCliente({
-                      idfactura,
-                      codcliente: fc.codcliente,
-                      codpago: String(p?.codpago || "").trim(),
-                      importe,
-                      fechapago: today,
-                      fecha: today,
-                      idempresa: fc.idempresa,
-                      codigofactura: fc.codigo || fc.codigofactura || "",
-                      coddivisa: fc.coddivisa,
-                    }),
-                  );
+                    await retryFacturaFollowupStep(() =>
+                      createReciboCliente({
+                        idfactura,
+                        codcliente: fc.codcliente,
+                        codpago: String(p?.codpago || "").trim(),
+                        importe,
+                        fechapago: today,
+                        fecha: today,
+                        idempresa: fc.idempresa,
+                        codigofactura: fc.codigo || fc.codigofactura || "",
+                        coddivisa: fc.coddivisa,
+                      }),
+                    );
+                  }
+
+                  await cleanupRecibosFactura(idfactura, pagosOffline);
+
+                  // opcional: valida (si ya tienes función)
+                  try {
+                    await validateRecibosAgainstFactura?.(idfactura);
+                  } catch {}
                 }
-
-                await cleanupRecibosFactura(idfactura, pagosOffline);
-
-                // opcional: valida (si ya tienes función)
-                try {
-                  await validateRecibosAgainstFactura?.(idfactura);
-                } catch {}
+              } catch (e) {
+                console.warn(
+                  "No se pudieron crear/limpiar recibos offline tras reintentar:",
+                  e?.message || e,
+                );
+                offlineFollowupFailed = true;
               }
-            } catch (e) {
-              console.warn(
-                "No se pudieron crear/limpiar recibos offline tras reintentar:",
-                e?.message || e,
-              );
-              offlineFollowupFailed = true;
             }
 
             // Si el paso 3 y/o 4 agotaron sus reintentos inmediatos, se

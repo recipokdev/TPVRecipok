@@ -1196,7 +1196,7 @@ body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode)
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   position: relative;
   padding: 12px 16px 16px;
   box-sizing: border-box;
@@ -1484,6 +1484,62 @@ body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode)
   transform: translateY(-1px);
 }
 
+/* Acciones de la barra de agentes (modo mesas/actualizar/cajon) cuando esa
+   barra se colapsa por tener 1 solo agente (o ninguno) -- ver
+   renderMainAgentBar(). Vacio (2+ agentes, barra normal visible) no ocupa
+   sitio gracias a :empty. */
+.search-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding-left: 4px;
+}
+
+.search-bar-actions:empty {
+  display: none;
+  padding-left: 0;
+}
+
+.search-bar-actions .agent-drawer-btn,
+.search-bar-actions .agent-refresh-btn,
+.search-bar-actions .agent-tables-btn {
+  background: #eef3ff;
+  color: #198cff;
+  font-size: 15px;
+  border-radius: 999px;
+  padding: 0;
+  border: none;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    transform 0.05s;
+}
+
+.search-bar-actions .agent-drawer-btn:hover,
+.search-bar-actions .agent-refresh-btn:hover,
+.search-bar-actions .agent-tables-btn:hover {
+  background: #d9e6ff;
+  transform: translateY(-1px);
+}
+
+.search-bar-actions .agent-tables-btn.is-active {
+  background: #198cff;
+  color: #fff;
+}
+
+.search-bar-actions .agent-tables-btn .tables-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
 /* Boton "X" generico para vaciar un input/textarea sin tener que abrir el
    teclado en pantalla. Envolver el campo en .input-clear-wrap y colocar el
    boton como hermano con clase .input-clear-btn (empieza oculto con
@@ -1610,7 +1666,7 @@ body.theme-dark .input-clear-btn:hover {
   border: 1px solid #d1d5db;
   background: #ffffff;
   color: #1f2a4d;
-  font-size: 16px;
+  font-size: var(--category-btn-font-size, 16px);
   font-weight: 500;
   min-height: 46px;
   cursor: pointer;
@@ -1622,6 +1678,25 @@ body.theme-dark .input-clear-btn:hover {
     background 0.15s,
     color 0.15s,
     box-shadow 0.15s;
+}
+
+.category-btn-fontsize-handle {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 3px;
+  border-radius: 4px;
+  z-index: 8;
+  cursor: ns-resize;
+  touch-action: none;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(30, 41, 59, 0.25);
+  color: #0f172a;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .category-btn::before {
@@ -1826,6 +1901,68 @@ body.theme-dark .input-clear-btn:hover {
 
 body.theme-dark .products-grid-parking-overlay {
   background: rgba(17, 24, 39, 0.55);
+}
+
+/* Aviso grande y accionable cuando la caja está cerrada -- petición real
+   tras una instalación nueva donde, al no haber caja abierta, pareció que
+   "no había productos" en vez de quedar claro que faltaba abrir caja. */
+.open-caja-prompt {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(245, 248, 255, 0.92);
+  z-index: 6;
+  text-align: center;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.open-caja-prompt.hidden {
+  display: none;
+}
+
+.open-caja-prompt-icon {
+  font-size: 48px;
+  line-height: 1;
+}
+
+.open-caja-prompt-text {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1f2a4d;
+}
+
+.open-caja-prompt-btn {
+  margin-top: 6px;
+  padding: 14px 32px;
+  border-radius: 999px;
+  border: none;
+  background: #198cff;
+  color: #fff;
+  font-size: 17px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(25, 140, 255, 0.35);
+  transition:
+    background 0.15s,
+    transform 0.05s;
+}
+
+.open-caja-prompt-btn:hover {
+  background: #0f7ae5;
+  transform: translateY(-1px);
+}
+
+body.theme-dark .open-caja-prompt {
+  background: rgba(17, 24, 39, 0.92);
+}
+
+body.theme-dark .open-caja-prompt-text {
+  color: #e5e7eb;
 }
 
 .mesas-trans-terminal {

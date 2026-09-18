@@ -44,6 +44,7 @@ const stylesPath = ensureFileExists("styles.css");
 const mainPath = ensureFileExists("main.js");
 const preloadPath = ensureFileExists("preload.js");
 const ticketPrintPath = ensureFileExists("ticket_print.html");
+const facturaPrintPath = ensureFileExists("factura_print.html");
 const mesasJsPath = ensureFileExists("mesas/mesas.js");
 const customerSelectorPath = ensureFileExists(
   "js/tpv/ui/customer_selector/customer_selector.js",
@@ -58,6 +59,7 @@ if (
   !mainPath ||
   !preloadPath ||
   !ticketPrintPath ||
+  !facturaPrintPath ||
   !mesasJsPath ||
   !customerSelectorPath ||
   !scaleUiPath ||
@@ -72,6 +74,7 @@ const styles = fs.readFileSync(stylesPath, "utf8");
 const main = fs.readFileSync(mainPath, "utf8");
 const preload = fs.readFileSync(preloadPath, "utf8");
 const ticketPrint = fs.readFileSync(ticketPrintPath, "utf8");
+const facturaPrint = fs.readFileSync(facturaPrintPath, "utf8");
 const customerSelector = fs.readFileSync(customerSelectorPath, "utf8");
 const mesasJs = fs.readFileSync(mesasJsPath, "utf8");
 const scaleUi = fs.readFileSync(scaleUiPath, "utf8");
@@ -1081,10 +1084,13 @@ console.log(
   } else if (
     scoped.includes("const tryRecoverExistingFactura = async () =>") &&
     scoped.includes("submit.res.status >= 500") &&
-    // 3 desde 2026-08-31: las 2 de siempre (dedup inicial + recuperacion en
-    // el 5xx ambiguo) mas la nueva del reintento del 422 generico transitorio.
+    // 4 desde 2026-09-18: las 3 de siempre (dedup inicial + recuperacion en
+    // el 5xx ambiguo + el reintento del 422 generico transitorio) mas la
+    // nueva del timeout/error de red del doPost inicial (Los Argentinos:
+    // antes ese caso ni pasaba por aqui, se propagaba directo y el
+    // reintento -- automatico o manual -- creaba una factura gemela).
     (scoped.match(/return \{ doc: recovered, dedup: true, recovered: true \};/g) || [])
-      .length === 3
+      .length === 4
   ) {
     ok(
       "createTicketInFacturaScripts reconciles by numero2 before failing on an ambiguous response",
@@ -4122,7 +4128,7 @@ mustContain(
 }
 mustContain(
   renderer,
-  '"Este terminal no tiene agentes asignados.";',
+  "terminalErrorEl.textContent = AGENT_NOT_ASSIGNED_HINT;",
   "The agentSwitch overlay itself still shows a clear message when the selected terminal has zero agents",
 );
 
@@ -6597,6 +6603,512 @@ mustContain(
   'registerParkedSyncConflict(entry, e.remoteData || null, "stale-write");',
   "processParkedSyncQueue's own retry loop also recognizes a stale-write conflict and registers it (reusing the existing conflict list/toast) instead of re-queueing the same doomed write forever",
 );
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-18 send invoice by email feature\n",
+);
+
+mustContain(
+  facturaPrint,
+  'id="items"',
+  "factura_print.html has the invoice lines tbody target",
+);
+mustContain(
+  facturaPrint,
+  'id="taxSummary"',
+  "factura_print.html has the tax summary target",
+);
+mustContain(
+  facturaPrint,
+  'id="legalFooter"',
+  "factura_print.html has the legal footer target",
+);
+mustContain(
+  facturaPrint,
+  "--color1",
+  "factura_print.html uses CSS custom properties for FacturaScripts brand colors",
+);
+
+mustContain(
+  main,
+  'ipcMain.handle("invoice:renderPdf"',
+  "main.js exposes the invoice:renderPdf IPC handler",
+);
+mustContain(
+  main,
+  "renderTicketPdf(String(html || \"\"))",
+  "invoice:renderPdf reuses the existing renderTicketPdf pipeline instead of duplicating it",
+);
+
+mustContain(
+  preload,
+  "renderInvoicePdf: ({ html }) => {",
+  "preload.js exposes TPV_PRINT.renderInvoicePdf",
+);
+mustContain(
+  preload,
+  'return Promise.resolve({ ok: true, mocked: true, e2e: true, pdfBase64: "" });',
+  "TPV_PRINT.renderInvoicePdf has an E2E mock branch like the other TPV_PRINT methods",
+);
+
+mustContain(
+  index,
+  'id="invoiceEmailOverlay"',
+  "index.html has the send-invoice-by-email modal",
+);
+mustContain(
+  renderer,
+  'class="ticket-btn ticket-send-invoice"',
+  "Tickets rows have the send-invoice button",
+);
+
+mustContain(
+  renderer,
+  "async function buildFacturaEmailHtml(ticket)",
+  "buildFacturaEmailHtml orchestrator present",
+);
+mustContain(
+  renderer,
+  "async function getInvoiceCustomerBillingInfo(ticket)",
+  "getInvoiceCustomerBillingInfo present (fresh client fiscal data for the invoice)",
+);
+mustContain(
+  renderer,
+  "async function apiSendInvoiceEmail(",
+  "apiSendInvoiceEmail present",
+);
+mustContain(
+  renderer,
+  "?action=send-invoice-email",
+  "apiSendInvoiceEmail calls the send-invoice-email server action",
+);
+mustContain(
+  renderer,
+  "async function sendInvoiceEmailForTicket(ticket)",
+  "sendInvoiceEmailForTicket UI orchestrator present",
+);
+mustContain(
+  renderer,
+  "function openSendInvoiceEmailModal(",
+  "openSendInvoiceEmailModal present",
+);
+{
+  const idx = renderer.indexOf("async function buildFacturaEmailHtml(ticket)");
+  const endIdx = idx >= 0 ? renderer.indexOf("async function apiSendInvoiceEmail(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("getFacturaLinesForPrint(ticket)") &&
+    scoped.includes("calcTotalsAndTaxMap(")
+  ) {
+    ok(
+      "buildFacturaEmailHtml reuses getFacturaLinesForPrint + calcTotalsAndTaxMap instead of recomputing invoice totals from scratch",
+    );
+  } else {
+    fail(
+      "buildFacturaEmailHtml must reuse getFacturaLinesForPrint + calcTotalsAndTaxMap for correct, already-fixed IVA rounding",
+    );
+  }
+  if (scoped.includes("settings/plantillaspdf")) {
+    ok(
+      "buildFacturaEmailHtml pulls FacturaScripts's own PDF template colors/legal text (settings/plantillaspdf)",
+    );
+  } else {
+    fail(
+      "buildFacturaEmailHtml must read settings/plantillaspdf so the generated invoice matches FacturaScripts's branding",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-18 customer display screen picker + emergency exits\n",
+);
+
+mustContain(
+  main,
+  "function resolveCustomerDisplayChoice()",
+  "main.js has the display-choice resolver",
+);
+{
+  const idx = main.indexOf("function resolveCustomerDisplayChoice()");
+  const endIdx = idx >= 0 ? main.indexOf("async function ensureCustomerWindow()", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? main.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("cfg.customerDisplayId") &&
+    scoped.includes("onlyOneDisplay: true")
+  ) {
+    ok(
+      "resolveCustomerDisplayChoice respects an explicit saved customerDisplayId and flags the single-display case instead of silently reusing the primary display",
+    );
+  } else {
+    fail(
+      "resolveCustomerDisplayChoice must check the saved customerDisplayId and flag onlyOneDisplay instead of silently falling back to the primary display",
+    );
+  }
+}
+mustContain(
+  main,
+  'lastCustomerDisplayBlockedReason = "NO_SECOND_DISPLAY";',
+  "ensureCustomerWindow refuses to open the customer window on the primary display when there is truly only one screen and no explicit choice was made",
+);
+mustContain(
+  main,
+  'ipcMain.handle("customer:listDisplays"',
+  "main.js exposes customer:listDisplays",
+);
+mustContain(
+  main,
+  'ipcMain.handle("customer:setDisplayId"',
+  "main.js exposes customer:setDisplayId",
+);
+mustContain(
+  main,
+  'ipcMain.handle("customer:identifyDisplays"',
+  "main.js exposes customer:identifyDisplays",
+);
+mustContain(
+  main,
+  'globalShortcut.register("Control+Alt+Shift+P"',
+  "main.js registers the Control+Alt+Shift+P emergency shortcut to force-close a stuck customer display",
+);
+{
+  const idx = main.indexOf('globalShortcut.register("Control+Alt+Q"');
+  const endIdx = idx >= 0 ? main.indexOf('globalShortcut.register("Control+Alt+Shift+P"', idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? main.slice(idx, endIdx) : "";
+  if (scoped.includes("destroyCustomerWindow();") && scoped.includes("app.quit();")) {
+    ok(
+      "The Control+Alt+Q emergency quit also force-closes the customer display first, so its own close-guard can never silently block a full app.quit()",
+    );
+  } else {
+    fail(
+      "Control+Alt+Q must call destroyCustomerWindow() before app.quit(), otherwise a stuck customer display blocks even the emergency quit",
+    );
+  }
+}
+
+mustContain(
+  preload,
+  "listDisplays: () => ipcRenderer.invoke(\"customer:listDisplays\")",
+  "preload.js exposes TPV_CUSTOMER_CTRL.listDisplays",
+);
+mustContain(
+  preload,
+  "onCustomerForceClosed: (cb) =>",
+  "preload.js exposes TPV_UI.onCustomerForceClosed",
+);
+
+mustContain(
+  index,
+  'id="customerDisplayPickerRow"',
+  "index.html has the customer display screen-picker row",
+);
+mustContain(
+  index,
+  'id="customerDisplaySelect"',
+  "index.html has the display selector",
+);
+mustContain(
+  index,
+  'id="customerDisplayIdentifyBtn"',
+  "index.html has the Identificar button",
+);
+
+mustContain(
+  renderer,
+  "async function refreshCustomerDisplayOptions()",
+  "refreshCustomerDisplayOptions present",
+);
+mustContain(
+  renderer,
+  "function bindCustomerDisplayPickerOnce()",
+  "bindCustomerDisplayPickerOnce present",
+);
+mustContain(
+  renderer,
+  '"NO_SECOND_DISPLAY"',
+  "The customer display toggle handler recognizes the NO_SECOND_DISPLAY error and tells the admin to pick a screen explicitly",
+);
+mustContain(
+  renderer,
+  "window.TPV_UI?.onCustomerForceClosed?.(",
+  "renderer.js listens for the emergency force-close event and syncs the toggle/toast",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-18 clearer 'no agent assigned to terminal' guidance\n",
+);
+
+mustContain(
+  renderer,
+  "const AGENT_NOT_ASSIGNED_HINT =",
+  "A shared, actionable hint explains the FacturaScripts fix for a terminal with zero assigned agents",
+);
+mustContain(
+  renderer,
+  "en FacturaScripts ve a \"Agentes\", abre el empleado",
+  "The hint points admins to FacturaScripts's own Agentes -> Terminal TPV tab instead of just saying 'no agents'",
+);
+{
+  const occurrences = renderer.split("terminalErrorEl.textContent = AGENT_NOT_ASSIGNED_HINT;").length - 1;
+  if (occurrences === 2) {
+    ok(
+      "Both zero-agents call sites (initial terminal selection and the confirm step) use the actionable hint",
+    );
+  } else {
+    fail(
+      `Expected exactly 2 uses of AGENT_NOT_ASSIGNED_HINT for the zero-agents case, found ${occurrences}`,
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-18 agent warning only fires with truly zero agents\n",
+);
+
+{
+  const idx = renderer.indexOf("async function requireAssignedAgentOrBlock(");
+  const endIdx = idx >= 0 ? renderer.indexOf("\nfunction ", idx + 10) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("ensureActiveAgentIfPossible?.();") &&
+    scoped.indexOf("ensureActiveAgentIfPossible?.();") <
+      scoped.indexOf('confirmModal("Falta Agente"')
+  ) {
+    ok(
+      "requireAssignedAgentOrBlock tries to auto-pick an already-configured agent BEFORE showing the 'Falta Agente' warning -- a terminal with real agents just not yet linked to this session no longer shows a scary warning",
+    );
+  } else {
+    fail(
+      "requireAssignedAgentOrBlock must call ensureActiveAgentIfPossible() before deciding to show the 'Falta Agente' warning, so the warning is reserved for terminals with truly zero agents",
+    );
+  }
+  mustContain(
+    renderer,
+    'confirmModal("Falta Agente", AGENT_NOT_ASSIGNED_HINT);',
+    "The 'Falta Agente' modal now uses the same actionable FacturaScripts hint (it only fires once zero agents is confirmed)",
+  );
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-18 family/group button font-size drag handle\n",
+);
+
+mustContain(
+  renderer,
+  "function clampFamilyButtonFontSize(",
+  "clampFamilyButtonFontSize present",
+);
+mustContain(
+  renderer,
+  "function bindFamilyButtonFontSizeHandle(",
+  "bindFamilyButtonFontSizeHandle present (same drag pattern as product name font size)",
+);
+mustContain(
+  renderer,
+  '"--category-btn-font-size"',
+  "applyFamilyButtonFontSizeCssVar sets the --category-btn-font-size CSS var",
+);
+mustContain(
+  renderer,
+  "const canResizeFamilies = isAdminUser() && !!familyButtonResizeMode;",
+  "renderCategories only shows the resize handle for admins with the mode enabled",
+);
+mustContain(
+  renderer,
+  'handle.className = "category-btn-fontsize-handle";',
+  "renderCategories appends the family font-size handle",
+);
+mustContain(
+  renderer,
+  "function bindFamilyButtonResizeModeToggleOnce()",
+  "bindFamilyButtonResizeModeToggleOnce present",
+);
+mustContain(
+  renderer,
+  "function bindFamilyButtonFontSizeResetButtonOnce()",
+  "bindFamilyButtonFontSizeResetButtonOnce present",
+);
+
+mustContain(
+  styles,
+  ".category-btn-fontsize-handle {",
+  "styles.css defines the family font-size handle appearance",
+);
+mustContain(
+  styles,
+  "font-size: var(--category-btn-font-size, 16px);",
+  ".category-btn reads its font-size from the CSS var (falling back to the original 16px)",
+);
+
+mustContain(
+  index,
+  'id="familyButtonResizeModeToggle"',
+  "index.html has the 'Modo redimensionar familias' toggle",
+);
+mustContain(
+  index,
+  'id="familyButtonFontSizeResetBtn"',
+  "index.html has the family font-size reset button",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-18 top-left header compacted for 0/1 agents\n",
+);
+
+mustContain(
+  index,
+  'id="searchBarActionsSlot"',
+  "index.html has the search-bar actions slot for the collapsed agent bar",
+);
+mustContain(
+  styles,
+  ".search-bar-actions {",
+  "styles.css styles the compact actions slot",
+);
+mustContain(
+  renderer,
+  "const searchBarActionsSlot = document.getElementById(",
+  "renderer.js caches the searchBarActionsSlot element",
+);
+mustContain(
+  renderer,
+  "const compactMode = list.length <= 1;",
+  "renderMainAgentBar collapses the agent bar only when there are 0 or 1 agents",
+);
+{
+  const idx = renderer.indexOf("function renderMainAgentBar()");
+  const endIdx = idx >= 0 ? renderer.indexOf("\nfunction ", idx + 10) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes('mainAgentBar.classList.add("session-agentbar-hidden");') &&
+    scoped.includes("searchBarActionsSlot.appendChild(modeSwitchWrap);") &&
+    scoped.includes("searchBarActionsSlot.appendChild(agentActions);")
+  ) {
+    ok(
+      "When compact, the fixed action buttons (mesas/refrescar/cajón) move into the search bar instead of disappearing along with the agent bar",
+    );
+  } else {
+    fail(
+      "Compact mode must move modeSwitchWrap and agentActions into searchBarActionsSlot, not just hide them",
+    );
+  }
+  if (
+    scoped.includes('mainAgentBar.classList.remove("session-agentbar-hidden");') &&
+    scoped.includes("mainAgentBar.appendChild(agentListWrap);")
+  ) {
+    ok(
+      "With 2+ agents the full agent bar (pills + actions) still renders exactly as before",
+    );
+  } else {
+    fail(
+      "The 2+ agents branch must still append agentListWrap to mainAgentBar unchanged",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-18 offline sync no longer pays a ticket that never got emitted\n",
+);
+
+{
+  const idx = renderer.indexOf("// 3) Emitir y marcar pagada");
+  const endIdx = idx >= 0 ? renderer.indexOf("// Si el paso 3 y/o 4", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("if (!offlineFollowupFailed) {") &&
+    scoped.indexOf("if (!offlineFollowupFailed) {") <
+      scoped.indexOf("createReciboCliente(")
+  ) {
+    ok(
+      "The offline sync path only creates receipts (createReciboCliente) when the emit+pay update (updateFacturaCliente) actually succeeded -- real client bug (Los Argentinos, 2026-09-18): these ran independently, so a failed emit left an invoice stuck in Boceto/no agent that still got a paid receipt, inflating 'Total vendido' with no real money behind it",
+    );
+  } else {
+    fail(
+      "The offline sync path's receipt creation (step 4) must be gated behind step 3 (updateFacturaCliente) succeeding -- otherwise a ticket can end up 'paid' with a receipt while stuck in Boceto with no agent, exactly like the real Los Argentinos incident",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-18 a create-invoice timeout no longer creates a twin invoice\n",
+);
+
+{
+  const fnStart = renderer.indexOf(
+    "async function createTicketInFacturaScripts(",
+  );
+  const fnEnd = renderer.indexOf("\nfunction buildTicketPrintData(", fnStart);
+  const scoped =
+    fnStart >= 0 && fnEnd > fnStart ? renderer.slice(fnStart, fnEnd) : "";
+
+  const submitIdx = scoped.indexOf("let submit;");
+  const tryRecoverDefIdx = scoped.indexOf(
+    "const tryRecoverExistingFactura = async () =>",
+  );
+
+  if (
+    submitIdx > 0 &&
+    tryRecoverDefIdx > 0 &&
+    tryRecoverDefIdx < submitIdx &&
+    scoped.includes("submit = await doPost(bodyParams);") &&
+    scoped.includes("} catch (err) {\r\n    const recovered = await tryRecoverExistingFactura();")
+  ) {
+    ok(
+      "The initial doPost (invoice creation) call is wrapped so a timeout/network error checks for an already-created invoice by numero2 before failing -- real client bug (Los Argentinos, 2026-09-18): a 20s client timeout doesn't mean FacturaScripts didn't finish creating the invoice; the old code threw immediately and a retry (automatic offline-queue or manual) created a twin invoice with a fresh numero2, leaving the first one orphaned (Boceto, no agent) with a real receipt against it",
+    );
+  } else {
+    fail(
+      "createTicketInFacturaScripts must check tryRecoverExistingFactura() when the initial doPost throws (timeout/network error), not just on an ambiguous HTTP response -- otherwise a slow-but-successful create still gets duplicated on retry",
+    );
+  }
+}
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-18 'open caja' prompt over the products area\n",
+);
+
+mustContain(
+  index,
+  'id="openCajaPrompt"',
+  "index.html has the open-caja prompt overlay",
+);
+mustContain(
+  index,
+  'id="openCajaPromptBtn"',
+  "index.html has the open-caja prompt button",
+);
+mustContain(
+  styles,
+  ".open-caja-prompt {",
+  "styles.css styles the open-caja prompt overlay",
+);
+mustContain(
+  renderer,
+  "function updateOpenCajaPrompt(",
+  "updateOpenCajaPrompt present",
+);
+mustContain(
+  renderer,
+  "updateOpenCajaPrompt(cashOpen, hasLogin);",
+  "syncCashClosedUiState refreshes the open-caja prompt on every cash-state change",
+);
+mustContain(
+  renderer,
+  "openCajaPromptBtn.onclick = async () => {",
+  "The open-caja prompt button is wired to a click handler",
+);
+{
+  const idx = renderer.indexOf("const openCajaPromptBtn = document.getElementById");
+  const scoped = idx >= 0 ? renderer.slice(idx, idx + 300) : "";
+  if (scoped.includes("await handleCashHeaderAction({ auto: false });")) {
+    ok(
+      "The open-caja prompt button reuses the exact same handleCashHeaderAction flow as the header cash button, instead of a separate/duplicated flow",
+    );
+  } else {
+    fail(
+      "The open-caja prompt button must reuse handleCashHeaderAction({ auto: false }) so it opens the caja via the same tested flow as the header button",
+    );
+  }
+}
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 

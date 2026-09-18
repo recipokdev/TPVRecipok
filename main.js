@@ -2314,6 +2314,28 @@ ipcMain.handle("ticket:print", async (_event, { html, deviceName }) => {
   return printTicketHtml(html, deviceName);
 });
 
+// Genera un PDF de verdad a partir de HTML (reutiliza renderTicketPdf, la
+// misma funcion que ya usa el ticket en Linux) y lo devuelve como base64 en
+// vez de una ruta de fichero -- para "enviar factura por email", el
+// renderer nunca necesita tocar el sistema de ficheros, solo mandar el
+// resultado al servidor. Fichero temporal borrado en cuanto se lee.
+ipcMain.handle("invoice:renderPdf", async (_event, { html }) => {
+  let pdfPath = null;
+  try {
+    pdfPath = await renderTicketPdf(String(html || ""));
+    const buffer = fs.readFileSync(pdfPath);
+    return { ok: true, pdfBase64: buffer.toString("base64") };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  } finally {
+    if (pdfPath) {
+      try {
+        fs.unlinkSync(pdfPath);
+      } catch (_) {}
+    }
+  }
+});
+
 // Imprimir de verdad el ticket que se esta previsualizando (boton de la ventana).
 ipcMain.handle("ticket:previewPrint", async () => {
   if (!lastPreviewJob || !lastPreviewJob.html) {
@@ -2670,10 +2692,34 @@ function registerShortcuts() {
       return;
     }
 
+    // La pantalla de cliente bloquea su propio cierre mientras siga activada
+    // (para que un cliente no la cierre sin querer) -- eso mismo frenaria
+    // app.quit() de seguir abierta, dejando este atajo de emergencia sin
+    // efecto justo cuando mas falta hace.
+    destroyCustomerWindow();
     app.quit();
   });
 
   if (!ok) console.log("No se pudo registrar Control+Alt+Q");
+
+  // Atajo de emergencia SOLO para la pantalla de cliente: si por lo que sea
+  // se queda tapando toda la pantalla (p.ej. solo hay 1 monitor y "2
+  // pantallas" se activo igualmente), esto la cierra al momento sin tener
+  // que cerrar el TPV entero ni perder el ticket en curso. No depende de
+  // login/caja porque el problema es precisamente no poder interactuar con
+  // el TPV para nada.
+  const okCustomer = globalShortcut.register("Control+Alt+Shift+P", () => {
+    console.log(
+      "[SHORTCUT] Control+Alt+Shift+P -- cerrando pantalla de cliente de emergencia.",
+    );
+    writeCfg({ customerDisplay: false });
+    destroyCustomerWindow();
+    try {
+      mainWin?.webContents?.send("customer:forceClosed");
+    } catch {}
+  });
+
+  if (!okCustomer) console.log("No se pudo registrar Control+Alt+Shift+P");
 }
 
 ipcMain.handle("tpv:openCashDrawer", async (_event, { deviceName }) => {
@@ -3413,27 +3459,66 @@ ipcMain.handle("app:getVersion", () => {
   };
 });
 
-function pickCustomerDisplay() {
-  const displays = screen.getAllDisplays();
-  const primary = screen.getPrimaryDisplay();
-
-  // intenta usar otra distinta a la principal
-  const other = displays.find((d) => d.id !== primary.id);
-
-  return other || primary;
+function describeDisplay(d, primaryId) {
+  return {
+    id: d.id,
+    isPrimary: d.id === primaryId,
+    width: d.bounds.width,
+    height: d.bounds.height,
+    x: d.bounds.x,
+    y: d.bounds.y,
+  };
 }
 
+// Elige la pantalla para la ventana de cliente. Si el admin ha elegido una
+// explícitamente desde Opciones (customerDisplayId) y sigue conectada, se
+// respeta esa elección aunque sea la misma que la principal -- el aviso ya
+// se lo dimos en el propio selector. Si no hay elección guardada (instalación
+// vieja, o la pantalla elegida se desconectó), usamos cualquier otra distinta
+// a la principal; si de verdad solo hay una pantalla, NO la usamos en
+// silencio (eso fue justo lo que dejó un TPV atascado el 2026-09-18) --
+// `explicit` indica si la elección venía de una decisión real del admin.
+function resolveCustomerDisplayChoice() {
+  const displays = screen.getAllDisplays();
+  const primary = screen.getPrimaryDisplay();
+  const cfg = readCfg();
+
+  const savedId = cfg.customerDisplayId;
+  if (savedId != null && savedId !== "") {
+    const saved = displays.find((d) => String(d.id) === String(savedId));
+    if (saved) return { display: saved, explicit: true };
+  }
+
+  const other = displays.find((d) => d.id !== primary.id);
+  if (other) return { display: other, explicit: false };
+
+  return { display: primary, explicit: false, onlyOneDisplay: true };
+}
+
+let lastCustomerDisplayBlockedReason = null;
+
 async function ensureCustomerWindow() {
+  lastCustomerDisplayBlockedReason = null;
   if (IS_E2E_BACKGROUND) return null;
   if (!isCustomerDisplayEnabled()) return null;
   if (customerWin && !customerWin.isDestroyed()) return customerWin;
   if (customerCreating) return null;
 
+  const choice = resolveCustomerDisplayChoice();
+  if (choice.onlyOneDisplay && !choice.explicit) {
+    lastCustomerDisplayBlockedReason = "NO_SECOND_DISPLAY";
+    writeCfg({ customerDisplay: false });
+    console.log(
+      "[CUSTOMER] Solo se detecta una pantalla y no se ha elegido ninguna desde Opciones -- no se abre encima de la principal.",
+    );
+    return null;
+  }
+
   customerCreating = true;
 
   try {
     const isDev = !app.isPackaged;
-    const target = pickCustomerDisplay();
+    const target = choice.display;
     const b = target.bounds;
 
     customerWin = new BrowserWindow({
@@ -3564,7 +3649,14 @@ ipcMain.handle("customer:setEnabled", async (_e, enabled) => {
 
   if (val) {
     const win = await ensureCustomerWindow();
-    if (lastCustomerState && win && !win.isDestroyed()) {
+    if (!win) {
+      return {
+        ok: false,
+        error: lastCustomerDisplayBlockedReason || "CUSTOMER_WINDOW_FAILED",
+        enabled: isCustomerDisplayEnabled(),
+      };
+    }
+    if (lastCustomerState && !win.isDestroyed()) {
       try {
         win.webContents.send("customer:state", lastCustomerState);
       } catch {}
@@ -3573,7 +3665,81 @@ ipcMain.handle("customer:setEnabled", async (_e, enabled) => {
     destroyCustomerWindow();
   }
 
-  return { ok: true, enabled: val };
+  return { ok: true, enabled: isCustomerDisplayEnabled() };
+});
+
+ipcMain.handle("customer:listDisplays", () => {
+  const displays = screen.getAllDisplays();
+  const primary = screen.getPrimaryDisplay();
+  const cfg = readCfg();
+  return {
+    ok: true,
+    displays: displays.map((d) => describeDisplay(d, primary.id)),
+    savedId: cfg.customerDisplayId != null ? String(cfg.customerDisplayId) : null,
+  };
+});
+
+ipcMain.handle("customer:setDisplayId", async (_e, id) => {
+  if (!isAdmin()) return { ok: false, error: "FORBIDDEN" };
+
+  const displays = screen.getAllDisplays();
+  const found = displays.find((d) => String(d.id) === String(id));
+  if (!found) return { ok: false, error: "DISPLAY_NOT_FOUND" };
+
+  writeCfg({ customerDisplayId: String(id) });
+
+  // Si la pantalla de cliente ya está abierta, la movemos ya mismo en vez de
+  // esperar al próximo activar/desactivar.
+  if (customerWin && !customerWin.isDestroyed()) {
+    destroyCustomerWindow();
+    await ensureCustomerWindow();
+  }
+
+  return { ok: true };
+});
+
+ipcMain.handle("customer:identifyDisplays", async () => {
+  const displays = screen.getAllDisplays();
+  const primary = screen.getPrimaryDisplay();
+  const overlays = displays.map((d, idx) => {
+    const b = d.bounds;
+    const win = new BrowserWindow({
+      x: b.x,
+      y: b.y,
+      width: b.width,
+      height: b.height,
+      frame: false,
+      transparent: true,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      focusable: false,
+      show: false,
+      webPreferences: { contextIsolation: true, sandbox: true },
+    });
+    try {
+      win.setIgnoreMouseEvents(true);
+    } catch {}
+    const label = d.id === primary.id ? `${idx + 1} (principal)` : String(idx + 1);
+    const html =
+      "data:text/html;charset=utf-8," +
+      encodeURIComponent(
+        `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:rgba(11,18,32,.55)"><div style="font:bold 22vh sans-serif;color:#fff;text-shadow:0 0 40px #000">${label}</div></body>`,
+      );
+    win.loadURL(html).then(() => {
+      if (!win.isDestroyed()) win.showInactive();
+    });
+    return win;
+  });
+
+  setTimeout(() => {
+    overlays.forEach((w) => {
+      try {
+        if (!w.isDestroyed()) w.destroy();
+      } catch {}
+    });
+  }, 3000);
+
+  return { ok: true, count: overlays.length };
 });
 
 ipcMain.handle("customer:getTheme", async () => {
