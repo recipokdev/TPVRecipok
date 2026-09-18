@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.34",
+      "date": "2026-09-18",
+      "title": "Release 0.2.34",
       "changes": [
         "NUEVO: ahora se puede poner un precio distinto para el mismo producto en cada tienda/terminal, sin tener que duplicarlo. Desde el editor de precio de un producto (solo administradores), además de \"Guardar\" (que cambia el precio para siempre en FacturaScripts, como hasta ahora), hay un botón nuevo \"Guardar solo en este almacén\" que fija ese precio únicamente para la tienda en la que estás — el producto sigue siendo el mismo en todo lo demás (stock, historial de ventas...). Se puede quitar en cualquier momento con \"Quitar precio especial\" para volver al precio normal. Un cambio manual de precio del cajero en el momento del cobro sigue teniendo prioridad sobre esto, igual que siempre.",
         "MEJORA: actualizar el programa es ahora mucho más rápido. Si hay una versión nueva, el programa se la va descargando solo en segundo plano mientras trabajas con normalidad (sin interrumpir ventas ni cobros), así que al pulsar \"Actualizar\" el cambio es casi instantáneo en vez de tener que esperar a que se descargue todo con el programa cerrado. También se han simplificado los mensajes que se ven al arrancar mientras se comprueban actualizaciones, para que sean más claros.",
