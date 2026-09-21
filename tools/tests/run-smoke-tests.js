@@ -4906,8 +4906,8 @@ console.log(
   // La misma vulnerabilidad (fallo silencioso sin reintento) existia en el
   // propio drenado de la cola offline (una venta que se quedo sin internet
   // y se sincroniza mas tarde) -- no solo en el flujo online.
-  const idx = renderer.indexOf("// 3) Emitir y marcar pagada (tpv_efectivo/tpv_cambio/etc.)");
-  const endIdx = idx >= 0 ? renderer.indexOf("// 4) Recibos por método", idx) : -1;
+  const idx = renderer.indexOf("// Camino de siempre: la creacion no confirmo agente/pagada");
+  const endIdx = idx >= 0 ? renderer.indexOf("// Recibos por método + cleanup", idx) : -1;
   const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
   if (
     scoped.includes("retryFacturaFollowupStep(() =>") &&
@@ -7010,7 +7010,7 @@ console.log(
 );
 
 {
-  const idx = renderer.indexOf("// 3) Emitir y marcar pagada");
+  const idx = renderer.indexOf("// Camino de siempre: la creacion no confirmo agente/pagada");
   const endIdx = idx >= 0 ? renderer.indexOf("// Si el paso 3 y/o 4", idx) : -1;
   const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
   if (
@@ -7109,6 +7109,93 @@ mustContain(
     );
   }
 }
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-21 atomic cobro (agent/pagada/recibo in one call)\n",
+);
+
+mustContain(
+  renderer,
+  'if (ticketPayload.codagente) {\r\n    bodyParams.append("codagente"',
+  "createTicketInFacturaScripts sends codagente in the initial creation call",
+);
+mustContain(
+  renderer,
+  'bodyParams.append("tpv_efectivo"',
+  "createTicketInFacturaScripts sends tpv_efectivo in the initial creation call",
+);
+mustContain(
+  renderer,
+  'bodyParams.append("tpv_cambio"',
+  "createTicketInFacturaScripts sends tpv_cambio in the initial creation call",
+);
+mustContain(
+  renderer,
+  'bodyParams.append("codalmacen"',
+  "createTicketInFacturaScripts sends codalmacen in the initial creation call",
+);
+mustContain(
+  renderer,
+  "ticketPayload.nick = ticketPayload._payNick;",
+  "onPayButtonClick actually assigns ticketPayload.nick (previously dead: createTicketInFacturaScripts checked it but nothing ever set it)",
+);
+mustContain(
+  renderer,
+  "ticketPayload.codagente = ticketPayload._payCodAgente;",
+  "onPayButtonClick assigns codagente onto the create payload, not just the later PATCH",
+);
+mustContain(
+  renderer,
+  "const atomicCreateWorked =",
+  "processConfirmedSale checks whether the atomic create actually confirmed codagente/pagada before skipping the full PATCH+recibo fallback",
+);
+mustContain(
+  renderer,
+  'type: "FINALIZE_FACTURACLIENTE"',
+  "A dedicated queue item type finalizes just idestado for an atomically-created, already-attributed-and-paid invoice",
+);
+{
+  const idx = renderer.indexOf('if (item.type === "FINALIZE_FACTURACLIENTE")');
+  const endIdx = idx >= 0 ? renderer.indexOf("continue;\r\n        }", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx + 20) : "";
+  if (
+    scoped.includes("await window.TPV_QUEUE.error(item.id") &&
+    !scoped.includes('dropped: true')
+  ) {
+    ok(
+      "FINALIZE_FACTURACLIENTE never permanently drops on failure -- it always re-queues with the queue's own growing backoff, unlike COMPLETE_FACTURACLIENTE which gives up on non-retryable errors. Real request (Sergi, 2026-09-21): once the money/agent are already correct, there's no reason to ever stop trying to flip idestado to Emitida.",
+    );
+  } else {
+    fail(
+      "FINALIZE_FACTURACLIENTE must never mark itself 'dropped' -- it should always retry with backoff, forever, since by the time it runs the sale is already fully attributed and paid",
+    );
+  }
+}
+mustContain(
+  renderer,
+  "recoveredNumero2: String(ticketPayload?.numero2 || \"\").trim() || null,",
+  "parkFailedSaleForRetry preserves the original numero2 on the recovery parked ticket",
+);
+mustContain(
+  renderer,
+  "const recoveredNumero2 = String(\r\n      parkedTickets?.[parkedIndexToClose]?.recoveredNumero2",
+  "Retrying a recovered parked ticket's payment reuses its original numero2 instead of generating a fresh one, so the dedup-by-numero2 check has something to compare against",
+);
+mustContain(
+  renderer,
+  "async function countOrphanFacturasInCaja(idcaja)",
+  "countOrphanFacturasInCaja helper present",
+);
+mustContain(
+  renderer,
+  "const orphanCount = await countOrphanFacturasInCaja(idcajaForCheck);",
+  "Closing the caja checks for orphaned (agent-less) invoices as a last-resort safety net, alongside the existing pending-parked-tickets check",
+);
+mustContain(
+  renderer,
+  'return "Ticket incompleto (sin agente)";',
+  "getAgentLabel no longer produces the confusing 'Agente -' label (mistaken for a real employee name) for a ticket with no agent",
+);
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 

@@ -11282,7 +11282,12 @@ function loadAgentNameMapFromCache() {
 }
 
 function getAgentLabel(codagente) {
-  const c = String(codagente || "").trim() || "—";
+  const c = String(codagente || "").trim();
+  // "Agente -" parecia el nombre de una operaria (confundio a un cliente
+  // real, ver plan "cobro atomico" 2026-09-21) cuando en realidad significa
+  // que el ticket se quedo a medias sin agente asignado -- una incidencia
+  // tecnica, no una persona.
+  if (!c) return "Ticket incompleto (sin agente)";
   return agentNameByCode[c] || `Agente ${c}`;
 }
 
@@ -21492,6 +21497,24 @@ function getCajaIdSafe() {
   return id > 0 ? id : null;
 }
 
+// Cuenta las facturas de esta caja sin agente (codagente vacio) -- el
+// sintoma real que dejaba el fallo de "factura huerfana" (ver plan "cobro
+// atomico", 2026-09-21). Se usa como aviso de ultima hora antes de cerrar
+// caja, no como mecanismo principal -- el cobro atomico deberia evitar que
+// esto pase casi nunca.
+async function countOrphanFacturasInCaja(idcaja) {
+  if (!idcaja) return 0;
+
+  const rows = await fetchApiResourceWithParams("facturaclientes", {
+    "filter[idcaja]": idcaja,
+    "filter[tpv_venta]": 1,
+    limit: 0,
+  });
+
+  const list = Array.isArray(rows) ? rows : [];
+  return list.filter((f) => !String(f?.codagente || "").trim()).length;
+}
+
 function getLogCtx() {
   const agentName =
     (currentAgent?.name || currentAgent?.nick || getLoginUser?.() || "—")
@@ -25465,6 +25488,31 @@ if (cashOpenOkBtn) {
 
       // Releer valor efectivo para evitar cierres bloqueados por estado stale.
       await loadAllowCloseWithParkedToggle();
+
+      // Red de seguridad final (ver plan "cobro atomico", 2026-09-21): con
+      // el cobro atomico esto no deberia saltar casi nunca, pero si por lo
+      // que sea sigue quedando alguna factura sin agente en esta caja
+      // (todavia reintentando en segundo plano, o de verdad atascada), es
+      // mejor avisar aqui -- el ultimo sitio barato para detectarlo -- que
+      // dejar cerrar en silencio y que aparezca luego como "Agente -" en el
+      // cierre, confundiendo con dinero que falta.
+      try {
+        const idcajaForCheck = getCajaIdSafe();
+        if (idcajaForCheck) {
+          const orphanCount = await countOrphanFacturasInCaja(idcajaForCheck);
+          if (orphanCount > 0) {
+            await confirmModal(
+              "Tickets incompletos en esta caja",
+              `Hay ${orphanCount} ticket(s) de esta caja que todavía se están terminando de procesar en segundo plano (sin agente asignado todavía).\n\nEspera un momento y vuelve a intentar cerrar -- no es dinero que falte, es solo cuestión de segundos/minutos.`,
+            );
+            return;
+          }
+        }
+      } catch (e) {
+        // Fallo al comprobar (sin red, etc.) no debe bloquear el cierre --
+        // es una red de seguridad extra, no el mecanismo principal.
+        console.warn("No se pudo comprobar tickets sin agente antes de cerrar caja:", e?.message || e);
+      }
 
       let closeQuestion =
         "¿Seguro que quieres cerrar la caja?\n\nEsta acción registrará el cierre y no se puede deshacer.";
@@ -30225,9 +30273,25 @@ async function createTicketInFacturaScripts(ticketPayload) {
     bodyParams.append("idtpv", String(ticketPayload.idtpv));
   if (ticketPayload.idcaja)
     bodyParams.append("idcaja", String(ticketPayload.idcaja));
+  if (ticketPayload.codalmacen)
+    bodyParams.append("codalmacen", String(ticketPayload.codalmacen));
 
   // Algunos setups usan estos flags
   bodyParams.append("tpv_venta", "1");
+
+  // Cobro atomico: agente y efectivo/cambio YA en la creacion (ver
+  // comentario junto a ticketPayload.codagente en onPayButtonClick) --
+  // verificado contra demo que crearFacturaCliente los admite igual que
+  // cualquier otro campo del modelo.
+  if (ticketPayload.codagente) {
+    bodyParams.append("codagente", String(ticketPayload.codagente));
+  }
+  if (ticketPayload.tpv_efectivo !== undefined) {
+    bodyParams.append("tpv_efectivo", String(ticketPayload.tpv_efectivo));
+  }
+  if (ticketPayload.tpv_cambio !== undefined) {
+    bodyParams.append("tpv_cambio", String(ticketPayload.tpv_cambio));
+  }
 
   // Intento de registrar forma de pago principal en FacturaScripts
   if (ticketPayload.codpago) {
@@ -36332,6 +36396,15 @@ async function parkFailedSaleForRetry(
       paidTicketCode: null,
       paidTicketId: null,
       fs: null,
+      // Real de Los Argentinos/asador_el_gallo (2026-09): si este aparcado
+      // se reintenta cobrando y se genera un numero2 nuevo, la comprobacion
+      // de duplicados no tiene nada que comparar contra el intento que
+      // fallo -- si aquel SI llego a crear la factura en FacturaScripts
+      // (p.ej. un timeout que en realidad si respondio), el reintento crea
+      // una segunda factura completa y la primera se queda huerfana.
+      // Guardar aqui el numero2 original para que el proximo cobro de este
+      // aparcado lo reutilice (ver onPayButtonClick).
+      recoveredNumero2: String(ticketPayload?.numero2 || "").trim() || null,
     };
     clearMesaScopeFromTicket(localTicket);
 
@@ -36749,7 +36822,16 @@ async function onPayButtonClick() {
       );
     }
 
-    ticketPayload.numero2 = payResult.numero || "";
+    // Reintento de una venta recuperada tras un fallo (parkFailedSaleForRetry
+    // guarda el numero2 original en recoveredNumero2): reusar ese mismo
+    // numero2 en vez de generar uno nuevo, para que la comprobacion de
+    // duplicados (tryRecoverExistingFactura, en createTicketInFacturaScripts)
+    // tenga algo que comparar si aquel primer intento SI llego a crearse en
+    // FacturaScripts pese a que el TPV lo diera por fallido.
+    const recoveredNumero2 = String(
+      parkedTickets?.[parkedIndexToClose]?.recoveredNumero2 || "",
+    ).trim();
+    ticketPayload.numero2 = recoveredNumero2 || payResult.numero || "";
     const serieVenta = (payResult.serie || "S").toString().trim().toUpperCase();
     ticketPayload.serie = serieVenta;
     ticketPayload.codserie = serieVenta;
@@ -36796,6 +36878,29 @@ async function onPayButtonClick() {
     ticketPayload._payCodAlmacen = String(
       currentTerminal?.codalmacen || "",
     ).trim();
+
+    // Cobro atomico (real de Los Argentinos/asador_el_gallo/Zoen, 2026-09):
+    // estos campos hoy solo se mandaban en el PATCH posterior
+    // (updateFacturaCliente), dejando una ventana donde la factura ya existe
+    // pero sin agente/efectivo -- si esa ventana se interrumpe (timeout,
+    // reintento), la factura se queda huerfana. Verificado contra demo:
+    // crearFacturaCliente admite estos mismos campos en la propia creacion
+    // (bucle generico de campos del modelo en el ApiCreateDocument de
+    // FacturaScripts), y con pagada=1 (ya se mandaba) genera ademas el
+    // recibo automatico ya con el codpago y pagado correctos -- para un solo
+    // metodo de pago, esto deja la venta completa en una sola llamada, sin
+    // ningun paso posterior que pueda fallar a medias. `nick` ya se
+    // intentaba mandar en createTicketInFacturaScripts pero nunca se
+    // asignaba aqui -- ese "if" llevaba tiempo muerto.
+    if (ticketPayload._payCodAgente) {
+      ticketPayload.codagente = ticketPayload._payCodAgente;
+    }
+    if (ticketPayload._payCodAlmacen) {
+      ticketPayload.codalmacen = ticketPayload._payCodAlmacen;
+    }
+    ticketPayload.nick = ticketPayload._payNick;
+    ticketPayload.tpv_efectivo = Number(tpv_efectivo || 0);
+    ticketPayload.tpv_cambio = Number(tpv_cambio || 0);
 
     const hasFastPredictorHistory = hasFastTicketPredictorHistory({
       codserie: ticketPayload?.codserie || ticketPayload?.serie,
@@ -37294,50 +37399,95 @@ async function processConfirmedSale(ctx) {
     // se registra para que lo revisemos NOSOTROS (nunca el cliente) y el
     // cobro sigue su curso normal (ticket, pantalla de "gracias", etc.) como
     // si nada hubiera pasado desde el punto de vista del cajero.
+    // Cobro atomico (ver ticketPayload.codagente en fase 1, mas arriba):
+    // si la creacion ya devolvio codagente/pagada correctos, agente y
+    // efectivo/cambio ya estan bien puestos y, con un solo metodo de pago,
+    // el recibo ya lo genero FacturaScripts solo (mismo codpago, ya pagado)
+    // -- no hay nada que completar salvo pasar la factura de Boceto a
+    // Emitida. Si la creacion NO confirmo esto (version de FacturaScripts
+    // distinta en algun cliente, etc.), no se asume que funciono: se cae al
+    // camino de siempre (PATCH completo + recibos).
+    const atomicCreateWorked =
+      !!ticketPayload.codagente &&
+      String(facturaResp?.codagente || "").trim() ===
+        String(ticketPayload.codagente).trim() &&
+      !!facturaResp?.pagada;
+
     if (idfactura) {
       try {
-        // OJO: usar SIEMPRE la foto fija de ticketPayload (tomada en el
-        // momento de cobrar, fase 1), nunca currentAgent/currentTerminal en
-        // vivo -- esta actualizacion corre en la cola serial de fondo, y para
-        // cuando le toca el turno el operario puede ya haber cambiado de
-        // agente o de terminal para el SIGUIENTE cliente. Ver el comentario
-        // junto a ticketPayload._payCodAgente (fase 1) para el porque.
-        const upd = {
-          idestado: 11,
-          pagada: 1,
-          tpv_venta: 1,
-          tpv_efectivo: Number(tpv_efectivo.toFixed(2)),
-          tpv_cambio: Number(tpv_cambio.toFixed(2)),
-          codpago: ticketPayload.codpago || "",
-          idtpv: ticketPayload.idtpv || "",
-          codalmacen: ticketPayload._payCodAlmacen || "",
-          observaciones: (payResult?.observaciones || "").toString(),
-          numero2: (payResult?.numero ?? "").toString(),
-          nick: ticketPayload._payNick || "Ventas",
-        };
-        if (ticketPayload._payCodAgente) upd.codagente = ticketPayload._payCodAgente;
-        committedUpd = upd;
-        await retryFacturaFollowupStep(() => updateFacturaCliente(idfactura, upd));
+        if (atomicCreateWorked) {
+          await retryFacturaFollowupStep(() =>
+            updateFacturaCliente(idfactura, { idestado: 11 }),
+          );
 
-        if (codcliente) {
-          const today = new Date().toISOString().slice(0, 10);
-          for (const p of pagosFinal) {
-            const importe = Number(Number(p.importe || 0).toFixed(2));
-            if (!(importe > 0)) continue;
+          // Pago partido: el recibo automatico cubre el TOTAL con un solo
+          // metodo -- cleanupRecibosFactura (mas abajo) lo sustituye por el
+          // desglose real.
+          if (pagosFinal.length > 1 && codcliente) {
+            const today = new Date().toISOString().slice(0, 10);
+            for (const p of pagosFinal) {
+              const importe = Number(Number(p.importe || 0).toFixed(2));
+              if (!(importe > 0)) continue;
 
-            await retryFacturaFollowupStep(() =>
-              createReciboCliente({
-                idfactura,
-                codcliente,
-                codpago: p.codpago,
-                importe,
-                fechapago: today,
-                fecha: today,
-                idempresa,
-                codigofactura,
-                coddivisa,
-              }),
-            );
+              await retryFacturaFollowupStep(() =>
+                createReciboCliente({
+                  idfactura,
+                  codcliente,
+                  codpago: p.codpago,
+                  importe,
+                  fechapago: today,
+                  fecha: today,
+                  idempresa,
+                  codigofactura,
+                  coddivisa,
+                }),
+              );
+            }
+          }
+        } else {
+          // OJO: usar SIEMPRE la foto fija de ticketPayload (tomada en el
+          // momento de cobrar, fase 1), nunca currentAgent/currentTerminal en
+          // vivo -- esta actualizacion corre en la cola serial de fondo, y para
+          // cuando le toca el turno el operario puede ya haber cambiado de
+          // agente o de terminal para el SIGUIENTE cliente. Ver el comentario
+          // junto a ticketPayload._payCodAgente (fase 1) para el porque.
+          const upd = {
+            idestado: 11,
+            pagada: 1,
+            tpv_venta: 1,
+            tpv_efectivo: Number(tpv_efectivo.toFixed(2)),
+            tpv_cambio: Number(tpv_cambio.toFixed(2)),
+            codpago: ticketPayload.codpago || "",
+            idtpv: ticketPayload.idtpv || "",
+            codalmacen: ticketPayload._payCodAlmacen || "",
+            observaciones: (payResult?.observaciones || "").toString(),
+            numero2: (payResult?.numero ?? "").toString(),
+            nick: ticketPayload._payNick || "Ventas",
+          };
+          if (ticketPayload._payCodAgente) upd.codagente = ticketPayload._payCodAgente;
+          committedUpd = upd;
+          await retryFacturaFollowupStep(() => updateFacturaCliente(idfactura, upd));
+
+          if (codcliente) {
+            const today = new Date().toISOString().slice(0, 10);
+            for (const p of pagosFinal) {
+              const importe = Number(Number(p.importe || 0).toFixed(2));
+              if (!(importe > 0)) continue;
+
+              await retryFacturaFollowupStep(() =>
+                createReciboCliente({
+                  idfactura,
+                  codcliente,
+                  codpago: p.codpago,
+                  importe,
+                  fechapago: today,
+                  fecha: today,
+                  idempresa,
+                  codigofactura,
+                  coddivisa,
+                }),
+              );
+            }
           }
         }
       } catch (e) {
@@ -37349,12 +37499,29 @@ async function processConfirmedSale(ctx) {
         apiLogCobroFollowupIssue({
           idfactura,
           codigo: codigofactura,
-          step: "agente-efectivo-recibo",
+          step: atomicCreateWorked ? "idestado-emitida" : "agente-efectivo-recibo",
           message: e?.message || String(e),
         }).catch(() => {});
 
         let queuedForFollowupRetry = false;
-        if (isRetryableQueueSyncError(e)) {
+        if (atomicCreateWorked) {
+          // El dinero y el agente YA estan bien puestos -- lo unico que
+          // falta es un campo (idestado). No hay ningun motivo de negocio
+          // para rendirse aqui: se reintenta para siempre (mismo backoff
+          // creciente de la cola) en vez de avisar y abandonar.
+          try {
+            await window.TPV_QUEUE.enqueue({
+              type: "FINALIZE_FACTURACLIENTE",
+              payload: { idfactura, codigofactura },
+            });
+            queuedForFollowupRetry = true;
+          } catch (qe) {
+            console.warn(
+              "No se pudo encolar el remate de idestado:",
+              qe?.message || qe,
+            );
+          }
+        } else if (isRetryableQueueSyncError(e)) {
           try {
             await window.TPV_QUEUE.enqueue({
               type: "COMPLETE_FACTURACLIENTE",
@@ -49348,155 +49515,250 @@ async function syncQueueNow() {
               );
             }
 
-            // 3) Emitir y marcar pagada (tpv_efectivo/tpv_cambio/etc.)
+            // Cobro atomico (ver ticketPayload.codagente en
+            // onPayButtonClick): item.payload ES el mismo ticketPayload de
+            // fase 1, asi que si ya llevaba codagente/tpv_efectivo/
+            // tpv_cambio, el paso 1 (crearFacturaCliente, arriba) los mando
+            // ya en la creacion. Si la respuesta confirma codagente/pagada,
+            // no hace falta repetir el PATCH completo -- solo el remate de
+            // idestado (y, si el pago fue partido, ajustar los recibos).
+            const atomicCreateWorked =
+              !!item.payload?.codagente &&
+              String(doc?.codagente || "").trim() ===
+                String(item.payload.codagente).trim() &&
+              !!doc?.pagada;
+
             let offlineUpd = null;
             let offlineFollowupFailed = false;
-            try {
-              // efectivo = ENTREGADO en efectivo (como tu criterio en online)
-              const tpv_efectivo = pagosOffline
-                .filter((p) =>
-                  isCashPago({
-                    codpago: p?.codpago,
-                    descripcion: p?.descripcion,
-                  }),
-                )
-                .reduce(
-                  (s, p) => s + moneyToNumber(p?.entregado ?? p?.importe ?? 0),
-                  0,
+
+            if (atomicCreateWorked) {
+              try {
+                await retryFacturaFollowupStep(() =>
+                  updateFacturaCliente(idfactura, { idestado: 11 }),
                 );
 
-              const tpv_cambio = moneyToNumber(item.post?.cambio || 0);
+                if (pagosOffline.length > 1) {
+                  const today = new Date().toISOString().slice(0, 10);
+                  const fc = await fetchFacturaClienteById(idfactura);
 
-              offlineUpd = {
-                idestado: 11,
-                pagada: 1,
+                  if (fc?.codcliente) {
+                    for (const p of pagosOffline) {
+                      const importe = Number(Number(p?.importe || 0).toFixed(2));
+                      if (!(importe > 0)) continue;
 
-                tpv_venta: 1,
-                tpv_efectivo: Number(Number(tpv_efectivo || 0).toFixed(2)),
-                tpv_cambio: Number(Number(tpv_cambio || 0).toFixed(2)),
+                      await retryFacturaFollowupStep(() =>
+                        createReciboCliente({
+                          idfactura,
+                          codcliente: fc.codcliente,
+                          codpago: String(p?.codpago || "").trim(),
+                          importe,
+                          fechapago: today,
+                          fecha: today,
+                          idempresa: fc.idempresa,
+                          codigofactura: fc.codigo || fc.codigofactura || "",
+                          coddivisa: fc.coddivisa,
+                        }),
+                      );
+                    }
 
-                observaciones: (item.post?.observaciones || "").toString(),
-                numero2: (item.post?.numero ?? "").toString(),
-                nick: (item.post?.nick || "Ventas").toString(),
-
-                codpago: item.post?.codpago || item.payload?.codpago || "",
-
-                // terminal/caja (si el payload lo llevaba, mejor)
-                idtpv:
-                  item.payload?.idtpv ||
-                  currentTerminal?.id ||
-                  item.post?.terminal?.id ||
-                  "",
-                idcaja:
-                  item.payload?.idcaja ||
-                  cashSession?.remoteCajaId ||
-                  getCajaIdSafe?.() ||
-                  "",
-
-                codalmacen:
-                  item.payload?.codalmacen ||
-                  currentTerminal?.codalmacen ||
-                  item.post?.terminal?.codalmacen ||
-                  "",
-
-                ...(item.post?.agente?.codagente
-                  ? { codagente: item.post.agente.codagente }
-                  : currentAgent?.codagente
-                    ? { codagente: currentAgent.codagente }
-                    : {}),
-              };
-              await retryFacturaFollowupStep(() =>
-                updateFacturaCliente(idfactura, offlineUpd),
-              );
-            } catch (e) {
-              console.warn(
-                "No se pudo emitir/pagar factura offline tras reintentar:",
-                e?.message || e,
-              );
-              offlineFollowupFailed = true;
-            }
-
-            // 4) Recibos por método + cleanup -- SOLO si el paso 3 (emitir +
-            // marcar pagada/agente) salió bien. Cliente real (Los
-            // Argentinos, 2026-09-18): estos dos pasos corrían siempre los
-            // dos, sin depender uno del otro -- si el paso 3 fallaba (p.ej.
-            // otro corte de red justo al reintentar), el recibo se creaba
-            // igual, y FacturaScripts marca la factura como "pagada" solo
-            // porque tiene un recibo cubriendo el importe. Resultado: una
-            // factura real, cobrada de cara al "Total vendido" del cierre,
-            // pero sin agente y sin pasar nunca de Boceto a Emitida -- ni un
-            // euro real detras. El flujo online (processConfirmedSale) ya
-            // hacia esto bien (misma cadena de try, un fallo del paso 3
-            // salta directo al catch sin crear el recibo); aqui faltaba el
-            // mismo gate.
-            if (!offlineFollowupFailed) {
-              try {
-                const today = new Date().toISOString().slice(0, 10);
-                const fc = await fetchFacturaClienteById(idfactura);
-
-                if (fc?.codcliente && pagosOffline.length) {
-                  for (const p of pagosOffline) {
-                    const importe = Number(Number(p?.importe || 0).toFixed(2));
-                    if (!(importe > 0)) continue;
-
-                    await retryFacturaFollowupStep(() =>
-                      createReciboCliente({
-                        idfactura,
-                        codcliente: fc.codcliente,
-                        codpago: String(p?.codpago || "").trim(),
-                        importe,
-                        fechapago: today,
-                        fecha: today,
-                        idempresa: fc.idempresa,
-                        codigofactura: fc.codigo || fc.codigofactura || "",
-                        coddivisa: fc.coddivisa,
-                      }),
-                    );
+                    await cleanupRecibosFactura(idfactura, pagosOffline);
+                    try {
+                      await validateRecibosAgainstFactura?.(idfactura);
+                    } catch {}
                   }
-
-                  await cleanupRecibosFactura(idfactura, pagosOffline);
-
-                  // opcional: valida (si ya tienes función)
-                  try {
-                    await validateRecibosAgainstFactura?.(idfactura);
-                  } catch {}
                 }
               } catch (e) {
                 console.warn(
-                  "No se pudieron crear/limpiar recibos offline tras reintentar:",
+                  "No se pudo rematar factura offline (atomica) tras reintentar:",
                   e?.message || e,
                 );
                 offlineFollowupFailed = true;
               }
-            }
 
-            // Si el paso 3 y/o 4 agotaron sus reintentos inmediatos, se
-            // encola un COMPLETE_FACTURACLIENTE (mismo mecanismo que usa el
-            // flujo online para este mismo caso) en vez de dejarlo
-            // silenciosamente huerfano -- se reintentara solo con backoff
-            // creciente hasta que se complete.
-            if (offlineFollowupFailed && offlineUpd) {
+              if (offlineFollowupFailed) {
+                try {
+                  if (pagosOffline.length > 1) {
+                    // Pago partido: falta idestado y/o el ajuste de recibos
+                    // -- mismo mecanismo que el camino de siempre.
+                    await window.TPV_QUEUE.enqueue({
+                      type: "COMPLETE_FACTURACLIENTE",
+                      payload: {
+                        idfactura,
+                        upd: { idestado: 11 },
+                        pagos: pagosOffline,
+                        codcliente: doc?.codcliente || null,
+                        idempresa: doc?.idempresa || null,
+                        codigofactura: doc?.codigo || doc?.codigofactura || "",
+                        coddivisa: doc?.coddivisa || null,
+                      },
+                    });
+                  } else {
+                    // Un solo metodo: el dinero/agente ya estan bien
+                    // puestos, solo falta idestado -- nunca se rinde.
+                    await window.TPV_QUEUE.enqueue({
+                      type: "FINALIZE_FACTURACLIENTE",
+                      payload: {
+                        idfactura,
+                        codigofactura: doc?.codigo || doc?.codigofactura || "",
+                      },
+                    });
+                  }
+                } catch (qe) {
+                  console.warn(
+                    "No se pudo encolar el remate de una venta offline (atomica):",
+                    qe?.message || qe,
+                  );
+                }
+              }
+            } else {
+              // Camino de siempre: la creacion no confirmo agente/pagada
+              // (p.ej. version distinta de FacturaScripts en algun cliente)
+              // -- no se asume que funciono, se completa todo por PATCH+
+              // recibos, igual que antes.
               try {
-                await window.TPV_QUEUE.enqueue({
-                  type: "COMPLETE_FACTURACLIENTE",
-                  payload: {
-                    idfactura,
-                    upd: offlineUpd,
-                    pagos: pagosOffline,
-                    codcliente: facturaSyncResp?.codcliente || null,
-                    idempresa: facturaSyncResp?.idempresa || null,
-                    codigofactura:
-                      facturaSyncResp?.codigo ||
-                      facturaSyncResp?.codigofactura ||
-                      "",
-                    coddivisa: facturaSyncResp?.coddivisa || null,
-                  },
-                });
-              } catch (qe) {
-                console.warn(
-                  "No se pudo encolar el completado automatico de una venta offline:",
-                  qe?.message || qe,
+                // efectivo = ENTREGADO en efectivo (como tu criterio en online)
+                const tpv_efectivo = pagosOffline
+                  .filter((p) =>
+                    isCashPago({
+                      codpago: p?.codpago,
+                      descripcion: p?.descripcion,
+                    }),
+                  )
+                  .reduce(
+                    (s, p) => s + moneyToNumber(p?.entregado ?? p?.importe ?? 0),
+                    0,
+                  );
+
+                const tpv_cambio = moneyToNumber(item.post?.cambio || 0);
+
+                offlineUpd = {
+                  idestado: 11,
+                  pagada: 1,
+
+                  tpv_venta: 1,
+                  tpv_efectivo: Number(Number(tpv_efectivo || 0).toFixed(2)),
+                  tpv_cambio: Number(Number(tpv_cambio || 0).toFixed(2)),
+
+                  observaciones: (item.post?.observaciones || "").toString(),
+                  numero2: (item.post?.numero ?? "").toString(),
+                  nick: (item.post?.nick || "Ventas").toString(),
+
+                  codpago: item.post?.codpago || item.payload?.codpago || "",
+
+                  // terminal/caja (si el payload lo llevaba, mejor)
+                  idtpv:
+                    item.payload?.idtpv ||
+                    currentTerminal?.id ||
+                    item.post?.terminal?.id ||
+                    "",
+                  idcaja:
+                    item.payload?.idcaja ||
+                    cashSession?.remoteCajaId ||
+                    getCajaIdSafe?.() ||
+                    "",
+
+                  codalmacen:
+                    item.payload?.codalmacen ||
+                    currentTerminal?.codalmacen ||
+                    item.post?.terminal?.codalmacen ||
+                    "",
+
+                  ...(item.post?.agente?.codagente
+                    ? { codagente: item.post.agente.codagente }
+                    : currentAgent?.codagente
+                      ? { codagente: currentAgent.codagente }
+                      : {}),
+                };
+                await retryFacturaFollowupStep(() =>
+                  updateFacturaCliente(idfactura, offlineUpd),
                 );
+              } catch (e) {
+                console.warn(
+                  "No se pudo emitir/pagar factura offline tras reintentar:",
+                  e?.message || e,
+                );
+                offlineFollowupFailed = true;
+              }
+
+              // Recibos por método + cleanup -- SOLO si el paso de arriba
+              // (emitir + marcar pagada/agente) salió bien. Cliente real
+              // (Los Argentinos, 2026-09-18): estos dos pasos corrían
+              // siempre los dos, sin depender uno del otro -- si el primero
+              // fallaba (p.ej. otro corte de red justo al reintentar), el
+              // recibo se creaba igual, y FacturaScripts marca la factura
+              // como "pagada" solo porque tiene un recibo cubriendo el
+              // importe. Resultado: una factura real, cobrada de cara al
+              // "Total vendido" del cierre, pero sin agente y sin pasar
+              // nunca de Boceto a Emitida -- ni un euro real detras.
+              if (!offlineFollowupFailed) {
+                try {
+                  const today = new Date().toISOString().slice(0, 10);
+                  const fc = await fetchFacturaClienteById(idfactura);
+
+                  if (fc?.codcliente && pagosOffline.length) {
+                    for (const p of pagosOffline) {
+                      const importe = Number(Number(p?.importe || 0).toFixed(2));
+                      if (!(importe > 0)) continue;
+
+                      await retryFacturaFollowupStep(() =>
+                        createReciboCliente({
+                          idfactura,
+                          codcliente: fc.codcliente,
+                          codpago: String(p?.codpago || "").trim(),
+                          importe,
+                          fechapago: today,
+                          fecha: today,
+                          idempresa: fc.idempresa,
+                          codigofactura: fc.codigo || fc.codigofactura || "",
+                          coddivisa: fc.coddivisa,
+                        }),
+                      );
+                    }
+
+                    await cleanupRecibosFactura(idfactura, pagosOffline);
+
+                    // opcional: valida (si ya tienes función)
+                    try {
+                      await validateRecibosAgainstFactura?.(idfactura);
+                    } catch {}
+                  }
+                } catch (e) {
+                  console.warn(
+                    "No se pudieron crear/limpiar recibos offline tras reintentar:",
+                    e?.message || e,
+                  );
+                  offlineFollowupFailed = true;
+                }
+              }
+
+              // Si el paso 3 y/o 4 agotaron sus reintentos inmediatos, se
+              // encola un COMPLETE_FACTURACLIENTE (mismo mecanismo que usa el
+              // flujo online para este mismo caso) en vez de dejarlo
+              // silenciosamente huerfano -- se reintentara solo con backoff
+              // creciente hasta que se complete.
+              if (offlineFollowupFailed && offlineUpd) {
+                try {
+                  await window.TPV_QUEUE.enqueue({
+                    type: "COMPLETE_FACTURACLIENTE",
+                    payload: {
+                      idfactura,
+                      upd: offlineUpd,
+                      pagos: pagosOffline,
+                      codcliente: facturaSyncResp?.codcliente || null,
+                      idempresa: facturaSyncResp?.idempresa || null,
+                      codigofactura:
+                        facturaSyncResp?.codigo ||
+                        facturaSyncResp?.codigofactura ||
+                        "",
+                      coddivisa: facturaSyncResp?.coddivisa || null,
+                    },
+                  });
+                } catch (qe) {
+                  console.warn(
+                    "No se pudo encolar el completado automatico de una venta offline:",
+                    qe?.message || qe,
+                  );
+                }
               }
             }
 
@@ -49660,6 +49922,36 @@ async function syncQueueNow() {
                 { title: "Sincronizacion", modal: true, cooldownMs: 60 * 60 * 1000 },
               );
             }
+          }
+          continue;
+        }
+
+        // =============================================================
+        // 2.6) Rematar factura ya atribuida y pagada (solo falta Emitida) --
+        // cobro atomico (ver ticketPayload.codagente en onPayButtonClick):
+        // el dinero y el agente YA estan bien puestos desde la propia
+        // creacion, esto es solo un PATCH de un campo (idestado). No hay
+        // ningun motivo de negocio para rendirse aqui pase lo que pase --
+        // a diferencia de COMPLETE_FACTURACLIENTE (arriba), este NUNCA se
+        // marca "dropped": sigue reintentando con el mismo backoff creciente
+        // (1/2/5/10 min) indefinidamente, incluso si el TPV se cierra y se
+        // vuelve a abrir mas tarde (la cola persiste en disco).
+        // =============================================================
+        if (item.type === "FINALIZE_FACTURACLIENTE") {
+          try {
+            const { idfactura } = item.payload || {};
+            if (!idfactura) {
+              await window.TPV_QUEUE.done(item.id, {
+                ok: false,
+                error: "payload-invalido",
+              });
+              continue;
+            }
+
+            await updateFacturaCliente(idfactura, { idestado: 11 });
+            await window.TPV_QUEUE.done(item.id, { ok: true, idfactura });
+          } catch (e) {
+            await window.TPV_QUEUE.error(item.id, e?.message || String(e));
           }
           continue;
         }

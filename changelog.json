@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "IMPORTANTE: mejorada de raíz la fiabilidad al cobrar. Ahora el agente, el efectivo/cambio y la forma de pago se guardan en el mismo momento de crear la factura (antes se completaban en un segundo paso); si algo interrumpe ese segundo paso (un corte de red, cerrar el programa), el TPV lo sigue intentando solo hasta conseguirlo, incluso si se reinicia el ordenador. Además, antes de cerrar caja se avisa si queda algún ticket todavía terminándose de procesar, y el aviso \"Agente —\" (que parecía el nombre de una empleada) ahora se llama \"Ticket incompleto (sin agente)\", dejando claro que es una incidencia técnica y no una persona."
+      ]
     },
     {
       "version": "0.2.34",
