@@ -313,16 +313,26 @@ body.mesas-inline-trans-mode .mesas-context-row {
 body.mesas-inline-trans-mode .products-area {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
-  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto auto auto minmax(0, 1fr) auto;
   grid-template-areas:
     "agent agent"
     "tabs tabs"
     "left search"
     "left categories"
+    "left notice"
     "left products"
     "status status";
   padding: 10px 12px 12px;
   gap: 8px;
+}
+
+/* El aviso de "modo reordenar" es hijo directo de .products-area (igual que
+   .products-grid-wrap): sin su propia grid-area, el auto-placement de CSS
+   Grid se la queda a él en vez de a productsGridWrap, empujando la rejilla
+   de productos entera a una fila implícita fuera del área visible (rejilla
+   en blanco). Bug preexistente, no introducido por los añadidos de producto. */
+body.mesas-inline-trans-mode #productReorderModeNotice {
+  grid-area: notice;
 }
 
 body.mesas-inline-trans-mode #mainAgentBar {
@@ -341,7 +351,7 @@ body.mesas-inline-trans-mode .categories-wrapper {
   grid-area: categories;
 }
 
-body.mesas-inline-trans-mode .products-grid {
+body.mesas-inline-trans-mode .products-grid-wrap {
   grid-area: products;
   margin-top: 0;
 }
@@ -841,7 +851,7 @@ body.mesas-inline-trans-mode .search-bar input {
 
 body.mesas-inline-trans-mode .category-btn {
   padding: 10px 14px;
-  font-size: 14px;
+  font-size: var(--category-btn-font-size, 14px);
   border-radius: 10px;
   min-height: 42px;
 }
@@ -869,7 +879,7 @@ body.mesas-inline-trans-mode .product-name {
 }
 
 body.mesas-inline-trans-mode .product-secondary {
-  font-size: 11px;
+  font-size: var(--product-name-font-size, 11px);
 }
 
 body.mesas-inline-trans-mode .product-price {
@@ -1021,7 +1031,7 @@ body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode)
 
 body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode) .category-btn {
   padding: 10px 14px;
-  font-size: 14px;
+  font-size: var(--category-btn-font-size, 14px);
   min-height: 42px;
 }
 
@@ -1045,7 +1055,7 @@ body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode) .product-name {
 
 body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode)
   .product-secondary {
-  font-size: 11px;
+  font-size: var(--product-name-font-size, 11px);
 }
 
 body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode) .product-price {
@@ -1256,11 +1266,13 @@ body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode)
   padding-bottom: 2px;
 }
 
-/* Grid en 2 filas, creciendo por columnas */
+/* Una sola fila (con scroll horizontal ya soportado por .agent-list-wrap):
+   con 2+ agentes, la barra ya no reserva la altura de 2 filas -- se pierde
+   menos espacio arriba, dejando ver más productos debajo. */
 .agent-list {
   display: grid;
   grid-auto-flow: column;
-  grid-template-rows: repeat(2, auto);
+  grid-template-rows: repeat(1, auto);
   grid-auto-columns: max-content;
   gap: 8px;
   align-content: start;
@@ -2143,7 +2155,7 @@ body.theme-dark .open-caja-prompt-text {
 
 /* Descripción */
 .product-secondary {
-  font-size: 11px;
+  font-size: var(--product-name-font-size, 11px);
   opacity: 0.9;
 }
 
@@ -3128,6 +3140,13 @@ body.mesas-inline-trans-mode
   z-index: 1000001;
 }
 
+/* Mismo z-index base que #ticketsOverlay (.simple-overlay): sin esto, al
+   abrirse desde la lista de Tickets (que sigue detrás, visible), el
+   desempate por orden en el DOM lo dejaba tapado e invisible. */
+#invoiceEmailOverlay {
+  z-index: 1000000;
+}
+
 .simple-overlay.hidden {
   display: none !important;
 }
@@ -3140,6 +3159,47 @@ body.mesas-inline-trans-mode
   max-width: 90vw;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
   box-sizing: border-box;
+}
+
+.invoice-email-dialog {
+  width: 480px;
+  max-width: 94vw;
+}
+
+.invoice-email-history-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+  min-height: 0;
+}
+
+.invoice-email-history-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  border-radius: 999px;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  font-size: 12px;
+  color: #3730a3;
+  cursor: pointer;
+}
+
+.invoice-email-history-chip-del {
+  border: 0;
+  background: rgba(55, 48, 163, 0.12);
+  color: #3730a3;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .dialog-actions {
@@ -5011,6 +5071,10 @@ textarea:focus {
 .ticket-refund {
   background: #f6c343;
   color: #111;
+}
+.ticket-send-invoice {
+  background: #64748b;
+  color: #fff;
 }
 .ticket-btn:active {
   transform: translateY(1px);
@@ -7156,6 +7220,28 @@ body.theme-dark #parkObsOverlay .park-quick-flag.is-active {
   justify-content: center;
 }
 
+/* Anadidos de producto (Modo Mesas) - boton de gestion, dentro del footer
+   (no absolute sobre la imagen) para no tapar nunca el nombre del producto. */
+.product-addons-footer-btn {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin-right: 4px;
+  border-radius: 6px;
+  border: 1px solid rgba(30, 41, 59, 0.2);
+  background: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.product-addons-footer-btn.has-addons {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25);
+}
+
 /* Opciones - dialog grande */
 .opt-dialog {
   width: 720px;
@@ -7588,6 +7674,13 @@ body.theme-dark .opt-loading-banner {
   -webkit-box-orient: vertical;
 }
 
+.cart-line-addons {
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #2563eb;
+}
+
 .item.pack-child .desc {
   padding-left: 12px;
   opacity: 0.95;
@@ -7820,6 +7913,32 @@ body.theme-dark .opt-loading-banner {
 
 .pack-item.is-disabled {
   opacity: 0.45;
+}
+
+/* Anadidos de producto: gestion (admin) y seleccion al vender */
+.addons-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.addons-item-input {
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  font-size: 14px;
+}
+.addons-item-del {
+  flex: 0 0 auto;
+}
+.addons-manage-empty {
+  padding: 12px;
+  font-size: 13px;
+  opacity: 0.75;
+  text-align: center;
+}
+.addons-select-item {
+  cursor: pointer;
 }
 
 .pack-item-left {

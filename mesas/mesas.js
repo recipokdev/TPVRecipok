@@ -1340,13 +1340,21 @@ function readTablesStateRaw() {
   );
 }
 
+// Misma optimización que el host window (renderer.js): sin esto, este
+// iframe hace SU PROPIO sondeo de 8s independiente y se trae el bloque
+// entero aunque nada haya cambiado.
+let mesasLayoutLastKnownUpdatedAt = null;
+
 async function apiGetMesasLayoutRemote() {
   const slug = String(getMesasSlugScope() || "").trim();
   const apiKey = getMesasSyncApiKey();
   if (!slug || !apiKey) return null;
 
   const apiUrl = getMesasSyncApiUrl();
-  const url = `${apiUrl}?action=get-mesas-layout&slug=${encodeURIComponent(slug)}`;
+  const ifNewerThanQs = mesasLayoutLastKnownUpdatedAt
+    ? `&ifNewerThan=${encodeURIComponent(mesasLayoutLastKnownUpdatedAt)}`
+    : "";
+  const url = `${apiUrl}?action=get-mesas-layout&slug=${encodeURIComponent(slug)}${ifNewerThanQs}`;
   const res = await fetch(url, {
     method: "GET",
     headers: {
@@ -1358,6 +1366,10 @@ async function apiGetMesasLayoutRemote() {
 
   if (!res.ok) return null;
   const data = await res.json().catch(() => null);
+  const remoteUpdatedAt = data?.data?.updatedAt;
+  if (remoteUpdatedAt) mesasLayoutLastKnownUpdatedAt = String(remoteUpdatedAt);
+  if (data?.unchanged) return null;
+
   const layout = data?.data?.layout ?? data?.layout ?? data?.data ?? null;
   return layout && typeof layout === "object" ? layout : null;
 }

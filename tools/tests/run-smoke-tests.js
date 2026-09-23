@@ -7197,6 +7197,341 @@ mustContain(
   "getAgentLabel no longer produces the confusing 'Agente -' label (mistaken for a real employee name) for a ticket with no agent",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-21 family/category button + product description font-size fixes\n",
+);
+
+mustContain(
+  styles,
+  "body.mesas-inline-trans-mode .category-btn {\r\n  padding: 10px 14px;\r\n  font-size: var(--category-btn-font-size, 14px);",
+  "The mesas-inline-trans-mode override no longer hardcodes .category-btn font-size, so the family resize handle actually has an effect there (higher specificity than the base .category-btn rule was silently overriding it)",
+);
+mustContain(
+  styles,
+  "body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode) .category-btn {\r\n  padding: 10px 14px;\r\n  font-size: var(--category-btn-font-size, 14px);",
+  "The normal-mode override no longer hardcodes .category-btn font-size either (same bug, same fix, other mode)",
+);
+mustContain(
+  styles,
+  ".product-secondary {\r\n  font-size: var(--product-name-font-size, 11px);\r\n  opacity: 0.9;\r\n}",
+  "The product description (.product-secondary) now scales with the same drag handle as the product name, instead of being stuck at a hardcoded 11px",
+);
+mustContain(
+  index,
+  'class="opt-row opt-row-stack" id="customerDisplayPickerRow"',
+  "The 'Pantalla a usar' options row now stacks its select+buttons under the description text instead of squeezing them into the same row",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-21 product addons (Mesas mode at launch; extended to normal TPV 2026-09-23)\n",
+);
+
+mustContain(
+  renderer,
+  "async function loadProductAddons()",
+  "Loading product addons from the shared server is present",
+);
+mustContain(
+  renderer,
+  "function getProductAddonsForProduct(product)",
+  "Resolving a product's configured addons is present",
+);
+mustContain(
+  renderer,
+  "async function apiSaveProductAddon(",
+  "Saving (create/rename) a product addon is present",
+);
+mustContain(
+  renderer,
+  "async function apiDeleteProductAddon(",
+  "Deleting a product addon is present",
+);
+mustContain(
+  renderer,
+  "function isProductAddonsFeatureEnabled()",
+  "The 'product addons' Options toggle getter is present",
+);
+mustContain(
+  renderer,
+  "async function openProductAddonsManagerModal(product)",
+  "The admin-only addon management modal is present",
+);
+mustContain(
+  renderer,
+  "async function openProductAddonsSelectModal({",
+  "The multi-select addon picker shown when selling is present",
+);
+mustContain(
+  renderer,
+  "function attachPrintableAddonsHintsFromSnapshot(fsMappedLines, snapshotLines)",
+  "Reinjecting addons into the FS-sourced customer ticket lines is present",
+);
+mustContain(
+  renderer,
+  'const canManageAddons = isAdminUser() && isProductAddonsFeatureEnabled();',
+  "The addon management button is gated to admin + the feature toggle only -- since 2026-09-23 it works in Modo Mesas AND the normal counter TPV, a single toggle controls both (a cafe can sell 'cafe +leche' straight from the counter, no table needed)",
+);
+mustContain(
+  renderer,
+  "addonsSignature(c.addons) !== addonsSignature(product.__selectedAddons)",
+  "addToCart no longer merges two sales of the same product into one line when they have different (or no) addons selected",
+);
+mustContain(
+  renderer,
+  "addons: Array.isArray(product.__selectedAddons)",
+  "buildCartLine attaches the chosen addons onto the cart line",
+);
+mustContain(
+  index,
+  'id="productAddonsEnabledToggle"',
+  "The 'Añadidos de producto' Options toggle exists (moved 2026-09-23 into the general Productos section, since it now applies to Modo Mesas AND the normal counter TPV)",
+);
+mustContain(
+  renderer,
+  "isProductAddonsFeatureEnabled() &&\r\n            !isOfferPackProductById(Number(p?.baseProductId || p?.id || 0));",
+  "Selling a product with configured addons opens the picker regardless of Modo Mesas -- the Mesas-transacciones-only gate was removed",
+);
+mustContain(
+  styles,
+  ".product-addons-footer-btn {",
+  "Styling for the per-product addon management button is present",
+);
+mustContain(
+  styles,
+  ".cart-line-addons {",
+  "Styling for the chosen addons shown in the cart line is present",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-21 product addons UI fixes (real-usage feedback)\n",
+);
+
+mustContain(
+  renderer,
+  'footer.insertBefore(addonsBtn, footer.firstChild);',
+  "The addon management button lives inside .product-footer (in-flow) instead of an absolute overlay on top of the product name",
+);
+mustContain(
+  renderer,
+  "renderProducts?.();\r\n}",
+  "setMesasInlineView re-renders products on every Mesas mode/view change, so admin-only badges (like the addon button) react immediately instead of only on the next unrelated render",
+);
+mustContain(
+  styles,
+  "body.mesas-inline-trans-mode .products-grid-wrap {\r\n  grid-area: products;",
+  "The Mesas transacciones grid assigns 'products' to the actual direct grid child (.products-grid-wrap), not to a nested grandchild -- previously the CSS Grid auto-placement algorithm could give that slot to an unrelated sibling (the reorder-mode notice) and push the whole product grid off-screen",
+);
+mustContain(
+  styles,
+  "body.mesas-inline-trans-mode #productReorderModeNotice {\r\n  grid-area: notice;",
+  "The reorder-mode notice has its own explicit grid-area in Mesas transacciones, so it can no longer steal the auto-placed 'products' slot and blank out the product grid",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-21 agent bar single row with 2+ agents (real-usage feedback)\n",
+);
+
+mustContain(
+  styles,
+  "grid-template-rows: repeat(1, auto);",
+  "The agent pill list lays out in a single row (with the existing horizontal scroll as fallback) instead of always reserving 2 rows of height, which pushed the search bar/categories/products further down whenever there were 2+ agents",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-21 send-invoice-email modal fixes (real-usage feedback)\n",
+);
+
+mustContain(
+  styles,
+  ".ticket-send-invoice {\r\n  background: #64748b;",
+  "The 'send invoice by email' ticket action button has its own background color instead of blending into the default white button",
+);
+mustContain(
+  styles,
+  "#invoiceEmailOverlay {\r\n  z-index: 1000000;",
+  "The invoice-email overlay has an explicit z-index above the generic .simple-overlay default, so it no longer opens invisibly behind the still-open Tickets list overlay",
+);
+mustContain(
+  renderer,
+  "window.TPV_QWERTY?.openForInput?.(emailInput, \"email\");",
+  "The invoice email input is wired to the on-screen keyboard, like other dynamic inputs already are",
+);
+mustContain(
+  renderer,
+  "window.TPV_QWERTY?.openForInput?.(messageInput, \"text\");",
+  "The invoice message textarea is wired to the on-screen keyboard too",
+);
+mustContain(
+  renderer,
+  "function saveInvoiceEmailToHistory(email)",
+  "Sent invoice emails are remembered in a small local history for reuse",
+);
+mustContain(
+  renderer,
+  "function removeInvoiceEmailFromHistory(email)",
+  "A saved invoice email can be removed from the history",
+);
+mustContain(
+  renderer,
+  "function setInvoiceEmailDefaultMessage(message)",
+  "The invoice message is remembered as the default for next time instead of always resetting to empty",
+);
+mustContain(
+  index,
+  'class="simple-dialog invoice-email-dialog"',
+  "The invoice-email dialog is wider than the generic small confirm dialog, so the email history and message textarea actually fit",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-21 product addons persistence fixes (real-usage feedback)\n",
+);
+
+mustContain(
+  renderer,
+  "addons: Array.isArray(it?.addons) ? it.addons : [],",
+  "Saving a parked Mesas order now includes each line's addons in the payload sent to the server -- previously they were silently dropped by a field whitelist, and the very next remote resync would overwrite the local cart with the addons-less server copy",
+);
+mustContain(
+  renderer,
+  "async function findPaidParkedItemsForFactura(idfactura)",
+  "Reprinting an already-paid ticket from the Tickets list can recover its addons from the matching paid parked reservation (kept ~24h after being paid) -- FacturaScripts itself never stores them",
+);
+mustContain(
+  renderer,
+  "Array.isArray(paidParkedItems) && paidParkedItems.length\r\n        ? paidParkedItems\r\n        : lineasTpv,",
+  "imprimirFacturaHistorica uses the real local addons snapshot (when found) instead of feeding the hint-reinjection function a copy of the same FS-only data it's supposed to be enriching",
+);
+mustContain(
+  renderer,
+  'input.addEventListener("click", () => openQwertyForInput(input, "text"));',
+  "The addon-name input in the manager modal opens the on-screen keyboard -- missed when the modal was first built, found by real usage on a touchscreen TPV with no physical keyboard",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-21 on-screen keyboard audit fixes (real-usage feedback)\n",
+);
+
+mustContain(
+  renderer,
+  "openNumPad(\r\n        inp.value || \"\",",
+  "Each payment-method amount field in the Cobrar modal now opens the numeric keypad on tap -- previously it had NO keyboard mechanism at all (not even a fallback button), making it impossible to type a payment amount on a touchscreen TPV with no physical keyboard",
+);
+mustContain(
+  renderer,
+  "inp.onpointerdown = openPriceKeypad;",
+  "The price-edit input itself now opens the numeric keypad on tap, instead of only the separate keypad button next to it -- the field looked interactive but silently did nothing when tapped directly",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-22 mesas layout polling watermark (perf, real usage feedback)\n",
+);
+
+mustContain(
+  renderer,
+  "let mesasLayoutLastKnownUpdatedAt = null;",
+  "renderer.js tracks the last-known mesas layout updatedAt to skip re-downloading the full block when nothing changed",
+);
+mustContain(
+  renderer,
+  "const ifNewerThanQs = mesasLayoutLastKnownUpdatedAt\r\n    ? `&ifNewerThan=${encodeURIComponent(mesasLayoutLastKnownUpdatedAt)}`",
+  "renderer.js sends ifNewerThan on the 8s mesas layout poll so an unchanged layout comes back tiny instead of the full room/table/draft-cart blob",
+);
+mustContain(
+  mesasJs,
+  "let mesasLayoutLastKnownUpdatedAt = null;",
+  "The mesas.js iframe (a second, independent poller/saver for the same layout) got the same watermark fix -- it does its own separate 8s poll uncoordinated with renderer.js",
+);
+mustContain(
+  mesasJs,
+  "const ifNewerThanQs = mesasLayoutLastKnownUpdatedAt\r\n    ? `&ifNewerThan=${encodeURIComponent(mesasLayoutLastKnownUpdatedAt)}`",
+  "mesas.js also sends ifNewerThan on its own independent poll",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-22 stale-cart-after-remote-mesa-change fix (real-usage feedback via CamarerosTPV)\n",
+);
+
+mustContain(
+  renderer,
+  "merged.__remoteChangedWhileLoaded = true;",
+  "syncParkedTicketsFromRemote flags the currently loaded mesa ticket when it accepts remote items that differ from the in-memory cart -- cart used to go silently stale while the 'Mesa Seleccionada' summary (which reads parkedTickets directly) still looked correct",
+);
+mustContain(
+  renderer,
+  "if (ticket.__remoteChangedWhileLoaded) {",
+  "flushLoadedParkedTicketChangesSync refuses to push a stale cart snapshot over fresher remote items when switching away from a mesa -- previously it would silently overwrite server-confirmed lines (e.g. added by another terminal) with the old local copy",
+);
+mustContain(
+  renderer,
+  "if (loaded.__remoteChangedWhileLoaded) {",
+  "confirmSplitTicket refuses to split/unify using a stale cart when the loaded mesa ticket changed remotely since it was opened -- previously it could permanently drop lines added by another terminal while dividing the bill",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-22 stale-cart fix, round 2 -- Cobrar/guardado/comanda (user asked to dig further)\n",
+);
+
+mustContain(
+  renderer,
+  "function mergeMissingRemoteLinesIntoCart(ticket) {",
+  "New additive-merge helper: adds to cart any ticket lines missing locally, without touching/removing existing cart lines -- used where discarding cart outright would also discard a real local edit in progress",
+);
+mustContain(
+  renderer,
+  "if (syncedTicket.__remoteChangedWhileLoaded) {",
+  "onPayButtonClick refuses to charge/invoice from a stale cart when the mesa changed remotely right before paying -- previously the real FacturaScripts invoice itself was built from the old cart (buildFsLinesFromCart(cart)), permanently under-billing real consumption with no natural way to bill the difference once the ticket is paid",
+);
+mustContain(
+  renderer,
+  "const recovered = mergeMissingRemoteLinesIntoCart(\r\n        parkedTickets[currentParkedTicketIndex],",
+  "parkCurrentCart (the normal save AND the silent autosave that fires on every cart edit) recovers remotely-added lines into cart before saving -- previously this was the most severe of the group: the silent autosave could erase another terminal's addition automatically, with zero explicit user action beyond continuing to edit the same mesa",
+);
+mustContain(
+  renderer,
+  "if (loaded && mergeMissingRemoteLinesIntoCart(loaded)) renderCart();",
+  "Manual 'Imprimir comanda' (openComandaModal / printComandaFromCurrentMesa) recovers remotely-added lines before computing what's new for the kitchen -- previously a dish added by another terminal could silently never reach the kitchen from this terminal if auto-comanda-on-save was disabled",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-23 stuck-parked-ticket fix (real client: Asador el Gallo, saw 4 vs 7 aparcados on 2 terminals at the same instant)\n",
+);
+
+mustContain(
+  renderer,
+  "const isRecentQueueEntry =",
+  "syncParkedTicketsFromRemote no longer trusts a queued-upsert entry to preserve a locally-vanished parked ticket forever -- only recent entries (within the same grace window as other local-recency checks) count, so a genuinely resolved ticket eventually stops being shown as parked even if its queue entry never got cleared",
+);
+mustContain(
+  renderer,
+  "reencolar a ciegas aqui (que se llama en CADA cobro",
+  "syncParkedTicketClosingState (runs on every single checkout) now recognizes an optimistic-lock conflict and registers it as a sync incidence instead of blindly re-queuing a write the server already knows is stale",
+);
+mustContain(
+  renderer,
+  "Real de cliente 2026-09-22 (Asador el Gallo, hora punta): reencolar a",
+  "The parked-ticket-switch flush path (apiSaveParkedReservation(...).then().catch()) also stops blindly re-queuing on a stale-write conflict",
+);
+mustContain(
+  renderer,
+  "Localmente el ticket ya quedo marcado como pagado justo",
+  "markParkedTicketAsPaidByIndex's main save (the exact write that marks a ticket paid) now handles a stale-write conflict by registering it and refreshing, instead of re-queuing a snapshot that's already obsolete -- this was the single most impactful gap, since it's the write every real cobro depends on",
+);
+mustContain(
+  renderer,
+  "handleStaleParkedWriteConflict(loaded, e);\r\n      } else {\r\n        enqueueParkedSyncOperation(\"upsert\", loaded);\r\n        console.warn(\r\n          \"No se pudo sincronizar ticket unificado:\",",
+  "confirmSplitTicket's unify path also handles the stale-write conflict correctly now",
+);
+mustContain(
+  renderer,
+  "handleStaleParkedWriteConflict(loaded, e);\r\n    } else {\r\n      enqueueParkedSyncOperation(\"upsert\", loaded);\r\n      console.warn(\r\n        \"No se pudo sincronizar ticket origen al dividir:\",",
+  "confirmSplitTicket's divide path (saving the origin ticket) also handles the stale-write conflict correctly now",
+);
+mustContain(
+  renderer,
+  "handleStaleParkedWriteConflict(ticket, e);\r\n    } else {\r\n      enqueueParkedSyncOperation(\"upsert\", ticket);\r\n      console.warn(\r\n        \"No se pudo sincronizar estado de comanda en ticket:\",",
+  "persistTicketAfterComandaPrint also handles the stale-write conflict correctly now",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

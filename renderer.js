@@ -8308,12 +8308,20 @@ function writeMesasTablesStateRawLocal(raw) {
   localStorage.setItem(getMesasLayoutScopedStorageKey(), safeRaw);
 }
 
+// Última versión de la que sabemos (para el watermark de abajo). Sin esto,
+// cada sondeo de 8s se traería el bloque entero (roomDesigns/tableMeta/
+// draftCartByTable...) aunque nada haya cambiado desde el sondeo anterior.
+let mesasLayoutLastKnownUpdatedAt = null;
+
 async function apiGetMesasLayoutRemote() {
   const slug = String(getCurrentSlugForReservations() || "").trim();
   const syncApiKey = getTpvSyncApiKey();
   if (!slug || !syncApiKey) return null;
 
-  const url = `${TPV_SYNC_API_URL}?action=get-mesas-layout&slug=${encodeURIComponent(slug)}`;
+  const ifNewerThanQs = mesasLayoutLastKnownUpdatedAt
+    ? `&ifNewerThan=${encodeURIComponent(mesasLayoutLastKnownUpdatedAt)}`
+    : "";
+  const url = `${TPV_SYNC_API_URL}?action=get-mesas-layout&slug=${encodeURIComponent(slug)}${ifNewerThanQs}`;
   const res = await fetch(url, {
     method: "GET",
     headers: {
@@ -8326,6 +8334,10 @@ async function apiGetMesasLayoutRemote() {
   if (!res.ok) return null;
 
   const data = await res.json().catch(() => null);
+  const remoteUpdatedAt = data?.data?.updatedAt;
+  if (remoteUpdatedAt) mesasLayoutLastKnownUpdatedAt = String(remoteUpdatedAt);
+  if (data?.unchanged) return null; // ya teníamos la última versión, nada que aplicar
+
   const layout = data?.data?.layout ?? data?.layout ?? data?.data ?? null;
   if (!layout || typeof layout !== "object") return null;
   return layout;
@@ -9394,6 +9406,74 @@ function hasUnsavedChangesForLoadedParkedTicket(ticket) {
   return current !== saved;
 }
 
+// Real de cliente 2026-09-22 (aviso de CamarerosTPV): a diferencia de
+// cambiar de mesa o Dividir (donde se puede recuperar `cart` del servidor y
+// abortar sin mas), el guardado normal/autoguardado de una mesa NO puede
+// simplemente descartar `cart` cuando el ticket cambio en otro terminal --
+// `cart` es justo lo que el cajero acaba de editar (por eso se esta
+// guardando). Descartarlo perderia SU cambio en vez del remoto. En vez de
+// eso, se fusiona de forma aditiva: por cada "tipo" de linea (mismo
+// producto/precio/descuento/añadidos) se compara la CANTIDAD total que ya
+// hay en `cart` contra la que trae el ticket remoto, y solo se añade una
+// linea nueva con el déficit -- sin tocar ni quitar ninguna linea existente.
+// Comparar solo "¿existe ya esta clave?" (sin sumar cantidades) se probó
+// insuficiente: si el cambio remoto era "una unidad mas de un producto que
+// el cajero ya tenia en el carrito", esa unidad de mas se perdia igual
+// (verificado en vivo, ver bug_stale_cart_after_remote_mesa_change).
+function mergeMissingRemoteLinesIntoCart(ticket) {
+  if (!ticket?.__remoteChangedWhileLoaded) return false;
+
+  const lineKey = (it) =>
+    JSON.stringify({
+      id: getProductBaseId(it) || String(it?.id || ""),
+      price: Number(it?.price ?? it?.grossPrice ?? 0) || 0,
+      taxRate: Number(it?.taxRate ?? 0) || 0,
+      cartLineDiscountPct: clampDiscountPercent(
+        parseNumericLike(it?.cartLineDiscountPct, 0),
+      ),
+      addons: addonsSignature(it?.addons),
+    });
+  const lineQty = (it) => Number(it?.qty ?? it?.cantidad ?? 1) || 0;
+
+  const sumQtyByKey = (lines) => {
+    const map = new Map();
+    (Array.isArray(lines) ? lines : []).forEach((it) => {
+      const key = lineKey(it);
+      map.set(key, (map.get(key) || 0) + lineQty(it));
+    });
+    return map;
+  };
+
+  const cartQtyByKey = sumQtyByKey(cart);
+  const templateByKey = new Map();
+  (Array.isArray(ticket.items) ? ticket.items : []).forEach((it) => {
+    const key = lineKey(it);
+    if (!templateByKey.has(key)) templateByKey.set(key, it);
+  });
+  const ticketQtyByKey = sumQtyByKey(ticket.items);
+
+  const additions = [];
+  ticketQtyByKey.forEach((ticketQty, key) => {
+    const deficit = ticketQty - (cartQtyByKey.get(key) || 0);
+    if (deficit > 0) {
+      additions.push({
+        ...templateByKey.get(key),
+        qty: deficit,
+        cantidad: deficit,
+      });
+    }
+  });
+
+  if (additions.length) {
+    cart = [
+      ...cart,
+      ...additions.map((it) => ({ ...it, _lineId: makeLineId() })),
+    ];
+  }
+  delete ticket.__remoteChangedWhileLoaded;
+  return additions.length > 0;
+}
+
 // Saltar de un aparcado cargado a OTRO (desde la lista, o navegando partes
 // de un dividido) pisaba cart/currentParkedTicketIndex sin pasar por
 // parkCurrentCart, así que cualquier cambio pendiente (cliente, cantidades)
@@ -9424,6 +9504,28 @@ function flushLoadedParkedTicketChangesSync() {
   }
 
   const ticket = parkedTickets[idx];
+
+  // Real de cliente 2026-09-22: si la mesa cambio en otro terminal mientras
+  // estaba cargada aqui, `ticket.items` ya trae la version fresca del
+  // servidor pero `cart` (de donde sale el snapshot que se manda abajo) NO
+  // -- guardar en ese estado sobreescribiria en el servidor lineas ya
+  // confirmadas con una copia vieja. En vez de arriesgarnos, recuperamos la
+  // version fresca en cart y no reescribimos nada (ya esta guardado).
+  if (ticket.__remoteChangedWhileLoaded) {
+    cart = Array.isArray(ticket.items)
+      ? ticket.items.map((it) => ({ ...it }))
+      : [];
+    delete ticket.__remoteChangedWhileLoaded;
+    saveParkedTicketsCache();
+    renderCart?.();
+    toast?.(
+      "Esta mesa se actualizó desde otro terminal mientras estaba abierta; se recuperaron los cambios más recientes.",
+      "info",
+      "Mesas",
+    );
+    return;
+  }
+
   if (!hasUnsavedChangesForLoadedParkedTicket(ticket)) return;
 
   const selectedCustomerCod =
@@ -9450,11 +9552,21 @@ function flushLoadedParkedTicketChangesSync() {
   apiSaveParkedReservation(ticket)
     .then(() => refreshRemoteParkedReservationsOnly())
     .catch((e) => {
-      enqueueParkedSyncOperation("upsert", ticket);
-      console.warn(
-        "No se pudo guardar la reserva remota al cambiar de aparcado:",
-        e?.message || e,
-      );
+      // Real de cliente 2026-09-22 (Asador el Gallo, hora punta): reencolar a
+      // ciegas ante CUALQUIER fallo (incluido el bloqueo optimista) dejaba
+      // esta entrada en la cola de sync indefinidamente -- y mientras algo
+      // siga en cola, syncParkedTicketsFromRemote preserva el ticket local
+      // aunque el servidor ya lo tenga cobrado/borrado, mostrandolo "aparcado"
+      // en este terminal mucho despues de que dejara de existir de verdad.
+      if (e?.staleParkedWrite) {
+        handleStaleParkedWriteConflict(ticket, e);
+      } else {
+        enqueueParkedSyncOperation("upsert", ticket);
+        console.warn(
+          "No se pudo guardar la reserva remota al cambiar de aparcado:",
+          e?.message || e,
+        );
+      }
     });
 
   const reservedDelta = buildReservedQtyDeltaMap(snapshot, prevItems);
@@ -10474,6 +10586,11 @@ function setMesasInlineView(view, { persist = true } = {}) {
   if (persist && MESAS_INLINE_ACTIVE) {
     persistAppMode("mesas").catch(() => {});
   }
+
+  // Re-pintar productos: hay botones/badges (p.ej. gestión de añadidos) cuya
+  // visibilidad depende de MESAS_INLINE_ACTIVE/MESAS_INLINE_VIEW, y este es
+  // el único punto por el que pasan todos los cambios de modo/vista de mesas.
+  renderProducts?.();
 }
 
 async function setMesasInlineModeEnabled(
@@ -11181,6 +11298,11 @@ async function runBootFlow() {
     // carga justo despues de fijar el terminal, antes de que se pueda
     // montar ningun carrito con precios.
     await loadAlmacenPriceOverrides();
+
+    // Añadidos de producto: solo depende del slug, no del terminal, pero se
+    // carga aquí mismo (mismo punto seguro que precio-por-almacén) para
+    // tenerlos ya listos antes de que se pueda pintar ningún producto.
+    await loadProductAddons();
 
     // 5) Caja (recupera o abre modal)
     await maybeOpenCashOrRecover();
@@ -11976,7 +12098,33 @@ function renderProducts() {
     } else {
       tile.onclick = async () => {
         try {
-          await addToCart(productForSale);
+          let productToSell = productForSale;
+
+          // Real (2026-09-23): al principio solo Modo Mesas, pero una
+          // cafeteria puede vender un cafe con leche directo de mostrador
+          // sin asignarlo a ninguna mesa -- un unico ajuste activa/desactiva
+          // los añadidos en los dos sitios a la vez, ver
+          // isProductAddonsFeatureEnabled.
+          const addonsEnabledHere =
+            isProductAddonsFeatureEnabled() &&
+            !isOfferPackProductById(Number(p?.baseProductId || p?.id || 0));
+          const availableAddons = addonsEnabledHere
+            ? getProductAddonsForProduct(productForSale)
+            : [];
+
+          if (availableAddons.length) {
+            const chosen = await openProductAddonsSelectModal({
+              productName: productForSale.name || "",
+              productSecondary: productForSale.secondaryName || "",
+              addons: availableAddons,
+            });
+            if (chosen === null) return; // cancelado: no añadir nada
+            if (chosen.length) {
+              productToSell = { ...productToSell, __selectedAddons: chosen };
+            }
+          }
+
+          await addToCart(productToSell);
         } catch (e) {
           console.warn("addToCart error:", e);
           toast("No se pudo añadir al carrito.", "error");
@@ -12028,6 +12176,36 @@ function renderProducts() {
       };
 
       tile.appendChild(editBtn);
+    }
+
+    const canManageAddons = isAdminUser() && isProductAddonsFeatureEnabled();
+
+    if (canManageAddons) {
+      // Dentro del footer (no absolute sobre la imagen): así nunca tapa el
+      // nombre del producto, y no compite por esquina con price-edit/resize.
+      // .product-price ya usa margin-left:auto, así que insertarlo el
+      // primero en el footer lo deja pegado a la izquierda sin más ajustes.
+      const footer = tile.querySelector(".product-footer");
+      if (footer) {
+        const addonsBtn = document.createElement("button");
+        addonsBtn.type = "button";
+        addonsBtn.className = "product-addons-footer-btn";
+        if (getProductAddonsForProduct(p).length) {
+          addonsBtn.classList.add("has-addons");
+        }
+        addonsBtn.textContent = "🏷️";
+        addonsBtn.title = "Gestionar añadidos";
+        addonsBtn.ariaLabel = "Gestionar añadidos de este producto";
+
+        addonsBtn.onclick = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          await openProductAddonsManagerModal(p);
+          renderProducts();
+        };
+
+        footer.insertBefore(addonsBtn, footer.firstChild);
+      }
     }
 
     if (canResizeTiles) {
@@ -12231,7 +12409,24 @@ function buildCartLine(product, quantity) {
     grossPriceOverride: null,
     discountPctApplied: clampDiscountPercent(product.discountPctApplied || 0),
     discountBaseNetPrice: Number(product.discountBaseNetPrice || priceNet),
+
+    // Añadidos de producto (ver openProductAddonsSelectModal):
+    // anotaciones locales para cocina/camarero, nunca se envían a FacturaScripts.
+    addons: Array.isArray(product.__selectedAddons)
+      ? product.__selectedAddons.map((a) => ({
+          id: a.id,
+          nombre: a.nombre,
+          precio: Number(a.precio || 0),
+        }))
+      : [],
   };
+}
+
+function addonsSignature(addonsArr) {
+  return (Array.isArray(addonsArr) ? addonsArr : [])
+    .map((a) => Number(a?.id || 0))
+    .sort((a, b) => a - b)
+    .join(",");
 }
 
 async function createChildrenFromSelection({
@@ -12446,6 +12641,10 @@ async function addToCart(product, quantity = 1) {
         (1 + (Number(getTaxRateForProduct(product)) || 0) / 100),
     );
     if (existingGross !== productGross) return false;
+    // No mezclar dos ventas del mismo producto con distintos añadidos
+    // (o una con y otra sin) en la misma línea: perderían la distinción.
+    if (addonsSignature(c.addons) !== addonsSignature(product.__selectedAddons))
+      return false;
     return true;
   });
 
@@ -13245,6 +13444,11 @@ function renderCart() {
       if (includesText) includesText = "Incluye: " + includesText;
     }
 
+    let addonsText = "";
+    if (Array.isArray(item.addons) && item.addons.length) {
+      addonsText = item.addons.map((a) => `+${a.nombre}`).join(", ");
+    }
+
     row.innerHTML = `
       <div class="cart-line-name">
         <div class="cart-line-name-head">
@@ -13265,6 +13469,12 @@ function renderCart() {
         ${
           includesText
             ? `<div class="cart-line-packincludes">${includesText}</div>`
+            : ""
+        }
+
+        ${
+          addonsText
+            ? `<div class="cart-line-addons">${addonsText}</div>`
             : ""
         }
 
@@ -16537,11 +16747,20 @@ function syncParkedTicketClosingState(ticket, reason = "") {
       }
     })
     .catch((e) => {
-      enqueueParkedSyncOperation("upsert", ticket);
-      console.warn(
-        "No se pudo sincronizar estado closingInProgress de aparcado:",
-        e?.message || e,
-      );
+      // Ver comentario 2026-09-22 en flushLoadedParkedTicketChangesSync:
+      // reencolar a ciegas aqui (que se llama en CADA cobro, justo el punto
+      // mas transitado en hora punta) es la via mas facil para dejar una
+      // entrada de cola pegada para siempre si esta llamada en concreto
+      // choca con un fallo pasajero.
+      if (e?.staleParkedWrite) {
+        handleStaleParkedWriteConflict(ticket, e);
+      } else {
+        enqueueParkedSyncOperation("upsert", ticket);
+        console.warn(
+          "No se pudo sincronizar estado closingInProgress de aparcado:",
+          e?.message || e,
+        );
+      }
       if (typeof scheduleParkedReservationsBurstRefresh === "function") {
         scheduleParkedReservationsBurstRefresh(`queue-closing-${reason}`);
       }
@@ -16796,6 +17015,26 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
         "Pedidos",
       );
       return;
+    }
+
+    if (
+      currentParkedTicketIndex != null &&
+      Array.isArray(parkedTickets) &&
+      parkedTickets[currentParkedTicketIndex]
+    ) {
+      const recovered = mergeMissingRemoteLinesIntoCart(
+        parkedTickets[currentParkedTicketIndex],
+      );
+      if (recovered) {
+        renderCart();
+        if (!silentAutoSave) {
+          toast?.(
+            "Esta mesa se actualizó desde otro terminal; se han recuperado los productos añadidos antes de guardar.",
+            "info",
+            "Mesas",
+          );
+        }
+      }
     }
 
     const keepActiveMesasTicket =
@@ -20266,11 +20505,15 @@ async function markParkedTicketAsPaidByIndex(
       await apiSaveParkedReservation(ticket);
       await refreshRemoteParkedReservationsOnly();
     } catch (e) {
-      enqueueParkedSyncOperation("upsert", ticket);
-      console.warn(
-        "No se pudo sincronizar pedido TPV cobrado:",
-        e?.message || e,
-      );
+      if (e?.staleParkedWrite) {
+        handleStaleParkedWriteConflict(ticket, e);
+      } else {
+        enqueueParkedSyncOperation("upsert", ticket);
+        console.warn(
+          "No se pudo sincronizar pedido TPV cobrado:",
+          e?.message || e,
+        );
+      }
     }
 
     if (isCurrentlyLoadedParkedTicket(ticket)) {
@@ -20354,20 +20597,33 @@ async function markParkedTicketAsPaidByIndex(
     await refreshRemoteParkedReservationsOnly();
     scheduleParkedReservationsBurstRefresh("pay-mark-parked");
   } catch (e) {
-    enqueueParkedSyncOperation("upsert", ticket);
-    scheduleParkedReservationsBurstRefresh("queue-pay-mark-parked");
-    console.warn(
-      "No se pudo marcar como cobrada la reserva remota:",
-      e?.message || e,
-    );
-
-    if (isParkedSyncTransientError(e)) {
-      toast(
-        "Sin internet: cobro aplicado localmente y marcado en cola.",
-        "warn",
-        labels.featureTitle,
+    // Real de cliente 2026-09-22 (Asador el Gallo, hora punta): este es el
+    // guardado que marca el ticket como YA COBRADO -- si choca con el
+    // bloqueo optimista (otro dispositivo ya lo actualizo) y se reencola a
+    // ciegas, la entrada se queda en la cola de ESTE terminal y
+    // syncParkedTicketsFromRemote lo sigue mostrando como aparcado sin
+    // limite de tiempo, aunque el servidor (y el otro terminal) ya lo den
+    // por cobrado. Localmente el ticket ya quedo marcado como pagado justo
+    // antes de este try, asi que aqui solo hace falta registrar el
+    // conflicto y refrescar, nunca reencolar un dato ya obsoleto.
+    if (e?.staleParkedWrite) {
+      handleStaleParkedWriteConflict(ticket, e);
+    } else {
+      enqueueParkedSyncOperation("upsert", ticket);
+      console.warn(
+        "No se pudo marcar como cobrada la reserva remota:",
+        e?.message || e,
       );
+
+      if (isParkedSyncTransientError(e)) {
+        toast(
+          "Sin internet: cobro aplicado localmente y marcado en cola.",
+          "warn",
+          labels.featureTitle,
+        );
+      }
     }
+    scheduleParkedReservationsBurstRefresh("queue-pay-mark-parked");
   }
 
   if (isCurrentlyLoadedParkedTicket(ticket)) {
@@ -27394,6 +27650,7 @@ function openPostPayModal({ docCode, total, cambio }) {
 // ===== [09] Opciones (panel principal) =====
 const OPTIONS_AUTOPRINT_KEY = "tpv_autoPrint";
 const OPTIONS_AUTO_COMANDA_ON_SAVE_KEY = "tpv_autoComandaOnSave";
+const OPTIONS_PRODUCT_ADDONS_ENABLED_KEY = "tpv_productAddonsEnabled";
 const OPTIONS_GROUPLINES_KEY = "tpv_groupLines";
 const FAST_TICKET_NUMBER_CACHE_KEY = "tpv_fast_ticket_number_by_type_v1";
 
@@ -27496,6 +27753,9 @@ const currentComandaPrinterNameEl = document.getElementById(
 const autoPrintToggle = document.getElementById("autoPrintToggle");
 const autoComandaOnSaveToggle = document.getElementById(
   "autoComandaOnSaveToggle",
+);
+const productAddonsEnabledToggle = document.getElementById(
+  "productAddonsEnabledToggle",
 );
 const groupLinesToggle = document.getElementById("groupLinesToggle");
 // ===== [09] Opciones: abrir cajon siempre (toggle) =====
@@ -27946,6 +28206,8 @@ function refreshOptionsUI() {
   autoPrintToggle && (autoPrintToggle.checked = isAutoPrintEnabled());
   autoComandaOnSaveToggle &&
     (autoComandaOnSaveToggle.checked = isAutoComandaOnSaveEnabled());
+  productAddonsEnabledToggle &&
+    (productAddonsEnabledToggle.checked = isProductAddonsFeatureEnabled());
   groupLinesToggle && (groupLinesToggle.checked = isGroupLinesEnabled());
   openDrawerAlwaysToggle &&
     (openDrawerAlwaysToggle.checked = isOpenDrawerAlwaysEnabled());
@@ -28716,6 +28978,13 @@ function setAutoComandaOnSaveEnabled(v) {
   localStorage.setItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY, v ? "1" : "0");
 }
 
+function isProductAddonsFeatureEnabled() {
+  return localStorage.getItem(OPTIONS_PRODUCT_ADDONS_ENABLED_KEY) === "1";
+}
+function setProductAddonsFeatureEnabled(v) {
+  localStorage.setItem(OPTIONS_PRODUCT_ADDONS_ENABLED_KEY, v ? "1" : "0");
+}
+
 function isGroupLinesEnabled() {
   const v = localStorage.getItem(OPTIONS_GROUPLINES_KEY);
   return v === null ? true : v === "1"; // por defecto true
@@ -28784,6 +29053,20 @@ autoComandaOnSaveToggle?.addEventListener("change", () => {
       autoComandaOnSaveToggle.checked
         ? "Auto-comanda al guardar activada ✅"
         : "Auto-comanda al guardar desactivada",
+      "info",
+      "Opciones",
+    );
+  }
+});
+
+productAddonsEnabledToggle?.addEventListener("change", () => {
+  setProductAddonsFeatureEnabled(!!productAddonsEnabledToggle.checked);
+  renderProducts?.();
+  if (typeof toast === "function") {
+    toast(
+      productAddonsEnabledToggle.checked
+        ? "Añadidos de producto activados ✅"
+        : "Añadidos de producto desactivados",
       "info",
       "Opciones",
     );
@@ -31010,6 +31293,70 @@ function attachPrintableDiscountHintsFromSnapshot(
   return out;
 }
 
+// Añadidos de producto: igual que los descuentos, nunca
+// se envían a FacturaScripts, así que para el ticket de cliente (que relee
+// líneas reales desde FS) se reinyectan por comparación contra el snapshot
+// local del ticket, con el mismo criterio de emparejamiento (cantidad +
+// precio unitario + referencia/descripción normalizadas).
+function attachPrintableAddonsHintsFromSnapshot(fsMappedLines, snapshotLines) {
+  const fs = Array.isArray(fsMappedLines) ? fsMappedLines : [];
+  const snap = Array.isArray(snapshotLines) ? snapshotLines : [];
+  if (!fs.length || !snap.length) return fs;
+
+  const normalize = (v) =>
+    String(v || "")
+      .trim()
+      .replace(/^DEV\s*-\s*/i, "")
+      .replace(/\s+/g, " ")
+      .toUpperCase();
+
+  const available = snap
+    .map((line, idx) => ({ line, idx, used: false }))
+    .filter((x) => !isPackChildForPrint(x.line));
+
+  const out = fs.map((line) => ({ ...line }));
+
+  out.forEach((row) => {
+    const fsQty = Math.abs(parseQtyValue(row?.cantidad ?? row?.qty, 0));
+    const fsUnit = round2(Number(getUnitGrossForPrint(row) || 0));
+    const fsRef = normalize(row?.referencia);
+    const fsDesc = normalize(row?.descripcion);
+
+    let best = null;
+    let bestScore = -1;
+
+    for (const c of available) {
+      if (c.used) continue;
+      const qty = Math.abs(parseQtyValue(c.line?.qty ?? c.line?.cantidad, 0));
+      if (Math.abs(qty - fsQty) > 0.001) continue;
+
+      const unit = round2(Number(getUnitGross(c.line) || 0));
+      if (Math.abs(unit - fsUnit) > 0.02) continue;
+
+      let score = 0;
+      const snapRef = normalize(c.line?.referencia || c.line?.name);
+      const snapDesc = normalize(c.line?.descripcion || c.line?.secondaryName);
+      if (fsRef && snapRef && fsRef === snapRef) score += 2;
+      if (fsDesc && snapDesc && fsDesc === snapDesc) score += 1;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = c;
+      }
+    }
+
+    if (!best) return;
+
+    if (Array.isArray(best.line?.addons) && best.line.addons.length) {
+      row.__addonsHint = best.line.addons;
+    }
+
+    best.used = true;
+  });
+
+  return out;
+}
+
 function calcTotalsAndTaxMap(lineas, totalsOnlyPositive) {
   let totalToShow = 0;
   const taxMap = {}; // { rate: { base, iva } }
@@ -31205,6 +31552,14 @@ function renderItemsHtml(doc, lineas) {
 
       const { main, desc } = pickMainAndDesc(l);
 
+      const addonsList =
+        (Array.isArray(l?.addons) && l.addons.length && l.addons) ||
+        (Array.isArray(l?.__addonsHint) && l.__addonsHint.length && l.__addonsHint) ||
+        null;
+      const addonsTxt = addonsList
+        ? addonsList.map((a) => `+${a.nombre}`).join(", ")
+        : "";
+
       const leftQtyHtml = isChild ? "" : safe(qty);
 
       // ✅ hijos: xN o x-N
@@ -31230,6 +31585,7 @@ function renderItemsHtml(doc, lineas) {
               : ""
           }
           ${desc ? `<div class="item-sub small muted">${safe(desc)}</div>` : ""}
+          ${addonsTxt ? `<div class="item-sub small muted"><strong>${safe(addonsTxt)}</strong></div>` : ""}
         </div>
       `;
     })
@@ -31836,12 +32192,59 @@ async function sendInvoiceEmailForTicket(ticket) {
   }
 }
 
+// Historial de emails usados para enviar facturas + mensaje por defecto
+// recordado: guardados en local (por instalación, no por cliente), ya que
+// son datos de conveniencia del cajero, no algo que dependa de FacturaScripts.
+const INVOICE_EMAIL_HISTORY_KEY = "tpv_invoiceEmailHistory";
+const INVOICE_EMAIL_DEFAULT_MESSAGE_KEY = "tpv_invoiceEmailDefaultMessage";
+const INVOICE_EMAIL_HISTORY_MAX = 8;
+
+function getInvoiceEmailHistory() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(INVOICE_EMAIL_HISTORY_KEY) || "[]");
+    return Array.isArray(raw) ? raw.filter((e) => typeof e === "string" && e) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveInvoiceEmailToHistory(email) {
+  const normalized = String(email || "").trim();
+  if (!normalized) return;
+  const existing = getInvoiceEmailHistory().filter(
+    (e) => e.toLowerCase() !== normalized.toLowerCase(),
+  );
+  existing.unshift(normalized);
+  localStorage.setItem(
+    INVOICE_EMAIL_HISTORY_KEY,
+    JSON.stringify(existing.slice(0, INVOICE_EMAIL_HISTORY_MAX)),
+  );
+}
+
+function removeInvoiceEmailFromHistory(email) {
+  const remaining = getInvoiceEmailHistory().filter(
+    (e) => e.toLowerCase() !== String(email || "").toLowerCase(),
+  );
+  localStorage.setItem(INVOICE_EMAIL_HISTORY_KEY, JSON.stringify(remaining));
+}
+
+function getInvoiceEmailDefaultMessage() {
+  return localStorage.getItem(INVOICE_EMAIL_DEFAULT_MESSAGE_KEY) || "";
+}
+
+function setInvoiceEmailDefaultMessage(message) {
+  localStorage.setItem(INVOICE_EMAIL_DEFAULT_MESSAGE_KEY, String(message || ""));
+}
+
+let invoiceEmailKeyboardBound = false;
+
 function openSendInvoiceEmailModal({ prefillEmail = "", prefillName = "" } = {}) {
   return new Promise((resolve) => {
     const overlay = document.getElementById("invoiceEmailOverlay");
     const emailInput = document.getElementById("invoiceEmailInput");
     const messageInput = document.getElementById("invoiceEmailMessageInput");
     const nameEl = document.getElementById("invoiceEmailClientName");
+    const historyList = document.getElementById("invoiceEmailHistoryList");
     const okBtn = document.getElementById("invoiceEmailSendBtn");
     const cancelBtn = document.getElementById("invoiceEmailCancelBtn");
 
@@ -31852,9 +32255,56 @@ function openSendInvoiceEmailModal({ prefillEmail = "", prefillName = "" } = {})
       return resolve({ toEmail: email.trim(), message: "" });
     }
 
-    emailInput.value = prefillEmail || "";
-    if (messageInput) messageInput.value = "";
+    // Teclado en pantalla: estos campos son estáticos en index.html, pero
+    // nunca se registraron contra window.TPV_QWERTY (a diferencia de otros
+    // inputs dinámicos ya enganchados) -- se registra una sola vez.
+    if (!invoiceEmailKeyboardBound) {
+      invoiceEmailKeyboardBound = true;
+      emailInput.addEventListener("click", () => {
+        window.TPV_QWERTY?.openForInput?.(emailInput, "email");
+      });
+      messageInput?.addEventListener("click", () => {
+        window.TPV_QWERTY?.openForInput?.(messageInput, "text");
+      });
+    }
+
+    const history = getInvoiceEmailHistory();
+
+    function renderHistoryChips() {
+      if (!historyList) return;
+      historyList.innerHTML = "";
+      getInvoiceEmailHistory().forEach((savedEmail) => {
+        const chip = document.createElement("span");
+        chip.className = "invoice-email-history-chip";
+
+        const label = document.createElement("span");
+        label.textContent = savedEmail;
+        chip.appendChild(label);
+
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "invoice-email-history-chip-del";
+        delBtn.textContent = "✕";
+        delBtn.title = "Quitar de la lista";
+        delBtn.onclick = (e) => {
+          e.stopPropagation();
+          removeInvoiceEmailFromHistory(savedEmail);
+          renderHistoryChips();
+        };
+        chip.appendChild(delBtn);
+
+        chip.onclick = () => {
+          emailInput.value = savedEmail;
+        };
+
+        historyList.appendChild(chip);
+      });
+    }
+
+    emailInput.value = prefillEmail || history[0] || "";
+    if (messageInput) messageInput.value = getInvoiceEmailDefaultMessage();
     if (nameEl) nameEl.textContent = prefillName || "";
+    renderHistoryChips();
 
     overlay.classList.remove("hidden");
     emailInput.focus();
@@ -31872,6 +32322,8 @@ function openSendInvoiceEmailModal({ prefillEmail = "", prefillName = "" } = {})
         return;
       }
       const message = String(messageInput?.value || "").trim();
+      saveInvoiceEmailToHistory(toEmail);
+      setInvoiceEmailDefaultMessage(message);
       cleanup();
       resolve({ toEmail, message });
     };
@@ -32318,6 +32770,11 @@ async function printTicket(ticket) {
 
           // Si FS no trae detalle de descuento, intentar rescatarlo del snapshot local.
           lineas = attachPrintableDiscountHintsFromSnapshot(
+            lineas,
+            Array.isArray(ticket?.lineas) ? ticket.lineas : [],
+          );
+          // Añadidos de producto: FacturaScripts no los tiene, se rescatan igual.
+          lineas = attachPrintableAddonsHintsFromSnapshot(
             lineas,
             Array.isArray(ticket?.lineas) ? ticket.lineas : [],
           );
@@ -35106,6 +35563,31 @@ function syncParkedTicketsFromRemote(list) {
         merged.localRevisionAt = localRevTs || Date.now();
       }
 
+      // Real de cliente 2026-09-22 (aviso de CamarerosTPV): si esta es la mesa
+      // cargada AHORA MISMO en pantalla y aceptamos la version remota (no
+      // shouldPreferLocalSnapshot) porque de verdad es mas reciente, `cart`
+      // (copia de trabajo en memoria) puede quedarse desactualizado sin que
+      // nada lo note -- el resumen "Mesa Seleccionada" lee de parkedTickets
+      // (ya al dia) pero Cobrar/flush-al-cambiar-de-mesa/Dividir siguen
+      // leyendo `cart`. Marcamos el ticket para que esos 3 sitios sepan que
+      // deben refrescar `cart` antes de usarlo, en vez de arriesgarse a
+      // sobreescribir en el servidor lineas que ya llegaron por otro lado.
+      if (!shouldPreferLocalSnapshot) {
+        const isLoadedTicket =
+          currentParkedTicketIndex != null &&
+          getParkedTicketSyncKeyVariants(ticket).some((k) =>
+            prevLoadedVariants.has(k),
+          );
+        if (isLoadedTicket) {
+          const cartMatchesMerged =
+            JSON.stringify(normalizeTicketLinesForCompare(cart)) ===
+            JSON.stringify(normalizeTicketLinesForCompare(merged.items));
+          if (!cartMatchesMerged) {
+            merged.__remoteChangedWhileLoaded = true;
+          }
+        }
+      }
+
       const remoteModeCandidate = String(
         ticket?.parkingMode || ticket?.appMode || ticket?.mode || "",
       )
@@ -35243,6 +35725,19 @@ function syncParkedTicketsFromRemote(list) {
         .trim()
         .toLowerCase();
       if (op !== "upsert") return;
+      // Real de cliente 2026-09-22 (Asador el Gallo, hora punta): una entrada
+      // de cola vieja (por lo que sea -- un reintento que no acaba de cuajar)
+      // hacia que este ticket se preservara como "aparcado" en este terminal
+      // SIN LIMITE de tiempo, aunque el servidor llevara minutos dandolo por
+      // cobrado/borrado. Se ignoran aqui las entradas mas viejas que el mismo
+      // margen que ya se usa para "cambio local reciente" (PARKED_LOCAL_PREFER_MS);
+      // esto NO borra la entrada de la cola (processParkedSyncQueue la sigue
+      // reintentando en segundo plano), solo deja de fiarse de ella para
+      // decidir que mostrar en pantalla.
+      const queuedAtTs = Number(new Date(entry?.queuedAt || 0).getTime()) || 0;
+      const isRecentQueueEntry =
+        queuedAtTs > 0 && Date.now() - queuedAtTs <= PARKED_LOCAL_PREFER_MS;
+      if (!isRecentQueueEntry) return;
       const qt = normalizeRemoteParkedTicket(entry?.ticket || {}) || null;
       if (!qt) return;
       const targetSet = qt?.paid ? queuedPaidKeySet : queuedPendingKeySet;
@@ -35858,6 +36353,11 @@ async function apiSaveParkedReservation(ticket) {
               : Number(it.discountBaseNetPrice),
           imageUrl: it?.imageUrl || null,
           meta: it?.meta && typeof it.meta === "object" ? it.meta : null,
+          // Añadidos de producto: sin esto, se pierden al
+          // guardar el aparcado -- el refresh remoto que sigue al guardado
+          // sobrescribe el carrito local con la copia del servidor, que
+          // nunca los tuvo si no se mandan aquí.
+          addons: Array.isArray(it?.addons) ? it.addons : [],
         }))
       : [],
     // Bloqueo optimista (server-side en saveParkedReservationDb): si esto no
@@ -36754,6 +37254,26 @@ async function onPayButtonClick() {
       const syncedTicket = parkedTickets[syncedIdx];
       if (!syncedTicket || syncedTicket.paid) {
         throw new Error("El ticket aparcado ya está cobrado en otro TPV.");
+      }
+
+      // Real de cliente 2026-09-22 (aviso de CamarerosTPV): el refresh de
+      // arriba puede detectar que esta mesa cambio en OTRO terminal mientras
+      // estaba cargada aqui -- `cart` (de donde sale el importe y las lineas
+      // de la factura real, mas abajo) puede no incluir productos que el
+      // servidor ya tiene. Cobrar con eso facturaria de menos y, al quedar el
+      // ticket ya pagado, no habria forma natural de facturar la diferencia
+      // despues. Se recupera `cart` y se aborta ESTE cobro para que el
+      // cajero vea el importe correcto y pulse Cobrar de nuevo a proposito.
+      if (syncedTicket.__remoteChangedWhileLoaded) {
+        cart = Array.isArray(syncedTicket.items)
+          ? syncedTicket.items.map((it) => ({ ...it }))
+          : [];
+        delete syncedTicket.__remoteChangedWhileLoaded;
+        saveParkedTicketsCache();
+        renderCart();
+        throw new Error(
+          "Esta mesa se actualizó desde otro terminal justo antes de cobrar. Se ha refrescado el ticket con el importe correcto -- revísalo y vuelve a pulsar Cobrar.",
+        );
       }
 
       const syncedKey = String(
@@ -39262,6 +39782,25 @@ async function confirmSplitTicket() {
     return;
   }
 
+  // Mismo motivo que en flushLoadedParkedTicketChangesSync: si la mesa
+  // cambio en otro terminal mientras estaba cargada, dividir ahora tomaria
+  // `cart` (desactualizado) como base y perderia para siempre las lineas que
+  // ya llegaron por otro lado. Recuperamos la version fresca y pedimos que
+  // se revise antes de dividir.
+  if (loaded.__remoteChangedWhileLoaded) {
+    cart = Array.isArray(loaded.items)
+      ? loaded.items.map((it) => ({ ...it }))
+      : [];
+    delete loaded.__remoteChangedWhileLoaded;
+    saveParkedTicketsCache();
+    renderCart();
+    if (splitTicketError) {
+      splitTicketError.textContent =
+        "Esta mesa se actualizó desde otro terminal; revisa el ticket y vuelve a intentarlo.";
+    }
+    return;
+  }
+
   const parts = resolveSplitPartsCount();
   splitTicketMode = String(
     splitTicketModeSelect?.value || splitTicketMode || "items",
@@ -39393,8 +39932,15 @@ async function confirmSplitTicket() {
     try {
       await apiSaveParkedReservation(loaded);
     } catch (e) {
-      enqueueParkedSyncOperation("upsert", loaded);
-      console.warn("No se pudo sincronizar ticket unificado:", e?.message || e);
+      if (e?.staleParkedWrite) {
+        handleStaleParkedWriteConflict(loaded, e);
+      } else {
+        enqueueParkedSyncOperation("upsert", loaded);
+        console.warn(
+          "No se pudo sincronizar ticket unificado:",
+          e?.message || e,
+        );
+      }
     }
 
     for (const entry of toDelete) {
@@ -39571,11 +40117,15 @@ async function confirmSplitTicket() {
   try {
     await apiSaveParkedReservation(loaded);
   } catch (e) {
-    enqueueParkedSyncOperation("upsert", loaded);
-    console.warn(
-      "No se pudo sincronizar ticket origen al dividir:",
-      e?.message || e,
-    );
+    if (e?.staleParkedWrite) {
+      handleStaleParkedWriteConflict(loaded, e);
+    } else {
+      enqueueParkedSyncOperation("upsert", loaded);
+      console.warn(
+        "No se pudo sincronizar ticket origen al dividir:",
+        e?.message || e,
+      );
+    }
   }
 
   for (const splitTicket of splitTickets) {
@@ -39721,11 +40271,15 @@ async function persistTicketAfterComandaPrint(ticket) {
     await apiSaveParkedReservation(ticket);
     await refreshRemoteParkedReservationsOnly();
   } catch (e) {
-    enqueueParkedSyncOperation("upsert", ticket);
-    console.warn(
-      "No se pudo sincronizar estado de comanda en ticket:",
-      e?.message || e,
-    );
+    if (e?.staleParkedWrite) {
+      handleStaleParkedWriteConflict(ticket, e);
+    } else {
+      enqueueParkedSyncOperation("upsert", ticket);
+      console.warn(
+        "No se pudo sincronizar estado de comanda en ticket:",
+        e?.message || e,
+      );
+    }
   }
 }
 
@@ -39886,6 +40440,11 @@ async function printComandaWithContext({
       const ref = String(line?.referencia || "").trim();
       const desc = String(line?.name || line?.descripcion || "Producto").trim();
 
+      const addonsTxt =
+        Array.isArray(line?.addons) && line.addons.length
+          ? line.addons.map((a) => `+${a.nombre}`).join(", ")
+          : "";
+
       const row = doc.createElement("div");
       row.className = "comanda-item";
 
@@ -39899,6 +40458,14 @@ async function printComandaWithContext({
 
       row.appendChild(qtyEl);
       row.appendChild(descEl);
+
+      if (addonsTxt) {
+        const addonsEl = doc.createElement("div");
+        addonsEl.className = "comanda-desc-addons";
+        addonsEl.textContent = addonsTxt;
+        descEl.appendChild(addonsEl);
+      }
+
       itemsEl.appendChild(row);
     });
   }
@@ -39974,6 +40541,11 @@ function openComandaModal() {
 
   const scope = getSelectedMesaScopeContext();
   const loaded = resolveComandaTicketForSelectedMesa();
+  // Real de cliente 2026-09-22 (aviso de CamarerosTPV): si esta mesa cambio
+  // en otro terminal mientras estaba cargada aqui, `cart` puede no incluir
+  // productos que el servidor ya tiene -- sin esto, un plato añadido por
+  // otro terminal nunca llegaria a esta cocina desde este terminal.
+  if (loaded && mergeMissingRemoteLinesIntoCart(loaded)) renderCart();
   const lines = loaded
     ? getComandaDeltaLinesForTicket(loaded, cart)
     : getComandaPrintableLines(cart);
@@ -40022,6 +40594,7 @@ async function printComandaFromCurrentMesa() {
 
   const scope = getSelectedMesaScopeContext();
   const loaded = resolveComandaTicketForSelectedMesa();
+  if (loaded && mergeMissingRemoteLinesIntoCart(loaded)) renderCart();
   const lines = loaded
     ? getComandaDeltaLinesForTicket(loaded, cart)
     : getComandaPrintableLines(cart);
@@ -40836,7 +41409,23 @@ function renderPayMethods() {
     inp.value = payModalState.values[fp.codpago] || "";
 
     inp.addEventListener("focus", () => selectPayInput(fp.codpago));
-    inp.addEventListener("click", () => selectPayInput(fp.codpago));
+    inp.addEventListener("click", () => {
+      selectPayInput(fp.codpago);
+      // El importe de cada forma de pago no tenía NINGÚN teclado enganchado
+      // (ni QWERTY ni numérico) -- en un TPV táctil sin teclado físico no se
+      // podía escribir el importe cobrado. Mismo mecanismo "cash" que ya usa
+      // el importe directo de caja (openCashDirectTotalNumPad).
+      openNumPad(
+        inp.value || "",
+        (value, meta = {}) => {
+          if (String(meta?.phase || "") === "cancel") return;
+          inp.value = String(value ?? "");
+          inp.dispatchEvent(new Event("input", { bubbles: true }));
+        },
+        fp.descripcion || fp.codpago,
+        "cash",
+      );
+    });
 
     inp.addEventListener("input", () => {
       const raw = inp.value;
@@ -44404,6 +44993,151 @@ async function apiUnsetAlmacenPriceOverride(idproducto) {
   delete almacenPriceOverrides[idp];
 }
 
+// Añadidos de producto (Modo Mesas y TPV normal): anotaciones libres por producto
+// (p.ej. "+leche", "+azúcar") para cocina/camarero, gratuitas por ahora.
+// FacturaScripts no tiene este concepto, así que viven puramente en nuestro
+// servidor compartido (parked_tpv_shared), igual que precio-por-almacén.
+// Fail-open en lectura: si no está disponible, el mapa queda vacío y ningún
+// producto muestra ni el botón de gestión ni el selector al vender.
+let productAddonsByProductId = {};
+
+async function loadProductAddons() {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    productAddonsByProductId = {};
+    return productAddonsByProductId;
+  }
+
+  try {
+    const url = `${TPV_SYNC_API_URL}?action=list-product-addons&slug=${encodeURIComponent(slug)}`;
+    const res = await fetchWithTimeout(
+      url,
+      {
+        headers: { Accept: "application/json", "X-TPV-API-KEY": syncApiKey },
+      },
+      5000,
+    );
+    const data = await res.json().catch(() => null);
+    if (!res.ok || data?.ok === false) {
+      throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+    }
+
+    const map = {};
+    (Array.isArray(data?.data) ? data.data : []).forEach((row) => {
+      const pid = Number(row?.idproducto || 0);
+      if (!pid) return;
+      if (!map[pid]) map[pid] = [];
+      map[pid].push({
+        id: Number(row.id),
+        nombre: String(row.nombre || "").trim(),
+        precio: Number(row.precio || 0),
+        orden: Number(row.orden || 0),
+      });
+    });
+    Object.values(map).forEach((arr) =>
+      arr.sort((a, b) => a.orden - b.orden || a.id - b.id),
+    );
+    productAddonsByProductId = map;
+  } catch (e) {
+    console.warn(
+      "No se pudieron cargar los añadidos de producto (fail-open):",
+      e?.message || e,
+    );
+    productAddonsByProductId = {};
+  }
+
+  return productAddonsByProductId;
+}
+
+function getProductAddonsForProduct(product) {
+  const pid = Number(product?.baseProductId || product?.id || 0);
+  return pid ? productAddonsByProductId[pid] || [] : [];
+}
+
+async function apiSaveProductAddon({ id = null, idproducto, nombre, precio = 0 }) {
+  const idp = Number(idproducto || 0);
+  if (!idp) throw new Error("idproducto inválido");
+
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("Los añadidos de producto no están disponibles en esta instalación.");
+  }
+
+  const res = await fetchWithTimeout(
+    `${TPV_SYNC_API_URL}?action=save-product-addon`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      body: JSON.stringify({
+        slug,
+        idproducto: idp,
+        id: id != null ? Number(id) : null,
+        nombre: String(nombre || "").trim(),
+        precio: Number(precio || 0),
+      }),
+    },
+    8000,
+  );
+  const data = await res.json().catch(() => null);
+  if (!res.ok || data?.ok === false) {
+    throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+  }
+
+  const saved = data.data || {};
+  if (!productAddonsByProductId[idp]) productAddonsByProductId[idp] = [];
+  const list = productAddonsByProductId[idp];
+  const idx = list.findIndex((a) => a.id === Number(saved.id));
+  const normalized = {
+    id: Number(saved.id),
+    nombre: String(saved.nombre || ""),
+    precio: Number(saved.precio || 0),
+    orden: Number(saved.orden || 0),
+  };
+  if (idx >= 0) list[idx] = normalized;
+  else list.push(normalized);
+
+  return normalized;
+}
+
+async function apiDeleteProductAddon({ id, idproducto }) {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("Los añadidos de producto no están disponibles en esta instalación.");
+  }
+
+  const res = await fetchWithTimeout(
+    `${TPV_SYNC_API_URL}?action=delete-product-addon`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      body: JSON.stringify({ slug, id: Number(id) }),
+    },
+    8000,
+  );
+  const data = await res.json().catch(() => null);
+  if (!res.ok || data?.ok === false) {
+    throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+  }
+
+  const idp = Number(idproducto || 0);
+  if (productAddonsByProductId[idp]) {
+    productAddonsByProductId[idp] = productAddonsByProductId[idp].filter(
+      (a) => a.id !== Number(id),
+    );
+  }
+}
+
 function pickStockRowByWarehouse(rows, warehouseCode = "") {
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) return null;
@@ -44843,6 +45577,11 @@ function buildCustomerItemsFromCart(cartArr) {
           ? `${baseSecondary} · Incluye: ${includes}`
           : `Incluye: ${includes}`;
       }
+    }
+
+    if (Array.isArray(item.addons) && item.addons.length) {
+      const addonsTxt = item.addons.map((a) => `+${a.nombre}`).join(", ");
+      secondaryName = secondaryName ? `${secondaryName} · ${addonsTxt}` : addonsTxt;
     }
 
     return {
@@ -45663,6 +46402,332 @@ async function openPackConfigModal({
 
       close(selection);
     });
+  });
+}
+
+// Selector de añadidos al vender (Modo Mesas): multi-checkbox, sin stepper
+// (los añadidos no tienen cantidad propia). Se puede confirmar sin marcar
+// nada (selección vacía = "sin añadidos", vía rápida en un solo toque).
+// Cancelar (o cerrar) no añade el producto al carrito, igual que packs.
+async function openProductAddonsSelectModal({
+  productName,
+  productSecondary,
+  addons,
+}) {
+  return new Promise((resolve) => {
+    document.body.classList.add("modal-locked");
+
+    const overlay = document.createElement("div");
+    overlay.className = "pack-modal-overlay addons-select-overlay";
+
+    const modal = document.createElement("div");
+    modal.className = "pack-modal addons-select-modal";
+
+    const head = document.createElement("div");
+    head.className = "pack-modal-head";
+
+    const hTitle = document.createElement("div");
+    hTitle.className = "pack-modal-title";
+    hTitle.textContent = productSecondary
+      ? `${productName} - ${productSecondary}`
+      : productName;
+
+    const xBtn = document.createElement("button");
+    xBtn.type = "button";
+    xBtn.className = "pack-modal-x";
+    xBtn.textContent = "✕";
+
+    head.appendChild(hTitle);
+    head.appendChild(xBtn);
+
+    const body = document.createElement("div");
+    body.className = "pack-modal-body";
+
+    const bulkActions = document.createElement("div");
+    bulkActions.className = "pack-modal-bulk-actions";
+
+    const btnCheckAll = document.createElement("button");
+    btnCheckAll.type = "button";
+    btnCheckAll.className = "pack-btn pack-btn-bulk";
+    btnCheckAll.textContent = "Marcar todo";
+
+    const btnUncheckAll = document.createElement("button");
+    btnUncheckAll.type = "button";
+    btnUncheckAll.className = "pack-btn pack-btn-bulk";
+    btnUncheckAll.textContent = "Desmarcar todo";
+
+    bulkActions.appendChild(btnCheckAll);
+    bulkActions.appendChild(btnUncheckAll);
+
+    const list = document.createElement("div");
+    list.className = "pack-modal-list";
+
+    const state = (Array.isArray(addons) ? addons : []).map((a) => ({
+      id: a.id,
+      nombre: a.nombre,
+      precio: Number(a.precio || 0),
+      checked: false,
+    }));
+
+    function close(result) {
+      overlay.remove();
+      document.body.classList.remove("modal-locked");
+      resolve(result);
+    }
+
+    const checkboxEls = new Map();
+
+    function makeRow(i) {
+      const s = state[i];
+      const row = document.createElement("div");
+      row.className = "pack-item addons-select-item";
+
+      const left = document.createElement("div");
+      left.className = "pack-item-left";
+
+      const chk = document.createElement("input");
+      chk.type = "checkbox";
+      chk.checked = false;
+      checkboxEls.set(i, chk);
+
+      const name = document.createElement("div");
+      name.className = "pack-item-name";
+      name.textContent = `+${s.nombre}`;
+
+      left.appendChild(chk);
+      left.appendChild(name);
+      row.appendChild(left);
+
+      chk.addEventListener("change", () => {
+        s.checked = chk.checked;
+      });
+
+      row.addEventListener("click", (e) => {
+        if (e.target === chk) return;
+        chk.checked = !chk.checked;
+        s.checked = chk.checked;
+      });
+
+      return row;
+    }
+
+    for (let i = 0; i < state.length; i++) {
+      list.appendChild(makeRow(i));
+    }
+
+    btnCheckAll.addEventListener("click", () => {
+      state.forEach((s, i) => {
+        s.checked = true;
+        const chk = checkboxEls.get(i);
+        if (chk) chk.checked = true;
+      });
+    });
+
+    btnUncheckAll.addEventListener("click", () => {
+      state.forEach((s, i) => {
+        s.checked = false;
+        const chk = checkboxEls.get(i);
+        if (chk) chk.checked = false;
+      });
+    });
+
+    body.appendChild(bulkActions);
+    body.appendChild(list);
+
+    const actions = document.createElement("div");
+    actions.className = "pack-modal-actions";
+
+    const btnCancel = document.createElement("button");
+    btnCancel.type = "button";
+    btnCancel.className = "pack-btn pack-btn-cancel";
+    btnCancel.textContent = "Cancelar";
+
+    const btnOk = document.createElement("button");
+    btnOk.type = "button";
+    btnOk.className = "pack-btn pack-btn-ok";
+    btnOk.textContent = "Añadir al carrito";
+
+    actions.appendChild(btnCancel);
+    actions.appendChild(btnOk);
+
+    modal.appendChild(head);
+    modal.appendChild(body);
+    modal.appendChild(actions);
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    xBtn.addEventListener("click", () => close(null));
+    btnCancel.addEventListener("click", () => close(null));
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) close(null);
+    });
+
+    btnOk.addEventListener("click", () => {
+      const selection = state
+        .filter((s) => s.checked)
+        .map((s) => ({ id: s.id, nombre: s.nombre, precio: s.precio }));
+      close(selection);
+    });
+  });
+}
+
+// Modal de gestión de añadidos de un producto (solo admin, Modo Mesas):
+// crear/renombrar/borrar los añadidos disponibles para ESE producto. Cada
+// acción se persiste al momento contra el servidor (sin "Guardar todo"),
+// igual que precio-por-almacén.
+async function openProductAddonsManagerModal(product) {
+  const pid = Number(product?.baseProductId || product?.id || 0);
+  if (!pid) return;
+
+  return new Promise((resolve) => {
+    document.body.classList.add("modal-locked");
+
+    const overlay = document.createElement("div");
+    overlay.className = "pack-modal-overlay addons-modal-overlay";
+
+    const modal = document.createElement("div");
+    modal.className = "pack-modal addons-modal";
+
+    const head = document.createElement("div");
+    head.className = "pack-modal-head";
+
+    const hTitle = document.createElement("div");
+    hTitle.className = "pack-modal-title";
+    hTitle.textContent = `Añadidos de "${product?.name || "producto"}"`;
+
+    const xBtn = document.createElement("button");
+    xBtn.type = "button";
+    xBtn.className = "pack-modal-x";
+    xBtn.textContent = "✕";
+
+    head.appendChild(hTitle);
+    head.appendChild(xBtn);
+
+    const body = document.createElement("div");
+    body.className = "pack-modal-body";
+
+    const list = document.createElement("div");
+    list.className = "pack-modal-list addons-manage-list";
+
+    function close() {
+      overlay.remove();
+      document.body.classList.remove("modal-locked");
+      resolve();
+    }
+
+    function renderList() {
+      list.innerHTML = "";
+      const items = getProductAddonsForProduct(product);
+
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "addons-manage-empty";
+        empty.textContent =
+          "Este producto todavía no tiene añadidos. Usa \"+ Añadir añadido\" para crear el primero.";
+        list.appendChild(empty);
+      }
+
+      items.forEach((addon) => {
+        const row = document.createElement("div");
+        row.className = "pack-item addons-item";
+
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = "addons-item-input";
+        input.value = addon.nombre;
+        input.placeholder = "Nombre del añadido (p.ej. leche)";
+        input.addEventListener("click", () => openQwertyForInput(input, "text"));
+
+        let saveTimer = null;
+        input.addEventListener("input", () => {
+          clearTimeout(saveTimer);
+          saveTimer = setTimeout(async () => {
+            const nombre = input.value.trim();
+            if (!nombre) return;
+            try {
+              await apiSaveProductAddon({
+                id: addon.id,
+                idproducto: pid,
+                nombre,
+                precio: addon.precio || 0,
+              });
+            } catch (e) {
+              toast(
+                e?.message || "No se pudo guardar el añadido.",
+                "error",
+              );
+            }
+          }, 500);
+        });
+
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "pack-btn addons-item-del";
+        delBtn.textContent = "✕";
+        delBtn.title = "Borrar añadido";
+        delBtn.onclick = async () => {
+          try {
+            await apiDeleteProductAddon({ id: addon.id, idproducto: pid });
+            renderList();
+          } catch (e) {
+            toast(e?.message || "No se pudo borrar el añadido.", "error");
+          }
+        };
+
+        row.appendChild(input);
+        row.appendChild(delBtn);
+        list.appendChild(row);
+      });
+    }
+
+    const btnAdd = document.createElement("button");
+    btnAdd.type = "button";
+    btnAdd.className = "pack-btn pack-btn-bulk";
+    btnAdd.textContent = "+ Añadir añadido";
+    btnAdd.onclick = async () => {
+      try {
+        await apiSaveProductAddon({
+          idproducto: pid,
+          nombre: "Nuevo añadido",
+          precio: 0,
+        });
+        renderList();
+        const inputs = list.querySelectorAll(".addons-item-input");
+        const lastInput = inputs[inputs.length - 1];
+        lastInput?.focus();
+        lastInput?.select();
+      } catch (e) {
+        toast(e?.message || "No se pudo crear el añadido.", "error");
+      }
+    };
+
+    body.appendChild(btnAdd);
+    body.appendChild(list);
+
+    const actions = document.createElement("div");
+    actions.className = "pack-modal-actions";
+
+    const btnClose = document.createElement("button");
+    btnClose.type = "button";
+    btnClose.className = "pack-btn pack-btn-ok";
+    btnClose.textContent = "Cerrar";
+    actions.appendChild(btnClose);
+
+    modal.appendChild(head);
+    modal.appendChild(body);
+    modal.appendChild(actions);
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    xBtn.addEventListener("click", close);
+    btnClose.addEventListener("click", close);
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) close();
+    });
+
+    renderList();
   });
 }
 
@@ -46615,6 +47680,25 @@ async function fetchPagosFacturaByCodigo(codigofactura) {
   }
 }
 
+// Busca, entre los aparcados ya cobrados (se conservan ~24h, ver
+// purge_expired_paid_parked.php), el que dio lugar a esta factura -- es la
+// única copia local que puede tener `addons` (los añadidos de producto de
+// Modo Mesas nunca llegan a FacturaScripts). Fail-open: null si no hay
+// coincidencia, si ha pasado la ventana de 24h, o si la petición falla.
+async function findPaidParkedItemsForFactura(idfactura) {
+  const targetId = Number(idfactura || 0);
+  if (!targetId) return null;
+
+  const rawList = await apiListParkedReservations();
+  const match = (Array.isArray(rawList) ? rawList : [])
+    .map((raw) => normalizeRemoteParkedTicket(raw))
+    .find((t) => Number(t?.paidTicketId || 0) === targetId);
+
+  return Array.isArray(match?.items) && match.items.length
+    ? match.items
+    : null;
+}
+
 async function imprimirFacturaHistorica(facturaRow) {
   if (facturaRow?._offline || !Number(facturaRow?.idfactura || 0)) {
     const offlineLines = Array.isArray(facturaRow?.lineas)
@@ -46671,6 +47755,17 @@ async function imprimirFacturaHistorica(facturaRow) {
     mapFsLineToTpvPrintLine,
   );
 
+  // Añadidos de producto: FacturaScripts no los tiene, así
+  // que lineasTpv nunca los trae. La única copia local que sí los tiene es el
+  // aparcado ya cobrado (se conserva ~24h tras cobrar, ver purge_expired_paid_parked.php).
+  // Si lo encontramos, sus `items` sirven de snapshot real para que
+  // attachPrintableAddonsHintsFromSnapshot (dentro de printTicket) los
+  // recupere -- si no, se sigue exactamente igual que hasta ahora (sin
+  // añadidos, como cualquier ticket de más de 24h o del TPV normal).
+  const paidParkedItems = await findPaidParkedItemsForFactura(id).catch(
+    () => null,
+  );
+
   // Tu builder base (cabecera + totales + datos generales)
   // OJO: le pasamos lineasTpv (no FS raw)
   const ticketBase = buildTicketFromFacturaRow(facturaRow, lineasTpv) || {};
@@ -46705,7 +47800,10 @@ async function imprimirFacturaHistorica(facturaRow) {
     idfacturarect: Number(raw.idfacturarect || facturaRow?.idfacturarect || 0),
 
     // ✅ IMPORTANTE: estas son las que usará tu diseño
-    lineas: lineasTpv,
+    lineas:
+      Array.isArray(paidParkedItems) && paidParkedItems.length
+        ? paidParkedItems
+        : lineasTpv,
 
     _raw: raw,
     pagos,
@@ -51272,7 +52370,7 @@ function openPriceEditForProduct(p) {
 
   const keypadBtn = document.getElementById("priceEditKeypadBtn");
   if (keypadBtn && inp) {
-    keypadBtn.onclick = (e) => {
+    const openPriceKeypad = (e) => {
       e.preventDefault();
       e.stopPropagation();
 
@@ -51291,6 +52389,12 @@ function openPriceEditForProduct(p) {
         null,
       );
     };
+
+    keypadBtn.onclick = openPriceKeypad;
+    // El propio campo no reaccionaba al tacto (solo el botón "⌨" aparte) --
+    // en un TPV táctil sin teclado físico no había forma de tocar el precio
+    // directamente y esperar que pasara algo.
+    inp.onpointerdown = openPriceKeypad;
   }
 
   const close = () => overlay.classList.add("hidden");
