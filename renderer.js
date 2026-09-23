@@ -9215,6 +9215,37 @@ async function apiRevokePairedDevice(deviceId) {
   }
 }
 
+// Borra definitivamente un dispositivo ya revocado (papelera -> "Olvidar
+// para siempre"). El servidor rechaza esto si el dispositivo no esta
+// revocado, asi que aqui no hace falta duplicar esa comprobacion.
+async function apiDeletePairedDevice(deviceId) {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("Falta configuracion de sincronizacion de este TPV.");
+  }
+
+  const url = `${TPV_CAMAREROS_API_URL}?action=delete-paired-device`;
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      body: JSON.stringify({ slug, id: Number(deviceId) || 0 }),
+    },
+    8000,
+  );
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok) {
+    throw new Error(data?.error || "No se pudo olvidar el dispositivo, intentalo de nuevo.");
+  }
+}
+
 // "Familias visibles en esta tablet" -- reutiliza el mismo patron que
 // apiRevokePairedDevice. hiddenFamilies vacio = sin restriccion (ve todo).
 async function apiUpdatePairedDeviceFamilies(deviceId, hiddenFamilies) {
@@ -31918,50 +31949,72 @@ function bindPairingCodeOptionsOnce() {
 
 let pairedDevicesOptionsBound = false;
 
+function formatPairedDeviceMeta(d) {
+  const paired = d.pairedAt ? formatDateTimeES(new Date(d.pairedAt)) : "?";
+  const lastSeen = d.lastSeenAt
+    ? formatDateTimeES(new Date(d.lastSeenAt))
+    : "nunca";
+  return `Emparejada: ${paired} · Ultimo uso: ${lastSeen}`;
+}
+
 function renderPairedDevicesList(devices) {
   const listEl = document.getElementById("pairedDevicesList");
+  const trashListEl = document.getElementById("pairedDevicesTrashList");
+  const trashSectionEl = document.getElementById("pairedDevicesTrashSection");
+  const trashToggleBtn = document.getElementById(
+    "pairedDevicesTrashToggleBtn",
+  );
+  const trashCountEl = document.getElementById("pairedDevicesTrashCount");
   if (!listEl) return;
 
-  if (!Array.isArray(devices) || !devices.length) {
-    listEl.innerHTML =
-      '<div class="opt-chip-list-empty">No hay tablets emparejadas todavia.</div>';
-    return;
-  }
+  const all = Array.isArray(devices) ? devices : [];
+  const active = all.filter((d) => !d.revoked);
+  const revoked = all.filter((d) => d.revoked);
 
-  listEl.innerHTML = devices
-    .map((d) => {
-      const name = d.deviceInfo
-        ? String(d.deviceInfo).replace(/</g, "&lt;")
-        : "Tablet sin nombre";
-      const paired = d.pairedAt
-        ? formatDateTimeES(new Date(d.pairedAt))
-        : "?";
-      const lastSeen = d.lastSeenAt
-        ? formatDateTimeES(new Date(d.lastSeenAt))
-        : "nunca";
-      const metaText = `Emparejada: ${paired} · Ultimo uso: ${lastSeen}`;
+  listEl.innerHTML = active.length
+    ? active
+        .map((d) => {
+          const name = d.deviceInfo
+            ? String(d.deviceInfo).replace(/</g, "&lt;")
+            : "Tablet sin nombre";
+          return `<div class="paired-device-row">
+            <div class="paired-device-info">
+              <div class="paired-device-name">${name}</div>
+              <div class="paired-device-meta">${formatPairedDeviceMeta(d)}</div>
+            </div>
+            <button type="button" class="small-btn paired-device-revoke-btn" data-device-id="${d.id}">
+              Revocar
+            </button>
+          </div>`;
+        })
+        .join("")
+    : '<div class="opt-chip-list-empty">No hay tablets emparejadas todavia.</div>';
 
-      if (d.revoked) {
+  if (trashCountEl) trashCountEl.textContent = String(revoked.length);
+  trashToggleBtn?.classList.toggle("hidden", revoked.length === 0);
+  // Si ya no quedan dispositivos revocados (por ejemplo, se acaban de
+  // olvidar todos), se colapsa la papelera sola en vez de dejarla abierta
+  // y vacia.
+  if (revoked.length === 0) trashSectionEl?.classList.add("hidden");
+
+  if (trashListEl) {
+    trashListEl.innerHTML = revoked
+      .map((d) => {
+        const name = d.deviceInfo
+          ? String(d.deviceInfo).replace(/</g, "&lt;")
+          : "Tablet sin nombre";
         return `<div class="paired-device-row revoked">
           <div class="paired-device-info">
             <div class="paired-device-name">${name}</div>
-            <div class="paired-device-meta">${metaText}</div>
+            <div class="paired-device-meta">${formatPairedDeviceMeta(d)}</div>
           </div>
-          <span class="paired-device-revoked-tag">Revocada</span>
+          <button type="button" class="small-btn paired-device-delete-btn" data-device-id="${d.id}">
+            Olvidar para siempre
+          </button>
         </div>`;
-      }
-
-      return `<div class="paired-device-row">
-        <div class="paired-device-info">
-          <div class="paired-device-name">${name}</div>
-          <div class="paired-device-meta">${metaText}</div>
-        </div>
-        <button type="button" class="small-btn paired-device-revoke-btn" data-device-id="${d.id}">
-          Revocar
-        </button>
-      </div>`;
-    })
-    .join("");
+      })
+      .join("");
+  }
 }
 
 async function refreshPairedDevicesList() {
@@ -31988,8 +32041,17 @@ function bindPairedDevicesOptionsOnce() {
 
   const refreshBtn = document.getElementById("pairedDevicesRefreshBtn");
   const listEl = document.getElementById("pairedDevicesList");
+  const trashListEl = document.getElementById("pairedDevicesTrashList");
+  const trashSectionEl = document.getElementById("pairedDevicesTrashSection");
+  const trashToggleBtn = document.getElementById(
+    "pairedDevicesTrashToggleBtn",
+  );
 
   refreshBtn?.addEventListener("click", () => refreshPairedDevicesList());
+
+  trashToggleBtn?.addEventListener("click", () => {
+    trashSectionEl?.classList.toggle("hidden");
+  });
 
   listEl?.addEventListener("click", async (ev) => {
     const btn = ev.target?.closest?.(".paired-device-revoke-btn");
@@ -32015,6 +32077,37 @@ function bindPairedDevicesOptionsOnce() {
     } catch (e) {
       toast(
         e?.message || "No se pudo revocar el dispositivo, intentalo de nuevo.",
+        "error",
+        "Vincular tablet",
+      );
+      btn.disabled = false;
+    }
+  });
+
+  trashListEl?.addEventListener("click", async (ev) => {
+    const btn = ev.target?.closest?.(".paired-device-delete-btn");
+    if (!btn) return;
+
+    const deviceId = btn.getAttribute("data-device-id");
+    const deviceName =
+      btn.closest(".paired-device-row")?.querySelector(".paired-device-name")
+        ?.textContent || "esta tablet";
+
+    const confirmed = await confirmModal(
+      "Olvidar dispositivo para siempre",
+      `"${deviceName}" ya esta revocada y sin ningun acceso. Esto solo borra su registro de la papelera -- no se puede deshacer. ¿Continuar?`,
+      { okButtonText: "Olvidar para siempre" },
+    );
+    if (!confirmed) return;
+
+    btn.disabled = true;
+    try {
+      await apiDeletePairedDevice(deviceId);
+      toast("Dispositivo olvidado.", "ok", "Vincular tablet");
+      await refreshPairedDevicesList();
+    } catch (e) {
+      toast(
+        e?.message || "No se pudo olvidar el dispositivo, intentalo de nuevo.",
         "error",
         "Vincular tablet",
       );

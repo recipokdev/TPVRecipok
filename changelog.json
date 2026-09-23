@@ -6,6 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
+        "Modo Mesas: la lista de \"Tablets emparejadas\" (Opciones) ya no acumula para siempre los dispositivos revocados mezclados con los activos. Ahora los revocados se guardan aparte, en una papelera plegada (\"🗑 Papelera\") que solo se abre si se quiere, y desde ahí se pueden \"Olvidar para siempre\" (borrado definitivo, ya no aparecen nunca más).",
         "Modo Mesas: cuando una mesa se aparca o se actualiza desde fuera del TPV (p. ej. la app de camareros), la comanda se imprime sola en cocina en cuanto el TPV detecta el cambio, sin que nadie tenga que abrir la mesa y pulsar 'Imprimir comanda' a mano. Si la impresora de comandas falla, aparece un aviso en la mesa correspondiente dentro del plano de Mesas.",
         "Modo Mesas: vincular una tablet de la app de camareros ahora es de una sola vez -- una vez introducido el código de 6 dígitos, esa tablet queda emparejada permanentemente con el negocio, sin tener que volver a introducir ningún código al abrir la app. Desde Opciones > Modo Mesas se puede ver la lista de tablets emparejadas y revocar el acceso de cualquiera de ellas cuando haga falta (se pierde, se vende, o ya no debería tener acceso).",
         "Modo Mesas: desde Opciones > Terminales > \"Configurar familias\" ya se puede elegir tambien que familias de producto ve cada tablet de camarero emparejada (ademas de por terminal, como ya se podia). Sin restriccion configurada, una tablet sigue viendo el catalogo completo."

@@ -8808,6 +8808,80 @@ mustContain(
   '"Mostrar todos los productos" (a terminal-only concept) is hidden when a tablet is selected',
 );
 
+console.log("\n[SMOKE] Checking 2026-09-23: papelera de tablets revocadas (olvidar para siempre)\n");
+
+mustContain(
+  renderer,
+  "async function apiDeletePairedDevice(deviceId) {",
+  "apiDeletePairedDevice() calls delete-paired-device",
+);
+mustContain(
+  renderer,
+  'const url = `${TPV_CAMAREROS_API_URL}?action=delete-paired-device`;',
+  "apiDeletePairedDevice() hits the isolated camareros.php endpoint, not index.php",
+);
+{
+  const idx = renderer.indexOf("function renderPairedDevicesList(devices) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("async function refreshPairedDevicesList", idx) : -1;
+  const scoped = idx >= 0 && endIdx > idx ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("const active = all.filter((d) => !d.revoked);") &&
+    scoped.includes("const revoked = all.filter((d) => d.revoked);") &&
+    scoped.includes('trashToggleBtn?.classList.toggle("hidden", revoked.length === 0);')
+  ) {
+    ok(
+      "renderPairedDevicesList splits active vs revoked devices, rendering revoked ones into the separate trash section and hiding its toggle when there are none",
+    );
+  } else {
+    fail(
+      "renderPairedDevicesList splits active vs revoked devices, rendering revoked ones into the separate trash section and hiding its toggle when there are none",
+    );
+  }
+}
+mustContain(
+  renderer,
+  'class="small-btn paired-device-delete-btn" data-device-id="${d.id}"',
+  "Each revoked device in the trash gets its own 'Olvidar para siempre' (permanent delete) button",
+);
+{
+  const idx = renderer.indexOf("function bindPairedDevicesOptionsOnce() {");
+  const endIdx = idx >= 0 ? renderer.indexOf("function refreshBackgroundUpdateOptionsUI", idx) : -1;
+  const scoped = idx >= 0 && endIdx > idx ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes('trashToggleBtn?.addEventListener("click", () => {\r\n    trashSectionEl?.classList.toggle("hidden");') &&
+    scoped.includes('trashListEl?.addEventListener("click", async (ev) => {') &&
+    scoped.includes("await apiDeletePairedDevice(deviceId);")
+  ) {
+    ok(
+      "The trash toggle button collapses/expands the revoked-devices section, and its 'Olvidar' button confirms before permanently deleting",
+    );
+  } else {
+    fail(
+      "The trash toggle button collapses/expands the revoked-devices section, and its 'Olvidar' button confirms before permanently deleting",
+    );
+  }
+}
+mustContain(
+  index,
+  'id="pairedDevicesTrashToggleBtn"',
+  "Paired-devices trash toggle button present in Modo Mesas options",
+);
+mustContain(
+  index,
+  'id="pairedDevicesTrashSection"',
+  "Paired-devices trash (collapsible) section present in Modo Mesas options",
+);
+mustContain(
+  styles,
+  ".paired-devices-trash-section",
+  "Paired-devices trash section styling present",
+);
+mustContain(
+  styles,
+  ".paired-device-delete-btn",
+  "Paired-device permanent-delete button styling present",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

@@ -7669,6 +7669,24 @@ body.theme-dark .opt-preview-item.is-on {
   color: #b91c1c;
   white-space: nowrap;
 }
+.paired-devices-trash-toggle-btn {
+  color: #6b7280;
+}
+.paired-devices-trash-section {
+  width: 100%;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #e5e7eb;
+}
+.paired-devices-trash-header {
+  font-size: 11px;
+  color: #6b7280;
+  margin-bottom: 8px;
+}
+.paired-device-delete-btn {
+  color: #b91c1c;
+  border-color: #fecaca;
+}
 
 /* 5 campos de porcentaje para los accesos rapidos de descuento: cada uno
    solo necesita sitio para 2-3 digitos, no el ancho por defecto de un input
@@ -9161,6 +9179,19 @@ body.theme-dark .paired-device-meta {
 }
 body.theme-dark .paired-device-revoked-tag {
   color: #fca5a5;
+}
+body.theme-dark .paired-devices-trash-toggle-btn {
+  color: #9ca3af;
+}
+body.theme-dark .paired-devices-trash-section {
+  border-top-color: #374151;
+}
+body.theme-dark .paired-devices-trash-header {
+  color: #9ca3af;
+}
+body.theme-dark .paired-device-delete-btn {
+  color: #fca5a5;
+  border-color: #7f1d1d;
 }
 
 body.theme-dark #terminalSelectWrapper {

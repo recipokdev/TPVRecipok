@@ -3151,8 +3151,28 @@
                   >
                     Actualizar lista
                   </button>
+                  <button
+                    type="button"
+                    id="pairedDevicesTrashToggleBtn"
+                    class="small-btn paired-devices-trash-toggle-btn hidden"
+                  >
+                    🗑 Papelera (<span id="pairedDevicesTrashCount">0</span>)
+                  </button>
                 </div>
                 <div id="pairedDevicesList" class="paired-devices-list"></div>
+                <div
+                  id="pairedDevicesTrashSection"
+                  class="paired-devices-trash-section hidden"
+                >
+                  <div class="paired-devices-trash-header">
+                    Dispositivos revocados. No tienen ningun acceso; puedes
+                    olvidarlos para siempre para que dejen de aparecer aqui.
+                  </div>
+                  <div
+                    id="pairedDevicesTrashList"
+                    class="paired-devices-list"
+                  ></div>
+                </div>
               </div>
             </div>
           </section>
