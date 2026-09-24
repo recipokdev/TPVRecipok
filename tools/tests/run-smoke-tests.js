@@ -7674,6 +7674,46 @@ mustContain(
   "The global barcode-scanner keydown listener now bails out while ANY blocking modal is open (login, cash open/close, cash movements, pack config...) -- previously it only skipped on-screen keyboards, so digits typed into the PIN field (or a cash denomination field) followed by Enter could be interpreted as a scanned barcode and silently add a product to the cart behind the modal",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-24 per-store (codalmacen) isolation within a shared slug (multi-tienda company)\n",
+);
+
+mustContain(
+  renderer,
+  'localStorage.setItem(\r\n      "tpv_current_codalmacen",',
+  "setCurrentTerminal relays the active terminal's codalmacen to localStorage so mesas/mesas.js (same-origin iframe) can scope its own layout requests to the right tienda",
+);
+mustContain(
+  renderer,
+  'String(currentTerminal?.codalmacen || "") === String(next?.codalmacen || "")',
+  "setCurrentTerminal no longer short-circuits on id alone -- if the same idtpv gets reassigned to a different codalmacen in FacturaScripts, the terminal (and its persisted codalmacen) still updates instead of silently keeping the stale one forever",
+);
+mustContain(
+  renderer,
+  "action=get-mesas-layout&slug=${encodeURIComponent(slug)}&codalmacen=${encodeURIComponent(codalmacen)}",
+  "get-mesas-layout now sends codalmacen so two tiendas sharing the same slug get their own separate room/table layout instead of mixing",
+);
+mustContain(
+  renderer,
+  "codalmacen: getCurrentWarehouseCode(),",
+  "save-mesas-layout and the parked-reservation payload both send codalmacen (Mesas tickets get isolated per tienda server-side; TPV-normal aparcados accept it but are NOT filtered by it, on purpose, to avoid hiding live tickets for real clients)",
+);
+mustContain(
+  renderer,
+  "action=list-parked-reservations&slug=${encodeURIComponent(slug)}&codalmacen=${encodeURIComponent(codalmacen)}",
+  "list-parked-reservations now sends codalmacen too",
+);
+mustContain(
+  mesasJs,
+  "function getMesasCodalmacenScope()",
+  "mesas.js (the embedded iframe) reads the same tpv_current_codalmacen relay via localStorage, mirroring the existing getMesasSlugScope pattern",
+);
+mustContain(
+  mesasJs,
+  "codalmacen: getMesasCodalmacenScope(),",
+  "mesas.js's own independent get/save-mesas-layout calls also carry codalmacen",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

@@ -8318,10 +8318,11 @@ async function apiGetMesasLayoutRemote() {
   const syncApiKey = getTpvSyncApiKey();
   if (!slug || !syncApiKey) return null;
 
+  const codalmacen = getCurrentWarehouseCode();
   const ifNewerThanQs = mesasLayoutLastKnownUpdatedAt
     ? `&ifNewerThan=${encodeURIComponent(mesasLayoutLastKnownUpdatedAt)}`
     : "";
-  const url = `${TPV_SYNC_API_URL}?action=get-mesas-layout&slug=${encodeURIComponent(slug)}${ifNewerThanQs}`;
+  const url = `${TPV_SYNC_API_URL}?action=get-mesas-layout&slug=${encodeURIComponent(slug)}&codalmacen=${encodeURIComponent(codalmacen)}${ifNewerThanQs}`;
   const res = await fetch(url, {
     method: "GET",
     headers: {
@@ -8352,6 +8353,7 @@ async function apiSaveMesasLayoutRemote(nextState) {
 
   const payload = {
     slug,
+    codalmacen: getCurrentWarehouseCode(),
     layout: nextState && typeof nextState === "object" ? nextState : {},
     updatedAt: new Date().toISOString(),
   };
@@ -21218,8 +21220,17 @@ async function persistTerminalToCfg(terminalId) {
 function setCurrentTerminal(terminal) {
   const next = terminal || null;
 
-  // ✅ si no cambia, no hagas nada
-  if (String(currentTerminal?.id || "") === String(next?.id || "")) return;
+  // ✅ si no cambia ni el terminal ni su almacen, no hagas nada. Se compara
+  // tambien codalmacen (no solo id) para el aislamiento por tienda (ver plan
+  // 2026-09-24): si el MISMO idtpv se reasigna a otro almacen en
+  // FacturaScripts, este terminal debe "saltar" de tienda -- comparar solo
+  // el id dejaria colado el codalmacen viejo para siempre.
+  if (
+    String(currentTerminal?.id || "") === String(next?.id || "") &&
+    String(currentTerminal?.codalmacen || "") === String(next?.codalmacen || "")
+  ) {
+    return;
+  }
 
   currentTerminal = next;
 
@@ -21230,6 +21241,16 @@ function setCurrentTerminal(terminal) {
   try {
     if (currentTerminal?.id)
       localStorage.setItem("tpv_terminal", String(currentTerminal.id));
+  } catch {}
+
+  // Relay para mesas/mesas.js (iframe, mismo origen/localStorage que la
+  // ventana principal, ver getMesasSlugScope): necesita saber el codalmacen
+  // vigente para pedir/guardar SU propio layout ya particionado por tienda.
+  try {
+    localStorage.setItem(
+      "tpv_current_codalmacen",
+      String(currentTerminal?.codalmacen || ""),
+    );
   } catch {}
 
   renderMainAgentBar?.();
@@ -36444,7 +36465,8 @@ async function apiListParkedReservations() {
     throw new Error("Falta TPV_CONFIG.tpvApiKey para listar reservas remotas.");
   }
 
-  const url = `${TPV_SYNC_API_URL}?action=list-parked-reservations&slug=${encodeURIComponent(slug)}`;
+  const codalmacen = getCurrentWarehouseCode();
+  const url = `${TPV_SYNC_API_URL}?action=list-parked-reservations&slug=${encodeURIComponent(slug)}&codalmacen=${encodeURIComponent(codalmacen)}`;
 
   const res = await fetchWithTimeout(url, {
     method: "GET",
@@ -36586,6 +36608,11 @@ async function apiSaveParkedReservation(ticket) {
     total: Number(ticket.total || 0),
     terminalId: String(currentTerminal?.id || ""),
     terminalName: String(currentTerminal?.name || ""),
+    // Aislamiento por tienda dentro de un mismo slug (ver plan 2026-09-24):
+    // el servidor solo lo usa/guarda para tickets de Modo Mesas -- para
+    // aparcados de TPV normal se acepta pero no se filtra por el, a
+    // proposito, para no afectar a clientes reales ya en uso.
+    codalmacen: getCurrentWarehouseCode(),
     userName: String(currentAgent?.name || currentAgent?.nick || ""),
     parkingMode: inferTicketParkingMode(ticket),
     modoMesas: isMesasModeTicket(ticket) ? 1 : 0,

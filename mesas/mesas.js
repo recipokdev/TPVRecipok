@@ -1267,6 +1267,19 @@ function getMesasSlugScope() {
   return m ? String(m[1]).trim() : "";
 }
 
+// Aislamiento por tienda dentro de un mismo slug (ver plan 2026-09-24):
+// calcado de getMesasSlugScope, mismo mecanismo (localStorage compartido con
+// la ventana principal, ya que este iframe es del mismo origen) -- lo
+// escribe renderer.js/setCurrentTerminal cada vez que cambia el terminal
+// activo o su almacen.
+function getMesasCodalmacenScope() {
+  try {
+    return String(localStorage.getItem("tpv_current_codalmacen") || "").trim();
+  } catch {
+    return "";
+  }
+}
+
 function getMesasLayoutScopedStorageKey() {
   const slug = String(getMesasSlugScope() || "").trim() || "default";
   return `${MESAS_LAYOUT_CACHE_KEY}::${slug}`;
@@ -1351,10 +1364,11 @@ async function apiGetMesasLayoutRemote() {
   if (!slug || !apiKey) return null;
 
   const apiUrl = getMesasSyncApiUrl();
+  const codalmacen = getMesasCodalmacenScope();
   const ifNewerThanQs = mesasLayoutLastKnownUpdatedAt
     ? `&ifNewerThan=${encodeURIComponent(mesasLayoutLastKnownUpdatedAt)}`
     : "";
-  const url = `${apiUrl}?action=get-mesas-layout&slug=${encodeURIComponent(slug)}${ifNewerThanQs}`;
+  const url = `${apiUrl}?action=get-mesas-layout&slug=${encodeURIComponent(slug)}&codalmacen=${encodeURIComponent(codalmacen)}${ifNewerThanQs}`;
   const res = await fetch(url, {
     method: "GET",
     headers: {
@@ -1384,6 +1398,7 @@ async function apiSaveMesasLayoutRemote(nextState) {
   const apiUrl = getMesasSyncApiUrl();
   const payload = {
     slug,
+    codalmacen: getMesasCodalmacenScope(),
     layout: nextState && typeof nextState === "object" ? nextState : {},
     updatedAt: new Date().toISOString(),
   };
