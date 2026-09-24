@@ -11304,8 +11304,19 @@ async function runBootFlow() {
     // tenerlos ya listos antes de que se pueda pintar ningún producto.
     await loadProductAddons();
 
-    // 5) Caja (recupera o abre modal)
-    await maybeOpenCashOrRecover();
+    // 5) Caja (recupera o abre modal) -- si el overlay de Terminal/Agente
+    // sigue abierto esperando que el usuario elija de verdad (con varios
+    // terminales/agentes: ensureTerminalAgentDefaults, arriba, ya habra
+    // fijado un valor ADIVINADO igualmente, solo para poder seguir cargando
+    // datos mientras tanto), no lo intentamos aqui con ese valor adivinado.
+    // Real de cliente 2026-09-24 (Vanille): sin este chequeo, "Apertura de
+    // caja" podia abrirse dos veces -- una con el terminal/agente adivinado,
+    // y otra (la buena) al confirmar el selector, que dispara su propio
+    // "tpv:sessionReady" -- si el cajero cerraba la primera antes de que la
+    // segunda llegara, cashOpenDialogShown ya estaba libre y la reabria.
+    if (!isTerminalOverlayCurrentlyOpen()) {
+      await maybeOpenCashOrRecover();
+    }
 
     if (cashSession?.open) {
       if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
@@ -16244,6 +16255,16 @@ window.addEventListener("keydown", (e) => {
 window.addEventListener("keydown", (e) => {
   if (e.defaultPrevented) return;
   if (numPadVisible || qwertyVisible) return;
+  // Real de cliente 2026-09-24 (Vanille): este listener solo bloqueaba
+  // teclas NO numericas cuando el foco esta en un campo editable -- los
+  // digitos y Enter siempre pasaban, aunque hubiera un modal bloqueante
+  // abierto (login, apertura/cierre de caja, movimientos de caja, packs...).
+  // Tecleando el PIN de 4 digitos y pulsando Enter, esos digitos se
+  // interpretaban como un codigo escaneado y anadian un producto al
+  // carrito por detras del modal. "modal-locked" es la clase generica que
+  // ya activan todos esos overlays bloqueantes (lockAppUI/openCashOpenDialog/
+  // etc.), asi que cubre este caso y los demas de una vez.
+  if (document.body.classList.contains("modal-locked")) return;
   if (e.ctrlKey || e.altKey || e.metaKey) return;
 
   const target = e.target;
@@ -20414,6 +20435,99 @@ function renderParkedTicketsModal() {
   });
 }
 
+// Cobro optimista en Modo Mesas (peticion real de Sergi 2026-09-24): cobrar
+// una mesa se notaba "lento" porque el cambio visual (ocupada -> cuenta
+// cobrada, que es lo que hace aparecer "Cobrada y liberar") solo ocurria
+// dentro de markParkedTicketAsPaidByIndex, llamada DESPUES de que la factura
+// real ya existiera en FacturaScripts (varios round-trips de red). El camino
+// OFFLINE ya marcaba la mesa como cobrada antes de que la factura real
+// existiera (se sincroniza despues, en cola) -- esta funcion aplica ese mismo
+// cambio local, de forma instantanea, tambien en el camino online, en el
+// mismo instante en que onPayButtonClick ya vacia el carrito (ver mas abajo).
+// markParkedTicketAsPaidByIndex sigue siendo quien de verdad confirma el
+// cobro (ticket.paid, stock, etc.) -- esto solo adelanta el reflejo visual.
+function applyOptimisticMesaCobrada(ticket) {
+  try {
+    const mesasState = loadMesasTablesStateForInline();
+    if (!mesasState || typeof mesasState !== "object") return null;
+
+    const uid = resolveTicketMesaUid(ticket, mesasState);
+    if (!uid) return null;
+
+    if (!mesasState.tableStates || typeof mesasState.tableStates !== "object") {
+      mesasState.tableStates = {};
+    }
+    if (!mesasState.tableMeta || typeof mesasState.tableMeta !== "object") {
+      mesasState.tableMeta = {};
+    }
+
+    // Si otra cosa ya la puso en "cuenta cobrada" (p.ej. otro terminal
+    // cobrando la misma mesa a la vez), no pisamos nada -- no hay optimismo
+    // que aplicar ni que revertir despues.
+    if (mesasState.tableMeta[uid]?.serviceStage === "cobro-realizado") {
+      return null;
+    }
+
+    const previousStatus = mesasState.tableStates[uid] ?? null;
+    const previousMeta =
+      mesasState.tableMeta[uid] && typeof mesasState.tableMeta[uid] === "object"
+        ? { ...mesasState.tableMeta[uid] }
+        : null;
+
+    mesasState.tableStates[uid] = "cuenta";
+    mesasState.tableMeta[uid] = {
+      ...(previousMeta || {}),
+      serviceStage: "cobro-realizado",
+    };
+    saveMesasTablesStateForInline(mesasState);
+
+    return { uid, previousStatus, previousMeta };
+  } catch (e) {
+    console.warn(
+      "No se pudo aplicar el cobro optimista de la mesa:",
+      e?.message || e,
+    );
+    return null;
+  }
+}
+
+// Deshace applyOptimisticMesaCobrada cuando el cobro real, al final, no llega
+// a completarse (fallo generico -- ver el catch de processConfirmedSale). Solo
+// revierte si la mesa sigue tal cual la dejo el optimismo: si mientras tanto
+// el cobro real ya confirmo (o algo mas la toco), no se pisa nada.
+function revertOptimisticMesaCobrada(optimisticMesaState) {
+  if (!optimisticMesaState || !optimisticMesaState.uid) return;
+  try {
+    const mesasState = loadMesasTablesStateForInline();
+    if (!mesasState || typeof mesasState !== "object") return;
+    if (!mesasState.tableMeta || typeof mesasState.tableMeta !== "object") return;
+
+    const { uid, previousStatus, previousMeta } = optimisticMesaState;
+    if (mesasState.tableMeta[uid]?.serviceStage !== "cobro-realizado") return;
+
+    if (!mesasState.tableStates || typeof mesasState.tableStates !== "object") {
+      mesasState.tableStates = {};
+    }
+
+    if (previousStatus == null) {
+      delete mesasState.tableStates[uid];
+    } else {
+      mesasState.tableStates[uid] = previousStatus;
+    }
+    if (previousMeta == null) {
+      delete mesasState.tableMeta[uid];
+    } else {
+      mesasState.tableMeta[uid] = previousMeta;
+    }
+    saveMesasTablesStateForInline(mesasState);
+  } catch (e) {
+    console.warn(
+      "No se pudo revertir el cobro optimista de la mesa:",
+      e?.message || e,
+    );
+  }
+}
+
 async function markParkedTicketAsPaidByIndex(
   index,
   paidInfo = {},
@@ -21340,27 +21454,86 @@ function renderMainAgentBar() {
   agentActions.appendChild(createRefreshBtn());
   agentActions.appendChild(createDrawerBtn());
 
+  // Real (2026-09-23), pedido directo de Sergi tras ver la barra con muchos
+  // agentes en produccion: los 3 botones fijos (mesas/actualizar/cajon) ya
+  // NUNCA viven en la barra de agentes -- pasan siempre, pequeños, a la
+  // barra de busqueda (misma zona/estilo que antes solo se usaba con 0-1
+  // agente). Asi la barra de agentes puede usar el ancho entero para la
+  // lista, sin compartirlo con nada mas.
+  if (searchBarActionsSlot) {
+    searchBarActionsSlot.appendChild(modeSwitchWrap);
+    searchBarActionsSlot.appendChild(agentActions);
+  }
+
   // Con 0 o 1 agente no hay nada que elegir en esta barra -- el nombre del
-  // agente activo ya se ve en la cabecera de info (#agentName), asi que en
-  // vez de una fila entera casi vacia (el agentListWrap con flex:1 empujaba
-  // los 3 botones fijos al extremo derecho, dejando un hueco enorme en
-  // medio, ver captura real de una instalacion en produccion 2026-09-18), la
-  // barra se colapsa del todo y esos 3 botones pasan, mas pequeños, a la
-  // propia barra de busqueda. Con 2+ agentes se mantiene la barra completa
-  // de siempre, sin tocar nada.
+  // agente activo ya se ve en la cabecera de info (#agentName) -- se
+  // colapsa del todo en vez de mostrar una fila vacia.
   const compactMode = list.length <= 1;
 
   if (compactMode) {
     mainAgentBar.classList.add("session-agentbar-hidden");
-    if (searchBarActionsSlot) {
-      searchBarActionsSlot.appendChild(modeSwitchWrap);
-      searchBarActionsSlot.appendChild(agentActions);
-    }
   } else {
     mainAgentBar.classList.remove("session-agentbar-hidden");
+
+    // Real (2026-09-23): la barra de scroll horizontal nativa "queda fatal"
+    // ahi metida (pedido directo de Sergi) -- se oculta visualmente (CSS,
+    // ver .agent-list-wrap) sin quitar el scroll de verdad (arrastre tactil
+    // sigue funcionando igual que siempre). En su lugar, un par de flechas
+    // dan la misma pista visual de "hay mas agentes por aqui" de forma mas
+    // discreta, y sirven de atajo de un toque.
+    const leftArrowBtn = document.createElement("button");
+    leftArrowBtn.type = "button";
+    // Ocultas por defecto hasta que updateScrollArrows() confirme que hacen
+    // falta -- asi nunca se ven un instante de mas si el calculo tarda un
+    // frame en llegar (el caso normal, sin overflow, es el mas comun).
+    leftArrowBtn.className = "agent-list-scroll-arrow agent-list-scroll-left hidden";
+    leftArrowBtn.textContent = "‹";
+    leftArrowBtn.title = "Ver agentes anteriores";
+    leftArrowBtn.setAttribute("aria-label", "Ver agentes anteriores");
+
+    const rightArrowBtn = document.createElement("button");
+    rightArrowBtn.type = "button";
+    rightArrowBtn.className = "agent-list-scroll-arrow agent-list-scroll-right hidden";
+    rightArrowBtn.textContent = "›";
+    rightArrowBtn.title = "Ver más agentes";
+    rightArrowBtn.setAttribute("aria-label", "Ver más agentes");
+
+    const SCROLL_STEP_PX = 180;
+    leftArrowBtn.onclick = () => {
+      agentListWrap.scrollBy({ left: -SCROLL_STEP_PX, behavior: "smooth" });
+    };
+    rightArrowBtn.onclick = () => {
+      agentListWrap.scrollBy({ left: SCROLL_STEP_PX, behavior: "smooth" });
+    };
+
+    const updateScrollArrows = () => {
+      const maxScroll = Math.max(
+        0,
+        agentListWrap.scrollWidth - agentListWrap.clientWidth,
+      );
+      const hasOverflow = maxScroll > 2;
+      const atStart = agentListWrap.scrollLeft <= 2;
+      const atEnd = agentListWrap.scrollLeft >= maxScroll - 2;
+      leftArrowBtn.classList.toggle("hidden", !hasOverflow || atStart);
+      rightArrowBtn.classList.toggle("hidden", !hasOverflow || atEnd);
+    };
+
+    agentListWrap.addEventListener("scroll", updateScrollArrows, {
+      passive: true,
+    });
+
+    mainAgentBar.appendChild(leftArrowBtn);
     mainAgentBar.appendChild(agentListWrap);
-    mainAgentBar.appendChild(modeSwitchWrap);
-    mainAgentBar.appendChild(agentActions);
+    mainAgentBar.appendChild(rightArrowBtn);
+
+    // El ancho normalmente ya es correcto en cuanto se engancha al DOM, pero
+    // por si el layout de este frame en concreto tardara (ventana recien
+    // redimensionada, primer render, etc.) se repite tambien en el
+    // siguiente frame -- las flechas ya arrancan ocultas (ver arriba), asi
+    // que en el peor caso solo tardan un frame de mas en aparecer, nunca al
+    // reves.
+    updateScrollArrows();
+    requestAnimationFrame(updateScrollArrows);
   }
 
   if (!currentTerminal) {
@@ -31963,6 +32136,11 @@ async function getInvoiceCustomerBillingInfo(ticket) {
   return { clientName, clientFiscalId, clientAddress };
 }
 
+// Real (2026-09-23): tabla de líneas rehecha para calcar el formato real de
+// FacturaScripts (columnas Referencia/Descripción/Cant./Precio/Neto/Imp.,
+// donde "Imp." es el % de IVA de la línea, NO un importe -- el importe total
+// solo aparece en la tabla de impuestos y en el total, igual que en una
+// factura simplificada real).
 function renderInvoiceLineRowsHtml(doc, lineas) {
   const box = doc.getElementById("items");
   if (!box) return;
@@ -31974,7 +32152,7 @@ function renderInvoiceLineRowsHtml(doc, lineas) {
 
       const unitGross = Number(getUnitGrossForPrint(l) || 0);
       const rate = getTaxRateForLine(l);
-      const { total } = computeLineNetFirst(unitGross, qty, rate);
+      const { base } = computeLineNetFirst(unitGross, qty, rate);
 
       const ref = escapeHtml(
         String(l?.referencia ?? l?.ref ?? l?.codigo ?? "").trim(),
@@ -31988,8 +32166,8 @@ function renderInvoiceLineRowsHtml(doc, lineas) {
         <td>${desc}</td>
         <td class="num">${qty}</td>
         <td class="num">${eurTicket(unitGross)} €</td>
+        <td class="num">${eurTicket(base)} €</td>
         <td class="num">${rate}%</td>
-        <td class="num">${eurTicket(total)} €</td>
       </tr>`;
     })
     .join("");
@@ -31997,6 +32175,8 @@ function renderInvoiceLineRowsHtml(doc, lineas) {
   box.innerHTML = rowsHtml;
 }
 
+// Tabla Impuesto/Base Imponible/Porcentaje/Importe, igual que la factura real
+// (antes eran unas filas sueltas sin tabla ni columna de porcentaje explícita).
 function renderInvoiceTaxSummaryHtml(doc, taxMap) {
   const box = doc.getElementById("taxSummary");
   if (!box) return;
@@ -32008,12 +32188,57 @@ function renderInvoiceTaxSummaryHtml(doc, taxMap) {
   box.innerHTML = rates
     .map((rate) => {
       const t = taxMap[rate] || {};
-      return `
-        <div class="totals-row"><div>Base ${rate}%</div><div>${eurTicket(t.base)} €</div></div>
-        <div class="totals-row"><div>IVA ${rate}%</div><div>${eurTicket(t.iva)} €</div></div>
-      `;
+      return `<tr>
+        <td>IVA ${rate}%</td>
+        <td class="num">${eurTicket(t.base)} €</td>
+        <td class="num">${Number(rate).toFixed(2)}%</td>
+        <td class="num">${eurTicket(t.iva)} €</td>
+      </tr>`;
     })
     .join("");
+}
+
+// Tabla Recibo/Forma de Pago/Importe/Vencimiento -- no existía antes; una
+// factura real de FacturaScripts siempre la incluye. Si no hay recibos (p.ej.
+// no se pudieron leer), la tabla entera se oculta en vez de mostrarse vacía.
+function renderInvoiceRecibosHtml(doc, recibos, payMethodMap) {
+  const table = doc.getElementById("recibosTable");
+  const box = doc.getElementById("recibosBody");
+  if (!table || !box) return;
+
+  const rows = Array.isArray(recibos) ? recibos : [];
+  if (!rows.length) {
+    table.style.display = "none";
+    return;
+  }
+
+  box.innerHTML = rows
+    .map((r, i) => {
+      const codpago = String(r?.codpago || "").trim();
+      const label = escapeHtml(
+        (payMethodMap && payMethodMap[codpago]) || codpago || "—",
+      );
+      const importe = Number(r?.importe || 0);
+      const pagado = !!(r?.pagado === true || r?.pagado === "1" || r?.pagado === 1);
+      let vencimientoText = "—";
+      if (pagado) {
+        vencimientoText = "Pagado";
+      } else {
+        const d = new Date(r?.vencimiento || "");
+        vencimientoText = Number.isNaN(d.getTime())
+          ? "—"
+          : d.toLocaleDateString("es-ES");
+      }
+
+      return `<tr>
+        <td>${i + 1}</td>
+        <td>${label}</td>
+        <td class="num">${eurTicket(importe)} €</td>
+        <td class="num">${vencimientoText}</td>
+      </tr>`;
+    })
+    .join("");
+  table.style.display = "table";
 }
 
 // Construye el HTML completo de la factura (mismo patron que el ticket:
@@ -32023,6 +32248,21 @@ async function buildFacturaEmailHtml(ticket) {
   const lineas = await getFacturaLinesForPrint(ticket);
   const { totalToShow, taxMap } = calcTotalsAndTaxMap(lineas, false);
   const billing = await getInvoiceCustomerBillingInfo(ticket);
+
+  const idfactura = Number(ticket?.idfactura || ticket?._raw?.idfactura || 0);
+  let recibos = [];
+  let payMethodMap = {};
+  try {
+    [recibos, payMethodMap] = await Promise.all([
+      idfactura ? fetchRecibosByFactura(idfactura) : Promise.resolve([]),
+      getFormasPagoMap(),
+    ]);
+  } catch (e) {
+    console.warn(
+      "No se pudieron cargar recibos/formas de pago para la factura por email:",
+      e?.message || e,
+    );
+  }
 
   let plantillaProps = {};
   try {
@@ -32070,17 +32310,32 @@ async function buildFacturaEmailHtml(ticket) {
     if (phoneRow) phoneRow.style.display = "block";
   }
 
+  // Real (2026-09-23): la etiqueta/serie ahora calca la factura real de
+  // FacturaScripts ("Factura Simplificada FACxxxx" en vez de solo "Factura"),
+  // reutilizando getInvoiceLabelBySerie (ya usado en otros sitios de la app
+  // para lo mismo, nunca antes conectado a este email).
+  const codserie = String(
+    ticket?.codserie || ticket?._raw?.codserie || "",
+  ).trim();
   const isRect =
+    codserie.toUpperCase() === "R" ||
     Number(ticket?.idfacturarect || ticket?._raw?.idfacturarect || 0) > 0;
-  setText(doc, "invoiceLabel", isRect ? "Factura Rectificativa" : "Factura");
+  const fullCode = getInvoiceFullCode(ticket) || "—";
   setText(
     doc,
-    "invoiceNumber",
-    ticket?.numero ?? ticket?._raw?.codigo ?? ticket?.numero2 ?? "—",
+    "invoiceLabel",
+    `${getInvoiceLabelBySerie(isRect ? "R" : codserie)} ${fullCode}`,
   );
+  setText(
+    doc,
+    "invoiceNumber2",
+    String(ticket?._raw?.numero || ticket?.numero || "—").trim(),
+  );
+  setText(doc, "invoiceSerie", codserie || "S");
   const fecha = String(ticket?.fecha || "").trim();
   const hora = String(ticket?.hora || "").trim();
-  setText(doc, "invoiceDate", [fecha, hora].filter(Boolean).join(" ") || "—");
+  setText(doc, "invoiceDate", fecha || "—");
+  setText(doc, "invoiceBarTotal", `${eurTicket(totalToShow)} €`);
 
   setText(doc, "clientName", billing.clientName);
   const clientFiscalRow = doc.getElementById("clientFiscalRow");
@@ -32096,13 +32351,20 @@ async function buildFacturaEmailHtml(ticket) {
 
   renderInvoiceLineRowsHtml(doc, lineas);
   renderInvoiceTaxSummaryHtml(doc, taxMap);
+  renderInvoiceRecibosHtml(doc, recibos, payMethodMap);
   setText(doc, "grandTotal", `${eurTicket(totalToShow)} €`);
   setText(doc, "legalFooter", plantillaProps.endtext || "");
 
   return "<!doctype html>\n" + doc.documentElement.outerHTML;
 }
 
-async function apiSendInvoiceEmail({ toEmail, subject, message, pdfBase64 }) {
+async function apiSendInvoiceEmail({
+  toEmail,
+  subject,
+  message,
+  pdfBase64,
+  fileName,
+}) {
   const slug = String(getCurrentSlugForReservations() || "").trim();
   const syncApiKey = getTpvSyncApiKey();
   if (!slug || !syncApiKey) {
@@ -32124,6 +32386,7 @@ async function apiSendInvoiceEmail({ toEmail, subject, message, pdfBase64 }) {
         subject,
         message,
         pdfBase64,
+        fileName,
         fromName: String(companyInfo?.nombrecorto || "").trim(),
       }),
       timeoutMs: 30000,
@@ -32175,12 +32438,14 @@ async function sendInvoiceEmailForTicket(ticket) {
     return;
   }
 
+  const fullCode = getInvoiceFullCode(ticket);
   try {
     await apiSendInvoiceEmail({
       toEmail,
-      subject: `Factura ${ticket?.numero ?? ""}`.trim(),
+      subject: `Factura ${fullCode}`.trim(),
       message,
       pdfBase64: pdfResult.pdfBase64,
+      fileName: `Factura ${fullCode || "sin-numero"}.pdf`,
     });
     toast("Factura enviada ✅", "ok", "Enviar factura");
   } catch (e) {
@@ -32192,11 +32457,9 @@ async function sendInvoiceEmailForTicket(ticket) {
   }
 }
 
-// Historial de emails usados para enviar facturas + mensaje por defecto
-// recordado: guardados en local (por instalación, no por cliente), ya que
-// son datos de conveniencia del cajero, no algo que dependa de FacturaScripts.
+// Historial de emails usados para enviar facturas: guardado en local (por
+// instalación, no por cliente), dato de conveniencia del cajero.
 const INVOICE_EMAIL_HISTORY_KEY = "tpv_invoiceEmailHistory";
-const INVOICE_EMAIL_DEFAULT_MESSAGE_KEY = "tpv_invoiceEmailDefaultMessage";
 const INVOICE_EMAIL_HISTORY_MAX = 8;
 
 function getInvoiceEmailHistory() {
@@ -32228,17 +32491,28 @@ function removeInvoiceEmailFromHistory(email) {
   localStorage.setItem(INVOICE_EMAIL_HISTORY_KEY, JSON.stringify(remaining));
 }
 
-function getInvoiceEmailDefaultMessage() {
-  return localStorage.getItem(INVOICE_EMAIL_DEFAULT_MESSAGE_KEY) || "";
-}
-
-function setInvoiceEmailDefaultMessage(message) {
-  localStorage.setItem(INVOICE_EMAIL_DEFAULT_MESSAGE_KEY, String(message || ""));
-}
-
 let invoiceEmailKeyboardBound = false;
 
-function openSendInvoiceEmailModal({ prefillEmail = "", prefillName = "" } = {}) {
+// Real (2026-09-23): el jefe de Sergi pidio que el email calque exactamente
+// el que manda FacturaScripts desde su propio panel -- investigado a fondo
+// (Core/Lib/Email/NewMail.php + Core/View/Email/NewTemplate.html.twig,
+// contra la instalacion real de un cliente): el texto del mensaje NO es un
+// texto fijo de FacturaScripts (es editable por instalacion, vía
+// emails_notifications), asi que aqui se precarga como valor por defecto,
+// editable, el mismo texto visto en el envio real de referencia -- no un
+// "ultimo mensaje recordado" (ese mecanismo se quito: recordar un texto con
+// un numero de factura de otro ticket ya no tiene sentido con un valor por
+// defecto que ahora SI es dinamico por factura).
+function buildDefaultInvoiceEmailMessage(ticket) {
+  const fullCode = getInvoiceFullCode(ticket);
+  return `Hola.\n\nAdjuntamos su factura número ${fullCode || "—"}.\n\nGracias, un saludo.`;
+}
+
+function openSendInvoiceEmailModal({
+  ticket = null,
+  prefillEmail = "",
+  prefillName = "",
+} = {}) {
   return new Promise((resolve) => {
     const overlay = document.getElementById("invoiceEmailOverlay");
     const emailInput = document.getElementById("invoiceEmailInput");
@@ -32302,7 +32576,9 @@ function openSendInvoiceEmailModal({ prefillEmail = "", prefillName = "" } = {})
     }
 
     emailInput.value = prefillEmail || history[0] || "";
-    if (messageInput) messageInput.value = getInvoiceEmailDefaultMessage();
+    if (messageInput) {
+      messageInput.value = buildDefaultInvoiceEmailMessage(ticket);
+    }
     if (nameEl) nameEl.textContent = prefillName || "";
     renderHistoryChips();
 
@@ -32323,7 +32599,6 @@ function openSendInvoiceEmailModal({ prefillEmail = "", prefillName = "" } = {})
       }
       const message = String(messageInput?.value || "").trim();
       saveInvoiceEmailToHistory(toEmail);
-      setInvoiceEmailDefaultMessage(message);
       cleanup();
       resolve({ toEmail, message });
     };
@@ -32456,6 +32731,20 @@ function getInvoiceLabelBySerie(codserie) {
   if (serie === "R") return "Factura Rectificativa";
   if (serie === "A") return "Factura General";
   return "Factura Simplificada";
+}
+
+// Real (2026-09-23): el codigo completo tipo "FAC2026S2860" se usaba con una
+// cadena de fallback ligeramente distinta en 3 sitios (barra del PDF, asunto
+// del email, nombre del adjunto) -- factorizado aqui para que los 3 muestren
+// siempre el mismo codigo.
+function getInvoiceFullCode(ticket) {
+  return String(
+    ticket?._raw?.codigo ||
+      ticket?.codigo ||
+      ticket?.numero2 ||
+      ticket?.numero ||
+      "",
+  ).trim();
 }
 
 async function fetchClienteByCodcliente(codcliente) {
@@ -36977,6 +37266,7 @@ async function onPayButtonClick() {
   let parkedSyncKeyToClose = "";
   let parkedIdToClose = 0;
   let parkedTicketFallbackForMark = null;
+  let optimisticMesaState = null;
 
   try {
     if (isPayingNow || isParkingNow) return;
@@ -37105,6 +37395,44 @@ async function onPayButtonClick() {
       stockOverrideProductIds = stockProblems.map((w) => w.baseProductId);
     }
 
+    // Real de cliente 2026-09-24: cobrar una mesa se notaba lento porque la
+    // comprobacion de frescura de mas abajo (waitForSilentAutoSaveToSettle +
+    // refreshRemoteParkedReservationsOnly -- arreglo real de
+    // bug_stale_cart_after_remote_mesa_change_2026-09-22, no se puede quitar)
+    // arrancaba DESPUES de que el cajero ya hubiera rellenado el modal de
+    // pago, sumando ese round-trip de red a la espera. Arrancarla ya mismo,
+    // en paralelo con lo que tarde el cajero en el modal, no cambia ninguna
+    // comprobacion -- solo adelanta CUANDO empieza la llamada de red.
+    let prefetchedParkedFreshnessPromise = null;
+    {
+      const earlySyncKey = String(
+        ACTIVE_PARKED_TICKET_SYNC_KEY || PENDING_RUNTIME_PARKED_SYNC_KEY || "",
+      ).trim();
+      const earlyTicketId =
+        Number(ACTIVE_PARKED_TICKET_ID || 0) ||
+        Number(PENDING_RUNTIME_PARKED_TICKET_ID || 0) ||
+        0;
+      const earlyParkedIdx = resolveUnpaidParkedTicketIndexForCheckout({
+        preferredIndex:
+          currentParkedTicketIndex !== null
+            ? Number(currentParkedTicketIndex)
+            : null,
+        syncKey: earlySyncKey,
+        ticketId: earlyTicketId,
+        cartItems: null,
+      });
+      if (earlyParkedIdx != null) {
+        prefetchedParkedFreshnessPromise = waitForSilentAutoSaveToSettle().then(
+          () => refreshRemoteParkedReservationsOnly(),
+        );
+        // Si el cobro se cancela en el modal, nadie mas espera esta promesa
+        // -- sigue resolviendose sola en 2º plano (solo refresca
+        // parkedTickets, igual que ya hace el sondeo periodico). Sin este
+        // catch, un fallo tardio saldria como rechazo no gestionado.
+        prefetchedParkedFreshnessPromise.catch(() => {});
+      }
+    }
+
     // 1) Modal cobro
     const payResult = await openPayModal(totalCart);
     if (!payResult) {
@@ -37226,12 +37554,21 @@ async function onPayButtonClick() {
       // isParkingNowSilent), asi que en teoria se podria pulsar Cobrar justo
       // mientras ese guardado esta escribiendo este mismo ticket en el
       // servidor. Se espera a que termine antes de bloquearlo/cerrarlo para
-      // no arrancar el cobro sobre una escritura a medias.
-      await waitForSilentAutoSaveToSettle();
+      // no arrancar el cobro sobre una escritura a medias. Si ya se lanzo el
+      // prefetch de arriba (caso normal), esta espera y el refresco de mas
+      // abajo ya estan resueltos o a punto -- awaitear esa misma promesa en
+      // vez de repetir las llamadas.
+      if (prefetchedParkedFreshnessPromise) {
+        await prefetchedParkedFreshnessPromise;
+      } else {
+        await waitForSilentAutoSaveToSettle();
+      }
 
       releaseParkedCheckoutLock = beginParkedCheckoutLock(parkedIndexToClose);
 
-      await refreshRemoteParkedReservationsOnly();
+      if (!prefetchedParkedFreshnessPromise) {
+        await refreshRemoteParkedReservationsOnly();
+      }
 
       let syncedIdx = -1;
       if (parkedSyncKeyToClose) {
@@ -37457,6 +37794,22 @@ async function onPayButtonClick() {
       total: totalCart,
     };
 
+    // Cobro optimista de la mesa (peticion real de Sergi 2026-09-24): justo
+    // aqui, en el mismo instante en que el carrito ya se libera para el
+    // siguiente cliente, reflejamos ya la mesa como "cuenta cobrada" (hace
+    // aparecer "Cobrada y liberar") en vez de esperar a que la factura real
+    // se cree en FacturaScripts en segundo plano. Se revierte en el catch de
+    // processConfirmedSale si el cobro real acaba fallando de verdad.
+    if (parkedIndexToClose != null) {
+      const ticketForMesaOptimism =
+        (Array.isArray(parkedTickets) && parkedTickets[parkedIndexToClose]) ||
+        parkedTicketFallbackForMark ||
+        null;
+      if (ticketForMesaOptimism) {
+        optimisticMesaState = applyOptimisticMesaCobrada(ticketForMesaOptimism);
+      }
+    }
+
     removeCartLinesByIdSet(saleLineIds);
     renderCart();
 
@@ -37517,6 +37870,7 @@ async function onPayButtonClick() {
         releaseParkedCheckoutLock,
         didFastAutoPrint,
         fastPreApiPrintedNumber,
+        optimisticMesaState,
       }),
     );
 
@@ -37563,6 +37917,13 @@ async function onPayButtonClick() {
       Promise.all(
         stockOverrideProductIds.map((id) => setProductVentasInStock(id, false)),
       ).catch(() => {});
+    }
+    // Red de seguridad: si el cobro optimista de la mesa (ver mas arriba) ya
+    // se aplico pero algo raro impidio llegar a encolar la fase 2 (que es
+    // quien normalmente revertiria esto si el cobro fallara), no dejar la
+    // mesa colgada en "Cobrada y liberar" sin ninguna venta procesandose.
+    if (optimisticMesaState) {
+      revertOptimisticMesaCobrada(optimisticMesaState);
     }
   } finally {
     if (isPayingNowWatchdogTimer) {
@@ -37626,6 +37987,7 @@ async function processConfirmedSale(ctx) {
     releaseParkedCheckoutLock,
     didFastAutoPrint,
     fastPreApiPrintedNumber,
+    optimisticMesaState,
   } = ctx;
 
   // No arrancar/reanudar la descarga en 2º plano de una actualizacion
@@ -38290,13 +38652,25 @@ async function processConfirmedSale(ctx) {
     // lugar, se recupera como un aparcado nuevo para poder revisarlo y
     // volver a cobrarlo cuando quieran, sin tocar el carrito actual.
     let recoveredTicket = null;
-    if (!saleCommitted && cartSnapshot.length) {
-      recoveredTicket = await parkFailedSaleForRetry(
-        cartSnapshot,
-        ticketPayload,
-        msg,
-        parkedTicketFallbackForMark,
-      );
+    if (!saleCommitted) {
+      // El cobro optimista de la mesa (ver applyOptimisticMesaCobrada, mas
+      // arriba en onPayButtonClick) se aplico dando por hecho que el cobro
+      // real iba a completarse. Si al final no es asi (fallo generico, no
+      // offline), parkFailedSaleForRetry desengancha la venta de la mesa
+      // (clearMesaScopeFromTicket) y la deja como un aparcado generico nuevo
+      // -- sin revertir esto, la mesa se quedaria mostrando "Cobrada y
+      // liberar" para un pedido que en realidad quedo huerfano.
+      if (optimisticMesaState) {
+        revertOptimisticMesaCobrada(optimisticMesaState);
+      }
+      if (cartSnapshot.length) {
+        recoveredTicket = await parkFailedSaleForRetry(
+          cartSnapshot,
+          ticketPayload,
+          msg,
+          parkedTicketFallbackForMark,
+        );
+      }
     }
 
     if (recoveredTicket) {

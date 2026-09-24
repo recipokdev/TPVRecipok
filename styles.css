@@ -1264,6 +1264,43 @@ body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode)
   -webkit-overflow-scrolling: touch;
   touch-action: pan-x;
   padding-bottom: 2px;
+  /* Real (2026-09-23): se sigue pudiendo arrastrar con el dedo igual que
+     siempre -- solo se oculta la barra de scroll nativa (quedaba fatal
+     metida ahi, pedido directo de Sergi); las flechas .agent-list-scroll-*
+     dan la misma pista de "hay mas agentes" de forma mas discreta. */
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* Edge/IE legacy */
+}
+.agent-list-wrap::-webkit-scrollbar {
+  display: none; /* Chromium/Electron */
+}
+
+/* Flechas de paginado de la lista de agentes -- solo se muestran cuando
+   updateScrollArrows() detecta que hay mas contenido en esa direccion. */
+.agent-list-scroll-arrow {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: none;
+  background: #ffffff;
+  color: #198cff;
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  transition: background 0.15s, transform 0.05s;
+}
+.agent-list-scroll-arrow:hover {
+  background: #eef3ff;
+  transform: translateY(-1px);
+}
+.agent-list-scroll-arrow.hidden {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 /* Una sola fila (con scroll horizontal ya soportado por .agent-list-wrap):
@@ -1455,8 +1492,11 @@ body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode)
 .search-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 3px 10px;
+  gap: 6px;
+  /* Real (2026-09-23): pedido directo de Sergi -- barra mas compacta ahora
+     que aloja tambien los botones de mesas/actualizar/cajon (ver
+     renderMainAgentBar, antes solo pasaban aqui con 0-1 agentes). */
+  padding: 2px 8px;
   background: #ffffff;
   border-radius: 999px;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
@@ -1466,8 +1506,8 @@ body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode)
   flex: 1;
   border: none;
   outline: none;
-  font-size: 14px;
-  padding: 6px 4px;
+  font-size: 13px;
+  padding: 5px 4px;
   background: transparent;
 }
 

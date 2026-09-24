@@ -5,7 +5,14 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "MEJORA: la factura que se envía por email ahora tiene el mismo aspecto que la factura real de FacturaScripts — barra con \"Factura Simplificada\", número y fecha, columna de importe neto por línea, tabla de impuestos (base/porcentaje/importe) y la tabla de recibo con la forma de pago y si está pagado. Antes era una versión mucho más simple.",
+        "MEJORA: el propio correo (no solo la factura adjunta) también calca ahora el que envía FacturaScripts — mismo diseño de cabecera con el nombre de la empresa, mensaje precargado (editable) igual al de FacturaScripts, firma configurada en Ajustes → Correo electrónico, y el archivo adjunto ya se llama \"Factura FAC2026S2860.pdf\" en vez de \"factura.pdf\".",
+        "MEJORA: en la barra de agentes, los 3 botones fijos (modo mesas, actualizar, cajón) ahora viven siempre dentro del buscador, más pequeños, dejando que la lista de agentes use todo el ancho disponible. Se quitó la barra de scroll horizontal (quedaba fea) y en su lugar aparecen unas flechitas discretas a los lados cuando hay más agentes fuera de la vista — el buscador también se ha hecho un poco más compacto.",
+        "MEJORA: en Modo Mesas, cobrar una mesa se notaba lento y hasta que no terminaba de verdad no cambiaba de \"ocupada\" a \"cuenta cobrada\". Ahora funciona como el TPV normal de mostrador: la mesa se refleja como cobrada al instante y la creación de la factura real sigue en segundo plano sin bloquear nada. Si el cobro real llegara a fallar de verdad (no simplemente sin conexión), la mesa vuelve sola a su estado anterior y se avisa igual que siempre.",
+        "FIX: con varios agentes/cajeros para elegir, el aviso de \"Apertura de caja\" podía llegar a abrirse dos veces seguidas al iniciar sesión (una con un cajero adivinado, antes de que terminaras de elegir el tuyo de verdad) — cerrarlo una vez podía hacer que se volviera a abrir solo. Ya no se intenta abrir caja hasta que el cajero/terminal está confirmado de verdad.",
+        "FIX: mientras se escribía el PIN de acceso (o se tecleaba un importe en apertura/cierre de caja), esos números podían interpretarse como un código escaneado y añadir un producto al carrito sin querer, por detrás del cuadro de diálogo. El lector de código ya no actúa mientras haya cualquier ventana de este tipo abierta."
+      ]
     },
     {
       "version": "0.2.35",

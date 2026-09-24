@@ -6717,7 +6717,74 @@ mustContain(
       "buildFacturaEmailHtml must read settings/plantillaspdf so the generated invoice matches FacturaScripts's branding",
     );
   }
+  if (
+    scoped.includes("fetchRecibosByFactura(idfactura)") &&
+    scoped.includes("getFormasPagoMap()")
+  ) {
+    ok(
+      "buildFacturaEmailHtml also fetches recibos + formas de pago, so the emailed invoice includes the Recibo/Forma de Pago/Importe/Vencimiento table a real FacturaScripts invoice always has",
+    );
+  } else {
+    fail(
+      "buildFacturaEmailHtml must fetch recibos + formas de pago for the recibos table",
+    );
+  }
 }
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-23 invoice-email template redesign (match real FacturaScripts layout)\n",
+);
+
+mustContain(
+  facturaPrint,
+  'class="invoice-bar"',
+  "factura_print.html has the colored FACTURA SIMPLIFICADA/date/total bar, matching the real FacturaScripts invoice layout instead of a plain title",
+);
+mustContain(
+  facturaPrint,
+  'id="recibosTable"',
+  "factura_print.html has the Recibo/Forma de Pago/Importe/Vencimiento table -- previously absent entirely, even though every real FacturaScripts invoice includes it",
+);
+mustContain(
+  facturaPrint,
+  '<th class="num">Neto</th>',
+  "The line items table now shows Neto (net amount) as a real FacturaScripts invoice does, not just a tax-rate-only column",
+);
+mustContain(
+  renderer,
+  'getInvoiceLabelBySerie(isRect ? "R" : codserie)',
+  "buildFacturaEmailHtml now uses the existing getInvoiceLabelBySerie helper (already used elsewhere for the same purpose) to show 'Factura Simplificada'/'Factura General'/'Factura Rectificativa' correctly, instead of always just 'Factura'",
+);
+mustContain(
+  renderer,
+  "function renderInvoiceRecibosHtml(doc, recibos, payMethodMap)",
+  "New function renders the Recibo/Forma de Pago/Importe/Vencimiento rows",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-23 invoice email HTML body + dynamic attachment name (calqued from FacturaScripts's own native send)\n",
+);
+
+mustContain(
+  renderer,
+  "function getInvoiceFullCode(ticket)",
+  "New shared helper for the invoice's full code (e.g. FAC2026S2860), reused by the PDF bar, the email subject, and the attachment filename so all 3 always agree",
+);
+mustContain(
+  renderer,
+  "function buildDefaultInvoiceEmailMessage(ticket)",
+  "The email message field defaults to a dynamic 'Hola. Adjuntamos su factura número {codigo}...' text calqued from a real FacturaScripts send, editable before sending",
+);
+mustContain(
+  renderer,
+  'fileName: `Factura ${fullCode || "sin-numero"}.pdf`',
+  "sendInvoiceEmailForTicket sends a real, human-readable attachment filename (e.g. 'Factura FAC2026S2860.pdf') instead of always 'factura.pdf'",
+);
+mustContain(
+  renderer,
+  "subject: `Factura ${fullCode}`.trim()",
+  "The email subject now uses the same real invoice code as the PDF/attachment, instead of a ticket.numero field that was usually empty on this app's ticket-row shape",
+);
 
 console.log(
   "\n[SMOKE] Checking 2026-09-18 customer display screen picker + emergency exits\n",
@@ -7334,7 +7401,37 @@ console.log(
 mustContain(
   styles,
   "grid-template-rows: repeat(1, auto);",
-  "The agent pill list lays out in a single row (with the existing horizontal scroll as fallback) instead of always reserving 2 rows of height, which pushed the search bar/categories/products further down whenever there were 2+ agents",
+  "The agent pill list lays out in a single row (with horizontal scroll as fallback, later replaced by hidden-scrollbar+arrows on 2026-09-23) instead of always reserving 2 rows of height, which pushed the search bar/categories/products further down whenever there were 2+ agents",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-23 agent bar redesign: fixed buttons moved into the search bar, arrows instead of a visible scrollbar (real-usage feedback)\n",
+);
+
+mustContain(
+  renderer,
+  "if (searchBarActionsSlot) {\r\n    searchBarActionsSlot.appendChild(modeSwitchWrap);\r\n    searchBarActionsSlot.appendChild(agentActions);\r\n  }",
+  "The mesas/refresh/drawer buttons now always move into the search bar, regardless of agent count -- previously they only moved there with 0-1 agents, staying in the (now full-width) agent bar otherwise",
+);
+mustContain(
+  renderer,
+  "const leftArrowBtn = document.createElement",
+  "New scroll-hint arrows for the agent pill list, shown/hidden based on real overflow",
+);
+mustContain(
+  renderer,
+  "const updateScrollArrows = () =>",
+  "Arrow visibility is recomputed on every scroll (touch-drag still works, this only replaces the visible scrollbar with a subtler hint) and right after building the bar",
+);
+mustContain(
+  styles,
+  ".agent-list-wrap::-webkit-scrollbar {\r\n  display: none",
+  "The agent list's native scrollbar is hidden visually while overflow-x scrolling (including touch drag) keeps working underneath",
+);
+mustContain(
+  styles,
+  ".agent-list-scroll-arrow {",
+  "Styling for the new left/right scroll-hint arrows is present",
 );
 
 console.log(
@@ -7373,8 +7470,8 @@ mustContain(
 );
 mustContain(
   renderer,
-  "function setInvoiceEmailDefaultMessage(message)",
-  "The invoice message is remembered as the default for next time instead of always resetting to empty",
+  "function buildDefaultInvoiceEmailMessage(ticket)",
+  "The invoice message field is now prefilled with a dynamic default calqued from FacturaScripts's own real invoice email (2026-09-23) instead of remembering the last typed text -- a remembered static message stopped making sense once the default itself became per-invoice",
 );
 mustContain(
   index,
@@ -7530,6 +7627,51 @@ mustContain(
   renderer,
   "handleStaleParkedWriteConflict(ticket, e);\r\n    } else {\r\n      enqueueParkedSyncOperation(\"upsert\", ticket);\r\n      console.warn(\r\n        \"No se pudo sincronizar estado de comanda en ticket:\",",
   "persistTicketAfterComandaPrint also handles the stale-write conflict correctly now",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-24 optimistic mesa cobro (table flips to 'cobrada' instantly, invoice creation stays in the background, real-usage feedback)\n",
+);
+
+mustContain(
+  renderer,
+  "function applyOptimisticMesaCobrada(ticket)",
+  "New helper marks a mesa table as 'cuenta cobrada' (makes the 'Cobrada y liberar' button appear) the instant the cart clears, instead of waiting for the real invoice creation in FacturaScripts to finish",
+);
+mustContain(
+  renderer,
+  "function revertOptimisticMesaCobrada(optimisticMesaState)",
+  "Companion revert helper undoes the optimistic mesa flip if the real charge ends up failing (not the offline-queued case, which is treated as committed)",
+);
+mustContain(
+  renderer,
+  "prefetchedParkedFreshnessPromise = waitForSilentAutoSaveToSettle().then(",
+  "The parked-ticket freshness check (waitForSilentAutoSaveToSettle + refreshRemoteParkedReservationsOnly, the fix for bug_stale_cart_after_remote_mesa_change_2026-09-22) now starts before the payment modal opens instead of after, overlapping with the cashier's modal interaction time instead of adding to it -- same checks, same abort-on-stale logic, just started earlier",
+);
+mustContain(
+  renderer,
+  "optimisticMesaState = applyOptimisticMesaCobrada(ticketForMesaOptimism);",
+  "onPayButtonClick applies the optimistic mesa flip at the exact instant the cart clears, the same moment a normal counter sale already 'moves on'",
+);
+mustContain(
+  renderer,
+  "if (optimisticMesaState) {\r\n        revertOptimisticMesaCobrada(optimisticMesaState);\r\n      }",
+  "processConfirmedSale's genuine-failure branch (not offline, not a committed invoice) reverts the optimistic mesa flip before parkFailedSaleForRetry unlinks the sale from the table -- otherwise the table would keep showing 'Cobrada y liberar' for an order that actually got orphaned into a generic parked ticket",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-24 login/cash-open double-trigger and barcode-scanner-during-modal fixes (real client: Vanille)\n",
+);
+
+mustContain(
+  renderer,
+  "if (!isTerminalOverlayCurrentlyOpen()) {\r\n      await maybeOpenCashOrRecover();\r\n    }",
+  "runBootFlow no longer forces the cash-open/recover check with a guessed default terminal/agent while the Terminal/Agent picker is still open waiting for the cashier's real choice -- previously this could show 'Apertura de caja' twice (once guessed, once for real once the picker was confirmed)",
+);
+mustContain(
+  renderer,
+  'if (document.body.classList.contains("modal-locked")) return;',
+  "The global barcode-scanner keydown listener now bails out while ANY blocking modal is open (login, cash open/close, cash movements, pack config...) -- previously it only skipped on-screen keyboards, so digits typed into the PIN field (or a cash denomination field) followed by Enter could be interpreted as a scanned barcode and silently add a product to the cart behind the modal",
 );
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");

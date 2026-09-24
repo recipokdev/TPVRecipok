@@ -33,9 +33,7 @@
         display: flex;
         justify-content: space-between;
         align-items: flex-start;
-        border-bottom: 3px solid var(--color1);
-        padding-bottom: 10px;
-        margin-bottom: 16px;
+        margin-bottom: 14px;
       }
 
       #companyLogo {
@@ -49,9 +47,8 @@
       }
 
       .company-name {
-        font-size: 18px;
+        font-size: 15px;
         font-weight: 700;
-        color: var(--color1);
       }
 
       .muted {
@@ -62,29 +59,42 @@
         font-size: 11px;
       }
 
-      .invoice-title-block {
+      .company-block-right {
         text-align: right;
       }
 
-      .invoice-title {
-        font-size: 20px;
+      .invoice-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background: var(--color1);
+        color: var(--color2);
+        border-radius: 3px;
+        padding: 8px 12px;
+        margin-bottom: 14px;
+      }
+
+      .invoice-bar-label {
         font-weight: 700;
-        color: var(--color1);
         text-transform: uppercase;
+        font-size: 13px;
+      }
+
+      .invoice-bar-date,
+      .invoice-bar-total {
+        font-weight: 700;
+        font-size: 13px;
       }
 
       .parties {
         display: flex;
         justify-content: space-between;
         gap: 16px;
-        margin-bottom: 18px;
+        margin-bottom: 16px;
       }
 
       .party-box {
         flex: 1;
-        background: var(--color3);
-        border-radius: 4px;
-        padding: 10px 12px;
       }
 
       .party-title {
@@ -96,13 +106,21 @@
         margin-bottom: 4px;
       }
 
-      table.lines {
+      .party-right {
+        text-align: right;
+      }
+
+      table.lines,
+      table.tax-summary,
+      table.recibos {
         width: 100%;
         border-collapse: collapse;
         margin-bottom: 16px;
       }
 
-      table.lines thead th {
+      table.lines thead th,
+      table.tax-summary thead th,
+      table.recibos thead th {
         background: var(--color1);
         color: var(--color2);
         text-align: left;
@@ -111,46 +129,48 @@
         padding: 6px 8px;
       }
 
-      table.lines thead th.num {
+      table.lines thead th.num,
+      table.tax-summary thead th.num,
+      table.recibos thead th.num {
         text-align: right;
       }
 
-      table.lines tbody td {
+      table.lines tbody td,
+      table.tax-summary tbody td,
+      table.recibos tbody td {
         padding: 6px 8px;
         border-bottom: 1px solid var(--color3);
         font-size: 12px;
         vertical-align: top;
       }
 
-      table.lines tbody td.num {
+      table.lines tbody td.num,
+      table.tax-summary tbody td.num,
+      table.recibos tbody td.num {
         text-align: right;
         white-space: nowrap;
       }
 
-      .totals {
-        display: flex;
-        justify-content: flex-end;
-        margin-bottom: 20px;
-      }
-
-      .totals-box {
-        width: 60mm;
-      }
-
-      .totals-row {
+      .totals-wrap {
         display: flex;
         justify-content: space-between;
-        padding: 3px 0;
-        font-size: 12px;
+        align-items: flex-start;
+        gap: 16px;
+        margin-bottom: 16px;
       }
 
-      .totals-row.grand {
-        border-top: 2px solid var(--color1);
-        margin-top: 4px;
-        padding-top: 6px;
-        font-size: 15px;
+      .tax-summary-col {
+        flex: 1;
+      }
+
+      .grand-total-box {
+        background: var(--color1);
+        color: var(--color2);
+        border-radius: 3px;
+        padding: 10px 16px;
+        font-size: 16px;
         font-weight: 700;
-        color: var(--color1);
+        white-space: nowrap;
       }
 
       .footer-legal {
@@ -166,23 +186,30 @@
     <div id="invoice">
       <div class="header">
         <div class="company-block">
-          <img id="companyLogo" src="" alt="Logo" />
           <div class="company-name" id="companyShortName">—</div>
           <div class="small" id="companyLegalName"></div>
+          <div class="small" id="companyCifRow">
+            CIF: <span id="companyCif">—</span>
+          </div>
           <div class="small" id="companyAddress"></div>
           <div class="small">
             <span id="companyZip"></span><span id="companyCity"></span>
           </div>
-          <div class="small">NIF/CIF: <span id="companyCif">—</span></div>
           <div class="small" id="companyPhoneRow" style="display: none">
             <span id="companyPhone"></span>
           </div>
         </div>
-        <div class="invoice-title-block">
-          <div class="invoice-title" id="invoiceLabel">Factura</div>
-          <div>Nº <span id="invoiceNumber">—</span></div>
-          <div class="small">Fecha: <span id="invoiceDate">—</span></div>
+        <div class="company-block-right">
+          <img id="companyLogo" src="" alt="" style="max-height: 18mm; display: none" />
         </div>
+      </div>
+
+      <div class="invoice-bar">
+        <div class="invoice-bar-label" id="invoiceLabel">
+          Factura Simplificada —
+        </div>
+        <div class="invoice-bar-date" id="invoiceDate">—</div>
+        <div class="invoice-bar-total" id="invoiceBarTotal">0,00 €</div>
       </div>
 
       <div class="parties">
@@ -196,31 +223,58 @@
             <span id="clientAddress"></span>
           </div>
         </div>
+        <div class="party-box party-right">
+          <div class="small">
+            Número: <span id="invoiceNumber2">—</span>
+          </div>
+          <div class="small">
+            Serie: <span id="invoiceSerie">—</span>
+          </div>
+        </div>
       </div>
 
       <table class="lines">
         <thead>
           <tr>
-            <th>Ref.</th>
+            <th>Referencia</th>
             <th>Descripción</th>
             <th class="num">Cant.</th>
             <th class="num">Precio</th>
-            <th class="num">IVA</th>
-            <th class="num">Importe</th>
+            <th class="num">Neto</th>
+            <th class="num">Imp.</th>
           </tr>
         </thead>
         <tbody id="items"></tbody>
       </table>
 
-      <div class="totals">
-        <div class="totals-box">
-          <div id="taxSummary"></div>
-          <div class="totals-row grand">
-            <div>Total</div>
-            <div id="grandTotal">0,00 €</div>
-          </div>
+      <div class="totals-wrap">
+        <div class="tax-summary-col">
+          <table class="tax-summary">
+            <thead>
+              <tr>
+                <th>Impuesto</th>
+                <th class="num">Base Imponible</th>
+                <th class="num">Porcentaje</th>
+                <th class="num">Importe</th>
+              </tr>
+            </thead>
+            <tbody id="taxSummary"></tbody>
+          </table>
         </div>
+        <div class="grand-total-box">TOTAL: <span id="grandTotal">0,00 €</span></div>
       </div>
+
+      <table class="recibos" id="recibosTable" style="display: none">
+        <thead>
+          <tr>
+            <th>Recibo</th>
+            <th>Forma de Pago</th>
+            <th class="num">Importe</th>
+            <th class="num">Vencimiento</th>
+          </tr>
+        </thead>
+        <tbody id="recibosBody"></tbody>
+      </table>
 
       <div class="footer-legal" id="legalFooter"></div>
     </div>
