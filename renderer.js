@@ -9156,6 +9156,45 @@ async function apiLogStockLedgerEntry({ ticketId, idProducto, delta, reason }) {
   } catch {}
 }
 
+// Pide un codigo de emparejamiento nuevo para este negocio (app de
+// camareros). A diferencia de los demas api* de esta zona, esto SI debe
+// fallar de forma visible (no fail-open): si no se puede generar, quien
+// pulso el boton necesita saberlo, no un codigo silenciosamente ausente.
+async function apiCreatePairingCode() {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("Falta configuracion de sincronizacion de este TPV.");
+  }
+
+  const url = `${TPV_CAMAREROS_API_URL}?action=create-pairing-code`;
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      // codalmacen opcional (aislamiento por tienda): si este terminal tiene
+      // uno, el codigo -- y el device-token resultante tras canjearlo --
+      // queda ligado a ESA tienda concreta, no a toda la empresa. Vacio
+      // sigue funcionando exactamente igual que antes (una tienda implicita
+      // por slug).
+      body: JSON.stringify({ slug, codalmacen: getCurrentWarehouseCode() }),
+    },
+    8000,
+  );
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok || !data?.data?.code) {
+    throw new Error(data?.error || "No se pudo generar el codigo, intentalo de nuevo.");
+  }
+
+  return data.data;
+}
+
 // Lista las tablets emparejadas de este negocio (para la pantalla de
 // gestion en Opciones). Igual que apiCreatePairingCode, falla de forma
 // visible -- es una vista de gestion, no un camino silencioso.
@@ -9320,40 +9359,6 @@ async function apiLogCobroFollowupIssue({ idfactura, codigo, step, message }) {
       3000,
     );
   } catch {}
-}
-
-// Pide un codigo de emparejamiento nuevo para este negocio (app de
-// camareros). A diferencia de los demas api* de esta zona, esto SI debe
-// fallar de forma visible (no fail-open): si no se puede generar, quien
-// pulso el boton necesita saberlo, no un codigo silenciosamente ausente.
-async function apiCreatePairingCode() {
-  const slug = String(getCurrentSlugForReservations() || "").trim();
-  const syncApiKey = getTpvSyncApiKey();
-  if (!slug || !syncApiKey) {
-    throw new Error("Falta configuracion de sincronizacion de este TPV.");
-  }
-
-  const url = `${TPV_CAMAREROS_API_URL}?action=create-pairing-code`;
-  const res = await fetchWithTimeout(
-    url,
-    {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "X-TPV-API-KEY": syncApiKey,
-      },
-      body: JSON.stringify({ slug }),
-    },
-    8000,
-  );
-
-  const data = await res.json().catch(() => null);
-  if (!res.ok || !data?.ok || !data?.data?.code) {
-    throw new Error(data?.error || "No se pudo generar el codigo, intentalo de nuevo.");
-  }
-
-  return data.data;
 }
 
 // Reintenta unas pocas veces con un pequeño backoff si otro TPV ya tiene el

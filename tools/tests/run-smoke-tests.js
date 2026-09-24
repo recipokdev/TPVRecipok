@@ -8882,6 +8882,14 @@ mustContain(
   "Paired-device permanent-delete button styling present",
 );
 
+console.log("\n[SMOKE] Checking 2026-09-24 pairing code scoped to codalmacen (multi-store isolation, server-side contract from TPV y Servidor CRM)\n");
+
+mustContain(
+  renderer,
+  "body: JSON.stringify({ slug, codalmacen: getCurrentWarehouseCode() }),",
+  "apiCreatePairingCode() sends codalmacen so the resulting pairing code/device-token is scoped to this terminal's own store, not the whole business -- optional server-side, so an empty codalmacen keeps today's one-store-per-slug behavior",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
