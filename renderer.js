@@ -8355,7 +8355,13 @@ async function apiSaveMesasLayoutRemote(nextState) {
     slug,
     codalmacen: getCurrentWarehouseCode(),
     layout: nextState && typeof nextState === "object" ? nextState : {},
-    updatedAt: new Date().toISOString(),
+    // Bloqueo optimista (ver saveMesasLayoutDb, servidor): la ultima version
+    // que vimos de este layout (ya se guardaba, solo para el watermark de
+    // lectura ifNewerThan -- ahora tambien se manda al guardar). renderer.js
+    // y mesas/mesas.js siguen siendo 2 implementaciones independientes que
+    // guardan el MISMO layout sin coordinarse entre si; sin esto, quien
+    // guardaba ultimo pisaba en silencio el cambio del otro.
+    expectedUpdatedAt: mesasLayoutLastKnownUpdatedAt || null,
   };
 
   const url = `${TPV_SYNC_API_URL}?action=save-mesas-layout`;
@@ -8369,8 +8375,41 @@ async function apiSaveMesasLayoutRemote(nextState) {
     body: JSON.stringify(payload),
   });
 
+  const data = await res.json().catch(() => null);
+
+  // Otro terminal (este mismo renderer.js en otra maquina, o el iframe
+  // mesas/mesas.js) guardo este layout entre medias -- nunca reencolar esto
+  // (ver los 2 callers): reenviaria el mismo expectedUpdatedAt ya caducado y
+  // volveria a chocar para siempre, mismo razonamiento que el fix de
+  // aparcados. Recargamos aqui mismo la version fresca que ya nos devuelve
+  // el propio 412, sin esperar al siguiente sondeo de 8s.
+  if (res.status === 412) {
+    const conflictUpdatedAt = data?.data?.updatedAt;
+    if (conflictUpdatedAt) {
+      mesasLayoutLastKnownUpdatedAt = String(conflictUpdatedAt);
+    }
+    const conflictLayout = data?.data?.layout;
+    if (conflictLayout && typeof conflictLayout === "object") {
+      applyMesasLayoutFromRemoteForInline(conflictLayout, true);
+    }
+    toast?.(
+      "El diseño de Mesas se actualizó desde otro terminal. Se ha recargado la versión más reciente.",
+      "warn",
+      "Mesas",
+    );
+
+    const conflictErr = new Error("mesas-layout-save-conflict");
+    conflictErr.mesasLayoutConflict = true;
+    throw conflictErr;
+  }
+
   if (!res.ok) {
     throw new Error(`mesas-layout-save-http-${res.status}`);
+  }
+
+  const savedUpdatedAt = data?.data?.updatedAt;
+  if (savedUpdatedAt) {
+    mesasLayoutLastKnownUpdatedAt = String(savedUpdatedAt);
   }
 
   return true;
@@ -8931,6 +8970,12 @@ async function processMesasLayoutSyncQueue() {
       try {
         await apiSaveMesasLayoutRemote(entry?.layout || {});
       } catch (e) {
+        // Conflicto de bloqueo optimista: NUNCA reencolar -- reintentaria con
+        // el mismo expectedUpdatedAt ya caducado y chocaria igual para
+        // siempre. apiSaveMesasLayoutRemote ya avisa y recarga el layout
+        // fresco por su cuenta.
+        if (e?.mesasLayoutConflict) continue;
+
         remaining.push(entry);
         if (!isParkedSyncTransientError(e)) {
           console.warn(
@@ -8948,19 +8993,26 @@ async function processMesasLayoutSyncQueue() {
   }
 }
 
-function applyMesasLayoutFromRemoteForInline(remoteLayout) {
+// force=true se usa SOLO al recuperarse de un conflicto de bloqueo optimista
+// (ver apiSaveMesasLayoutRemote): en ese caso YA sabemos que nuestro estado
+// local esta obsoleto (el servidor acaba de rechazar nuestro guardado), asi
+// que las guardas de "no pisar una edicion local reciente/guardado en
+// vuelo" ya no aplican -- lo contrario dejaria el layout desincronizado del
+// servidor sin ningun otro camino para corregirse hasta el siguiente sondeo.
+function applyMesasLayoutFromRemoteForInline(remoteLayout, force = false) {
   if (isTutorialGlobalPauseActive()) return false;
   if (isAnyVirtualKeyboardOverlayOpen()) return false;
   if (isMesasDesignViewActive()) return false;
-  if (hasRecentMesasLocalEdit()) return false;
+  if (!force && hasRecentMesasLocalEdit()) return false;
   if (!remoteLayout || typeof remoteLayout !== "object") return false;
 
   // Si tenemos cambios locales pendientes de sincronizar, evitamos pisarlos
   // con una lectura remota potencialmente atrasada.
   if (
-    MESAS_LAYOUT_SYNC_TIMER ||
-    MESAS_LAYOUT_SYNC_IN_FLIGHT ||
-    loadMesasLayoutSyncQueue().length > 0
+    !force &&
+    (MESAS_LAYOUT_SYNC_TIMER ||
+      MESAS_LAYOUT_SYNC_IN_FLIGHT ||
+      loadMesasLayoutSyncQueue().length > 0)
   ) {
     return false;
   }
@@ -9055,7 +9107,12 @@ function scheduleMesasLayoutRemoteSync(nextState) {
     try {
       await apiSaveMesasLayoutRemote(safeState);
     } catch (e) {
-      enqueueMesasLayoutSync(safeState);
+      // Conflicto de bloqueo optimista: NUNCA reencolar (mismo motivo que en
+      // processMesasLayoutSyncQueue) -- ya se aviso/recargo dentro de
+      // apiSaveMesasLayoutRemote.
+      if (!e?.mesasLayoutConflict) {
+        enqueueMesasLayoutSync(safeState);
+      }
       console.warn("No se pudo sincronizar layout de mesas:", e?.message || e);
     } finally {
       MESAS_LAYOUT_SYNC_IN_FLIGHT = false;

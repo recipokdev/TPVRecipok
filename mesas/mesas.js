@@ -1400,7 +1400,12 @@ async function apiSaveMesasLayoutRemote(nextState) {
     slug,
     codalmacen: getMesasCodalmacenScope(),
     layout: nextState && typeof nextState === "object" ? nextState : {},
-    updatedAt: new Date().toISOString(),
+    // Bloqueo optimista (ver saveMesasLayoutDb, servidor, y el mismo cambio
+    // espejado en renderer.js): este iframe y el host window son 2
+    // implementaciones independientes guardando el MISMO layout sin
+    // coordinarse -- sin esto, quien guardaba ultimo pisaba en silencio el
+    // cambio del otro.
+    expectedUpdatedAt: mesasLayoutLastKnownUpdatedAt || null,
   };
 
   const res = await fetch(`${apiUrl}?action=save-mesas-layout`, {
@@ -1413,11 +1418,70 @@ async function apiSaveMesasLayoutRemote(nextState) {
     body: JSON.stringify(payload),
   });
 
+  const data = await res.json().catch(() => null);
+
+  // Otro terminal (el host window renderer.js, u otra pestaña de este mismo
+  // iframe) guardo este layout entre medias -- nunca reencolar (ver los
+  // callers): reenviaria el mismo expectedUpdatedAt ya caducado y volveria a
+  // chocar para siempre, mismo razonamiento que aparcados/renderer.js.
+  if (res.status === 412) {
+    const conflictUpdatedAt = data?.data?.updatedAt;
+    if (conflictUpdatedAt) {
+      mesasLayoutLastKnownUpdatedAt = String(conflictUpdatedAt);
+    }
+    const conflictLayout = data?.data?.layout;
+    applyMesasLayoutConflictRecovery(conflictLayout);
+    try {
+      window.parent?.toast?.(
+        "El diseño de Mesas se actualizó desde otro terminal. Se ha recargado la versión más reciente.",
+        "warn",
+        "Mesas",
+      );
+    } catch {}
+
+    const conflictErr = new Error("mesas-layout-save-conflict");
+    conflictErr.mesasLayoutConflict = true;
+    throw conflictErr;
+  }
+
   if (!res.ok) {
     throw new Error(`mesas-layout-save-http-${res.status}`);
   }
 
+  const savedUpdatedAt = data?.data?.updatedAt;
+  if (savedUpdatedAt) {
+    mesasLayoutLastKnownUpdatedAt = String(savedUpdatedAt);
+  }
+
   return true;
+}
+
+// Aplica el layout que devuelve el servidor tras un conflicto de bloqueo
+// optimista (ver apiSaveMesasLayoutRemote). A diferencia de
+// hydrateStateFromRemote, no respeta la guarda de "edicion local reciente"
+// -- ya sabemos que nuestro guardado acaba de ser rechazado por estar
+// desactualizado, asi que el estado local YA es obsoleto. Se evita re-render
+// mientras el usuario esta activamente en la vista de diseño para no
+// interrumpirle un arrastre en curso (mismo criterio que
+// refreshMesasStateFromRemoteWithRerender).
+function applyMesasLayoutConflictRecovery(remoteLayout) {
+  if (!remoteLayout || typeof remoteLayout !== "object") return;
+
+  try {
+    writeTablesStateRaw(JSON.stringify(remoteLayout));
+    if (state?.activeView === "diseno") return;
+
+    loadState();
+    ensureActiveRoomAndTable();
+    loadCartFromSelectedTable();
+    renderEverything();
+    switchView(state.activeView);
+  } catch (e) {
+    console.warn(
+      "No se pudo aplicar el layout de Mesas tras un conflicto:",
+      e?.message || e,
+    );
+  }
 }
 
 function getMesasLayoutSyncQueueStorageKey() {
@@ -1496,6 +1560,12 @@ async function processMesasLayoutSyncQueue() {
       try {
         await apiSaveMesasLayoutRemote(entry?.layout || {});
       } catch (e) {
+        // Conflicto de bloqueo optimista: NUNCA reencolar -- reintentaria con
+        // el mismo expectedUpdatedAt ya caducado y chocaria igual para
+        // siempre. apiSaveMesasLayoutRemote ya avisa y recarga el layout
+        // fresco por su cuenta.
+        if (e?.mesasLayoutConflict) continue;
+
         remaining.push(entry);
         if (!isMesasSyncTransientError(e)) {
           console.warn(
@@ -1530,7 +1600,12 @@ function scheduleRemoteMesasStateSave(nextState) {
     try {
       await apiSaveMesasLayoutRemote(safeState);
     } catch (e) {
-      enqueueMesasLayoutSync(safeState);
+      // Conflicto de bloqueo optimista: NUNCA reencolar (mismo motivo que en
+      // processMesasLayoutSyncQueue) -- ya se aviso/recargo dentro de
+      // apiSaveMesasLayoutRemote.
+      if (!e?.mesasLayoutConflict) {
+        enqueueMesasLayoutSync(safeState);
+      }
       console.warn("No se pudo guardar Mesas en remoto:", e?.message || e);
     } finally {
       mesasRemoteSyncInFlight = false;

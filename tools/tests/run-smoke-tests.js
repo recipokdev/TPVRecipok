@@ -7765,6 +7765,62 @@ mustContain(
   "New 'Escala de la interfaz' select in Options (Pantalla, admin-only) reads/writes cfg.uiZoomOverride and calls TPV_UI_MODE.setZoomOverride on change, keeping the section's preview text in sync (Automático / fixed %)",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-25 Mesas layout optimistic lock (renderer.js and mesas.js are 2 independent implementations saving the same layout with no coordination; real clients Lumi/r_reciplus/ben_trempat already use Modo Mesas, this was a real silent-overwrite risk, not just demo)\n",
+);
+
+mustContain(
+  renderer,
+  "expectedUpdatedAt: mesasLayoutLastKnownUpdatedAt || null,",
+  "apiSaveMesasLayoutRemote (renderer.js) now sends the last-seen updatedAt as expectedUpdatedAt, so the server can detect a stale write instead of blindly overwriting",
+);
+mustContain(
+  renderer,
+  "conflictErr.mesasLayoutConflict = true;",
+  "A 412 conflict response is marked with .mesasLayoutConflict so callers can distinguish it from a transient network failure",
+);
+mustContain(
+  renderer,
+  "function applyMesasLayoutFromRemoteForInline(remoteLayout, force = false) {",
+  "applyMesasLayoutFromRemoteForInline gained a force parameter to bypass the recent-local-edit/in-flight guards when recovering from a conflict we already know makes our local state stale",
+);
+mustContain(
+  renderer,
+  "if (e?.mesasLayoutConflict) continue;",
+  "processMesasLayoutSyncQueue never re-queues a mesas-layout conflict -- retrying would resend the same expired expectedUpdatedAt and collide forever",
+);
+mustContain(
+  renderer,
+  "if (!e?.mesasLayoutConflict) {\r\n        enqueueMesasLayoutSync(safeState);",
+  "The debounced autosave path (scheduleMesasLayoutRemoteSync) also skips re-queuing on a conflict, for the same reason",
+);
+
+mustContain(
+  mesasJs,
+  "expectedUpdatedAt: mesasLayoutLastKnownUpdatedAt || null,",
+  "mesas.js's own independent apiSaveMesasLayoutRemote also sends expectedUpdatedAt -- same fix, mirrored in the 2nd implementation",
+);
+mustContain(
+  mesasJs,
+  "function applyMesasLayoutConflictRecovery(remoteLayout) {",
+  "New helper applies the fresh layout the server returns on a conflict, skipping re-render only while the user is actively in the design view to avoid interrupting a drag in progress",
+);
+mustContain(
+  mesasJs,
+  "conflictErr.mesasLayoutConflict = true;",
+  "mesas.js also marks a 412 conflict distinctly from a transient error",
+);
+mustContain(
+  mesasJs,
+  "if (e?.mesasLayoutConflict) continue;",
+  "mesas.js's own queue drainer (processMesasLayoutSyncQueue) also never re-queues a conflict",
+);
+mustContain(
+  mesasJs,
+  "if (!e?.mesasLayoutConflict) {\r\n        enqueueMesasLayoutSync(safeState);",
+  "mesas.js's own debounced autosave path also skips re-queuing on a conflict",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
