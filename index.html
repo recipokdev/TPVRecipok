@@ -3555,6 +3555,9 @@
                 class="opt-preview-item"
                 data-toggle-id="virtualKeyboardToggle"
                 >teclado en pantalla</span
+              >,
+              <span class="opt-preview-item" id="uiZoomPreviewItem"
+                >escala de la interfaz</span
               >
             </div>
             <div class="opt-sec-b">
@@ -3570,6 +3573,26 @@
                   <input type="checkbox" id="kioskToggle" />
                   <span class="slider"></span>
                 </label>
+              </div>
+              <div class="opt-row opt-row-stack">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Escala de la interfaz</div>
+                  <div class="opt-row-sub">
+                    "Automático" ajusta letra/iconos/botones según la
+                    resolución real de esta pantalla, para que quepa todo en
+                    equipos con pantalla pequeña. Cambia esto solo si en este
+                    equipo concreto el automático no acierta.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <select id="uiZoomSelect" class="opt-select">
+                    <option value="auto">Automático</option>
+                    <option value="1">100%</option>
+                    <option value="0.9">90%</option>
+                    <option value="0.8">80%</option>
+                    <option value="0.7">70%</option>
+                  </select>
+                </div>
               </div>
               <div class="opt-row">
                 <div class="opt-row-txt">

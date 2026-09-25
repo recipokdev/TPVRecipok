@@ -52502,6 +52502,39 @@ async function initKioskToggle() {
 
 initKioskToggle();
 
+const uiZoomSelect = document.getElementById("uiZoomSelect");
+const uiZoomPreviewItem = document.getElementById("uiZoomPreviewItem");
+
+function formatUiZoomPreviewText(rawValue) {
+  if (rawValue === "auto") return "escala de la interfaz: automático";
+  const pct = Math.round(Number(rawValue) * 100);
+  return `escala de la interfaz: ${pct}% (fijo)`;
+}
+
+async function initUiZoomSelect() {
+  if (!uiZoomSelect) return;
+
+  const saved = await window.TPV_CFG.get("uiZoomOverride");
+  const value =
+    typeof saved === "number" && saved > 0 ? String(saved) : "auto";
+  uiZoomSelect.value = value;
+  if (uiZoomPreviewItem) {
+    uiZoomPreviewItem.textContent = formatUiZoomPreviewText(value);
+  }
+
+  uiZoomSelect.onchange = async () => {
+    const raw = uiZoomSelect.value;
+    const override = raw === "auto" ? null : Number(raw);
+    await window.TPV_CFG.set("uiZoomOverride", override);
+    await window.TPV_UI_MODE.setZoomOverride(override);
+    if (uiZoomPreviewItem) {
+      uiZoomPreviewItem.textContent = formatUiZoomPreviewText(raw);
+    }
+  };
+}
+
+initUiZoomSelect();
+
 // 1) Si algún día vuelve el bootstrap remoto y emite cajaAbierta, dejamos esto consistente
 document.addEventListener("tpv:cajaAbierta", (e) => {
   const idcaja = Number(e.detail?.idcaja || 0) || null;

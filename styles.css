@@ -3199,6 +3199,17 @@ body.mesas-inline-trans-mode
   max-width: 90vw;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
   box-sizing: border-box;
+  /* Real de cliente 2026-09-24: en pantallas pequeñas (tablet/portátil de
+     resolución baja) el contenido de algunos dialogs (login con varios
+     agentes + teclado numérico, por ejemplo) podía ser más alto que la
+     propia pantalla -- sin limite de altura ni scroll, el overlay lo
+     centraba igualmente y la parte de abajo (con los botones de accion)
+     quedaba fuera de la vista, inalcanzable. Con esto, cualquier dialog que
+     use .simple-dialog (son mas de una decena) se queda dentro de la
+     pantalla y se puede desplazar por dentro si hace falta, sin perder
+     nunca sus botones.  */
+  max-height: 90vh;
+  overflow-y: auto;
 }
 
 .invoice-email-dialog {

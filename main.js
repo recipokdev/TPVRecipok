@@ -423,6 +423,67 @@ function applyKioskMode(win, enabled) {
   }
 }
 
+// Auto-escalado de la interfaz segun la resolucion real de pantalla (real de
+// cliente 2026-09-24): en una pantalla pequeña/de baja resolucion, el CSS en
+// px fijos hace que todo (letra, botones, dialogs) ocupe proporcionalmente
+// mas espacio del que cabe -- llego a dejar el boton "Entrar" del login
+// fuera de la pantalla, sin ninguna forma de alcanzarlo (el propio dialog ya
+// se arreglo aparte para que sea desplazable, ver .simple-dialog en
+// styles.css; esto es la causa de fondo, no solo el sintoma puntual).
+// 1366x768 es la resolucion de referencia: es donde ya empiezan a activarse
+// los @media existentes en styles.css, o sea la que el CSS ya asume que
+// "cabe bien". Nunca se AMPLIA por encima del 100% en pantallas grandes
+// (dejaria todo mas gordo sin necesidad), y nunca se reduce por debajo del
+// 70% (los botones tactiles dejarian de ser usables).
+const AUTO_ZOOM_REFERENCE_WIDTH = 1366;
+const AUTO_ZOOM_REFERENCE_HEIGHT = 768;
+const AUTO_ZOOM_MIN = 0.7;
+const AUTO_ZOOM_MAX = 1;
+
+function computeAutoZoomFactor() {
+  try {
+    const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+    if (!width || !height) return AUTO_ZOOM_MAX;
+
+    const raw = Math.min(
+      width / AUTO_ZOOM_REFERENCE_WIDTH,
+      height / AUTO_ZOOM_REFERENCE_HEIGHT,
+      AUTO_ZOOM_MAX,
+    );
+
+    // Redondeado a multiplos de 0.05 -- valores predecibles y faciles de
+    // verificar, en vez de un decimal casi arbitrario segun el pixel exacto
+    // de cada pantalla.
+    const rounded = Math.round(raw * 20) / 20;
+    return Math.min(AUTO_ZOOM_MAX, Math.max(AUTO_ZOOM_MIN, rounded));
+  } catch {
+    return AUTO_ZOOM_MAX;
+  }
+}
+
+// cfg.uiZoomOverride: null/ausente = automatico (por defecto); un numero
+// (0.7-1) = fijado a mano desde Opciones, ignora la resolucion detectada --
+// red de seguridad por si el calculo automatico no acierta en algun equipo
+// con una configuracion rara (pantalla pequeña de alta densidad, escalado de
+// Windows ya aplicado, etc.). Mismo patron que isKioskMode() de arriba.
+function resolveEffectiveZoomFactor() {
+  try {
+    const cfg = readCfg();
+    const override = cfg.uiZoomOverride;
+    if (typeof override === "number" && override > 0) {
+      return Math.min(AUTO_ZOOM_MAX, Math.max(AUTO_ZOOM_MIN, override));
+    }
+  } catch {}
+  return computeAutoZoomFactor();
+}
+
+function applyAutoZoom(win) {
+  if (!win || win.isDestroyed()) return;
+  try {
+    win.webContents.setZoomFactor(resolveEffectiveZoomFactor());
+  } catch (_) {}
+}
+
 function createWindow() {
   if (appIsInstallingUpdate) return;
   const isDev = !app.isPackaged;
@@ -505,6 +566,12 @@ function createWindow() {
 
   // aplica el modo inicial
   applyKioskMode(mainWin, kioskMode);
+
+  // Auto-escalado de la interfaz segun la resolucion real de pantalla (ver
+  // computeAutoZoomFactor). En did-finish-load (no solo aqui, una vez) para
+  // que sobreviva tambien a una recarga completa de la pagina, no solo al
+  // arranque.
+  mainWin.webContents.on("did-finish-load", () => applyAutoZoom(mainWin));
 
   // carga UI
   loadUI(mainWin);
@@ -2633,6 +2700,15 @@ app.whenReady().then(async () => {
   startupNoInternetFlag = !!updateGate?.noInternet;
 
   createWindow();
+
+  // Tablet reorientada, monitor externo conectado/desconectado... recalcula
+  // el auto-escalado solo, sin tener que reiniciar el TPV. Un unico listener
+  // (no por ventana) que siempre actua sobre la ventana principal vigente en
+  // ese momento.
+  screen.on("display-metrics-changed", () => {
+    if (mainWin && !mainWin.isDestroyed()) applyAutoZoom(mainWin);
+  });
+
   ensureAppShortcuts(); // verifica/repara acceso directo escritorio + Inicio
   startScaleReconnectMonitor();
   startPreCashUpdateRetries();
@@ -3215,6 +3291,19 @@ ipcMain.handle("ui:setKioskMode", async (_e, enabled) => {
   writeCfg({ kioskMode: !!enabled });
   applyKioskMode(mainWin, !!enabled);
   return { ok: true };
+});
+
+// override: null/"auto" = vuelve al calculo automatico; un numero (0.7-1) =
+// fijado a mano. Reaplica al instante, sin reiniciar el TPV -- ver
+// resolveEffectiveZoomFactor/computeAutoZoomFactor mas arriba.
+ipcMain.handle("ui:setZoomOverride", async (_e, override) => {
+  if (!isAdmin()) return { ok: false, error: "FORBIDDEN" };
+
+  const value =
+    typeof override === "number" && override > 0 ? override : null;
+  writeCfg({ uiZoomOverride: value });
+  applyAutoZoom(mainWin);
+  return { ok: true, effectiveZoom: resolveEffectiveZoomFactor() };
 });
 
 function cfgPath() {

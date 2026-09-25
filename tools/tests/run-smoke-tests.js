@@ -7714,6 +7714,57 @@ mustContain(
   "mesas.js's own independent get/save-mesas-layout calls also carry codalmacen",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-24 small-screen fixes: dialog overflow + auto-scale UI (real client, small tablet/laptop couldn't reach the login 'Entrar' button)\n",
+);
+
+mustContain(
+  styles,
+  ".simple-dialog {\r\n  background: #fff;\r\n  padding: 16px 20px;\r\n  border-radius: 8px;\r\n  width: 360px;\r\n  max-width: 90vw;\r\n  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);\r\n  box-sizing: border-box;",
+  "The base .simple-dialog class (shared by 13+ modals, including login) is unchanged in its normal-size behavior",
+);
+mustContain(
+  styles,
+  "max-height: 90vh;\r\n  overflow-y: auto;\r\n}",
+  "Every .simple-dialog now caps itself to the actual viewport height and scrolls internally if its content is taller -- on a small tablet/laptop screen, a dialog with many agent buttons + the numeric PIN pad could be taller than the whole screen, leaving action buttons like 'Entrar' permanently unreachable with no way to scroll to them",
+);
+
+mustContain(
+  main,
+  "function computeAutoZoomFactor()",
+  "New helper computes an Electron zoom factor from the real detected screen resolution vs a 1366x768 reference (where styles.css's own @media breakpoints already assume things fit), clamped to [0.7, 1] so small screens shrink proportionally without becoming unusably tiny",
+);
+mustContain(
+  main,
+  "function resolveEffectiveZoomFactor()",
+  "cfg.uiZoomOverride (set from Options) takes priority over the automatic calculation -- an escape hatch for the rare device where auto-detection guesses wrong",
+);
+mustContain(
+  main,
+  'mainWin.webContents.on("did-finish-load", () => applyAutoZoom(mainWin));',
+  "The zoom is (re)applied on every did-finish-load, not just once at boot, so it also survives a full page reload",
+);
+mustContain(
+  main,
+  'screen.on("display-metrics-changed", () => {',
+  "Rotating a tablet or plugging/unplugging an external monitor recalculates the zoom automatically, without restarting the TPV -- registered right after the first createWindow() call (inside app.whenReady), never at raw module scope, since the Electron 'screen' module can only be used once the app is ready",
+);
+mustContain(
+  main,
+  'ipcMain.handle("ui:setZoomOverride", async (_e, override) => {',
+  "New IPC handler (admin-only, same guard as ui:setKioskMode) lets Options set/clear the manual override and reapplies zoom immediately",
+);
+mustContain(
+  preload,
+  "setZoomOverride: (override) =>",
+  "The new IPC call is exposed on window.TPV_UI_MODE, the same bridge already used for setKioskMode",
+);
+mustContain(
+  renderer,
+  "async function initUiZoomSelect()",
+  "New 'Escala de la interfaz' select in Options (Pantalla, admin-only) reads/writes cfg.uiZoomOverride and calls TPV_UI_MODE.setZoomOverride on change, keeping the section's preview text in sync (Automático / fixed %)",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

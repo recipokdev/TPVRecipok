@@ -92,6 +92,8 @@ contextBridge.exposeInMainWorld("TPV_UI", {
 
 contextBridge.exposeInMainWorld("TPV_UI_MODE", {
   setKioskMode: (enabled) => ipcRenderer.invoke("ui:setKioskMode", enabled),
+  setZoomOverride: (override) =>
+    ipcRenderer.invoke("ui:setZoomOverride", override),
 });
 
 contextBridge.exposeInMainWorld("TPV_QUEUE", {
