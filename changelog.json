@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.36",
+      "date": "2026-09-25",
+      "title": "Release 0.2.36",
       "changes": [
         "MEJORA: la factura que se envía por email ahora tiene el mismo aspecto que la factura real de FacturaScripts — barra con \"Factura Simplificada\", número y fecha, columna de importe neto por línea, tabla de impuestos (base/porcentaje/importe) y la tabla de recibo con la forma de pago y si está pagado. Antes era una versión mucho más simple.",
         "MEJORA: el propio correo (no solo la factura adjunta) también calca ahora el que envía FacturaScripts — mismo diseño de cabecera con el nombre de la empresa, mensaje precargado (editable) igual al de FacturaScripts, firma configurada en Ajustes → Correo electrónico, y el archivo adjunto ya se llama \"Factura FAC2026S2860.pdf\" en vez de \"factura.pdf\".",
