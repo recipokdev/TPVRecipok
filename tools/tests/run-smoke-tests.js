@@ -6590,8 +6590,8 @@ mustContain(
 
 mustContain(
   renderer,
-  "if (e?.staleParkedWrite) {\r\n            handleStaleParkedWriteConflict(existing, e);",
-  "finishUpdateParkedTail routes a stale-write conflict to the dedicated handler instead of silently re-queueing it forever",
+  "if (e?.staleParkedWrite) {\r\n            saveConflicted = true;\r\n            handleStaleParkedWriteConflict(existing, e);",
+  "finishUpdateParkedTail routes a stale-write conflict to the dedicated handler instead of silently re-queueing it forever, and now also flags saveConflicted so the stock-delta block below skips a base that just lost the save race",
 );
 mustContain(
   renderer,
@@ -7819,6 +7819,131 @@ mustContain(
   mesasJs,
   "if (!e?.mesasLayoutConflict) {\r\n        enqueueMesasLayoutSync(safeState);",
   "mesas.js's own debounced autosave path also skips re-queuing on a conflict",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-28 priced product addons (e.g. 'leche condensada' +0.10€ -- addons could only ever be free/cosmetic before; the server already supported a price field since 2026-09-21, this wires it up client-side)\n",
+);
+
+mustContain(
+  renderer,
+  "function getLineAddonsTotal(item) {",
+  "New getLineAddonsTotal helper sums the priced addons on a cart line (per unit, scales with qty) -- free addons (precio 0) contribute nothing, unchanged from before",
+);
+mustContain(
+  renderer,
+  "const addonsUnitGross = manualPriceLocked ? 0 : getLineAddonsTotal(item);",
+  "getCartLinePricing adds the line's addon surcharge after the customer tariff but before the cart-wide discount, and never on top of a manually-locked price",
+);
+mustContain(
+  renderer,
+  "const unit = getUnitGross(line) + getLineAddonsTotal(line);",
+  "computeLinesTotal and the split-ticket preview's inline totals also add the addon surcharge (they bypass getCartLinePricing by design, for a lightweight preview)",
+);
+mustContain(
+  renderer,
+  "function grossToNetUnit(unitGross, taxRate) {",
+  "New grossToNetUnit helper extracted from buildFsLinesFromCart's gross-to-net conversion, reused for the new addon lines",
+);
+mustContain(
+  renderer,
+  ".flatMap((item) => {",
+  "buildFsLinesFromCart switched from map to flatMap so a single cart item can now emit more than one FacturaScripts line",
+);
+mustContain(
+  renderer,
+  'descripcion: `Añadido: ${String(a?.nombre || "").trim() || "?"}`,',
+  "Each priced addon becomes its own free-text FacturaScripts line (no referencia/idproducto) -- FacturaScripts natively supports this via getNewLine() when referencia is empty, confirmed against the real ApiCreateDocument.php on the demo server; free addons (precio 0) still generate no invoice line at all",
+);
+mustContain(
+  renderer,
+  ".filter((a) => Number(a?.precio) > 0)",
+  "Only addons with a real price generate an invoice line -- free/cosmetic addons are filtered out before building addon lines",
+);
+mustContain(
+  renderer,
+  "priceInput.title = \"Precio del añadido (0 = gratis)\";",
+  "The admin addon-management modal gained a price input per row (previously name-only) -- price can only be set/edited here, never from the at-sale selector",
+);
+mustContain(
+  renderer,
+  's.precio > 0 ? `+${s.nombre}  +${eur(s.precio)}` : `+${s.nombre}`;',
+  "The at-sale addon selector now shows the surcharge next to a priced addon's name, so the cashier/customer sees the extra charge before it's added to the cart",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-29 parked-ticket clientName overwrite fix (real client: Asador el Gallo, 2 terminals sharing one caja, ticket #864 lost its real customer name)\n",
+);
+
+mustContain(
+  renderer,
+  'clientName && clientName !== "Cliente"\r\n          ? clientName\r\n          : existing.clientName || clientName;',
+  "Re-parking an existing ticket no longer blindly overwrites .clientName with whatever the on-screen customer field currently shows -- it only overwrites when there's a real, non-generic value to write, otherwise it preserves the name the ticket already had (same defensive pattern .name already used)",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-29 silent cart-discard fix on remote-changed-while-loaded (real client: Asador el Gallo, 2 terminals sharing one caja -- switching/splitting/paying a ticket that changed on the OTHER terminal used to blindly take the remote copy and throw away the cashier's own unsaved local edit)\n",
+);
+
+mustContain(
+  renderer,
+  "const recovered = mergeMissingRemoteLinesIntoCart(ticket);",
+  "flushLoadedParkedTicketChangesSync (switching to a different parked ticket) now merges the cashier's own local additions with whatever changed remotely, instead of blindly discarding the local cart in favor of the remote copy",
+);
+mustContain(
+  renderer,
+  "mergeMissingRemoteLinesIntoCart(loaded);",
+  "confirmSplitTicket also merges before aborting the split and asking the cashier to review/retry -- the local addition is no longer lost even though the split itself is still deliberately blocked for a manual re-check",
+);
+mustContain(
+  renderer,
+  "mergeMissingRemoteLinesIntoCart(syncedTicket);",
+  "The pre-cobro (checkout) safety check also merges before aborting the charge and asking the cashier to press Cobrar again -- same reasoning: don't lose their edit, but still require an explicit human re-confirmation before an actual invoice is created",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-29 stock-delta retry queue (real client: Asador el Gallo, 'me quedaban 13 pollos y me marcaba 25' -- only on Sundays with both terminals active; root cause: syncReservedStockDeltaToFS had no retry queue at all, unlike parked tickets -- a failed network write under Sunday load silently dropped the stock adjustment forever)\n",
+);
+
+mustContain(
+  renderer,
+  "err.failedDeltaMap = failedDeltaMap;",
+  "syncReservedStockDeltaToFS now attaches which products genuinely failed to the thrown error, so a later retry only re-applies those -- retrying the whole original delta map would double-apply the ones that already succeeded",
+);
+mustContain(
+  renderer,
+  "function enqueueStockDeltaSync(deltaMap, reason = \"\", ticketId = null) {",
+  "New enqueueStockDeltaSync mirrors the existing parked-ticket sync queue pattern -- a failed stock adjustment is no longer silently abandoned",
+);
+mustContain(
+  renderer,
+  "async function processStockDeltaSyncQueue() {",
+  "New processStockDeltaSyncQueue drains the retry queue, keeping only products that still fail so a partial success never gets re-applied",
+);
+mustContain(
+  renderer,
+  "processStockDeltaSyncQueue().catch((e) => {",
+  "The stock-delta queue is drained on the exact same 10s cycle already used for the parked-ticket sync queue (refreshRemoteParkedReservationsOnlyImpl) -- no new timer introduced",
+);
+mustContain(
+  renderer,
+  "let saveConflicted = false;",
+  "finishUpdateParkedTail tracks whether the ticket's own save lost an optimistic-lock race",
+);
+mustContain(
+  renderer,
+  "if (!saveConflicted && reservedDelta.size > 0) {",
+  "...and skips applying (or queueing) this attempt's stock delta entirely when it did -- our snapshot no longer reflects the winning version, so its delta is stale; the next successful save (after the merge fix) computes the correct one from the real base",
+);
+mustContain(
+  renderer,
+  "enqueueStockDeltaSync(\r\n              e?.failedDeltaMap || reservedDelta,\r\n              \"actualizar aparcado\"",
+  "The update-parked-ticket stock sync failure path now enqueues for retry instead of just warning and dropping it",
+);
+mustContain(
+  renderer,
+  "enqueueStockDeltaSync(\r\n        e?.failedDeltaMap || reservedDelta,\r\n        \"cobrar aparcado\"",
+  "The cobro (checkout) stock-release failure path also enqueues for retry -- same fix applied to the most financially sensitive of the 7 call sites",
 );
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");

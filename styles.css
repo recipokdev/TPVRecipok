@@ -7979,6 +7979,15 @@ body.theme-dark .opt-loading-banner {
   border: 1px solid rgba(0, 0, 0, 0.15);
   font-size: 14px;
 }
+.addons-item-price-input {
+  flex: 0 0 72px;
+  width: 72px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  font-size: 14px;
+  text-align: right;
+}
 .addons-item-del {
   flex: 0 0 auto;
 }

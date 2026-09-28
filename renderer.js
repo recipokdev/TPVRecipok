@@ -830,6 +830,11 @@ const PARKED_GLOBAL_ID_COUNTER_KEY = "tpv_parked_global_id_counter_v1";
 const PARKED_PAID_TOMBSTONES_KEY = "tpv_parked_paid_tombstones_v1";
 const PARKED_PAID_HISTORY_KEY = "tpv_parked_paid_history_v1";
 const PARKED_SYNC_CONFLICTS_KEY = "tpv_parked_sync_conflicts_v1";
+// Real de cliente (Asador el Gallo, 2 terminales compartiendo caja, solo
+// domingos): si syncReservedStockDeltaToFS fallaba (red/servidor saturado),
+// el ajuste de stock se abandonaba para siempre -- a diferencia de los
+// aparcados, no tenia ninguna cola de reintento. Esta cola cierra ese hueco.
+const STOCK_DELTA_SYNC_QUEUE_KEY = "tpv_stock_delta_sync_queue_v1";
 const PARKED_DEVICE_NODE_ID_KEY = "tpv_parked_device_node_id_v1";
 const PARKED_DEVICE_SEQ_KEY = "tpv_parked_device_seq_v1";
 const PAID_TICKET_PARKED_ORIGIN_KEY = "tpv_paid_ticket_parked_origin_v1";
@@ -850,6 +855,7 @@ const API_MISSING_RESOURCES_CACHE_KEY = "tpv_api_missing_resources_cache_v1";
 const API_MISSING_RESOURCES_CACHE_TS_KEY = "tpv_api_missing_resources_ts_v1";
 
 let __parkedSyncDrainInFlight = false;
+let __stockDeltaSyncDrainInFlight = false;
 let __parkedLegacyMetadataMigrationTried = false;
 
 let __parkedReservationsRefreshTimer = null;
@@ -2749,6 +2755,16 @@ function getTariffAdjustedGross(baseGross, tariff, opts = {}) {
   };
 }
 
+// Suma de los añadidos de producto con precio (p.ej. "+leche condensada
+// +0,10€") de esta línea -- por unidad, escala con la cantidad de la línea
+// igual que el precio del propio producto. Los añadidos gratis (precio 0,
+// el caso de siempre) no aportan nada aquí.
+function getLineAddonsTotal(item) {
+  return Array.isArray(item?.addons)
+    ? item.addons.reduce((s, a) => s + (Number(a?.precio) || 0), 0)
+    : 0;
+}
+
 function getCartLinePricing(item) {
   const baseUnitGross = Number(getUnitGrossBase(item) || 0);
   const baseCostGross = Number(getUnitCostGrossBase(item) || 0);
@@ -2764,11 +2780,18 @@ function getCartLinePricing(item) {
   const tariffUnitGross = tariffResult.applied
     ? tariffResult.finalGross
     : baseUnitGross;
+  // Los añadidos de pago se suman DESPUES de la tarifa (la tarifa es del
+  // producto catalogado, no tiene sentido aplicarla a un recargo ad-hoc) y
+  // ANTES del descuento de carrito (un "10% en todo el ticket" debe incluir
+  // tambien el recargo del añadido). Si el cajero fijo un precio manual para
+  // esta linea, ese precio manda tal cual -- no se le suma nada encima.
+  const addonsUnitGross = manualPriceLocked ? 0 : getLineAddonsTotal(item);
+  const preDiscountUnitGross = round2(tariffUnitGross + addonsUnitGross);
   const cartDiscount = getEffectiveCartDiscountForLine(item);
   const cartDiscountApplied = cartDiscount.pct > 0;
   const unitGross = cartDiscountApplied
-    ? round2(tariffUnitGross * (1 - cartDiscount.pct / 100))
-    : tariffUnitGross;
+    ? round2(preDiscountUnitGross * (1 - cartDiscount.pct / 100))
+    : preDiscountUnitGross;
 
   const qty = Number(item?.qty || 0) || 0;
 
@@ -2789,6 +2812,7 @@ function getCartLinePricing(item) {
     taxRate,
     baseUnitGross,
     tariffUnitGross,
+    addonsUnitGross,
     baseLineTotal,
     tariffApplied: !!tariffResult.applied,
     tariffDiscountPct: tariffResult.discountPct,
@@ -9564,25 +9588,30 @@ function flushLoadedParkedTicketChangesSync() {
 
   const ticket = parkedTickets[idx];
 
-  // Real de cliente 2026-09-22: si la mesa cambio en otro terminal mientras
-  // estaba cargada aqui, `ticket.items` ya trae la version fresca del
-  // servidor pero `cart` (de donde sale el snapshot que se manda abajo) NO
-  // -- guardar en ese estado sobreescribiria en el servidor lineas ya
-  // confirmadas con una copia vieja. En vez de arriesgarnos, recuperamos la
-  // version fresca en cart y no reescribimos nada (ya esta guardado).
+  // Real de cliente 2026-09-22 (Asador el Gallo, 2 terminales compartiendo
+  // caja): si la mesa cambio en otro terminal mientras estaba cargada aqui,
+  // `ticket.items` ya trae la version fresca del servidor pero `cart` (de
+  // donde sale el snapshot que se manda abajo) no. Antes se tomaba la
+  // version remota a ciegas y se descartaba CUALQUIER cambio local sin
+  // guardar (p.ej. un producto que el cajero acababa de añadir) con solo un
+  // aviso informativo facil de pasar por alto -- real perdida de datos en
+  // silencio. Ahora se fusiona igual que ya hace parkCurrentCart
+  // (mergeMissingRemoteLinesIntoCart, sincrono, sin red): se conserva lo que
+  // el cajero tenia en su carrito Y se recuperan los productos que llegaron
+  // del otro terminal, en vez de descartar uno de los dos a ciegas. Ya NO se
+  // sale aqui -- si tras fusionar sigue habiendo algo que guardar de verdad,
+  // el resto de esta funcion (mas abajo) lo hace, igual que siempre.
   if (ticket.__remoteChangedWhileLoaded) {
-    cart = Array.isArray(ticket.items)
-      ? ticket.items.map((it) => ({ ...it }))
-      : [];
-    delete ticket.__remoteChangedWhileLoaded;
+    const recovered = mergeMissingRemoteLinesIntoCart(ticket);
     saveParkedTicketsCache();
     renderCart?.();
     toast?.(
-      "Esta mesa se actualizó desde otro terminal mientras estaba abierta; se recuperaron los cambios más recientes.",
+      recovered
+        ? "Esta mesa se actualizó desde otro terminal; se han combinado tus cambios con los del otro terminal."
+        : "Esta mesa se actualizó desde otro terminal mientras estaba abierta.",
       "info",
       "Mesas",
     );
-    return;
   }
 
   if (!hasUnsavedChangesForLoadedParkedTicket(ticket)) return;
@@ -9636,6 +9665,11 @@ function flushLoadedParkedTicketChangesSync() {
       "actualizar aparcado (cambio rapido de aparcado)",
       ticket?.id,
     ).catch((e) => {
+      enqueueStockDeltaSync(
+        e?.failedDeltaMap || reservedDelta,
+        "actualizar aparcado (cambio rapido de aparcado)",
+        ticket?.id,
+      );
       console.warn(
         "No se pudo sincronizar stock al cambiar rapido de aparcado:",
         e?.message || e,
@@ -12861,6 +12895,12 @@ function eur(n) {
   return (Number(n) || 0).toFixed(2).replace(".", ",") + " €";
 }
 
+// Igual que eur() pero sin el símbolo € -- para el valor de un <input>
+// editable (p.ej. el precio de un añadido de producto).
+function eurInputValue(n) {
+  return (Number(n) || 0).toFixed(2).replace(".", ",");
+}
+
 function getUnitGross(item) {
   const v = item?.grossPriceOverride;
   if (typeof v === "number" && isFinite(v) && v >= 0) return v;
@@ -13516,7 +13556,13 @@ function renderCart() {
 
     let addonsText = "";
     if (Array.isArray(item.addons) && item.addons.length) {
-      addonsText = item.addons.map((a) => `+${a.nombre}`).join(", ");
+      addonsText = item.addons
+        .map((a) =>
+          Number(a?.precio) > 0
+            ? `+${a.nombre} (+${eur(Number(a.precio))})`
+            : `+${a.nombre}`,
+        )
+        .join(", ");
     }
 
     row.innerHTML = `
@@ -17283,7 +17329,20 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
         existing.cartGlobalDiscountPct = currentGlobalDiscountPct;
       }
       existing.codcliente = selectedCustomerCod;
-      existing.clientName = clientName;
+      // Bug real (Asador el Gallo, 2026-09-27): a diferencia de .name (que sí
+      // conserva el nombre si no se escribe uno nuevo), .clientName se
+      // sobrescribía SIEMPRE con lo que mostrara el campo de cliente en
+      // pantalla en ESE guardado -- si un reaparcado se disparaba (añadir
+      // algo, un guardado de fondo, el otro terminal en "caja compartida")
+      // con ese campo vacío/genérico, se perdía el nombre real del cliente
+      // para siempre, sin que saltara ningún conflicto de sync (el guardado
+      // en sí era "válido", solo con datos incompletos). Misma defensa que
+      // ya tenía .name: solo se sobrescribe si de verdad hay algo nuevo y
+      // real que escribir.
+      existing.clientName =
+        clientName && clientName !== "Cliente"
+          ? clientName
+          : existing.clientName || clientName;
       existing.name =
         ticketName ||
         existing.name ||
@@ -17406,11 +17465,13 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
       });
 
       const finishUpdateParkedTail = async () => {
+        let saveConflicted = false;
         try {
           await apiSaveParkedReservation(existing);
           await refreshRemoteParkedReservationsOnly();
         } catch (e) {
           if (e?.staleParkedWrite) {
+            saveConflicted = true;
             handleStaleParkedWriteConflict(existing, e);
           } else {
             enqueueParkedSyncOperation("upsert", existing);
@@ -17429,7 +17490,13 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
           }
         }
 
-        if (reservedDelta.size > 0) {
+        // Si el guardado del ticket choco con otro terminal (bloqueo
+        // optimista), nuestra foto local ya no es la que "gano" -- aplicar
+        // (o encolar) su delta de stock partiria de una base que dejo de
+        // ser la actual. El proximo guardado con exito (tras la fusion, ver
+        // mergeMissingRemoteLinesIntoCart) calculara el delta correcto
+        // desde la base real, asi que aqui no se toca el stock para nada.
+        if (!saveConflicted && reservedDelta.size > 0) {
           try {
             await syncReservedStockDeltaToFS(
               reservedDelta,
@@ -17437,6 +17504,11 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
               existing?.id,
             );
           } catch (e) {
+            enqueueStockDeltaSync(
+              e?.failedDeltaMap || reservedDelta,
+              "actualizar aparcado",
+              existing?.id,
+            );
             console.warn(
               "No se pudo sincronizar stock al actualizar aparcado:",
               e?.message || e,
@@ -17649,6 +17721,11 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
             localTicket?.id,
           );
         } catch (e) {
+          enqueueStockDeltaSync(
+            e?.failedDeltaMap || reservedDelta,
+            "crear aparcado",
+            localTicket?.id,
+          );
           console.warn(
             "No se pudo sincronizar stock al crear aparcado:",
             e?.message || e,
@@ -18902,11 +18979,8 @@ async function deleteAllPendingParkedTickets({ releaseStock = true } = {}) {
       }
 
       if (releaseStock) {
+        const releaseDelta = buildReservedQtyDeltaMap([], ticket?.items || []);
         try {
-          const releaseDelta = buildReservedQtyDeltaMap(
-            [],
-            ticket?.items || [],
-          );
           if (releaseDelta.size > 0) {
             await syncReservedStockDeltaToFS(
               releaseDelta,
@@ -18915,6 +18989,11 @@ async function deleteAllPendingParkedTickets({ releaseStock = true } = {}) {
             );
           }
         } catch (e) {
+          enqueueStockDeltaSync(
+            e?.failedDeltaMap || releaseDelta,
+            "borrado masivo de pendientes",
+            ticket?.id,
+          );
           console.warn(
             "No se pudo liberar stock al borrar pendiente en bloque:",
             e?.message || e,
@@ -19891,30 +19970,33 @@ async function deleteParkedTicketByIndex(
       }
     }
 
+    // Real de cliente 2026-09-01: un aparcado ya COBRADO ya no tiene
+    // ninguna reserva de stock pendiente que liberar -- esa reserva se
+    // libero de verdad en el momento de cobrar (ver "cobrar aparcado" en
+    // markParkedTicketAsPaidByIndex), justo antes de que la factura real
+    // descontara el stock de verdad. Este ticket, una vez cobrado, es solo
+    // un registro/historial en la lista de aparcados; borrarlo mas tarde
+    // no deberia tocar el stock para nada. Liberar aqui TAMBIEN (como
+    // hacia antes, sin distinguir) sumaba stock que ya se habia
+    // descontado de verdad -- justo el descuadre que reporto el cliente.
+    let releaseDelta = new Map();
+    if (releaseStock && !removedTicket?.paid) {
+      releaseDelta = buildReservedQtyDeltaMap([], removedTicket?.items || []);
+    }
     try {
-      // Real de cliente 2026-09-01: un aparcado ya COBRADO ya no tiene
-      // ninguna reserva de stock pendiente que liberar -- esa reserva se
-      // libero de verdad en el momento de cobrar (ver "cobrar aparcado" en
-      // markParkedTicketAsPaidByIndex), justo antes de que la factura real
-      // descontara el stock de verdad. Este ticket, una vez cobrado, es solo
-      // un registro/historial en la lista de aparcados; borrarlo mas tarde
-      // no deberia tocar el stock para nada. Liberar aqui TAMBIEN (como
-      // hacia antes, sin distinguir) sumaba stock que ya se habia
-      // descontado de verdad -- justo el descuadre que reporto el cliente.
-      if (releaseStock && !removedTicket?.paid) {
-        const releaseDelta = buildReservedQtyDeltaMap(
-          [],
-          removedTicket?.items || [],
+      if (releaseDelta.size > 0) {
+        await syncReservedStockDeltaToFS(
+          releaseDelta,
+          "eliminar aparcado",
+          removedTicket?.id,
         );
-        if (releaseDelta.size > 0) {
-          await syncReservedStockDeltaToFS(
-            releaseDelta,
-            "eliminar aparcado",
-            removedTicket?.id,
-          );
-        }
       }
     } catch (e) {
+      enqueueStockDeltaSync(
+        e?.failedDeltaMap || releaseDelta,
+        "eliminar aparcado",
+        removedTicket?.id,
+      );
       console.warn(
         "No se pudo sincronizar stock al eliminar aparcado:",
         e?.message || e,
@@ -20648,6 +20730,11 @@ async function markParkedTicketAsPaidByIndex(
         ticket?.id,
       );
     } catch (e) {
+      enqueueStockDeltaSync(
+        e?.failedDeltaMap || reservedDelta,
+        "cobrar aparcado",
+        ticket?.id,
+      );
       console.warn(
         "No se pudo sincronizar stock al cobrar aparcado:",
         e?.message || e,
@@ -31808,7 +31895,13 @@ function renderItemsHtml(doc, lineas) {
         (Array.isArray(l?.__addonsHint) && l.__addonsHint.length && l.__addonsHint) ||
         null;
       const addonsTxt = addonsList
-        ? addonsList.map((a) => `+${a.nombre}`).join(", ")
+        ? addonsList
+            .map((a) =>
+              Number(a?.precio) > 0
+                ? `+${a.nombre} (+${eurTicket(Number(a.precio))})`
+                : `+${a.nombre}`,
+            )
+            .join(", ")
         : "";
 
       const leftQtyHtml = isChild ? "" : safe(qty);
@@ -31879,6 +31972,16 @@ function stripIncluyeFromDesc(desc) {
     .trim();
 }
 
+// Convierte un precio bruto unitario a neto con el mismo redondeo de alta
+// precisión que ya usaba buildFsLinesFromCart, reutilizable para la línea
+// principal y para las líneas de añadidos de pago.
+function grossToNetUnit(unitGross, taxRate) {
+  const tax = Number(taxRate || 0);
+  const divisor = 1 + tax / 100;
+  const unitNetRaw = divisor > 0 ? unitGross / divisor : unitGross;
+  return Math.round((unitNetRaw + Number.EPSILON) * 1e8) / 1e8;
+}
+
 function buildFsLinesFromCart(cartArr) {
   if (!Array.isArray(cartArr) || cartArr.length === 0) return [];
 
@@ -31886,7 +31989,7 @@ function buildFsLinesFromCart(cartArr) {
     cartArr
       // ✅ NO mandar hijos a FS (el plugin los añade/gestiona)
       .filter((item) => !item?.meta?.includedInPack)
-      .map((item) => {
+      .flatMap((item) => {
         const qty = parseQtyValue(item?.qty ?? item?.cantidad, 1);
         const pricing = getCartLinePricing(item);
 
@@ -31901,13 +32004,8 @@ function buildFsLinesFromCart(cartArr) {
           ? pricing.unitGross
           : Number(getUnitGross(item) || 0);
 
-        // Convertimos a NETO para FS
         const tax = Number(item.taxRate || 0);
-        const divisor = 1 + tax / 100;
-        const unitNetRaw = divisor > 0 ? unitGross / divisor : unitGross;
-
-        // precisión alta para evitar errores de redondeo
-        const unitNet = Math.round((unitNetRaw + Number.EPSILON) * 1e8) / 1e8;
+        const unitNet = grossToNetUnit(unitGross, tax);
 
         // referencia separada (FS)
         const ref = String(item.referencia || item.name || "").trim() || "-";
@@ -31932,7 +32030,26 @@ function buildFsLinesFromCart(cartArr) {
 
         if (item.codimpuesto) linea.codimpuesto = item.codimpuesto;
 
-        return linea;
+        // Añadidos de producto CON PRECIO (ver getLineAddonsTotal): cada uno
+        // se manda como una linea MAS, sin referencia/idproducto -- si una
+        // linea no lleva referencia, FacturaScripts la trata como "linea
+        // libre" (ApiCreateDocument::saveLines -> $documento->getNewLine()),
+        // sin tocar catalogo ni stock. Es el mecanismo nativo pensado para
+        // esto, no un hack. Los añadidos gratis (precio 0, el caso de
+        // siempre) NO generan ninguna linea -- siguen siendo solo la
+        // anotacion cosmetica de siempre.
+        const addonLines = Array.isArray(item.addons)
+          ? item.addons
+              .filter((a) => Number(a?.precio) > 0)
+              .map((a) => ({
+                descripcion: `Añadido: ${String(a?.nombre || "").trim() || "?"}`,
+                cantidad: qty,
+                pvpunitario: grossToNetUnit(Number(a.precio) || 0, tax),
+                ...(item.codimpuesto ? { codimpuesto: item.codimpuesto } : {}),
+              }))
+          : [];
+
+        return [linea, ...addonLines];
       })
   );
 }
@@ -34761,6 +34878,11 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "", ticketId = null
   }
 
   const issues = [];
+  // Que productos de este mismo Map fallaron DE VERDAD (para la cola de
+  // reintento, ver enqueueStockDeltaSync) -- necesario para no reintentar
+  // mas tarde el Map ENTERO si solo una parte fallo: los que ya se aplicaron
+  // bien no deben volver a aplicarse (doblarian el ajuste real).
+  const failedDeltaMap = new Map();
   let anyChanged = false;
 
   for (const [idProdRaw, deltaRaw] of deltaMap.entries()) {
@@ -34818,6 +34940,7 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "", ticketId = null
       );
     } catch (e) {
       issues.push(`${idProd}: ${e?.message || e}`);
+      failedDeltaMap.set(idProd, delta);
     } finally {
       if (lockInfo?.acquired) {
         await apiReleaseStockLock(idProd).catch(() => {});
@@ -34836,12 +34959,127 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "", ticketId = null
 
   if (issues.length) {
     const detail = issues.slice(0, 3).join(" | ");
-    throw new Error(
+    const err = new Error(
       `No se pudo sincronizar stock en FacturaScripts (${reason || "aparcados"}): ${detail}`,
     );
+    // Solo los que de verdad fallaron -- ver comentario junto a
+    // failedDeltaMap arriba. Los llamadores existentes no cambian de
+    // comportamiento (siguen viendo un throw); solo la cola de reintento
+    // nueva mira este campo.
+    err.failedDeltaMap = failedDeltaMap;
+    throw err;
   }
 
   return true;
+}
+
+// ===== Cola de reintento de deltas de stock (ver STOCK_DELTA_SYNC_QUEUE_KEY) =====
+// Mismo patron exacto que la cola de aparcados (loadParkedSyncQueue/
+// saveParkedSyncQueue/enqueueParkedSyncOperation) -- si
+// syncReservedStockDeltaToFS falla (red/servidor saturado, tipico de un
+// domingo con 2 terminales), el ajuste no se pierde: queda aqui y se
+// reintenta solo, drenada por el mismo ciclo de 10s que ya usan los
+// aparcados (ver refreshRemoteParkedReservationsOnlyImpl).
+function loadStockDeltaSyncQueue() {
+  try {
+    const raw = localStorage.getItem(
+      getParkedScopedStorageKey(STOCK_DELTA_SYNC_QUEUE_KEY),
+    );
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveStockDeltaSyncQueue(queue) {
+  try {
+    const safe = Array.isArray(queue) ? queue : [];
+    localStorage.setItem(
+      getParkedScopedStorageKey(STOCK_DELTA_SYNC_QUEUE_KEY),
+      JSON.stringify(safe.slice(-500)),
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar cola de deltas de stock:", e?.message || e);
+  }
+}
+
+// Suma (no sobrescribe) cada entrada del Map a lo que ya hubiera en cola
+// para ese idProducto -- dos ajustes fallidos del mismo producto se
+// acumulan en uno solo antes del proximo reintento, no se pisan.
+function enqueueStockDeltaSync(deltaMap, reason = "", ticketId = null) {
+  if (!(deltaMap instanceof Map) || deltaMap.size === 0) return;
+
+  const queue = loadStockDeltaSyncQueue();
+  const byProduct = new Map(queue.map((q) => [Number(q?.idProducto || 0), q]));
+
+  deltaMap.forEach((deltaRaw, idProdRaw) => {
+    const idProd = Number(idProdRaw || 0) || 0;
+    const delta = Number(deltaRaw || 0);
+    if (!idProd || !Number.isFinite(delta) || Math.abs(delta) < 0.0005) return;
+
+    const existing = byProduct.get(idProd);
+    byProduct.set(idProd, {
+      idProducto: idProd,
+      delta: roundQty3((existing?.delta || 0) + delta),
+      reason: reason || existing?.reason || "",
+      ticketId: ticketId || existing?.ticketId || null,
+      queuedAt: new Date().toISOString(),
+    });
+  });
+
+  saveStockDeltaSyncQueue(Array.from(byProduct.values()));
+}
+
+async function processStockDeltaSyncQueue() {
+  if (__stockDeltaSyncDrainInFlight) return false;
+  if (TPV_STATE?.offline) return false;
+
+  const queue = loadStockDeltaSyncQueue();
+  if (!queue.length) return true;
+
+  __stockDeltaSyncDrainInFlight = true;
+  try {
+    const deltaMap = new Map();
+    const metaByProduct = new Map();
+    queue.forEach((q) => {
+      const idProd = Number(q?.idProducto || 0);
+      if (!idProd) return;
+      deltaMap.set(idProd, Number(q?.delta || 0));
+      metaByProduct.set(idProd, q);
+    });
+
+    try {
+      await syncReservedStockDeltaToFS(
+        deltaMap,
+        "reintento cola de stock",
+        null,
+      );
+      saveStockDeltaSyncQueue([]);
+      return true;
+    } catch (e) {
+      // Solo los que de verdad siguen fallando quedan en cola -- los que
+      // ya se aplicaron bien en este intento (failedDeltaMap no los
+      // incluye) se descartan, para no volver a aplicarlos.
+      const failed = e?.failedDeltaMap instanceof Map ? e.failedDeltaMap : deltaMap;
+      const remaining = Array.from(failed.entries()).map(([idProd, delta]) => ({
+        idProducto: idProd,
+        delta,
+        reason: metaByProduct.get(idProd)?.reason || "",
+        ticketId: metaByProduct.get(idProd)?.ticketId || null,
+        queuedAt: metaByProduct.get(idProd)?.queuedAt || new Date().toISOString(),
+      }));
+      saveStockDeltaSyncQueue(remaining);
+      console.warn(
+        "Reintento de cola de stock: siguen pendientes",
+        remaining.length,
+        e?.message || e,
+      );
+      return remaining.length === 0;
+    }
+  } finally {
+    __stockDeltaSyncDrainInFlight = false;
+  }
 }
 
 function rebuildRemoteReservedByProductMap() {
@@ -36947,6 +37185,9 @@ async function refreshRemoteParkedReservationsOnlyImpl() {
 
   try {
     await processParkedSyncQueue();
+    processStockDeltaSyncQueue().catch((e) => {
+      console.warn("No se pudo drenar la cola de deltas de stock:", e?.message || e);
+    });
 
     const list = await apiListParkedReservations();
     REMOTE_PARKED_RESERVATIONS = Array.isArray(list) ? list : [];
@@ -37306,8 +37547,8 @@ async function parkFailedSaleForRetry(
     // hizo -- sumando stock de mas que nunca se resto, exactamente el "stock
     // no me coincide" que reporto el cliente. Reservar aqui, igual que un
     // aparcado normal, deja el balance correcto pase lo que pase despues.
+    const reservedDelta = buildReservedQtyDeltaMap(items, []);
     try {
-      const reservedDelta = buildReservedQtyDeltaMap(items, []);
       if (reservedDelta.size > 0) {
         await syncReservedStockDeltaToFS(
           reservedDelta,
@@ -37316,6 +37557,11 @@ async function parkFailedSaleForRetry(
         );
       }
     } catch (e) {
+      enqueueStockDeltaSync(
+        e?.failedDeltaMap || reservedDelta,
+        "crear aparcado (venta fallida recuperada)",
+        localTicket?.id,
+      );
       console.warn(
         "No se pudo reservar stock para la venta fallida recuperada como aparcado:",
         e?.message || e,
@@ -37683,13 +37929,14 @@ async function onPayButtonClick() {
       // de la factura real, mas abajo) puede no incluir productos que el
       // servidor ya tiene. Cobrar con eso facturaria de menos y, al quedar el
       // ticket ya pagado, no habria forma natural de facturar la diferencia
-      // despues. Se recupera `cart` y se aborta ESTE cobro para que el
-      // cajero vea el importe correcto y pulse Cobrar de nuevo a proposito.
+      // despues. Antes se tomaba la version remota a ciegas, perdiendo
+      // TAMBIEN lo que el cajero acababa de añadir aqui. Se fusiona
+      // (mergeMissingRemoteLinesIntoCart, sincrono) para no perder ninguno de
+      // los dos lados, pero se sigue abortando ESTE cobro -- cobrar es
+      // demasiado sensible para seguir sin que el cajero confirme el importe
+      // ya fusionado con un nuevo toque en Cobrar.
       if (syncedTicket.__remoteChangedWhileLoaded) {
-        cart = Array.isArray(syncedTicket.items)
-          ? syncedTicket.items.map((it) => ({ ...it }))
-          : [];
-        delete syncedTicket.__remoteChangedWhileLoaded;
+        mergeMissingRemoteLinesIntoCart(syncedTicket);
         saveParkedTicketsCache();
         renderCart();
         throw new Error(
@@ -39558,7 +39805,7 @@ function refreshPreprintButtonUI() {
 
 function computeLinesTotal(lines) {
   return (Array.isArray(lines) ? lines : []).reduce((sum, line) => {
-    const unit = getUnitGross(line);
+    const unit = getUnitGross(line) + getLineAddonsTotal(line);
     const qty = Number(line?.qty || 0) || 0;
     // "Neto primero" como el resto del TPV/FacturaScripts.
     return sum + computeLineNetFirst(unit, qty, getTaxRateForLine(line)).total;
@@ -39847,7 +40094,7 @@ function renderSplitTicketItemsMatrixLines() {
       const meta = document.createElement("div");
       meta.className = "split-ticket-line-meta";
       const qty = Number(line?.qty || 0) || 0;
-      const unit = getUnitGross(line);
+      const unit = getUnitGross(line) + getLineAddonsTotal(line);
       const lineTotal = unit * qty;
       meta.textContent = `Cantidad final: ${Number(qty.toFixed(4))} · Total línea: ${eurTicket(lineTotal)}`;
 
@@ -40083,7 +40330,7 @@ function renderSplitTicketLines() {
     const meta = document.createElement("div");
     meta.className = "split-ticket-line-meta";
     const qty = Number(line?.qty || 0) || 0;
-    const unit = getUnitGross(line);
+    const unit = getUnitGross(line) + getLineAddonsTotal(line);
     const lineTotal = unit * qty;
     const isQtyOne = Math.abs(qty - 1) < 0.0001;
     if (isQtyOne) {
@@ -40242,14 +40489,14 @@ async function confirmSplitTicket() {
 
   // Mismo motivo que en flushLoadedParkedTicketChangesSync: si la mesa
   // cambio en otro terminal mientras estaba cargada, dividir ahora tomaria
-  // `cart` (desactualizado) como base y perderia para siempre las lineas que
-  // ya llegaron por otro lado. Recuperamos la version fresca y pedimos que
-  // se revise antes de dividir.
+  // `cart` (desactualizado) como base. Antes se tomaba la version remota a
+  // ciegas, perdiendo tambien lo que el cajero acababa de añadir aqui mismo.
+  // Se fusiona (mergeMissingRemoteLinesIntoCart, sincrono) para no perder ni
+  // lo local ni lo remoto, pero se sigue abortando ESTA division y pidiendo
+  // revisar/reintentar -- dividir la cuenta es demasiado sensible para
+  // seguir adelante sin que el cajero vea el resultado fusionado primero.
   if (loaded.__remoteChangedWhileLoaded) {
-    cart = Array.isArray(loaded.items)
-      ? loaded.items.map((it) => ({ ...it }))
-      : [];
-    delete loaded.__remoteChangedWhileLoaded;
+    mergeMissingRemoteLinesIntoCart(loaded);
     saveParkedTicketsCache();
     renderCart();
     if (splitTicketError) {
@@ -46038,7 +46285,13 @@ function buildCustomerItemsFromCart(cartArr) {
     }
 
     if (Array.isArray(item.addons) && item.addons.length) {
-      const addonsTxt = item.addons.map((a) => `+${a.nombre}`).join(", ");
+      const addonsTxt = item.addons
+        .map((a) =>
+          Number(a?.precio) > 0
+            ? `+${a.nombre} (+${eur(Number(a.precio))})`
+            : `+${a.nombre}`,
+        )
+        .join(", ");
       secondaryName = secondaryName ? `${secondaryName} · ${addonsTxt}` : addonsTxt;
     }
 
@@ -46950,7 +47203,8 @@ async function openProductAddonsSelectModal({
 
       const name = document.createElement("div");
       name.className = "pack-item-name";
-      name.textContent = `+${s.nombre}`;
+      name.textContent =
+        s.precio > 0 ? `+${s.nombre}  +${eur(s.precio)}` : `+${s.nombre}`;
 
       left.appendChild(chk);
       left.appendChild(name);
@@ -47097,18 +47351,36 @@ async function openProductAddonsManagerModal(product) {
         input.placeholder = "Nombre del añadido (p.ej. leche)";
         input.addEventListener("click", () => openQwertyForInput(input, "text"));
 
+        // Precio del añadido (0 = gratis, el caso de siempre). Solo se puede
+        // fijar/editar aquí, en el modal de gestión -- nunca desde el
+        // selector al vender.
+        const priceInput = document.createElement("input");
+        priceInput.type = "text";
+        priceInput.inputMode = "decimal";
+        priceInput.className = "addons-item-price-input";
+        priceInput.value = eurInputValue(addon.precio || 0);
+        priceInput.placeholder = "0,00";
+        priceInput.title = "Precio del añadido (0 = gratis)";
+        priceInput.addEventListener("click", () =>
+          openQwertyForInput(priceInput, "text"),
+        );
+
         let saveTimer = null;
-        input.addEventListener("input", () => {
+        function scheduleSave() {
           clearTimeout(saveTimer);
           saveTimer = setTimeout(async () => {
             const nombre = input.value.trim();
             if (!nombre) return;
+            const precio = Math.max(
+              0,
+              Number(String(priceInput.value).replace(",", ".")) || 0,
+            );
             try {
               await apiSaveProductAddon({
                 id: addon.id,
                 idproducto: pid,
                 nombre,
-                precio: addon.precio || 0,
+                precio,
               });
             } catch (e) {
               toast(
@@ -47117,6 +47389,15 @@ async function openProductAddonsManagerModal(product) {
               );
             }
           }, 500);
+        }
+        input.addEventListener("input", scheduleSave);
+        priceInput.addEventListener("input", scheduleSave);
+        priceInput.addEventListener("blur", () => {
+          const precio = Math.max(
+            0,
+            Number(String(priceInput.value).replace(",", ".")) || 0,
+          );
+          priceInput.value = eurInputValue(precio);
         });
 
         const delBtn = document.createElement("button");
@@ -47134,6 +47415,7 @@ async function openProductAddonsManagerModal(product) {
         };
 
         row.appendChild(input);
+        row.appendChild(priceInput);
         row.appendChild(delBtn);
         list.appendChild(row);
       });
