@@ -7946,6 +7946,36 @@ mustContain(
   "The cobro (checkout) stock-release failure path also enqueues for retry -- same fix applied to the most financially sensitive of the 7 call sites",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-29 missing timeout on Mesas layout sync (real client: Lumi, first one really using Modo Mesas -- reported 'goes slow, freezes'; reproduced live: a single hung connection left the periodic sync permanently stuck, and an active save from the cashier hung forever with no error)\n",
+);
+
+mustContain(
+  renderer,
+  "const res = await fetchWithTimeout(\r\n    url,\r\n    {\r\n      method: \"GET\",",
+  "apiGetMesasLayoutRemote (renderer.js, host window) now uses fetchWithTimeout instead of a bare fetch -- a hung connection used to leave the in-flight guard stuck forever, permanently stopping the periodic sync from ever retrying again",
+);
+mustContain(
+  renderer,
+  "const res = await fetchWithTimeout(\r\n    url,\r\n    {\r\n      method: \"POST\",",
+  "apiSaveMesasLayoutRemote (renderer.js, host window) also switched to fetchWithTimeout -- an active save (moving a table, editing the layout) used to hang forever on a bad connection with no error shown to the cashier",
+);
+mustContain(
+  mesasJs,
+  "async function fetchWithTimeout(url, options = {}, timeoutMs = 6000) {",
+  "mesas/mesas.js (the embedded iframe, a 2nd independent implementation) gained its own fetchWithTimeout helper -- it had no timeout mechanism of its own at all before this",
+);
+mustContain(
+  mesasJs,
+  "const res = await fetchWithTimeout(url, {\r\n    method: \"GET\",",
+  "mesas.js's own apiGetMesasLayoutRemote now uses its new fetchWithTimeout too -- same fix mirrored in the 2nd independent implementation",
+);
+mustContain(
+  mesasJs,
+  "const res = await fetchWithTimeout(`${apiUrl}?action=save-mesas-layout`, {",
+  "mesas.js's own apiSaveMesasLayoutRemote also switched to fetchWithTimeout",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

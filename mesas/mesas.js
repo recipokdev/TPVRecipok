@@ -1358,6 +1358,28 @@ function readTablesStateRaw() {
 // entero aunque nada haya cambiado.
 let mesasLayoutLastKnownUpdatedAt = null;
 
+// Mismo motivo que la copia en renderer.js: sin esto, una conexión mala o
+// inestable puede dejar una petición colgada para siempre -- y con ella, el
+// guard "en vuelo" de quien la llama, que nunca se libera hasta que esta
+// promesa se resuelva. Real: así se congelaba el sondeo/guardado de Mesas
+// de un cliente real con mala conexión -- ver
+// bug_lumi_mesas_slow_freeze_2026-09-29.
+async function fetchWithTimeout(url, options = {}, timeoutMs = 6000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new Error(`Timeout conectando con ${url}`);
+    }
+    throw new Error(`Error de red conectando con ${url}: ${err?.message || err}`);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function apiGetMesasLayoutRemote() {
   const slug = String(getMesasSlugScope() || "").trim();
   const apiKey = getMesasSyncApiKey();
@@ -1369,7 +1391,7 @@ async function apiGetMesasLayoutRemote() {
     ? `&ifNewerThan=${encodeURIComponent(mesasLayoutLastKnownUpdatedAt)}`
     : "";
   const url = `${apiUrl}?action=get-mesas-layout&slug=${encodeURIComponent(slug)}&codalmacen=${encodeURIComponent(codalmacen)}${ifNewerThanQs}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: "GET",
     headers: {
       Accept: "application/json",
@@ -1408,7 +1430,7 @@ async function apiSaveMesasLayoutRemote(nextState) {
     expectedUpdatedAt: mesasLayoutLastKnownUpdatedAt || null,
   };
 
-  const res = await fetch(`${apiUrl}?action=save-mesas-layout`, {
+  const res = await fetchWithTimeout(`${apiUrl}?action=save-mesas-layout`, {
     method: "POST",
     headers: {
       Accept: "application/json",

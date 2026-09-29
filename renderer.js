@@ -8347,14 +8347,25 @@ async function apiGetMesasLayoutRemote() {
     ? `&ifNewerThan=${encodeURIComponent(mesasLayoutLastKnownUpdatedAt)}`
     : "";
   const url = `${TPV_SYNC_API_URL}?action=get-mesas-layout&slug=${encodeURIComponent(slug)}&codalmacen=${encodeURIComponent(codalmacen)}${ifNewerThanQs}`;
-  const res = await fetch(url, {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-      "X-TPV-API-KEY": syncApiKey,
+  // Sin timeout, una conexion mala/inestable puede dejar esta peticion
+  // colgada para siempre -- y con ella, el guard "en vuelo" de quien la
+  // llama, que nunca se libera hasta que esta promesa se resuelva. Real:
+  // asi se congelaba el sondeo de Mesas de un cliente real con mala conexion
+  // (ver bug_lumi_mesas_slow_freeze_2026-09-29). MESAS_LAYOUT_REMOTE_POLL_MS
+  // es 8s; este timeout se queda deliberadamente por debajo para no solapar
+  // con el siguiente ciclo de sondeo.
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      cache: "no-store",
     },
-    cache: "no-store",
-  });
+    6000,
+  );
 
   if (!res.ok) return null;
 
@@ -8389,15 +8400,23 @@ async function apiSaveMesasLayoutRemote(nextState) {
   };
 
   const url = `${TPV_SYNC_API_URL}?action=save-mesas-layout`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "X-TPV-API-KEY": syncApiKey,
+  // Mismo motivo que en apiGetMesasLayoutRemote: sin timeout, un guardado
+  // real (mover una mesa, editar el diseño) se queda colgado para siempre
+  // con mala conexión, sin ningún aviso al cajero -- ver
+  // bug_lumi_mesas_slow_freeze_2026-09-29.
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      body: JSON.stringify(payload),
     },
-    body: JSON.stringify(payload),
-  });
+    6000,
+  );
 
   const data = await res.json().catch(() => null);
 
