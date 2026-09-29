@@ -7976,6 +7976,26 @@ mustContain(
   "mesas.js's own apiSaveMesasLayoutRemote also switched to fetchWithTimeout",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-29 Mesas table cart lost on map-view switch (real client: Lumi -- switching tables via the visual floor-plan tap silently dropped the in-progress cart, while the small context-row dropdown switch worked fine; root cause: leaving 'transacciones' for the map view never saved the outgoing table's draft, and by the time the host got notified the plan iframe had already moved selectedTableId to the new table)\n",
+);
+
+mustContain(
+  renderer,
+  "if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === \"transacciones\" && next !== \"transacciones\") {\r\n    saveCurrentCartAsMesaDraft();\r\n  }",
+  "setMesasInlineView now saves the outgoing table's draft at the one safe point -- right before leaving 'transacciones', while the outgoing table is still selectedTableId -- instead of relying on a save that happens too late (after the map iframe already switched to the new table)",
+);
+mustContain(
+  renderer,
+  "skipSaveOutgoingDraft = false,",
+  "updateMesasSelectionFromContext gained a skipSaveOutgoingDraft option -- the map-tap flow already saved the outgoing draft at the correct point, and calling saveCurrentCartAsMesaDraft again here would read the NEW table's id (the plan iframe sets it before notifying the host) and overwrite that table's just-restored draft with the stale/wrong cart",
+);
+mustContain(
+  renderer,
+  "skipSaveOutgoingDraft: true,",
+  "The tpv:mesas-open-table handler (fired when a table is tapped on the visual floor plan) passes skipSaveOutgoingDraft so it doesn't redo (and corrupt) the save that setMesasInlineView already did correctly",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

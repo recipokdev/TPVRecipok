@@ -10463,13 +10463,26 @@ function renderMesasTransContextBar() {
 
 function updateMesasSelectionFromContext(
   { roomId, tableUid },
-  { preferLinkedTicketOnEmptyDraft = false, preserveReturnView = false } = {},
+  {
+    preferLinkedTicketOnEmptyDraft = false,
+    preserveReturnView = false,
+    skipSaveOutgoingDraft = false,
+  } = {},
 ) {
   if (!preserveReturnView) {
     MESAS_RETURN_TO_VIEW_AFTER_PARK = "";
   }
   MESAS_TRANS_TABLE_MOVE_SOURCE_UID = "";
-  saveCurrentCartAsMesaDraft();
+  // El llamador del plano visual (ver "tpv:mesas-open-table" mas abajo) ya
+  // guardo el borrador de la mesa saliente el guardar el momento correcto
+  // (al salir de "transacciones" hacia el plano, ver setMesasInlineView) --
+  // para entonces, el propio iframe del plano ya ha movido
+  // selectedTableId a la mesa NUEVA antes de avisarnos, asi que guardar
+  // aqui otra vez guardaria el carrito (ya vacio/de la mesa vieja) bajo la
+  // clave de la mesa nueva, pisando el borrador que se acaba de restaurar.
+  if (!skipSaveOutgoingDraft) {
+    saveCurrentCartAsMesaDraft();
+  }
 
   const state = loadMesasTablesStateForInline();
   if (!state || !Array.isArray(state.roomList)) return;
@@ -10645,6 +10658,20 @@ function setMesasInlineView(view, { persist = true } = {}) {
   if (next === "diseno" && !isAdminUser()) {
     toast("Solo administradores.", "warn", "Mesas");
     return;
+  }
+
+  // Real: tocar una mesa distinta en el plano visual perdía en silencio lo
+  // que el cajero acababa de añadir a la mesa que tenía abierta. Motivo:
+  // saveCurrentCartAsMesaDraft() solo guarda si la vista actual sigue
+  // siendo "transacciones" -- pero para llegar al plano hay que salir de
+  // esa vista primero, y una vez fuera ya es tarde para guardar (y el
+  // propio iframe del plano, al elegir la mesa nueva, ya ha reemplazado
+  // selectedTableId antes de avisar al host -- guardar más tarde
+  // guardaría el carrito de la mesa VIEJA bajo la clave de la mesa NUEVA).
+  // Se guarda aquí, en el único punto seguro: justo antes de dejar
+  // "transacciones", con la mesa saliente todavía seleccionada.
+  if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones" && next !== "transacciones") {
+    saveCurrentCartAsMesaDraft();
   }
 
   MESAS_INLINE_VIEW = next;
@@ -11075,7 +11102,16 @@ function bindMesasInlineEventsOnce() {
       setMesasInlineView("transacciones", { persist: false });
       updateMesasSelectionFromContext(
         { tableUid: uid },
-        { preferLinkedTicketOnEmptyDraft: true, preserveReturnView: true },
+        {
+          preferLinkedTicketOnEmptyDraft: true,
+          preserveReturnView: true,
+          // El borrador de la mesa saliente ya se guardo al salir a la
+          // vista de plano (ver setMesasInlineView) -- para cuando llega
+          // este mensaje, el iframe del plano YA movio selectedTableId a
+          // esta mesa nueva, asi que volver a guardar aqui pisaria el
+          // borrador recien restaurado con el carrito viejo/vacio.
+          skipSaveOutgoingDraft: true,
+        },
       );
 
       if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
