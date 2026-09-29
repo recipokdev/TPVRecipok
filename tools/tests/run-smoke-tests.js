@@ -8057,6 +8057,21 @@ mustContain(
   "applyMesasLayoutFromRemoteForInline's conflict-recovery (force=true) now ALWAYS keeps the currently-open table's own local draft cart, whether or not remote already has one -- reproduced live: a 412 conflict-recovery mid-edit could arrive with a STALE (non-empty, so not caught by the old 'only if remote is empty' check) remote draft from BEFORE the cashier's latest addition, silently overwriting the live cart back down and permanently discarding the item just added",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-29 Mesas: raw ticket id shown as the occupied-table turn badge (real client: Lumi -- reported a raw 13-digit number bursting out of the small round badge under an occupied table on the floor plan; present since Modo Mesas launched, confirmed live with a screenshot showing '1790683637197' instead of a small turn number)\n",
+);
+
+mustContain(
+  mesasJs,
+  'const orderByUid = new Map();\r\n  objects\r\n    .filter((obj) => !!obj?.tableUid)\r\n    .map((obj) => {\r\n      const uid = String(obj.tableUid || "").trim();\r\n      const ticket = getMappedTicketForTable(uid);\r\n      const statusCode = getTableStatus(uid).code;\r\n      if (!ticket || (statusCode !== "ocupada" && statusCode !== "cuenta")) {\r\n        return null;\r\n      }\r\n      return {\r\n        uid,\r\n        createdAt: new Date(',
+  "renderMapCards no longer computes this badge's number from the ticket's own internal id (a large, effectively-always-truthy value, in practice a creation timestamp) -- it only carries the uid and createdAt now, so the small 20px round badge (mesas.css .gestion-order) can never again be asked to display a 13-digit number",
+);
+mustContain(
+  mesasJs,
+  ".sort((a, b) => a.createdAt - b.createdAt)\r\n    .forEach((entry, idx) => {\r\n      orderByUid.set(entry.uid, idx + 1);\r\n    });",
+  "The turn number is now always the table's position after sorting currently-occupied/cuenta tables by creation time (1, 2, 3...) -- the intended behavior all along, previously unreachable because the ticket-id-based value was (almost) always truthy and greater than 0, so this correct idx+1 fallback never actually fired",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

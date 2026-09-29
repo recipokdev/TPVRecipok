@@ -2494,6 +2494,16 @@ function renderMapCards() {
   syncRoomDesignWithTables(room.id);
   const objects = getRoomDesignObjects(room.id);
 
+  // Real (Lumi, siempre presente desde el lanzamiento de Modo Mesas): esta
+  // insignia esta pensada como un numerito pequeño de turno (1, 2, 3...)
+  // entre las mesas ocupadas ahora mismo, ordenado por antiguedad -- el
+  // propio badge en mesas.css es un circulo de 20px pensado para 1-2 digitos.
+  // Pero "order" se rellenaba con el id INTERNO del ticket (un numero grande,
+  // practicamente siempre un timestamp de creacion), no con un turno de
+  // verdad -- y como ese id es (casi) siempre > 0, el fallback correcto
+  // (idx + 1, calculado aqui mismo tras ordenar por fecha) nunca llegaba a
+  // usarse. Resultado: un numero crudo de 13 digitos reventando el circulo
+  // debajo de cualquier mesa ocupada, siempre, en vez del turno pequeño.
   const orderByUid = new Map();
   objects
     .filter((obj) => !!obj?.tableUid)
@@ -2504,10 +2514,8 @@ function renderMapCards() {
       if (!ticket || (statusCode !== "ocupada" && statusCode !== "cuenta")) {
         return null;
       }
-      const order = Number(ticket?.id || 0);
       return {
         uid,
-        order: Number.isFinite(order) && order > 0 ? order : 0,
         createdAt: new Date(
           ticket?.createdAt || ticket?.updatedAt || Date.now(),
         ).getTime(),
@@ -2516,7 +2524,7 @@ function renderMapCards() {
     .filter(Boolean)
     .sort((a, b) => a.createdAt - b.createdAt)
     .forEach((entry, idx) => {
-      orderByUid.set(entry.uid, entry.order > 0 ? entry.order : idx + 1);
+      orderByUid.set(entry.uid, idx + 1);
     });
 
   const formatTicketHour = (value) => {
