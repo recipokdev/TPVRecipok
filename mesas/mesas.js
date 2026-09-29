@@ -10,6 +10,30 @@ const LEGACY_TABLES_STATE_KEY = "tpv_tables_state_v2";
 const MESAS_LAYOUT_CACHE_KEY = "tpv_mesas_layout_cache_v1";
 const MESAS_LAYOUT_SYNC_QUEUE_KEY = "tpv_mesas_layout_sync_queue_v1";
 const MESAS_LOCAL_EDIT_TS_KEY = "tpv_mesas_local_edit_ts_v1";
+
+// Mismo motivo que la copia en renderer.js: "que estoy mirando yo en mi
+// pantalla" (navegacion de este terminal/iframe) no es algo que otro
+// terminal necesite saber -- iba mezclado con el bloque compartido de
+// verdad (diseno del plano, carritos por mesa...) y disparaba un guardado
+// remoto con bloqueo optimista en cada cambio de mesa/sala/vista, chocando
+// sin necesidad. Se sigue guardando en local, solo deja de contar para
+// decidir si hace falta un guardado remoto.
+const MESAS_LOCAL_ONLY_STATE_FIELDS = [
+  "activeView",
+  "activeRoomId",
+  "selectedTableId",
+  "category",
+  "search",
+];
+
+function stripMesasLocalOnlyFields(rawState) {
+  const out = { ...(rawState && typeof rawState === "object" ? rawState : {}) };
+  for (const key of MESAS_LOCAL_ONLY_STATE_FIELDS) delete out[key];
+  return out;
+}
+
+let mesasLayoutLastSyncedRemoteRelevantJson = null;
+
 const TUTORIAL_BLANK_MODE_KEY = "tpv_tutorial_blank_mode_v1";
 const TUTORIAL_ACTIVE_KEY = "tpv_tutorial_active_v1";
 const MESAS_REMOTE_SYNC_POLL_MS = 8000;
@@ -1490,7 +1514,26 @@ function applyMesasLayoutConflictRecovery(remoteLayout) {
   if (!remoteLayout || typeof remoteLayout !== "object") return;
 
   try {
-    writeTablesStateRaw(JSON.stringify(remoteLayout));
+    // Esta version ya esta confirmada en el servidor -- el proximo guardado
+    // debe compararse contra ella, no contra la que acaba de chocar.
+    mesasLayoutLastSyncedRemoteRelevantJson = JSON.stringify(
+      stripMesasLocalOnlyFields(remoteLayout),
+    );
+
+    // La version que devuelve el servidor tras un choque es la de ANTES de
+    // nuestro propio intento -- su "que mesa tenia seleccionada" es vieja.
+    // Los campos de navegacion local (MESAS_LOCAL_ONLY_STATE_FIELDS) se
+    // conservan tal cual estaban en este terminal en vez de aceptarlos del
+    // servidor -- si no, recuperarse de un choque al guardar el carrito de
+    // una mesa te sacaba de la mesa que tenias abierta en tu propia
+    // pantalla.
+    const recovered = { ...remoteLayout };
+    for (const key of MESAS_LOCAL_ONLY_STATE_FIELDS) {
+      if (state?.[key] !== undefined) recovered[key] = state[key];
+      else delete recovered[key];
+    }
+
+    writeTablesStateRaw(JSON.stringify(recovered));
     if (state?.activeView === "diseno") return;
 
     loadState();
@@ -1581,6 +1624,9 @@ async function processMesasLayoutSyncQueue() {
     for (const entry of queue) {
       try {
         await apiSaveMesasLayoutRemote(entry?.layout || {});
+        mesasLayoutLastSyncedRemoteRelevantJson = JSON.stringify(
+          stripMesasLocalOnlyFields(entry?.layout || {}),
+        );
       } catch (e) {
         // Conflicto de bloqueo optimista: NUNCA reencolar -- reintentaria con
         // el mismo expectedUpdatedAt ya caducado y chocaria igual para
@@ -1614,6 +1660,15 @@ function scheduleRemoteMesasStateSave(nextState) {
   }
 
   const safeState = nextState && typeof nextState === "object" ? nextState : {};
+
+  // Si lo unico que cambio desde el ultimo guardado confirmado es
+  // navegacion local de este iframe (mesa/sala/vista seleccionada...), no
+  // hace falta tocar el servidor -- ver MESAS_LOCAL_ONLY_STATE_FIELDS.
+  const remoteRelevantRaw = JSON.stringify(stripMesasLocalOnlyFields(safeState));
+  if (remoteRelevantRaw === mesasLayoutLastSyncedRemoteRelevantJson) {
+    return;
+  }
+
   mesasRemoteSyncTimer = setTimeout(async () => {
     mesasRemoteSyncTimer = null;
     if (mesasRemoteSyncInFlight) return;
@@ -1621,6 +1676,7 @@ function scheduleRemoteMesasStateSave(nextState) {
     mesasRemoteSyncInFlight = true;
     try {
       await apiSaveMesasLayoutRemote(safeState);
+      mesasLayoutLastSyncedRemoteRelevantJson = remoteRelevantRaw;
     } catch (e) {
       // Conflicto de bloqueo optimista: NUNCA reencolar (mismo motivo que en
       // processMesasLayoutSyncQueue) -- ya se aviso/recargo dentro de
@@ -1775,8 +1831,20 @@ async function hydrateStateFromRemote() {
     const remote = await apiGetMesasLayoutRemote();
     if (!remote || typeof remote !== "object") return false;
 
-    const payload = JSON.stringify(remote);
     const currentRaw = String(readTablesStateRaw() || "").trim();
+    mesasLayoutLastSyncedRemoteRelevantJson = JSON.stringify(
+      stripMesasLocalOnlyFields(remote),
+    );
+
+    // Mismo motivo que en applyMesasLayoutConflictRecovery: la navegacion
+    // local de este terminal no debe sustituirse por lo que el servidor
+    // tenga guardado ahi.
+    const merged = { ...remote };
+    for (const key of MESAS_LOCAL_ONLY_STATE_FIELDS) {
+      if (state?.[key] !== undefined) merged[key] = state[key];
+      else delete merged[key];
+    }
+    const payload = JSON.stringify(merged);
     if (payload === currentRaw) return false;
 
     writeTablesStateRaw(payload);

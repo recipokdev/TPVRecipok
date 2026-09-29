@@ -8230,6 +8230,35 @@ const MESAS_LOCAL_EDIT_TS_KEY = "tpv_mesas_local_edit_ts_v1";
 const TUTORIAL_ACTIVE_KEY = "tpv_tutorial_active_v1";
 const MESAS_LAYOUT_REMOTE_POLL_MS = 8000;
 const MESAS_REMOTE_PULL_GRACE_MS = 15000;
+
+// Campos de "que estoy mirando yo en mi pantalla ahora mismo" (navegacion de
+// ESTE terminal) -- a diferencia del resto del bloque (diseno del plano,
+// carritos por mesa, estado de cada mesa...), nadie mas necesita saber esto.
+// Real: iban mezclados con lo compartido, y cada cambio de mesa/sala/vista
+// disparaba un guardado remoto con bloqueo optimista de verdad, chocando con
+// cualquier otro terminal (o consigo mismo, entre renderer.js y el iframe)
+// aunque nadie tocara nada compartido. Se siguen guardando en local (para
+// conservar donde estabas si cierras y abres la app) pero ya no cuentan para
+// decidir si hace falta un guardado remoto.
+const MESAS_LOCAL_ONLY_STATE_FIELDS = [
+  "activeView",
+  "activeRoomId",
+  "selectedTableId",
+  "category",
+  "search",
+];
+
+function stripMesasLocalOnlyFields(state) {
+  const out = { ...(state && typeof state === "object" ? state : {}) };
+  for (const key of MESAS_LOCAL_ONLY_STATE_FIELDS) delete out[key];
+  return out;
+}
+
+// Ultimo estado (sin los campos locales de arriba) que sabemos confirmado en
+// el servidor -- por un guardado nuestro que tuvo exito, o por una lectura
+// remota que acabamos de aplicar. Si lo unico que cambio desde entonces es
+// navegacion local, scheduleMesasLayoutRemoteSync no manda nada.
+let MESAS_LAYOUT_LAST_SYNCED_REMOTE_RELEVANT_JSON = null;
 let TPV_THEME_MODE = "light";
 let TPV_CUSTOMER_THEME_MODE = "dark";
 let MESAS_INLINE_ACTIVE = false;
@@ -9012,6 +9041,9 @@ async function processMesasLayoutSyncQueue() {
     for (const entry of queue) {
       try {
         await apiSaveMesasLayoutRemote(entry?.layout || {});
+        MESAS_LAYOUT_LAST_SYNCED_REMOTE_RELEVANT_JSON = JSON.stringify(
+          stripMesasLocalOnlyFields(entry?.layout || {}),
+        );
       } catch (e) {
         // Conflicto de bloqueo optimista: NUNCA reencolar -- reintentaria con
         // el mismo expectedUpdatedAt ya caducado y chocaria igual para
@@ -9079,13 +9111,23 @@ function applyMesasLayoutFromRemoteForInline(remoteLayout, force = false) {
         : {},
   };
 
-  const selectedUid = String(localState?.selectedTableId || "").trim();
-  if (!merged.selectedTableId && selectedUid) {
-    merged.selectedTableId = selectedUid;
+  // Los campos de navegacion local (MESAS_LOCAL_ONLY_STATE_FIELDS) nunca
+  // deben venir del remoto -- ni en una lectura normal ni en una
+  // recuperacion de conflicto (force=true). Real: una recuperacion tras un
+  // choque (el propio guardado de esta mesa/carrito chocando) devolvia la
+  // version del servidor ANTERIOR a nuestro intento -- con la mesa
+  // seleccionada vieja -- y al aplicarse con force=true pisaba la mesa que
+  // el cajero acababa de seleccionar en su propia pantalla, aunque nadie
+  // mas necesitara saber eso.
+  for (const key of MESAS_LOCAL_ONLY_STATE_FIELDS) {
+    if (localState[key] !== undefined) {
+      merged[key] = localState[key];
+    } else {
+      delete merged[key];
+    }
   }
-  if (!merged.activeRoomId && localState?.activeRoomId) {
-    merged.activeRoomId = String(localState.activeRoomId);
-  }
+
+  const selectedUid = String(merged?.selectedTableId || "").trim();
 
   if (selectedUid) {
     const localLinked = localState?.tableTicketMap?.[selectedUid];
@@ -9117,6 +9159,12 @@ function applyMesasLayoutFromRemoteForInline(remoteLayout, force = false) {
 
   const remoteRaw = JSON.stringify(merged);
   const currentRaw = String(readMesasTablesStateRawLocal() || "").trim();
+  // Esta version (con o sin cambios en los campos locales) YA esta
+  // confirmada en el servidor -- lo actualizamos aunque no reescribamos el
+  // local, para que el proximo guardado compare contra la version real.
+  MESAS_LAYOUT_LAST_SYNCED_REMOTE_RELEVANT_JSON = JSON.stringify(
+    stripMesasLocalOnlyFields(merged),
+  );
   if (currentRaw === remoteRaw) {
     return false;
   }
@@ -9142,6 +9190,16 @@ function scheduleMesasLayoutRemoteSync(nextState) {
   }
 
   const safeState = nextState && typeof nextState === "object" ? nextState : {};
+
+  // Si lo unico que cambio desde el ultimo guardado confirmado es
+  // navegacion local (que mesa/sala/vista tengo abierta yo, el filtro de
+  // busqueda...), no hace falta tocar el servidor -- ver
+  // MESAS_LOCAL_ONLY_STATE_FIELDS mas arriba.
+  const remoteRelevantRaw = JSON.stringify(stripMesasLocalOnlyFields(safeState));
+  if (remoteRelevantRaw === MESAS_LAYOUT_LAST_SYNCED_REMOTE_RELEVANT_JSON) {
+    return;
+  }
+
   MESAS_LAYOUT_SYNC_TIMER = setTimeout(async () => {
     MESAS_LAYOUT_SYNC_TIMER = null;
     if (MESAS_LAYOUT_SYNC_IN_FLIGHT) return;
@@ -9149,6 +9207,7 @@ function scheduleMesasLayoutRemoteSync(nextState) {
     MESAS_LAYOUT_SYNC_IN_FLIGHT = true;
     try {
       await apiSaveMesasLayoutRemote(safeState);
+      MESAS_LAYOUT_LAST_SYNCED_REMOTE_RELEVANT_JSON = remoteRelevantRaw;
     } catch (e) {
       // Conflicto de bloqueo optimista: NUNCA reencolar (mismo motivo que en
       // processMesasLayoutSyncQueue) -- ya se aviso/recargo dentro de
@@ -9280,10 +9339,23 @@ function saveDraftCartForMesaUid(uid, draftItems, opts = {}) {
   }
 
   const safeItems = Array.isArray(draftItems) ? draftItems : [];
-  if (!safeItems.length && !keepEmpty) {
+  const nextDraft =
+    !safeItems.length && !keepEmpty
+      ? undefined
+      : safeItems.map((it) => ({ ...it }));
+
+  // Evita un guardado remoto real (y su ventana de conflicto con otros
+  // terminales/CamarerosTPV tocando el mismo layout) cuando no hay ningun
+  // cambio de verdad -- p.ej. entrar a mirar el plano sin haber tocado el
+  // carrito de la mesa actual.
+  const prevRaw = JSON.stringify(state.draftCartByTable[mesaUid] ?? null);
+  const nextRaw = JSON.stringify(nextDraft ?? null);
+  if (prevRaw === nextRaw) return;
+
+  if (nextDraft === undefined) {
     delete state.draftCartByTable[mesaUid];
   } else {
-    state.draftCartByTable[mesaUid] = safeItems.map((it) => ({ ...it }));
+    state.draftCartByTable[mesaUid] = nextDraft;
   }
 
   saveMesasTablesStateForInline(state);

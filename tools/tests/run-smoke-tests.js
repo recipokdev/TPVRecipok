@@ -7996,6 +7996,47 @@ mustContain(
   "The tpv:mesas-open-table handler (fired when a table is tapped on the visual floor plan) passes skipSaveOutgoingDraft so it doesn't redo (and corrupt) the save that setMesasInlineView already did correctly",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-29 Mesas navigation triggering spurious cross-terminal conflicts (real client: Lumi -- switching between tables kept showing 'layout updated from another terminal' even with a single terminal; root cause: 'which table/room/view am I looking at' was bundled into the same remotely-synced, optimistic-locked blob as the real shared data (room design, per-table carts), so every simple navigation was treated as a real write that could conflict)\n",
+);
+
+mustContain(
+  renderer,
+  'const MESAS_LOCAL_ONLY_STATE_FIELDS = [\r\n  "activeView",\r\n  "activeRoomId",\r\n  "selectedTableId",\r\n  "category",\r\n  "search",\r\n];',
+  "New MESAS_LOCAL_ONLY_STATE_FIELDS names the fields that are pure per-terminal navigation state (which table/room/view/search filter is showing on THIS screen) -- never meaningful to other terminals, unlike the real shared data (room design, per-table draft carts, ticket links)",
+);
+mustContain(
+  renderer,
+  "const remoteRelevantRaw = JSON.stringify(stripMesasLocalOnlyFields(safeState));\r\n  if (remoteRelevantRaw === MESAS_LAYOUT_LAST_SYNCED_REMOTE_RELEVANT_JSON) {\r\n    return;\r\n  }",
+  "scheduleMesasLayoutRemoteSync now skips the remote write entirely when only local-only navigation changed since the last confirmed sync -- simply switching which table you're looking at no longer touches the network or the optimistic lock at all",
+);
+mustContain(
+  renderer,
+  "const prevRaw = JSON.stringify(state.draftCartByTable[mesaUid] ?? null);\r\n  const nextRaw = JSON.stringify(nextDraft ?? null);\r\n  if (prevRaw === nextRaw) return;",
+  "saveDraftCartForMesaUid also no-ops when the table's draft didn't actually change -- e.g. glancing at the floor plan without touching the current table's cart",
+);
+mustContain(
+  renderer,
+  "for (const key of MESAS_LOCAL_ONLY_STATE_FIELDS) {\r\n    if (localState[key] !== undefined) {\r\n      merged[key] = localState[key];\r\n    } else {\r\n      delete merged[key];\r\n    }\r\n  }",
+  "applyMesasLayoutFromRemoteForInline now ALWAYS keeps this terminal's own local-only fields instead of accepting them from the remote/conflict payload -- previously a conflict-recovery (force=true) after the terminal's OWN save collision would blindly overwrite selectedTableId with the server's pre-collision (stale) value, silently kicking the cashier out of the table they had just selected on their own screen",
+);
+
+mustContain(
+  mesasJs,
+  'const MESAS_LOCAL_ONLY_STATE_FIELDS = [\r\n  "activeView",\r\n  "activeRoomId",\r\n  "selectedTableId",\r\n  "category",\r\n  "search",\r\n];',
+  "Same fixed field list mirrored in mesas.js (the embedded iframe, a 2nd independent implementation of this same sync)",
+);
+mustContain(
+  mesasJs,
+  "const remoteRelevantRaw = JSON.stringify(stripMesasLocalOnlyFields(safeState));\r\n  if (remoteRelevantRaw === mesasLayoutLastSyncedRemoteRelevantJson) {\r\n    return;\r\n  }",
+  "mesas.js's own scheduleRemoteMesasStateSave also skips the remote write for pure navigation changes -- this is the side that runs when tapping a table directly on the visual floor plan, exactly the flow the client hit",
+);
+mustContain(
+  mesasJs,
+  "const recovered = { ...remoteLayout };\r\n    for (const key of MESAS_LOCAL_ONLY_STATE_FIELDS) {\r\n      if (state?.[key] !== undefined) recovered[key] = state[key];\r\n      else delete recovered[key];\r\n    }",
+  "mesas.js's own conflict-recovery also keeps this terminal's local-only fields instead of accepting the server's pre-collision snapshot -- same fix mirrored in the 2nd independent implementation",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
