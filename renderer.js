@@ -24583,7 +24583,7 @@ async function runCashCloseSummaryComputation({ applyToUI = true } = {}) {
   cashSession.closeFacturasSnapshot = facturasCajaList;
   cashSession.closeRecibosByFacturaSnapshot = recibosByFactura;
 
-  const [, , agentSalesSummary] = await Promise.all([
+  const [, , agentSalesSummary, movimientosCajaRaw] = await Promise.all([
     hydrateCloseTicketStatsForCaja(cajaId, facturasCajaList),
     hydratePaymentsByMethodForClose(
       cajaId,
@@ -24591,8 +24591,47 @@ async function runCashCloseSummaryComputation({ applyToUI = true } = {}) {
       recibosByFactura,
     ),
     buildAgentSalesSummaryForCaja(cajaId, facturasCajaList, recibosByFactura),
+    fetchApiResourceWithParams("tpvmovimientos", {
+      "filter[idcaja]": cajaId,
+      limit: 0,
+    }).catch((e) => {
+      console.warn(
+        "No se pudieron leer los movimientos de caja reales:",
+        e?.message || e,
+      );
+      return null;
+    }),
   ]);
   cashSession.agentSalesSummary = agentSalesSummary;
+
+  // Real de cliente (Lumi): al reabrir/recuperar una caja ya abierta (reinicio
+  // de la app, corte de luz, actualizacion de Windows...) los acumulados
+  // "en vivo" de esta sesion (cashSalesTotal/totalSales/cashMovementsTotal,
+  // que solo crecen via apiUpdateCajaAfterSale en cada venta de ESTE proceso)
+  // vuelven a 0 -- el resto del cierre (tickets, desglose por metodo/agente,
+  // arriba) SI es fiable porque se recalcula aqui mismo pidiendo las facturas
+  // reales a FacturaScripts, pero estos 3 seguian mostrando 0/mal tras un
+  // reinicio aunque ya hubiera ventas reales en la caja. Se recalculan aqui,
+  // desde la MISMA fuente real que el resto del cierre, en vez de fiarse del
+  // acumulado en memoria -- que sigue sirviendo para pintar la UI al vuelo
+  // mientras la caja esta abierta sin interrupciones, pero deja de ser la
+  // fuente de verdad en cuanto se calcula el cierre real.
+  let ventasRealesNet = 0;
+  let cobrosEfectivoRealNet = 0;
+  Object.values(cashSession.paymentsByMethod || {}).forEach((m) => {
+    const total = Number(m?.total || 0) || 0;
+    ventasRealesNet += total;
+    if (isCashPago({ codpago: m?.code })) cobrosEfectivoRealNet += total;
+  });
+  cashSession.totalSales = roundMoney2(ventasRealesNet);
+  cashSession.cashSalesTotal = roundMoney2(cobrosEfectivoRealNet);
+
+  const movimientosCaja = Array.isArray(movimientosCajaRaw)
+    ? movimientosCajaRaw
+    : [];
+  cashSession.cashMovementsTotal = roundMoney2(
+    movimientosCaja.reduce((sum, m) => sum + (Number(m?.amount) || 0), 0),
+  );
 
   if (applyToUI) {
     renderCashCloseTotalMeta();
@@ -24620,6 +24659,9 @@ async function runCashCloseSummaryComputation({ applyToUI = true } = {}) {
       numtickets: cashSession.numtickets,
       ticketCountByAgent: cashSession.ticketCountByAgent,
       agentSalesSummary,
+      totalSales: cashSession.totalSales,
+      cashSalesTotal: cashSession.cashSalesTotal,
+      cashMovementsTotal: cashSession.cashMovementsTotal,
     },
   };
   await persistCashCloseCache(cacheEntry);

@@ -3981,27 +3981,31 @@ mustContain(
 
 {
   // Cierre de caja: los 3 resumenes (tickets por agente, importes por
-  // metodo, ventas por agente) se calculan a la vez a partir de los mismos
-  // datos ya obtenidos (facturasCajaList/recibosByFactura).
-  const idx = renderer.indexOf("const [, , agentSalesSummary] = await Promise.all([");
+  // metodo, ventas por agente) y los movimientos reales de caja se calculan
+  // a la vez a partir de los mismos datos ya obtenidos
+  // (facturasCajaList/recibosByFactura) mas una consulta real a tpvmovimientos.
+  const idx = renderer.indexOf(
+    "const [, , agentSalesSummary, movimientosCajaRaw] = await Promise.all([",
+  );
   if (idx >= 0) {
-    const scoped = renderer.slice(idx, idx + 500);
+    const scoped = renderer.slice(idx, idx + 700);
     if (
       scoped.includes("hydrateCloseTicketStatsForCaja(cajaId, facturasCajaList),") &&
       scoped.includes("hydratePaymentsByMethodForClose(") &&
-      scoped.includes("buildAgentSalesSummaryForCaja(cajaId, facturasCajaList, recibosByFactura),")
+      scoped.includes("buildAgentSalesSummaryForCaja(cajaId, facturasCajaList, recibosByFactura),") &&
+      scoped.includes('fetchApiResourceWithParams("tpvmovimientos", {')
     ) {
       ok(
-        "Cash-close builds its 3 independent summaries (ticket stats, payment methods, agent sales) in parallel",
+        "Cash-close builds its 3 independent summaries (ticket stats, payment methods, agent sales) plus a real cash-movements fetch in parallel",
       );
     } else {
       fail(
-        "Cash-close builds its 3 independent summaries (ticket stats, payment methods, agent sales) in parallel",
+        "Cash-close builds its 3 independent summaries (ticket stats, payment methods, agent sales) plus a real cash-movements fetch in parallel",
       );
     }
   } else {
     fail(
-      "Cash-close builds its 3 independent summaries (ticket stats, payment methods, agent sales) in parallel",
+      "Cash-close builds its 3 independent summaries (ticket stats, payment methods, agent sales) plus a real cash-movements fetch in parallel",
     );
   }
 }
@@ -8070,6 +8074,26 @@ mustContain(
   mesasJs,
   ".sort((a, b) => a.createdAt - b.createdAt)\r\n    .forEach((entry, idx) => {\r\n      orderByUid.set(entry.uid, idx + 1);\r\n    });",
   "The turn number is now always the table's position after sorting currently-occupied/cuenta tables by creation time (1, 2, 3...) -- the intended behavior all along, previously unreachable because the ticket-id-based value was (almost) always truthy and greater than 0, so this correct idx+1 fallback never actually fired",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-29 cash-close summary showing 0,00 EUR for real sales (real client: Lumi -- 'Cobros Efectivo', 'Total Movimientos', 'Total Esperado Caja' and 'Total Ventas' all showed 0,00 EUR at closing despite 16 real tickets, while the per-method and per-agent breakdown below correctly showed 147,40 EUR; root cause: those 4 fields came from a plain in-memory counter that only grows via apiUpdateCajaAfterSale during THIS process's lifetime, so resuming an already-open caja after any app restart reset them to 0 while the rest of the close summary is correctly recomputed from real FacturaScripts data every time)\n",
+);
+
+mustContain(
+  renderer,
+  'let ventasRealesNet = 0;\r\n  let cobrosEfectivoRealNet = 0;\r\n  Object.values(cashSession.paymentsByMethod || {}).forEach((m) => {\r\n    const total = Number(m?.total || 0) || 0;\r\n    ventasRealesNet += total;\r\n    if (isCashPago({ codpago: m?.code })) cobrosEfectivoRealNet += total;\r\n  });\r\n  cashSession.totalSales = roundMoney2(ventasRealesNet);\r\n  cashSession.cashSalesTotal = roundMoney2(cobrosEfectivoRealNet);',
+  "runCashCloseSummaryComputation now recomputes totalSales and cashSalesTotal from cashSession.paymentsByMethod -- the same real, freshly-fetched-from-FacturaScripts breakdown already used for the (correct) per-method cards -- instead of trusting the fragile in-memory running counters that reset on every app restart",
+);
+mustContain(
+  renderer,
+  'const movimientosCaja = Array.isArray(movimientosCajaRaw)\r\n    ? movimientosCajaRaw\r\n    : [];\r\n  cashSession.cashMovementsTotal = roundMoney2(\r\n    movimientosCaja.reduce((sum, m) => sum + (Number(m?.amount) || 0), 0),\r\n  );',
+  "cashMovementsTotal is likewise recomputed from a real tpvmovimientos fetch filtered by this caja's id, instead of the same fragile in-memory accumulator",
+);
+mustContain(
+  renderer,
+  "totalSales: cashSession.totalSales,\r\n      cashSalesTotal: cashSession.cashSalesTotal,\r\n      cashMovementsTotal: cashSession.cashMovementsTotal,",
+  "The local cash-close cache (used to show the dialog instantly before the background recompute finishes) now also carries these 3 recomputed fields -- previously the cache omitted them entirely, so even the instant-display fast path would show the stale/zero in-memory values first",
 );
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
