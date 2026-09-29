@@ -8037,6 +8037,26 @@ mustContain(
   "mesas.js's own conflict-recovery also keeps this terminal's local-only fields instead of accepting the server's pre-collision snapshot -- same fix mirrored in the 2nd independent implementation",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-29 Mesas: table click bounced back to the map, and a 2nd product silently vanished (real client: Lumi -- remote screen-share into the live production TPV showed clicking an occupied table opening the cart then bouncing straight back to the map view; investigating that led to a 2nd, more serious bug found in the same area: adding a 2nd product to an already-open occupied table could get silently discarded)\n",
+);
+
+mustContain(
+  renderer,
+  '      // Real: añadir un producto mas a una mesa ya ocupada disparaba un\r\n      // autoguardado silencioso de ese mismo ticket -- y este bloque,\r\n      // pensado para volver al plano solo cuando el cajero termina de\r\n      // verdad y aparca a proposito, tambien se disparaba con ese\r\n      // autoguardado de fondo, echando al cajero al mapa en mitad de un\r\n      // pedido sin haber tocado nada para salir.\r\n      if (\r\n        !silentAutoSave &&\r\n        keepActiveMesasTicket &&\r\n        (MESAS_RETURN_TO_VIEW_AFTER_PARK === "mapa" ||\r\n          MESAS_RETURN_TO_VIEW_AFTER_PARK === "diseno")\r\n      ) {',
+  "Updating an already-parked Mesas ticket only returns to the map/design view on an explicit park action, not on a silent background autosave -- previously, simply adding another product to an occupied table's order triggered a silent autosave that ALSO consumed this 'return to map' flag, bouncing the cashier back to the floor plan mid-order without them touching anything to leave",
+);
+mustContain(
+  renderer,
+  '    // Mismo motivo que en el camino de "actualizar aparcado": un\r\n    // autoguardado silencioso no debe echar al cajero de vuelta al plano.\r\n    if (\r\n      !silentAutoSave &&\r\n      keepActiveMesasTicket &&\r\n      (MESAS_RETURN_TO_VIEW_AFTER_PARK === "mapa" ||\r\n        MESAS_RETURN_TO_VIEW_AFTER_PARK === "diseno")\r\n    ) {',
+  "Same guard mirrored in the 'create new parked ticket' path (the other of the 2 call sites that consume MESAS_RETURN_TO_VIEW_AFTER_PARK)",
+);
+mustContain(
+  renderer,
+  'const localDraftByTableForMerge =\r\n      localState?.draftCartByTable &&\r\n      typeof localState.draftCartByTable === "object"\r\n        ? localState.draftCartByTable\r\n        : {};\r\n    if (\r\n      Object.prototype.hasOwnProperty.call(\r\n        localDraftByTableForMerge,\r\n        selectedUid,\r\n      )\r\n    ) {\r\n      const localDraft = Array.isArray(localDraftByTableForMerge[selectedUid])\r\n        ? localDraftByTableForMerge[selectedUid]\r\n        : [];\r\n      merged.draftCartByTable[selectedUid] = localDraft.map((it) => ({\r\n        ...it,\r\n      }));\r\n    } else {\r\n      delete merged.draftCartByTable[selectedUid];\r\n    }',
+  "applyMesasLayoutFromRemoteForInline's conflict-recovery (force=true) now ALWAYS keeps the currently-open table's own local draft cart, whether or not remote already has one -- reproduced live: a 412 conflict-recovery mid-edit could arrive with a STALE (non-empty, so not caught by the old 'only if remote is empty' check) remote draft from BEFORE the cashier's latest addition, silently overwriting the live cart back down and permanently discarding the item just added",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

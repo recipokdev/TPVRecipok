@@ -9135,18 +9135,35 @@ function applyMesasLayoutFromRemoteForInline(remoteLayout, force = false) {
       merged.tableTicketMap[selectedUid] = localLinked;
     }
 
-    const localDraft = Array.isArray(
-      localState?.draftCartByTable?.[selectedUid],
-    )
-      ? localState.draftCartByTable[selectedUid]
-      : [];
-    const remoteDraft = Array.isArray(merged?.draftCartByTable?.[selectedUid])
-      ? merged.draftCartByTable[selectedUid]
-      : [];
-    if (localDraft.length && !remoteDraft.length) {
+    // Real (repro 2026-09-29): esto solo restauraba el borrador local si el
+    // remoto llegaba VACIO -- pero en una recuperacion de conflicto (force),
+    // lo tipico es que el remoto traiga un borrador VIEJO (no vacio) de
+    // ANTES del ultimo producto añadido aqui mismo (el propio guardado que
+    // choco). Con el remoto no-vacio, esta condicion no protegia nada y el
+    // borrador viejo pisaba el que el cajero acababa de escribir en esta
+    // mesa, perdiendo el producto en silencio. La mesa que este terminal
+    // tiene abierta AHORA MISMO es la unica fuente de verdad para su propio
+    // borrador -- igual que MESAS_LOCAL_ONLY_STATE_FIELDS arriba -- asi que
+    // el local siempre gana aqui, exista o no exista ya algo en remoto.
+    const localDraftByTableForMerge =
+      localState?.draftCartByTable &&
+      typeof localState.draftCartByTable === "object"
+        ? localState.draftCartByTable
+        : {};
+    if (
+      Object.prototype.hasOwnProperty.call(
+        localDraftByTableForMerge,
+        selectedUid,
+      )
+    ) {
+      const localDraft = Array.isArray(localDraftByTableForMerge[selectedUid])
+        ? localDraftByTableForMerge[selectedUid]
+        : [];
       merged.draftCartByTable[selectedUid] = localDraft.map((it) => ({
         ...it,
       }));
+    } else {
+      delete merged.draftCartByTable[selectedUid];
     }
 
     const localManualState = String(
@@ -17574,7 +17591,14 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
         );
       }
 
+      // Real: añadir un producto mas a una mesa ya ocupada disparaba un
+      // autoguardado silencioso de ese mismo ticket -- y este bloque,
+      // pensado para volver al plano solo cuando el cajero termina de
+      // verdad y aparca a proposito, tambien se disparaba con ese
+      // autoguardado de fondo, echando al cajero al mapa en mitad de un
+      // pedido sin haber tocado nada para salir.
       if (
+        !silentAutoSave &&
         keepActiveMesasTicket &&
         (MESAS_RETURN_TO_VIEW_AFTER_PARK === "mapa" ||
           MESAS_RETURN_TO_VIEW_AFTER_PARK === "diseno")
@@ -17779,7 +17803,10 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
       renderParkedTicketsModal();
     }
 
+    // Mismo motivo que en el camino de "actualizar aparcado": un
+    // autoguardado silencioso no debe echar al cajero de vuelta al plano.
     if (
+      !silentAutoSave &&
       keepActiveMesasTicket &&
       (MESAS_RETURN_TO_VIEW_AFTER_PARK === "mapa" ||
         MESAS_RETURN_TO_VIEW_AFTER_PARK === "diseno")
