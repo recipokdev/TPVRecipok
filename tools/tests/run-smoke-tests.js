@@ -8096,6 +8096,41 @@ mustContain(
   "The local cash-close cache (used to show the dialog instantly before the background recompute finishes) now also carries these 3 recomputed fields -- previously the cache omitted them entirely, so even the instant-display fast path would show the stale/zero in-memory values first",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-29 cash-close totals with zero connectivity right after an app restart (real client: Lumi -- opened caja, sold products, an app update restarted the process, and closing showed 0,00 EUR; the server-recompute fix above needs a network round-trip, which still leaves a narrow gap: a restart with no cache yet AND no connectivity at that exact moment. Closed here with a local, per-caja mirror that needs no network at all)\n",
+);
+
+mustContain(
+  renderer,
+  "function getCashRunningTotalsStorageKey(cajaId) {\r\n  const id = Number(cajaId || 0) || 0;\r\n  return `tpv_cash_running_totals_${id}`;\r\n}",
+  "New per-caja localStorage mirror of cashSalesTotal/totalSales/cashMovementsTotal/numtickets -- same key-per-cajaId pattern already used by the payment ledger, but for these 3 previously-fragile fields",
+);
+mustContain(
+  renderer,
+  "function hydrateCashRunningTotalsIntoSession(cajaId) {\r\n  const saved = loadCashRunningTotals(cajaId);\r\n  if (!saved) return;\r\n\r\n  cashSession.cashSalesTotal = Number(saved.cashSalesTotal || 0);\r\n  cashSession.totalSales = Number(saved.totalSales || 0);\r\n  cashSession.cashMovementsTotal = Number(saved.cashMovementsTotal || 0);",
+  "New hydrateCashRunningTotalsIntoSession reads this mirror with zero network involved -- called right alongside loadCashLedgerIntoSession at all 3 places in the code that recover an already-open caja, so cashSession starts from the last known real values instead of 0 even before any server call has a chance to run or succeed",
+);
+mustContain(
+  renderer,
+  "  // Espejo local ANTES de cualquier intento de red (ver comentario en\r\n  // persistCashRunningTotalsSnapshot) -- si lo que sigue falla o la app se\r\n  // cierra justo aqui, este acumulado ya queda a salvo.\r\n  persistCashRunningTotalsSnapshot();",
+  "apiUpdateCajaAfterSale persists this mirror right after updating the in-memory accumulator, before attempting anything over the network -- a sale followed immediately by a crash/restart still leaves the mirror correct",
+);
+mustContain(
+  renderer,
+  "    cashSession.cashMovementsTotal = currentMov + signedAmount;\r\n    persistCashRunningTotalsSnapshot();",
+  "The cash-movement (deposit/withdrawal) save path persists the mirror too, the same way as a sale",
+);
+mustContain(
+  renderer,
+  "  // Aprovecha este recalculo real (autoritativo, desde FacturaScripts) para\r\n  // refrescar tambien el espejo local -- asi queda al dia con el dato mas\r\n  // fiable posible cada vez que hay conexion, no solo con el acumulado en\r\n  // vivo de las ventas de este terminal.\r\n  persistCashRunningTotalsSnapshot();",
+  "The real server-side recompute (runCashCloseSummaryComputation) also refreshes this same local mirror, so it stays as accurate as possible whenever there IS connectivity, not just as a fallback fed only by this terminal's own live sales",
+);
+mustContain(
+  renderer,
+  "    clearCashLedger(idcaja);\r\n    clearCashRunningTotals(idcaja);",
+  "A genuinely new caja (confirmCashOpening) clears this mirror too, right alongside the existing payment-ledger cleanup -- a fresh caja never inherits stale numbers",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

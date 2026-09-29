@@ -1771,6 +1771,84 @@ function loadCashLedgerIntoSession(cajaId) {
   return ledger;
 }
 
+// Real de cliente (Lumi): abrio caja, vendio productos, salio un update de
+// la app (que reinicia el proceso) y al cerrar caja los totales salian a 0
+// -- ver bug_cash_close_totals_reset_after_restart_2026-09-29. Ese arreglo ya
+// recalcula el cierre real desde FacturaScripts, pero eso necesita conexion;
+// si justo en ese momento no hay internet Y todavia no existe ninguna copia
+// de cierre guardada para esta caja (p.ej. reinicio a los pocos segundos de
+// abrir), no hay nada de que tirar y se seguiria viendo 0. Este espejo local
+// (una linea por caja, actualizada en cada venta/movimiento real, ANTES de
+// intentar nada de red) cierra ese hueco: al recuperar una caja ya abierta,
+// se usa como punto de partida en vez de 0, sin depender de ninguna conexion.
+function getCashRunningTotalsStorageKey(cajaId) {
+  const id = Number(cajaId || 0) || 0;
+  return `tpv_cash_running_totals_${id}`;
+}
+
+function loadCashRunningTotals(cajaId) {
+  const id = Number(cajaId || 0) || 0;
+  if (!id) return null;
+
+  try {
+    const raw = localStorage.getItem(getCashRunningTotalsStorageKey(id));
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// Se llama tras cada actualizacion real de estos acumulados (venta o
+// movimiento de caja) Y tras cada recalculo real del cierre -- asi el espejo
+// local siempre refleja el ultimo dato bueno que este terminal ha visto,
+// sea de su propio acumulado en vivo o del recalculo autoritativo desde
+// FacturaScripts.
+function persistCashRunningTotalsSnapshot() {
+  const id = Number(cashSession?.remoteCajaId || 0) || 0;
+  if (!id) return;
+
+  try {
+    localStorage.setItem(
+      getCashRunningTotalsStorageKey(id),
+      JSON.stringify({
+        cashSalesTotal: Number(cashSession.cashSalesTotal || 0),
+        totalSales: Number(cashSession.totalSales || 0),
+        cashMovementsTotal: Number(cashSession.cashMovementsTotal || 0),
+        numtickets: Number(cashSession.numtickets || 0),
+        updatedAt: Date.now(),
+      }),
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar el acumulado local de caja:", e);
+  }
+}
+
+function clearCashRunningTotals(cajaId) {
+  const id = Number(cajaId || 0) || 0;
+  if (!id) return;
+
+  try {
+    localStorage.removeItem(getCashRunningTotalsStorageKey(id));
+  } catch {}
+}
+
+// Llamar junto a loadCashLedgerIntoSession en cualquier camino que recupere
+// una caja ya abierta -- usa el ultimo dato local bueno como punto de
+// partida en vez de 0, hasta que un recalculo real (con conexion) lo
+// confirme o corrija.
+function hydrateCashRunningTotalsIntoSession(cajaId) {
+  const saved = loadCashRunningTotals(cajaId);
+  if (!saved) return;
+
+  cashSession.cashSalesTotal = Number(saved.cashSalesTotal || 0);
+  cashSession.totalSales = Number(saved.totalSales || 0);
+  cashSession.cashMovementsTotal = Number(saved.cashMovementsTotal || 0);
+  if (saved.numtickets != null) {
+    cashSession.numtickets = Number(saved.numtickets || 0);
+  }
+}
+
 function appendPaymentsToCashLedger({
   cajaId,
   pagos,
@@ -23551,6 +23629,7 @@ async function maybeOpenCashOrRecover() {
           cashSession.open = true;
           pushCustomerState();
           loadCashLedgerIntoSession(cashSession.remoteCajaId);
+          hydrateCashRunningTotalsIntoSession(cashSession.remoteCajaId);
 
           await ensureTerminalAgentDefaults();
           renderMainUI();
@@ -23643,6 +23722,7 @@ async function maybeOpenCashOrRecover() {
           pushCustomerState();
           localStorage.setItem("tpv_remoteCajaId", String(pick.idcaja));
           loadCashLedgerIntoSession(cashSession.remoteCajaId);
+          hydrateCashRunningTotalsIntoSession(cashSession.remoteCajaId);
 
           await ensureTerminalAgentDefaults();
 
@@ -24633,6 +24713,12 @@ async function runCashCloseSummaryComputation({ applyToUI = true } = {}) {
     movimientosCaja.reduce((sum, m) => sum + (Number(m?.amount) || 0), 0),
   );
 
+  // Aprovecha este recalculo real (autoritativo, desde FacturaScripts) para
+  // refrescar tambien el espejo local -- asi queda al dia con el dato mas
+  // fiable posible cada vez que hay conexion, no solo con el acumulado en
+  // vivo de las ventas de este terminal.
+  persistCashRunningTotalsSnapshot();
+
   if (applyToUI) {
     renderCashCloseTotalMeta();
     renderPayMethodsSummary();
@@ -25444,6 +25530,7 @@ async function confirmCashOpening() {
   const idcaja = getCajaIdSafe();
   if (idcaja) {
     clearCashLedger(idcaja);
+    clearCashRunningTotals(idcaja);
     loadCashLedgerIntoSession(idcaja);
   }
 
@@ -27640,6 +27727,7 @@ window.cargarPantallaTPV = async function (idcaja, idtpv, caja) {
     } catch {}
 
     loadCashLedgerIntoSession(cashSession.remoteCajaId);
+    hydrateCashRunningTotalsIntoSession(cashSession.remoteCajaId);
 
     try {
       hideCashOpenDialog();
@@ -39374,6 +39462,11 @@ async function apiUpdateCajaAfterSale({ totalVenta, pagos }) {
 
   cashSession.cashSalesTotal =
     (Number(cashSession.cashSalesTotal) || 0) + contado;
+
+  // Espejo local ANTES de cualquier intento de red (ver comentario en
+  // persistCashRunningTotalsSnapshot) -- si lo que sigue falla o la app se
+  // cierra justo aqui, este acumulado ya queda a salvo.
+  persistCashRunningTotalsSnapshot();
 
   // 2) Calcula totalcaja esperado
   const opening = Number(cashSession.openingTotal || 0);
@@ -52679,6 +52772,7 @@ async function saveCashMovement() {
 
     const currentMov = Number(cashSession.cashMovementsTotal || 0);
     cashSession.cashMovementsTotal = currentMov + signedAmount;
+    persistCashRunningTotalsSnapshot();
 
     let fsOk = false;
 
