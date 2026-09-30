@@ -9445,7 +9445,27 @@ function applyMesasLayoutFromRemoteForInline(remoteLayout, force = false) {
       typeof localState.draftCartByTable === "object"
         ? localState.draftCartByTable
         : {};
-    if (
+
+    // Real (2026-09-30, feature "Mesas sin boton Guardar"): el carrito EN
+    // VIVO de la mesa que se esta viendo ahora mismo es MAS reciente que
+    // cualquier cosa en draftCartByTable -- ahi solo se vuelca al cambiar
+    // de mesa/vista (ver saveCurrentCartAsMesaDraft), asi que un producto
+    // recien anadido (sin aparcado ni borrador todavia, o con uno de los 2
+    // ya desactualizado) puede no estar reflejado ahi todavia. Reproducido
+    // en real: un guardado de layout (de esta mesa o de cualquier otra)
+    // respondiendo justo despues de anadir el primer producto a una mesa
+    // nueva borraba ese producto en silencio -- syncTpvCartWithSelectedMesa
+    // (mas abajo) no tenia de donde recuperarlo. El carrito en vivo, si lo
+    // hay, gana siempre sobre lo que hubiera guardado antes.
+    const liveCartBelongsToSelectedTable =
+      MESAS_INLINE_ACTIVE &&
+      MESAS_INLINE_VIEW === "transacciones" &&
+      Array.isArray(cart) &&
+      cart.length > 0;
+
+    if (liveCartBelongsToSelectedTable) {
+      merged.draftCartByTable[selectedUid] = cart.map((it) => ({ ...it }));
+    } else if (
       Object.prototype.hasOwnProperty.call(
         localDraftByTableForMerge,
         selectedUid,
@@ -9838,7 +9858,23 @@ function syncTpvCartWithSelectedMesa(opts = {}) {
     return;
   }
 
-  cart = [];
+  // El vinculo de esta mesa apunta a un ticket que ya no existe de verdad
+  // (borrado sin pasar por el flujo normal que limpia tableTicketMap, o una
+  // resurreccion/desincronizacion vieja) -- tratarlo igual que "sin ticket"
+  // en vez de vaciar a ciegas: si hay un borrador o un carrito en vivo para
+  // esta mesa, no se pierden solo porque el vinculo estuviera obsoleto.
+  // Real (2026-09-30): encontrado con un vinculo fantasma real en la mesa de
+  // pruebas de demo.
+  if (state.tableTicketMap && state.tableTicketMap[uid] !== undefined) {
+    delete state.tableTicketMap[uid];
+    saveMesasTablesStateForInline(state);
+  }
+
+  const draftItemsForOrphan = Array.isArray(draftByTable?.[uid])
+    ? draftByTable[uid]
+    : [];
+
+  cart = hasDraftForUid ? draftItemsForOrphan.map((it) => ({ ...it })) : [];
   setCurrentParkedTicketIndex(null);
   renderCart();
   refreshParkButtonUI?.();
@@ -40665,11 +40701,37 @@ function refreshPayAndPreprintLayout() {
   }
 }
 
-async function runMesasAutoSaveIfNeeded() {
+// Peticion real de cliente vía Sergi (2026-09-30): "no deberia hacer falta
+// pulsar Guardar nunca en Mesas". El autoguardado silencioso ya existia,
+// pero solo para ACTUALIZAR un pedido que ya estuviera aparcado -- una mesa
+// nueva (todavia sin nada guardado) no disparaba nada hasta pulsar "Guardar"
+// a mano. Este helper decide si hace falta autoguardar en cualquiera de los
+// 2 casos (actualizar uno ya aparcado, o crear uno nuevo en silencio si hay
+// mesa seleccionada y el carrito tiene productos) -- se usa tanto para
+// decidir si programar el debounce como para la comprobacion final justo
+// antes de guardar de verdad.
+function getMesasAutoSaveIntent() {
+  if (!isMesasTransaccionesMode()) return null;
+
   const loaded = getCurrentLoadedParkedTicket();
-  if (!isMesasTransaccionesMode() || !loaded || loaded?.paid) return;
-  if (!hasVisibleCartLines() || !hasUnsavedChangesForLoadedParkedTicket(loaded))
-    return;
+  if (loaded?.paid) return null;
+
+  if (loaded) {
+    if (!hasVisibleCartLines() || !hasUnsavedChangesForLoadedParkedTicket(loaded))
+      return null;
+    return { loaded };
+  }
+
+  if (!hasVisibleCartLines()) return null;
+  const mesaScope = getSelectedMesaScopeContext();
+  if (!String(mesaScope?.uid || "").trim()) return null;
+
+  return { loaded: null };
+}
+
+async function runMesasAutoSaveIfNeeded() {
+  const intent = getMesasAutoSaveIntent();
+  if (!intent) return;
   if (!cashSession?.open || !currentTerminal) return;
 
   if (MESAS_AUTO_SAVE_IN_FLIGHT) {
@@ -40680,7 +40742,8 @@ async function runMesasAutoSaveIfNeeded() {
   MESAS_AUTO_SAVE_IN_FLIGHT = true;
   MESAS_AUTO_SAVE_RERUN = false;
   try {
-    await parkCurrentCart(loaded.name || "", loaded.obs || "", {
+    const loaded = intent.loaded;
+    await parkCurrentCart(loaded?.name || "", loaded?.obs || "", {
       mesaAlerts: normalizeMesaTicketAlerts(loaded?.mesaAlerts),
       openListAfterSave: false,
       silentAutoSave: true,
@@ -40705,10 +40768,7 @@ function scheduleMesasAutoSave() {
     MESAS_AUTO_SAVE_TIMER = null;
   }
 
-  const loaded = getCurrentLoadedParkedTicket();
-  if (!isMesasTransaccionesMode() || !loaded || loaded?.paid) return;
-  if (!hasVisibleCartLines() || !hasUnsavedChangesForLoadedParkedTicket(loaded))
-    return;
+  if (!getMesasAutoSaveIntent()) return;
 
   MESAS_AUTO_SAVE_TIMER = setTimeout(() => {
     MESAS_AUTO_SAVE_TIMER = null;

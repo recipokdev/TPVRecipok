@@ -8057,8 +8057,23 @@ mustContain(
 );
 mustContain(
   renderer,
-  'const localDraftByTableForMerge =\r\n      localState?.draftCartByTable &&\r\n      typeof localState.draftCartByTable === "object"\r\n        ? localState.draftCartByTable\r\n        : {};\r\n    if (\r\n      Object.prototype.hasOwnProperty.call(\r\n        localDraftByTableForMerge,\r\n        selectedUid,\r\n      )\r\n    ) {\r\n      const localDraft = Array.isArray(localDraftByTableForMerge[selectedUid])\r\n        ? localDraftByTableForMerge[selectedUid]\r\n        : [];\r\n      merged.draftCartByTable[selectedUid] = localDraft.map((it) => ({\r\n        ...it,\r\n      }));\r\n    } else {\r\n      delete merged.draftCartByTable[selectedUid];\r\n    }',
+  'const localDraftByTableForMerge =\r\n      localState?.draftCartByTable &&\r\n      typeof localState.draftCartByTable === "object"\r\n        ? localState.draftCartByTable\r\n        : {};',
   "applyMesasLayoutFromRemoteForInline's conflict-recovery (force=true) now ALWAYS keeps the currently-open table's own local draft cart, whether or not remote already has one -- reproduced live: a 412 conflict-recovery mid-edit could arrive with a STALE (non-empty, so not caught by the old 'only if remote is empty' check) remote draft from BEFORE the cashier's latest addition, silently overwriting the live cart back down and permanently discarding the item just added",
+);
+mustContain(
+  renderer,
+  '} else if (\r\n      Object.prototype.hasOwnProperty.call(\r\n        localDraftByTableForMerge,\r\n        selectedUid,\r\n      )\r\n    ) {\r\n      const localDraft = Array.isArray(localDraftByTableForMerge[selectedUid])\r\n        ? localDraftByTableForMerge[selectedUid]\r\n        : [];\r\n      merged.draftCartByTable[selectedUid] = localDraft.map((it) => ({\r\n        ...it,\r\n      }));\r\n    } else {\r\n      delete merged.draftCartByTable[selectedUid];\r\n    }',
+  "Falls back to the stored local draft when the live cart doesn't apply (different table/view), and only clears the merged draft entry when neither the live cart nor a stored draft exist for this table",
+);
+mustContain(
+  renderer,
+  "const liveCartBelongsToSelectedTable =\r\n      MESAS_INLINE_ACTIVE &&\r\n      MESAS_INLINE_VIEW === \"transacciones\" &&\r\n      Array.isArray(cart) &&\r\n      cart.length > 0;",
+  "New 2026-09-30 fix (feature 'Mesas sin boton Guardar'): the LIVE cart of the table currently being viewed beats even the stored local draft -- reproduced live: a mesas-layout save responding right after adding the first product to a brand-new table (no ticket, no draft yet) silently wiped that product because draftCartByTable had nothing to fall back to; the live cart is now captured into the merge before that can happen",
+);
+mustContain(
+  renderer,
+  "if (liveCartBelongsToSelectedTable) {\r\n      merged.draftCartByTable[selectedUid] = cart.map((it) => ({ ...it }));\r\n    } else if (",
+  "The live-cart-wins branch is checked first, before falling back to the stored draft or clearing it",
 );
 
 console.log(
@@ -8354,6 +8369,45 @@ mustContain(
   renderer,
   'applyLogoAspectAwareMaxHeight(logoEl, "28mm");',
   "Wired into factura_print.html's logo too (used for both the printed invoice and the emailed one)",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-30 Mesas autosave-on-first-item ('sin boton Guardar', real request via Sergi)\n",
+);
+
+// El autoguardado silencioso ya existia, pero solo para ACTUALIZAR un pedido
+// YA aparcado -- una mesa nueva (sin nada guardado todavia) no disparaba
+// nada hasta pulsar "Guardar" a mano. Sergi pidio explicitamente que nunca
+// hiciera falta pulsarlo; dejar el boton como atajo manual opcional.
+mustContain(
+  renderer,
+  "function getMesasAutoSaveIntent() {\r\n  if (!isMesasTransaccionesMode()) return null;",
+  "New helper decides whether Mesas needs to autosave in either of 2 cases now: updating an already-parked order, OR silently creating a brand-new one when a table is selected and the cart has items but nothing is parked yet",
+);
+mustContain(
+  renderer,
+  "if (!hasVisibleCartLines()) return null;\r\n  const mesaScope = getSelectedMesaScopeContext();\r\n  if (!String(mesaScope?.uid || \"\").trim()) return null;\r\n\r\n  return { loaded: null };",
+  "The 'create' intent only fires when a real table is selected and the cart genuinely has items -- parkCurrentCart itself already knows how to create vs. update based on whether a ticket is currently loaded, so no new save path was needed, just triggering it earlier",
+);
+mustContain(
+  renderer,
+  "function scheduleMesasAutoSave() {\r\n  if (MESAS_AUTO_SAVE_TIMER) {\r\n    clearTimeout(MESAS_AUTO_SAVE_TIMER);\r\n    MESAS_AUTO_SAVE_TIMER = null;\r\n  }\r\n\r\n  if (!getMesasAutoSaveIntent()) return;",
+  "scheduleMesasAutoSave() (called from renderCart on every cart mutation) now schedules the debounced autosave for both the update and the new create case, through the same shared intent check",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-09-30 Mesas cart silently wiped right after adding the first item (found while verifying the fix above)\n",
+);
+
+mustContain(
+  renderer,
+  "const liveCartBelongsToSelectedTable =\r\n      MESAS_INLINE_ACTIVE &&\r\n      MESAS_INLINE_VIEW === \"transacciones\" &&\r\n      Array.isArray(cart) &&\r\n      cart.length > 0;",
+  "applyMesasLayoutFromRemoteForInline() now treats the LIVE cart of the table being viewed as more authoritative than the stored draftCartByTable -- reproduced live: a mesas-layout save responding right after adding the very first product to a brand-new table (no ticket, no draft captured yet) silently wiped that product because there was nothing in the stored draft to fall back to. Verified live end-to-end against demo: the item survives, gets created as a real parked ticket, confirmed persisted server-side, and even survives switching to a different table before the 700ms autosave debounce fires (self-heals on return)",
+);
+mustContain(
+  renderer,
+  "// El vinculo de esta mesa apunta a un ticket que ya no existe de verdad\r\n  // (borrado sin pasar por el flujo normal que limpia tableTicketMap, o una\r\n  // resurreccion/desincronizacion vieja) -- tratarlo igual que \"sin ticket\"\r\n  // en vez de vaciar a ciegas",
+  "syncTpvCartWithSelectedMesa()'s other blind-wipe path (an orphaned tableTicketMap entry pointing to a ticket that no longer really exists) now falls back to the stored draft (or empty) instead of unconditionally wiping -- found live via a genuine ghost link accumulated in demo's shared mesas layout; it also self-heals by deleting the stale mapping once detected",
 );
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
