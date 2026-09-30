@@ -8331,6 +8331,31 @@ mustContain(
   "showTerminalOverlay()'s single-agent bypass (skip straight to dispatchSessionReady) is disabled when that one agent needs an unverified PIN",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-30 small printed logo for square/portrait logos (real client request via Sergi: 'el logo sale muy pequeño'; root cause confirmed live with demo's real 1024x1024 logo -- the 3 print templates cap the logo with a WIDE box (max-width much bigger than max-height), so a square/portrait logo hits the height ceiling long before using the available width)\n",
+);
+
+mustContain(
+  renderer,
+  "async function ensureCompanyLogoAspectRatio() {",
+  "New helper computes and caches the real logo's aspect ratio once, by actually loading the image -- the 3 print templates are built as an in-memory DOMParser document that never loads <img> tags for real, so this can't be computed there",
+);
+mustContain(
+  renderer,
+  "function applyLogoAspectAwareMaxHeight(logoEl, tallMaxHeight) {\r\n  if (!logoEl || !companyLogoAspectRatio) return;\r\n  if (companyLogoAspectRatio < 1.8) {\r\n    logoEl.style.maxHeight = tallMaxHeight;\r\n  }\r\n}",
+  "Only bumps max-height for a square/portrait logo (below the wide-logo threshold) -- verified live: a real wide 4:1 logo is never touched, a square (demo's real 1024x1024) and a portrait (1:2) logo both get bumped",
+);
+mustContain(
+  renderer,
+  'applyLogoAspectAwareMaxHeight(logoEl, "30mm");',
+  "Wired into ticket_print.html and cash_close_print.html's logo (both share the same 60mm/18mm box) -- verified live: a real DOMParser build of ticket_print.html with demo's actual square logo ends up with maxHeight '30mm' (up from 18mm) while keeping maxWidth '60mm' untouched",
+);
+mustContain(
+  renderer,
+  'applyLogoAspectAwareMaxHeight(logoEl, "28mm");',
+  "Wired into factura_print.html's logo too (used for both the printed invoice and the emailed one)",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

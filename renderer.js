@@ -28352,6 +28352,9 @@ window.cargarPantallaTPV = async function (idcaja, idtpv, caja) {
 
 let companyInfo = null; // ya lo tienes
 let companyLogoUrl = ""; // ✅ GLOBAL
+// naturalWidth/naturalHeight del logo (cacheado tras cargarlo una vez) --
+// null = aun sin calcular, ver ensureCompanyLogoAspectRatio.
+let companyLogoAspectRatio = null;
 
 async function loadCompanyLogoUrl() {
   try {
@@ -28372,12 +28375,58 @@ async function loadCompanyLogoUrl() {
     const base = (filesBaseUrl || "").replace(/\/+$/, "");
     const path = String(rel).replace(/^\/+/, "");
 
-    companyLogoUrl = `${base}/${path}`;
+    const nextUrl = `${base}/${path}`;
+    if (nextUrl !== companyLogoUrl) companyLogoAspectRatio = null;
+    companyLogoUrl = nextUrl;
     return companyLogoUrl;
   } catch (e) {
     console.warn("No se pudo cargar logo:", e);
     companyLogoUrl = "";
+    companyLogoAspectRatio = null;
     return "";
+  }
+}
+
+// Peticion real de cliente vía Sergi (2026-09-30): "el logo sale muy
+// pequeño" al imprimir. Los 3 impresos (ticket/factura/cierre de caja)
+// limitan el logo con una caja pensada para un logotipo ANCHO (mucho mas
+// ancha que alta) -- un logo cuadrado o vertical (muy habitual, p.ej. un
+// simple isotipo/icono) queda entonces atado por el limite de ALTO mucho
+// antes de aprovechar el ancho disponible, e imprime pequeño aunque el
+// propio fichero de imagen sea de buena resolucion (confirmado con el logo
+// real de demo: 1024x1024 -> solo 18mm de alto usados de los 60mm de ancho
+// disponibles). Se calcula una vez y se cachea -- los 3mm de las plantillas
+// de impresion son DOMParser en memoria, nunca cargan la imagen de verdad,
+// asi que esto no puede calcularse alli mismo.
+async function ensureCompanyLogoAspectRatio() {
+  if (companyLogoAspectRatio !== null) return companyLogoAspectRatio;
+  if (!companyLogoUrl) return null;
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      companyLogoAspectRatio =
+        img.naturalWidth > 0 && img.naturalHeight > 0
+          ? img.naturalWidth / img.naturalHeight
+          : null;
+      resolve(companyLogoAspectRatio);
+    };
+    img.onerror = () => {
+      companyLogoAspectRatio = null;
+      resolve(null);
+    };
+    img.src = companyLogoUrl;
+  });
+}
+
+// Si el logo es cuadrado o vertical (por debajo del umbral, lejos de un
+// logotipo ancho tipico), se le da mas alto para que pueda crecer hasta
+// aprovechar el ancho ya disponible en la plantilla -- un logo ancho de
+// verdad no se ve afectado (sigue atado por el ancho igual que antes).
+function applyLogoAspectAwareMaxHeight(logoEl, tallMaxHeight) {
+  if (!logoEl || !companyLogoAspectRatio) return;
+  if (companyLogoAspectRatio < 1.8) {
+    logoEl.style.maxHeight = tallMaxHeight;
   }
 }
 
@@ -33373,6 +33422,8 @@ async function buildFacturaEmailHtml(ticket) {
   if (logoEl && companyLogoUrl) {
     logoEl.setAttribute("src", companyLogoUrl);
     logoEl.style.display = "inline-block";
+    await ensureCompanyLogoAspectRatio();
+    applyLogoAspectAwareMaxHeight(logoEl, "28mm");
   }
   setText(doc, "companyShortName", emp?.nombrecorto || "—");
   setText(doc, "companyLegalName", emp?.nombre || "");
@@ -34314,6 +34365,8 @@ async function printTicket(ticket) {
     if (logoEl && logoUrl) {
       logoEl.setAttribute("src", logoUrl);
       logoEl.style.display = "inline-block";
+      await ensureCompanyLogoAspectRatio();
+      applyLogoAspectAwareMaxHeight(logoEl, "30mm");
     }
     setText(doc, "companyShortName", emp?.nombrecorto || "—");
     setText(doc, "companyLegalName", emp?.nombre || "");
@@ -34521,6 +34574,8 @@ async function printCashCloseReport(report) {
     if (logoEl && companyLogoUrl) {
       logoEl.setAttribute("src", companyLogoUrl);
       logoEl.style.display = "inline-block";
+      await ensureCompanyLogoAspectRatio();
+      applyLogoAspectAwareMaxHeight(logoEl, "30mm");
     }
 
     _setText("companyShortName", report.companyShortName || "");
