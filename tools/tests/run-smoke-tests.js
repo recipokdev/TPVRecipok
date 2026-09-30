@@ -8131,6 +8131,16 @@ mustContain(
   "A genuinely new caja (confirmCashOpening) clears this mirror too, right alongside the existing payment-ledger cleanup -- a fresh caja never inherits stale numbers",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-30 'Total Esperado Caja' still stale after the previous cash-close fix (found by opening the REAL close dialog via a real button click, not just calling the underlying functions: cashIncome showed the correct recomputed value but 'Total Esperado Caja' still showed just the opening amount, as if cashIncome were 0)\n",
+);
+
+mustContain(
+  renderer,
+  "cashSession.expectedCashFS = roundMoney2(\r\n    Number(cashSession.openingTotal || 0) +\r\n      cashSession.cashSalesTotal +\r\n      cashSession.cashMovementsTotal,\r\n  );",
+  "runCashCloseSummaryComputation now also recomputes expectedCashFS after fixing up cashSalesTotal/cashMovementsTotal -- applyRemoteCajaToSession (earlier in the same function) had already computed and cached expectedCashFS using the PRE-fix values, and updateCloseSummary prefers that cached value over recomputing it, so 'Total Esperado Caja' kept showing just the opening amount even though 'Cobros Efectivo' right next to it already showed the correct number",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

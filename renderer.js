@@ -24713,6 +24713,23 @@ async function runCashCloseSummaryComputation({ applyToUI = true } = {}) {
     movimientosCaja.reduce((sum, m) => sum + (Number(m?.amount) || 0), 0),
   );
 
+  // Real (revision 2026-09-30, mismo dia): applyRemoteCajaToSession (arriba)
+  // ya habia calculado y dejado fijo cashSession.expectedCashFS usando
+  // cashSession.cashSalesTotal/cashMovementsTotal de ANTES de este mismo
+  // recalculo -- es decir, con el acumulado en memoria todavia sin
+  // actualizar (0 tras un reinicio). updateCloseSummary usa ese
+  // expectedCashFS ya cacheado con preferencia sobre recalcularlo, asi que
+  // "Total Esperado Caja" se quedaba mostrando solo el dinero inicial
+  // aunque "Cobros Efectivo" ya saliera bien -- confirmado abriendo el
+  // dialogo real tras forzar un reinicio. Se recalcula aqui, con los
+  // totales YA corregidos de arriba, para que quede consistente con el
+  // resto de la pantalla.
+  cashSession.expectedCashFS = roundMoney2(
+    Number(cashSession.openingTotal || 0) +
+      cashSession.cashSalesTotal +
+      cashSession.cashMovementsTotal,
+  );
+
   // Aprovecha este recalculo real (autoritativo, desde FacturaScripts) para
   // refrescar tambien el espejo local -- asi queda al dia con el dato mas
   // fiable posible cada vez que hay conexion, no solo con el acumulado en
