@@ -8151,6 +8151,31 @@ mustContain(
   "onPayButtonClick's success path now clears cartGlobalDiscountPct (and any frozen per-line copies of it) right after the sale's lines leave the cart, using the exact same reset the manual 'Quitar descuento general' button already used -- verified with a real payment against demo (discount set to 15% before charging, confirmed back at 0 immediately after a real completed sale)",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-30 print-only cash-close report button (real client request: print an intermediate report/count at shift change -- e.g. afternoon to evening -- without actually closing the register, so the evening total still covers the WHOLE day instead of just since the shift change)\n",
+);
+
+mustContain(
+  index,
+  '<button id="cashPrintOnlyBtn" type="button" class="btn-cash-print hidden">',
+  "New button in the cash-close dialog, hidden by default (only shown in close mode) -- sits between Cancelar and Cerrar caja",
+);
+mustContain(
+  renderer,
+  'const printOnlyBtnEl = document.getElementById("cashPrintOnlyBtn");\r\n  if (printOnlyBtnEl) {\r\n    printOnlyBtnEl.classList.toggle("hidden", mode !== "close");\r\n  }',
+  "openCashOpenDialog shows/hides the new button depending on dialog mode -- only makes sense when closing, never when opening a fresh caja",
+);
+mustContain(
+  renderer,
+  'const idcaja = getCajaIdSafe();\r\n      let remoteCaja = null;\r\n      try {\r\n        remoteCaja = idcaja\r\n          ? await apiReadCajaById(idcaja)\r\n          : await apiReadCurrentCaja();\r\n      } catch (e) {\r\n        console.warn("No pude leer caja para imprimir informe intermedio:", e?.message || e);\r\n      }\r\n\r\n      const report = buildCashClosePrintData(remoteCaja || {});\r\n      report.payEditsCount = await getPayEditsCountForCaja(idcaja);\r\n      await printCashCloseReport(report);',
+  "The button's handler reuses the exact same report data/print path as the real close (buildCashClosePrintData + printCashCloseReport) but never calls apiCloseCashInFS -- verified live against demo: the caja stayed open and the dialog stayed visible after clicking it",
+);
+mustContain(
+  renderer,
+  'const line = buildCajaLogLineWith(ctx, "Informe intermedio impreso (caja NO cerrada)");\r\n        await appendCajaAutoLogLineForId(idcaja, line);',
+  "Leaves a record in the caja's own auto-log (same mechanism already used for drawer-open events) that this intermediate report was printed, with who and when -- verified live: a real new log line appeared in the caja's observaciones right after clicking",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

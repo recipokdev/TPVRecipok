@@ -24968,6 +24968,14 @@ function openCashOpenDialog(mode = "open") {
     cashOpenOkBtn.textContent = mode === "open" ? "Abrir caja" : "Cerrar caja";
   }
 
+  // Peticion real de cliente (2026-09-30): poder sacar un informe/conteo
+  // intermedio (p.ej. al cambiar de turno tarde->noche) sin cerrar la caja
+  // de verdad -- solo tiene sentido en modo cierre, nunca en apertura.
+  const printOnlyBtnEl = document.getElementById("cashPrintOnlyBtn");
+  if (printOnlyBtnEl) {
+    printOnlyBtnEl.classList.toggle("hidden", mode !== "close");
+  }
+
   if (cashCloseSummary) {
     cashCloseSummary.style.display = mode === "close" ? "block" : "none";
   }
@@ -26352,6 +26360,61 @@ if (cashOpenCancelBtn) {
     if (terminalNameEl)
       terminalNameEl.textContent = currentTerminal?.name || "---";
     if (agentNameEl) agentNameEl.textContent = currentAgent?.name || "---";
+  };
+}
+
+// Peticion real de cliente (2026-09-30): en negocios que solo cierran caja
+// una vez al final del dia pero quieren un informe/conteo intermedio al
+// cambiar de turno (p.ej. tarde->noche), sin cerrar la caja de verdad --
+// por la noche siguen viendo el total del DIA COMPLETO, no solo lo vendido
+// desde el cambio de turno. Reutiliza exactamente los mismos datos y el
+// mismo informe que ya usa el cierre real (buildCashClosePrintData +
+// printCashCloseReport), simplemente sin llamar a apiCloseCashInFS ni tocar
+// el estado de la caja. Deja constancia en el propio registro de la caja
+// (mismo mecanismo que ya usan los avisos de apertura de cajon) de que se
+// saco este informe, con quien y cuando -- se vera en el cierre real, igual
+// que el resto del log automatico.
+const cashPrintOnlyBtn = document.getElementById("cashPrintOnlyBtn");
+if (cashPrintOnlyBtn) {
+  cashPrintOnlyBtn.onclick = async () => {
+    if (cashDialogMode !== "close") return;
+    if (cashPrintOnlyBtn.disabled) return;
+
+    cashPrintOnlyBtn.disabled = true;
+    try {
+      if (cashCloseSummaryLoading) {
+        await cashCloseSummaryReadyPromise.catch(() => {});
+      }
+
+      const idcaja = getCajaIdSafe();
+      let remoteCaja = null;
+      try {
+        remoteCaja = idcaja
+          ? await apiReadCajaById(idcaja)
+          : await apiReadCurrentCaja();
+      } catch (e) {
+        console.warn("No pude leer caja para imprimir informe intermedio:", e?.message || e);
+      }
+
+      const report = buildCashClosePrintData(remoteCaja || {});
+      report.payEditsCount = await getPayEditsCountForCaja(idcaja);
+      await printCashCloseReport(report);
+
+      try {
+        const ctx = getLogCtx();
+        const line = buildCajaLogLineWith(ctx, "Informe intermedio impreso (caja NO cerrada)");
+        await appendCajaAutoLogLineForId(idcaja, line);
+      } catch (e) {
+        console.warn("No se pudo registrar el informe intermedio en el log de caja:", e?.message || e);
+      }
+
+      toast("Informe impreso. La caja sigue abierta.", "ok", "Caja");
+    } catch (e) {
+      console.warn("No se pudo imprimir el informe intermedio:", e?.message || e);
+      toast("No se pudo imprimir el informe.", "err", "Caja");
+    } finally {
+      cashPrintOnlyBtn.disabled = false;
+    }
   };
 }
 

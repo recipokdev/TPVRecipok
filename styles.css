@@ -4408,6 +4408,20 @@ textarea:focus {
   cursor: pointer;
 }
 
+.btn-cash-print {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid #8a8a8a;
+  background: #fff;
+  color: #333;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-cash-print.hidden {
+  display: none;
+}
+
 /* Responsive caja */
 @media (max-width: 900px) {
   .cash-grid-page {
