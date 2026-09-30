@@ -38443,6 +38443,16 @@ async function onPayButtonClick() {
     }
 
     removeCartLinesByIdSet(saleLineIds);
+
+    // El siguiente ticket debe arrancar sin el descuento general que se
+    // pudiera haber aplicado para cobrar este (peticion real de cliente,
+    // 2026-09-30): igual que el cliente, es un ajuste pensado para ESTE
+    // cobro, no algo que deba quedarse puesto por defecto para el siguiente.
+    // Mismo reset que ya hace el boton manual "Quitar descuento general".
+    if (cartGlobalDiscountPct > 0) {
+      cartGlobalDiscountPct = 0;
+      clearFrozenGlobalDiscountFromCartLines(cart);
+    }
     renderCart();
 
     // El siguiente ticket debe arrancar con el cliente por defecto, no con

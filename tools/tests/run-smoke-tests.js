@@ -8141,6 +8141,16 @@ mustContain(
   "runCashCloseSummaryComputation now also recomputes expectedCashFS after fixing up cashSalesTotal/cashMovementsTotal -- applyRemoteCajaToSession (earlier in the same function) had already computed and cached expectedCashFS using the PRE-fix values, and updateCloseSummary prefers that cached value over recomputing it, so 'Total Esperado Caja' kept showing just the opening amount even though 'Cobros Efectivo' right next to it already showed the correct number",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-30 global discount left applied for the next customer after checkout (real client request: after charging a customer, reset to the default customer AND clear any discount applied for that sale -- the customer reset already existed, but the cart-level global discount percentage lives in its own module-level variable, independent of the cart array, so clearing the cart after a sale never touched it)\n",
+);
+
+mustContain(
+  renderer,
+  'removeCartLinesByIdSet(saleLineIds);\r\n\r\n    // El siguiente ticket debe arrancar sin el descuento general que se\r\n    // pudiera haber aplicado para cobrar este (peticion real de cliente,\r\n    // 2026-09-30): igual que el cliente, es un ajuste pensado para ESTE\r\n    // cobro, no algo que deba quedarse puesto por defecto para el siguiente.\r\n    // Mismo reset que ya hace el boton manual "Quitar descuento general".\r\n    if (cartGlobalDiscountPct > 0) {\r\n      cartGlobalDiscountPct = 0;\r\n      clearFrozenGlobalDiscountFromCartLines(cart);\r\n    }',
+  "onPayButtonClick's success path now clears cartGlobalDiscountPct (and any frozen per-line copies of it) right after the sale's lines leave the cart, using the exact same reset the manual 'Quitar descuento general' button already used -- verified with a real payment against demo (discount set to 15% before charging, confirmed back at 0 immediately after a real completed sale)",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
