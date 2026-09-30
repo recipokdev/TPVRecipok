@@ -622,6 +622,9 @@ const productSortModeSelect = document.getElementById("productSortModeSelect");
 const parkedCustomerResetModeSelect = document.getElementById(
   "parkedCustomerResetModeSelect",
 );
+const productDisplayFieldModeSelect = document.getElementById(
+  "productDisplayFieldModeSelect",
+);
 const productReorderModeToggle = document.getElementById(
   "productReorderModeToggle",
 );
@@ -2130,6 +2133,7 @@ const OPTIONS_CART_PANEL_WIDTH_KEY = "ui.cartPanelWidthPx";
 const OPTIONS_SAFE_TRAINING_MODE_KEY = "runtime.safeTrainingMode";
 const OPTIONS_VIRTUAL_KEYBOARD_ENABLED_KEY = "ui.virtualKeyboardEnabled";
 const OPTIONS_PARKED_CUSTOMER_RESET_MODE_KEY = "ui.parkedCustomerResetMode";
+const OPTIONS_PRODUCT_DISPLAY_FIELD_MODE_KEY = "ui.productDisplayFieldMode";
 const OPTIONS_DISCOUNT_QUICK_PERCENTS_KEY = "ui.discountQuickPercents";
 const DISCOUNT_QUICK_PERCENTS_MAX = 5;
 const OPTIONS_AUTO_PRINT_TICKET_ON_PARK_KEY = "ui.autoPrintTicketOnPark";
@@ -2141,6 +2145,7 @@ let enableProductStockEdition = false;
 let allowCloseWithParkedTickets = false;
 let virtualKeyboardEnabled = true;
 let parkedCustomerResetMode = "previous";
+let productDisplayFieldMode = "both";
 // Lista ya "compactada" (sin huecos ni repetidos) que se usa de verdad para
 // pintar los botones del teclado de descuento -- ver
 // computeActiveDiscountQuickPercents().
@@ -4932,6 +4937,79 @@ function bindParkedCustomerResetModeOnce() {
   parkedCustomerResetModeSelect.addEventListener("change", async () => {
     await saveParkedCustomerResetModeSetting(parkedCustomerResetModeSelect.value);
   });
+}
+
+// Peticion real de cliente (2026-09-30): cada tienda usa "referencia" y
+// "descripcion" a su manera (una tienda tiene en referencia un codigo tipo
+// "111111" y el nombre real en descripcion; otra al reves, con descripcion
+// vacia). Antes esto dependia siempre del mismo fallback implicito
+// (descripcion, y si esta vacia, referencia) -- ahora es una eleccion
+// explicita por instalacion, con "ambas" (ese mismo fallback de siempre)
+// como opcion por defecto para no cambiar nada a quien no toque esto.
+function normalizeProductDisplayFieldMode(value) {
+  const v = String(value || "").trim().toLowerCase();
+  if (v === "descripcion" || v === "referencia") return v;
+  return "both";
+}
+
+async function loadProductDisplayFieldModeSetting() {
+  let mode = "both";
+  try {
+    mode = normalizeProductDisplayFieldMode(
+      await window.TPV_CFG?.get?.(OPTIONS_PRODUCT_DISPLAY_FIELD_MODE_KEY),
+    );
+  } catch {
+    mode = "both";
+  }
+
+  productDisplayFieldMode = mode;
+  if (productDisplayFieldModeSelect) {
+    productDisplayFieldModeSelect.value = mode;
+  }
+}
+
+async function saveProductDisplayFieldModeSetting(mode) {
+  productDisplayFieldMode = normalizeProductDisplayFieldMode(mode);
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_PRODUCT_DISPLAY_FIELD_MODE_KEY,
+      productDisplayFieldMode,
+    );
+  } catch (e) {
+    console.warn("No se pudo guardar el modo de texto de producto:", e);
+  }
+
+  // Cambiar esto afecta a como se construye product.name/secondaryName al
+  // cargar el catalogo -- recargar es la forma mas simple y segura de que
+  // toda la app (grid, carrito, tickets...) quede consistente ya mismo, sin
+  // tener que ir tocando cada sitio que lee product.name por separado.
+  await loadDataFromApi({ refresh: true }).catch(() => {});
+  updateRenderedProductStocks?.();
+  renderProducts?.();
+}
+
+let productDisplayFieldModeBound = false;
+function bindProductDisplayFieldModeOnce() {
+  if (productDisplayFieldModeBound) return;
+  productDisplayFieldModeBound = true;
+
+  if (!productDisplayFieldModeSelect) return;
+
+  productDisplayFieldModeSelect.addEventListener("change", async () => {
+    await saveProductDisplayFieldModeSetting(productDisplayFieldModeSelect.value);
+  });
+}
+
+// Aplica el modo elegido a un nombre/referencia ya calculados (mismo
+// fallback de siempre si el campo elegido especificamente esta vacio, para
+// no dejar nunca una tarjeta en blanco).
+function applyProductDisplayFieldMode(descripcionText, referenciaText) {
+  const desc = String(descripcionText || "").trim();
+  const ref = String(referenciaText || "").trim();
+
+  if (productDisplayFieldMode === "descripcion") return desc || ref;
+  if (productDisplayFieldMode === "referencia") return ref || desc;
+  return desc || ref;
 }
 
 // Valor de UN campo de Opciones -> valor real de ese hueco, o null si el
@@ -11698,6 +11776,7 @@ async function runBootFlow() {
     await loadPrintCajaDrawerOpenLogsToggle?.();
     await loadVirtualKeyboardToggle?.();
     await loadParkedCustomerResetModeSetting?.();
+    await loadProductDisplayFieldModeSetting?.();
     await loadSafeTrainingModeToggle?.();
     await loadDiscountQuickPercentsSetting?.();
 
@@ -27613,7 +27692,7 @@ async function loadDataFromApi(opts = {}) {
         if (variantsByProduct[idProd]) return;
         if (p.bloqueado || isFalseFlag(p.sevende)) return;
 
-        const name = String(p.descripcion ?? p.referencia ?? "").trim();
+        const name = applyProductDisplayFieldMode(p.descripcion, p.referencia);
         if (!name || name === "-") return;
 
         const price = Number(p.precio ?? 0);
@@ -29324,6 +29403,7 @@ async function openOptions() {
   // nada), asi que van todos antes, sin esperar a nada.
   bindVirtualKeyboardToggleOnce();
   bindParkedCustomerResetModeOnce();
+  bindProductDisplayFieldModeOnce();
   bindDiscountQuickPctsSaveOnce();
   bindCustomerDisplayToggleOnce();
   bindCustomerDisplayPickerOnce();
@@ -29374,6 +29454,7 @@ async function openOptions() {
     loadInfoBarVisibilitySettings?.(),
     loadVirtualKeyboardToggle(),
     loadParkedCustomerResetModeSetting(),
+    loadProductDisplayFieldModeSetting(),
     loadDiscountQuickPercentsSetting(),
     loadCustomerDisplayToggle(),
     loadProductStockToggle(),
@@ -50731,6 +50812,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   await loadProductManualOrderConfig?.();
   await loadProductSortModeSetting?.();
   await loadProductReorderModeSetting?.();
+  await loadProductDisplayFieldModeSetting?.();
   await loadInfoBarVisibilitySettings?.();
   setTpvLoadingState(true);
   renderCart();

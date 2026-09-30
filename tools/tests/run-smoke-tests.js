@@ -8201,6 +8201,51 @@ mustContain(
   "Same guard mirrored in the 'create new parked ticket' tail -- verified live against demo: toggle off prints nothing; toggle on prints on explicit create AND update (TPV normal and Mesas), with the correct line/total count each time; a silent autosave right after adding another item to an already-parked Mesas ticket correctly printed nothing",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-30 product-display-field-mode (nombre/descripcion)\n",
+);
+
+// Feedback de cliente: distintas tiendas usan "referencia" y "descripcion" con
+// convenciones distintas (una usa referencia como codigo interno y
+// descripcion como el nombre real que quiere mostrar; otra al reves). Nueva
+// opcion en Opciones -> Productos para elegir que campo mostrar, en vez de
+// depender siempre del fallback implicito de siempre.
+mustContain(
+  index,
+  'id="productDisplayFieldModeSelect"',
+  "Product-display-field-mode select present in Options HTML",
+);
+mustContain(
+  index,
+  '<option value="both">Ambas (como ahora)</option>',
+  "Product-display-field-mode select keeps the old fallback behavior as its default option",
+);
+mustContain(
+  renderer,
+  'function applyProductDisplayFieldMode(descripcionText, referenciaText) {\r\n  const desc = String(descripcionText || "").trim();\r\n  const ref = String(referenciaText || "").trim();\r\n\r\n  if (productDisplayFieldMode === "descripcion") return desc || ref;\r\n  if (productDisplayFieldMode === "referencia") return ref || desc;\r\n  return desc || ref;\r\n}',
+  "applyProductDisplayFieldMode() always falls back to the other field when the chosen one is empty, in every mode -- verified live (pure-function check against demo) for all 3 modes and both empty-field cases",
+);
+mustContain(
+  renderer,
+  "const name = applyProductDisplayFieldMode(p.descripcion, p.referencia);",
+  "Non-variant product catalog building uses the new toggle instead of the old hardcoded descripcion-then-referencia fallback",
+);
+mustContain(
+  renderer,
+  "await loadProductDisplayFieldModeSetting?.();",
+  "Product-display-field-mode setting is loaded at boot before the initial catalog load",
+);
+mustContain(
+  renderer,
+  "loadProductDisplayFieldModeSetting(),",
+  "openOptions() loads the product-display-field-mode select",
+);
+mustContain(
+  renderer,
+  "bindProductDisplayFieldModeOnce();",
+  "openOptions() binds the product-display-field-mode select",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

@@ -3080,9 +3080,26 @@
                 class="opt-preview-item"
                 data-toggle-id="productAddonsEnabledToggle"
                 >añadidos de producto</span
-              >, orden y tamaño de tarjetas
+              >, orden y tamaño de tarjetas, texto de la tarjeta
             </div>
             <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Texto en la tarjeta de producto</div>
+                  <div class="opt-row-sub">
+                    Qué mostrar en cada producto: la descripción de
+                    FacturaScripts, la referencia, o ambas (si falta una, se
+                    usa la otra — igual que ahora).
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <select id="productDisplayFieldModeSelect" class="opt-select">
+                    <option value="both">Ambas (como ahora)</option>
+                    <option value="descripcion">Solo descripción</option>
+                    <option value="referencia">Solo referencia</option>
+                  </select>
+                </div>
+              </div>
               <div class="opt-row">
                 <div class="opt-row-txt">
                   <div class="opt-row-title">
