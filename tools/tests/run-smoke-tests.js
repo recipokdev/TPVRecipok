@@ -8291,13 +8291,23 @@ mustContain(
 );
 mustContain(
   renderer,
-  "setAdminFlag(true, \"agent-pin\");",
-  "A successfully verified agent PIN grants the same admin flag as an admin USER login (all Options become visible) -- additive only, never revokes it",
+  "recomputeAdminAccessForCurrentAgent();\r\n    // Ahora SI se puede persistir -- el click que selecciono este agente (en\r\n    // renderAgentButtonsOverlay/renderMainAgentBar) lo dejo deliberadamente\r\n    // sin guardar hasta este momento exacto (ver persistSelectedAgentCodeIfSafe).\r\n    persistSelectedAgentCodeIfSafe(currentAgent.codagente);",
+  "Real bug found in end-to-end live testing (real demo agent 'test11'/codagente 11, real PIN from the CRM session): the first version verified the PIN and granted admin but never persisted auth.codagente, so the newly-confirmed agent silently reverted on the next app restart, forcing the PIN to be re-entered every single time. Fixed by persisting right after a successful verification, exactly once the gate that was blocking persistSelectedAgentCodeIfSafe no longer applies",
 );
 mustContain(
   renderer,
-  'setAdminFlag(true, "agent-pin");\r\n    // Ahora SI se puede persistir -- el click que selecciono este agente (en\r\n    // renderAgentButtonsOverlay/renderMainAgentBar) lo dejo deliberadamente\r\n    // sin guardar hasta este momento exacto (ver persistSelectedAgentCodeIfSafe).\r\n    persistSelectedAgentCodeIfSafe(currentAgent.codagente);',
-  "Real bug found in end-to-end live testing (real demo agent 'test11'/codagente 11, real PIN from the CRM session): the first version verified the PIN and granted admin but never persisted auth.codagente, so the newly-confirmed agent silently reverted on the next app restart, forcing the PIN to be re-entered every single time. Fixed by persisting right after a successful verification, exactly once the gate that was blocking persistSelectedAgentCodeIfSafe no longer applies",
+  "function recomputeAdminAccessForCurrentAgent() {",
+  "Unlike the logged-in USER's admin flag (fixed for the whole session), agent-granted admin access is dynamic: it only applies while that exact agent stays active. Explicit real-world request (Sergi, verified live against demo with the real test11/PIN 4455 agent): switching to a plain agent must hide the admin-only Options sections again, not just 'add' access permanently",
+);
+mustContain(
+  renderer,
+  "const shouldBeAdmin = !!window.TPV_STATE?.isAdminFromLogin || agentGrantsAdminNow;",
+  "The recomputed flag is (login-granted admin) OR (current agent is a verified PIN admin) -- a real admin USER login is never downgraded by switching to a plain agent, but a plain-user session correctly loses admin access when switching away from the verified admin agent",
+);
+mustContain(
+  renderer,
+  "recomputeAdminAccessForCurrentAgent?.();",
+  "recomputeAdminAccessForCurrentAgent() is hooked into both renderMainAgentBar() and refreshAgentGuardUI() -- the two most pervasive call sites already triggered by virtually every place currentAgent can change -- verified live end-to-end: opening Options with a plain agent hides all 9 admin-only sections, switching to test11 with the real PIN shows all 9, and switching back to a plain agent hides them again",
 );
 
 // El auto-relleno de agente en segundo plano (arranque, refreshAgentGuardUI,

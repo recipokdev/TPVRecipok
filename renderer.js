@@ -7110,6 +7110,7 @@ function ensureActiveAgentIfPossible() {
 
 function refreshAgentGuardUI() {
   ensureActiveAgentIfPossible?.();
+  recomputeAdminAccessForCurrentAgent?.();
   renderAgentMissingBadge?.();
   updatePayButtonEnabledState?.();
 }
@@ -8464,6 +8465,14 @@ window.TPV_STATE = window.TPV_STATE || {};
 function setAdminFlag(isAdmin, source = "unknown") {
   window.TPV_STATE = window.TPV_STATE || {};
   window.TPV_STATE.isAdmin = !!isAdmin;
+
+  // Base "de sesion" (login/autologin), independiente de que agente este
+  // activo ahora mismo -- recomputeAdminAccessForCurrentAgent la usa para no
+  // revocar el acceso de un usuario que YA era admin de verdad al cambiar a
+  // un agente sin PIN.
+  if (source !== "agent-pin" && source !== "agent-pin-recompute") {
+    window.TPV_STATE.isAdminFromLogin = !!isAdmin;
+  }
 
   try {
     localStorage.setItem(
@@ -21984,11 +21993,13 @@ async function verifyCurrentAgentPinIfNeeded() {
       return false;
     }
     agentPinVerifiedCode = currentAgent.codagente;
-    // Concede acceso admin (todas las Opciones) igual que el flag admin del
-    // USUARIO de FacturaScripts, pero desde el agente -- solo SUMA acceso,
-    // nunca lo quita: si el usuario logueado ya era admin, seguir siendolo;
-    // cambiar despues a un agente normal no revoca este acceso ya concedido.
-    setAdminFlag(true, "agent-pin");
+    // Concede acceso admin (todas las Opciones) mientras ESTE agente siga
+    // siendo el activo -- a diferencia del admin del usuario logueado (fijo
+    // toda la sesion), el de agente es dinamico: cambiar despues a un agente
+    // normal SI oculta de nuevo las opciones de administrador (peticion
+    // explicita de Sergi, verificada en vivo con test11/PIN real). Ver
+    // recomputeAdminAccessForCurrentAgent.
+    recomputeAdminAccessForCurrentAgent();
     // Ahora SI se puede persistir -- el click que selecciono este agente (en
     // renderAgentButtonsOverlay/renderMainAgentBar) lo dejo deliberadamente
     // sin guardar hasta este momento exacto (ver persistSelectedAgentCodeIfSafe).
@@ -22000,6 +22011,29 @@ async function verifyCurrentAgentPinIfNeeded() {
     return false;
   } finally {
     if (terminalOkBtn) terminalOkBtn.disabled = !!prevDisabled;
+  }
+}
+
+// A diferencia del admin del usuario logueado (setAdminFlag(..., "login"),
+// fijo toda la sesion), el acceso concedido por el PIN de un agente es
+// dinamico: solo vale mientras ESE agente siga siendo el activo. Se llama
+// desde renderMainAgentBar (que ya se invoca en todos los sitios donde
+// currentAgent puede cambiar) para que las Opciones reflejen siempre el
+// agente realmente activo, en vez de quedar "pegado" al primer admin elegido
+// en la sesion.
+function recomputeAdminAccessForCurrentAgent() {
+  const agentGrantsAdminNow =
+    !!currentAgent &&
+    agentRequiresAdminPin(currentAgent.codagente) &&
+    agentPinVerifiedCode === currentAgent.codagente;
+
+  const shouldBeAdmin = !!window.TPV_STATE?.isAdminFromLogin || agentGrantsAdminNow;
+
+  if (!!window.TPV_STATE?.isAdmin !== shouldBeAdmin) {
+    setAdminFlag(
+      shouldBeAdmin,
+      agentGrantsAdminNow ? "agent-pin" : "agent-pin-recompute",
+    );
   }
 }
 
@@ -22085,6 +22119,10 @@ function renderAgentButtonsOverlay(terminalId) {
 }
 
 function renderMainAgentBar() {
+  // Se llama en todos los sitios donde currentAgent puede haber cambiado --
+  // el punto mas fiable para mantener el acceso admin por agente al dia.
+  recomputeAdminAccessForCurrentAgent?.();
+
   if (!mainAgentBar) return;
 
   if (!hasActiveLoginSession()) {
@@ -26710,6 +26748,7 @@ if (terminalOkBtn) {
     // administrador, verificarlo antes de dar la sesion por buena.
     if (!(await verifyCurrentAgentPinIfNeeded())) return;
 
+    recomputeAdminAccessForCurrentAgent();
     refreshAgentGuardUI?.();
 
     // ✅ solo dispara sessionReady
