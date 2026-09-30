@@ -2601,7 +2601,12 @@
                 data-toggle-id="cartWidthControlsToggle"
                 >ancho</span
               >, cliente por defecto, cliente al salir de un aparcado,
-              accesos rapidos de descuento
+              accesos rapidos de descuento,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="autoPrintTicketOnParkToggle"
+                >imprimir ticket al guardar</span
+              >
             </div>
             <div class="opt-sec-b">
               <div class="opt-row">
@@ -2629,6 +2634,22 @@
                 </div>
                 <label class="switch">
                   <input type="checkbox" id="cartDiscountToolsToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Imprimir ticket automáticamente al guardar/aparcar
+                  </div>
+                  <div class="opt-row-sub">
+                    Al aparcar o actualizar un pedido (Mesas o TPV normal),
+                    imprime el ticket al instante, sin tener que pulsar
+                    ningún botón aparte.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="autoPrintTicketOnParkToggle" />
                   <span class="slider"></span>
                 </label>
               </div>

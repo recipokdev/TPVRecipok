@@ -2132,6 +2132,7 @@ const OPTIONS_VIRTUAL_KEYBOARD_ENABLED_KEY = "ui.virtualKeyboardEnabled";
 const OPTIONS_PARKED_CUSTOMER_RESET_MODE_KEY = "ui.parkedCustomerResetMode";
 const OPTIONS_DISCOUNT_QUICK_PERCENTS_KEY = "ui.discountQuickPercents";
 const DISCOUNT_QUICK_PERCENTS_MAX = 5;
+const OPTIONS_AUTO_PRINT_TICKET_ON_PARK_KEY = "ui.autoPrintTicketOnPark";
 // Cada hueco (campo de Opciones) conserva su propio valor/posicion siempre;
 // null = campo vacio (sin boton ahi). Por defecto: los 4 de toda la vida.
 const DISCOUNT_QUICK_PERCENT_SLOTS_DEFAULT = [10, 20, 50, 100, null];
@@ -2189,6 +2190,8 @@ let cartGlobalDiscountPct = 0;
 let cartWidthControlsEnabled = false;
 let cartPanelWidthPx = 0;
 let cartDiscountToolsToggleBound = false;
+let autoPrintTicketOnParkEnabled = false;
+let autoPrintTicketOnParkToggleBound = false;
 let cartWidthControlsToggleBound = false;
 let cartWidthDragHandleBound = false;
 let cartWidthDragActive = false;
@@ -3314,6 +3317,106 @@ function bindCartDiscountToolsToggleOnce() {
   el.addEventListener("change", async () => {
     await saveCartDiscountToolsToggle(!!el.checked);
   });
+}
+
+// Peticion real de cliente (2026-09-30): opcion para imprimir el ticket
+// automaticamente al aparcar/actualizar un pedido (Mesas o TPV normal), sin
+// tener que pulsar un boton aparte -- pensado para negocios que quieren el
+// ticket en mano del cliente al instante. Apagado por defecto a proposito.
+async function loadAutoPrintTicketOnParkToggle() {
+  const el = document.getElementById("autoPrintTicketOnParkToggle");
+  let enabled = false;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(
+      OPTIONS_AUTO_PRINT_TICKET_ON_PARK_KEY,
+    );
+    if (cfgVal !== undefined && cfgVal !== null && cfgVal !== "") {
+      enabled = parseBoolLike(cfgVal, false);
+    }
+  } catch {}
+
+  autoPrintTicketOnParkEnabled = !!enabled;
+  if (el) el.checked = autoPrintTicketOnParkEnabled;
+}
+
+async function saveAutoPrintTicketOnParkToggle(enabled) {
+  autoPrintTicketOnParkEnabled = !!enabled;
+
+  try {
+    await window.TPV_CFG?.set?.(
+      OPTIONS_AUTO_PRINT_TICKET_ON_PARK_KEY,
+      autoPrintTicketOnParkEnabled,
+    );
+  } catch {}
+}
+
+function bindAutoPrintTicketOnParkToggleOnce() {
+  if (autoPrintTicketOnParkToggleBound) return;
+  autoPrintTicketOnParkToggleBound = true;
+
+  const el = document.getElementById("autoPrintTicketOnParkToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    await saveAutoPrintTicketOnParkToggle(!!el.checked);
+  });
+}
+
+// Construye e imprime un ticket a partir del propio pedido YA GUARDADO
+// (ticket.items), no del `cart`/seleccion de mesa en vivo -- deliberado: en
+// el momento en que esto se llama (justo tras aparcar/actualizar), `cart`
+// puede ya estar vacio (TPV normal) o haber cambiado de forma (Mesas), asi
+// que depender del estado en vivo daria un ticket vacio o incorrecto segun
+// el momento exacto. A diferencia de la Precuenta (preprintCurrentMesaTicket,
+// que ademas marca la mesa como "pendiente de pago"), esto es solo una copia
+// informativa del pedido tal cual queda guardado -- sin marcar nada.
+async function autoPrintTicketAfterParkIfEnabled(ticket) {
+  if (!autoPrintTicketOnParkEnabled) return;
+  if (!ticket || typeof ticket !== "object") return;
+  if (!Array.isArray(ticket.items) || !ticket.items.length) return;
+
+  try {
+    const now = new Date();
+    const fecha = now.toLocaleDateString("es-ES");
+    const hora = now.toLocaleTimeString("es-ES", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const printableSnapshot = buildPrintableLinesFromCartSnapshot(
+      ticket.items,
+    );
+    const total = getCartTotal(ticket.items);
+    const ticketDisplayNo =
+      getParkedTicketDisplayNumber(ticket) ||
+      getParkedDisplayNumberFromId(ticket?.id);
+    const mesaScope = resolveMesaScopeFromTicket(ticket);
+    const isMesaTicket = !!(mesaScope?.uid || ticket?.mesaTableId);
+
+    const draftTicket = {
+      numero: String(ticketDisplayNo || ticket?.id || "").trim(),
+      fecha,
+      hora,
+      paymentMethod: "Pendiente de pago",
+      clientName: String(ticket?.clientName || "").trim() || "Ventas tickets",
+      terminalName: currentTerminal ? currentTerminal.name || "" : "",
+      agentName: currentAgent ? currentAgent.name || "" : "",
+      company: companyInfo ? { ...companyInfo } : null,
+      lineas: printableSnapshot,
+      total,
+      obs: isMesaTicket
+        ? `Mesa ${mesaScope.tableName} · ${mesaScope.roomName}`
+        : String(ticket?.obs || "").trim(),
+      _preprint: true,
+    };
+
+    await printTicket(draftTicket);
+  } catch (e) {
+    console.warn(
+      "No se pudo imprimir el ticket automaticamente al guardar:",
+      e?.message || e,
+    );
+  }
 }
 
 function clampCartPanelWidthPx(value) {
@@ -11576,6 +11679,7 @@ async function runBootFlow() {
     await loadProductStockEditionToggle?.();
     await loadAllowCloseWithParkedToggle?.();
     await loadCartDiscountToolsToggle?.();
+    await loadAutoPrintTicketOnParkToggle?.();
     await loadMesasDinersFamilyRules?.();
     await loadMesasComandaFamilyRules?.();
     await loadParkStockWarningToggle?.();
@@ -17686,6 +17790,13 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
         setMesasInlineView(targetView, { persist: false });
       }
 
+      // Peticion real de cliente (2026-09-30): igual que el resto de esta
+      // cola de fondo (guardado remoto, sync de stock...), no se espera aqui
+      // -- el cajero ya sigue con lo suyo mientras se imprime.
+      if (!silentAutoSave) {
+        autoPrintTicketAfterParkIfEnabled(existing);
+      }
+
       logFeatureInfo("APARCAR", "actualizado", {
         requestId,
         id: existing?.id || null,
@@ -17892,6 +18003,10 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
       const targetView = MESAS_RETURN_TO_VIEW_AFTER_PARK;
       MESAS_RETURN_TO_VIEW_AFTER_PARK = "";
       setMesasInlineView(targetView, { persist: false });
+    }
+
+    if (!silentAutoSave) {
+      autoPrintTicketAfterParkIfEnabled(localTicket);
     }
 
     logFeatureInfo("APARCAR", "creado", {
@@ -29226,6 +29341,7 @@ async function openOptions() {
   bindFamilyButtonFontSizeResetButtonOnce();
   bindScaleManualCaptureToggleOnce();
   bindCartDiscountToolsToggleOnce();
+  bindAutoPrintTicketOnParkToggleOnce();
   bindSafeTrainingModeToggleOnce();
   bindCartGlobalDiscountButtonsOnce();
   bindTariffOptionsOnce();
@@ -29272,6 +29388,7 @@ async function openOptions() {
     loadProductTileResizeModeToggle(),
     loadScaleManualCaptureModeToggle(),
     loadCartDiscountToolsToggle(),
+    loadAutoPrintTicketOnParkToggle(),
     loadSafeTrainingModeToggle(),
     loadTariffManagerOptionsData(),
     loadProductTileSizeSetting(),
@@ -45166,9 +45283,11 @@ async function bootstrapApp() {
   }
 
   bindCartDiscountToolsToggleOnce();
+  bindAutoPrintTicketOnParkToggleOnce();
   bindSafeTrainingModeToggleOnce();
   bindCartGlobalDiscountButtonsOnce();
   await loadCartDiscountToolsToggle();
+  await loadAutoPrintTicketOnParkToggle();
   await loadSafeTrainingModeToggle();
   refreshCartDiscountUi();
 

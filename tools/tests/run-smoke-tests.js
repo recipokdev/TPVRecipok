@@ -8176,6 +8176,31 @@ mustContain(
   "Leaves a record in the caja's own auto-log (same mechanism already used for drawer-open events) that this intermediate report was printed, with who and when -- verified live: a real new log line appeared in the caja's observaciones right after clicking",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-30 auto-print ticket on park/save (real client request: an opt-in toggle so parking/updating an order -- Mesas or TPV normal -- prints the ticket instantly, without pressing a separate print button)\n",
+);
+
+mustContain(
+  index,
+  '<input type="checkbox" id="autoPrintTicketOnParkToggle" />',
+  "New Options -> Carrito toggle, off by default",
+);
+mustContain(
+  renderer,
+  'async function autoPrintTicketAfterParkIfEnabled(ticket) {\r\n  if (!autoPrintTicketOnParkEnabled) return;\r\n  if (!ticket || typeof ticket !== "object") return;\r\n  if (!Array.isArray(ticket.items) || !ticket.items.length) return;',
+  "New helper builds the printable draft straight from the just-saved ticket's own items -- not from the live cart/mesa-selection state, which by the time this runs may already be empty (TPV normal) or pointing elsewhere (Mesas) -- and reuses the plain printTicket() path (informational only, unlike Precuenta which also marks the table as pending payment)",
+);
+mustContain(
+  renderer,
+  'if (!silentAutoSave) {\r\n        autoPrintTicketAfterParkIfEnabled(existing);\r\n      }',
+  "Hooked into the 'update existing parked ticket' tail, guarded by the same !silentAutoSave flag already used for the Mesas bounce fix -- a background silent autosave (e.g. adding one more product) must never trigger a print, only an explicit park/save",
+);
+mustContain(
+  renderer,
+  'if (!silentAutoSave) {\r\n      autoPrintTicketAfterParkIfEnabled(localTicket);\r\n    }',
+  "Same guard mirrored in the 'create new parked ticket' tail -- verified live against demo: toggle off prints nothing; toggle on prints on explicit create AND update (TPV normal and Mesas), with the correct line/total count each time; a silent autosave right after adding another item to an already-parked Mesas ticket correctly printed nothing",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
