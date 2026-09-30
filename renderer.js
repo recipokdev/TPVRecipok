@@ -21989,6 +21989,10 @@ async function verifyCurrentAgentPinIfNeeded() {
     // nunca lo quita: si el usuario logueado ya era admin, seguir siendolo;
     // cambiar despues a un agente normal no revoca este acceso ya concedido.
     setAdminFlag(true, "agent-pin");
+    // Ahora SI se puede persistir -- el click que selecciono este agente (en
+    // renderAgentButtonsOverlay/renderMainAgentBar) lo dejo deliberadamente
+    // sin guardar hasta este momento exacto (ver persistSelectedAgentCodeIfSafe).
+    persistSelectedAgentCodeIfSafe(currentAgent.codagente);
     return true;
   } catch (e) {
     terminalErrorEl.textContent =

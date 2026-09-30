@@ -8294,6 +8294,11 @@ mustContain(
   "setAdminFlag(true, \"agent-pin\");",
   "A successfully verified agent PIN grants the same admin flag as an admin USER login (all Options become visible) -- additive only, never revokes it",
 );
+mustContain(
+  renderer,
+  'setAdminFlag(true, "agent-pin");\r\n    // Ahora SI se puede persistir -- el click que selecciono este agente (en\r\n    // renderAgentButtonsOverlay/renderMainAgentBar) lo dejo deliberadamente\r\n    // sin guardar hasta este momento exacto (ver persistSelectedAgentCodeIfSafe).\r\n    persistSelectedAgentCodeIfSafe(currentAgent.codagente);',
+  "Real bug found in end-to-end live testing (real demo agent 'test11'/codagente 11, real PIN from the CRM session): the first version verified the PIN and granted admin but never persisted auth.codagente, so the newly-confirmed agent silently reverted on the next app restart, forcing the PIN to be re-entered every single time. Fixed by persisting right after a successful verification, exactly once the gate that was blocking persistSelectedAgentCodeIfSafe no longer applies",
+);
 
 // El auto-relleno de agente en segundo plano (arranque, refreshAgentGuardUI,
 // restaurar sesion...) nunca debe auto-elegir en silencio un agente con PIN
