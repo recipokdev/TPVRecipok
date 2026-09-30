@@ -8246,6 +8246,76 @@ mustContain(
   "openOptions() binds the product-display-field-mode select",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-09-30 agent admin PIN (contrato cerrado con el CRM: list-agent-admins / verify-agent-pin)\n",
+);
+
+// Peticion real de cliente vía Sergi: dar acceso a todas las Opciones a
+// agentes concretos (no solo al usuario FS que inicia sesion), con su propio
+// PIN de 4 digitos gestionable desde el CRM -- independiente del flag admin
+// del usuario de FacturaScripts (ver architecture_tpv_login_system).
+mustContain(
+  index,
+  'id="agentPinWrap" class="hidden"',
+  "New agent-admin PIN box in the terminal/agent overlay, hidden by default",
+);
+mustContain(
+  index,
+  'id="agentPinInput"',
+  "Agent PIN input present in the terminal/agent overlay",
+);
+mustContain(
+  renderer,
+  'const url = `${TPV_SYNC_API_URL}?action=list-agent-admins&slug=${encodeURIComponent(slug)}`;',
+  "fetchAdminAgentCodes calls the real list-agent-admins endpoint (contract closed with the CRM session)",
+);
+mustContain(
+  renderer,
+  'const url = `${TPV_SYNC_API_URL}?action=verify-agent-pin`;',
+  "verifyAgentAdminPin calls the real verify-agent-pin endpoint",
+);
+mustContain(
+  renderer,
+  "function agentRequiresAdminPin(codagente) {",
+  "agentRequiresAdminPin() checks the fetched admin-agent code set",
+);
+mustContain(
+  renderer,
+  'function persistSelectedAgentCodeIfSafe(codagente) {\r\n  if (\r\n    agentRequiresAdminPin(codagente) &&\r\n    agentPinVerifiedCode !== String(codagente ?? "")\r\n  ) {\r\n    return;\r\n  }',
+  "persistSelectedAgentCodeIfSafe() refuses to persist auth.codagente for an unverified PIN-required agent -- otherwise a mere click (without ever completing Continuar/PIN) would already leave that agent restorable on the next app restart, skipping the PIN entirely (verified live: real TPV_CFG value stayed untouched while unverified, and did persist once agentPinVerifiedCode matched)",
+);
+mustContain(
+  renderer,
+  "async function verifyCurrentAgentPinIfNeeded() {",
+  "verifyCurrentAgentPinIfNeeded() gates the terminal/agent overlay's Continuar button",
+);
+mustContain(
+  renderer,
+  "setAdminFlag(true, \"agent-pin\");",
+  "A successfully verified agent PIN grants the same admin flag as an admin USER login (all Options become visible) -- additive only, never revokes it",
+);
+
+// El auto-relleno de agente en segundo plano (arranque, refreshAgentGuardUI,
+// restaurar sesion...) nunca debe auto-elegir en silencio un agente con PIN
+// pendiente de verificar -- serian otros tantos huecos para saltarse el PIN
+// sin pasar nunca por el modal. Los 3 sitios reales que hacian esto se
+// verificaron en vivo (real TPV_CFG + estado real de demo, sin mocks).
+mustContain(
+  renderer,
+  "if (\r\n    fallback &&\r\n    agentRequiresAdminPin(fallback.codagente) &&\r\n    agentPinVerifiedCode !== String(fallback.codagente ?? \"\")\r\n  ) {\r\n    return;\r\n  }",
+  "ensureActiveAgentIfPossible() (called constantly via refreshAgentGuardUI) never silently auto-picks a PIN-required agent -- verified live: stayed unset while unverified, auto-picked correctly once verified",
+);
+mustContain(
+  renderer,
+  "if (fallback && !agentRequiresAdminPin(fallback.codagente)) {\r\n          currentAgent = fallback;\r\n        }",
+  "autoSelectTerminalAndAgentIfPossible() (boot-time restore) skips the blind list[0] fallback when it requires an unverified PIN, instead of silently granting admin on every app restart",
+);
+mustContain(
+  renderer,
+  "const singleAgentNeedsPin =",
+  "showTerminalOverlay()'s single-agent bypass (skip straight to dispatchSessionReady) is disabled when that one agent needs an unverified PIN",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

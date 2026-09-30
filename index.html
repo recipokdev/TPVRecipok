@@ -723,6 +723,47 @@
           </div>
         </div>
 
+        <!-- PIN de agente admin (solo visible si el agente elegido lo requiere) -->
+        <div id="agentPinWrap" class="hidden" style="margin-bottom: 8px">
+          <div style="font-size: 13px; display: block; margin: 6px 0 4px">
+            PIN de administrador del agente (Max 4)
+          </div>
+          <input
+            id="agentPinInput"
+            type="password"
+            autocomplete="off"
+            inputmode="numeric"
+            maxlength="4"
+            style="
+              width: 100%;
+              padding: 8px;
+              border-radius: 6px;
+              border: 1px solid #ccc;
+            "
+          />
+          <div class="login-pin-wrap">
+            <div class="login-pin-pad" id="agentPinPad">
+              <button type="button" class="pin-key" data-k="1">1</button>
+              <button type="button" class="pin-key" data-k="2">2</button>
+              <button type="button" class="pin-key" data-k="3">3</button>
+              <button type="button" class="pin-key" data-k="4">4</button>
+              <button type="button" class="pin-key" data-k="5">5</button>
+              <button type="button" class="pin-key" data-k="6">6</button>
+              <button type="button" class="pin-key" data-k="7">7</button>
+              <button type="button" class="pin-key" data-k="8">8</button>
+              <button type="button" class="pin-key" data-k="9">9</button>
+
+              <button type="button" class="pin-key pin-key-warn" data-k="clear">
+                C
+              </button>
+              <button type="button" class="pin-key" data-k="0">0</button>
+              <button type="button" class="pin-key pin-key-fn" data-k="back">
+                ⌫
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div id="terminalError" class="dialog-error"></div>
 
         <div class="dialog-actions">

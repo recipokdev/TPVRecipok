@@ -431,6 +431,20 @@ let cashCloseSummaryReadyPromise = Promise.resolve();
 let cashCloseSummaryLoading = false;
 let terminalOverlayMode = "session"; // "session" (elegir tpv/agent para abrir caja) o "agentSwitch"
 
+// PIN de administrador por agente (petición real de cliente vía Sergi,
+// 2026-09-30): distinto del PIN de USUARIO/operador de siempre (operators.json,
+// ver architecture_tpv_login_system) -- este es un flag+PIN por AGENTE de
+// FacturaScripts, gestionable desde el CRM, para poder dar acceso admin a
+// varios agentes sin que dependa del flag admin del usuario de FacturaScripts.
+// `adminAgentCodes` son los codagente que lo requieren (fail-open: si no se
+// puede consultar, se trata como si nadie lo requiriera -- igual que el resto
+// de "candados" de este TPV, nunca debe bloquear el uso normal sin conexion).
+let adminAgentCodes = new Set();
+// codagente ya verificado con PIN correcto en la apertura ACTUAL del modal --
+// se resetea cada vez que el modal pasa de oculto a visible, para no dejar
+// "recordado" un PIN de una apertura anterior.
+let agentPinVerifiedCode = null;
+
 let apiBaseUrl = ""; // base de la API para montar URLs de imágenes
 let filesBaseUrl = ""; // base sin /api/3 para los ficheros (MyFiles, etc.)
 
@@ -700,6 +714,9 @@ const terminalErrorEl = document.getElementById("terminalError");
 const terminalSelectWrapper = document.getElementById("terminalSelectWrapper");
 const agentSelectWrapper = document.getElementById("agentSelectWrapper");
 const agentButtonsOverlay = document.getElementById("agentButtonsOverlay");
+const agentPinWrap = document.getElementById("agentPinWrap");
+const agentPinInput = document.getElementById("agentPinInput");
+const agentPinPad = document.getElementById("agentPinPad");
 
 // Barra de agentes en la pantalla principal
 const mainAgentBar = document.getElementById("mainAgentBar");
@@ -7070,15 +7087,25 @@ function ensureActiveAgentIfPossible() {
 
   if (stillValid) return;
 
-  currentAgent = list[0];
-  if (agentNameEl) agentNameEl.textContent = currentAgent?.name || "---";
+  const fallback = list[0];
 
-  try {
-    window.TPV_CFG?.set?.(
-      "auth.codagente",
-      String(currentAgent?.codagente || ""),
-    );
-  } catch {}
+  // Nunca auto-elegir en silencio un agente que requiera PIN de
+  // administrador sin verificar -- esta funcion se llama constantemente
+  // (refreshAgentGuardUI corre en decenas de sitios) y hacerlo aqui
+  // regalaria acceso admin sin pedir nunca el PIN. Se deja sin agente: el
+  // aviso/badge de "seleccionar agente" (renderAgentMissingBadge) sigue
+  // funcionando igual que siempre y abre el modal, que SI sabe pedirlo.
+  if (
+    fallback &&
+    agentRequiresAdminPin(fallback.codagente) &&
+    agentPinVerifiedCode !== String(fallback.codagente ?? "")
+  ) {
+    return;
+  }
+
+  currentAgent = fallback;
+  if (agentNameEl) agentNameEl.textContent = currentAgent?.name || "---";
+  if (currentAgent) persistSelectedAgentCodeIfSafe(currentAgent.codagente);
 }
 
 function refreshAgentGuardUI() {
@@ -14617,7 +14644,7 @@ async function openLoginModal() {
         await window.TPV_CFG.set("auth.isAdmin", !!isAdmin);
 
         if (codagente) {
-          await window.TPV_CFG.set("auth.codagente", String(codagente));
+          persistSelectedAgentCodeIfSafe(codagente);
         }
         if (codalmacen) {
           await window.TPV_CFG.set("auth.codalmacen", String(codalmacen));
@@ -14668,7 +14695,19 @@ async function openLoginModal() {
         const picked = (Array.isArray(listNow) ? listNow : []).find(
           (a) => String(a?.codagente || "").trim() === wanted,
         );
-        if (picked) currentAgent = picked;
+        // El agente por defecto que devuelve el login (tpv_login.php) NO se
+        // salta el PIN de administrador por agente -- son 2 candados
+        // independientes (usuario TPV vs agente FacturaScripts). Si lo
+        // requiere y aun no se ha verificado, se deja sin agente.
+        if (
+          picked &&
+          !(
+            agentRequiresAdminPin(picked.codagente) &&
+            agentPinVerifiedCode !== String(picked.codagente ?? "")
+          )
+        ) {
+          currentAgent = picked;
+        }
       }
 
       refreshLoggedUserUI?.();
@@ -21853,6 +21892,139 @@ function getAgentsForTerminalId(terminalId) {
   return agentsByTerminal[key] || [];
 }
 
+// Persiste el agente elegido para poder restaurarlo en el proximo arranque
+// (auth.codagente en TPV_CFG) -- PERO nunca si requiere PIN de administrador
+// y aun no se ha verificado: si no, un simple click (sin pasar por
+// "Continuar" ni escribir el PIN) ya dejaria ese agente restaurable solo con
+// reiniciar la app, saltandose el PIN por completo. Ver
+// autoSelectTerminalAndAgentIfPossible, que es quien lee este valor al
+// arrancar.
+function persistSelectedAgentCodeIfSafe(codagente) {
+  if (
+    agentRequiresAdminPin(codagente) &&
+    agentPinVerifiedCode !== String(codagente ?? "")
+  ) {
+    return;
+  }
+  try {
+    window.TPV_CFG?.set?.("auth.codagente", String(codagente ?? ""));
+  } catch {}
+}
+
+// Muestra/oculta el cuadro de PIN de administrador segun si el agente
+// elegido ahora mismo lo requiere y aun no se ha verificado en ESTA apertura
+// del modal (ver agentPinVerifiedCode, reseteado en showTerminalOverlay).
+function updateAgentPinUI() {
+  if (!agentPinWrap) return;
+
+  const needsPin =
+    !!currentAgent &&
+    agentRequiresAdminPin(currentAgent.codagente) &&
+    agentPinVerifiedCode !== currentAgent.codagente;
+
+  agentPinWrap.classList.toggle("hidden", !needsPin);
+
+  if (needsPin) {
+    if (agentPinInput) agentPinInput.focus();
+  } else if (agentPinInput) {
+    agentPinInput.value = "";
+  }
+
+  updateTerminalOkBtnState();
+}
+
+// El modo "terminalSwitch" no toca el agente para nada -- no debe quedar
+// bloqueado por un PIN de agente pendiente de una seleccion anterior.
+function updateTerminalOkBtnState() {
+  if (!terminalOkBtn) return;
+  if (terminalOverlayMode === "terminalSwitch") {
+    terminalOkBtn.disabled = false;
+    return;
+  }
+
+  const needsPin =
+    !!currentAgent &&
+    agentRequiresAdminPin(currentAgent.codagente) &&
+    agentPinVerifiedCode !== currentAgent.codagente;
+
+  if (!needsPin) {
+    terminalOkBtn.disabled = false;
+    return;
+  }
+
+  const pinTxt = String(agentPinInput?.value || "").trim();
+  terminalOkBtn.disabled = !/^\d{4}$/.test(pinTxt);
+}
+
+// Llamar justo antes de dar por buena la seleccion de agente (Continuar).
+// Devuelve true si se puede seguir (no hacia falta PIN, o el PIN tecleado era
+// correcto); false si hay que quedarse en el modal.
+async function verifyCurrentAgentPinIfNeeded() {
+  if (!currentAgent) return true;
+  if (!agentRequiresAdminPin(currentAgent.codagente)) return true;
+  if (agentPinVerifiedCode === currentAgent.codagente) return true;
+
+  const pin = String(agentPinInput?.value || "").trim();
+  if (!/^\d{4}$/.test(pin)) {
+    terminalErrorEl.textContent = "El PIN de administrador debe tener 4 dígitos.";
+    agentPinInput?.focus?.();
+    return false;
+  }
+
+  const prevDisabled = terminalOkBtn?.disabled;
+  if (terminalOkBtn) terminalOkBtn.disabled = true;
+  try {
+    const verified = await verifyAgentAdminPin(currentAgent.codagente, pin);
+    if (!verified) {
+      terminalErrorEl.textContent = "PIN incorrecto.";
+      if (agentPinInput) {
+        agentPinInput.value = "";
+        agentPinInput.focus();
+      }
+      return false;
+    }
+    agentPinVerifiedCode = currentAgent.codagente;
+    // Concede acceso admin (todas las Opciones) igual que el flag admin del
+    // USUARIO de FacturaScripts, pero desde el agente -- solo SUMA acceso,
+    // nunca lo quita: si el usuario logueado ya era admin, seguir siendolo;
+    // cambiar despues a un agente normal no revoca este acceso ya concedido.
+    setAdminFlag(true, "agent-pin");
+    return true;
+  } catch (e) {
+    terminalErrorEl.textContent =
+      e?.message || "No se pudo verificar el PIN. Revisa la conexión.";
+    return false;
+  } finally {
+    if (terminalOkBtn) terminalOkBtn.disabled = !!prevDisabled;
+  }
+}
+
+if (agentPinPad) {
+  agentPinPad.onclick = (e) => {
+    const btn = e.target.closest("button[data-k]");
+    if (!btn || !agentPinInput) return;
+    const k = btn.getAttribute("data-k");
+
+    if (k === "clear") {
+      agentPinInput.value = "";
+    } else if (k === "back") {
+      agentPinInput.value = agentPinInput.value.slice(0, -1);
+    } else if (/^\d$/.test(k) && agentPinInput.value.length < 4) {
+      agentPinInput.value += k;
+    }
+    if (terminalErrorEl) terminalErrorEl.textContent = "";
+    updateTerminalOkBtnState();
+    agentPinInput.focus();
+  };
+}
+
+if (agentPinInput) {
+  agentPinInput.addEventListener("input", () => {
+    if (terminalErrorEl) terminalErrorEl.textContent = "";
+    updateTerminalOkBtnState();
+  });
+}
+
 function renderAgentButtonsOverlay(terminalId) {
   if (!agentButtonsOverlay || !agentSelectWrapper) return;
 
@@ -21862,6 +22034,7 @@ function renderAgentButtonsOverlay(terminalId) {
   if (list.length === 0) {
     agentSelectWrapper.style.display = "none";
     currentAgent = null;
+    updateAgentPinUI();
     return;
   }
 
@@ -21878,9 +22051,7 @@ function renderAgentButtonsOverlay(terminalId) {
     btn.textContent = agent.name;
     btn.onclick = () => {
       currentAgent = agent;
-      try {
-        window.TPV_CFG?.set?.("auth.codagente", String(agent.codagente));
-      } catch {}
+      persistSelectedAgentCodeIfSafe(agent.codagente);
       // marcar seleccionado
       agentButtonsOverlay
         .querySelectorAll(".agent-btn")
@@ -21888,6 +22059,7 @@ function renderAgentButtonsOverlay(terminalId) {
 
       // ✅ actualizar failsafe UI
       refreshAgentGuardUI?.();
+      updateAgentPinUI();
     };
     agentButtonsOverlay.appendChild(btn);
   });
@@ -21895,14 +22067,17 @@ function renderAgentButtonsOverlay(terminalId) {
   // Si solo hay uno y aún no hay seleccionado, lo auto-seleccionamos
   if (!currentAgent && list.length === 1) {
     currentAgent = list[0];
-    try {
-      window.TPV_CFG?.set?.("auth.codagente", String(currentAgent.codagente));
-    } catch {}
+    persistSelectedAgentCodeIfSafe(currentAgent.codagente);
     const firstBtn = agentButtonsOverlay.querySelector(".agent-btn");
     if (firstBtn) firstBtn.classList.add("selected");
     // ✅
     refreshAgentGuardUI?.();
   }
+
+  // Sincroniza el cuadro de PIN con quien haya quedado como currentAgent al
+  // terminar de pintar -- cubre tambien el caso de que ya viniera elegido de
+  // antes (restaurado de TPV_CFG) sin pasar por ningun click de este render.
+  updateAgentPinUI();
 }
 
 function renderMainAgentBar() {
@@ -22004,6 +22179,19 @@ function renderMainAgentBar() {
       btn.onclick = async () => {
         const clickedCode = agent.codagente;
 
+        // Un agente que requiere PIN de administrador nunca se cambia "al
+        // vuelo" desde esta barra compacta -- no hay sitio aqui para el
+        // cuadro de PIN. Se reutiliza el mismo modal de cambio de agente
+        // (showTerminalOverlay("agentSwitch")), que ya sabe pedirlo debajo
+        // de la lista, tal cual el login de usuario admin.
+        if (
+          agentRequiresAdminPin(clickedCode) &&
+          agentPinVerifiedCode !== clickedCode
+        ) {
+          showTerminalOverlay("agentSwitch");
+          return;
+        }
+
         await refreshTerminalsAndAgents();
 
         const currentList = currentTerminal
@@ -22015,12 +22203,7 @@ function renderMainAgentBar() {
           currentList[0] ||
           null;
 
-        try {
-          window.TPV_CFG?.set?.(
-            "auth.codagente",
-            String(currentAgent?.codagente || ""),
-          );
-        } catch {}
+        if (currentAgent) persistSelectedAgentCodeIfSafe(currentAgent.codagente);
 
         if (agentNameEl) {
           agentNameEl.textContent = currentAgent ? currentAgent.name : "---";
@@ -22154,6 +22337,15 @@ function showTerminalOverlay(mode = "session") {
   if (!terminalOverlay) return;
   if (mode === "agentSwitch" && !hasActiveLoginSession()) return;
 
+  // Un PIN de agente ya verificado NO se recuerda entre aperturas del modal
+  // -- reabrirlo (aunque sea con el mismo agente de antes) vuelve a pedirlo,
+  // igual que el login de usuario nunca recuerda el PIN entre sesiones.
+  const wasHidden = terminalOverlay.classList.contains("hidden");
+  if (wasHidden) {
+    agentPinVerifiedCode = null;
+    if (agentPinInput) agentPinInput.value = "";
+  }
+
   terminalOverlayMode = mode;
   terminalErrorEl.textContent = "";
 
@@ -22203,6 +22395,7 @@ function showTerminalOverlay(mode = "session") {
       terminalSelect.value = String(currentTerminal.id);
     }
 
+    updateAgentPinUI();
     terminalOverlay.classList.remove("hidden");
     return;
   }
@@ -22237,6 +22430,7 @@ function showTerminalOverlay(mode = "session") {
         if (agentSelectWrapper) agentSelectWrapper.style.display = "none";
         if (agentButtonsOverlay) agentButtonsOverlay.innerHTML = "";
         terminalErrorEl.textContent = AGENT_NOT_ASSIGNED_HINT;
+        updateAgentPinUI();
         return;
       }
 
@@ -22254,12 +22448,7 @@ function showTerminalOverlay(mode = "session") {
 
       if (!currentAgent) {
         currentAgent = list[0] || null;
-        try {
-          window.TPV_CFG?.set?.(
-            "auth.codagente",
-            String(currentAgent?.codagente || ""),
-          );
-        } catch {}
+        if (currentAgent) persistSelectedAgentCodeIfSafe(currentAgent.codagente);
       }
 
       if (agentSelectWrapper) agentSelectWrapper.style.display = "block";
@@ -22344,8 +22533,18 @@ function showTerminalOverlay(mode = "session") {
   const list = getAgentsForTerminalId(selectedTerminalId);
   const multipleAgents = list.length > 1;
 
+  // El unico agente de la lista (ya auto-seleccionado dentro de
+  // renderAgentButtonsOverlay) puede requerir PIN de administrador -- en ese
+  // caso NO se puede saltar directo a dispatchSessionReady, hay que mostrar
+  // el modal igualmente para poder pedirlo.
+  const singleAgentNeedsPin =
+    !multipleAgents &&
+    !!currentAgent &&
+    agentRequiresAdminPin(currentAgent.codagente) &&
+    agentPinVerifiedCode !== currentAgent.codagente;
+
   // Si no hay nada que elegir (<=1 TPV y sin/1 agente), abrimos directamente
-  if (!multipleTpvs && !multipleAgents) {
+  if (!multipleTpvs && !multipleAgents && !singleAgentNeedsPin) {
     terminalOverlay.classList.add("hidden");
 
     if (!currentTerminal) {
@@ -22366,16 +22565,18 @@ function showTerminalOverlay(mode = "session") {
 
   // Mostrar/ocultar wrapper de agentes según si hay múltiples (si hay 0/1, lo ocultamos)
   if (agentSelectWrapper) {
-    agentSelectWrapper.style.display = multipleAgents ? "block" : "none";
+    agentSelectWrapper.style.display =
+      multipleAgents || singleAgentNeedsPin ? "block" : "none";
   }
 
   updateTerminalOverlayCopy({
     showTerminal:
       !!terminalSelectWrapper &&
       getComputedStyle(terminalSelectWrapper).display !== "none",
-    showAgent: multipleAgents,
+    showAgent: multipleAgents || singleAgentNeedsPin,
   });
 
+  updateAgentPinUI();
   terminalOverlay.classList.remove("hidden");
 }
 
@@ -26443,6 +26644,10 @@ if (terminalOkBtn) {
         return;
       }
 
+      // 4) Si el agente elegido requiere PIN de administrador, verificarlo
+      // antes de dar la seleccion por buena.
+      if (!(await verifyCurrentAgentPinIfNeeded())) return;
+
       if (agentNameEl && currentAgent) {
         agentNameEl.textContent = currentAgent.name;
       }
@@ -26496,6 +26701,10 @@ if (terminalOkBtn) {
     if (!currentAgent && list.length === 1) {
       currentAgent = list[0];
     }
+
+    // Si el agente elegido (o auto-elegido arriba) requiere PIN de
+    // administrador, verificarlo antes de dar la sesion por buena.
+    if (!(await verifyCurrentAgentPinIfNeeded())) return;
 
     refreshAgentGuardUI?.();
 
@@ -27099,21 +27308,27 @@ async function ensureTerminalAgentDefaults({ refresh = false } = {}) {
       savedLs = (localStorage.getItem("tpv_agent") || "").trim();
     } catch {}
 
-    const pickAgent =
+    const savedMatch =
       (savedCodAg &&
         list.find((a) => String(a.codagente) === String(savedCodAg))) ||
       (savedLs && list.find((a) => String(a.codagente) === String(savedLs))) ||
-      list[0] ||
       null;
+
+    // El fallback ciego a list[0] (sin ninguna seleccion previa de verdad)
+    // nunca debe auto-elegir un agente con PIN de administrador pendiente de
+    // verificar -- ver el mismo razonamiento en
+    // autoSelectTerminalAndAgentIfPossible/ensureActiveAgentIfPossible.
+    let pickAgent = savedMatch;
+    if (!pickAgent) {
+      const fallback = list[0] || null;
+      if (fallback && !agentRequiresAdminPin(fallback.codagente)) {
+        pickAgent = fallback;
+      }
+    }
 
     if (pickAgent) {
       currentAgent = pickAgent;
-      try {
-        await window.TPV_CFG?.set?.(
-          "auth.codagente",
-          String(pickAgent.codagente),
-        );
-      } catch {}
+      persistSelectedAgentCodeIfSafe(pickAgent.codagente);
     }
   }
 
@@ -27258,7 +27473,18 @@ async function handleCashHeaderAction(opts = {}) {
     }
 
     const list = getAgentsForTerminalId(currentTerminal.id) || [];
-    if (!currentAgent && list.length > 0) {
+    // El fallback ciego al primero de la lista nunca debe auto-elegir en
+    // silencio un agente con PIN de administrador pendiente de verificar --
+    // se deja sin agente (el badge/aviso de "seleccionar agente" abre el
+    // modal, que SI sabe pedirlo) en vez de regalar acceso admin sin PIN.
+    if (
+      !currentAgent &&
+      list.length > 0 &&
+      !(
+        agentRequiresAdminPin(list[0]?.codagente) &&
+        agentPinVerifiedCode !== String(list[0]?.codagente ?? "")
+      )
+    ) {
       currentAgent = list[0];
       try {
         localStorage.setItem(
@@ -27365,11 +27591,26 @@ async function autoSelectTerminalAndAgentIfPossible() {
   if (currentTerminal) {
     const list = getAgentsForTerminalId(currentTerminal.id) || [];
     if (!currentAgent) {
-      currentAgent =
-        (savedCodAg &&
-          list.find((a) => String(a.codagente) === String(savedCodAg))) ||
-        list[0] ||
-        null;
+      const savedMatch =
+        savedCodAg &&
+        list.find((a) => String(a.codagente) === String(savedCodAg));
+
+      if (savedMatch) {
+        // Ya se persistio una vez -- persistSelectedAgentCodeIfSafe nunca
+        // guarda un codagente con PIN pendiente de verificar, asi que llegar
+        // hasta aqui ya significa que se verifico en su momento (misma
+        // confianza "recordar sesion entre reinicios" que ya usa el login).
+        currentAgent = savedMatch;
+      } else {
+        const fallback = list[0] || null;
+        // Sin seleccion previa de verdad: si el primero de la lista requiere
+        // PIN de administrador, NO se auto-elige -- se deja sin agente para
+        // que el arranque muestre el modal (y pueda pedirlo) en vez de
+        // regalar acceso admin sin PIN al primer arranque/tras un logout.
+        if (fallback && !agentRequiresAdminPin(fallback.codagente)) {
+          currentAgent = fallback;
+        }
+      }
     }
   }
 
@@ -27377,7 +27618,7 @@ async function autoSelectTerminalAndAgentIfPossible() {
   if (currentTerminal?.id)
     await window.TPV_CFG.set("tpv.idtpv", String(currentTerminal.id));
   if (currentAgent?.codagente)
-    await window.TPV_CFG.set("auth.codagente", String(currentAgent.codagente));
+    persistSelectedAgentCodeIfSafe(currentAgent.codagente);
 }
 
 function fireSessionReady() {
@@ -27855,7 +28096,19 @@ async function loadDataFromApi(opts = {}) {
         }
 
         if (!currentAgent) {
-          currentAgent = listNow[0] || null;
+          const only = listNow[0] || null;
+          // Mismo razonamiento que en ensureActiveAgentIfPossible: nunca
+          // auto-elegir en silencio un agente con PIN de administrador sin
+          // verificar.
+          if (
+            only &&
+            !(
+              agentRequiresAdminPin(only.codagente) &&
+              agentPinVerifiedCode !== String(only.codagente ?? "")
+            )
+          ) {
+            currentAgent = only;
+          }
         }
       }
 
@@ -27868,7 +28121,17 @@ async function loadDataFromApi(opts = {}) {
     // =========================
     await autoSelectTerminalAndAgentIfPossible();
 
-    if (!currentTerminal) {
+    // Si hay terminal pero NINGUN agente quedo seleccionado (por ejemplo,
+    // el unico candidato requeria PIN de administrador y aun no se ha
+    // verificado -- ver autoSelectTerminalAndAgentIfPossible), no se puede
+    // saltar directo a fireSessionReady(): hay que mostrar el modal para
+    // poder elegir/pedir el PIN, igual que en el resto de flujos.
+    const bootAgentList = currentTerminal
+      ? getAgentsForTerminalId(currentTerminal.id)
+      : [];
+    const needsAgentPicker = !!currentTerminal && !currentAgent && bootAgentList.length > 0;
+
+    if (!currentTerminal || needsAgentPicker) {
       if (numTerminals > 0 || agents.length > 0) {
         showTerminalOverlay("session");
       } else {
@@ -28109,9 +28372,19 @@ async function restoreTerminalAgentFromCfg() {
     const a = list.find((x) => String(x.codagente) === String(savedCodagente));
     if (a) currentAgent = a;
     else currentAgent = null; // agente guardado no pertenece a este TPV
-  } else {
-    // opcional: si solo hay 1 agente, autoseleccionar
-    if (!currentAgent && list.length === 1) currentAgent = list[0];
+  } else if (!currentAgent && list.length === 1) {
+    // opcional: si solo hay 1 agente, autoseleccionar -- salvo que requiera
+    // PIN de administrador sin verificar (ver mismo razonamiento en
+    // ensureActiveAgentIfPossible/autoSelectTerminalAndAgentIfPossible).
+    const only = list[0];
+    if (
+      !(
+        agentRequiresAdminPin(only.codagente) &&
+        agentPinVerifiedCode !== String(only.codagente ?? "")
+      )
+    ) {
+      currentAgent = only;
+    }
   }
 
   // UI
@@ -28128,10 +28401,16 @@ async function refreshTerminalsAndAgents() {
   if (!cfg || !cfg.baseUrl || !cfg.apiKey) return;
 
   try {
+    // adminAgentCodes es un endpoint propio del TPV, no de FacturaScripts --
+    // nunca lanza (fail-open), pero se espera en el mismo Promise.all para
+    // que ya este listo antes de que el modal de terminal/agente se muestre
+    // justo despues (si no, el PIN podria no pedirse la primera vez por pura
+    // carrera con este fetch).
     const [tpvTerminales, tpvAgentesData, agentesMaestros] = await Promise.all([
       fetchApiResource("tpvterminales"),
       fetchApiResource("tpvagentes"),
       fetchApiResource("agentes"),
+      refreshAdminAgentCodes(),
     ]);
 
     // ✅ MAPA GLOBAL codagente -> nombre (+ cache)
@@ -37311,6 +37590,82 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+// PIN de administrador por agente (contrato cerrado con el CRM, 2026-09-30):
+// GET list-agent-admins devuelve solo los codagente que SI son admin; ausencia
+// en esa lista = agente normal, sin PIN. Fail-open a proposito (igual que el
+// resto de "candados" de este TPV): si el servidor no responde, se trata como
+// si ningun agente requiriera PIN -- nunca debe dejar el TPV inutilizable sin
+// internet.
+async function fetchAdminAgentCodes() {
+  try {
+    const slug = getCurrentSlugForReservations();
+    const syncApiKey = getTpvSyncApiKey();
+    if (!slug || !syncApiKey) return new Set();
+
+    const url = `${TPV_SYNC_API_URL}?action=list-agent-admins&slug=${encodeURIComponent(slug)}`;
+    const res = await fetchWithTimeout(url, {
+      method: "GET",
+      headers: { Accept: "application/json", "X-TPV-API-KEY": syncApiKey },
+      cache: "no-store",
+    });
+    if (!res.ok) return new Set();
+
+    const data = await res.json().catch(() => null);
+    const list = Array.isArray(data?.data) ? data.data : [];
+    return new Set(
+      list
+        .filter((a) => a && a.enabled !== false)
+        .map((a) => String(a?.codagente ?? "").trim())
+        .filter(Boolean),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+async function refreshAdminAgentCodes() {
+  adminAgentCodes = await fetchAdminAgentCodes();
+}
+
+function agentRequiresAdminPin(codagente) {
+  return adminAgentCodes.has(String(codagente ?? "").trim());
+}
+
+// A diferencia de list-agent-admins, esta SI debe lanzar en caso de fallo de
+// red -- verifyCurrentAgentPinIfNeeded necesita distinguir "PIN incorrecto"
+// (bloquear) de "no se pudo comprobar" (avisar y no dejar pasar tampoco, pero
+// con un mensaje distinto) en vez de fallar abierto como el resto de candados:
+// esto SI protege quien ve las Opciones de admin, no solo un ajuste de stock.
+async function verifyAgentAdminPin(codagente, pin) {
+  const slug = getCurrentSlugForReservations();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("Falta configuración para verificar el PIN.");
+  }
+
+  const url = `${TPV_SYNC_API_URL}?action=verify-agent-pin`;
+  const res = await fetchWithTimeout(url, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-TPV-API-KEY": syncApiKey,
+    },
+    body: JSON.stringify({
+      slug,
+      codagente: String(codagente ?? ""),
+      pin: String(pin ?? ""),
+    }),
+    cache: "no-store",
+  });
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(data?.error || `Error verificando PIN: HTTP ${res.status}`);
+  }
+  return !!data?.data?.verified;
 }
 
 async function apiListParkedReservations() {

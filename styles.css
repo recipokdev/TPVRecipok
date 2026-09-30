@@ -9612,6 +9612,18 @@ body.theme-dark #loginOverlay .pin-key {
   border-color: #d1d5db;
 }
 
+body.theme-dark #terminalOverlay #agentPinInput {
+  background: #111827 !important;
+  border-color: #f59e0b !important;
+  color: #f8fafc !important;
+}
+
+body.theme-dark #terminalOverlay .pin-key {
+  background: #e5e7eb;
+  color: #111827;
+  border-color: #d1d5db;
+}
+
 body.theme-dark .cash-cell-page,
 body.theme-dark .cash-summary-page,
 body.theme-dark .cash-agent-card,
