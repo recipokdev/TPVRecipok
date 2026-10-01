@@ -3558,9 +3558,34 @@
                 class="opt-preview-item"
                 data-toggle-id="familyButtonResizeModeToggle"
                 >modo redimensionar familias</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="agentAdminPinModeToggle"
+                >PIN de administrador por agente</span
               >
             </div>
             <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    PIN de administrador por agente
+                  </div>
+                  <div class="opt-row-sub">
+                    Desactivado (recomendado si solo usas usuarios
+                    administradores de FacturaScripts): cualquier agente ve
+                    las Opciones de administrador con un usuario admin.
+                    Actívalo si además quieres exigir un PIN al elegir un
+                    agente marcado como administrador (gestionado desde el
+                    CRM) — más seguro, pero un paso más lento al cambiar de
+                    agente.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="agentAdminPinModeToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
               <div class="opt-row">
                 <div class="opt-row-txt">
                   <div class="opt-row-title">

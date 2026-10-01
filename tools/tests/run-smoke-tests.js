@@ -7951,6 +7951,41 @@ mustContain(
 );
 
 console.log(
+  "\n[SMOKE] Checking 2026-10-01 agent-admin-PIN made opt-in per install (Sergi: existing businesses with no agent-admin PIN setup at all must keep working exactly as before -- any agent under a real admin login already sees every admin option -- the stricter per-agent PIN should only kick in for a client who explicitly turns it on)\n",
+);
+
+mustContain(
+  renderer,
+  'const OPTIONS_AGENT_ADMIN_PIN_MODE_KEY = "security.agentAdminPinEnabled";',
+  "New per-install setting, defaulting to false/off so every existing client (who never touched this) keeps the old behavior untouched -- isAdminFromLogin alone already grants every admin option, same as before this whole agent-PIN feature existed",
+);
+mustContain(
+  renderer,
+  "function agentRequiresAdminPin(codagente) {\r\n  if (!agentAdminPinModeEnabled) return false;\r\n  return adminAgentCodes.has(String(codagente ?? \"\").trim());\r\n}",
+  "agentRequiresAdminPin now short-circuits to false whenever the toggle is off, regardless of what the CRM's list-agent-admins happens to contain for that client -- the CRM list existing (or even having stale/test entries) can never silently start requiring a PIN unless the client's own TPV explicitly turned this on",
+);
+mustContain(
+  renderer,
+  "recomputeAdminAccessForCurrentAgent?.();",
+  "Flipping the toggle recomputes admin access immediately (not just on the next agent switch) -- turning it off instantly un-requires any PIN that was previously needed, and turning it on takes effect right away too",
+);
+mustContain(
+  index,
+  'id="agentAdminPinModeToggle"',
+  "New admin-only toggle in Opciones -> Terminales, same switch pattern as every other Opciones boolean setting",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-10-01 compact agent quick-switch bar pre-selects the PIN-required agent before redirecting (Sergi, verifying live: clicking an admin-PIN agent in the top bar correctly never grants access directly, but used to need a 2nd redundant click inside the full modal before the PIN box showed up)\n",
+);
+
+mustContain(
+  renderer,
+  "          currentAgent = agent;\r\n          showTerminalOverlay(\"agentSwitch\");",
+  "The compact bar's redirect-to-full-modal path now also sets currentAgent to the clicked agent before opening it -- same assignment the modal's own agent button already does on click, just done one step earlier so the PIN box shows immediately instead of requiring the cashier to click the same agent again inside the modal",
+);
+
+console.log(
   "\n[SMOKE] Checking 2026-09-29 missing timeout on Mesas layout sync (real client: Lumi, first one really using Modo Mesas -- reported 'goes slow, freezes'; reproduced live: a single hung connection left the periodic sync permanently stuck, and an active save from the cashier hung forever with no error)\n",
 );
 

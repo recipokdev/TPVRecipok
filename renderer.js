@@ -2131,6 +2131,14 @@ const PRODUCT_NAME_FONT_SIZE_DEFAULT = 12;
 const PRODUCT_NAME_FONT_SIZE_MIN = 9;
 const PRODUCT_NAME_FONT_SIZE_MAX = 26;
 const OPTIONS_FAMILY_BUTTON_RESIZE_MODE_KEY = "ui.familyButtonResizeMode";
+// Desactivado (false) por defecto a proposito: preserva el comportamiento de
+// siempre (cualquier agente ve las Opciones de admin bajo un usuario admin
+// real) para cualquier cliente que nunca haya tocado este ajuste. Solo si el
+// propio cliente lo activa explicitamente empieza a exigirse ademas el PIN
+// por agente (ver [[feature_agent_admin_pin_2026-09-30]]) -- la lista de
+// agentes-admin del CRM (list-agent-admins) puede existir y no importar nada
+// mientras este interruptor siga apagado.
+const OPTIONS_AGENT_ADMIN_PIN_MODE_KEY = "security.agentAdminPinEnabled";
 const OPTIONS_FAMILY_BUTTON_FONT_SIZE_KEY = "ui.familyButtonFontSize";
 // 16px es el tamaño real que ya tenia .category-btn en styles.css -- mismo
 // valor aqui para que nadie note ningun cambio hasta que arrastre el tirador.
@@ -2196,6 +2204,7 @@ let productNameFontSize = PRODUCT_NAME_FONT_SIZE_DEFAULT;
 let productTileResizeMode = false;
 let familyButtonFontSize = FAMILY_BUTTON_FONT_SIZE_DEFAULT;
 let familyButtonResizeMode = false;
+let agentAdminPinModeEnabled = false;
 let scaleManualCaptureMode = false;
 let productsFilterStockOnly = false;
 let productsFilterIncludeUnmanaged = true;
@@ -5297,6 +5306,34 @@ async function setProductNameFontSize(nextSize, opts = {}) {
   if (rerender) renderProducts?.();
 }
 
+async function loadAgentAdminPinModeToggle() {
+  const el = document.getElementById("agentAdminPinModeToggle");
+  let enabled = false;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(OPTIONS_AGENT_ADMIN_PIN_MODE_KEY);
+    enabled = parseBoolLike(cfgVal, false);
+  } catch {}
+
+  agentAdminPinModeEnabled = !!enabled;
+  if (el) el.checked = agentAdminPinModeEnabled;
+}
+
+async function saveAgentAdminPinModeToggle(enabled) {
+  agentAdminPinModeEnabled = !!enabled;
+  try {
+    await window.TPV_CFG?.set?.(OPTIONS_AGENT_ADMIN_PIN_MODE_KEY, agentAdminPinModeEnabled);
+  } catch (e) {
+    console.warn("No se pudo guardar modo PIN de agente admin:", e);
+  }
+
+  // Al apagarlo, cualquier agente admin "verificado" en esta sesion deja de
+  // contar -- recomputeAdminAccessForCurrentAgent debe recalcular ya mismo
+  // (no esperar al siguiente cambio de agente) para que el efecto sea
+  // instantaneo, igual que al encenderlo.
+  recomputeAdminAccessForCurrentAgent?.();
+}
+
 async function loadFamilyButtonResizeModeToggle() {
   const el = document.getElementById("familyButtonResizeModeToggle");
   let enabled = false;
@@ -6352,6 +6389,27 @@ function bindFamilyButtonFontSizeHandle(handle) {
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerEnd);
     window.addEventListener("pointercancel", onPointerEnd);
+  });
+}
+
+let agentAdminPinModeToggleBound = false;
+function bindAgentAdminPinModeToggleOnce() {
+  if (agentAdminPinModeToggleBound) return;
+  agentAdminPinModeToggleBound = true;
+
+  const el = document.getElementById("agentAdminPinModeToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+    await saveAgentAdminPinModeToggle(wanted);
+    toast?.(
+      wanted
+        ? "PIN de administrador por agente activado."
+        : "PIN de administrador por agente desactivado -- cualquier agente vuelve a ver todas las Opciones bajo un usuario admin.",
+      "ok",
+      "Seguridad",
+    );
   });
 }
 
@@ -11840,6 +11898,7 @@ async function runBootFlow() {
     await loadInfoBarVisibilitySettings?.();
     await loadProductTileSizeSetting?.();
     await loadProductTileResizeModeToggle?.();
+    await loadAgentAdminPinModeToggle?.();
     await loadFamilyButtonResizeModeToggle?.();
     await loadFamilyButtonFontSizeSetting?.();
     await loadCartPanelWidthSetting?.();
@@ -22261,11 +22320,15 @@ function renderMainAgentBar() {
         // vuelo" desde esta barra compacta -- no hay sitio aqui para el
         // cuadro de PIN. Se reutiliza el mismo modal de cambio de agente
         // (showTerminalOverlay("agentSwitch")), que ya sabe pedirlo debajo
-        // de la lista, tal cual el login de usuario admin.
+        // de la lista, tal cual el login de usuario admin. Se preselecciona
+        // aqui mismo (igual que si el cajero lo hubiera clicado dentro del
+        // propio modal) para que la caja de PIN aparezca directamente, sin
+        // un segundo clic repitiendo la misma selección dentro del modal.
         if (
           agentRequiresAdminPin(clickedCode) &&
           agentPinVerifiedCode !== clickedCode
         ) {
+          currentAgent = agent;
           showTerminalOverlay("agentSwitch");
           return;
         }
@@ -29844,6 +29907,7 @@ async function openOptions() {
   bindPrintCajaAutoLogToggleOnce();
   bindPrintCajaDrawerOpenLogsToggleOnce();
   bindProductTileResizeModeToggleOnce();
+  bindAgentAdminPinModeToggleOnce();
   bindFamilyButtonResizeModeToggleOnce();
   bindFamilyButtonFontSizeResetButtonOnce();
   bindScaleManualCaptureToggleOnce();
@@ -29901,6 +29965,7 @@ async function openOptions() {
     loadTariffManagerOptionsData(),
     loadProductTileSizeSetting(),
     loadProductNameFontSizeSetting(),
+    loadAgentAdminPinModeToggle(),
     loadFamilyButtonResizeModeToggle(),
     loadFamilyButtonFontSizeSetting(),
     loadCartPanelWidthSetting(),
@@ -37784,6 +37849,7 @@ async function refreshAdminAgentCodes() {
 }
 
 function agentRequiresAdminPin(codagente) {
+  if (!agentAdminPinModeEnabled) return false;
   return adminAgentCodes.has(String(codagente ?? "").trim());
 }
 
