@@ -1904,6 +1904,49 @@ body.theme-dark .input-clear-btn:hover {
   flex: 1;
 }
 
+/* Opciones -> Productos -> "Familias primero": mientras no se haya elegido
+   una familia final (ni escrito nada en el buscador), se oculta la
+   cuadricula de productos del todo y las familias ocupan ese espacio con
+   botones grandes. Al elegir una familia (o buscar), se oculta la lista de
+   familias y aparece el boton "Volver a familias" sobre la cuadricula. */
+.families-first-back-bar {
+  display: flex;
+  margin-bottom: 4px;
+}
+.families-first-back-bar.hidden {
+  display: none;
+}
+
+body.families-first-families-view .products-grid-wrap {
+  display: none;
+}
+body.families-first-families-view .categories-wrapper {
+  flex: 1 1 auto;
+  align-items: stretch;
+  min-height: 0;
+}
+body.families-first-families-view .categories {
+  flex: 1 1 auto;
+  max-height: none;
+  align-content: flex-start;
+  gap: 12px;
+}
+body.families-first-families-view .category-btn {
+  flex: 1 1 calc(25% - 12px);
+  min-width: 160px;
+  min-height: 110px;
+  font-size: 22px;
+  justify-content: center;
+  text-align: center;
+}
+body.families-first-families-view .category-btn::before {
+  font-size: 28px;
+}
+
+body.families-first-products-view .categories-wrapper {
+  display: none;
+}
+
 /* Mientras se guarda un aparcado: la zona de productos se ve atenuada y deja
    de responder a toques, para no dar la falsa impresion de que anadir/quitar
    productos en ese momento se aplica al aparcado que se esta guardando. */

@@ -2139,6 +2139,7 @@ const OPTIONS_FAMILY_BUTTON_RESIZE_MODE_KEY = "ui.familyButtonResizeMode";
 // agentes-admin del CRM (list-agent-admins) puede existir y no importar nada
 // mientras este interruptor siga apagado.
 const OPTIONS_AGENT_ADMIN_PIN_MODE_KEY = "security.agentAdminPinEnabled";
+const OPTIONS_FAMILIES_FIRST_MODE_KEY = "ui.familiesFirstModeEnabled";
 const OPTIONS_FAMILY_BUTTON_FONT_SIZE_KEY = "ui.familyButtonFontSize";
 // 16px es el tamaño real que ya tenia .category-btn en styles.css -- mismo
 // valor aqui para que nadie note ningun cambio hasta que arrastre el tirador.
@@ -2205,6 +2206,7 @@ let productTileResizeMode = false;
 let familyButtonFontSize = FAMILY_BUTTON_FONT_SIZE_DEFAULT;
 let familyButtonResizeMode = false;
 let agentAdminPinModeEnabled = false;
+let familiesFirstModeEnabled = false;
 let scaleManualCaptureMode = false;
 let productsFilterStockOnly = false;
 let productsFilterIncludeUnmanaged = true;
@@ -5334,6 +5336,31 @@ async function saveAgentAdminPinModeToggle(enabled) {
   recomputeAdminAccessForCurrentAgent?.();
 }
 
+async function loadFamiliesFirstModeToggle() {
+  const el = document.getElementById("familiesFirstModeToggle");
+  let enabled = false;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(OPTIONS_FAMILIES_FIRST_MODE_KEY);
+    enabled = parseBoolLike(cfgVal, false);
+  } catch {}
+
+  familiesFirstModeEnabled = !!enabled;
+  if (el) el.checked = familiesFirstModeEnabled;
+}
+
+async function saveFamiliesFirstModeToggle(enabled) {
+  familiesFirstModeEnabled = !!enabled;
+  try {
+    await window.TPV_CFG?.set?.(OPTIONS_FAMILIES_FIRST_MODE_KEY, familiesFirstModeEnabled);
+  } catch (e) {
+    console.warn("No se pudo guardar modo familias primero:", e);
+  }
+
+  renderCategories?.();
+  renderProducts?.();
+}
+
 async function loadFamilyButtonResizeModeToggle() {
   const el = document.getElementById("familyButtonResizeModeToggle");
   let enabled = false;
@@ -6410,6 +6437,20 @@ function bindAgentAdminPinModeToggleOnce() {
       "ok",
       "Seguridad",
     );
+  });
+}
+
+let familiesFirstModeToggleBound = false;
+function bindFamiliesFirstModeToggleOnce() {
+  if (familiesFirstModeToggleBound) return;
+  familiesFirstModeToggleBound = true;
+
+  const el = document.getElementById("familiesFirstModeToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    const wanted = !!el.checked;
+    await saveFamiliesFirstModeToggle(wanted);
   });
 }
 
@@ -11899,6 +11940,7 @@ async function runBootFlow() {
     await loadProductTileSizeSetting?.();
     await loadProductTileResizeModeToggle?.();
     await loadAgentAdminPinModeToggle?.();
+    await loadFamiliesFirstModeToggle?.();
     await loadFamilyButtonResizeModeToggle?.();
     await loadFamilyButtonFontSizeSetting?.();
     await loadCartPanelWidthSetting?.();
@@ -12189,6 +12231,48 @@ function updateOpenCajaPrompt(cashOpen, hasLogin) {
 }
 
 // ===== [08] UI venta: categorias/familias =====
+
+// En modo "familias primero", solo se consideran "productos ya elegidos
+// para ver" los 2 casos que de verdad identifican un conjunto concreto:
+// una familia/subfamilia final (sin hijos propios) o un termino de busqueda
+// escrito a mano. Navegar por familias CON hijos (activeFamilyParentId sin
+// activeSubfamilyId) sigue contando como "eligiendo familia todavia", no
+// como "ya quiero ver productos".
+function isFamiliesOnlyViewActive() {
+  if (!familiesFirstModeEnabled) return false;
+  if (activeSubfamilyId || selectedCategory) return false;
+  if (normalizeSearchText((searchTerm || "").trim())) return false;
+  return true;
+}
+
+function applyFamiliesFirstModeUI() {
+  const familiesOnly = isFamiliesOnlyViewActive();
+  const showingProductsBecauseOfMode =
+    familiesFirstModeEnabled && !familiesOnly;
+
+  document.body.classList.toggle("families-first-families-view", familiesOnly);
+  document.body.classList.toggle(
+    "families-first-products-view",
+    showingProductsBecauseOfMode,
+  );
+
+  const backBar = document.getElementById("familiesFirstBackBar");
+  if (backBar) {
+    backBar.classList.toggle("hidden", !showingProductsBecauseOfMode);
+  }
+}
+
+function backToFamiliesFirstView() {
+  selectedCategory = null;
+  activeFamilyParentId = null;
+  activeSubfamilyId = null;
+  searchTerm = "";
+  if (searchInput) searchInput.value = "";
+  syncSearchClearBtnVisibility?.();
+  renderCategories();
+  renderProducts();
+}
+
 function renderCategories() {
   debugTrace("[TRACE] renderCategories()");
 
@@ -12558,6 +12642,7 @@ function renderProducts() {
 
   grid.innerHTML = "";
   refreshProductReorderModeNotice();
+  applyFamiliesFirstModeUI();
 
   const term = normalizeSearchText((searchTerm || "").trim());
 
@@ -12982,6 +13067,11 @@ if (searchClearBtn) {
     syncSearchClearBtnVisibility();
     renderProducts();
   };
+}
+
+const familiesFirstBackBtn = document.getElementById("familiesFirstBackBtn");
+if (familiesFirstBackBtn) {
+  familiesFirstBackBtn.onclick = () => backToFamiliesFirstView();
 }
 
 if (productsStockOnlyToggle) {
@@ -29914,6 +30004,7 @@ async function openOptions() {
   bindPrintCajaDrawerOpenLogsToggleOnce();
   bindProductTileResizeModeToggleOnce();
   bindAgentAdminPinModeToggleOnce();
+  bindFamiliesFirstModeToggleOnce();
   bindFamilyButtonResizeModeToggleOnce();
   bindFamilyButtonFontSizeResetButtonOnce();
   bindScaleManualCaptureToggleOnce();
@@ -29972,6 +30063,7 @@ async function openOptions() {
     loadProductTileSizeSetting(),
     loadProductNameFontSizeSetting(),
     loadAgentAdminPinModeToggle(),
+    loadFamiliesFirstModeToggle(),
     loadFamilyButtonResizeModeToggle(),
     loadFamilyButtonFontSizeSetting(),
     loadCartPanelWidthSetting(),

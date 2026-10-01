@@ -7951,6 +7951,41 @@ mustContain(
 );
 
 console.log(
+  "\n[SMOKE] Checking 2026-10-01 agent-admin-PIN made opt-in per install (Sergi: existing businesses with no agent-admin PIN setup at all must keep working exactly as before -- any agent under a real admin login already sees every admin option -- the stricter per-agent PIN should only kick in for a client who explicitly turns it on)\n",
+);
+
+mustContain(
+  renderer,
+  'const OPTIONS_AGENT_ADMIN_PIN_MODE_KEY = "security.agentAdminPinEnabled";',
+  "New per-install setting, defaulting to false/off so every existing client (who never touched this) keeps the old behavior untouched -- isAdminFromLogin alone already grants every admin option, same as before this whole agent-PIN feature existed",
+);
+mustContain(
+  renderer,
+  "function agentRequiresAdminPin(codagente) {\r\n  if (!agentAdminPinModeEnabled) return false;\r\n  return adminAgentCodes.has(String(codagente ?? \"\").trim());\r\n}",
+  "agentRequiresAdminPin now short-circuits to false whenever the toggle is off, regardless of what the CRM's list-agent-admins happens to contain for that client -- the CRM list existing (or even having stale/test entries) can never silently start requiring a PIN unless the client's own TPV explicitly turned this on",
+);
+mustContain(
+  renderer,
+  "recomputeAdminAccessForCurrentAgent?.();",
+  "Flipping the toggle recomputes admin access immediately (not just on the next agent switch) -- turning it off instantly un-requires any PIN that was previously needed, and turning it on takes effect right away too",
+);
+mustContain(
+  index,
+  'id="agentAdminPinModeToggle"',
+  "New admin-only toggle in Opciones -> Terminales, same switch pattern as every other Opciones boolean setting",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-10-01 compact agent quick-switch bar pre-selects the PIN-required agent before redirecting (Sergi, verifying live: clicking an admin-PIN agent in the top bar correctly never grants access directly, but used to need a 2nd redundant click inside the full modal before the PIN box showed up)\n",
+);
+
+mustContain(
+  renderer,
+  "          currentAgent = agent;\r\n          showTerminalOverlay(\"agentSwitch\");",
+  "The compact bar's redirect-to-full-modal path now also sets currentAgent to the clicked agent before opening it -- same assignment the modal's own agent button already does on click, just done one step earlier so the PIN box shows immediately instead of requiring the cashier to click the same agent again inside the modal",
+);
+
+console.log(
   "\n[SMOKE] Checking 2026-10-01 'Borrar mesa' button in Mesas (Sergi: 'Vaciar' only empties the cart, it never deletes the parked ticket -- the table stays linked to the same (now empty) ticket instead of becoming genuinely free; there was no direct way to actually delete a table's order from this header)\n",
 );
 
@@ -7968,6 +8003,46 @@ mustContain(
   renderer,
   "const parkedDeleteBtn = document.getElementById(\"parkedDeleteBtn\");\r\nparkedDeleteBtn?.addEventListener(\"click\", async () => {\r\n  const labels = getParkingLabels();\r\n  if (!cashSession?.open) return;\r\n\r\n  const idx = Number(currentParkedTicketIndex);",
   "Removed the early-return that blocked this button in Mesas mode with an info toast pointing the cashier elsewhere -- verified live against demo end-to-end: adding a real product to a real table, clicking 'Borrar mesa', confirming, and seeing the parked reservation genuinely gone server-side (not just hidden locally), the table-ticket mapping removed, and the cart cleared",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-10-01 'Familias primero' toggle (Sergi: hide the whole product grid behind big family tiles until one is chosen -- a more opinionated catalog layout, so it's an opt-in toggle, not a redesign of the default view)\n",
+);
+
+mustContain(
+  renderer,
+  'const OPTIONS_FAMILIES_FIRST_MODE_KEY = "ui.familiesFirstModeEnabled";',
+  "New per-install setting, off by default -- the normal 'see everything at once' catalog is untouched unless a client explicitly opts into this more opinionated layout",
+);
+mustContain(
+  renderer,
+  "function isFamiliesOnlyViewActive() {",
+  "Drilling through a nested family that still has children (activeFamilyParentId set, no leaf chosen yet) still counts as 'still picking a family', not 'ready to see products' -- only a genuine leaf family/subfamily selection or a typed search term switches to the products view, so the existing parent/child family drill-down keeps working exactly as before inside this mode",
+);
+mustContain(
+  renderer,
+  "function applyFamiliesFirstModeUI() {",
+  "Toggles 2 body classes (families-only view vs products view) plus the back-bar's visibility every render -- CSS keys off these classes to hide the product grid and blow up the family buttons, or hide the family bar and show the 'Volver a familias' button, without any layout logic duplicated in JS",
+);
+mustContain(
+  renderer,
+  "function backToFamiliesFirstView() {",
+  "Clears the selected family AND any typed search term together -- otherwise clicking 'Volver a familias' with lingering search text would immediately flip right back to the products view",
+);
+mustContain(
+  index,
+  'id="familiesFirstModeToggle"',
+  "New admin-only toggle in Opciones -> Productos, same switch pattern as every other Opciones boolean setting",
+);
+mustContain(
+  index,
+  'id="familiesFirstBackBar"',
+  "Static 'Volver a familias' bar added once to index.html (hidden by default), toggled by JS rather than built dynamically on every render",
+);
+mustContain(
+  styles,
+  "body.families-first-families-view .products-grid-wrap {\r\n  display: none;\r\n}",
+  "Verified live against demo: enabling the toggle immediately hides the product grid and grows the family buttons into a 2-column grid of big tiles using the freed-up space; picking a leaf family swaps to showing its products with the back button, and 'Volver a familias' returns cleanly with the selection and search term both cleared",
 );
 
 console.log(

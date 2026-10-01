@@ -191,6 +191,16 @@
         </div>
       </div>
 
+      <div id="familiesFirstBackBar" class="families-first-back-bar hidden">
+        <button
+          type="button"
+          id="familiesFirstBackBtn"
+          class="category-btn category-btn-back"
+        >
+          ← Volver a familias
+        </button>
+      </div>
+
       <div class="products-grid-wrap" id="productsGridWrap">
         <div class="products-grid" id="productsGrid"></div>
         <div
@@ -3121,7 +3131,12 @@
                 class="opt-preview-item"
                 data-toggle-id="productAddonsEnabledToggle"
                 >añadidos de producto</span
-              >, orden y tamaño de tarjetas, texto de la tarjeta
+              >, orden y tamaño de tarjetas, texto de la tarjeta,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="familiesFirstModeToggle"
+                >familias primero</span
+              >
             </div>
             <div class="opt-sec-b">
               <div class="opt-row">
@@ -3356,6 +3371,24 @@
                 >
                   Restablecer
                 </button>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Familias primero (ocultar productos hasta elegir una)
+                  </div>
+                  <div class="opt-row-sub">
+                    En vez de ver todos los productos de golpe, la pantalla
+                    muestra solo botones grandes de familia; al elegir una,
+                    se ven sus productos con un botón para volver a las
+                    familias. Diseño distinto, pensado para catálogos
+                    grandes. Apagado por defecto.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="familiesFirstModeToggle" />
+                  <span class="slider"></span>
+                </label>
               </div>
             </div>
           </section>
