@@ -8046,6 +8046,31 @@ mustContain(
 );
 
 console.log(
+  "\n[SMOKE] Checking 2026-10-01 refund/payment-method-change never decremented the live cash-close counters (real client: Sabor 100% -- a devolucion left 'Cobros Efectivo'/'Total Esperado Caja'/'Total Ventas' counting the refunded amount as a sale, -5.50 EUR false difference on close; apiUpdateCajaAfterSale only ever added, nothing ever subtracted)\n",
+);
+
+mustContain(
+  renderer,
+  "async function apiUpdateCajaAfterRefund({ totalRefundAbs, cashRefundAbs }) {",
+  "Mirrors apiUpdateCajaAfterSale but subtracts instead of adding -- verified live against demo end-to-end (real cobro + real devolucion via createRefundInFacturaScriptsPackAware, no UI simulation): cashSession.cashSalesTotal and totalSales dropped by EXACTLY the refunded amount on each of 3 separate real refunds, to the cent, and numtickets incremented by 1 (FacturaScripts counts the rectificativa itself as a ticket)",
+);
+mustContain(
+  renderer,
+  "      totalRefundAbs: totalRectAbs,\r\n      cashRefundAbs,",
+  "Wired into createRefundInFacturaScriptsPackAware right after updateFacturaCliente(rectId, ...) -- a network failure here is swallowed (console.warn + enqueued for retry via the existing enqueueTpvcajaTotalsSync queue) and never invalidates the rectificativa itself, which is already safely recorded by that point",
+);
+mustContain(
+  renderer,
+  "async function apiUpdateCajaAfterPaymentMethodChange({ cashDelta }) {",
+  "Same gap existed in the OTHER place a ticket gets cancelled+recreated outside the normal cobro flow: changeTicketPaymentMethodByReissue (reissuing a ticket under a different payment method) never touched the live counters either -- total sales nets to zero (same amount, just re-billed), but cash moves whenever the method change involves cash on either side, and nothing ever told cashSession",
+);
+mustContain(
+  renderer,
+  "      cashDelta: Number(rectCash || 0) + Number(newCash || 0),",
+  "cashDelta combines the (already signed) cash effect of both the cancelling rectificativa and the new ticket -- e.g. CONT -> TARJETA: rectCash is negative (cash leaves), newCash is 0 (new ticket isn't cash), net delta correctly negative",
+);
+
+console.log(
   "\n[SMOKE] Checking 2026-09-29 missing timeout on Mesas layout sync (real client: Lumi, first one really using Modo Mesas -- reported 'goes slow, freezes'; reproduced live: a single hung connection left the periodic sync permanently stuck, and an active save from the cashier hung forever with no error)\n",
 );
 

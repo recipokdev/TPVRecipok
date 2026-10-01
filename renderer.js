@@ -23720,6 +23720,37 @@ async function changeTicketPaymentMethodByReissue({ facturaRow, newCodpago }) {
     numero2: n2New,
   });
 
+  // Sincroniza los acumulados en memoria de esta caja -- mismo motivo que en
+  // una devolucion normal (ver apiUpdateCajaAfterRefund): sin esto, "Cobros
+  // Efectivo" no reflejaba el cambio de metodo de pago hasta el siguiente
+  // cobro. Un fallo de red no invalida los 2 documentos ya creados arriba.
+  try {
+    await apiUpdateCajaAfterPaymentMethodChange({
+      cashDelta: Number(rectCash || 0) + Number(newCash || 0),
+    });
+  } catch (e) {
+    if (isNetworkError(e) || isProbablyNetworkError(e)) {
+      const cajaSyncMeta =
+        e?.__tpvCajaSync && typeof e.__tpvCajaSync === "object"
+          ? e.__tpvCajaSync
+          : null;
+      if (cajaSyncMeta?.remoteId && cajaSyncMeta?.body) {
+        await enqueueTpvcajaTotalsSync(cajaSyncMeta.remoteId, cajaSyncMeta.body, {
+          source: "post-paymentmethodchange-online",
+        });
+      }
+      console.warn(
+        "No se pudo sync caja tras cambio de metodo de pago; encolado para reintento.",
+        e?.message || e,
+      );
+    } else {
+      console.warn(
+        "No se pudo sincronizar los totales de caja tras el cambio de metodo de pago:",
+        e?.message || e,
+      );
+    }
+  }
+
   // Sincroniza predictor de numeracion para siguientes preimpresiones
   // (este flujo crea un ticket nuevo real fuera del cobro normal onPay).
   updateFastTicketNumberByConfirmedCode({
@@ -40461,6 +40492,112 @@ async function apiUpdateCajaAfterSale({ totalVenta, pagos }) {
   }
 }
 
+// Espejo de apiUpdateCajaAfterSale para una devolucion (rectificativa): resta
+// de los mismos acumulados en memoria en vez de sumar. Sin esto, una
+// devolucion dejaba "Cobros Efectivo"/"Total Esperado Caja"/"Total Ventas"
+// en el dialogo de Cerrar Caja contando el importe devuelto como si siguiera
+// siendo una venta -- real de cliente (Sabor 100%, 28-sep): -5,50€ de
+// diferencia falsa en el cierre tras una devolucion en efectivo.
+async function apiUpdateCajaAfterRefund({ totalRefundAbs, cashRefundAbs }) {
+  if (TPV_STATE.offline || TPV_STATE.locked) return;
+  const remoteId = cashSession.remoteCajaId;
+  if (!remoteId) return;
+
+  // 1) Actualiza acumulados LOCALES (resta, en vez de sumar como la venta)
+  cashSession.totalSales =
+    (Number(cashSession.totalSales) || 0) - Math.abs(Number(totalRefundAbs) || 0);
+  cashSession.cashSalesTotal =
+    (Number(cashSession.cashSalesTotal) || 0) - Math.abs(Number(cashRefundAbs) || 0);
+  // FacturaScripts cuenta la propia rectificativa como un ticket mas
+  // (tpv_venta=true) -- ver hydrateCloseTicketStatsForCaja.
+  cashSession.numtickets = (Number(cashSession.numtickets) || 0) + 1;
+
+  // Espejo local ANTES de cualquier intento de red, igual que en la venta.
+  persistCashRunningTotalsSnapshot();
+
+  // 2) Calcula totalcaja esperado (mismo calculo que apiUpdateCajaAfterSale)
+  const opening = Number(cashSession.openingTotal || 0);
+  const totalmovi = Number(cashSession.cashMovementsTotal || 0);
+  const ingresos = Number(cashSession.cashSalesTotal || 0);
+  const totalcaja = calcExpectedCash(opening, ingresos, totalmovi);
+
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+  const payload = {
+    ingresos: round2(ingresos),
+    totalmovi: round2(totalmovi),
+    totalcaja: round2(totalcaja),
+    totaltickets: round2(Number(cashSession.totalSales || 0)),
+    numtickets: Number(cashSession.numtickets || 0),
+    nick: getLoginUser(),
+  };
+
+  try {
+    await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
+  } catch (e) {
+    if (isNetworkError(e) || isProbablyNetworkError(e)) {
+      const wrapped = new Error(e?.message || String(e));
+      wrapped.__tpvCajaSync = {
+        remoteId: String(remoteId),
+        body: payload,
+      };
+      throw wrapped;
+    }
+    throw e;
+  }
+}
+
+// Cambio de metodo de pago por reemision (changeTicketPaymentMethodByReissue):
+// cancela el ticket original con una rectificativa y crea uno nuevo con el
+// metodo nuevo -- el importe TOTAL vendido no cambia (misma cantidad, mismo
+// ticket, solo cambia como se pago), pero si el efectivo cambia cuando el
+// metodo pasa de/a efectivo. Mismo problema que una devolucion normal: sin
+// esto, "Cobros Efectivo" no reflejaba el cambio hasta el siguiente cobro.
+async function apiUpdateCajaAfterPaymentMethodChange({ cashDelta }) {
+  if (TPV_STATE.offline || TPV_STATE.locked) return;
+  const remoteId = cashSession.remoteCajaId;
+  if (!remoteId) return;
+
+  // Total Ventas no cambia (la rectificativa y el ticket nuevo se cancelan en
+  // importe) -- solo el efectivo, y el nº de tickets (FacturaScripts cuenta
+  // ambos documentos nuevos como ticket).
+  cashSession.cashSalesTotal =
+    (Number(cashSession.cashSalesTotal) || 0) + (Number(cashDelta) || 0);
+  cashSession.numtickets = (Number(cashSession.numtickets) || 0) + 2;
+
+  persistCashRunningTotalsSnapshot();
+
+  const opening = Number(cashSession.openingTotal || 0);
+  const totalmovi = Number(cashSession.cashMovementsTotal || 0);
+  const ingresos = Number(cashSession.cashSalesTotal || 0);
+  const totalcaja = calcExpectedCash(opening, ingresos, totalmovi);
+
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+  const payload = {
+    ingresos: round2(ingresos),
+    totalmovi: round2(totalmovi),
+    totalcaja: round2(totalcaja),
+    totaltickets: round2(Number(cashSession.totalSales || 0)),
+    numtickets: Number(cashSession.numtickets || 0),
+    nick: getLoginUser(),
+  };
+
+  try {
+    await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
+  } catch (e) {
+    if (isNetworkError(e) || isProbablyNetworkError(e)) {
+      const wrapped = new Error(e?.message || String(e));
+      wrapped.__tpvCajaSync = {
+        remoteId: String(remoteId),
+        body: payload,
+      };
+      throw wrapped;
+    }
+    throw e;
+  }
+}
+
 // ===== [08] UI venta: boton eliminar todo =====
 const clearBtn = document.getElementById("clearCartBtn");
 if (clearBtn) {
@@ -51028,6 +51165,41 @@ async function createRefundInFacturaScriptsPackAware(
 
     ...(currentAgent?.codagente ? { codagente: currentAgent.codagente } : {}),
   });
+
+  // Sincroniza los acumulados en memoria de esta caja (Cobros Efectivo,
+  // Total Ventas, Total Esperado) para que resten la devolucion al instante,
+  // no solo cuando se abra Cerrar Caja (que ya recalcula desde FacturaScripts
+  // de todas formas -- esto es ademas, para que la UI en vivo tambien sea
+  // correcta mientras la caja sigue abierta). Un fallo de red no debe
+  // invalidar la rectificativa, que ya quedo bien grabada arriba -- se
+  // encola para reintento igual que ya hace una venta normal.
+  try {
+    await apiUpdateCajaAfterRefund({
+      totalRefundAbs: totalRectAbs,
+      cashRefundAbs,
+    });
+  } catch (e) {
+    if (isNetworkError(e) || isProbablyNetworkError(e)) {
+      const cajaSyncMeta =
+        e?.__tpvCajaSync && typeof e.__tpvCajaSync === "object"
+          ? e.__tpvCajaSync
+          : null;
+      if (cajaSyncMeta?.remoteId && cajaSyncMeta?.body) {
+        await enqueueTpvcajaTotalsSync(cajaSyncMeta.remoteId, cajaSyncMeta.body, {
+          source: "post-refund-online",
+        });
+      }
+      console.warn(
+        "No se pudo sync caja tras devolucion; encolado para reintento.",
+        e?.message || e,
+      );
+    } else {
+      console.warn(
+        "No se pudo sincronizar los totales de caja tras la devolucion:",
+        e?.message || e,
+      );
+    }
+  }
 
   // ✅ NUEVO: si la venta original era mixta, reescribimos los recibos
   // de la rectificativa para que el reparto por método quede correcto
