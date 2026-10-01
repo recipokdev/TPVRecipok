@@ -20234,7 +20234,13 @@ function refreshParkedEditingBanner() {
   }
 
   const showMesasActions = isMesasTransaccionesMode() && isMesasModeTicket(t);
-  const showDeleteAction = !showMesasActions;
+  // Antes se ocultaba del todo en Mesas (habia que borrar desde la lista de
+  // Pedidos) -- siempre visible ahora: "Vaciar" solo quita los platos del
+  // carrito, no borra el pedido guardado ni libera la mesa, asi que hacia
+  // falta un camino directo para borrar la mesa de verdad desde aqui mismo.
+  const showDeleteAction = true;
+  const delBtnEl = document.getElementById("parkedDeleteBtn");
+  if (delBtnEl) delBtnEl.textContent = showMesasActions ? "Borrar mesa" : "Borrar";
   setActionButtonsVisible({
     split: showMesasActions,
     comanda: showMesasActions,
@@ -44723,15 +44729,6 @@ const parkedDeleteBtn = document.getElementById("parkedDeleteBtn");
 parkedDeleteBtn?.addEventListener("click", async () => {
   const labels = getParkingLabels();
   if (!cashSession?.open) return;
-
-  if (isMesasTransaccionesMode()) {
-    toast(
-      "Borrado directo no disponible en Mesas desde esta cabecera.",
-      "info",
-      labels.featureTitle,
-    );
-    return;
-  }
 
   const idx = Number(currentParkedTicketIndex);
   if (!Number.isInteger(idx) || idx < 0) {
