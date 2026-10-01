@@ -27970,21 +27970,41 @@ async function loadDataFromApi(opts = {}) {
 
         const sortedVariants = list.slice().sort((a, b) => a.idx - b.idx);
 
+        // Un producto con una UNICA fila en /variantes (FacturaScripts la
+        // crea por defecto para todos los productos, tengan o no
+        // combinaciones reales de talla/sabor/etc.) no necesita distinguirse
+        // de ningun otro -- se comporta igual que un producto sin variantes,
+        // respetando Opciones -> Productos en vez de forzar siempre la
+        // referencia. Real (cliente Lumi, 2026-10-01): sus productos de
+        // pasteleria SI tienen esa fila por defecto, pero su referencia es
+        // un codigo numerico interno ("3313", no un nombre legible) -- se
+        // mostraba como nombre principal en el carrito, confundiendo al
+        // cliente, con el nombre real ("Pastel Milhojas Mango") relegado a
+        // texto secundario mas pequeño. Un producto con variantes DE
+        // VERDAD (2+ filas -- tallas, sabores...) sigue mostrando siempre su
+        // propia referencia, o perderia la forma de distinguirlas entre si.
+        const isSingleVariant = sortedVariants.length <= 1;
+
         sortedVariants.forEach(({ v }, pos) => {
-          let mainName = String(v.referencia ?? "").trim();
-          if (!mainName) mainName = baseName;
+          const variantRef = String(v.referencia ?? "").trim();
+          const mainName = isSingleVariant
+            ? applyProductDisplayFieldMode(baseName, variantRef)
+            : variantRef || baseName;
           if (!mainName || mainName === "-") return;
 
           const price = Number(v.precio ?? base.precio ?? 0);
           const idVar = Number(v.idvariante ?? v.id ?? baseId * 1000 + pos);
-          const secondaryName =
-            baseName && mainName !== baseName ? baseName : "";
+          const secondaryName = isSingleVariant
+            ? ""
+            : baseName && mainName !== baseName
+              ? baseName
+              : "";
 
           combined.push({
             id: idVar,
             name: mainName,
             secondaryName,
-            referencia: mainName,
+            referencia: variantRef || baseName,
             descripcion: baseName,
             descripcion2: secondaryName,
             price,

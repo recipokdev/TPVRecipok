@@ -8410,6 +8410,38 @@ mustContain(
   "syncTpvCartWithSelectedMesa()'s other blind-wipe path (an orphaned tableTicketMap entry pointing to a ticket that no longer really exists) now falls back to the stored draft (or empty) instead of unconditionally wiping -- found live via a genuine ghost link accumulated in demo's shared mesas layout; it also self-heals by deleting the stale mapping once detected",
 );
 
+console.log(
+  "\n[SMOKE] Checking 2026-10-01 single-fake-variant product showed its raw reference code instead of its real name (real client: Lumi -- flagged days earlier as 'nombre de producto mal renderizado', only confirmed now)\n",
+);
+
+// FacturaScripts crea una fila en /variantes para TODO producto, tenga o no
+// combinaciones reales de talla/sabor/etc. -- el TPV trataba CUALQUIER
+// producto con al menos una fila ahi como "con variantes", forzando siempre
+// su referencia como nombre principal. Lumi (pasteleria) usa codigos
+// numericos internos como referencia ("3313") con el nombre real en
+// descripcion ("Pastel Milhojas Mango") -- el carrito mostraba el codigo en
+// grande y el nombre real como texto secundario, pareciendo "roto".
+mustContain(
+  renderer,
+  "const isSingleVariant = sortedVariants.length <= 1;",
+  "New check distinguishes a product with only FacturaScripts' always-present default variant row from one with genuinely multiple distinguishable variants (2+ rows, e.g. different sizes)",
+);
+mustContain(
+  renderer,
+  "const mainName = isSingleVariant\r\n            ? applyProductDisplayFieldMode(baseName, variantRef)\r\n            : variantRef || baseName;",
+  "A single-fake-variant product now respects Opciones -> Productos (same as a non-variant product) instead of always forcing its own reference as the name -- verified live against demo's real product 360 (referencia 'Croissant Ensaimada R. Almd' vs descripcion 'Croissant/Ensaïmada R. Almendra'): now correctly shows the descripcion by default",
+);
+mustContain(
+  renderer,
+  'const secondaryName = isSingleVariant\r\n            ? ""\r\n            : baseName && mainName !== baseName\r\n              ? baseName\r\n              : "";',
+  "No secondary-name clutter for the single-fake-variant case (matches the non-variant product shape exactly) -- a real multi-variant product (verified live: demo's 'Fartón' / '3x1 Fartones', 2 real variant rows) is completely unaffected and still always shows its own distinguishing reference, or both would show the identical base name and become indistinguishable",
+);
+mustContain(
+  renderer,
+  "isVariant: true,",
+  "isVariant stays true even for the single-fake-variant case -- editing its base price must still target the variant-price API endpoint (apiUpdateVariantePrecioNet), not the plain product one, since FacturaScripts stores its real price/stock on that variant row",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
