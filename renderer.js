@@ -10312,10 +10312,22 @@ function hasUnsavedChangesForLoadedParkedTicket(ticket) {
 function mergeMissingRemoteLinesIntoCart(ticket) {
   if (!ticket?.__remoteChangedWhileLoaded) return false;
 
-  const lineKey = (it) =>
+  // Real (app de camareros, 2026-10-02): la clave de comparacion incluia el
+  // precio EXACTO de la linea (pensado para no fusionar una linea con un
+  // precio manual distinto con la "normal" del mismo producto). Pero una
+  // linea remota con precio invalido (0/ausente -- visto real, por un fallo
+  // de la app al construir ese envio) nunca coincidia entonces con la que
+  // YA estaba en el carrito con su precio correcto: se trataba como "linea
+  // nueva" y se insertaba DUPLICADA a 0€ en vez de reconciliarse con la que
+  // ya habia. Ahora la clave ignora el precio (solo producto/impuesto/
+  // descuento/añadidos); si hace falta insertar unidades de verdad nuevas,
+  // el precio se resuelve por este orden: el que ya tenga esa misma linea
+  // en el carrito > el de la propia linea remota (si es valido) > el del
+  // catalogo cargado ahora mismo -- nunca un precio roto/0 heredado a
+  // ciegas de una linea remota corrupta.
+  const baseLineKey = (it) =>
     JSON.stringify({
       id: getProductBaseId(it) || String(it?.id || ""),
-      price: Number(it?.price ?? it?.grossPrice ?? 0) || 0,
       taxRate: Number(it?.taxRate ?? 0) || 0,
       cartLineDiscountPct: clampDiscountPercent(
         parseNumericLike(it?.cartLineDiscountPct, 0),
@@ -10323,34 +10335,74 @@ function mergeMissingRemoteLinesIntoCart(ticket) {
       addons: addonsSignature(it?.addons),
     });
   const lineQty = (it) => Number(it?.qty ?? it?.cantidad ?? 1) || 0;
+  const hasValidPrice = (it) => Number(it?.price ?? it?.grossPrice ?? 0) > 0;
 
   const sumQtyByKey = (lines) => {
     const map = new Map();
     (Array.isArray(lines) ? lines : []).forEach((it) => {
-      const key = lineKey(it);
+      const key = baseLineKey(it);
       map.set(key, (map.get(key) || 0) + lineQty(it));
     });
     return map;
   };
 
   const cartQtyByKey = sumQtyByKey(cart);
+
+  // Plantilla por clave: prioriza una linea con precio valido (primero la
+  // que ya hubiera en el carrito, luego la del propio ticket remoto) para
+  // heredar nombre/referencia/precio; si ninguna de las dos tiene un precio
+  // valido, se usa igualmente la primera linea remota como plantilla de
+  // los demas campos -- el precio se resuelve aparte, por catalogo, justo
+  // antes de insertar.
   const templateByKey = new Map();
+  [...(Array.isArray(cart) ? cart : []), ...(Array.isArray(ticket.items) ? ticket.items : [])].forEach(
+    (it) => {
+      const key = baseLineKey(it);
+      if (hasValidPrice(it) && !templateByKey.has(key)) templateByKey.set(key, it);
+    },
+  );
   (Array.isArray(ticket.items) ? ticket.items : []).forEach((it) => {
-    const key = lineKey(it);
+    const key = baseLineKey(it);
     if (!templateByKey.has(key)) templateByKey.set(key, it);
   });
+
   const ticketQtyByKey = sumQtyByKey(ticket.items);
 
   const additions = [];
   ticketQtyByKey.forEach((ticketQty, key) => {
     const deficit = ticketQty - (cartQtyByKey.get(key) || 0);
-    if (deficit > 0) {
-      additions.push({
-        ...templateByKey.get(key),
-        qty: deficit,
-        cantidad: deficit,
-      });
+    if (deficit <= 0) return;
+
+    let template = templateByKey.get(key);
+    if (!hasValidPrice(template)) {
+      const baseId = getProductBaseId(template);
+      const catalogProduct = Array.isArray(products)
+        ? products.find((p) => getProductBaseId(p) === baseId)
+        : null;
+      if (catalogProduct) {
+        const taxRate = getTaxRateForProduct(catalogProduct);
+        const priceNet = Number(catalogProduct.price || 0);
+        template = {
+          ...template,
+          price: priceNet,
+          grossPrice: priceNet * (1 + taxRate / 100),
+          taxRate,
+          originalNetPrice: priceNet,
+          originalGrossPrice: priceNet * (1 + taxRate / 100),
+        };
+      } else {
+        console.warn(
+          "mergeMissingRemoteLinesIntoCart: precio invalido y producto no encontrado en catalogo, se inserta igualmente con el precio tal cual llego:",
+          template?.name || baseId,
+        );
+      }
     }
+
+    additions.push({
+      ...template,
+      qty: deficit,
+      cantidad: deficit,
+    });
   });
 
   if (additions.length) {

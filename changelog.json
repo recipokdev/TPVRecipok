@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "FIX (importante, Modo Mesas): si tenías una mesa abierta en el TPV justo cuando llegaba un pedido nuevo desde la app de camareros, podían aparecer productos duplicados a 0€ en el pedido en vez de sumarse correctamente a lo que ya había. Causa: el TPV comparaba las líneas nuevas contra las que ya tenías usando también el precio exacto como parte de la comparación -- si la línea que llegaba traía un precio inválido (visto real, por un fallo puntual al enviarla), nunca coincidía con la que ya tenías correctamente, y se insertaba duplicada a 0€ en vez de reconciliarse. Ahora la comparación ignora el precio (solo mira el producto), y si hace falta añadir alguna unidad de verdad nueva, usa el precio ya correcto que tenías o el del catálogo -- nunca un precio roto heredado a ciegas."
+      ]
     },
     {
       "version": "0.2.38",

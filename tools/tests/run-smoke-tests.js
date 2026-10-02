@@ -9059,6 +9059,19 @@ mustContain(
   "Barra de informacion preview now mentions the master visibility toggle itself, not just which fields it shows",
 );
 
+console.log("\n[SMOKE] Checking 2026-10-02 real cash-corruption bug: remote Mesas merge duplicated lines at 0 euros (app de camareros)\n");
+
+mustContain(
+  renderer,
+  "const hasValidPrice = (it) => Number(it?.price ?? it?.grossPrice ?? 0) > 0;",
+  "Real bug found live (Sergi testing the waiter app against demo): mergeMissingRemoteLinesIntoCart's matching key used to include the exact price, so a remote line arriving with an invalid/zero price (confirmed in the real stored ticket, a camareros-app send) never matched the already-correct existing cart line for the same product -- it was inserted as a brand new DUPLICATE line at 0 euros instead of being reconciled. The key is now price-agnostic (product/tax/discount/addons only)",
+);
+mustContain(
+  renderer,
+  "const catalogProduct = Array.isArray(products)",
+  "When a real deficit needs a brand-new line and the only available price is invalid, the current catalog price is looked up and used instead of blindly trusting the broken 0 that arrived -- verified against the exact real corrupted data pulled from demo's database (3 correct lines + 5 broken-at-0 duplicates): after the fix, each product ends up as the correct total quantity with its real price, no 0-priced lines, no duplicates",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
