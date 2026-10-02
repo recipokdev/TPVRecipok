@@ -9072,6 +9072,24 @@ mustContain(
   "When a real deficit needs a brand-new line and the only available price is invalid, the current catalog price is looked up and used instead of blindly trusting the broken 0 that arrived -- verified against the exact real corrupted data pulled from demo's database (3 correct lines + 5 broken-at-0 duplicates): after the fix, each product ends up as the correct total quantity with its real price, no 0-priced lines, no duplicates",
 );
 
+console.log("\n[SMOKE] Checking 2026-10-02 Mesas: selecting an occupied table showed an empty cart (stale empty draft blocked the real ticket forever)\n");
+
+mustContain(
+  renderer,
+  "const { preferLinkedTicketOnEmptyDraft = true } = opts || {};",
+  "Real bug found live with screenshots (Sergi): selecting a table via the SALA/MESA dropdown showed a completely empty cart even though the table was marked Ocupada with a real parked ticket behind it -- an old EMPTY local draft (from earlier navigation, or an already-autosaved 'Vaciar') won forever over the real ticket, since this safety flag previously defaulted to false everywhere except app boot. Now it defaults to true: an empty draft never again blocks a real ticket with actual content -- a draft WITH real content (genuine unsaved edits) is still respected exactly as before",
+);
+mustContain(
+  renderer,
+  "preferLinkedTicketOnEmptyDraft = true,\r\n    preserveReturnView = false,",
+  "updateMesasSelectionFromContext (the SALA/MESA dropdown's own handler) gets the same safer default, not just syncTpvCartWithSelectedMesa's own internal default",
+);
+mustContain(
+  renderer,
+  "const hasNonEmptyDraftForUid =",
+  "ensureMesaLinkedTicketLoaded() (runs on every cart render) used to bail out on ANY draft for the table, empty or not -- now only a draft with real lines counts as 'local changes to respect', so it stops permanently re-confirming a stale empty draft against a real non-empty ticket on every single render",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

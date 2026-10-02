@@ -10139,7 +10139,17 @@ function syncTpvCartWithSelectedMesa(opts = {}) {
     return;
   }
 
-  const { preferLinkedTicketOnEmptyDraft = false } = opts || {};
+  // Real (Sergi, 2026-10-02): seleccionar una mesa OCUPADA (con un pedido
+  // real detras) podia mostrar el carrito completamente vacio -- un
+  // borrador vacio de una navegacion anterior (p.ej. de pasar por ahi sin
+  // tocar nada, o de un "Vaciar" ya autoguardado hace rato) ganaba siempre
+  // sobre el pedido real, indefinidamente, hasta que se borrara a mano.
+  // Antes esto solo se evitaba al arrancar la app (preferLinkedTicketOnEmptyDraft
+  // explicito en ese unico sitio) -- ahora es el comportamiento por defecto
+  // en cualquier seleccion de mesa: un borrador CON contenido real (cambios
+  // sin guardar de verdad) se sigue respetando igual que siempre, pero uno
+  // vacio nunca debe tapar un pedido real que si tiene algo.
+  const { preferLinkedTicketOnEmptyDraft = true } = opts || {};
 
   const state = loadMesasTablesStateForInline();
   const uid = String(state?.selectedTableId || "").trim();
@@ -10565,7 +10575,13 @@ function ensureMesaLinkedTicketLoaded() {
     draftByTable,
     uid,
   );
-  if (hasDraftForUid) return false;
+  // Real (Sergi, 2026-10-02): un borrador VACIO (de una navegacion anterior,
+  // o ya autoguardado hace rato) no debe tapar para siempre un pedido real
+  // que si tiene contenido -- solo un borrador con lineas de verdad cuenta
+  // como "cambios locales que respetar" aqui.
+  const hasNonEmptyDraftForUid =
+    hasDraftForUid && Array.isArray(draftByTable[uid]) && draftByTable[uid].length > 0;
+  if (hasNonEmptyDraftForUid) return false;
 
   const linkedTicket = parkedTickets[linkedIndex];
   const current = JSON.stringify(normalizeTicketLinesForCompare(cart));
@@ -11303,7 +11319,7 @@ function renderMesasTransContextBar() {
 function updateMesasSelectionFromContext(
   { roomId, tableUid },
   {
-    preferLinkedTicketOnEmptyDraft = false,
+    preferLinkedTicketOnEmptyDraft = true,
     preserveReturnView = false,
     skipSaveOutgoingDraft = false,
   } = {},
