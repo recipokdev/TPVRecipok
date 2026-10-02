@@ -6003,6 +6003,7 @@ let productSortModeBound = false;
 let productReorderModeBound = false;
 let productManualOrderResetBtnBound = false;
 let infoBarVisibilityBound = false;
+let derivedStockFractionBtnBound = false;
 
 function bindProductStockToggleOnce() {
   if (productStockToggleBound) return;
@@ -28493,6 +28494,7 @@ async function loadDataFromApi(opts = {}) {
             stockfis: parseManagedStockValue(base.stockfis),
             stockManaged: isFalseFlag(base.nostock),
             allowSellWithoutStock: !isFalseFlag(base.ventasinstock),
+            observaciones: String(base.observaciones ?? ""),
           });
         });
       });
@@ -28535,6 +28537,7 @@ async function loadDataFromApi(opts = {}) {
           stockfis: parseManagedStockValue(p.stockfis),
           stockManaged: isFalseFlag(p.nostock),
           allowSellWithoutStock: !isFalseFlag(p.ventasinstock),
+          observaciones: String(p.observaciones ?? ""),
         });
       });
 
@@ -28551,6 +28554,7 @@ async function loadDataFromApi(opts = {}) {
 
     // Packs: carga normal (no forzada) para evitar reintentos agresivos.
     await warmupPacksData().catch(() => {});
+    applyDerivedPackStockOverrides(products);
 
     // ===== Terminales -> terminals =====
     terminals = Array.isArray(tpvTerminales)
@@ -30332,6 +30336,7 @@ async function openOptions() {
   bindInfoBarVisibilityOnce();
   bindProductTileSizeResetButtonOnce();
   bindProductNameFontSizeResetButtonOnce();
+  bindDerivedStockFractionButtonOnce();
   bindCartWidthControlsToggleOnce();
   bindCartWidthDragHandleOnce();
   bindAutostartToggleOnce();
@@ -38359,7 +38364,7 @@ function isProductWithoutStockControl(product) {
   return effectiveManaged === null;
 }
 
-function getVisibleStockForProduct(productOrId) {
+function getVisibleStockForProduct(productOrId, _depth = 0) {
   const product =
     typeof productOrId === "object"
       ? productOrId
@@ -38368,6 +38373,9 @@ function getVisibleStockForProduct(productOrId) {
         : null;
 
   if (!product) return null;
+
+  const liveDerived = getLiveDerivedPackStock(product, _depth);
+  if (liveDerived !== null) return liveDerived;
 
   const realStock = parseManagedStockValue(product.stockfis);
   if (realStock === null) return null;
@@ -39219,6 +39227,7 @@ async function refreshProductsStockOnly() {
         stockfisRaw: p.stockfis,
         stockManaged: isFalseFlag(p.nostock),
         allowSellWithoutStock: !isFalseFlag(p.ventasinstock),
+        observaciones: String(p.observaciones ?? ""),
       });
     });
 
@@ -39241,7 +39250,8 @@ async function refreshProductsStockOnly() {
         prevStock !== nextStock ||
         p.stockfisRaw !== fresh.stockfisRaw ||
         p.stockManaged !== fresh.stockManaged ||
-        p.allowSellWithoutStock !== fresh.allowSellWithoutStock
+        p.allowSellWithoutStock !== fresh.allowSellWithoutStock ||
+        p.observaciones !== fresh.observaciones
       ) {
         changed = true;
         return {
@@ -39250,13 +39260,20 @@ async function refreshProductsStockOnly() {
           stockfis: nextStock,
           stockManaged: fresh.stockManaged,
           allowSellWithoutStock: fresh.allowSellWithoutStock,
+          observaciones: fresh.observaciones,
         };
       }
 
       return p;
     });
 
-    if (!changed) return true;
+    // Recalcula el stock derivado de los productos-pack (ej. "medias
+    // raciones") con el stock del padre ya refrescado -- necesario aunque
+    // el propio producto-pack no aparezca en este lote delta, porque lo
+    // que cambio fue el padre, no el.
+    const derivedChanged = applyDerivedPackStockOverrides(products);
+
+    if (!changed && !derivedChanged) return true;
 
     updateRenderedProductStocks();
     return true;
@@ -48906,6 +48923,618 @@ function isOfferPackProductById(productId) {
   const id = Number(productId || 0);
   if (!id) return false;
   return PACKS_STATE.ready && PACKS_STATE.packsByOfferProductId.has(id);
+}
+
+// Marca fija (igual en todas las instalaciones que usen esta funcion) que
+// indica "este producto es una fraccion de otro producto real" (medio,
+// cuarto...) -- ver investigation_facturascripts_pack_stock_doublecount_2026-09-28.
+// Vive en el campo de NOTAS del producto (observaciones), no en su familia:
+// un producto como "Medio Pollo" puede seguir organizado en la familia que
+// el cliente prefiera (p.ej. "Pollos", junto al Pollo Entero) y a la vez
+// llevar esta marca para que el mecanismo lo reconozca -- la familia de
+// FacturaScripts es un campo unico por producto, usarla como gate le
+// quitaria al cliente la posibilidad de agrupar estos productos a su gusto.
+// Deliberadamente explicita (hay que escribirla a mano): cualquier pack/
+// oferta que NO lleve esta marca se deja intacto, mostrando su propio stock
+// tal cual, para no aplicar por error la logica de "minimo entre lineas" a
+// una oferta donde las lineas son alternativas, no ingredientes de una misma
+// receta.
+const DERIVED_STOCK_MARKER_TAG = "[stock_derivado]";
+
+function productHasDerivedStockMarker(product) {
+  const observaciones = String(product?.observaciones ?? "");
+  return observaciones.includes(DERIVED_STOCK_MARKER_TAG);
+}
+
+// Nucleo compartido: dado un producto-pack de la marca de arriba, calcula su
+// stock derivado como stock_del_padre / cantidad_de_la_receta (el minimo
+// entre lineas si el pack tuviera varios ingredientes, igual que en una
+// cocina real) -- ej: 10 pollos enteros, receta a 0,5 -> 20 medios pollos
+// disponibles. `getParentStock(referencia)` abstrae DE DONDE sale el stock
+// del padre: `applyDerivedPackStockOverrides` usa el valor oficial ya
+// confirmado por FacturaScripts (se corrige solo cada 10s); getVisibleStockForProduct
+// usa el valor EN VIVO (con las reservas del carrito ya restadas), para que
+// el cajero vea el numero reaccionar al instante al tocar el carrito, no solo
+// cada 10s.
+function computeDerivedPackStockWith(product, getParentStock) {
+  if (!PACKS_STATE?.ready) return null;
+  if (!productHasDerivedStockMarker(product)) return null;
+
+  const baseId = getProductBaseId(product);
+  const pack = PACKS_STATE.packsByOfferProductId.get(baseId);
+  if (!pack) return null;
+
+  const lines = PACKS_STATE.linesByPackId.get(pack.id) || [];
+  if (!lines.length) return null;
+
+  let derived = Infinity;
+  for (const line of lines) {
+    const qty = Number(line?.quantity) || 0;
+    if (qty <= 0) continue;
+
+    const parentRef = String(line?.reference || "").trim();
+    // Si el padre no esta en el catalogo cargado, no gestiona stock, o no
+    // se puede resolver, no podemos derivar nada fiable.
+    const parentStock = parentRef ? getParentStock(parentRef) : null;
+    if (parentStock === null) return null;
+
+    const possible = parentStock / qty;
+    if (possible < derived) derived = possible;
+  }
+
+  return Number.isFinite(derived) ? derived : null;
+}
+
+// Stock derivado "oficial" (confirmado por FacturaScripts), recalculado al
+// cargar el catalogo y en cada ciclo de refresco de 10s -- ver
+// refreshProductsStockOnly. FacturaScripts no tiene forma nativa de mostrar
+// este numero -- su propio campo de stock para el producto-pack es un
+// numero muerto (a menudo ya contaminado por el bug de doble conteo, ver
+// investigation_facturascripts_pack_stock_doublecount_2026-09-28).
+function applyDerivedPackStockOverrides(productsArray) {
+  if (!PACKS_STATE?.ready || !Array.isArray(productsArray)) return false;
+  if (!PACKS_STATE.packsByOfferProductId.size) return false;
+
+  const byReferencia = new Map();
+  productsArray.forEach((p) => {
+    const ref = String(p?.referencia || "").trim().toLowerCase();
+    if (ref && !byReferencia.has(ref)) byReferencia.set(ref, p);
+  });
+
+  let changed = false;
+
+  productsArray.forEach((p) => {
+    const derived = computeDerivedPackStockWith(p, (parentRef) => {
+      const parent = byReferencia.get(parentRef.toLowerCase());
+      if (!parent || !parent.stockManaged) return null;
+      return parseManagedStockValue(parent.stockfisRaw ?? parent.stockfis);
+    });
+    if (derived === null) return;
+
+    if (
+      p.stockfis !== derived ||
+      p.stockfisRaw !== derived ||
+      p.stockManaged !== true ||
+      p.isDerivedPackStock !== true
+    ) {
+      p.stockfisRaw = derived;
+      p.stockfis = derived;
+      p.stockManaged = true;
+      p.isDerivedPackStock = true;
+      changed = true;
+    }
+  });
+
+  return changed;
+}
+
+// Stock derivado EN VIVO, a partir del stock visible del padre (ya con las
+// reservas del carrito restadas) -- reutiliza getVisibleStockForProduct del
+// padre, asi que hereda automaticamente la misma correccion instantanea que
+// ya tiene cualquier producto normal al tocar el carrito, sin esperar al
+// ciclo de 10s. `depth` es solo una guarda anti-recursion (un padre nunca
+// deberia ser el a su vez otro producto-pack derivado).
+function getLiveDerivedPackStock(product, depth) {
+  if (depth > 3) return null;
+  if (product?.isDerivedPackStock !== true) return null;
+
+  return computeDerivedPackStockWith(product, (parentRef) => {
+    const parentId = resolveProductIdByReferenceSync(parentRef);
+    const parentEntry = parentId ? findProductByBaseId(parentId) : null;
+    if (!parentEntry) return null;
+    return getVisibleStockForProduct(parentEntry, depth + 1);
+  });
+}
+
+// ===== Asistente: configurar un producto como "fracción" de otro (medio,
+// cuarto...) sin salir del TPV ni tocar el panel de FacturaScripts a mano.
+// Hace los 3 pasos que requiere el mecanismo de arriba: Pack+línea contra el
+// padre, "No controlar stock", y la marca en notas (ver
+// investigation_facturascripts_pack_stock_doublecount_2026-09-28).
+
+function buildObservacionesWithMarkerTag(existing, add) {
+  const base = String(existing || "");
+  const has = base.includes(DERIVED_STOCK_MARKER_TAG);
+  if (add === has) return base;
+
+  if (add) {
+    const trimmed = base.trim();
+    return trimmed
+      ? `${trimmed} ${DERIVED_STOCK_MARKER_TAG}`
+      : DERIVED_STOCK_MARKER_TAG;
+  }
+
+  return base.split(DERIVED_STOCK_MARKER_TAG).join("").replace(/\s{2,}/g, " ").trim();
+}
+
+// Si el producto ya tiene un Pack configurado (de antes, o de una pasada
+// anterior de este mismo asistente), lo devuelve para poder actualizar su
+// única línea en vez de crear un Pack duplicado.
+function findExistingDerivedPackLineForProduct(baseId) {
+  if (!PACKS_STATE?.ready || !baseId) return null;
+  const pack = PACKS_STATE.packsByOfferProductId.get(baseId);
+  if (!pack) return null;
+  const lines = PACKS_STATE.linesByPackId.get(pack.id) || [];
+  return { pack, lines };
+}
+
+function filterProductsForDerivedStockPicker(query, excludeBaseId) {
+  const q = String(query || "").trim().toLowerCase();
+  const seen = new Set();
+  const out = [];
+
+  for (const p of Array.isArray(products) ? products : []) {
+    const baseId = getProductBaseId(p);
+    if (!baseId || baseId === excludeBaseId || seen.has(baseId)) continue;
+
+    const name = String(p.name || p.descripcion || "").toLowerCase();
+    const ref = String(p.referencia || "").toLowerCase();
+    if (q && !name.includes(q) && !ref.includes(q)) continue;
+
+    seen.add(baseId);
+    out.push(p);
+    if (out.length >= 30) break;
+  }
+
+  return out;
+}
+
+async function apiConfigureProductAsStockFraction(child, parent, quantity) {
+  const childId = getProductBaseId(child);
+  const childRef = String(child?.referencia || "").trim();
+  const parentId = getProductBaseId(parent);
+  const parentRef = String(parent?.referencia || "").trim();
+  const qty = Number(quantity);
+
+  if (!childId || !childRef) throw new Error("Producto a configurar inválido.");
+  if (!parentId || !parentRef) throw new Error("Elige el producto padre.");
+  if (childId === parentId) throw new Error("El producto no puede ser fracción de sí mismo.");
+  if (productHasDerivedStockMarker(parent)) {
+    throw new Error("El producto padre no puede ser a su vez otra fracción derivada.");
+  }
+  if (!Number.isFinite(qty) || qty <= 0 || qty >= 1) {
+    throw new Error("La cantidad debe ser mayor que 0 y menor que 1 (p.ej. 0,5 para 'medio').");
+  }
+
+  const existing = findExistingDerivedPackLineForProduct(childId);
+  if (existing && existing.lines.length > 1) {
+    throw new Error(
+      "Este producto ya tiene un Pack con varias líneas (parece una oferta/menú, no una simple fracción) -- configúralo manualmente en FacturaScripts.",
+    );
+  }
+
+  if (existing && existing.lines.length === 1) {
+    // pricepolicy=1 (PRICE_POLICY_ITEMS, nucleo de FacturaScripts) hace que
+    // guardar el Pack recalcule el precio del propio producto-pack a partir
+    // de sus lineas -- confirmado en vivo: sobreescribio en silencio un
+    // precio ya puesto a mano (4 -> 3,33, el padre a 10 / fraccion a 1/3).
+    // Un "medio/cuarto" real casi nunca cuesta exactamente la fraccion del
+    // precio del entero (el cliente real de esta misma investigacion cobra
+    // 6€ por Medio Pollo, no 5€ = 0,5x10€) -- pricepolicy=0 (PRICE_POLICY_PRODUCT)
+    // deja el precio que el propio producto ya tenga totalmente intacto.
+    if (Number(existing.pack.pricepolicy) !== 0) {
+      const fixPricePolicyPayload = { id: existing.pack.id, pricepolicy: 0 };
+      try {
+        await apiWrite(`productpacks/${existing.pack.id}`, "PATCH", fixPricePolicyPayload);
+      } catch {
+        await apiWrite(`productpacks/${existing.pack.id}`, "PUT", fixPricePolicyPayload);
+      }
+    }
+
+    const line = existing.lines[0];
+    const linePayload = {
+      id: line.id,
+      idpack: existing.pack.id,
+      quantity: qty,
+      parent: childRef,
+      reference: parentRef,
+      required: 1,
+      sortnum: Number(line.sortnum || 1),
+      discount: Number(line.discount || 0),
+    };
+    try {
+      await apiWrite(`productpacklines/${line.id}`, "PATCH", linePayload);
+    } catch {
+      await apiWrite(`productpacklines/${line.id}`, "PUT", linePayload);
+    }
+  } else {
+    const packPayload = {
+      idproduct: childId,
+      description: 0,
+      applyto: 0,
+      isbox: 0,
+      name: `${child?.name || childRef} (pack)`,
+      reference: childRef,
+      pricepolicy: 0,
+    };
+    const packRes = await apiWrite("productpacks", "POST", packPayload);
+    const newPackId = Number(packRes?.data?.id || packRes?.id || 0);
+    if (!newPackId) {
+      throw new Error("FacturaScripts no devolvió el id del nuevo Pack.");
+    }
+
+    const linePayload = {
+      idpack: newPackId,
+      quantity: qty,
+      parent: childRef,
+      reference: parentRef,
+      required: 1,
+      sortnum: 1,
+      discount: 0,
+    };
+    await apiWrite("productpacklines", "POST", linePayload);
+  }
+
+  const newObservaciones = buildObservacionesWithMarkerTag(child?.observaciones, true);
+  const productPayload = {
+    idproducto: childId,
+    nostock: 1,
+    observaciones: newObservaciones,
+  };
+  try {
+    await apiWrite(`productos/${childId}`, "PATCH", productPayload);
+  } catch {
+    await apiWrite(`productos/${childId}`, "PUT", productPayload);
+  }
+
+  await warmupPacksData({ force: true });
+  await refreshProductsStockOnly().catch(() => {});
+  applyDerivedPackStockOverrides(products);
+  renderProducts?.();
+}
+
+async function apiRemoveDerivedStockMarkerFromProduct(child) {
+  const childId = getProductBaseId(child);
+  if (!childId) throw new Error("Producto inválido.");
+
+  const newObservaciones = buildObservacionesWithMarkerTag(child?.observaciones, false);
+  const payload = { idproducto: childId, observaciones: newObservaciones };
+  try {
+    await apiWrite(`productos/${childId}`, "PATCH", payload);
+  } catch {
+    await apiWrite(`productos/${childId}`, "PUT", payload);
+  }
+
+  await refreshProductsStockOnly().catch(() => {});
+  applyDerivedPackStockOverrides(products);
+  renderProducts?.();
+}
+
+async function openDerivedStockFractionConfigModal() {
+  if (!isAdminUser()) {
+    toast?.("Solo administradores.", "warn", "Productos");
+    return;
+  }
+
+  await warmupPacksData().catch(() => {});
+
+  return new Promise((resolve) => {
+    document.body.classList.add("modal-locked");
+
+    const overlay = document.createElement("div");
+    overlay.className = "pack-modal-overlay";
+
+    const modal = document.createElement("div");
+    modal.className = "pack-modal derived-stock-modal";
+
+    const head = document.createElement("div");
+    head.className = "pack-modal-head";
+    const hTitle = document.createElement("div");
+    hTitle.className = "pack-modal-title";
+    hTitle.textContent = "Configurar producto como fracción (medio, cuarto...)";
+    const xBtn = document.createElement("button");
+    xBtn.type = "button";
+    xBtn.className = "pack-modal-x";
+    xBtn.textContent = "✕";
+    head.appendChild(hTitle);
+    head.appendChild(xBtn);
+
+    const body = document.createElement("div");
+    body.className = "pack-modal-body";
+
+    function close() {
+      overlay.remove();
+      document.body.classList.remove("modal-locked");
+      resolve();
+    }
+    xBtn.onclick = close;
+
+    let step = "pick-child";
+    let selectedChild = null;
+    let selectedParent = null;
+    let fraction = 0.5;
+    let errorMsg = "";
+
+    function renderChildPicker() {
+      const hint = document.createElement("div");
+      hint.className = "addons-manage-empty";
+      hint.style.textAlign = "left";
+      hint.style.padding = "0 0 10px";
+      hint.textContent =
+        'Elige el producto que quieres configurar como fracción de otro (p.ej. "Medio Pollo").';
+      body.appendChild(hint);
+
+      const searchInput = document.createElement("input");
+      searchInput.type = "text";
+      searchInput.className = "addons-item-input";
+      searchInput.placeholder = "Buscar producto...";
+      searchInput.addEventListener("click", () =>
+        openQwertyForInput(searchInput, "text"),
+      );
+      body.appendChild(searchInput);
+
+      const list = document.createElement("div");
+      list.className = "pack-modal-list derived-stock-picker-list";
+      body.appendChild(list);
+
+      function renderList() {
+        list.innerHTML = "";
+        const matches = filterProductsForDerivedStockPicker(searchInput.value, 0);
+        if (!matches.length) {
+          const empty = document.createElement("div");
+          empty.className = "addons-manage-empty";
+          empty.textContent = "Sin resultados.";
+          list.appendChild(empty);
+          return;
+        }
+        matches.forEach((p) => {
+          const row = document.createElement("div");
+          row.className = "pack-item addons-select-item";
+          const nm = document.createElement("div");
+          nm.className = "pack-item-name";
+          nm.textContent = p.name || p.referencia || "Producto";
+          row.appendChild(nm);
+          const ref = document.createElement("div");
+          ref.className = "derived-stock-picker-ref";
+          ref.textContent = p.referencia || "";
+          row.appendChild(ref);
+          row.onclick = () => {
+            selectedChild = p;
+            const existing = findExistingDerivedPackLineForProduct(
+              getProductBaseId(p),
+            );
+            if (existing && existing.lines.length === 1) {
+              const line = existing.lines[0];
+              const parentId = resolveProductIdByReferenceSync(line.reference);
+              selectedParent = parentId ? findProductByBaseId(parentId) : null;
+              fraction = Number(line.quantity) || 0.5;
+            } else {
+              selectedParent = null;
+              fraction = 0.5;
+            }
+            errorMsg = "";
+            step = "configure";
+            renderBody();
+          };
+          list.appendChild(row);
+        });
+      }
+
+      searchInput.addEventListener("input", renderList);
+      renderList();
+    }
+
+    function renderConfigureStep() {
+      const childBaseId = getProductBaseId(selectedChild);
+      const childHasMarker = productHasDerivedStockMarker(selectedChild);
+      const childExisting = findExistingDerivedPackLineForProduct(childBaseId);
+      const multiLineWarning = !!(childExisting && childExisting.lines.length > 1);
+
+      const back = document.createElement("button");
+      back.type = "button";
+      back.className = "pack-btn pack-btn-bulk";
+      back.textContent = "← Elegir otro producto";
+      back.onclick = () => {
+        step = "pick-child";
+        errorMsg = "";
+        renderBody();
+      };
+      body.appendChild(back);
+
+      const title = document.createElement("div");
+      title.className = "pack-item-name derived-stock-child-title";
+      title.textContent = selectedChild?.name || selectedChild?.referencia || "";
+      body.appendChild(title);
+
+      const status = document.createElement("div");
+      status.className = "derived-stock-status";
+      status.textContent = childHasMarker
+        ? "Ya configurado como fracción derivada."
+        : "Todavía no está configurado como fracción.";
+      body.appendChild(status);
+
+      if (multiLineWarning) {
+        const warn = document.createElement("div");
+        warn.className = "addons-manage-empty";
+        warn.textContent =
+          "Este producto ya tiene un Pack con varias líneas (parece una oferta/menú con opciones, no una simple fracción) -- no se puede configurar desde aquí.";
+        body.appendChild(warn);
+        return;
+      }
+
+      const parentLabel = document.createElement("div");
+      parentLabel.className = "opt-row-title derived-stock-label";
+      parentLabel.textContent = 'Producto del que es fracción (el "entero")';
+      body.appendChild(parentLabel);
+
+      const parentSearchInput = document.createElement("input");
+      parentSearchInput.type = "text";
+      parentSearchInput.className = "addons-item-input";
+      parentSearchInput.placeholder = "Buscar producto padre...";
+      parentSearchInput.value = selectedParent
+        ? selectedParent.name || selectedParent.referencia || ""
+        : "";
+      parentSearchInput.addEventListener("click", () =>
+        openQwertyForInput(parentSearchInput, "text"),
+      );
+      body.appendChild(parentSearchInput);
+
+      const parentList = document.createElement("div");
+      parentList.className = "pack-modal-list derived-stock-picker-list";
+      body.appendChild(parentList);
+
+      function renderParentList() {
+        parentList.innerHTML = "";
+        const q = parentSearchInput.value;
+        if (selectedParent && q === (selectedParent.name || selectedParent.referencia || "")) {
+          return;
+        }
+        const matches = filterProductsForDerivedStockPicker(q, childBaseId);
+        matches.forEach((p) => {
+          const row = document.createElement("div");
+          row.className = "pack-item addons-select-item";
+          row.textContent = `${p.name || p.referencia || "Producto"} (${p.referencia || ""})`;
+          row.onclick = () => {
+            selectedParent = p;
+            parentSearchInput.value = p.name || p.referencia || "";
+            parentList.innerHTML = "";
+          };
+          parentList.appendChild(row);
+        });
+      }
+      parentSearchInput.addEventListener("input", renderParentList);
+      renderParentList();
+
+      const fractionLabel = document.createElement("div");
+      fractionLabel.className = "opt-row-title derived-stock-label";
+      fractionLabel.textContent = "Fracción de cada unidad (ej. 0,5 = medio)";
+      body.appendChild(fractionLabel);
+
+      const quickRow = document.createElement("div");
+      quickRow.className = "derived-stock-quick-row";
+
+      const fractionInput = document.createElement("input");
+      fractionInput.type = "text";
+      fractionInput.inputMode = "decimal";
+      fractionInput.className = "addons-item-price-input derived-stock-fraction-input";
+      fractionInput.value = String(Math.round(fraction * 10000) / 10000).replace(".", ",");
+      fractionInput.addEventListener("click", () =>
+        openQwertyForInput(fractionInput, "text"),
+      );
+      fractionInput.addEventListener("input", () => {
+        const parsed = Number(String(fractionInput.value).replace(",", "."));
+        if (Number.isFinite(parsed)) fraction = parsed;
+      });
+
+      [
+        ["Mitad (0,5)", 0.5],
+        ["Tercio (0,33)", 1 / 3],
+        ["Cuarto (0,25)", 0.25],
+      ].forEach(([label, val]) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "pack-btn pack-btn-bulk";
+        btn.textContent = label;
+        btn.onclick = () => {
+          fraction = val;
+          fractionInput.value = String(Math.round(val * 10000) / 10000).replace(".", ",");
+        };
+        quickRow.appendChild(btn);
+      });
+      body.appendChild(quickRow);
+      body.appendChild(fractionInput);
+
+      if (errorMsg) {
+        const err = document.createElement("div");
+        err.className = "derived-stock-error";
+        err.textContent = errorMsg;
+        body.appendChild(err);
+      }
+
+      const actions = document.createElement("div");
+      actions.className = "pack-modal-actions derived-stock-actions";
+
+      if (childHasMarker) {
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.className = "pack-btn pack-btn-cancel";
+        removeBtn.textContent = "Quitar marca";
+        removeBtn.onclick = async () => {
+          removeBtn.disabled = true;
+          try {
+            await apiRemoveDerivedStockMarkerFromProduct(selectedChild);
+            toast?.("Marca quitada.", "ok", "Productos");
+            close();
+          } catch (e) {
+            errorMsg = e?.message || "No se pudo quitar la marca.";
+            renderBody();
+          }
+        };
+        actions.appendChild(removeBtn);
+      }
+
+      const saveBtn = document.createElement("button");
+      saveBtn.type = "button";
+      saveBtn.className = "pack-btn pack-btn-ok";
+      saveBtn.textContent = "Guardar configuración";
+      saveBtn.onclick = async () => {
+        if (!selectedParent) {
+          errorMsg = "Elige el producto padre.";
+          renderBody();
+          return;
+        }
+        saveBtn.disabled = true;
+        try {
+          await apiConfigureProductAsStockFraction(selectedChild, selectedParent, fraction);
+          toast?.("Configurado correctamente ✅", "ok", "Productos");
+          close();
+        } catch (e) {
+          errorMsg = e?.message || "No se pudo guardar.";
+          renderBody();
+        }
+      };
+      actions.appendChild(saveBtn);
+      body.appendChild(actions);
+    }
+
+    function renderBody() {
+      body.innerHTML = "";
+      if (step === "pick-child") {
+        renderChildPicker();
+      } else {
+        renderConfigureStep();
+      }
+    }
+
+    renderBody();
+
+    modal.appendChild(head);
+    modal.appendChild(body);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+  });
+}
+
+function bindDerivedStockFractionButtonOnce() {
+  if (derivedStockFractionBtnBound) return;
+  derivedStockFractionBtnBound = true;
+
+  const btn = document.getElementById("derivedStockFractionConfigBtn");
+  if (!btn) return;
+
+  btn.addEventListener("click", () => {
+    openDerivedStockFractionConfigModal();
+  });
 }
 
 function selectionKeyFromArr(arr) {

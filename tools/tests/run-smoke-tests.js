@@ -7956,6 +7956,111 @@ mustContain(
 );
 
 console.log(
+  "\n[SMOKE] Checking 2026-09-28 derived stock for 'half portion' pack products (real client: Asador el Gallo -- 'Medio Pollo' is configured in FacturaScripts as a Pack of 0.5x 'Pollo asado', but FacturaScripts has no native way to show its stock as derived from the parent; its own stock field is a dead number, often already wrong from the double-counting bug)\n",
+);
+
+mustContain(
+  renderer,
+  'const DERIVED_STOCK_MARKER_TAG = "[stock_derivado]";',
+  "Fixed marker tag (same across every install that uses this) gates which packs get the derived-stock treatment -- deliberately strict so a real multi-choice combo/menu pack (different use case, same underlying Pack mechanism) is never affected",
+);
+mustContain(
+  renderer,
+  "function productHasDerivedStockMarker(product) {",
+  "The marker lives in the product's own notes field (observaciones), not its family -- a family is a single value per product in FacturaScripts, so using it as the gate would force 'Medio Pollo' out of whatever family the client wants it organized under (e.g. 'Pollos', alongside Pollo Entero)",
+);
+mustContain(
+  renderer,
+  "function computeDerivedPackStockWith(product, getParentStock) {",
+  "Shared core extracted so both the periodic (server-confirmed) and the live (cart-reservation-aware) derived-stock calculations use the exact same recipe-ratio logic, fed by a `getParentStock` callback that differs only in WHERE the parent's number comes from",
+);
+mustContain(
+  renderer,
+  "function applyDerivedPackStockOverrides(productsArray) {",
+  "applyDerivedPackStockOverrides reuses the pre-existing PACKS_STATE (until now only used to expand kitchen tickets) instead of fetching anything new from FacturaScripts -- recalculated at catalog load and every 10s, from the parent's official (server-confirmed) stock",
+);
+mustContain(
+  renderer,
+  "const derived = computeDerivedPackStockWith(p, (parentRef) => {\r\n      const parent = byReferencia.get(parentRef.toLowerCase());\r\n      if (!parent || !parent.stockManaged) return null;\r\n      return parseManagedStockValue(parent.stockfisRaw ?? parent.stockfis);\r\n    });",
+  "Derived stock is the parent's real stock divided by the recipe ratio (0.5 -> x2, 0.25 -> x4; with several lines the real limit is the scarcest ingredient, the minimum, same as in a real kitchen) -- if the parent isn't loaded or doesn't manage stock, the pack product is left untouched instead of showing a made-up number",
+);
+mustContain(
+  renderer,
+  "await warmupPacksData().catch(() => {});\r\n    applyDerivedPackStockOverrides(products);",
+  "Wired into the initial catalog load, right after the existing (pre-existing) packs warmup -- no new network request added",
+);
+mustContain(
+  renderer,
+  "const derivedChanged = applyDerivedPackStockOverrides(products);",
+  "Also wired into the existing 10s stock-refresh cycle (refreshProductsStockOnly) -- recalculated even when the pack product itself isn't in that delta batch, because what changed was the parent's stock, not its own",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-10-01 instant (cart-reactive) derived stock, not just the 10s-confirmed value (Sergi: the official number should still confirm every 10s, but the cashier should see the derived fraction react to the cart AT ONCE, same as a normal product already does)\n",
+);
+
+mustContain(
+  renderer,
+  "function getLiveDerivedPackStock(product, depth) {",
+  "New getLiveDerivedPackStock computes the fraction product's stock from the parent's LIVE visible stock (reservations already subtracted), by recursively calling getVisibleStockForProduct on the parent -- it inherits whatever mechanism already makes a normal product's own badge instant, instead of duplicating that logic",
+);
+mustContain(
+  renderer,
+  "  const liveDerived = getLiveDerivedPackStock(product, _depth);\r\n  if (liveDerived !== null) return liveDerived;",
+  "getVisibleStockForProduct (the single function every stock badge, cart tile, and the sale-blocking stock check already go through) now short-circuits to the live derived value for a fraction product before falling back to its own frozen stockfis -- every existing call site benefits with no changes needed at the call sites themselves",
+);
+mustContain(
+  renderer,
+  "function getVisibleStockForProduct(productOrId, _depth = 0) {",
+  "Recursion-depth guard added for the parent lookup (a fraction product's parent should never itself be another fraction product, but this caps it defensively instead of trusting that assumption blindly)",
+);
+
+console.log(
+  "\n[SMOKE] Checking 2026-10-01 in-TPV wizard to configure a product as a derived-stock fraction (Sergi: setting this up today needs 3 manual steps in the FacturaScripts admin panel -- Pack+line, 'no stock control', and the notes marker -- there should be an easy way to do this from the TPV itself)\n",
+);
+
+mustContain(
+  renderer,
+  "function apiConfigureProductAsStockFraction(child, parent, quantity) {",
+  "New admin wizard does all 3 FacturaScripts-side steps in one go via the TPV's own direct write access (apiWrite) -- creates or updates the single Pack line against the chosen parent, sets nostock=1, and adds the DERIVED_STOCK_MARKER_TAG to observaciones (preserving any existing notes text instead of overwriting it)",
+);
+mustContain(
+  renderer,
+  "if (existing && existing.lines.length > 1) {\r\n    throw new Error(\r\n      \"Este producto ya tiene un Pack con varias líneas (parece una oferta/menú, no una simple fracción) -- configúralo manualmente en FacturaScripts.\",\r\n    );\r\n  }",
+  "Refuses to touch a product whose Pack already has more than 1 line (looks like a real multi-choice menu/combo, not a simple fraction) instead of silently clobbering it",
+);
+mustContain(
+  renderer,
+  'if (productHasDerivedStockMarker(parent)) {\r\n    throw new Error("El producto padre no puede ser a su vez otra fracción derivada.");\r\n  }',
+  "Refuses to chain a fraction product as the parent of another fraction product -- the parent must be a real, independently stock-managed product",
+);
+mustContain(
+  renderer,
+  "function buildObservacionesWithMarkerTag(existing, add) {",
+  "Marker is appended to (or removed from) whatever notes text the product already had, instead of overwriting the whole observaciones field -- a client's own notes on that product survive",
+);
+mustContain(
+  index,
+  'id="derivedStockFractionConfigBtn"',
+  "New admin-only button in Opciones -> Productos opens the wizard (not a per-tile icon, so it doubles as a 'manage all fraction products' entry point, not just a per-product shortcut)",
+);
+mustContain(
+  renderer,
+  "function bindDerivedStockFractionButtonOnce() {",
+  "Wizard button follows the same bindXOnce() pattern as every other Opciones control, wired once per openOptions() call",
+);
+mustContain(
+  renderer,
+  "pricepolicy: 0,",
+  "Real bug found in live testing (demo): FacturaScripts's own ProductPack::save() recalculates the pack product's OWN price from its line items when pricepolicy=1 (PRICE_POLICY_ITEMS) -- silently overwrote a manually-set price (4€ -> 3.33€, the parent's price × the fraction) the first time this wizard ran. A real half/quarter portion almost never costs exactly that fraction of the whole (the client this whole investigation is about charges 6€ for 'Medio Pollo', not 5€ = 0.5×10€) -- pricepolicy=0 (PRICE_POLICY_PRODUCT) leaves whatever price the product already has completely untouched. Also retroactively fixed the same landmine on the pre-existing demo sandbox pack (pricepolicy=1 since Phase 1 of this investigation, never caught because its fraction happened to be a round 0.5)",
+);
+mustContain(
+  renderer,
+  "if (Number(existing.pack.pricepolicy) !== 0) {",
+  "Re-running the wizard on an already-configured product also fixes a leftover wrong pricepolicy on the existing Pack header, not just on first-time creation",
+);
+
+console.log(
   "\n[SMOKE] Checking 2026-10-01 agent-admin-PIN made opt-in per install (Sergi: existing businesses with no agent-admin PIN setup at all must keep working exactly as before -- any agent under a real admin login already sees every admin option -- the stricter per-agent PIN should only kick in for a client who explicitly turns it on)\n",
 );
 

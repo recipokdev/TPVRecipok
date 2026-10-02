@@ -8260,6 +8260,57 @@ body.theme-dark .opt-loading-banner {
   color: #fff;
 }
 
+/* Asistente: configurar producto como fraccion derivada (medio/cuarto) */
+.derived-stock-modal .pack-modal-body {
+  display: flex;
+  flex-direction: column;
+}
+.derived-stock-picker-list {
+  max-height: 260px;
+  overflow: auto;
+  margin-top: 8px;
+}
+.derived-stock-picker-list .pack-item {
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+.derived-stock-picker-ref {
+  opacity: 0.6;
+  font-size: 12px;
+}
+.derived-stock-child-title {
+  margin: 12px 0 4px;
+}
+.derived-stock-status {
+  font-size: 13px;
+  opacity: 0.75;
+  margin-bottom: 12px;
+}
+.derived-stock-label {
+  margin: 10px 0 6px;
+}
+.derived-stock-quick-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.derived-stock-fraction-input {
+  width: 90px;
+}
+.derived-stock-error {
+  color: #c0392b;
+  font-size: 13px;
+  margin: 12px 0;
+}
+.derived-stock-actions {
+  margin-top: 16px;
+  padding: 0;
+  border-top: none;
+  background: none;
+  justify-content: flex-start;
+}
+
 /* --- Z-index stacking con numPad --- */
 /* pack modal debajo del numpad cuando el pack modal esté abierto */
 .num-pad-overlay {

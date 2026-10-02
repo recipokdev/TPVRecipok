@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.38",
+      "date": "2026-10-02",
+      "title": "Release 0.2.38",
       "changes": [
         "Modo Mesas: la lista de \"Tablets emparejadas\" (Opciones) ya no acumula para siempre los dispositivos revocados mezclados con los activos. Ahora los revocados se guardan aparte, en una papelera plegada (\"🗑 Papelera\") que solo se abre si se quiere, y desde ahí se pueden \"Olvidar para siempre\" (borrado definitivo, ya no aparecen nunca más).",
         "Modo Mesas: cuando una mesa se aparca o se actualiza desde fuera del TPV (p. ej. la app de camareros), la comanda se imprime sola en cocina en cuanto el TPV detecta el cambio, sin que nadie tenga que abrir la mesa y pulsar 'Imprimir comanda' a mano. Si la impresora de comandas falla, aparece un aviso en la mesa correspondiente dentro del plano de Mesas.",
@@ -13,7 +19,8 @@
         "MEJORA: en negocios con varias tiendas/almacenes, un código de emparejamiento de tablet de camarero generado desde un terminal concreto ahora queda ligado a esa tienda (si el terminal tiene una configurada) en vez de a todo el negocio. Sin tienda configurada en el terminal, sigue funcionando exactamente igual que hasta ahora.",
         "FIX: en algunos casos, Modo Mesas se quedaba activado para siempre al arrancar el TPV, aunque se hubiera desactivado correctamente la última vez (y se cerrara la app después). El ajuste se guardaba por duplicado en dos sitios distintos; si uno de los dos se quedaba desactualizado por cualquier motivo, ese valor antiguo podía ganar y reactivar Modo Mesas en cada arranque sin que hubiera forma de que el interruptor lo arreglara de verdad. Ahora solo manda un único valor guardado, consistente con lo último que se activó/desactivó de verdad.",
         "CAMBIO: con el interruptor \"PIN de administrador por agente\" activado, ahora hacen falta las DOS cosas para ver las Opciones de administrador: que el usuario con el que se inició sesión sea admin Y que el agente activo esté verificado por PIN como admin. Antes bastaba con cualquiera de las dos por separado. Pensado para negocios con un único usuario (siempre admin) compartido por toda la plantilla, donde el agente/PIN es la única forma real de distinguir quién es de verdad administrador. Con el interruptor apagado (como hasta ahora), nada cambia: solo importa el usuario. Además, la lista de agentes-admin ahora se guarda también en local, así que sigue funcionando sin conexión con los últimos datos conocidos en vez de bloquear el acceso.",
-        "MEJORA: en Opciones, el resumen de una línea que se ve con cada sección plegada (Báscula, Tarifas, Productos, Cierre de Caja, Barra de información) ahora menciona y resalta en verde algunos ajustes que ya existían pero nunca aparecían reflejados ahí, para poder ver de un vistazo si están activados sin tener que desplegar la sección."
+        "MEJORA: en Opciones, el resumen de una línea que se ve con cada sección plegada (Báscula, Tarifas, Productos, Cierre de Caja, Barra de información) ahora menciona y resalta en verde algunos ajustes que ya existían pero nunca aparecían reflejados ahí, para poder ver de un vistazo si están activados sin tener que desplegar la sección.",
+        "NUEVO: stock de \"medias raciones\" calculado automáticamente a partir del producto original (p.ej. \"Medio Pollo\" siempre muestra el doble del stock real de \"Pollo asado\", sin necesidad de llevar su propio contador, y reacciona al instante al tocar el carrito). Aplica solo a productos marcados expresamente para esto; pueden seguir organizados en la familia que prefieras (p.ej. junto al producto entero), y cualquier otra oferta o menú con opciones sigue mostrando su propio stock, sin cambios. Configurable desde el propio TPV: en Opciones → Productos, botón \"Configurar...\" para elegir el producto, de qué producto es fracción (buscador) y en qué proporción (mitad, tercio, cuarto u otra), sin tocar nada en FacturaScripts a mano."
       ]
     },
     {
