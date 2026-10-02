@@ -8890,6 +8890,19 @@ mustContain(
   "apiCreatePairingCode() sends codalmacen so the resulting pairing code/device-token is scoped to this terminal's own store, not the whole business -- optional server-side, so an empty codalmacen keeps today's one-store-per-slug behavior",
 );
 
+console.log("\n[SMOKE] Checking 2026-10-02 Modo Mesas sticky on boot (localStorage/TPV_CFG app-mode desync)\n");
+
+mustContain(
+  renderer,
+  "const hasCfgValue = cfgMode === \"mesas\" || cfgMode === \"tpv\";",
+  "Boot-time app-mode decision checks whether TPV_CFG already holds a real value",
+);
+mustContain(
+  renderer,
+  '(hasCfgValue ? cfgMode === "mesas" : localMode === "mesas");',
+  "TPV_CFG (not an OR with localStorage) is the single source of truth once it holds a value -- real bug found live: a stale 'mesas' left in localStorage from an earlier session could force Modo Mesas on every boot forever, even after correctly turning it off (which updates TPV_CFG), because the old OR let either store win. Verified live: desyncing localStorage='mesas' with TPV_CFG='tpv' no longer starts the app in Modo Mesas",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

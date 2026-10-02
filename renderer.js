@@ -52343,8 +52343,19 @@ window.addEventListener("DOMContentLoaded", async () => {
   const cfgMode = String((await window.TPV_CFG?.get?.(APP_MODE_CFG_KEY)) || "")
     .trim()
     .toLowerCase();
+  // TPV_CFG (fichero propio, auth.isAdmin/etc. viven ahi) es la fuente de
+  // verdad; localStorage solo se mira como fallback de migracion para una
+  // instalacion antigua que nunca llego a guardar en TPV_CFG. Antes se hacia
+  // un OR entre ambos -- real bug encontrado en vivo 2026-10-02: si
+  // localStorage se quedaba "mesas" de una sesion vieja (p.ej. un cierre
+  // abrupto que no llego a limpiarlo), ese valor pegado ganaba para siempre
+  // via el OR, aunque TPV_CFG ya dijera "tpv" tras apagar el modo
+  // correctamente -- Mesas volvia a activarse solo en cada arranque sin
+  // forma de que el toggle lo arreglara de verdad.
+  const hasCfgValue = cfgMode === "mesas" || cfgMode === "tpv";
   const startMesasMode =
-    MESAS_MODULE_ENABLED && (localMode === "mesas" || cfgMode === "mesas");
+    MESAS_MODULE_ENABLED &&
+    (hasCfgValue ? cfgMode === "mesas" : localMode === "mesas");
   await setMesasInlineModeEnabled(startMesasMode, {
     persist: false,
     saveOutgoingSnapshot: false,
