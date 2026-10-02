@@ -2310,7 +2310,12 @@
                 class="opt-preview-item"
                 data-toggle-id="scaleEnabledToggle"
                 >Activar</span
-              >, puerto, unidad de peso, modo de parser, calibracion
+              >, puerto, unidad de peso, modo de parser,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="scaleReverseReadingToggle"
+                >inversión de lectura</span
+              >, calibracion
             </div>
 
             <div class="opt-sec-b">
@@ -2828,7 +2833,17 @@
               <span class="opt-sec-chev">▾</span>
             </button>
             <div class="opt-sec-preview">
-              Crear/editar tarifas, descuentos, clientes asignados
+              Crear/editar tarifas, descuentos, clientes asignados,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="tariffMinCosteToggle"
+                >no vender bajo coste</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="tariffMaxPvpToggle"
+                >no vender sobre PVP</span
+              >
             </div>
             <div class="opt-sec-b">
               <div class="opt-row">
@@ -3186,8 +3201,23 @@
             <div class="opt-sec-preview">
               <span
                 class="opt-preview-item"
+                data-toggle-id="priceEditModeToggle"
+                >Modo edición de precio</span
+              >,
+              <span
+                class="opt-preview-item"
                 data-toggle-id="productStockToggle"
                 >Mostrar stock</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="productsStockOnlyToggle"
+                >solo con stock</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="productsIncludeUnmanagedToggle"
+                >incluir sin stock</span
               >,
               <span
                 class="opt-preview-item"
@@ -3201,9 +3231,24 @@
               >,
               <span
                 class="opt-preview-item"
+                data-toggle-id="askStockBulkDeletePendingToggle"
+                >preguntar en borrado masivo</span
+              >,
+              <span
+                class="opt-preview-item"
                 data-toggle-id="productAddonsEnabledToggle"
                 >añadidos de producto</span
-              >, orden y tamaño de tarjetas, texto de la tarjeta,
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="productTileResizeModeToggle"
+                >modo redimensionar</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="productReorderModeToggle"
+                >modo reordenar</span
+              >, texto de la tarjeta,
               <span
                 class="opt-preview-item"
                 data-toggle-id="familiesFirstModeToggle"
@@ -3482,7 +3527,12 @@
                 data-toggle-id="printCajaAutoLogToggle"
                 >registro de avisos</span
               >
-              en el cierre
+              en el cierre,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="printCajaDrawerLogsToggle"
+                >aperturas de cajón</span
+              >
             </div>
             <div class="opt-sec-b">
               <div class="opt-row">
@@ -3543,7 +3593,11 @@
               <span class="opt-sec-chev">▾</span>
             </button>
             <div class="opt-sec-preview">
-              Mostrar:
+              <span
+                class="opt-preview-item"
+                data-toggle-id="infoBarVisibleToggle"
+                >Barra visible</span
+              >. Mostrar:
               <span
                 class="opt-preview-item"
                 data-toggle-id="infoBarShowTerminalToggle"

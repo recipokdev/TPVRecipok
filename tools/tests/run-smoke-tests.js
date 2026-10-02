@@ -8441,8 +8441,8 @@ mustContain(
 );
 mustContain(
   renderer,
-  "const shouldBeAdmin = !!window.TPV_STATE?.isAdminFromLogin || agentGrantsAdminNow;",
-  "The recomputed flag is (login-granted admin) OR (current agent is a verified PIN admin) -- a real admin USER login is never downgraded by switching to a plain agent, but a plain-user session correctly loses admin access when switching away from the verified admin agent",
+  "? isAdminLogin && agentGrantsAdminNow",
+  "SUPERSEDES the original OR design (login-admin alone used to always win, regardless of agent) -- changed to AND 2026-10-02 after Sergi walked through the real business case: a company with a single, always-admin TPV login shared by everyone, where the per-agent CRM PIN (not the login) is the only real way to tell who is actually an administrator. With the toggle off, behavior is unchanged (login alone decides, exactly like before this whole feature existed) -- the AND only applies once a client explicitly opts in",
 );
 mustContain(
   renderer,
@@ -8901,6 +8901,57 @@ mustContain(
   renderer,
   '(hasCfgValue ? cfgMode === "mesas" : localMode === "mesas");',
   "TPV_CFG (not an OR with localStorage) is the single source of truth once it holds a value -- real bug found live: a stale 'mesas' left in localStorage from an earlier session could force Modo Mesas on every boot forever, even after correctly turning it off (which updates TPV_CFG), because the old OR let either store win. Verified live: desyncing localStorage='mesas' with TPV_CFG='tpv' no longer starts the app in Modo Mesas",
+);
+
+console.log("\n[SMOKE] Checking 2026-10-02 agent-admin PIN access becomes AND (login admin + agent admin), not OR -- Sergi's real business case\n");
+
+mustContain(
+  renderer,
+  "function loadAdminAgentCodesCache() {",
+  "list-agent-admins' last successful result is cached locally (same pattern as the TPV users cache)",
+);
+mustContain(
+  renderer,
+  "if (!res.ok) return loadAdminAgentCodesCache();",
+  "A genuine failure to reach the server falls back to the last known admin-agent list instead of an empty one -- needed now that a network outage could otherwise lock a real admin out of every admin-only Options section (the old OR design didn't have this risk, since login-admin alone always sufficed)",
+);
+mustContain(
+  renderer,
+  "if (!data || data.ok === false) return loadAdminAgentCodesCache();",
+  "A malformed/error response is treated the same as a network failure (falls back to cache), never as 'the list is legitimately empty'",
+);
+mustContain(
+  renderer,
+  "saveAdminAgentCodesCache(codes);",
+  "A real, successful response (even a legitimately empty list) is cached and trusted as-is, overwriting any older cached list",
+);
+
+console.log("\n[SMOKE] Checking 2026-10-02 Options preview summaries backfilled (5 sections had toggles never reflected in their collapsed one-line summary)\n");
+
+mustContain(
+  index,
+  'data-toggle-id="scaleReverseReadingToggle"',
+  "Bascula preview now mentions 'inversion de lectura'",
+);
+mustContain(
+  index,
+  'data-toggle-id="tariffMinCosteToggle"',
+  "Tarifas preview now mentions both tariff restriction toggles (min coste / max PVP)",
+);
+mustContain(
+  index,
+  'data-toggle-id="priceEditModeToggle"',
+  "Productos preview now mentions price-edit-mode, stock-only, include-unmanaged, bulk-delete-stock-prompt, tile-resize-mode and reorder-mode -- previously only 4 of 10 real toggles in this section showed up in the collapsed summary",
+);
+mustContain(
+  index,
+  'data-toggle-id="printCajaDrawerLogsToggle"',
+  "Cierre de Caja preview now mentions the drawer-openings sub-toggle",
+);
+mustContain(
+  index,
+  'data-toggle-id="infoBarVisibleToggle"',
+  "Barra de informacion preview now mentions the master visibility toggle itself, not just which fields it shows",
 );
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");

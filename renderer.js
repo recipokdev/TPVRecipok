@@ -864,6 +864,7 @@ const PARKED_MODE_TPV = "tpv";
 const PARKED_MODE_MESAS = "mesas";
 const TPV_USERS_CACHE_KEY = "tpv_cachedUsers_v1";
 const TPV_USERS_CACHE_TS_KEY = "tpv_cachedUsers_ts_v1";
+const ADMIN_AGENT_CODES_CACHE_KEY = "tpv_cachedAdminAgentCodes_v1";
 const TERMINAL_AGENT_CACHE_KEY = "tpv_cachedTerminalAgent_v1";
 const TERMINAL_AGENT_CACHE_TS_KEY = "tpv_cachedTerminalAgent_ts_v1";
 const BOOT_SNAPSHOT_CACHE_KEY = "tpv_boot_snapshot_v1";
@@ -22479,12 +22480,27 @@ async function verifyCurrentAgentPinIfNeeded() {
 // agente realmente activo, en vez de quedar "pegado" al primer admin elegido
 // en la sesion.
 function recomputeAdminAccessForCurrentAgent() {
+  const isAdminLogin = !!window.TPV_STATE?.isAdminFromLogin;
   const agentGrantsAdminNow =
     !!currentAgent &&
     agentRequiresAdminPin(currentAgent.codagente) &&
     agentPinVerifiedCode === currentAgent.codagente;
 
-  const shouldBeAdmin = !!window.TPV_STATE?.isAdminFromLogin || agentGrantsAdminNow;
+  // Decision explicita de Sergi (2026-10-02): con el interruptor apagado,
+  // el agente no pinta nada -- manda solo si el usuario de login es admin,
+  // exactamente como antes de que existiera este PIN de agente (asi los
+  // clientes que ya usan el usuario como separador no notan nada). Con el
+  // interruptor encendido, hacen falta las DOS cosas (usuario admin Y agente
+  // admin con PIN verificado) -- pensado para negocios con un unico usuario
+  // (siempre admin) compartido por todos, donde el agente/PIN gestionado
+  // desde el CRM es la unica forma real de distinguir quien es de verdad
+  // administrador. Antes era un OR (cualquiera de los dos bastaba), lo que
+  // dejaba ver las Opciones de admin a un usuario-admin aunque su agente
+  // activo fuera uno normal -- el caso exacto que atrapo a Sergi el
+  // 2026-10-02 al no tener ningun agente-admin configurado todavia.
+  const shouldBeAdmin = agentAdminPinModeEnabled
+    ? isAdminLogin && agentGrantsAdminNow
+    : isAdminLogin;
 
   if (!!window.TPV_STATE?.isAdmin !== shouldBeAdmin) {
     setAdminFlag(
@@ -38472,16 +38488,40 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
 }
 
 // PIN de administrador por agente (contrato cerrado con el CRM, 2026-09-30):
+function saveAdminAgentCodesCache(codes) {
+  try {
+    const arr = Array.from(codes instanceof Set ? codes : []);
+    localStorage.setItem(ADMIN_AGENT_CODES_CACHE_KEY, JSON.stringify(arr));
+  } catch {}
+}
+
+function loadAdminAgentCodesCache() {
+  try {
+    const raw = localStorage.getItem(ADMIN_AGENT_CODES_CACHE_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return new Set((Array.isArray(arr) ? arr : []).map((v) => String(v)));
+  } catch {
+    return new Set();
+  }
+}
+
 // GET list-agent-admins devuelve solo los codagente que SI son admin; ausencia
-// en esa lista = agente normal, sin PIN. Fail-open a proposito (igual que el
-// resto de "candados" de este TPV): si el servidor no responde, se trata como
-// si ningun agente requiriera PIN -- nunca debe dejar el TPV inutilizable sin
-// internet.
+// en esa lista = agente normal, sin PIN. Antes esto fallaba abierto a "ningun
+// agente es admin" sin mas (inofensivo cuando el acceso era usuario-admin OR
+// agente-admin: el usuario admin seguia entrando igual). Desde que el PIN de
+// agente exige TAMBIEN que el usuario de login sea admin (AND, decision de
+// Sergi 2026-10-02 para negocios de un solo usuario compartido), fallar
+// abierto a una lista vacia dejaria a un admin de verdad sin acceso a
+// Opciones en cuanto no hubiera internet. Se guarda en local la ultima lista
+// obtenida CON EXITO, y solo se cae a esa cache si la peticion de verdad
+// falla (red/servidor/respuesta invalida) -- nunca si el servidor responde
+// de verdad con una lista legitimamente vacia (eso si debe tratarse como
+// "ningun agente es admin ahora mismo", no como un fallo).
 async function fetchAdminAgentCodes() {
   try {
     const slug = getCurrentSlugForReservations();
     const syncApiKey = getTpvSyncApiKey();
-    if (!slug || !syncApiKey) return new Set();
+    if (!slug || !syncApiKey) return loadAdminAgentCodesCache();
 
     const url = `${TPV_SYNC_API_URL}?action=list-agent-admins&slug=${encodeURIComponent(slug)}`;
     const res = await fetchWithTimeout(url, {
@@ -38489,18 +38529,22 @@ async function fetchAdminAgentCodes() {
       headers: { Accept: "application/json", "X-TPV-API-KEY": syncApiKey },
       cache: "no-store",
     });
-    if (!res.ok) return new Set();
+    if (!res.ok) return loadAdminAgentCodesCache();
 
     const data = await res.json().catch(() => null);
+    if (!data || data.ok === false) return loadAdminAgentCodesCache();
+
     const list = Array.isArray(data?.data) ? data.data : [];
-    return new Set(
+    const codes = new Set(
       list
         .filter((a) => a && a.enabled !== false)
         .map((a) => String(a?.codagente ?? "").trim())
         .filter(Boolean),
     );
+    saveAdminAgentCodesCache(codes);
+    return codes;
   } catch {
-    return new Set();
+    return loadAdminAgentCodesCache();
   }
 }
 
