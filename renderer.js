@@ -14513,6 +14513,22 @@ function scheduleRuntimeUiRestoreAfterBoot() {
   setTimeout(tryOpenOptions, 120);
 }
 
+// Agrupa los separadores de tanda (ver renderCart) en bloques fijos de 5
+// minutos en vez de por cada sentBatchAt exacto -- feedback de Sergi
+// (2026-10-05): un camarero mandando varias tandas rapidas seguidas (p.ej.
+// 10:30, 10:31, 10:32) llenaria el carrito de rayas separadoras para muy
+// pocos productos cada vez. Redondea siempre hacia ABAJO (10:28 -> 10:25,
+// 10:31 -> 10:30), igual en todos los TPV sin depender de su reloj exacto.
+// Esto solo afecta a que raya se pinta -- el sentBatchAt real de cada
+// linea se guarda tal cual, sin redondear.
+const CART_BATCH_BUCKET_MINUTES = 5;
+function floorToBatchBucket(isoString, bucketMinutes = CART_BATCH_BUCKET_MINUTES) {
+  const d = new Date(isoString);
+  if (!Number.isFinite(d.getTime())) return null;
+  const ms = bucketMinutes * 60 * 1000;
+  return new Date(Math.floor(d.getTime() / ms) * ms);
+}
+
 function renderCart() {
   const container = document.getElementById("cartLines");
   if (!container) return;
@@ -14553,28 +14569,29 @@ function renderCart() {
 
   // Real de cliente 2026-10-05 (camarero, "separar comandas por tanda"):
   // las lineas que llegaron juntas en un mismo envio del camarero (mismo
-  // "sentBatchAt") se agrupan con una raya+hora encima de la primera de
-  // ellas -- nunca sobre lineas añadidas directamente en el TPV (sin esa
-  // marca). Las adiciones de un mismo envio quedan siempre consecutivas en
-  // `cart` (se appendean juntas), asi que basta con detectar el cambio de
-  // valor al recorrer la lista en orden.
-  let lastSentBatchAt = "";
+  // bloque de 5 minutos, ver floorToBatchBucket) se agrupan con una
+  // raya+hora encima de la primera de ellas -- nunca sobre lineas añadidas
+  // directamente en el TPV (sin sentBatchAt). Las adiciones de un mismo
+  // envio quedan siempre consecutivas en `cart` (se appendean juntas), asi
+  // que basta con detectar el cambio de bloque al recorrer la lista en
+  // orden.
+  let lastSentBatchBucketKey = "";
 
   uiLines.forEach((item) => {
     const itemBatchAt = String(item?.sentBatchAt || "").trim();
-    if (itemBatchAt && itemBatchAt !== lastSentBatchAt) {
+    const bucketDate = itemBatchAt ? floorToBatchBucket(itemBatchAt) : null;
+    const bucketKey = bucketDate ? bucketDate.toISOString() : "";
+    if (bucketKey && bucketKey !== lastSentBatchBucketKey) {
       const divider = document.createElement("div");
       divider.className = "cart-batch-divider";
-      const d = new Date(itemBatchAt);
-      const timeLabel = Number.isFinite(d.getTime())
-        ? d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })
-        : "";
-      divider.textContent = timeLabel
-        ? `${timeLabel} · camarero`
-        : "Camarero";
+      const timeLabel = bucketDate.toLocaleTimeString("es-ES", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      divider.textContent = `${timeLabel} · camarero`;
       container.appendChild(divider);
     }
-    lastSentBatchAt = itemBatchAt;
+    lastSentBatchBucketKey = bucketKey;
 
     const pricing = getCartLinePricing(item);
     const unitPrice = Number(pricing.unitGross || 0);
