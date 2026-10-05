@@ -37253,6 +37253,16 @@ function saveParkedTicketsCache(list = parkedTickets) {
     updatedAt: t?.updatedAt ? new Date(t.updatedAt).toISOString() : null,
     paidAt: t?.paidAt ? new Date(t.paidAt).toISOString() : null,
     collectedAt: t?.collectedAt ? new Date(t.collectedAt).toISOString() : null,
+    // Peticion de Sergi (2026-10-05): el plano de mesas (mesas/mesas.js,
+    // contexto JS aparte, solo lee esta misma cache de localStorage) quiere
+    // avisar en la mesa misma si tiene productos sin mandar a cocina
+    // todavia -- reutiliza el mismo calculo ya existente para imprimir
+    // solo lo nuevo (getComandaDeltaLinesForTicket), sobre los items YA
+    // guardados del ticket (no el `cart` en vivo, que solo es el de la
+    // mesa seleccionada ahora mismo).
+    hasPendingComandaLines: t?.paid
+      ? false
+      : getComandaDeltaLinesForTicket(t, t?.items || []).length > 0,
   }));
 
   safe.forEach((ticket) => {
@@ -39284,6 +39294,11 @@ async function refreshRemoteParkedReservationsOnlyImpl() {
     const list = await apiListParkedReservations();
     REMOTE_PARKED_RESERVATIONS = Array.isArray(list) ? list : [];
     syncParkedTicketsFromRemote(REMOTE_PARKED_RESERVATIONS);
+    // Guarda la cache local aqui mismo (no solo cuando se auto-imprime una
+    // comanda) para que el aviso "sin enviar a cocina" del plano de mesas
+    // (mesas/mesas.js, que solo lee esta cache) se actualice cada ciclo de
+    // 10s aunque el cliente tenga desactivada la auto-impresion.
+    saveParkedTicketsCache();
     // Refresco continuo (real de cliente 2026-10-05, app de camareros): si
     // la mesa/aparcado cargado AHORA MISMO en el carrito cambio en el
     // servidor (otro terminal, o la app de camareros), se fusiona y se

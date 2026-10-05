@@ -9193,6 +9193,29 @@ mustContain(
   "renderCart() aplica la clase visual solo cuando la linea es relevante para comanda (pasa las reglas de familias) Y no esta entre las pendientes de este calculo -- una linea fuera de las reglas de comanda (p.ej. una bebida si el cliente solo manda platos a cocina) nunca se marca, y una linea con solo PARTE de su cantidad ya impresa se queda en negro (sigue pendiente), no en gris",
 );
 
+console.log("\n[SMOKE] Checking 2026-10-05 plano de mesas: aviso de productos sin enviar a cocina\n");
+
+mustContain(
+  renderer,
+  "hasPendingComandaLines: t?.paid",
+  "Peticion de Sergi (2026-10-05): el plano de mesas (mesas/mesas.js, contexto JS aparte, solo lee la cache local de aparcados) necesita saber si una mesa tiene productos sin mandar a cocina todavia, sin tener que abrirla -- saveParkedTicketsCache() calcula esto reutilizando getComandaDeltaLinesForTicket (el mismo calculo que ya usa 'Enviar comanda') sobre los items YA guardados del ticket, no el carrito en vivo",
+);
+mustContain(
+  renderer,
+  "para que el aviso \"sin enviar a cocina\" del plano de mesas",
+  "El sondeo remoto de 10s guarda la cache local en cada ciclo (no solo cuando se auto-imprime una comanda), para que el aviso del plano se actualice aunque el cliente tenga desactivada la auto-impresion",
+);
+mustContain(
+  mesasJs,
+  "!hasAutoPrintFailure && !!ticket?.hasPendingComandaLines;",
+  "mesas.js pinta el badge 'Sin enviar' en la mesa correspondiente del plano visual, leyendo el flag que renderer.js ya calculo y guardo en la cache compartida -- no duplica el calculo de que es 'comanda pendiente'. Si ya hay un aviso de fallo de auto-impresion no se duplica (ese ya deja claro que falta algo por enviar)",
+);
+mustContain(
+  mesasJs,
+  '${hasPendingComanda ? `<span class="gestion-badge pending-kitchen" title="Hay productos sin enviar a cocina todavía">🖨 Sin enviar</span>` : ""}',
+  "Verificado en vivo contra demo real (instancia aislada TPV_E2E): una mesa con 1 producto nunca enviado a cocina muestra el badge en el plano; las demas mesas (sin ticket, o sin nada pendiente) no lo muestran",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

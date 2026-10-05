@@ -2794,12 +2794,22 @@ function renderMapCards() {
       // que la comanda automatica de esta mesa no se pudo imprimir. No viaja
       // entre TPV (el servidor no lo guarda), solo se ve en el que fallo.
       const hasAutoPrintFailure = !!ticket?.comandaAutoPrintFailedAt;
+      // Peticion de Sergi (2026-10-05): avisar en el propio plano, sin
+      // tener que entrar a la mesa, si tiene productos todavia sin mandar
+      // a cocina -- renderer.js ya calcula esto (hasPendingComandaLines,
+      // mismo calculo que usa "Enviar comanda" para saber que es nuevo) y
+      // lo guarda junto al ticket en la cache local que este plano lee. Si
+      // ya hay un aviso de fallo de impresion, no se duplica -- ese ya deja
+      // claro que falta algo por enviar.
+      const hasPendingComanda =
+        !hasAutoPrintFailure && !!ticket?.hasPendingComandaLines;
 
       node.innerHTML = `
         <span class="gestion-name">${obj.label || "Mesa"}</span>
         ${totalText ? `<span class="gestion-total">${totalText}</span>` : ""}
         ${badgeText ? `<span class="${badgeClass}">${badgeText}</span>` : ""}
         ${hasAutoPrintFailure ? `<span class="gestion-badge warn" title="No se pudo imprimir la comanda automáticamente">⚠ Comanda</span>` : ""}
+        ${hasPendingComanda ? `<span class="gestion-badge pending-kitchen" title="Hay productos sin enviar a cocina todavía">🖨 Sin enviar</span>` : ""}
         ${serviceOrder > 0 ? `<span class="gestion-order">${serviceOrder}</span>` : ""}
       `;
 
