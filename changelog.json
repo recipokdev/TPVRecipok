@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "MEJORA (Modo Mesas): si una mesa ya abierta recibía un pedido nuevo (p.ej. desde la app de camareros) mientras la tenías en pantalla, antes no se veía hasta cambiar de mesa, cobrar, o abrir el diálogo de comanda. Ahora se actualiza sola en segundo plano, sin tener que tocar nada."
+      ]
     },
     {
       "version": "0.2.39",

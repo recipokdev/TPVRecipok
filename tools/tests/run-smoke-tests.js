@@ -7564,8 +7564,8 @@ mustContain(
 );
 mustContain(
   renderer,
-  "if (ticket.__remoteChangedWhileLoaded) {",
-  "flushLoadedParkedTicketChangesSync refuses to push a stale cart snapshot over fresher remote items when switching away from a mesa -- previously it would silently overwrite server-confirmed lines (e.g. added by another terminal) with the old local copy",
+  "if (!ticket.__remoteChangedWhileLoaded) return false;",
+  "flushLoadedParkedTicketChangesSync refuses to push a stale cart snapshot over fresher remote items when switching away from a mesa -- previously it would silently overwrite server-confirmed lines (e.g. added by another terminal) with the old local copy. This check now lives in mergeRemoteChangesIntoLoadedParkedTicketIfAny (2026-10-05), shared with the continuous 10s-poll refresh",
 );
 mustContain(
   renderer,
@@ -9142,6 +9142,19 @@ mustContain(
   renderer,
   "combined.push({\r\n          id: idProd,\r\n          name,\r\n          secondaryName,",
   "Non-variant product path also gets a real secondaryName now (used to be hardcoded to \"\") -- verified live against demo (synthetic descripcion='Nombre real', referencia='REF-001'): shows 'REF-001' as the main name with 'Nombre real' as the secondary line",
+);
+
+console.log("\n[SMOKE] Checking 2026-10-05 Mesas: carrito se refresca solo con un pedido abierto (app de camareros), sin cambiar de mesa\n");
+
+mustContain(
+  renderer,
+  "function mergeRemoteChangesIntoLoadedParkedTicketIfAny() {",
+  "Real de cliente (app de camareros, 2026-10-05): fusionar los cambios remotos del aparcado/mesa cargado solo pasaba al cambiar de mesa, cobrar, o abrir el dialogo de comanda -- si el cajero se quedaba quieto mirando una mesa ya abierta, un plato nuevo enviado por el camarero no aparecia solo en pantalla. Se extrajo a su propia funcion para poder llamarla tambien desde el sondeo remoto de 10s, no solo al navegar",
+);
+mustContain(
+  renderer,
+  "repinta aqui mismo, sin esperar a que el cajero cambie de mesa o",
+  "El sondeo remoto de 10s (refreshRemoteParkedReservationsOnlyImpl) ahora fusiona y repinta la mesa/aparcado cargado AHORA MISMO en el carrito en cuanto detecta que cambio en el servidor -- verificado en vivo contra demo real: una mesa real ya abierta (8 lineas) paso a 9 sola, con el plato nuevo visible, sin cambiar de mesa, cobrar ni abrir el dialogo de comanda",
 );
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");

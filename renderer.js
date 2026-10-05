@@ -10492,6 +10492,48 @@ function mergeMissingRemoteLinesIntoCart(ticket) {
 // usaria un guardado explicito y se sincroniza en segundo plano (sin
 // bloquear el salto al otro aparcado), rastreado igual que el resto de
 // guardados no silenciosos para que cobrar/borrar mas tarde lo esperen.
+// Real de cliente 2026-09-22 (Asador el Gallo, 2 terminales compartiendo
+// caja): si la mesa cambio en otro terminal mientras estaba cargada aqui,
+// `ticket.items` ya trae la version fresca del servidor pero `cart` (de
+// donde sale el snapshot que se manda al guardar) no. Antes se tomaba la
+// version remota a ciegas y se descartaba CUALQUIER cambio local sin
+// guardar (p.ej. un producto que el cajero acababa de añadir) con solo un
+// aviso informativo facil de pasar por alto -- real perdida de datos en
+// silencio. Ahora se fusiona igual que ya hace parkCurrentCart
+// (mergeMissingRemoteLinesIntoCart, sincrono, sin red): se conserva lo que
+// el cajero tenia en su carrito Y se recuperan los productos que llegaron
+// del otro terminal, en vez de descartar uno de los dos a ciegas.
+//
+// Real de cliente 2026-10-05 (app de camareros): esto solo se llamaba al
+// cambiar de aparcado/mesa, cobrar, o abrir el dialogo de comanda -- si el
+// cajero se quedaba quieto mirando una mesa ya abierta, un plato nuevo
+// enviado por el camarero no aparecia solo en pantalla hasta que el
+// cajero tocara algo. Ahora tambien se llama desde el sondeo remoto de
+// 10s (refreshRemoteParkedReservationsOnlyImpl) para la mesa/aparcado que
+// este cargado AHORA MISMO en el carrito, asi que el refresco llega solo,
+// sin esperar a ninguna accion del cajero.
+function mergeRemoteChangesIntoLoadedParkedTicketIfAny() {
+  const idx = currentParkedTicketIndex;
+  if (idx == null || !Array.isArray(parkedTickets) || !parkedTickets[idx]) {
+    return false;
+  }
+
+  const ticket = parkedTickets[idx];
+  if (!ticket.__remoteChangedWhileLoaded) return false;
+
+  const recovered = mergeMissingRemoteLinesIntoCart(ticket);
+  saveParkedTicketsCache();
+  renderCart?.();
+  toast?.(
+    recovered
+      ? "Esta mesa se actualizó desde otro terminal; se han combinado tus cambios con los del otro terminal."
+      : "Esta mesa se actualizó desde otro terminal mientras estaba abierta.",
+    "info",
+    "Mesas",
+  );
+  return true;
+}
+
 function flushLoadedParkedTicketChangesSync() {
   const idx = currentParkedTicketIndex;
   if (idx == null || !Array.isArray(parkedTickets) || !parkedTickets[idx]) {
@@ -10500,31 +10542,10 @@ function flushLoadedParkedTicketChangesSync() {
 
   const ticket = parkedTickets[idx];
 
-  // Real de cliente 2026-09-22 (Asador el Gallo, 2 terminales compartiendo
-  // caja): si la mesa cambio en otro terminal mientras estaba cargada aqui,
-  // `ticket.items` ya trae la version fresca del servidor pero `cart` (de
-  // donde sale el snapshot que se manda abajo) no. Antes se tomaba la
-  // version remota a ciegas y se descartaba CUALQUIER cambio local sin
-  // guardar (p.ej. un producto que el cajero acababa de añadir) con solo un
-  // aviso informativo facil de pasar por alto -- real perdida de datos en
-  // silencio. Ahora se fusiona igual que ya hace parkCurrentCart
-  // (mergeMissingRemoteLinesIntoCart, sincrono, sin red): se conserva lo que
-  // el cajero tenia en su carrito Y se recuperan los productos que llegaron
-  // del otro terminal, en vez de descartar uno de los dos a ciegas. Ya NO se
-  // sale aqui -- si tras fusionar sigue habiendo algo que guardar de verdad,
-  // el resto de esta funcion (mas abajo) lo hace, igual que siempre.
-  if (ticket.__remoteChangedWhileLoaded) {
-    const recovered = mergeMissingRemoteLinesIntoCart(ticket);
-    saveParkedTicketsCache();
-    renderCart?.();
-    toast?.(
-      recovered
-        ? "Esta mesa se actualizó desde otro terminal; se han combinado tus cambios con los del otro terminal."
-        : "Esta mesa se actualizó desde otro terminal mientras estaba abierta.",
-      "info",
-      "Mesas",
-    );
-  }
+  // Ya NO se sale aqui tras fusionar -- si tras fusionar sigue habiendo
+  // algo que guardar de verdad, el resto de esta funcion (mas abajo) lo
+  // hace, igual que siempre.
+  mergeRemoteChangesIntoLoadedParkedTicketIfAny();
 
   if (!hasUnsavedChangesForLoadedParkedTicket(ticket)) return;
 
@@ -39179,6 +39200,12 @@ async function refreshRemoteParkedReservationsOnlyImpl() {
     const list = await apiListParkedReservations();
     REMOTE_PARKED_RESERVATIONS = Array.isArray(list) ? list : [];
     syncParkedTicketsFromRemote(REMOTE_PARKED_RESERVATIONS);
+    // Refresco continuo (real de cliente 2026-10-05, app de camareros): si
+    // la mesa/aparcado cargado AHORA MISMO en el carrito cambio en el
+    // servidor (otro terminal, o la app de camareros), se fusiona y se
+    // repinta aqui mismo, sin esperar a que el cajero cambie de mesa o
+    // cobre para enterarse.
+    mergeRemoteChangesIntoLoadedParkedTicketIfAny();
     rebuildRemoteReservedByProductMap();
     updateRenderedProductStocks();
     __parkedSyncLastOkAt = Date.now();
