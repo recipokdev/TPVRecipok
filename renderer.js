@@ -14543,6 +14543,34 @@ function renderCart() {
   // ✅ UI: solo pintamos líneas NO-hijas
   const uiLines = getVisibleCartLines(cartItems);
 
+  // Peticion de Sergi (2026-10-05): distinguir visualmente en el carrito
+  // que productos ya se mandaron a la impresora de cocina (comanda) de los
+  // que siguen pendientes de enviar -- la app de camareros ya hace esto en
+  // su propia pantalla ("Ya en cocina" en gris vs "Pendiente de enviar" en
+  // negro), pero el TPV no mostraba nada. Reutiliza el mismo calculo que ya
+  // existia para imprimir solo lo nuevo (getComandaDeltaLinesForTicket):
+  // una linea es "ya en cocina" si es relevante para comanda (pasa las
+  // reglas de familias de Opciones -> Mesas) PERO no aparece entre las
+  // lineas pendientes de ese calculo.
+  const loadedTicketForComanda =
+    currentParkedTicketIndex != null
+      ? parkedTickets?.[currentParkedTicketIndex]
+      : null;
+  const comandaRelevantLineIds = new Set(
+    getComandaPrintableLines(cartItems).map((l) => l._lineId),
+  );
+  const comandaPendingLineIds = loadedTicketForComanda
+    ? new Set(
+        getComandaDeltaLinesForTicket(loadedTicketForComanda, cartItems).map(
+          (l) => l._lineId,
+        ),
+      )
+    : null;
+  const isLineAlreadySentToKitchen = (item) =>
+    !!comandaPendingLineIds &&
+    comandaRelevantLineIds.has(item._lineId) &&
+    !comandaPendingLineIds.has(item._lineId);
+
   const buildCartLineMiniLegend = (pricing) => {
     const tags = [];
     if (pricing?.manualPriceLocked) tags.push("Manual");
@@ -14584,7 +14612,9 @@ function renderCart() {
     const lineTotal = Number(pricing.lineTotal || 0);
 
     const row = document.createElement("div");
-    row.className = "cart-line";
+    row.className = isLineAlreadySentToKitchen(item)
+      ? "cart-line cart-line-sent-to-kitchen"
+      : "cart-line";
     row.dataset.lineid = item._lineId;
 
     const modifiedMark = isPriceModified(item)

@@ -9180,6 +9180,19 @@ mustContain(
   "renderCart() inserta un separador (raya + hora, diseno 'Opcion B' confirmado con Sergi) encima de la primera linea de cada tanda distinta -- nunca sobre lineas añadidas directamente en el TPV (sin sentBatchAt). Verificado en vivo contra demo real: 2 tandas sinteticas con horas distintas producen 2 separadores, cada uno con su hora correcta en la zona horaria local",
 );
 
+console.log("\n[SMOKE] Checking 2026-10-05 carrito: líneas ya enviadas a cocina en gris\n");
+
+mustContain(
+  renderer,
+  "const isLineAlreadySentToKitchen = (item) =>",
+  "Peticion de Sergi (2026-10-05): el TPV ya rastreaba por dentro que productos se habian mandado a cocina (comandaState.printedQtyByLineKey, para no repetirlos al imprimir) pero nunca lo mostraba en el carrito -- la app de camareros si distingue 'Ya en cocina' (gris) de 'Pendiente de enviar' en su propia pantalla. Reutiliza el mismo calculo existente (getComandaDeltaLinesForTicket) en vez de duplicar la logica de impresion",
+);
+mustContain(
+  renderer,
+  '? "cart-line cart-line-sent-to-kitchen"',
+  "renderCart() aplica la clase visual solo cuando la linea es relevante para comanda (pasa las reglas de familias) Y no esta entre las pendientes de este calculo -- una linea fuera de las reglas de comanda (p.ej. una bebida si el cliente solo manda platos a cocina) nunca se marca, y una linea con solo PARTE de su cantidad ya impresa se queda en negro (sigue pendiente), no en gris",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

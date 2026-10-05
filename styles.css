@@ -2762,6 +2762,10 @@ body.cart-width-dragging .cart-width-drag-handle {
   font-size: 13px;
 }
 
+.cart-line-sent-to-kitchen {
+  opacity: 0.55;
+}
+
 .cart-line-name {
   flex: 1;
   font-weight: 500;

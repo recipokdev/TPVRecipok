@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "MEJORA (Modo Mesas): los productos del carrito que ya se mandaron a la impresora de cocina ahora se ven atenuados (en gris), para distinguirlos de un vistazo de los que todavía están pendientes de enviar -- igual que ya hacía la app de camareros en su propia pantalla."
+      ]
     },
     {
       "version": "0.2.40",
