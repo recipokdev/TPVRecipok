@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.40",
+      "date": "2026-10-05",
+      "title": "Release 0.2.40",
       "changes": [
         "MEJORA (Modo Mesas): si una mesa ya abierta recibía un pedido nuevo (p.ej. desde la app de camareros) mientras la tenías en pantalla, antes no se veía hasta cambiar de mesa, cobrar, o abrir el diálogo de comanda. Ahora se actualiza sola en segundo plano, sin tener que tocar nada.",
         "MEJORA (Modo Mesas): cuando el camarero manda el pedido en varias tandas (p.ej. bebidas primero, postre después), ahora el carrito muestra una pequeña raya con la hora antes de los productos de cada tanda nueva, para ver de un vistazo qué es lo último que ha llegado. No afecta a los productos añadidos directamente en el TPV."
