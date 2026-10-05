@@ -9090,6 +9090,19 @@ mustContain(
   "ensureMesaLinkedTicketLoaded() (runs on every cart render) used to bail out on ANY draft for the table, empty or not -- now only a draft with real lines counts as 'local changes to respect', so it stops permanently re-confirming a stale empty draft against a real non-empty ticket on every single render",
 );
 
+console.log("\n[SMOKE] Checking 2026-10-05 products hidden entirely when their only available name resolved to a literal '-' (FacturaScripts' own placeholder for a blank field)\n");
+
+mustContain(
+  renderer,
+  'invendible sin ningun aviso (real: "Los Argentinos", 2026-10-05).',
+  "Real bug reported by a client (Los Argentinos): products whose descripcion was empty and whose referencia was literally \"-\" (FacturaScripts' own blank-field placeholder) resolved to a display name of \"-\", which an extra `|| name === \"-\"` check then used to skip the product ENTIRELY from the sellable grid -- not just an ugly card, genuinely invisible and unsellable, with no error anywhere. The client's own boss had to edit the database by hand to replace every \"-\" with a real reference just to make those products sellable again. A \"-\" is a real, non-empty value, not \"no name\" -- it no longer hides the product (SIN VARIANTES path)",
+);
+mustContain(
+  renderer,
+  '"-" es un valor real, no "sin nombre" -- no oculta el producto.',
+  "Same fix applied to the CON VARIANTES path (the default single-variant row FacturaScripts creates for every product) -- a variant whose own referencia is literally \"-\" no longer makes the whole product disappear either",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

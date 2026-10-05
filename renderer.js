@@ -28531,7 +28531,9 @@ async function loadDataFromApi(opts = {}) {
           const mainName = isSingleVariant
             ? applyProductDisplayFieldMode(baseName, variantRef)
             : variantRef || baseName;
-          if (!mainName || mainName === "-") return;
+          // Ver comentario equivalente en el bucle "SIN VARIANTES" mas abajo:
+          // "-" es un valor real, no "sin nombre" -- no oculta el producto.
+          if (!mainName) return;
 
           const price = Number(v.precio ?? base.precio ?? 0);
           const idVar = Number(v.idvariante ?? v.id ?? baseId * 1000 + pos);
@@ -28575,7 +28577,11 @@ async function loadDataFromApi(opts = {}) {
         if (p.bloqueado || isFalseFlag(p.sevende)) return;
 
         const name = applyProductDisplayFieldMode(p.descripcion, p.referencia);
-        if (!name || name === "-") return;
+        // Un "-" es un valor real (placeholder tipico de FacturaScripts
+        // cuando el campo se deja en blanco), no "sin nombre" -- tratarlo
+        // como motivo para OCULTAR el producto entero lo hacia invisible e
+        // invendible sin ningun aviso (real: "Los Argentinos", 2026-10-05).
+        if (!name) return;
 
         const price = Number(p.precio ?? 0);
         const category = String(p.codfamilia ?? "");
