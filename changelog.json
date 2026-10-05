@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.39",
+      "date": "2026-10-05",
+      "title": "Release 0.2.39",
       "changes": [
         "FIX (importante, Modo Mesas): si tenías una mesa abierta en el TPV justo cuando llegaba un pedido nuevo desde la app de camareros, podían aparecer productos duplicados a 0€ en el pedido en vez de sumarse correctamente a lo que ya había. Causa: el TPV comparaba las líneas nuevas contra las que ya tenías usando también el precio exacto como parte de la comparación -- si la línea que llegaba traía un precio inválido (visto real, por un fallo puntual al enviarla), nunca coincidía con la que ya tenías correctamente, y se insertaba duplicada a 0€ en vez de reconciliarse. Ahora la comparación ignora el precio (solo mira el producto), y si hace falta añadir alguna unidad de verdad nueva, usa el precio ya correcto que tenías o el del catálogo -- nunca un precio roto heredado a ciegas.",
         "FIX (importante, Modo Mesas): seleccionar una mesa marcada como Ocupada (con un pedido real detrás, p.ej. de la app de camareros) podía mostrar el carrito completamente vacío, sin ningún producto -- solo se veía el pedido real si lo abrías desde \"Pedidos\". Causa: un borrador local vacío (de una navegación anterior por esa mesa) ganaba siempre sobre el pedido real, para siempre, sin comparar si había algo de verdad guardado. Ahora un borrador vacío nunca tapa un pedido real con contenido; uno con cambios de verdad sin guardar se sigue respetando exactamente igual que antes.",
