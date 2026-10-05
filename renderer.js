@@ -5036,15 +5036,44 @@ function bindProductDisplayFieldModeOnce() {
   });
 }
 
-// Aplica el modo elegido a un nombre/referencia ya calculados (mismo
-// fallback de siempre si el campo elegido especificamente esta vacio, para
-// no dejar nunca una tarjeta en blanco).
+// Un "-" (o "—") es el placeholder real que FacturaScripts deja en un campo
+// que el usuario ha dejado en blanco -- no es contenido de verdad, aunque
+// el campo en si no este vacio.
+function isMeaninglessProductFieldText(v) {
+  const s = String(v ?? "").trim();
+  return !s || s === "-" || s === "—";
+}
+
+// Aplica el modo elegido a un nombre/referencia ya calculados. Real (cliente
+// "Los Argentinos", 2026-10-05): antes de que el carrito respetara esta
+// opcion, un producto de variante unica SIEMPRE mostraba su referencia como
+// nombre -- asi que un "-" puesto a proposito en descripcion (convencion de
+// esta tienda: "el nombre real va en referencia, dejo descripcion vacia/con
+// un guion") era inofensivo, nunca se miraba. Al pasar esta tarjeta a
+// respetar Opciones -> Productos, un simple "||" trataba ese "-" como
+// contenido real (no esta vacio) y ganaba sobre la referencia buena,
+// dejando el producto con nombre "-" -- y un chequeo aparte lo ocultaba del
+// todo. Ahora un campo que sea literalmente "-"/"—" cuenta como "sin
+// contenido" igual que vacio, en los 2 campos y en los 3 modos -- solo se
+// devuelve un "-" si de verdad no hay ningun campo con contenido real.
 function applyProductDisplayFieldMode(descripcionText, referenciaText) {
   const desc = String(descripcionText || "").trim();
   const ref = String(referenciaText || "").trim();
+  const descOk = !isMeaninglessProductFieldText(desc);
+  const refOk = !isMeaninglessProductFieldText(ref);
 
-  if (productDisplayFieldMode === "descripcion") return desc || ref;
-  if (productDisplayFieldMode === "referencia") return ref || desc;
+  if (productDisplayFieldMode === "descripcion") {
+    if (descOk) return desc;
+    if (refOk) return ref;
+    return desc || ref;
+  }
+  if (productDisplayFieldMode === "referencia") {
+    if (refOk) return ref;
+    if (descOk) return desc;
+    return ref || desc;
+  }
+  if (descOk) return desc;
+  if (refOk) return ref;
   return desc || ref;
 }
 
@@ -28499,9 +28528,13 @@ async function loadDataFromApi(opts = {}) {
 
         if (base.bloqueado || isFalseFlag(base.sevende)) return;
 
-        const baseName = String(
-          base.descripcion ?? base.referencia ?? "",
-        ).trim();
+        // No usar "??" a pelo aqui: si descripcion es literalmente "-"
+        // (placeholder real de FacturaScripts, no vacio de verdad), "??"
+        // lo aceptaria como valor valido y nunca probaria la referencia.
+        const baseDescripcionRaw = String(base.descripcion ?? "").trim();
+        const baseName = !isMeaninglessProductFieldText(baseDescripcionRaw)
+          ? baseDescripcionRaw
+          : String(base.referencia ?? "").trim();
         const category = String(base.codfamilia ?? "");
         const codImpuestoBase = base.codimpuesto || null;
         const taxRateBase = extractTaxRateFromCode(codImpuestoBase);

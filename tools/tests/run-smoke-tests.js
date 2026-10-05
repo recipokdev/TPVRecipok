@@ -8467,8 +8467,8 @@ mustContain(
 );
 mustContain(
   renderer,
-  'function applyProductDisplayFieldMode(descripcionText, referenciaText) {\r\n  const desc = String(descripcionText || "").trim();\r\n  const ref = String(referenciaText || "").trim();\r\n\r\n  if (productDisplayFieldMode === "descripcion") return desc || ref;\r\n  if (productDisplayFieldMode === "referencia") return ref || desc;\r\n  return desc || ref;\r\n}',
-  "applyProductDisplayFieldMode() always falls back to the other field when the chosen one is empty, in every mode -- verified live (pure-function check against demo) for all 3 modes and both empty-field cases",
+  "function isMeaninglessProductFieldText(v) {",
+  "applyProductDisplayFieldMode() always falls back to the other field when the chosen one is empty OR is a literal FacturaScripts blank-field placeholder (\"-\"/\"—\") -- see the 2026-10-05 dash-name fix below for why a bare empty-string check wasn't enough",
 );
 mustContain(
   renderer,
@@ -9103,6 +9103,18 @@ mustContain(
   "Same fix applied to the CON VARIANTES path (the default single-variant row FacturaScripts creates for every product) -- a variant whose own referencia is literally \"-\" no longer makes the whole product disappear either",
 );
 
+console.log("\n[SMOKE] Checking 2026-10-05 real root cause: a literal '-' in descripcion silently beat a perfectly good referencia once the display-field-mode feature made descripcion matter at all\n");
+
+mustContain(
+  renderer,
+  'function isMeaninglessProductFieldText(v) {',
+  "Sergi's own correction: the client never touched product data until the display-field-mode commits (2026-09-30/2026-10-01) -- before those, a single-variant product ALWAYS showed its variant referencia, descripcion was never even looked at, so a '-' placeholder sitting in descripcion (this store's convention: real name in referencia, descripcion left as '-') was completely harmless. Once naming started respecting descripcion-first ('both' mode), that same harmless '-' began winning over the real referencia via a plain '||', because a non-empty '-' string is truthy -- hiding the product. A literal '-'/'—' is now treated as 'no content' everywhere a field is compared for fallback, not just at the final hide-the-whole-product check",
+);
+mustContain(
+  renderer,
+  "const baseDescripcionRaw = String(base.descripcion ?? \"\").trim();",
+  "The CON VARIANTES path's own baseName used to compute itself with a raw '??' (base.descripcion ?? base.referencia) BEFORE ever reaching applyProductDisplayFieldMode -- '??' treats a literal '-' as a perfectly valid value and never tries referencia at all. Fixed at the source, not just downstream",
+);
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
