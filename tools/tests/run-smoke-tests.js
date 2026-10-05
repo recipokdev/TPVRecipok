@@ -9157,6 +9157,29 @@ mustContain(
   "El sondeo remoto de 10s (refreshRemoteParkedReservationsOnlyImpl) ahora fusiona y repinta la mesa/aparcado cargado AHORA MISMO en el carrito en cuanto detecta que cambio en el servidor -- verificado en vivo contra demo real: una mesa real ya abierta (8 lineas) paso a 9 sola, con el plato nuevo visible, sin cambiar de mesa, cobrar ni abrir el dialogo de comanda",
 );
 
+console.log("\n[SMOKE] Checking 2026-10-05 Mesas: separar comandas por tanda en el carrito (app de camareros)\n");
+
+mustContain(
+  renderer,
+  "const latestSentBatchAtByKey = new Map();",
+  "Peticion real de cliente (bug #2 de los 3 reportados sobre la app de camareros): la app ahora manda sentBatchAt (hora ISO) en cada producto, preservandolo en los que ya venian de un envio anterior. mergeMissingRemoteLinesIntoCart se queda con el mas reciente por cada clave de producto para etiquetar las unidades que realmente son nuevas en este ciclo",
+);
+mustContain(
+  renderer,
+  "sentBatchAt: latestSentBatchAtByKey.get(key)?.raw || null,",
+  "Las lineas nuevas insertadas por la fusion remota llevan la marca de tanda, para poder agruparlas visualmente en el carrito",
+);
+mustContain(
+  renderer,
+  "if (existing.sentBatchAt) existing.sentBatchAt = null;",
+  "Si el cajero añade manualmente mas cantidad de un producto que ya estaba marcado como 'de un envio del camarero', se quita la marca -- esa linea ya no es solo de ese envio, no se le debe atribuir al camarero algo que puso el cajero",
+);
+mustContain(
+  renderer,
+  'divider.className = "cart-batch-divider";',
+  "renderCart() inserta un separador (raya + hora, diseno 'Opcion B' confirmado con Sergi) encima de la primera linea de cada tanda distinta -- nunca sobre lineas añadidas directamente en el TPV (sin sentBatchAt). Verificado en vivo contra demo real: 2 tandas sinteticas con horas distintas producen 2 separadores, cada uno con su hora correcta en la zona horaria local",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

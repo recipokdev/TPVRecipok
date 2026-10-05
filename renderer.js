@@ -10422,6 +10422,24 @@ function mergeMissingRemoteLinesIntoCart(ticket) {
 
   const ticketQtyByKey = sumQtyByKey(ticket.items);
 
+  // Real de cliente 2026-10-05 (app de camareros): para poder separar en el
+  // carrito que productos llegaron juntos en un mismo envio del camarero,
+  // la app manda ahora "sentBatchAt" (hora ISO del envio) en cada producto,
+  // preservandolo en los que ya venian de un envio anterior. Nos quedamos
+  // con el mas reciente por cada clave de producto -- es el que corresponde
+  // a las unidades que faltan (las ya reflejadas en el carrito vienen de
+  // envios mas viejos, ya fusionados en un ciclo anterior).
+  const latestSentBatchAtByKey = new Map();
+  (Array.isArray(ticket.items) ? ticket.items : []).forEach((it) => {
+    const raw = it?.sentBatchAt;
+    if (!raw) return;
+    const t = Date.parse(raw);
+    if (!Number.isFinite(t)) return;
+    const key = baseLineKey(it);
+    const prevT = latestSentBatchAtByKey.get(key)?.t ?? -Infinity;
+    if (t > prevT) latestSentBatchAtByKey.set(key, { t, raw });
+  });
+
   const additions = [];
   ticketQtyByKey.forEach((ticketQty, key) => {
     const deficit = ticketQty - (cartQtyByKey.get(key) || 0);
@@ -10456,6 +10474,7 @@ function mergeMissingRemoteLinesIntoCart(ticket) {
       ...template,
       qty: deficit,
       cantidad: deficit,
+      sentBatchAt: latestSentBatchAtByKey.get(key)?.raw || null,
     });
   });
 
@@ -13780,8 +13799,16 @@ async function addToCart(product, quantity = 1) {
   });
 
   pushCartHistoryStep(existing ? "qty-change" : "add-product");
-  if (existing) existing.qty += finalQty;
-  else cart.push(buildCartLine(product, finalQty));
+  if (existing) {
+    existing.qty += finalQty;
+    // Si esta linea venia marcada como "de un envio del camarero" y ahora
+    // se le suma cantidad añadida aqui mismo en el TPV, ya no es solo de
+    // ese envio -- quitamos la marca para no atribuirle al camarero
+    // unidades que puso el cajero.
+    if (existing.sentBatchAt) existing.sentBatchAt = null;
+  } else {
+    cart.push(buildCartLine(product, finalQty));
+  }
 
   renderCart();
 }
@@ -14524,7 +14551,31 @@ function renderCart() {
     return `<div class="cart-line-mini-legend">${tags.join(" · ")}</div>`;
   };
 
+  // Real de cliente 2026-10-05 (camarero, "separar comandas por tanda"):
+  // las lineas que llegaron juntas en un mismo envio del camarero (mismo
+  // "sentBatchAt") se agrupan con una raya+hora encima de la primera de
+  // ellas -- nunca sobre lineas añadidas directamente en el TPV (sin esa
+  // marca). Las adiciones de un mismo envio quedan siempre consecutivas en
+  // `cart` (se appendean juntas), asi que basta con detectar el cambio de
+  // valor al recorrer la lista en orden.
+  let lastSentBatchAt = "";
+
   uiLines.forEach((item) => {
+    const itemBatchAt = String(item?.sentBatchAt || "").trim();
+    if (itemBatchAt && itemBatchAt !== lastSentBatchAt) {
+      const divider = document.createElement("div");
+      divider.className = "cart-batch-divider";
+      const d = new Date(itemBatchAt);
+      const timeLabel = Number.isFinite(d.getTime())
+        ? d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })
+        : "";
+      divider.textContent = timeLabel
+        ? `${timeLabel} · camarero`
+        : "Camarero";
+      container.appendChild(divider);
+    }
+    lastSentBatchAt = itemBatchAt;
+
     const pricing = getCartLinePricing(item);
     const unitPrice = Number(pricing.unitGross || 0);
     const lineTotal = Number(pricing.lineTotal || 0);

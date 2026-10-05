@@ -5750,6 +5750,14 @@ body.theme-dark #parkObsOverlay .park-quick-flag.is-active {
   color: #6b7280;
 }
 
+.cart-batch-divider {
+  font-size: 11px;
+  color: #9ca3af;
+  border-top: 1px solid #e5e7eb;
+  padding-top: 6px;
+  margin: 8px 0 6px;
+}
+
 .parked-editing-banner .peb-chip.is-ticket {
   border-color: #f5c26b;
   color: #92400e;
@@ -8970,6 +8978,11 @@ body.theme-dark .line-discount-btn.is-active {
 
 body.theme-dark .cart-line-mini-legend {
   color: #94a3b8;
+}
+
+body.theme-dark .cart-batch-divider {
+  color: #94a3b8;
+  border-top-color: #334155;
 }
 
 body.theme-dark .cart-lines-wrapper {
