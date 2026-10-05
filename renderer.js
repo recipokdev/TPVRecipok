@@ -5044,37 +5044,52 @@ function isMeaninglessProductFieldText(v) {
   return !s || s === "-" || s === "—";
 }
 
-// Aplica el modo elegido a un nombre/referencia ya calculados. Real (cliente
-// "Los Argentinos", 2026-10-05): antes de que el carrito respetara esta
-// opcion, un producto de variante unica SIEMPRE mostraba su referencia como
-// nombre -- asi que un "-" puesto a proposito en descripcion (convencion de
-// esta tienda: "el nombre real va en referencia, dejo descripcion vacia/con
-// un guion") era inofensivo, nunca se miraba. Al pasar esta tarjeta a
-// respetar Opciones -> Productos, un simple "||" trataba ese "-" como
-// contenido real (no esta vacio) y ganaba sobre la referencia buena,
-// dejando el producto con nombre "-" -- y un chequeo aparte lo ocultaba del
-// todo. Ahora un campo que sea literalmente "-"/"—" cuenta como "sin
-// contenido" igual que vacio, en los 2 campos y en los 3 modos -- solo se
-// devuelve un "-" si de verdad no hay ningun campo con contenido real.
-function applyProductDisplayFieldMode(descripcionText, referenciaText) {
+// Calcula el nombre principal (y, en modo "ambas", el secundario) de un
+// producto sin variantes reales a partir de sus 2 campos de FacturaScripts.
+// Real (cliente "Los Argentinos", 2026-10-05): antes de que el carrito
+// respetara Opciones -> Productos, un producto de variante unica SIEMPRE
+// mostraba su referencia como nombre -- asi que un "-" puesto a proposito
+// en descripcion (convencion de esta tienda: "el nombre real va en
+// referencia, dejo descripcion vacia/con un guion") era inofensivo, nunca
+// se miraba. Al pasar esta tarjeta a respetar la opcion, un simple "||"
+// trataba ese "-" como contenido real y ganaba sobre la referencia buena.
+// Un campo que sea literalmente "-"/"—" cuenta ahora como "sin contenido"
+// igual que vacio, en los 2 campos y en los 3 modos.
+//
+// Diseño confirmado con Sergi (2026-10-05): en modo "ambas" (por defecto),
+// si los 2 campos tienen contenido real Y son distintos, se muestran los 2
+// apilados -- referencia arriba (nombre principal), descripcion debajo
+// (texto secundario), igual que ya funcionaba de siempre para productos
+// con variantes DE VERDAD (tallas/sabores). Si son iguales, o si falta
+// alguno, se muestra solo 1 linea. Los modos "solo referencia"/"solo
+// descripcion" siguen forzando ese unico campo siempre (p.ej. Lumi, que
+// queria ocultar su codigo interno de referencia aunque existiera),
+// cayendo al otro campo solo si el elegido no tiene contenido real, para
+// no dejar nunca una tarjeta en blanco.
+function computeProductDisplayNames(descripcionText, referenciaText) {
   const desc = String(descripcionText || "").trim();
   const ref = String(referenciaText || "").trim();
   const descOk = !isMeaninglessProductFieldText(desc);
   const refOk = !isMeaninglessProductFieldText(ref);
+  const sameText = descOk && refOk && desc.toLowerCase() === ref.toLowerCase();
 
   if (productDisplayFieldMode === "descripcion") {
-    if (descOk) return desc;
-    if (refOk) return ref;
-    return desc || ref;
+    const name = descOk ? desc : refOk ? ref : desc || ref;
+    return { name, secondaryName: "" };
   }
   if (productDisplayFieldMode === "referencia") {
-    if (refOk) return ref;
-    if (descOk) return desc;
-    return ref || desc;
+    const name = refOk ? ref : descOk ? desc : ref || desc;
+    return { name, secondaryName: "" };
   }
-  if (descOk) return desc;
-  if (refOk) return ref;
-  return desc || ref;
+
+  // "ambas" (por defecto)
+  if (descOk && refOk) {
+    if (sameText) return { name: ref, secondaryName: "" };
+    return { name: ref, secondaryName: desc };
+  }
+  if (refOk) return { name: ref, secondaryName: "" };
+  if (descOk) return { name: desc, secondaryName: "" };
+  return { name: desc || ref, secondaryName: "" };
 }
 
 // Valor de UN campo de Opciones -> valor real de ese hueco, o null si el
@@ -28561,20 +28576,25 @@ async function loadDataFromApi(opts = {}) {
 
         sortedVariants.forEach(({ v }, pos) => {
           const variantRef = String(v.referencia ?? "").trim();
-          const mainName = isSingleVariant
-            ? applyProductDisplayFieldMode(baseName, variantRef)
-            : variantRef || baseName;
+          let mainName;
+          let secondaryName;
+          if (isSingleVariant) {
+            const names = computeProductDisplayNames(
+              baseDescripcionRaw,
+              variantRef,
+            );
+            mainName = names.name;
+            secondaryName = names.secondaryName;
+          } else {
+            mainName = variantRef || baseName;
+            secondaryName = baseName && mainName !== baseName ? baseName : "";
+          }
           // Ver comentario equivalente en el bucle "SIN VARIANTES" mas abajo:
           // "-" es un valor real, no "sin nombre" -- no oculta el producto.
           if (!mainName) return;
 
           const price = Number(v.precio ?? base.precio ?? 0);
           const idVar = Number(v.idvariante ?? v.id ?? baseId * 1000 + pos);
-          const secondaryName = isSingleVariant
-            ? ""
-            : baseName && mainName !== baseName
-              ? baseName
-              : "";
 
           combined.push({
             id: idVar,
@@ -28609,7 +28629,10 @@ async function loadDataFromApi(opts = {}) {
         if (variantsByProduct[idProd]) return;
         if (p.bloqueado || isFalseFlag(p.sevende)) return;
 
-        const name = applyProductDisplayFieldMode(p.descripcion, p.referencia);
+        const { name, secondaryName } = computeProductDisplayNames(
+          p.descripcion,
+          p.referencia,
+        );
         // Un "-" es un valor real (placeholder tipico de FacturaScripts
         // cuando el campo se deja en blanco), no "sin nombre" -- tratarlo
         // como motivo para OCULTAR el producto entero lo hacia invisible e
@@ -28626,10 +28649,10 @@ async function loadDataFromApi(opts = {}) {
         combined.push({
           id: idProd,
           name,
-          secondaryName: "",
+          secondaryName,
           referencia: String(p.referencia ?? name).trim(),
           descripcion: String(p.descripcion ?? name).trim(),
-          descripcion2: "",
+          descripcion2: secondaryName,
           price,
           category,
           sortKey: baseSort * 1000,

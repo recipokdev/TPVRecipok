@@ -8472,7 +8472,7 @@ mustContain(
 );
 mustContain(
   renderer,
-  "const name = applyProductDisplayFieldMode(p.descripcion, p.referencia);",
+  "const { name, secondaryName } = computeProductDisplayNames(",
   "Non-variant product catalog building uses the new toggle instead of the old hardcoded descripcion-then-referencia fallback",
 );
 mustContain(
@@ -8658,13 +8658,13 @@ mustContain(
 );
 mustContain(
   renderer,
-  "const mainName = isSingleVariant\r\n            ? applyProductDisplayFieldMode(baseName, variantRef)\r\n            : variantRef || baseName;",
+  "const names = computeProductDisplayNames(\r\n              baseDescripcionRaw,\r\n              variantRef,\r\n            );",
   "A single-fake-variant product now respects Opciones -> Productos (same as a non-variant product) instead of always forcing its own reference as the name -- verified live against demo's real product 360 (referencia 'Croissant Ensaimada R. Almd' vs descripcion 'Croissant/Ensaïmada R. Almendra'): now correctly shows the descripcion by default",
 );
 mustContain(
   renderer,
-  'const secondaryName = isSingleVariant\r\n            ? ""\r\n            : baseName && mainName !== baseName\r\n              ? baseName\r\n              : "";',
-  "No secondary-name clutter for the single-fake-variant case (matches the non-variant product shape exactly) -- a real multi-variant product (verified live: demo's 'Fartón' / '3x1 Fartones', 2 real variant rows) is completely unaffected and still always shows its own distinguishing reference, or both would show the identical base name and become indistinguishable",
+  "mainName = variantRef || baseName;\r\n            secondaryName = baseName && mainName !== baseName ? baseName : \"\";",
+  "A real multi-variant product (verified live: demo's 'Fartón' / '3x1 Fartones', 2 real variant rows) is unaffected and still always shows its own distinguishing reference, or both would show the identical base name and become indistinguishable",
 );
 mustContain(
   renderer,
@@ -9115,6 +9115,35 @@ mustContain(
   "const baseDescripcionRaw = String(base.descripcion ?? \"\").trim();",
   "The CON VARIANTES path's own baseName used to compute itself with a raw '??' (base.descripcion ?? base.referencia) BEFORE ever reaching applyProductDisplayFieldMode -- '??' treats a literal '-' as a perfectly valid value and never tries referencia at all. Fixed at the source, not just downstream",
 );
+
+console.log("\n[SMOKE] Checking 2026-10-05 product name/reference stacking in 'Ambas' mode (design confirmed with Sergi)\n");
+
+mustContain(
+  renderer,
+  "function computeProductDisplayNames(descripcionText, referenciaText) {",
+  "Sergi's design (2026-10-05), confirmed after discussing the dash-placeholder fixes: in 'Ambas' mode (default), when descripcion and referencia both have real content AND differ, show BOTH stacked (referencia as the main name, descripcion as the smaller secondary line) -- exactly like a real multi-variant product already did, and like single-variant products did before the 2026-10-01 Lumi fix accidentally dropped the secondary line for them. If one field is empty/'-'/'—', or the two are the same text, show only one line -- never a redundant or blank line. 'Solo referencia'/'Solo descripcion' modes are unaffected: they still force that one field always, falling back to the other only if it's empty",
+);
+mustContain(
+  renderer,
+  "const sameText = descOk && refOk && desc.toLowerCase() === ref.toLowerCase();",
+  "Two fields with the exact same real text (common case: a store that just duplicates the name into both fields) collapse into a single line instead of showing the identical text twice",
+);
+mustContain(
+  renderer,
+  "if (descOk && refOk) {\r\n    if (sameText) return { name: ref, secondaryName: \"\" };\r\n    return { name: ref, secondaryName: desc };\r\n  }",
+  "Both fields present and different -> stacked display (referencia main, descripcion secondary) in 'Ambas' mode",
+);
+mustContain(
+  renderer,
+  "const names = computeProductDisplayNames(\r\n              baseDescripcionRaw,\r\n              variantRef,\r\n            );\r\n            mainName = names.name;\r\n            secondaryName = names.secondaryName;",
+  "Single-fake-variant products (the overwhelming majority -- FacturaScripts creates one default variant row per product) now get the same stacked-name treatment as non-variant products, restoring the secondary line the 2026-10-01 Lumi fix had zeroed out for them",
+);
+mustContain(
+  renderer,
+  "combined.push({\r\n          id: idProd,\r\n          name,\r\n          secondaryName,",
+  "Non-variant product path also gets a real secondaryName now (used to be hardcoded to \"\") -- verified live against demo (synthetic descripcion='Nombre real', referencia='REF-001'): shows 'REF-001' as the main name with 'Nombre real' as the secondary line",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
