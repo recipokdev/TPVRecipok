@@ -9179,11 +9179,6 @@ mustContain(
   'divider.className = "cart-batch-divider";',
   "renderCart() inserta un separador (raya + hora, diseno 'Opcion B' confirmado con Sergi) encima de la primera linea de cada tanda distinta -- nunca sobre lineas añadidas directamente en el TPV (sin sentBatchAt). Verificado en vivo contra demo real: 2 tandas sinteticas con horas distintas producen 2 separadores, cada uno con su hora correcta en la zona horaria local",
 );
-mustContain(
-  renderer,
-  "function floorToBatchBucket(isoString, bucketMinutes = CART_BATCH_BUCKET_MINUTES) {",
-  "Feedback de Sergi (2026-10-05, tras ver el envio real con el emulador): varias tandas rapidas seguidas (p.ej. 10:30, 10:31, 10:32) llenarian el carrito de separadores para muy pocos productos cada vez. Los separadores ahora se agrupan en bloques fijos de 5 minutos, redondeando siempre hacia abajo (10:28 -> 10:25) -- el sentBatchAt real de cada linea NO se toca, solo afecta a que separador se pinta",
-);
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 

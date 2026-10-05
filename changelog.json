@@ -5,9 +5,7 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": [
-        "MEJORA (Modo Mesas): el separador de tanda del camarero en el carrito ahora agrupa envíos rápidos seguidos (p.ej. a los pocos minutos uno del otro) bajo una misma hora en vez de mostrar una raya distinta por cada uno."
-      ]
+      "changes": []
     },
     {
       "version": "0.2.40",
