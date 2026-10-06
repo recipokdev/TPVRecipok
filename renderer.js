@@ -54133,6 +54133,18 @@ async function bootstrapE2EMode() {
 
   window.__TPV_E2E_BOOT_SOURCE__ = bootSource;
 
+  // Bug real de este propio arranque E2E (no de produccion): el chequeo de
+  // MESAS_MODULE_ENABLED (ver DOMContentLoaded mas abajo) corre ANTES que
+  // este bootstrap, cuando window.RECIPOK_API todavia no existe -- getCurrentSlugForReservations/getTpvSyncApiKey
+  // devuelven vacio, la llamada a get-client-features nunca llega a salir, y
+  // MESAS_MODULE_ENABLED se queda en false para siempre (nada lo vuelve a
+  // comprobar despues). En produccion no pasa porque RECIPOK_API ya existe
+  // antes de ese chequeo -- aqui, una vez con las credenciales reales del
+  // slug demo ya puestas arriba, hay que repetirlo antes de pintar la barra.
+  if (bootSource === "remote-demo") {
+    await loadMesasModuleAvailability?.();
+  }
+
   renderMainUI();
   renderMainAgentBar?.();
   renderCart();

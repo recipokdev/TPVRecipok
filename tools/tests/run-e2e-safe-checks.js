@@ -278,10 +278,10 @@ async function run() {
     ok("options overlay closes");
 
     const mesasToggleCount = await win
-      .locator("#mainAgentBar .agent-tables-btn")
+      .locator("#searchBarActionsSlot .agent-tables-btn")
       .count();
     if (mesasToggleCount > 0) {
-      await win.click("#mainAgentBar .agent-tables-btn");
+      await win.click("#searchBarActionsSlot .agent-tables-btn");
       await win.waitForTimeout(300);
 
       const mesasOpen = await win.evaluate(() => {
@@ -292,7 +292,7 @@ async function run() {
       if (!mesasOpen) fail("mesas inline row did not open");
       ok("mesas mode opens");
 
-      await win.click("#mainAgentBar .agent-tables-btn");
+      await win.click("#searchBarActionsSlot .agent-tables-btn");
       await win.waitForTimeout(250);
       ok("mesas mode closes");
     } else {

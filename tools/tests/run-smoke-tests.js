@@ -9341,6 +9341,29 @@ mustContain(
   "El tooltip de la mesa tambien muestra el nombre del camarero -- verificado en vivo",
 );
 
+console.log("\n[SMOKE] Checking 2026-10-06 arnes E2E: Mesas se saltaba en silencio desde 2026-09-23\n");
+
+mustContain(
+  renderer,
+  "await loadMesasModuleAvailability?.();",
+  "Hallazgo real al verificar el anillo por camarero: dentro de bootstrapE2EMode, el chequeo de MESAS_MODULE_ENABLED (en el DOMContentLoaded normal) corria ANTES de que este bootstrap pusiera window.RECIPOK_API con las credenciales del slug demo -- la llamada a get-client-features se iba vacia y MESAS_MODULE_ENABLED se quedaba en false para siempre, sin que nada lo repitiera. Esto NO afectaba a produccion (ahi RECIPOK_API ya existe antes de ese chequeo), pero hacia que TODOS los asserts de Mesas en run-e2e-smoke.js se saltaran en silencio en cada push desde que el boton de Modo Mesas se movio a #searchBarActionsSlot (2026-09-23) -- un selector obsoleto (#mainAgentBar en vez de #searchBarActionsSlot) enmascaraba el problema real detras de un 'funcion no disponible, se salta' que nunca fallaba",
+);
+
+const e2eSmokeTest = fs.readFileSync(
+  ensureFileExists("tools/tests/run-e2e-smoke.js"),
+  "utf8",
+);
+mustContain(
+  e2eSmokeTest,
+  "#searchBarActionsSlot .agent-tables-btn",
+  "Selector corregido (antes #mainAgentBar .agent-tables-btn, obsoleto desde el 2026-09-23) -- verificado en vivo contra demo real: con el arreglo de arriba + este selector, los asserts de Mesas ahora se ejecutan de verdad (abre, selecciona mesa por cambio rapido, cierra) en vez de saltarse",
+);
+mustContain(
+  e2eSmokeTest,
+  "await win.click(\"#mesasInlineTabMapa\");",
+  "El panel de cambio rapido de mesas esta oculto por CSS en la vista transacciones (solo vive en Mapa/Diseño) -- el test tiene que cambiar de pestaña antes de poder probarlo, otro hallazgo real al des-enmascarar estos asserts",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

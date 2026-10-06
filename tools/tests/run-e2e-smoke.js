@@ -395,7 +395,7 @@ async function ensureE2EIsolatedMode(win) {
 
 async function runOptionalMesasModeAssertions(win) {
   const tablesBtnCount = await win
-    .locator("#mainAgentBar .agent-tables-btn")
+    .locator("#searchBarActionsSlot .agent-tables-btn")
     .count();
   if (!tablesBtnCount) {
     ok(
@@ -404,7 +404,7 @@ async function runOptionalMesasModeAssertions(win) {
     return;
   }
 
-  await win.click("#mainAgentBar .agent-tables-btn");
+  await win.click("#searchBarActionsSlot .agent-tables-btn");
   await win.waitForTimeout(350);
 
   const mesasRowVisible = await win.evaluate(() => {
@@ -416,6 +416,18 @@ async function runOptionalMesasModeAssertions(win) {
     fail("Mesas mode did not open after clicking toggle button");
   ok("Mesas mode opens from toggle button");
 
+  // El panel de cambio rapido de mesas (#mesasContextQuickSwitch) esta
+  // deliberadamente oculto en la vista "transacciones" (ver styles.css:
+  // body.mesas-inline-trans-mode .mesas-context-quick-switch { display:
+  // none !important }) -- vive en "Mapa"/"Diseño". El toggle de Modo Mesas
+  // entra siempre directo en "transacciones", asi que hay que cambiar de
+  // pestaña antes de poder probarlo.
+  const tabMapaExists = await win.locator("#mesasInlineTabMapa").count();
+  if (tabMapaExists) {
+    await win.click("#mesasInlineTabMapa");
+    await win.waitForTimeout(350);
+  }
+
   const quickSwitchState = await win.evaluate(() => {
     const wrap = document.getElementById("mesasContextQuickSwitch");
     const roomSelect = document.getElementById("mesasContextRoomSelect");
@@ -426,7 +438,10 @@ async function runOptionalMesasModeAssertions(win) {
 
     return {
       hasWrap: !!wrap,
-      wrapVisible: !!wrap && !wrap.classList.contains("hidden"),
+      wrapVisible:
+        !!wrap &&
+        !wrap.classList.contains("hidden") &&
+        getComputedStyle(wrap).display !== "none",
       roomValue: roomSelect ? String(roomSelect.value || "") : "",
       tableValue: tableSelect ? String(tableSelect.value || "") : "",
       buttonCount: buttons.length,
@@ -444,9 +459,24 @@ async function runOptionalMesasModeAssertions(win) {
   if (quickSwitchState.buttonCount > 0 && quickSwitchState.wrapVisible) {
     const targetUid = quickSwitchState.secondUid || quickSwitchState.firstUid;
     if (targetUid) {
-      await win.click(
-        `#mesasContextQuickSwitch button[data-uid='${targetUid}']`,
-      );
+      // La fila de cambio rapido se reconstruye entera (innerHTML = "") en
+      // cada renderMesasTransContextBar() -- un par de reintentos cortos
+      // evitan fallar por puro mal timing contra un repintado normal.
+      const selector = `#mesasContextQuickSwitch button[data-uid='${targetUid}']`;
+      let clicked = false;
+      let lastClickErr = "";
+      for (let attempt = 0; attempt < 5 && !clicked; attempt += 1) {
+        try {
+          await win.click(selector, { timeout: 2000 });
+          clicked = true;
+        } catch (e) {
+          lastClickErr = String(e?.message || e);
+          await win.waitForTimeout(200);
+        }
+      }
+      if (!clicked) {
+        fail(`Could not click Mesas quick-switch button after retries: ${lastClickErr}`);
+      }
       await win.waitForTimeout(250);
 
       const selectedUid = await win.evaluate(() => {
@@ -468,7 +498,18 @@ async function runOptionalMesasModeAssertions(win) {
     );
   }
 
-  await win.click("#mainAgentBar .agent-tables-btn");
+  // El boton de cerrar Modo Mesas vive en la barra de busqueda, que esta
+  // oculta en las vistas "Mapa"/"Diseño" (solo se ve en "transacciones") --
+  // hay que volver antes de poder tocarlo.
+  const tabTransExists = await win
+    .locator("#mesasInlineTabTransacciones")
+    .count();
+  if (tabTransExists) {
+    await win.click("#mesasInlineTabTransacciones");
+    await win.waitForTimeout(300);
+  }
+
+  await win.click("#searchBarActionsSlot .agent-tables-btn");
   await win.waitForTimeout(300);
 
   const mesasRowHidden = await win.evaluate(() => {
