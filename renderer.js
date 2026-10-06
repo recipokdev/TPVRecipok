@@ -37242,7 +37242,32 @@ function normalizeRemoteParkedTicket(raw) {
 }
 
 function saveParkedTicketsCache(list = parkedTickets) {
-  const safe = getStorableParkedTicketsForMode(list).map((t) => ({
+  const source = getStorableParkedTicketsForMode(list);
+
+  // Peticion de Sergi (2026-10-06): el aviso "sin enviar a cocina" del plano
+  // de mesas debe escalar (ponerse urgente) si lleva demasiado tiempo
+  // pendiente. Se guarda la hora en la que empezo a estar pendiente
+  // DIRECTAMENTE en el ticket en memoria (mismo patron que
+  // comandaAutoPrintFailedAt: campo solo local, nunca lo manda el servidor,
+  // asi que sobrevive a los sync remotos vía el merge "...prev, ...ticket")
+  // -- no se recalcula cada vez para no perder la hora real en la que
+  // empezo, solo se fija la primera vez y se borra en cuanto se pone al dia.
+  const pendingFlagByTicket = new Map();
+  source.forEach((t) => {
+    if (!t || typeof t !== "object") return;
+    const hasPending =
+      !t.paid && getComandaDeltaLinesForTicket(t, t?.items || []).length > 0;
+    pendingFlagByTicket.set(t, hasPending);
+    if (hasPending) {
+      if (!t.comandaPendingSinceAt) {
+        t.comandaPendingSinceAt = new Date().toISOString();
+      }
+    } else if (t.comandaPendingSinceAt) {
+      t.comandaPendingSinceAt = null;
+    }
+  });
+
+  const safe = source.map((t) => ({
     ...t,
     parkingMode: isMesasModeTicket(t) ? PARKED_MODE_MESAS : PARKED_MODE_TPV,
     modoMesas: isMesasModeTicket(t) ? 1 : 0,
@@ -37260,9 +37285,8 @@ function saveParkedTicketsCache(list = parkedTickets) {
     // solo lo nuevo (getComandaDeltaLinesForTicket), sobre los items YA
     // guardados del ticket (no el `cart` en vivo, que solo es el de la
     // mesa seleccionada ahora mismo).
-    hasPendingComandaLines: t?.paid
-      ? false
-      : getComandaDeltaLinesForTicket(t, t?.items || []).length > 0,
+    hasPendingComandaLines: !!pendingFlagByTicket.get(t),
+    comandaPendingSinceAt: t?.comandaPendingSinceAt || null,
   }));
 
   safe.forEach((ticket) => {

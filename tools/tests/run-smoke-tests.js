@@ -9197,7 +9197,7 @@ console.log("\n[SMOKE] Checking 2026-10-05 plano de mesas: aviso de productos si
 
 mustContain(
   renderer,
-  "hasPendingComandaLines: t?.paid",
+  "!t.paid && getComandaDeltaLinesForTicket(t, t?.items || []).length > 0;",
   "Peticion de Sergi (2026-10-05): el plano de mesas (mesas/mesas.js, contexto JS aparte, solo lee la cache local de aparcados) necesita saber si una mesa tiene productos sin mandar a cocina todavia, sin tener que abrirla -- saveParkedTicketsCache() calcula esto reutilizando getComandaDeltaLinesForTicket (el mismo calculo que ya usa 'Enviar comanda') sobre los items YA guardados del ticket, no el carrito en vivo",
 );
 mustContain(
@@ -9212,8 +9212,26 @@ mustContain(
 );
 mustContain(
   mesasJs,
-  '${hasPendingComanda ? `<span class="gestion-badge pending-kitchen" title="Hay productos sin enviar a cocina todavía">🖨 Sin enviar</span>` : ""}',
+  '${hasPendingComanda ? `<span class="${pendingBadgeClass}" title="${pendingBadgeTitle}">🖨 Sin enviar</span>` : ""}',
   "Verificado en vivo contra demo real (instancia aislada TPV_E2E): una mesa con 1 producto nunca enviado a cocina muestra el badge en el plano; las demas mesas (sin ticket, o sin nada pendiente) no lo muestran",
+);
+
+console.log("\n[SMOKE] Checking 2026-10-06 plano de mesas: aviso 'sin enviar' escala a urgente con el tiempo\n");
+
+mustContain(
+  renderer,
+  "t.comandaPendingSinceAt = new Date().toISOString();",
+  "Peticion de Sergi (2026-10-06, tras investigar como lo hace Toast con el timer de mesas): el aviso de 'sin enviar a cocina' debe ponerse urgente si lleva demasiado tiempo, no quedarse igual de discreto siempre. Se guarda la hora exacta en la que empezo a estar pendiente, directamente en el ticket -- mismo patron que comandaAutoPrintFailedAt (campo solo local, sobrevive a los sync remotos)",
+);
+mustContain(
+  renderer,
+  "comandaPendingSinceAt: t?.comandaPendingSinceAt || null,",
+  "Ese campo se guarda en la cache compartida que lee mesas.js, igual que hasPendingComandaLines",
+);
+mustContain(
+  mesasJs,
+  "Date.now() - pendingSinceMs >= MESAS_PENDING_COMANDA_URGENT_MS;",
+  "mesas.js calcula si el aviso lleva mas del umbral (10 minutos) pendiente y cambia a la variante 'is-urgent' (rojo) -- verificado en vivo contra demo real: recien creado NO es urgente, y tras simular 15 minutos pendiente SI lo es",
 );
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");

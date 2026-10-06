@@ -37,6 +37,15 @@ let mesasLayoutLastSyncedRemoteRelevantJson = null;
 const TUTORIAL_BLANK_MODE_KEY = "tpv_tutorial_blank_mode_v1";
 const TUTORIAL_ACTIVE_KEY = "tpv_tutorial_active_v1";
 const MESAS_REMOTE_SYNC_POLL_MS = 8000;
+// Peticion de Sergi (2026-10-06): el aviso "Sin enviar" de una mesa debe
+// ponerse mas urgente (rojo) si lleva demasiado tiempo pendiente, no quedarse
+// siempre igual de "tranquilo" aunque pasen 20 minutos. 10 minutos de margen
+// antes de escalar -- no hace falta un timer propio para repintar solo por
+// el paso del tiempo: el TPV (renderer.js) ya guarda la cache de aparcados
+// en CADA ciclo de su sondeo de 10s (cambie o no cambie algo), y eso avisa
+// a este iframe via postMessage/evento storage, asi que el plano se
+// repinta solo con la frecuencia suficiente para que la escalada se note.
+const MESAS_PENDING_COMANDA_URGENT_MS = 10 * 60 * 1000;
 const MESAS_REMOTE_PULL_GRACE_MS = 15000;
 const DESIGN_GRID_SIZE = 20;
 const RESERVATION_MIN_TIME = "08:00";
@@ -2803,13 +2812,29 @@ function renderMapCards() {
       // claro que falta algo por enviar.
       const hasPendingComanda =
         !hasAutoPrintFailure && !!ticket?.hasPendingComandaLines;
+      // Escalado por tiempo (peticion de Sergi, 2026-10-06, viendo como lo
+      // resuelve Toast con el timer de las mesas): el mismo aviso pasa a
+      // "urgente" (rojo) si lleva mas de MESAS_PENDING_COMANDA_URGENT_MS sin
+      // mandarse -- no es solo un "ha pasado algo", es "lleva ya un buen
+      // rato sin mandarse, ve a revisarlo".
+      const pendingSinceMs = ticket?.comandaPendingSinceAt
+        ? new Date(ticket.comandaPendingSinceAt).getTime()
+        : 0;
+      const pendingIsUrgent =
+        hasPendingComanda &&
+        pendingSinceMs > 0 &&
+        Date.now() - pendingSinceMs >= MESAS_PENDING_COMANDA_URGENT_MS;
+      const pendingBadgeClass = `gestion-badge pending-kitchen${pendingIsUrgent ? " is-urgent" : ""}`;
+      const pendingBadgeTitle = pendingIsUrgent
+        ? "Lleva un buen rato sin enviarse a cocina"
+        : "Hay productos sin enviar a cocina todavía";
 
       node.innerHTML = `
         <span class="gestion-name">${obj.label || "Mesa"}</span>
         ${totalText ? `<span class="gestion-total">${totalText}</span>` : ""}
         ${badgeText ? `<span class="${badgeClass}">${badgeText}</span>` : ""}
         ${hasAutoPrintFailure ? `<span class="gestion-badge warn" title="No se pudo imprimir la comanda automáticamente">⚠ Comanda</span>` : ""}
-        ${hasPendingComanda ? `<span class="gestion-badge pending-kitchen" title="Hay productos sin enviar a cocina todavía">🖨 Sin enviar</span>` : ""}
+        ${hasPendingComanda ? `<span class="${pendingBadgeClass}" title="${pendingBadgeTitle}">🖨 Sin enviar</span>` : ""}
         ${serviceOrder > 0 ? `<span class="gestion-order">${serviceOrder}</span>` : ""}
       `;
 
