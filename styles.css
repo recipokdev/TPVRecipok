@@ -2817,6 +2817,38 @@ body.cart-width-dragging .cart-width-drag-handle {
   background: #dbe7ff;
 }
 
+.cart-line-comanda-hold {
+  border: none;
+  background: #eef4ff;
+  color: #2f5bd3;
+  border-radius: 999px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.cart-line-comanda-hold:hover {
+  background: #dbe7ff;
+}
+
+.cart-line-comanda-hold.is-held {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.cart-line-held-badge {
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #92400e;
+}
+
 .cart-line-secondary {
   opacity: 0.8;
   font-size: 12px;

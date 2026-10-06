@@ -9290,6 +9290,29 @@ mustContain(
   "La comanda impresa a cocina (comanda_print.html) destaca los alergenos con su propio recuadro -- en una impresora termica (blanco y negro) el negrita solo no basta para que cocina no se lo salte. Reutiliza los mismos getProductAllergenCodes/getAllergenLabel ya probados en la tarjeta y el carrito, no duplica logica",
 );
 
+console.log("\n[SMOKE] Checking 2026-10-06 Modo Mesas: retener/lanzar una linea por tanda (coursing)\n");
+
+mustContain(
+  renderer,
+  "function toggleCartLineComandaHold(lineId) {",
+  "Idea de Square/Lightspeed 'coursing' (ver investigacion de otros TPV): el camarero retiene un plato (p.ej. el postre) para que NO se envie a cocina todavia, y lo 'lanza' cuando el cliente este listo. Sergi recordo explicitamente separar esto entre TPV y Modo Mesas -- solo tiene sentido en Mesas (unico sitio con comanda a cocina, Modo TPV es venta directa)",
+);
+mustContain(
+  renderer,
+  "(line) => !line?.comandaHeld,",
+  "getComandaPrintableLines() excluye las lineas retenidas -- esto propaga automaticamente a TODO lo que ya reutiliza esta funcion (envio manual, auto-print, y el aviso 'sin enviar a cocina' del plano de mesas), sin tener que tocar cada uno por separado",
+);
+mustContain(
+  renderer,
+  "MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === \"transacciones\";",
+  "El boton de retener/lanzar solo se pinta en Modo Mesas -- verificado en vivo: con el mismo carrito, Modo Mesas pinta 2 botones y Modo TPV normal pinta 0",
+);
+mustContain(
+  renderer,
+  "cart-line-comanda-hold${item.comandaHeld",
+  "Verificado en vivo contra demo real: retener una linea la excluye de getComandaPrintableLines (la otra linea no retenida sigue imprimible), marca el badge '⏸ En espera' y cambia el icono del boton a '▶'; lanzarla de vuelta la devuelve a imprimible",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

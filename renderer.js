@@ -14038,6 +14038,22 @@ function updateCartItemQuantity(lineId, newQty) {
   renderCart();
 }
 
+// "Lanzar por tanda" (peticion de Sergi, 2026-10-06 -- idea de Square/
+// Lightspeed "coursing", investigada en [[project_competitor_pos_research_2026-10-06]]):
+// el camarero puede retener un plato (p.ej. el postre) para que NO se
+// envie a cocina todavia, aunque el resto del pedido si se mande, y
+// "lanzarlo" cuando el cliente este listo. Solo tiene sentido en Modo
+// Mesas (el unico sitio con comanda a cocina, ver shouldShowSplitPayAndPreprint
+// -- Modo TPV normal no tiene este concepto, es venta directa) -- el
+// boton que llama a esto ya se oculta fuera de Mesas y para lineas que ya
+// se mandaron a cocina (ver renderCart).
+function toggleCartLineComandaHold(lineId) {
+  const item = cart.find((c) => c._lineId === lineId);
+  if (!item) return;
+  item.comandaHeld = !item.comandaHeld;
+  renderCart();
+}
+
 function previewCartItemQuantity(lineId, newQty) {
   if (getCartEditLockReason()) return;
 
@@ -14749,6 +14765,16 @@ function renderCart() {
     comandaRelevantLineIds.has(item._lineId) &&
     !comandaPendingLineIds.has(item._lineId);
 
+  // "Lanzar por tanda": el boton de retener/lanzar solo tiene sentido en
+  // Modo Mesas (unico sitio con comanda a cocina) y solo para productos del
+  // tipo que de verdad iria a cocina -- independientemente de si esta
+  // retenido ahora mismo (por eso se mira cartLineMatchesComandaFamilyRules
+  // directamente, no comandaRelevantLineIds, que ya excluye lo retenido).
+  const isMesasTransView =
+    MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones";
+  const isComandaRelevantProductType = (item) =>
+    !mesasComandaFamilyRules.length || cartLineMatchesComandaFamilyRules(item);
+
   const buildCartLineMiniLegend = (pricing) => {
     const tags = [];
     if (pricing?.manualPriceLocked) tags.push("Manual");
@@ -14854,6 +14880,12 @@ function renderCart() {
         .join(", ");
     }
 
+    const showComandaHoldBtn =
+      isMesasTransView &&
+      !isPackChildLine(item) &&
+      !isLineAlreadySentToKitchen(item) &&
+      isComandaRelevantProductType(item);
+
     row.innerHTML = `
       <div class="cart-line-name">
         <div class="cart-line-name-head">
@@ -14863,7 +14895,18 @@ function renderCart() {
               ? `<button class="cart-line-pack-edit" data-action="pack-edit" data-lineid="${item._lineId}" title="Editar oferta" aria-label="Editar oferta">✎</button>`
               : ""
           }
+          ${
+            showComandaHoldBtn
+              ? `<button class="cart-line-comanda-hold${item.comandaHeld ? " is-held" : ""}" data-action="comanda-hold-toggle" data-lineid="${item._lineId}" title="${item.comandaHeld ? "Lanzar a cocina" : "Retener (no enviar todavía)"}" aria-label="${item.comandaHeld ? "Lanzar a cocina" : "Retener"}">${item.comandaHeld ? "▶" : "⏸"}</button>`
+              : ""
+          }
         </div>
+
+        ${
+          item.comandaHeld
+            ? `<div class="cart-line-held-badge">⏸ En espera (no enviado a cocina)</div>`
+            : ""
+        }
 
         ${
           item.secondaryName
@@ -17778,6 +17821,13 @@ if (cartLinesContainer) {
     if (packEditBtn) {
       if (!item || !isPackParentLine(item)) return;
       await openPackEditModalForParentLine(item);
+      return;
+    }
+
+    const comandaHoldBtn = e.target.closest('[data-action="comanda-hold-toggle"]');
+    if (comandaHoldBtn) {
+      if (!item) return;
+      toggleCartLineComandaHold(item._lineId);
       return;
     }
 
@@ -42057,7 +42107,13 @@ function cartLineMatchesComandaFamilyRules(line) {
 }
 
 function getComandaPrintableLines(sourceCart = cart) {
-  const visible = getVisibleCartLines(sourceCart);
+  // "Lanzar por tanda": una linea retenida (comandaHeld) nunca cuenta como
+  // imprimible todavia -- ni en el envio manual, ni en el auto-print, ni en
+  // el aviso "sin enviar a cocina" del plano de mesas (todos leen de aqui).
+  // Se "libera" sola en cuanto el camarero la lanza (toggleCartLineComandaHold).
+  const visible = getVisibleCartLines(sourceCart).filter(
+    (line) => !line?.comandaHeld,
+  );
   if (!mesasComandaFamilyRules.length) {
     // Sin reglas configuradas: comanda sobre todas las líneas visibles.
     return visible;
