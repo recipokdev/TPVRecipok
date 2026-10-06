@@ -9313,6 +9313,34 @@ mustContain(
   "Verificado en vivo contra demo real: retener una linea la excluye de getComandaPrintableLines (la otra linea no retenida sigue imprimible), marca el badge '⏸ En espera' y cambia el icono del boton a '▶'; lanzarla de vuelta la devuelve a imprimible",
 );
 
+console.log("\n[SMOKE] Checking 2026-10-06 Modo Mesas: anillo de color por camarero asignado\n");
+
+mustContain(
+  renderer,
+  "ticket.agentCode = String(currentAgent.codagente);",
+  "Idea de Glop (investigacion de otros TPV): ademas del color de ESTADO de la mesa (libre/ocupada/cuenta/reservada), un anillo exterior con el color del camarero que esta trabajando esa mesa ahora mismo. applyMesaScopeToTicket (ya existia para mesaUid/mesaRoomId) tambien guarda el agente activo, mismo patron defensivo que .clientName: solo se sobrescribe si de verdad hay un agente activo",
+);
+mustContain(
+  renderer,
+  "ticket.agentCode = null;",
+  "clearMesaScopeFromTicket borra tambien el agente -- en Modo TPV normal nunca hay plano de mesas que pinte el anillo, asi que no debe sobrevivir ahi",
+);
+mustContain(
+  mesasJs,
+  "function getAgentRingColor(agentCode) {",
+  "Paleta fija, color deterministico por codigo de agente via hash -- no hace falta que el admin configure nada, y el mismo camarero siempre sale con el mismo color",
+);
+mustContain(
+  mesasJs,
+  'node.classList.add("has-agent-ring");',
+  "El anillo se aplica como clase+variable CSS aparte del box-shadow de estado/seleccion (outline, no box-shadow) para no competir visualmente con el color de ESTADO de la mesa -- verificado en vivo contra demo real: mesa con ticket.agentCode pinta el anillo con el color correcto y deterministico, una mesa libre (sin ticket) nunca lo pinta",
+);
+mustContain(
+  mesasJs,
+  "<div class=\"gestion-tip-row\"><span>Camarero</span><strong>${ticket.agentName}</strong></div>",
+  "El tooltip de la mesa tambien muestra el nombre del camarero -- verificado en vivo",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

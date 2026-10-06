@@ -10202,6 +10202,20 @@ function applyMesaScopeToTicket(
   ticket.mesaTableId = scopeCtx.tableId || null;
   ticket.mesaTableName = scopeCtx.tableName || null;
 
+  // Peticion de Sergi (2026-10-06, idea de la investigacion de TPVs de la
+  // competencia -- Glop colorea las mesas por camarero asignado): guardamos
+  // quien es el camarero que esta trabajando esta mesa AHORA MISMO, para que
+  // el plano pinte un anillo de color propio por camarero (ademas del color
+  // de estado que ya existia). Mismo patron que .clientName: solo se
+  // sobrescribe si de verdad hay un agente activo, nunca se borra por un
+  // guardado de fondo sin agente real detras.
+  if (currentAgent?.codagente) {
+    ticket.agentCode = String(currentAgent.codagente);
+    ticket.agentName = String(
+      currentAgent.name || currentAgent.nick || ticket.agentName || "",
+    ).trim();
+  }
+
   return ticket;
 }
 
@@ -45462,6 +45476,10 @@ function clearMesaScopeFromTicket(ticket) {
   ticket.mesaRoomName = null;
   ticket.mesaTableId = null;
   ticket.mesaTableName = null;
+  // El anillo de color por camarero solo tiene sentido en Modo Mesas -- en
+  // TPV normal no hay plano de mesas que lo pinte.
+  ticket.agentCode = null;
+  ticket.agentName = null;
 
   return ticket;
 }

@@ -355,6 +355,14 @@ body.embed-mode .mesas-main {
     0 2px 10px rgba(35, 64, 108, 0.2);
 }
 
+/* Anillo exterior por camarero asignado (peticion de Sergi, 2026-10-06) --
+   separado del box-shadow de estado/seleccion via outline, para que no
+   compita visualmente con el color de estado de la mesa. */
+.gestion-obj.table.has-agent-ring {
+  outline: 3px solid var(--agent-ring-color, transparent);
+  outline-offset: 3px;
+}
+
 .gestion-obj.table .gestion-name {
   font-size: clamp(17px, 34%, 24px);
   line-height: 1.04;

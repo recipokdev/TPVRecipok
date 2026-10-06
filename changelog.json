@@ -11,7 +11,8 @@
         "MEJORA (Modo Mesas): ese aviso ahora se pone en rojo si lleva ya un buen rato sin enviarse, en vez de quedarse siempre igual de discreto.",
         "NUEVO (Modo Mesas): ahora se pueden fusionar 2 mesas ocupadas en una sola cuenta desde \"Cambiar de mesa\" -- la mesa origen queda libre y su pedido se une entero al de la mesa destino.",
         "NUEVO (Opciones -> Productos): gestión de alérgenos por producto. Los 14 alérgenos oficiales de la UE ya vienen puestos, se pueden renombrar o añadir otros propios, y se marca fácilmente qué productos llevan cada uno. Se destaca en la tarjeta del producto, en el carrito y en la comanda impresa a cocina.",
-        "NUEVO (Modo Mesas): se puede retener un producto del carrito (p.ej. el postre) para que no se mande a cocina todavía, y \"lanzarlo\" cuando el cliente esté listo -- no se envía solo con el resto del pedido mientras esté retenido."
+        "NUEVO (Modo Mesas): se puede retener un producto del carrito (p.ej. el postre) para que no se mande a cocina todavía, y \"lanzarlo\" cuando el cliente esté listo -- no se envía solo con el resto del pedido mientras esté retenido.",
+        "MEJORA (Modo Mesas): el plano visual de mesas ahora pinta un anillo de color alrededor de la mesa según qué camarero la está llevando, además del color de estado que ya tenía (libre/ocupada/cuenta/reservada) -- de un vistazo se ve quién atiende cada mesa."
       ]
     },
     {

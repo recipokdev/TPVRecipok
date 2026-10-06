@@ -47,6 +47,34 @@ const MESAS_REMOTE_SYNC_POLL_MS = 8000;
 // repinta solo con la frecuencia suficiente para que la escalada se note.
 const MESAS_PENDING_COMANDA_URGENT_MS = 10 * 60 * 1000;
 const MESAS_REMOTE_PULL_GRACE_MS = 15000;
+
+// Peticion de Sergi (2026-10-06, idea de Glop en la investigacion de TPVs de
+// la competencia): ademas del color de ESTADO de la mesa (libre/ocupada/
+// cuenta/reservada, ya existia), un anillo exterior con el color del
+// camarero que esta trabajando esa mesa ahora mismo (ticket.agentCode,
+// guardado por renderer.js en applyMesaScopeToTicket). Paleta fija,
+// deterministica por codigo de agente -- no hace falta que el admin
+// configure nada, y el mismo camarero siempre sale con el mismo color.
+const MESAS_AGENT_RING_PALETTE = [
+  "#2563eb", // azul
+  "#db2777", // rosa
+  "#0d9488", // verde azulado
+  "#7c3aed", // violeta
+  "#ca8a04", // dorado
+  "#0891b2", // cian
+  "#65a30d", // oliva
+  "#9333ea", // morado
+];
+
+function getAgentRingColor(agentCode) {
+  const code = String(agentCode || "").trim();
+  if (!code) return "";
+  let hash = 0;
+  for (let i = 0; i < code.length; i++) {
+    hash = (hash * 31 + code.charCodeAt(i)) >>> 0;
+  }
+  return MESAS_AGENT_RING_PALETTE[hash % MESAS_AGENT_RING_PALETTE.length];
+}
 const DESIGN_GRID_SIZE = 20;
 const RESERVATION_MIN_TIME = "08:00";
 const RESERVATION_MAX_TIME = "23:30";
@@ -2564,6 +2592,11 @@ function renderMapCards() {
     rows.push(
       `<div class="gestion-tip-title">Mesa ${tableLabel} · ${statusLabel}</div>`,
     );
+    if (ticket?.agentName) {
+      rows.push(
+        `<div class="gestion-tip-row"><span>Camarero</span><strong>${ticket.agentName}</strong></div>`,
+      );
+    }
 
     let quickAction = "";
     let editBlock = "";
@@ -2779,6 +2812,12 @@ function renderMapCards() {
       const stageKey = getTableServiceStageKey(uid, ticket, st.code);
       node.classList.add(`state-${st.code}`);
       if (stageKey) node.classList.add(`phase-${stageKey}`);
+
+      const agentRingColor = getAgentRingColor(ticket?.agentCode);
+      if (agentRingColor) {
+        node.classList.add("has-agent-ring");
+        node.style.setProperty("--agent-ring-color", agentRingColor);
+      }
 
       const reservationNameText = String(meta.reservationName || "").trim();
       const totalText =
