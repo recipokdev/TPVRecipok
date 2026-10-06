@@ -11056,6 +11056,111 @@ function moveMesaPendingTicket(sourceUid, targetUid) {
   return true;
 }
 
+// Peticion de Sergi (2026-10-06), tras investigar otros TPV (Glop permite
+// fusionar mesas como flujo de primera clase, no un workaround) -- combinar
+// 2 mesas YA ocupadas en una sola cuenta. Distinto de moveMesaPendingTicket
+// (que mueve un pedido a una mesa VACIA): aqui las dos tienen pedido real.
+//
+// Diseño confirmado con Sergi:
+// - La mesa origen queda libre de inmediato (su pedido se mueve entero).
+// - Se entra desde el mismo boton "Cambiar de mesa" -- si al tocar la mesa
+//   destino esta YA tiene pedido, se pregunta si fusionar en vez de
+//   bloquear como hacia moveMesaPendingTicket.
+// - TODO lo ya impreso a cocina (de cualquiera de las 2) pasa a pendiente
+//   en la mesa combinada -- mas seguro que intentar conservar el estado de
+//   impresion producto a producto: nunca se olvida avisar a cocina de algo
+//   de verdad nuevo, aunque pueda reimprimir algo que ya se habia mandado
+//   por separado (molestia menor y recuperable).
+async function mergeMesaPendingTickets(sourceUid, targetUid) {
+  const fromUid = String(sourceUid || "").trim();
+  const toUid = String(targetUid || "").trim();
+  if (!fromUid || !toUid || fromUid === toUid) return false;
+
+  const mesasState = loadMesasTablesStateForInline();
+  if (!mesasState || typeof mesasState !== "object") return false;
+
+  const sourceTicket = getMesasPendingTicketByUid(mesasState, fromUid);
+  const targetTicket = getMesasPendingTicketByUid(mesasState, toUid);
+  if (!sourceTicket || !targetTicket) {
+    toast("No se pudo fusionar: falta el pedido de alguna de las 2 mesas.", "warn", "Mesas");
+    return false;
+  }
+
+  const prevTargetItems = Array.isArray(targetTicket.items)
+    ? targetTicket.items.map((it) => ({ ...it }))
+    : [];
+  const sourceItemsCloned = (
+    Array.isArray(sourceTicket.items) ? sourceTicket.items : []
+  ).map((it) => ({ ...it, _lineId: makeLineId() }));
+  const mergedItems = [...prevTargetItems, ...sourceItemsCloned];
+
+  const reservedDelta = buildReservedQtyDeltaMap(mergedItems, prevTargetItems);
+
+  targetTicket.items = mergedItems;
+  targetTicket.total = getCartTotal(mergedItems);
+  targetTicket.updatedAt = new Date();
+  targetTicket.localRevisionAt = Date.now();
+  // Todo pasa a "pendiente de enviar" en la mesa combinada (ver diseño
+  // arriba) -- se borra el historial de impresion de ambas en vez de
+  // intentar conservarlo producto a producto.
+  targetTicket.comandaState = undefined;
+  targetTicket.comandaPendingSinceAt = null;
+  targetTicket.comandaAutoPrintFailedAt = null;
+  targetTicket.comandaAutoPrintFailedError = null;
+
+  if (reservedDelta.size > 0) {
+    try {
+      await syncReservedStockDeltaToFS(reservedDelta, "fusionar mesas", targetTicket.id);
+    } catch (e) {
+      enqueueStockDeltaSync(e?.failedDeltaMap || reservedDelta, "fusionar mesas", targetTicket.id);
+      console.warn("No se pudo sincronizar stock al fusionar mesas:", e?.message || e);
+    }
+  }
+
+  try {
+    await apiSaveParkedReservation(targetTicket);
+  } catch (e) {
+    enqueueParkedSyncOperation("upsert", targetTicket);
+    console.warn("No se pudo guardar la mesa destino tras fusionar:", e?.message || e);
+  }
+
+  // Ahora sí liberamos la mesa origen por completo (su pedido ya vive en el
+  // destino) -- mismo patron que deleteParkedTicketByIndex, sin sus dialogos
+  // de confirmacion propios (la fusion ya tuvo su propia confirmacion).
+  markParkedTicketAsDeleted(sourceTicket);
+  const sourceReleaseDelta = buildReservedQtyDeltaMap([], sourceItemsCloned);
+  if (sourceReleaseDelta.size > 0) {
+    try {
+      await syncReservedStockDeltaToFS(sourceReleaseDelta, "fusionar mesas (origen)", sourceTicket.id);
+    } catch (e) {
+      enqueueStockDeltaSync(e?.failedDeltaMap || sourceReleaseDelta, "fusionar mesas (origen)", sourceTicket.id);
+      console.warn("No se pudo liberar el stock de la mesa origen al fusionar:", e?.message || e);
+    }
+  }
+
+  const sourceIdx = parkedTickets.indexOf(sourceTicket);
+  if (sourceIdx >= 0) parkedTickets.splice(sourceIdx, 1);
+  unlinkMesaTicketByTicketId(sourceTicket?.id || null, sourceTicket);
+
+  void (async () => {
+    try {
+      await apiDeleteParkedReservation(sourceTicket);
+    } catch (e) {
+      enqueueParkedSyncOperation("delete", sourceTicket);
+      console.warn("No se pudo borrar en remoto la mesa origen tras fusionar:", e?.message || e);
+    }
+  })();
+
+  saveParkedTicketsCache();
+
+  const refreshedState = loadMesasTablesStateForInline();
+  refreshedState.selectedTableId = toUid;
+  saveMesasTablesStateForInline(refreshedState);
+  syncTpvCartWithSelectedMesa({ preferLinkedTicketOnEmptyDraft: true });
+
+  return true;
+}
+
 function refreshMesasTransSidebar() {
   const side = document.getElementById("mesasTransSidebar");
   const selectedTableEl = document.getElementById("mesasTransSelectedTable");
@@ -11992,7 +12097,7 @@ function bindMesasInlineEventsOnce() {
     "mesasTransOtherTables",
   );
   if (mesasTransOtherTables) {
-    mesasTransOtherTables.addEventListener("click", (event) => {
+    mesasTransOtherTables.addEventListener("click", async (event) => {
       const btn = event?.target?.closest?.("button[data-uid]");
       if (!btn) return;
 
@@ -12000,10 +12105,34 @@ function bindMesasInlineEventsOnce() {
       if (!uid) return;
 
       if (MESAS_TRANS_TABLE_MOVE_SOURCE_UID) {
-        const moved = moveMesaPendingTicket(
-          MESAS_TRANS_TABLE_MOVE_SOURCE_UID,
+        const sourceUid = MESAS_TRANS_TABLE_MOVE_SOURCE_UID;
+        // Si la mesa destino YA tiene su propio pedido, moveMesaPendingTicket
+        // se niega (para no pisarlo) -- en vez de bloquear sin mas,
+        // ofrecemos fusionar las 2 en una sola cuenta.
+        const destinationHasTicket = !!getMesasPendingTicketByUid(
+          loadMesasTablesStateForInline(),
           uid,
         );
+
+        if (destinationHasTicket) {
+          const ok = await confirmModal(
+            "Fusionar mesas",
+            "La mesa de destino ya tiene un pedido propio. ¿Quieres fusionar las 2 mesas en una sola cuenta? El pedido de la mesa origen se moverá entero a la de destino, y la de origen quedará libre.",
+            { dialogClassName: "wide-dialog" },
+          );
+          if (!ok) return;
+
+          const merged = await mergeMesaPendingTickets(sourceUid, uid);
+          if (merged) {
+            MESAS_TRANS_TABLE_MOVE_SOURCE_UID = "";
+            renderMesasTransContextBar();
+            renderCart();
+            toast("Mesas fusionadas correctamente.", "ok", "Mesas");
+          }
+          return;
+        }
+
+        const moved = moveMesaPendingTicket(sourceUid, uid);
         if (moved) {
           MESAS_TRANS_TABLE_MOVE_SOURCE_UID = "";
           renderMesasTransContextBar();

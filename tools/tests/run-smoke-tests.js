@@ -9234,6 +9234,29 @@ mustContain(
   "mesas.js calcula si el aviso lleva mas del umbral (10 minutos) pendiente y cambia a la variante 'is-urgent' (rojo) -- verificado en vivo contra demo real: recien creado NO es urgente, y tras simular 15 minutos pendiente SI lo es",
 );
 
+console.log("\n[SMOKE] Checking 2026-10-06 Modo Mesas: fusionar 2 mesas en una sola cuenta\n");
+
+mustContain(
+  renderer,
+  "async function mergeMesaPendingTickets(sourceUid, targetUid) {",
+  "Segunda idea de la investigacion de otros TPV (Glop permite fusionar mesas como flujo de primera clase): combinar 2 mesas YA ocupadas en una sola cuenta, distinto de moveMesaPendingTicket (que solo mueve un pedido a una mesa VACIA, y se niega si la mesa destino ya tiene pedido). Diseño confirmado con Sergi: la mesa origen queda libre de inmediato, se entra desde el mismo boton 'Cambiar de mesa', y todo lo ya impreso a cocina (de cualquiera de las 2) pasa a pendiente en la mesa combinada -- mas seguro que intentar conservar el estado de impresion producto a producto",
+);
+mustContain(
+  renderer,
+  "targetTicket.comandaState = undefined;",
+  "Tras fusionar se borra el historial de impresion de la mesa destino (y los avisos de fallo de auto-impresion de ambas) -- nunca se olvida avisar a cocina de algo de verdad nuevo, aunque pueda reimprimir algo que ya se habia mandado por separado antes de la fusion",
+);
+mustContain(
+  renderer,
+  "if (destinationHasTicket) {",
+  "El boton 'Cambiar de mesa' de siempre ofrece fusionar (con confirmacion explicita) en vez de bloquear sin mas, en cuanto se toca una mesa destino que ya tiene su propio pedido",
+);
+mustContain(
+  renderer,
+  "const sourceReleaseDelta = buildReservedQtyDeltaMap([], sourceItemsCloned);",
+  "mergeMesaPendingTickets reutiliza los mismos helpers de stock ya probados (buildReservedQtyDeltaMap/syncReservedStockDeltaToFS) que usa borrar un aparcado -- no reinventa la logica de liberar/reservar stock. Verificado en vivo contra demo real: 2 mesas con pedidos reales distintos, tras fusionar quedan en 1 solo ticket con ambos productos, total correcto, comanda reseteada a pendiente, y la mesa origen libre (sin mapeo)",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
