@@ -9257,6 +9257,39 @@ mustContain(
   "mergeMesaPendingTickets reutiliza los mismos helpers de stock ya probados (buildReservedQtyDeltaMap/syncReservedStockDeltaToFS) que usa borrar un aparcado -- no reinventa la logica de liberar/reservar stock. Verificado en vivo contra demo real: 2 mesas con pedidos reales distintos, tras fusionar quedan en 1 solo ticket con ambos productos, total correcto, comanda reseteada a pendiente, y la mesa origen libre (sin mapeo)",
 );
 
+console.log("\n[SMOKE] Checking 2026-10-06 alergenos por producto (14 oficiales UE + propios, destacados en tarjeta/carrito/comanda)\n");
+
+mustContain(
+  renderer,
+  "const ALLERGEN_OFFICIAL_DEFINITIONS = [",
+  "Peticion de Sergi (2026-10-06), investigado antes como otros TPV resuelven esto: los 14 alergenos oficiales de la UE (RD 126/2015 / Reglamento 1169/2011) son una constante -- no hace falta crearlos por cliente, ya vienen puestos de serie. Guardado puramente en servidor propio (allergens.php, parked_tpv_shared), igual que precio-por-almacen -- FacturaScripts no tiene este concepto nativo",
+);
+mustContain(
+  renderer,
+  "async function loadAllergenTypes() {",
+  "Fail-open en lectura (mismo patron que loadAlmacenPriceOverrides): si el servidor no responde, los 14 oficiales se mantienen con su label por defecto y ningun producto se marca -- el TPV sigue funcionando igual que sin esta funcion",
+);
+mustContain(
+  renderer,
+  "async function openAllergensManageModal() {",
+  "Diseño confirmado con Sergi: al reves de ir producto por producto, se entra POR ALERGENO (como Glop/ICG organizan esto) -- la lista trae los 14 oficiales ya puestos, se pueden renombrar (incluidos los oficiales, solo el texto) o añadir propios (estos si se pueden borrar), y dentro de cada uno se busca/añade/quita productos. Verificado en vivo contra demo real de principio a fin: listar, añadir propio, abrir detalle, añadir producto por busqueda, quitarlo, renombrar un oficial, borrar el propio, cerrar",
+);
+mustContain(
+  renderer,
+  'class="product-allergen-badge"',
+  "La tarjeta del producto en el grid muestra un aviso pequeño (esquina opuesta al badge de descuento, para no chocar) con los nombres completos en el tooltip -- verificado en vivo: un producto real enlazado a 'gluten' muestra el badge con title 'Alérgenos: Gluten'",
+);
+mustContain(
+  renderer,
+  'class="cart-line-allergens"',
+  "La linea del carrito muestra los alergenos en negrita y rojo, visible sin necesidad de pasar el raton -- verificado en vivo contra demo real",
+);
+mustContain(
+  renderer,
+  "const allergenCodesForLine = getProductAllergenCodes(",
+  "La comanda impresa a cocina (comanda_print.html) destaca los alergenos con su propio recuadro -- en una impresora termica (blanco y negro) el negrita solo no basta para que cocina no se lo salte. Reutiliza los mismos getProductAllergenCodes/getAllergenLabel ya probados en la tarjeta y el carrito, no duplica logica",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

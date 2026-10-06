@@ -9,7 +9,8 @@
         "MEJORA (Modo Mesas): los productos del carrito que ya se mandaron a la impresora de cocina ahora se ven atenuados (en gris), para distinguirlos de un vistazo de los que todavía están pendientes de enviar -- igual que ya hacía la app de camareros en su propia pantalla.",
         "MEJORA (Modo Mesas): el plano visual de mesas ahora avisa con un pequeño icono en la propia mesa si tiene productos sin enviar a cocina todavía, sin tener que entrar a esa mesa para enterarte.",
         "MEJORA (Modo Mesas): ese aviso ahora se pone en rojo si lleva ya un buen rato sin enviarse, en vez de quedarse siempre igual de discreto.",
-        "NUEVO (Modo Mesas): ahora se pueden fusionar 2 mesas ocupadas en una sola cuenta desde \"Cambiar de mesa\" -- la mesa origen queda libre y su pedido se une entero al de la mesa destino."
+        "NUEVO (Modo Mesas): ahora se pueden fusionar 2 mesas ocupadas en una sola cuenta desde \"Cambiar de mesa\" -- la mesa origen queda libre y su pedido se une entero al de la mesa destino.",
+        "NUEVO (Opciones -> Productos): gestión de alérgenos por producto. Los 14 alérgenos oficiales de la UE ya vienen puestos, se pueden renombrar o añadir otros propios, y se marca fácilmente qué productos llevan cada uno. Se destaca en la tarjeta del producto, en el carrito y en la comanda impresa a cocina."
       ]
     },
     {

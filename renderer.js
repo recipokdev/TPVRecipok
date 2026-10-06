@@ -66,6 +66,34 @@ let managedStockCatalogLoaded = false;
 // FacturaScripts -- ver loadAlmacenPriceOverrides.
 let almacenPriceOverrides = {};
 
+// Alergenos por producto (peticion de Sergi, 2026-10-06): igual que precio
+// por almacen, vive puramente en nuestro servidor (FacturaScripts no tiene
+// este concepto nativo). allergenTypes = los 14 oficiales de la UE (ver
+// ALLERGEN_OFFICIAL_DEFINITIONS) + los que este cliente haya añadido o
+// renombrado -- ver loadAllergenTypes(). productAllergenLinks = mapa
+// idproducto -> array de codes, ver loadProductAllergenLinks().
+const ALLERGEN_OFFICIAL_DEFINITIONS = [
+  { code: "gluten", label: "Gluten" },
+  { code: "crustaceos", label: "Crustáceos" },
+  { code: "huevos", label: "Huevos" },
+  { code: "pescado", label: "Pescado" },
+  { code: "cacahuetes", label: "Cacahuetes" },
+  { code: "soja", label: "Soja" },
+  { code: "lacteos", label: "Lácteos" },
+  { code: "frutos_cascara", label: "Frutos de cáscara" },
+  { code: "apio", label: "Apio" },
+  { code: "mostaza", label: "Mostaza" },
+  { code: "sesamo", label: "Granos de sésamo" },
+  { code: "sulfitos", label: "Dióxido de azufre y sulfitos" },
+  { code: "altramuces", label: "Altramuces" },
+  { code: "moluscos", label: "Moluscos" },
+];
+let allergenTypes = ALLERGEN_OFFICIAL_DEFINITIONS.map((d) => ({
+  ...d,
+  isCustom: false,
+}));
+let productAllergenLinks = {};
+
 // Mapa codimpuesto -> porcentaje real de IVA
 let taxRatesByCode = {};
 
@@ -930,6 +958,12 @@ const TPV_SYNC_API_URL =
 const TPV_CAMAREROS_API_URL =
   window.TPV_CONFIG?.tpvCamarerosApiUrl ||
   TPV_SYNC_API_URL.replace(/index\.php$/, "camareros.php");
+
+// Fichero de servidor propio para alergenos por producto, mismo motivo que
+// camareros.php: un fallo aqui no afecta a index.php.
+const TPV_ALLERGENS_API_URL =
+  window.TPV_CONFIG?.tpvAllergensApiUrl ||
+  TPV_SYNC_API_URL.replace(/index\.php$/, "allergens.php");
 
 function getTpvSyncApiKey() {
   const fromCfg = String(window.TPV_CONFIG?.tpvApiKey || "").trim();
@@ -12524,6 +12558,12 @@ async function runBootFlow() {
     // tenerlos ya listos antes de que se pueda pintar ningún producto.
     await loadProductAddons();
 
+    // Alergenos: igual que añadidos, solo depende del slug -- se carga aquí
+    // para que la tarjeta/carrito ya puedan pintar el aviso desde el primer
+    // renderizado.
+    await loadAllergenTypes();
+    await loadProductAllergenLinks();
+
     // 5) Caja (recupera o abre modal) -- si el overlay de Terminal/Agente
     // sigue abierto esperando que el usuario elija de verdad (con varios
     // terminales/agentes: ensureTerminalAgentDefaults, arriba, ya habra
@@ -13302,6 +13342,14 @@ function renderProducts() {
       showProductStockBadge &&
       stockValue !== null;
 
+    // Alergenos (peticion de Sergi, 2026-10-06): aviso pequeño en la propia
+    // tarjeta, con los nombres completos en el tooltip -- el detalle
+    // destacado de verdad se ve ya en el carrito (ver renderCart).
+    const allergenCodes = getProductAllergenCodes(prodId);
+    const allergenBadgeHtml = allergenCodes.length
+      ? `<div class="product-allergen-badge" title="Alérgenos: ${allergenCodes.map(getAllergenLabel).join(", ")}">⚠</div>`
+      : "";
+
     tile.innerHTML = `
       <div class="product-img-wrapper">
         ${safeImageUrl ? `<img src="${safeImageUrl}" class="product-img" loading="lazy" decoding="async">` : ""}
@@ -13312,6 +13360,7 @@ function renderProducts() {
         ${p.secondaryName ? `<div class="product-secondary">${p.secondaryName}</div>` : ""}
       </div>
 
+      ${allergenBadgeHtml}
       ${discountPct > 0 ? `<div class="product-discount-badge" title="Descuento aplicado">-${formatDiscountPercent(discountPct)}%</div>` : ""}
 
       <div class="product-footer">
@@ -14819,6 +14868,12 @@ function renderCart() {
         ${
           item.secondaryName
             ? `<div class="cart-line-secondary">${item.secondaryName}</div>`
+            : ""
+        }
+
+        ${
+          getProductAllergenCodes(item.baseProductId ?? item.id).length
+            ? `<div class="cart-line-allergens">⚠ ${getProductAllergenCodes(item.baseProductId ?? item.id).map(getAllergenLabel).join(", ")}</div>`
             : ""
         }
 
@@ -30701,6 +30756,7 @@ async function openOptions() {
   bindProductTileSizeResetButtonOnce();
   bindProductNameFontSizeResetButtonOnce();
   bindDerivedStockFractionButtonOnce();
+  bindAllergensManageButtonOnce();
   bindCartWidthControlsToggleOnce();
   bindCartWidthDragHandleOnce();
   bindAutostartToggleOnce();
@@ -43628,6 +43684,20 @@ async function printComandaWithContext({
         descEl.appendChild(addonsEl);
       }
 
+      // Alergenos (peticion de Sergi, 2026-10-06): destacado aparte, con
+      // borde propio -- en una impresora termica (blanco y negro) el
+      // negrita sola no basta para que cocina no se lo salte.
+      const allergenCodesForLine = getProductAllergenCodes(
+        line?.baseProductId ?? line?.id,
+      );
+      if (allergenCodesForLine.length) {
+        const allergensEl = doc.createElement("div");
+        allergensEl.className = "comanda-desc-allergens";
+        allergensEl.textContent =
+          "⚠ " + allergenCodesForLine.map(getAllergenLabel).join(", ");
+        descEl.appendChild(allergensEl);
+      }
+
       itemsEl.appendChild(row);
     });
   }
@@ -48252,6 +48322,599 @@ async function apiUnsetAlmacenPriceOverride(idproducto) {
   }
 
   delete almacenPriceOverrides[idp];
+}
+
+// Alergenos por producto (peticion de Sergi, 2026-10-06): mismo patron que
+// precio-por-almacen. Fail-open en lectura: si el servidor no responde, los
+// 14 oficiales se mantienen con su label por defecto (ya estan en
+// allergenTypes desde que se declaro) y productAllergenLinks queda vacio --
+// ningun producto se marca, el TPV sigue funcionando igual que sin esta
+// funcion.
+async function loadAllergenTypes() {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) return allergenTypes;
+
+  try {
+    const url = `${TPV_ALLERGENS_API_URL}?action=list-allergen-types&slug=${encodeURIComponent(slug)}`;
+    const res = await fetchWithTimeout(
+      url,
+      { headers: { Accept: "application/json", "X-TPV-API-KEY": syncApiKey } },
+      5000,
+    );
+    const data = await res.json().catch(() => null);
+    if (!res.ok || data?.ok === false) {
+      throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+    }
+    const list = Array.isArray(data?.data) ? data.data : [];
+    if (list.length) allergenTypes = list;
+  } catch (e) {
+    console.warn(
+      "No se pudieron cargar los tipos de alergeno (fail-open):",
+      e?.message || e,
+    );
+  }
+
+  return allergenTypes;
+}
+
+async function loadProductAllergenLinks() {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    productAllergenLinks = {};
+    return productAllergenLinks;
+  }
+
+  try {
+    const url = `${TPV_ALLERGENS_API_URL}?action=list-product-allergen-links&slug=${encodeURIComponent(slug)}`;
+    const res = await fetchWithTimeout(
+      url,
+      { headers: { Accept: "application/json", "X-TPV-API-KEY": syncApiKey } },
+      5000,
+    );
+    const data = await res.json().catch(() => null);
+    if (!res.ok || data?.ok === false) {
+      throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+    }
+    const list = Array.isArray(data?.data) ? data.data : [];
+    const map = {};
+    list.forEach((entry) => {
+      const idp = Number(entry?.idproducto || 0);
+      const code = String(entry?.code || "").trim();
+      if (!idp || !code) return;
+      if (!map[idp]) map[idp] = [];
+      map[idp].push(code);
+    });
+    productAllergenLinks = map;
+  } catch (e) {
+    console.warn(
+      "No se pudieron cargar los alergenos por producto (fail-open):",
+      e?.message || e,
+    );
+    productAllergenLinks = {};
+  }
+
+  return productAllergenLinks;
+}
+
+function getAllergenLabel(code) {
+  const found = allergenTypes.find((a) => a.code === code);
+  return found?.label || code;
+}
+
+function getProductAllergenCodes(idproducto) {
+  const idp = Number(idproducto || 0);
+  return Array.isArray(productAllergenLinks[idp]) ? productAllergenLinks[idp] : [];
+}
+
+async function apiAddCustomAllergenType(label) {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("Los alergenos no están disponibles en esta instalación.");
+  }
+
+  const res = await fetchWithTimeout(
+    `${TPV_ALLERGENS_API_URL}?action=add-custom-allergen-type`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      body: JSON.stringify({ slug, label: String(label || "").trim() }),
+    },
+    8000,
+  );
+  const data = await res.json().catch(() => null);
+  if (!res.ok || data?.ok === false) {
+    throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+  }
+
+  allergenTypes = [...allergenTypes, data.data];
+  return data.data;
+}
+
+async function apiRenameAllergenType(code, label) {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("Los alergenos no están disponibles en esta instalación.");
+  }
+
+  const res = await fetchWithTimeout(
+    `${TPV_ALLERGENS_API_URL}?action=rename-allergen-type`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      body: JSON.stringify({
+        slug,
+        code: String(code || "").trim(),
+        label: String(label || "").trim(),
+      }),
+    },
+    8000,
+  );
+  const data = await res.json().catch(() => null);
+  if (!res.ok || data?.ok === false) {
+    throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+  }
+
+  allergenTypes = allergenTypes.map((a) =>
+    a.code === code ? { ...a, label: String(label || "").trim() } : a,
+  );
+}
+
+async function apiDeleteCustomAllergenType(code) {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("Los alergenos no están disponibles en esta instalación.");
+  }
+
+  const res = await fetchWithTimeout(
+    `${TPV_ALLERGENS_API_URL}?action=delete-custom-allergen-type`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      body: JSON.stringify({ slug, code: String(code || "").trim() }),
+    },
+    8000,
+  );
+  const data = await res.json().catch(() => null);
+  if (!res.ok || data?.ok === false) {
+    throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+  }
+
+  allergenTypes = allergenTypes.filter((a) => a.code !== code);
+  Object.keys(productAllergenLinks).forEach((idp) => {
+    productAllergenLinks[idp] = (productAllergenLinks[idp] || []).filter(
+      (c) => c !== code,
+    );
+  });
+}
+
+async function apiSetProductAllergenLink(code, idproducto, linked) {
+  const idp = Number(idproducto || 0);
+  if (!idp) throw new Error("idproducto inválido");
+
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("Los alergenos no están disponibles en esta instalación.");
+  }
+
+  const res = await fetchWithTimeout(
+    `${TPV_ALLERGENS_API_URL}?action=set-product-allergen-link`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      body: JSON.stringify({
+        slug,
+        code: String(code || "").trim(),
+        idproducto: idp,
+        linked: !!linked,
+        terminalId: String(currentTerminal?.id || ""),
+        terminalName: String(currentTerminal?.name || ""),
+      }),
+    },
+    8000,
+  );
+  const data = await res.json().catch(() => null);
+  if (!res.ok || data?.ok === false) {
+    throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+  }
+
+  const current = Array.isArray(productAllergenLinks[idp])
+    ? productAllergenLinks[idp]
+    : [];
+  if (linked) {
+    if (!current.includes(code)) productAllergenLinks[idp] = [...current, code];
+  } else {
+    productAllergenLinks[idp] = current.filter((c) => c !== code);
+  }
+}
+
+function getProductIdsForAllergenCode(code) {
+  return Object.keys(productAllergenLinks)
+    .filter((idp) => (productAllergenLinks[idp] || []).includes(code))
+    .map((idp) => Number(idp));
+}
+
+function filterProductsForAllergenPicker(query, excludeBaseIds) {
+  const q = String(query || "").trim().toLowerCase();
+  const exclude = excludeBaseIds instanceof Set ? excludeBaseIds : new Set();
+  const seen = new Set();
+  const out = [];
+
+  for (const p of Array.isArray(products) ? products : []) {
+    const baseId = getProductBaseId(p);
+    if (!baseId || exclude.has(baseId) || seen.has(baseId)) continue;
+
+    const name = String(p.name || p.descripcion || "").toLowerCase();
+    const ref = String(p.referencia || "").toLowerCase();
+    if (q && !name.includes(q) && !ref.includes(q)) continue;
+
+    seen.add(baseId);
+    out.push(p);
+    if (out.length >= 30) break;
+  }
+
+  return out;
+}
+
+// Modal de gestion de alergenos (Opciones -> Productos -> "Gestionar...").
+// Diseño confirmado con Sergi (2026-10-06): al reves de "producto por
+// producto marca sus alergenos", aqui se entra POR ALERGENO -- la lista
+// trae ya los 14 oficiales de la UE puestos de serie (sin tener que
+// crearlos), se pueden renombrar o añadir otros propios, y dentro de cada
+// uno se buscan/añaden/quitan productos. Mismo patron visual que el
+// asistente de stock derivado (openDerivedStockFractionConfigModal):
+// overlay+modal dinamicos, con un "step" para alternar entre la lista y el
+// detalle de un alergeno.
+async function openAllergensManageModal() {
+  if (!isAdminUser()) {
+    toast?.("Solo administradores.", "warn", "Productos");
+    return;
+  }
+
+  return new Promise((resolve) => {
+    document.body.classList.add("modal-locked");
+
+    const overlay = document.createElement("div");
+    overlay.className = "pack-modal-overlay";
+
+    const modal = document.createElement("div");
+    modal.className = "pack-modal allergens-modal";
+
+    const head = document.createElement("div");
+    head.className = "pack-modal-head";
+    const hTitle = document.createElement("div");
+    hTitle.className = "pack-modal-title";
+    const xBtn = document.createElement("button");
+    xBtn.type = "button";
+    xBtn.className = "pack-modal-x";
+    xBtn.textContent = "✕";
+    head.appendChild(hTitle);
+    head.appendChild(xBtn);
+
+    const body = document.createElement("div");
+    body.className = "pack-modal-body";
+
+    function close() {
+      overlay.remove();
+      document.body.classList.remove("modal-locked");
+      resolve();
+    }
+    xBtn.onclick = close;
+
+    let step = "list";
+    let activeCode = null;
+
+    function renderBody() {
+      body.innerHTML = "";
+      if (step === "detail") renderDetailStep();
+      else renderListStep();
+    }
+
+    function renderListStep() {
+      hTitle.textContent = "Alérgenos";
+
+      const hint = document.createElement("div");
+      hint.className = "addons-manage-empty";
+      hint.style.textAlign = "left";
+      hint.style.padding = "0 0 10px";
+      hint.textContent =
+        "Los 14 oficiales de la UE ya están aquí. Toca uno para marcar qué productos lo llevan.";
+      body.appendChild(hint);
+
+      const list = document.createElement("div");
+      list.className = "pack-modal-list";
+
+      allergenTypes.forEach((a) => {
+        const row = document.createElement("div");
+        row.className = "pack-item addons-select-item";
+
+        const left = document.createElement("div");
+        left.style.flex = "1";
+        left.style.minWidth = "0";
+
+        let renaming = false;
+
+        function renderLeft() {
+          left.innerHTML = "";
+          if (renaming) {
+            const input = document.createElement("input");
+            input.type = "text";
+            input.className = "addons-item-input";
+            input.value = a.label;
+            input.addEventListener("click", (e) => {
+              e.stopPropagation();
+              openQwertyForInput(input, "text");
+            });
+            left.appendChild(input);
+
+            const saveBtn = document.createElement("button");
+            saveBtn.type = "button";
+            saveBtn.className = "small-btn";
+            saveBtn.textContent = "Guardar";
+            saveBtn.onclick = async (e) => {
+              e.stopPropagation();
+              const newLabel = input.value.trim();
+              if (!newLabel) return;
+              try {
+                await apiRenameAllergenType(a.code, newLabel);
+                toast?.("Alérgeno renombrado.", "ok", "Alérgenos");
+                renderBody();
+              } catch (err) {
+                toast?.(err?.message || "No se pudo renombrar.", "err", "Alérgenos");
+              }
+            };
+            left.appendChild(saveBtn);
+          } else {
+            const nm = document.createElement("div");
+            nm.className = "pack-item-name";
+            nm.textContent = a.label;
+            left.appendChild(nm);
+            const count = document.createElement("div");
+            count.className = "derived-stock-picker-ref";
+            const n = getProductIdsForAllergenCode(a.code).length;
+            count.textContent = n === 1 ? "1 producto" : `${n} productos`;
+            left.appendChild(count);
+          }
+        }
+        renderLeft();
+        row.appendChild(left);
+
+        const renameBtn = document.createElement("button");
+        renameBtn.type = "button";
+        renameBtn.className = "small-btn";
+        renameBtn.textContent = "✎";
+        renameBtn.title = "Renombrar";
+        renameBtn.onclick = (e) => {
+          e.stopPropagation();
+          renaming = !renaming;
+          renderLeft();
+        };
+        row.appendChild(renameBtn);
+
+        if (a.isCustom) {
+          const delBtn = document.createElement("button");
+          delBtn.type = "button";
+          delBtn.className = "small-btn";
+          delBtn.textContent = "✕";
+          delBtn.title = "Eliminar";
+          delBtn.onclick = async (e) => {
+            e.stopPropagation();
+            const ok = await confirmModal(
+              "Eliminar alérgeno",
+              `¿Seguro que quieres eliminar "${a.label}"? Se quitará también de todos los productos que lo tuvieran marcado.`,
+            );
+            if (!ok) return;
+            try {
+              await apiDeleteCustomAllergenType(a.code);
+              toast?.("Alérgeno eliminado.", "ok", "Alérgenos");
+              renderBody();
+            } catch (err) {
+              toast?.(err?.message || "No se pudo eliminar.", "err", "Alérgenos");
+            }
+          };
+          row.appendChild(delBtn);
+        }
+
+        row.onclick = () => {
+          if (renaming) return;
+          activeCode = a.code;
+          step = "detail";
+          renderBody();
+        };
+        list.appendChild(row);
+      });
+
+      body.appendChild(list);
+
+      const addRow = document.createElement("div");
+      addRow.className = "opt-inline-fields";
+      addRow.style.marginTop = "10px";
+      const addInput = document.createElement("input");
+      addInput.type = "text";
+      addInput.className = "addons-item-input";
+      addInput.placeholder = "Nuevo alérgeno propio...";
+      addInput.addEventListener("click", () =>
+        openQwertyForInput(addInput, "text"),
+      );
+      const addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.className = "small-btn";
+      addBtn.textContent = "+ Añadir";
+      addBtn.onclick = async () => {
+        const label = addInput.value.trim();
+        if (!label) return;
+        try {
+          await apiAddCustomAllergenType(label);
+          toast?.("Alérgeno añadido.", "ok", "Alérgenos");
+          renderBody();
+        } catch (err) {
+          toast?.(err?.message || "No se pudo añadir.", "err", "Alérgenos");
+        }
+      };
+      addRow.appendChild(addInput);
+      addRow.appendChild(addBtn);
+      body.appendChild(addRow);
+    }
+
+    function renderDetailStep() {
+      const a = allergenTypes.find((x) => x.code === activeCode);
+      hTitle.textContent = a?.label || "Alérgeno";
+
+      const back = document.createElement("button");
+      back.type = "button";
+      back.className = "pack-btn pack-btn-bulk";
+      back.textContent = "← Todos los alérgenos";
+      back.onclick = () => {
+        step = "list";
+        renderBody();
+      };
+      body.appendChild(back);
+
+      const searchInput = document.createElement("input");
+      searchInput.type = "text";
+      searchInput.className = "addons-item-input";
+      searchInput.placeholder = "Buscar producto para añadir...";
+      searchInput.addEventListener("click", () =>
+        openQwertyForInput(searchInput, "text"),
+      );
+      body.appendChild(searchInput);
+
+      const results = document.createElement("div");
+      results.className = "pack-modal-list";
+      body.appendChild(results);
+
+      const chipTitle = document.createElement("div");
+      chipTitle.className = "addons-manage-empty";
+      chipTitle.style.textAlign = "left";
+      chipTitle.style.padding = "10px 0 4px";
+      chipTitle.textContent = "Productos marcados con este alérgeno:";
+      body.appendChild(chipTitle);
+
+      const chipWrap = document.createElement("div");
+      chipWrap.className = "opt-chip-list";
+      body.appendChild(chipWrap);
+
+      function renderResults() {
+        results.innerHTML = "";
+        const linkedIds = new Set(getProductIdsForAllergenCode(activeCode));
+        const matches = filterProductsForAllergenPicker(
+          searchInput.value,
+          linkedIds,
+        );
+        if (!matches.length) {
+          const empty = document.createElement("div");
+          empty.className = "addons-manage-empty";
+          empty.textContent = searchInput.value.trim()
+            ? "Sin resultados."
+            : "Escribe para buscar un producto.";
+          results.appendChild(empty);
+          return;
+        }
+        matches.forEach((p) => {
+          const row = document.createElement("div");
+          row.className = "pack-item addons-select-item";
+          const nm = document.createElement("div");
+          nm.className = "pack-item-name";
+          nm.textContent = p.name || p.referencia || "Producto";
+          row.appendChild(nm);
+          const addBtn = document.createElement("button");
+          addBtn.type = "button";
+          addBtn.className = "small-btn";
+          addBtn.textContent = "+ Añadir";
+          addBtn.onclick = async (e) => {
+            e.stopPropagation();
+            try {
+              await apiSetProductAllergenLink(
+                activeCode,
+                getProductBaseId(p),
+                true,
+              );
+              renderResults();
+              renderChips();
+            } catch (err) {
+              toast?.(err?.message || "No se pudo añadir.", "err", "Alérgenos");
+            }
+          };
+          row.appendChild(addBtn);
+          results.appendChild(row);
+        });
+      }
+
+      function renderChips() {
+        chipWrap.innerHTML = "";
+        const linkedIds = getProductIdsForAllergenCode(activeCode);
+        if (!linkedIds.length) {
+          const empty = document.createElement("div");
+          empty.className = "addons-manage-empty";
+          empty.textContent = "Ningún producto marcado todavía.";
+          chipWrap.appendChild(empty);
+          return;
+        }
+        linkedIds.forEach((idp) => {
+          const p = findProductByBaseId(idp);
+          const chip = document.createElement("span");
+          chip.className = "opt-chip";
+          chip.textContent = (p?.name || p?.referencia || `#${idp}`) + " ✕";
+          chip.title = "Quitar";
+          chip.onclick = async () => {
+            try {
+              await apiSetProductAllergenLink(activeCode, idp, false);
+              renderResults();
+              renderChips();
+            } catch (err) {
+              toast?.(err?.message || "No se pudo quitar.", "err", "Alérgenos");
+            }
+          };
+          chipWrap.appendChild(chip);
+        });
+      }
+
+      searchInput.addEventListener("input", renderResults);
+      renderResults();
+      renderChips();
+    }
+
+    renderBody();
+
+    modal.appendChild(head);
+    modal.appendChild(body);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+  });
+}
+
+let allergensManageBtnBound = false;
+function bindAllergensManageButtonOnce() {
+  if (allergensManageBtnBound) return;
+  allergensManageBtnBound = true;
+
+  const btn = document.getElementById("allergensManageBtn");
+  if (!btn) return;
+
+  btn.addEventListener("click", () => {
+    openAllergensManageModal();
+  });
 }
 
 // Añadidos de producto (Modo Mesas y TPV normal): anotaciones libres por producto
