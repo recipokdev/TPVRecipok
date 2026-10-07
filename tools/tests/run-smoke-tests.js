@@ -9377,6 +9377,45 @@ mustContain(
   "Guarda exacta: solo cuando estamos en Mesas transacciones Y nada esta cargado todavia -- evita re-disparar esto en cada poll de 10s sobre una mesa que ya tiene su ticket resuelto",
 );
 
+console.log("\n[SMOKE] Checking 2026-10-07 bug critico: linea borrada en otro terminal resucitaba sola (Asador el Gallo)\n");
+
+mustContain(
+  renderer,
+  "merged.__prevItemsBeforeRemoteMerge = prevItems;",
+  "Real de cliente (Asador el Gallo, 2026-10-07, confirmado con el registro de auditoria real del servidor -- el mismo ticket se guardaba 4 veces en 13 segundos): mergeMissingRemoteLinesIntoCart solo AÑADIA lineas que faltaran, nunca quitaba una que alguien hubiera borrado de verdad en otro terminal -- el carrito se quedaba con ella 'zombie' y el siguiente autoguardado (disparado sin mas por renderCart tras el repintado) la resucitaba en el servidor, daba igual cuantas veces se borrara. Hace falta saber que tenia el ticket ANTES de aceptar el remoto como autoritativo para distinguir un borrado real de una linea nueva local sin guardar",
+);
+mustContain(
+  renderer,
+  "const removedZombieLines = beforeRemovalLen !== cart.length;",
+  "Distingue por _lineId: si estaba en prevItems (lo que este terminal sabia antes) pero ya no esta en el ticket remoto autoritativo, es un borrado real -> se quita tambien del carrito local. Si no estaba en ninguno de los dos, es una linea nueva sin guardar todavia -> no se toca. Verificado en aislado con 4 escenarios: borrado real propagado, adicion nueva sin guardar preservada, el comportamiento original de 2026-10-02 (añadidos de la app de camareros) sigue funcionando, y una linea que sigue existiendo no se toca",
+);
+
+console.log("\n[SMOKE] Checking 2026-10-07 teclado QWERTY tapado por el modal de Añadidos\n");
+
+mustContain(
+  styles,
+  "el teclado QWERTY (texto) tenia el",
+  "Real de cliente (Sergi, 2026-10-07): el teclado numerico (.num-pad-overlay) ya tenia resuelto este mismo problema de capas hace tiempo (2100001, por encima de .pack-modal-overlay en 2100000), pero el teclado de texto QWERTY se quedo fuera de ese arreglo con el MISMO z-index que el modal (2100000) -- a igual z-index gana quien se pinta mas tarde en el DOM, y un modal como el de Añadidos se crea y se añade al body DESPUES de que #qwertyOverlay ya exista de forma estatica en index.html, asi que el teclado quedaba tapado detras sin poder escribir. Verificado en vivo: el teclado ahora queda por encima de ambos modales",
+);
+mustContain(
+  styles,
+  "z-index: 2100002;",
+  "Por encima incluso del numpad (2100001) y del modal (2100000) para que nunca quede detras de ningun modal, sea cual sea el orden en que se abran -- verificado en vivo contra demo real con ambos pseudo-elementos en el DOM",
+);
+
+console.log("\n[SMOKE] Checking 2026-10-07 añadidos de producto: precio en centimos y texto del boton\n");
+
+mustContain(
+  renderer,
+  "se podia guardar un precio con mas decimales de los que",
+  "Real de cliente (Sergi, 2026-10-07): el precio de un añadido solo se redondeaba a centimos visualmente al perder el foco (eurInputValue), pero el guardado real se disparaba antes (500ms despues de cada tecla) con el valor sin redondear. Redondeado en ambos sitios (guardado y blur)",
+);
+mustContain(
+  renderer,
+  '"+ Nuevo añadido"',
+  "Pedido de Sergi (con sorna, de parte de su jefe): \"+ Añadir añadido\" sonaba redundante -- renombrado a \"+ Nuevo añadido\"",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

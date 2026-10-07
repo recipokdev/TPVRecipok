@@ -10532,8 +10532,44 @@ function mergeMissingRemoteLinesIntoCart(ticket) {
       ...additions.map((it) => ({ ...it, _lineId: makeLineId() })),
     ];
   }
+
+  // Real de cliente (Asador el Gallo, 2026-10-07): propagar tambien las
+  // lineas que de verdad se borraron en otro terminal, no solo las que
+  // faltan por añadir -- si no, la linea borrada se queda "zombie" en este
+  // carrito y el siguiente autoguardado la resucita en el servidor sin que
+  // el usuario pueda hacer nada para evitarlo (por muchas veces que la
+  // borre). Distingue "la borraron de verdad" de "la acabo de añadir yo y
+  // aun no se ha guardado" por _lineId: si el _lineId YA estaba en lo que
+  // este terminal sabia del ticket ANTES de aceptar este remoto (prevItems)
+  // pero ya no esta en el ticket remoto autoritativo, es un borrado real;
+  // si no estaba en ninguno de los dos, es una linea nueva local sin
+  // guardar todavia y no se toca.
+  const prevLineIds = new Set(
+    (Array.isArray(ticket.__prevItemsBeforeRemoteMerge)
+      ? ticket.__prevItemsBeforeRemoteMerge
+      : []
+    )
+      .map((it) => String(it?._lineId || "").trim())
+      .filter(Boolean),
+  );
+  const remoteLineIds = new Set(
+    (Array.isArray(ticket.items) ? ticket.items : [])
+      .map((it) => String(it?._lineId || "").trim())
+      .filter(Boolean),
+  );
+  const beforeRemovalLen = cart.length;
+  cart = cart.filter((it) => {
+    const lineId = String(it?._lineId || "").trim();
+    if (!lineId) return true;
+    if (remoteLineIds.has(lineId)) return true;
+    if (!prevLineIds.has(lineId)) return true;
+    return false;
+  });
+  const removedZombieLines = beforeRemovalLen !== cart.length;
+
   delete ticket.__remoteChangedWhileLoaded;
-  return additions.length > 0;
+  delete ticket.__prevItemsBeforeRemoteMerge;
+  return additions.length > 0 || removedZombieLines;
 }
 
 // Saltar de un aparcado cargado a OTRO (desde la lista, o navegando partes
@@ -38448,6 +38484,17 @@ function syncParkedTicketsFromRemote(list) {
             JSON.stringify(normalizeTicketLinesForCompare(merged.items));
           if (!cartMatchesMerged) {
             merged.__remoteChangedWhileLoaded = true;
+            // Real de cliente (Asador el Gallo, 2026-10-07): mergeMissingRemoteLinesIntoCart
+            // solo AÑADE lineas que falten -- nunca quitaba una linea que
+            // alguien hubiera borrado de verdad en otro terminal, asi que el
+            // carrito de ESTE terminal se quedaba con ella "zombie" y el
+            // siguiente autoguardado (disparado sin mas por renderCart tras
+            // el repintado) la volvia a mandar al servidor, resucitandola --
+            // daba igual cuantas veces se borrara. Hace falta saber que
+            // tenia el ticket ANTES de aceptar este remoto como autoritativo
+            // para distinguir "esto lo borraron de verdad" de "esto lo acabo
+            // de añadir yo y aun no se ha guardado" (ver mas abajo).
+            merged.__prevItemsBeforeRemoteMerge = prevItems;
           }
         }
       }
@@ -51293,10 +51340,18 @@ async function openProductAddonsManagerModal(product) {
           saveTimer = setTimeout(async () => {
             const nombre = input.value.trim();
             if (!nombre) return;
-            const precio = Math.max(
-              0,
-              Number(String(priceInput.value).replace(",", ".")) || 0,
-            );
+            // Real de cliente (Sergi, 2026-10-07): el precio solo se
+            // redondeaba a centimos al perder el foco (eurInputValue), pero
+            // el guardado se dispara antes, 500ms despues de cada tecla --
+            // se podia guardar un precio con mas decimales de los que
+            // maneja la moneda (p.ej. 0,1234).
+            const precio =
+              Math.round(
+                Math.max(
+                  0,
+                  Number(String(priceInput.value).replace(",", ".")) || 0,
+                ) * 100,
+              ) / 100;
             try {
               await apiSaveProductAddon({
                 id: addon.id,
@@ -51315,10 +51370,13 @@ async function openProductAddonsManagerModal(product) {
         input.addEventListener("input", scheduleSave);
         priceInput.addEventListener("input", scheduleSave);
         priceInput.addEventListener("blur", () => {
-          const precio = Math.max(
-            0,
-            Number(String(priceInput.value).replace(",", ".")) || 0,
-          );
+          const precio =
+            Math.round(
+              Math.max(
+                0,
+                Number(String(priceInput.value).replace(",", ".")) || 0,
+              ) * 100,
+            ) / 100;
           priceInput.value = eurInputValue(precio);
         });
 
@@ -51346,7 +51404,7 @@ async function openProductAddonsManagerModal(product) {
     const btnAdd = document.createElement("button");
     btnAdd.type = "button";
     btnAdd.className = "pack-btn pack-btn-bulk";
-    btnAdd.textContent = "+ Añadir añadido";
+    btnAdd.textContent = "+ Nuevo añadido";
     btnAdd.onclick = async () => {
       try {
         await apiSaveProductAddon({

@@ -8388,6 +8388,18 @@ body.theme-dark .opt-loading-banner {
 .pack-modal-overlay {
   z-index: 2100000;
 }
+/* Real de cliente (Sergi, 2026-10-07): el teclado QWERTY (texto) tenia el
+   MISMO z-index que .pack-modal-overlay (ambos 2100000, ver la declaracion
+   original de .qwerty-overlay) -- a igual z-index gana quien se pinta mas
+   tarde en el DOM, y un modal como el de "Añadidos" se crea y se añade al
+   body DESPUES de que #qwertyOverlay ya exista de forma estatica en
+   index.html, asi que el teclado quedaba tapado detras y no se podia
+   escribir. Por encima incluso del numpad para que nunca quede detras de
+   ningun modal, sea cual sea el orden en que se abran.
+*/
+.qwerty-overlay {
+  z-index: 2100002;
+}
 
 /* ===== Tiles de oferta / pack ===== */
 .product-tile.is-offer .product-img-wrapper {

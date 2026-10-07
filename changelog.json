@@ -13,7 +13,11 @@
         "NUEVO (Opciones -> Productos): gestión de alérgenos por producto. Los 14 alérgenos oficiales de la UE ya vienen puestos, se pueden renombrar o añadir otros propios, y se marca fácilmente qué productos llevan cada uno. Se destaca en la tarjeta del producto, en el carrito y en la comanda impresa a cocina.",
         "NUEVO (Modo Mesas): se puede retener un producto del carrito (p.ej. el postre) para que no se mande a cocina todavía, y \"lanzarlo\" cuando el cliente esté listo -- no se envía solo con el resto del pedido mientras esté retenido.",
         "MEJORA (Modo Mesas): el plano visual de mesas ahora pinta un anillo de color alrededor de la mesa según qué camarero la está llevando, además del color de estado que ya tenía (libre/ocupada/cuenta/reservada) -- de un vistazo se ve quién atiende cada mesa.",
-        "CORRECCIÓN (Modo Mesas): si una mesa libre recibía un pedido nuevo desde la app de camareros mientras la tenías seleccionada, antes se quedaba mostrando el carrito vacío hasta que cambiabas de mesa o abrías el pedido a mano -- ahora se abre sola en cuanto llega."
+        "CORRECCIÓN (Modo Mesas): si una mesa libre recibía un pedido nuevo desde la app de camareros mientras la tenías seleccionada, antes se quedaba mostrando el carrito vacío hasta que cambiabas de mesa o abrías el pedido a mano -- ahora se abre sola en cuanto llega.",
+        "CORRECCIÓN IMPORTANTE: si un aparcado/pedido se tenía abierto a la vez en 2 terminales, borrar un producto podía \"resucitar\" solo, una y otra vez, sin importar cuántas veces se quitara -- ya no vuelve a aparecer un producto borrado de verdad en otro terminal.",
+        "CORRECCIÓN: el teclado en pantalla no se veía al escribir el nombre o el precio de un añadido de producto -- quedaba tapado detrás del propio cuadro.",
+        "CORRECCIÓN: el precio de un añadido de producto podía guardarse con más decimales de los que maneja la moneda (ej. 0,1234 €) -- ahora siempre se redondea a céntimos.",
+        "Pequeño cambio de texto: el botón \"Añadir añadido\" ahora dice \"Nuevo añadido\"."
       ]
     },
     {
