@@ -19754,6 +19754,17 @@ const SYNC_ALERT_COOLDOWN_MS = 5 * 60 * 1000;
 const QUEUE_HEALTH_CHECK_EVERY_MS = 60 * 1000;
 const QUEUE_STUCK_MIN_AGE_MIN = 10;
 const QUEUE_STUCK_MIN_ATTEMPTS = 4;
+// Real de cliente (Sergi, 2026-10-07): hasta ahora, un CREATE_FACTURACLIENTE
+// clasificado como fallo de red reintentaba para siempre (queue:error en
+// main.js solo sube el backoff hasta 10 min y se queda ahi, sin limite de
+// intentos ni de tiempo) -- una venta podia quedarse "reintentando en
+// silencio" indefinidamente sin que nadie se enterase mas que por el aviso
+// generico de la barra de estado. Pasado este limite, se da por perdida de
+// verdad (igual que un error de datos) y se avisa con el cuadro de "cobrala
+// a mano cuanto antes" -- mejor eso que confiar en que se arregle sola sin
+// fecha.
+const CREATE_FACTURA_MAX_RETRY_MINUTES = 120;
+const CREATE_FACTURA_MAX_ATTEMPTS = 20;
 
 let __queueHealthLastCheckAt = 0;
 const __syncAlertLastAtByKey = new Map();
@@ -55688,15 +55699,35 @@ async function syncQueueNow() {
             // 6) Marcar como done
             await window.TPV_QUEUE.done(item.id, { resp });
           } catch (e) {
-            // ✅ Igual que CREATE_TPVCAJA_OPEN: si es un fallo de red, se
-            // reintenta más tarde (queda "pending" con backoff). Si NO es de
-            // red (payload inválido, respuesta sin idfactura, error de
-            // FacturaScripts...) reintentar para siempre nunca lo va a
-            // arreglar solo -- eso es justo lo que dejaba tickets "OFF-..."
-            // colgados sin cobrar de verdad y sin avisar a nadie. Se marca
-            // como perdido y se avisa con un aviso que no se puede pasar
-            // por alto, para que se cobre a mano cuanto antes.
-            if (isNetworkError(e) || isProbablyNetworkError(e)) {
+            // Real de cliente (Sergi, 2026-10-07): esto solo miraba
+            // isNetworkError/isProbablyNetworkError, mas estricto que su
+            // hermano COMPLETE_FACTURACLIENTE (unas lineas mas abajo), que ya
+            // usa isRetryableQueueSyncError -- esta incluye ademas el mensaje
+            // generico de FacturaScripts para CUALQUIER excepcion no
+            // controlada al guardar, confirmado real (asador_el_gallo,
+            // 2026-08-31) que cubre tanto colisiones de numero de factura
+            // duplicado como deadlocks de MySQL con varios terminales a la
+            // vez -- ambos transitorios, y con el chequeo estricto de antes
+            // se habrian dado por perdidos de inmediato en vez de reintentar.
+            const isRetryable = isRetryableQueueSyncError(e);
+            const ageMinutes = minutesSinceIso(item?.createdAt);
+            const attemptsSoFar = Number(item?.attempts || 0);
+            const exhaustedRetries =
+              ageMinutes >= CREATE_FACTURA_MAX_RETRY_MINUTES ||
+              attemptsSoFar >= CREATE_FACTURA_MAX_ATTEMPTS;
+
+            // Si es un fallo retryable (de red, o uno de los de FacturaScripts
+            // de arriba) se reintenta más tarde (queda "pending" con
+            // backoff) -- PERO solo hasta un límite de tiempo/intentos. Antes
+            // de esto, nada paraba un fallo de red real de reintentar para
+            // siempre en silencio (el backoff en main.js sube hasta 10 min y
+            // se queda ahi, sin tope), dejando una venta "reintentando" sin
+            // fecha y sin que nadie se enterase mas que por el aviso generico
+            // de la barra de estado. Pasado el limite, se trata igual que un
+            // error de datos real: se da por perdida y se avisa con un
+            // cuadro que no se puede pasar por alto, para que se cobre a
+            // mano cuanto antes en vez de esperar indefinidamente.
+            if (isRetryable && !exhaustedRetries) {
               await window.TPV_QUEUE.error(item.id, e?.message || String(e));
             } else {
               await window.TPV_QUEUE.done(item.id, {
@@ -55706,9 +55737,12 @@ async function syncQueueNow() {
               });
 
               const total = Number(item?.payload?.total || 0);
+              const motivo = exhaustedRetries
+                ? `Lleva más de ${Math.floor(ageMinutes)} min (o ${attemptsSoFar} intentos) reintentando sin éxito. Último motivo: ${String(e?.message || e).slice(0, 140)}`
+                : String(e?.message || e).slice(0, 140);
               notifyWorkerSyncIssue(
                 `queue-dropped-${String(item.id)}`,
-                `No se pudo sincronizar una venta en cola de ${eurES(total)}. Motivo: ${String(e?.message || e).slice(0, 140)}. Cóbrala a mano cuanto antes.`,
+                `No se pudo sincronizar una venta en cola de ${eurES(total)}. Motivo: ${motivo}. Cóbrala a mano cuanto antes.`,
                 { title: "Sincronizacion", modal: true, cooldownMs: 60 * 60 * 1000 },
               );
             }

@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "CORRECCIÓN: una venta pendiente de sincronizar (sin internet momentáneamente) podía quedarse reintentando para siempre en silencio si el motivo real era otro tipo de fallo -- ahora, pasado un tiempo/número de intentos razonable, se avisa de forma clara para poder cobrarla a mano en vez de esperar indefinidamente."
+      ]
     },
     {
       "version": "0.2.41",

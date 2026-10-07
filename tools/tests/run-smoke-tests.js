@@ -9416,6 +9416,24 @@ mustContain(
   "Pedido de Sergi (con sorna, de parte de su jefe): \"+ Añadir añadido\" sonaba redundante -- renombrado a \"+ Nuevo añadido\"",
 );
 
+console.log("\n[SMOKE] Checking 2026-10-07 venta en cola: clasificacion de reintento + limite para no quedarse colgada para siempre\n");
+
+mustContain(
+  renderer,
+  "const CREATE_FACTURA_MAX_RETRY_MINUTES = 120;",
+  "Real de cliente (Sergi, 2026-10-07): el backoff de la cola offline (queue:error en main.js) sube hasta 10 min y se queda ahi para siempre, sin limite de intentos ni de tiempo -- una venta clasificada como fallo de red podia quedar reintentando en silencio indefinidamente, sin que nadie se enterase mas que por el aviso generico de la barra de estado. Pasado este limite (2h o 20 intentos), se da por perdida de verdad y se avisa con el cuadro de 'cobrala a mano cuanto antes' en vez de esperar sin fecha",
+);
+mustContain(
+  renderer,
+  "const isRetryable = isRetryableQueueSyncError(e);",
+  "El catch de CREATE_FACTURACLIENTE solo miraba isNetworkError/isProbablyNetworkError, mas estricto que su hermano COMPLETE_FACTURACLIENTE (que ya usaba isRetryableQueueSyncError, la lista mas amplia que ademas cubre el mensaje generico de FacturaScripts para CUALQUIER excepcion no controlada -- confirmado real, asador_el_gallo 2026-08-31, duplicados de numero de factura y deadlocks de MySQL con varios terminales a la vez, ambos transitorios). Con el chequeo estricto de antes, ese mensaje generico se habria dado por perdido de inmediato en vez de reintentar -- verificado en vivo: con el fix, ese mensaje exacto SI se reintenta, un error de red real sigue reintentando (sin regresion), y un error de verdad permanente sigue dandose por perdido al momento (sin regresion)",
+);
+mustContain(
+  renderer,
+  "attemptsSoFar >= CREATE_FACTURA_MAX_ATTEMPTS;",
+  "Verificado en vivo: un intento fresco sigue reintentando, un item con 25 intentos o uno creado hace 150 minutos activa el limite y se da por perdido aunque el error en si sea retryable",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
