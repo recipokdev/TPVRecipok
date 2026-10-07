@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.41",
+      "date": "2026-10-07",
+      "title": "Release 0.2.41",
       "changes": [
         "MEJORA (Modo Mesas): los productos del carrito que ya se mandaron a la impresora de cocina ahora se ven atenuados (en gris), para distinguirlos de un vistazo de los que todavía están pendientes de enviar -- igual que ya hacía la app de camareros en su propia pantalla.",
         "MEJORA (Modo Mesas): el plano visual de mesas ahora avisa con un pequeño icono en la propia mesa si tiene productos sin enviar a cocina todavía, sin tener que entrar a esa mesa para enterarte.",
