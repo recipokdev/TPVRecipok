@@ -1,8 +1,12 @@
 {
   "appId": "com.recipok.tpvrecipok",
   "productName": "TPV Recipok",
-
   "publish": [
+    {
+      "provider": "generic",
+      "url": "https://app.recipok.com/tpv-updates/stable/",
+      "channel": "latest"
+    },
     {
       "provider": "github",
       "owner": "recipokdev",
@@ -10,14 +14,15 @@
       "releaseType": "release"
     }
   ],
-
   "win": {
     "icon": "assets/icon.ico",
     "executableName": "TPV-Recipok"
   },
-
   "linux": {
-    "target": ["deb", "AppImage"],
+    "target": [
+      "deb",
+      "AppImage"
+    ],
     "icon": "assets/icon.png",
     "category": "Office",
     "extraResources": [
@@ -31,14 +36,18 @@
       }
     ]
   },
-
   "nsis": {
     "guid": "7b1e8c7d-0d69-4d3a-8e83-6b0c3d0b2c6e",
     "shortcutName": "TPV Recipok"
   },
-
   "extraResources": [
-    { "from": "build/channel-stable.json", "to": "channel.json" },
-    { "from": "assets/open-drawer.exe", "to": "assets/open-drawer.exe" }
+    {
+      "from": "build/channel-stable.json",
+      "to": "channel.json"
+    },
+    {
+      "from": "assets/open-drawer.exe",
+      "to": "assets/open-drawer.exe"
+    }
   ]
 }

@@ -77,8 +77,7 @@ if (IS_POST_UPDATE_SPLASH) {
 }
 
 const DEFAULT_UPDATE_POLICY_URLS = {
-  stable:
-    "https://raw.githubusercontent.com/recipokdev/TPVRecipok/main/build/update-policy.stable.json",
+  stable: "https://app.recipok.com/tpv-updates/stable/update-policy.stable.json",
   beta: "https://raw.githubusercontent.com/recipokdev/TPVRecipok/main/build/update-policy.beta.json",
 };
 
@@ -86,6 +85,20 @@ const GITHUB_UPDATE_REPOS = {
   stable: "recipokdev/TPVRecipok",
   beta: "recipokdev/TPVRecipok-Beta",
 };
+
+// Cabecera que identifica la instalacion ante el feed de actualizaciones del
+// servidor (app.recipok.com/tpv-updates). El slug sale de la URL base de la
+// empresa, igual que en logUpdateEventRemote(); sin slug no se manda nada y el
+// servidor decide (hoy solo lo registra). Nunca lanza.
+function applyUpdateFeedHeaders() {
+  try {
+    const { baseUrl } = getCompanyFromCfgForMain();
+    const slug = getSlugFromBaseUrl(baseUrl);
+    autoUpdater.requestHeaders = slug ? { "X-TPV-Slug": slug } : {};
+  } catch {
+    autoUpdater.requestHeaders = {};
+  }
+}
 
 async function triggerUpdateCheckIfSafe(reason = "manual") {
   // 1 check/min para evitar martillazos
@@ -662,6 +675,7 @@ async function runUpdateCheckOncePreCash() {
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
     autoUpdater.allowPrerelease = channel === "beta";
+    applyUpdateFeedHeaders();
     autoUpdater.allowDowngrade = shouldAllowDowngrade(policy, currentVersion);
 
     return await new Promise((resolve) => {
@@ -795,6 +809,7 @@ async function runManualUpdateAvailabilityCheck() {
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
     autoUpdater.allowPrerelease = channel === "beta";
+    applyUpdateFeedHeaders();
     autoUpdater.allowDowngrade = shouldAllowDowngrade(policy, currentVersion);
 
     return await new Promise((resolve) => {
@@ -978,6 +993,7 @@ async function runBackgroundPrefetchDownload() {
 
     const channel = readChannel();
     autoUpdater.allowPrerelease = channel === "beta";
+    applyUpdateFeedHeaders();
     try {
       delete autoUpdater.channel;
     } catch {}
