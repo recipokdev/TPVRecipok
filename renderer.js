@@ -39578,6 +39578,23 @@ async function refreshRemoteParkedReservationsOnlyImpl() {
     // repinta aqui mismo, sin esperar a que el cajero cambie de mesa o
     // cobre para enterarse.
     mergeRemoteChangesIntoLoadedParkedTicketIfAny();
+    // Real de cliente 2026-10-07 (Sergi): lo de arriba solo cubre una mesa
+    // que YA tenia un ticket cargado -- si la mesa seleccionada estaba
+    // LIBRE (nada cargado, currentParkedTicketIndex null) y la app de
+    // camareros crea un pedido nuevo para ella, nada lo detectaba hasta que
+    // el cajero cambiaba de mesa o abria el ticket a mano. Reutiliza la
+    // misma funcion que ya resuelve "que mostrar para la mesa seleccionada"
+    // al cambiar de mesa -- ya sabe priorizar un ticket real nuevo frente a
+    // un borrador vacio, y respeta un borrador con contenido real sin
+    // guardar todavia. Acotado a "nada cargado" para no re-disparar esto en
+    // cada poll de 10s sobre una mesa que ya tiene su ticket resuelto.
+    if (
+      MESAS_INLINE_ACTIVE &&
+      MESAS_INLINE_VIEW === "transacciones" &&
+      currentParkedTicketIndex == null
+    ) {
+      syncTpvCartWithSelectedMesa();
+    }
     rebuildRemoteReservedByProductMap();
     updateRenderedProductStocks();
     __parkedSyncLastOkAt = Date.now();

@@ -9364,6 +9364,19 @@ mustContain(
   "El panel de cambio rapido de mesas esta oculto por CSS en la vista transacciones (solo vive en Mapa/Diseño) -- el test tiene que cambiar de pestaña antes de poder probarlo, otro hallazgo real al des-enmascarar estos asserts",
 );
 
+console.log("\n[SMOKE] Checking 2026-10-07 Modo Mesas: abrir sola una mesa libre con pedido nuevo de la app de camareros\n");
+
+mustContain(
+  renderer,
+  "Real de cliente 2026-10-07 (Sergi): lo de arriba solo cubre una mesa",
+  "mergeRemoteChangesIntoLoadedParkedTicketIfAny solo cubre una mesa que YA tenia un ticket cargado -- si la mesa seleccionada estaba LIBRE (nada cargado) y la app de camareros creaba un pedido nuevo para ella, no se detectaba hasta cambiar de mesa o abrir el ticket a mano. Reutiliza syncTpvCartWithSelectedMesa (la misma funcion que ya resuelve esto al cambiar de mesa) en vez de logica nueva -- acotado a 'nada cargado todavia' para no re-dispararlo en cada poll de 10s sobre una mesa ya resuelta. Verificado en vivo contra demo real: una mesa libre seleccionada se abre sola con el pedido nuevo tras un solo ciclo de refreshRemoteParkedReservationsOnlyImpl(), y el guard nunca se dispara en Modo TPV normal",
+);
+mustContain(
+  renderer,
+  "syncTpvCartWithSelectedMesa();",
+  "Guarda exacta: solo cuando estamos en Mesas transacciones Y nada esta cargado todavia -- evita re-disparar esto en cada poll de 10s sobre una mesa que ya tiene su ticket resuelto",
+);
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
