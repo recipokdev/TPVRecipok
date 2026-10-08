@@ -45,6 +45,7 @@ const mainPath = ensureFileExists("main.js");
 const preloadPath = ensureFileExists("preload.js");
 const ticketPrintPath = ensureFileExists("ticket_print.html");
 const facturaPrintPath = ensureFileExists("factura_print.html");
+const comandaPrintPath = ensureFileExists("comanda_print.html");
 const mesasJsPath = ensureFileExists("mesas/mesas.js");
 const customerSelectorPath = ensureFileExists(
   "js/tpv/ui/customer_selector/customer_selector.js",
@@ -60,6 +61,7 @@ if (
   !preloadPath ||
   !ticketPrintPath ||
   !facturaPrintPath ||
+  !comandaPrintPath ||
   !mesasJsPath ||
   !customerSelectorPath ||
   !scaleUiPath ||
@@ -75,6 +77,7 @@ const main = fs.readFileSync(mainPath, "utf8");
 const preload = fs.readFileSync(preloadPath, "utf8");
 const ticketPrint = fs.readFileSync(ticketPrintPath, "utf8");
 const facturaPrint = fs.readFileSync(facturaPrintPath, "utf8");
+const comandaPrint = fs.readFileSync(comandaPrintPath, "utf8");
 const customerSelector = fs.readFileSync(customerSelectorPath, "utf8");
 const mesasJs = fs.readFileSync(mesasJsPath, "utf8");
 const scaleUi = fs.readFileSync(scaleUiPath, "utf8");
@@ -9450,6 +9453,35 @@ mustContain(
   renderer,
   "const linkByDeviceId = new Map(",
   "Correlaciona cada vinculo con su tablet por deviceId (paired_devices.id), nunca por deviceInfo (texto libre, no fiable) -- verificado en vivo contra demo real: la fila de la tablet muestra 'Agente vinculado: X', el boton 'Desvincular agente' solo aparece si hay uno vinculado, y al pulsarlo la fila pasa a 'Sin agente vinculado' sin que la tablet desaparezca de la lista",
+);
+
+console.log("\n[SMOKE] Checking 2026-10-08 devolver lineas a cocina (app de camareros)\n");
+
+mustContain(
+  renderer,
+  "function getComandaReturnedLinesForTicket(ticket, sourceLines = cart) {",
+  "Punto 2 del jefe de Sergi: devolver una linea ya enviada a cocina. Hasta ahora, si una cantidad YA impresa se reducia, getComandaDeltaLinesForTicket lo olvidaba en silencio (clamp a 0) y commitComandaPrintedState sobreescribia el registro como si nunca hubiera pasado -- esta es la mitad que faltaba, el calculo al reves (cuanto bajo lo impreso respecto a lo actual). El nombre/ref/id de la linea devuelta sale de la propia clave (buildComandaLineKey ya es {id,name,ref} en JSON) sin tener que buscar la linea original, que puede ya ni existir si se borro del todo",
+);
+mustContain(
+  renderer,
+  "isReturn: true,",
+  "Devuelta a cocina con un aviso imposible de confundir con un pedido nuevo en una impresora termica monocromo -- banner invertido (negro sobre blanco) + titulo 'DEVOLUCION' + tag '⚠ QUITAR' por linea, mismo patron que el recuadro de alergenos. Se imprime ANTES que cualquier pedido nuevo en el mismo ciclo (quitar es mas urgente que añadir) y usa el mismo tratamiento de fallo (se reintenta entero el siguiente ciclo si algo falla)",
+);
+mustContain(
+  renderer,
+  "getComandaReturnedLinesForTicket(t, t?.items || []).length > 0),",
+  "El filtro de candidatos a auto-imprimir ahora tambien entra si SOLO hay una devolucion (sin ningun pedido nuevo) -- antes, un ticket con solo una reduccion se saltaba por completo (getComandaDeltaLinesForTicket solo ve adiciones). Verificado en aislado: una linea reducida de 3 a 1 se detecta como devolucion de 2, una linea borrada del todo se imprime como devolucion con isReturn:true, el registro de impreso baja correctamente tras el commit, y un segundo ciclo no vuelve a imprimir la misma devolucion",
+);
+
+mustContain(
+  comandaPrint,
+  "comanda-return-banner",
+  "Aviso de devolucion con fondo invertido (negro sobre blanco), no solo negrita -- en una impresora termica monocromo eso no basta (mismo motivo que ya se aplico a los alergenos). Verificado en vivo: printComandaWithContext con isReturn:true completa sin lanzar excepcion (mismo nivel de verificacion indirecta ya usado este mes para alergenos, dado que window.TPV_PRINT.printTicket no se puede interceptar por contextIsolation)",
+);
+mustContain(
+  comandaPrint,
+  'id="comandaReturnBanner"',
+  "El banner y el titulo ('DEVOLUCIÓN' en vez de 'COMANDA') se activan desde printComandaWithContext solo cuando isReturn=true -- una comanda normal no se ve afectada en nada",
 );
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");

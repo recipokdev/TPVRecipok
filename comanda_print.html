@@ -102,6 +102,32 @@
         display: inline-block;
       }
 
+      /* Devolver a cocina (app de camareros, 2026-10-08): tiene que ser
+         imposible de confundir con un pedido nuevo en una impresora
+         termica monocromo -- fondo invertido (negro sobre blanco), no solo
+         negrita, igual que ya se hizo con los alergenos por el mismo
+         motivo. */
+      .comanda-return-banner {
+        text-align: center;
+        font-size: 16px;
+        font-weight: 900;
+        letter-spacing: 0.5px;
+        background: #000;
+        color: #fff;
+        padding: 4px 2px;
+        margin: 4px 0;
+      }
+
+      .comanda-desc-return-tag {
+        font-weight: 900;
+        font-size: 13px;
+        margin-top: 1px;
+        background: #000;
+        color: #fff;
+        padding: 1px 3px;
+        display: inline-block;
+      }
+
       .obs-title {
         font-size: 11px;
         font-weight: 700;
@@ -116,7 +142,14 @@
   </head>
   <body>
     <div id="comanda">
-      <div class="title">COMANDA</div>
+      <div class="title" id="comandaTitle">COMANDA</div>
+      <div
+        class="comanda-return-banner"
+        id="comandaReturnBanner"
+        style="display: none"
+      >
+        ⚠ DEVOLVER A COCINA ⚠
+      </div>
       <div class="mesa-big" id="comandaMesaBig">MESA</div>
 
       <div class="sep"></div>

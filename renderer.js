@@ -43695,6 +43695,54 @@ function getComandaDeltaLinesForTicket(ticket, sourceLines = cart) {
   return out;
 }
 
+// Devolver a cocina (app de camareros, 2026-10-08): hasta ahora, si una
+// cantidad YA impresa se reducia o la linea se borraba, getComandaDeltaLinesForTicket
+// de arriba simplemente lo "olvidaba" (clamp a 0 en su calculo de deltas) sin
+// avisar a nadie -- commitComandaPrintedState sobreescribia el registro de
+// impreso con la cantidad nueva, mas baja, como si nunca hubiera pasado nada.
+// Esta es la mitad que faltaba: mismo calculo pero al reves (cuanto bajo lo
+// impreso respecto a lo que hay ahora), para poder avisar a cocina de
+// verdad en vez de perder el cambio en silencio. Hay que llamarla ANTES de
+// commitComandaPrintedState (que sobreescribe el registro que esta funcion
+// necesita leer).
+//
+// El nombre/referencia/id de cada linea devuelta sale directamente de la
+// propia clave (buildComandaLineKey ya es exactamente {id, name, ref} en
+// JSON) -- no hace falta buscar la linea original, que puede ya ni existir
+// en el carrito si se borro del todo.
+function getComandaReturnedLinesForTicket(ticket, sourceLines = cart) {
+  const baseLines = getComandaPrintableLines(sourceLines || []);
+  const state = normalizeTicketComandaState(ticket?.comandaState);
+  const printedByKey = state?.printedQtyByLineKey || {};
+  const currentMap = buildComandaQtyMap(baseLines);
+
+  const out = [];
+  Object.keys(printedByKey).forEach((key) => {
+    const alreadyPrinted = Math.max(0, Number(printedByKey[key] || 0) || 0);
+    if (alreadyPrinted <= 0) return;
+
+    const currentQty = Math.max(0, Number(currentMap.get(key) || 0) || 0);
+    const returned = Math.max(0, alreadyPrinted - currentQty);
+    if (returned <= 0) return;
+
+    let parsed = null;
+    try {
+      parsed = JSON.parse(key);
+    } catch {
+      parsed = null;
+    }
+
+    out.push({
+      baseProductId: parsed?.id ?? null,
+      name: String(parsed?.name || "Producto"),
+      referencia: String(parsed?.ref || ""),
+      qty: Math.round(returned * 10000) / 10000,
+    });
+  });
+
+  return out;
+}
+
 function getNextComandaPartNumber(ticket) {
   const state = normalizeTicketComandaState(ticket?.comandaState);
   return Math.max(1, Number(state?.seq || 0) + 1);
@@ -43878,6 +43926,10 @@ async function printComandaWithContext({
   printerName,
   successToastMessage = "Comanda enviada a impresora.",
   errorPrefix = "No se pudo imprimir la comanda:",
+  // Devolver a cocina (app de camareros, 2026-10-08): mismo impreso de
+  // siempre, pero con un aviso imposible de confundir con un pedido nuevo
+  // en una impresora termica monocromo -- ver comanda_print.html.
+  isReturn = false,
 }) {
   let templateHtml = "";
   try {
@@ -43905,6 +43957,11 @@ async function printComandaWithContext({
     String(currentAgent?.name || currentAgent?.nick || "-").trim() || "-";
 
   const doc = new DOMParser().parseFromString(templateHtml, "text/html");
+  if (isReturn) {
+    setText(doc, "comandaTitle", "DEVOLUCIÓN");
+    const banner = doc.getElementById("comandaReturnBanner");
+    if (banner) banner.style.display = "block";
+  }
   setText(doc, "comandaMesaBig", mesaBig);
   setText(doc, "comandaMesa", `${room} · ${table}`);
   setText(doc, "comandaAgent", agent);
@@ -43947,6 +44004,13 @@ async function printComandaWithContext({
 
       row.appendChild(qtyEl);
       row.appendChild(descEl);
+
+      if (isReturn) {
+        const returnTagEl = doc.createElement("div");
+        returnTagEl.className = "comanda-desc-return-tag";
+        returnTagEl.textContent = "⚠ QUITAR";
+        descEl.appendChild(returnTagEl);
+      }
 
       if (addonsTxt) {
         const addonsEl = doc.createElement("div");
@@ -44066,7 +44130,8 @@ async function maybeAutoPrintComandaFromRemoteSync() {
       t &&
       !t.paid &&
       isMesasModeTicket(t) &&
-      getComandaDeltaLinesForTicket(t, t?.items || []).length > 0,
+      (getComandaDeltaLinesForTicket(t, t?.items || []).length > 0 ||
+        getComandaReturnedLinesForTicket(t, t?.items || []).length > 0),
   );
   if (!candidates.length) return;
 
@@ -44081,9 +44146,15 @@ async function maybeAutoPrintComandaFromRemoteSync() {
         // Delta recalculado sobre el ticket en memoria (ya viene fresco del
         // sync que acaba de terminar justo antes de llamar a esta funcion;
         // ver aviso de alcance arriba sobre por que no hay revalidacion
-        // adicional contra el remoto aqui).
+        // adicional contra el remoto aqui). returnedLines PRIMERO, antes de
+        // tocar nada -- commitComandaPrintedState (al final) sobreescribe el
+        // registro que ambos calculos necesitan leer.
         const lines = getComandaDeltaLinesForTicket(ticket, ticket?.items || []);
-        if (!lines.length) continue;
+        const returnedLines = getComandaReturnedLinesForTicket(
+          ticket,
+          ticket?.items || [],
+        );
+        if (!lines.length && !returnedLines.length) continue;
 
         const printerName = getConfiguredComandaPrinterForPrint();
         if (!printerName) {
@@ -44102,27 +44173,60 @@ async function maybeAutoPrintComandaFromRemoteSync() {
         const obsText = String(
           splitObsInfo?.cleanObs || ticket?.obs || "",
         ).trim();
-        const partNumber = getNextComandaPartNumber(ticket);
-        const res = await printComandaWithContext({
-          scope,
-          lines,
-          obsText,
-          partNumber,
-          printerName,
-          successToastMessage:
-            "Comanda enviada automáticamente (pedido desde app de camareros).",
-          errorPrefix: "No se pudo imprimir la comanda automática:",
-        });
 
-        if (!res?.ok) {
-          const isNewFailure = !ticket.comandaAutoPrintFailedAt;
-          const errorMsg =
-            res?.error || "No se pudo imprimir la comanda automática.";
-          ticket.comandaAutoPrintFailedAt = new Date();
-          ticket.comandaAutoPrintFailedError = errorMsg;
-          await persistComandaAutoPrintStateWithoutResync(ticket);
-          if (isNewFailure) toast(errorMsg, "err", "Comandas");
-          continue;
+        // Devolver a cocina (app de camareros, 2026-10-08): aviso aparte,
+        // antes del pedido nuevo (si lo hay) -- "quita esto" es mas urgente
+        // que "añade esto". Mismo fallo = mismo tratamiento que el pedido
+        // normal (se reintenta entero el siguiente ciclo, ver nota de
+        // arriba sobre por que no se separa el commit en dos).
+        if (returnedLines.length) {
+          const returnRes = await printComandaWithContext({
+            scope,
+            lines: returnedLines,
+            obsText,
+            partNumber: null,
+            printerName,
+            isReturn: true,
+            successToastMessage:
+              "Devolución enviada a cocina (pedido desde app de camareros).",
+            errorPrefix: "No se pudo imprimir la devolución a cocina:",
+          });
+
+          if (!returnRes?.ok) {
+            const isNewFailure = !ticket.comandaAutoPrintFailedAt;
+            const errorMsg =
+              returnRes?.error || "No se pudo imprimir la devolución a cocina.";
+            ticket.comandaAutoPrintFailedAt = new Date();
+            ticket.comandaAutoPrintFailedError = errorMsg;
+            await persistComandaAutoPrintStateWithoutResync(ticket);
+            if (isNewFailure) toast(errorMsg, "err", "Comandas");
+            continue;
+          }
+        }
+
+        if (lines.length) {
+          const partNumber = getNextComandaPartNumber(ticket);
+          const res = await printComandaWithContext({
+            scope,
+            lines,
+            obsText,
+            partNumber,
+            printerName,
+            successToastMessage:
+              "Comanda enviada automáticamente (pedido desde app de camareros).",
+            errorPrefix: "No se pudo imprimir la comanda automática:",
+          });
+
+          if (!res?.ok) {
+            const isNewFailure = !ticket.comandaAutoPrintFailedAt;
+            const errorMsg =
+              res?.error || "No se pudo imprimir la comanda automática.";
+            ticket.comandaAutoPrintFailedAt = new Date();
+            ticket.comandaAutoPrintFailedError = errorMsg;
+            await persistComandaAutoPrintStateWithoutResync(ticket);
+            if (isNewFailure) toast(errorMsg, "err", "Comandas");
+            continue;
+          }
         }
 
         commitComandaPrintedState(ticket, ticket?.items || []);
