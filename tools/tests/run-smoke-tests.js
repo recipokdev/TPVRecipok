@@ -9588,6 +9588,26 @@ console.log("\n[SMOKE] Checking 2026-10-08 Modo Mesas: no resucitar el enlace de
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-08 Modo Mesas: primera carga del plano en un perfil nuevo\n");
+
+{
+  const idx = renderer.indexOf("function applyMesasLayoutFromRemoteForInline(");
+  const endIdx = idx >= 0 ? renderer.indexOf("const remoteRaw = JSON.stringify(merged);", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("const hasAnyLocalRoomsYet =") &&
+    scoped.includes("if (!force && hasAnyLocalRoomsYet && hasRecentMesasLocalEdit()) return false;")
+  ) {
+    ok(
+      "Real de cliente (Sergi, 2026-10-08 -- solo visto en perfiles nuevos sin nada en cache, nunca en clientes reales ya establecidos): el guardian hasRecentMesasLocalEdit (pensado para no pisar una edicion en curso con una lectura remota atrasada) tambien bloqueaba la PRIMERA carga real del plano en un perfil nuevo si el cajero tocaba algo (seleccionar mesa, añadir un producto) en los primeros 15s tras entrar en Modo Mesas -- los desplegables de Sala/Mesa se quedaban vacios hasta cambiar de pestaña. Ahora ese guardian no aplica si no hay ni una sola sala en local todavia (nada que proteger). Verificado en aislado: con una 'edicion reciente' simulada y cache vacia, la primera carga real SI se aplica (antes no); con salas ya en cache, una edicion reciente SIGUE bloqueando una lectura atrasada -- sin regresion",
+    );
+  } else {
+    fail(
+      "applyMesasLayoutFromRemoteForInline ya no distingue un perfil nuevo (sin salas en cache) del guardian de edicion reciente -- revisar el fix de Sergi 2026-10-08",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking 2026-10-08 diagnostico: mesa no se libera tras cobrar (Lumi)\n");
 
 mustContain(

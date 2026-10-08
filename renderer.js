@@ -9912,7 +9912,20 @@ function applyMesasLayoutFromRemoteForInline(remoteLayout, force = false) {
   if (isTutorialGlobalPauseActive()) return false;
   if (isAnyVirtualKeyboardOverlayOpen()) return false;
   if (isMesasDesignViewActive()) return false;
-  if (!force && hasRecentMesasLocalEdit()) return false;
+
+  const localState = loadMesasTablesStateForInline() || {};
+  // Real de cliente (Sergi, 2026-10-08 -- solo visto en perfiles nuevos sin
+  // nada en cache todavia, nunca en clientes reales ya establecidos): el
+  // guardian de abajo (pensado para no pisar una edicion en curso con una
+  // lectura remota atrasada) tambien bloqueaba la PRIMERA carga real del
+  // plano si el cajero tocaba algo (seleccionar mesa, añadir un producto)
+  // en los primeros 15s tras entrar en Modo Mesas -- los desplegables de
+  // Sala/Mesa se quedaban vacios hasta cambiar de pestaña (que por el
+  // tiempo ya transcurrido dejaba de chocar con el guardian). No hay nada
+  // que proteger todavia si no hay ni una sola sala/mesa en local.
+  const hasAnyLocalRoomsYet =
+    Array.isArray(localState?.roomList) && localState.roomList.length > 0;
+  if (!force && hasAnyLocalRoomsYet && hasRecentMesasLocalEdit()) return false;
   if (!remoteLayout || typeof remoteLayout !== "object") return false;
 
   // Si tenemos cambios locales pendientes de sincronizar, evitamos pisarlos
@@ -9926,7 +9939,6 @@ function applyMesasLayoutFromRemoteForInline(remoteLayout, force = false) {
     return false;
   }
 
-  const localState = loadMesasTablesStateForInline() || {};
   const merged = {
     ...remoteLayout,
     tableTicketMap:
