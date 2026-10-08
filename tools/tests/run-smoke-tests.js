@@ -8295,13 +8295,13 @@ mustContain(
 );
 mustContain(
   renderer,
-  '} else if (\r\n      Object.prototype.hasOwnProperty.call(\r\n        localDraftByTableForMerge,\r\n        selectedUid,\r\n      )\r\n    ) {\r\n      const localDraft = Array.isArray(localDraftByTableForMerge[selectedUid])\r\n        ? localDraftByTableForMerge[selectedUid]\r\n        : [];\r\n      merged.draftCartByTable[selectedUid] = localDraft.map((it) => ({\r\n        ...it,\r\n      }));\r\n    } else {\r\n      delete merged.draftCartByTable[selectedUid];\r\n    }',
+  '} else if (\r\n      !localLinkedTicketAlreadyPaid &&\r\n      Object.prototype.hasOwnProperty.call(\r\n        localDraftByTableForMerge,\r\n        selectedUid,\r\n      )\r\n    ) {\r\n      const localDraft = Array.isArray(localDraftByTableForMerge[selectedUid])\r\n        ? localDraftByTableForMerge[selectedUid]\r\n        : [];\r\n      merged.draftCartByTable[selectedUid] = localDraft.map((it) => ({\r\n        ...it,\r\n      }));\r\n    } else {\r\n      delete merged.draftCartByTable[selectedUid];\r\n    }',
   "Falls back to the stored local draft when the live cart doesn't apply (different table/view), and only clears the merged draft entry when neither the live cart nor a stored draft exist for this table",
 );
 mustContain(
   renderer,
-  "const liveCartBelongsToSelectedTable =\r\n      MESAS_INLINE_ACTIVE &&\r\n      MESAS_INLINE_VIEW === \"transacciones\" &&\r\n      Array.isArray(cart) &&\r\n      cart.length > 0;",
-  "New 2026-09-30 fix (feature 'Mesas sin boton Guardar'): the LIVE cart of the table currently being viewed beats even the stored local draft -- reproduced live: a mesas-layout save responding right after adding the first product to a brand-new table (no ticket, no draft yet) silently wiped that product because draftCartByTable had nothing to fall back to; the live cart is now captured into the merge before that can happen",
+  "const liveCartBelongsToSelectedTable =\r\n      !localLinkedTicketAlreadyPaid &&\r\n      MESAS_INLINE_ACTIVE &&\r\n      MESAS_INLINE_VIEW === \"transacciones\" &&\r\n      Array.isArray(cart) &&\r\n      cart.length > 0;",
+  "New 2026-09-30 fix (feature 'Mesas sin boton Guardar'): the LIVE cart of the table currently being viewed beats even the stored local draft -- reproduced live: a mesas-layout save responding right after adding the first product to a brand-new table (no ticket, no draft yet) silently wiped that product because draftCartByTable had nothing to fall back to; the live cart is now captured into the merge before that can happen. Extended 2026-10-08 (Lumi, 2 TPV): the live cart no longer wins either when the previously-linked ticket is already paid -- see localLinkedTicketAlreadyPaid",
 );
 mustContain(
   renderer,
@@ -8634,7 +8634,7 @@ console.log(
 
 mustContain(
   renderer,
-  "const liveCartBelongsToSelectedTable =\r\n      MESAS_INLINE_ACTIVE &&\r\n      MESAS_INLINE_VIEW === \"transacciones\" &&\r\n      Array.isArray(cart) &&\r\n      cart.length > 0;",
+  "const liveCartBelongsToSelectedTable =\r\n      !localLinkedTicketAlreadyPaid &&\r\n      MESAS_INLINE_ACTIVE &&\r\n      MESAS_INLINE_VIEW === \"transacciones\" &&\r\n      Array.isArray(cart) &&\r\n      cart.length > 0;",
   "applyMesasLayoutFromRemoteForInline() now treats the LIVE cart of the table being viewed as more authoritative than the stored draftCartByTable -- reproduced live: a mesas-layout save responding right after adding the very first product to a brand-new table (no ticket, no draft captured yet) silently wiped that product because there was nothing in the stored draft to fall back to. Verified live end-to-end against demo: the item survives, gets created as a real parked ticket, confirmed persisted server-side, and even survives switching to a different table before the 700ms autosave debounce fires (self-heals on return)",
 );
 mustContain(
@@ -9565,6 +9565,25 @@ console.log("\n[SMOKE] Checking 2026-10-08 Modo Mesas: no resucitar el enlace de
   } else {
     fail(
       "applyMesasLayoutFromRemoteForInline ya no protege contra resucitar el enlace de una mesa ya cobrada -- revisar el fix de Lumi 2026-10-08",
+    );
+  }
+
+  // Segundo hueco del mismo bug, encontrado en vivo con 2 TPV reales contra
+  // demo (el primer arreglo, por si solo, no bastaba): el carrito EN VIVO de
+  // este terminal (un resto de antes del cobro) se volcaba igual en
+  // draftCartByTable para esa mesa, y como Mesas no tiene boton Guardar, el
+  // siguiente autoguardado lo aparcaba como un ticket NUEVO -- la mesa
+  // "revivia" con un numero de ticket distinto. Mismo guardian reutilizado.
+  if (
+    scoped.includes("!localLinkedTicketAlreadyPaid &&\n      MESAS_INLINE_ACTIVE") ||
+    scoped.includes("!localLinkedTicketAlreadyPaid &&\r\n      MESAS_INLINE_ACTIVE")
+  ) {
+    ok(
+      "Segundo hueco del mismo bug (verificado con 2 TPV reales contra demo, 2026-10-08): el carrito en vivo de este terminal ya no revive una mesa recien cobrada en otro -- antes se volcaba en draftCartByTable y el autoguardado de Mesas (sin boton Guardar) lo aparcaba como ticket nuevo",
+    );
+  } else {
+    fail(
+      "liveCartBelongsToSelectedTable ya no esta protegido contra resucitar una mesa ya cobrada via el carrito en vivo -- revisar el segundo fix de Lumi 2026-10-08",
     );
   }
 }

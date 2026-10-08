@@ -10,7 +10,7 @@
         "NUEVO (Opciones -> Tablets emparejadas): si una tablet/móvil de la app de camareros tiene un agente vinculado, ahora se ve junto a su nombre, con un botón para desvincularlo a mano -- pensado para el caso de un móvil perdido o reseteado que ya no puede desvincularse solo.",
         "MEJORA (Modo Mesas): si desde la app de camareros se devuelve/quita un producto que ya se había mandado a cocina, ahora se imprime un aviso de devolución bien visible (fondo invertido, título \"DEVOLUCIÓN\") en vez de perderse en silencio como antes.",
         "CORRECCIÓN: en una tarjeta de producto estrecha, el símbolo € del precio podía quedar solo en una segunda línea, separado del número -- ahora el precio siempre se ve entero en una sola línea.",
-        "CORRECCIÓN IMPORTANTE (Modo Mesas, 2+ terminales): si un terminal tenía una mesa seleccionada en pantalla justo cuando otro terminal la cobraba, podía \"revivir\" la mesa como ocupada otra vez poco después, deshaciendo el cobro visualmente -- ya no puede pasar si la venta ya está confirmada como pagada."
+        "CORRECCIÓN IMPORTANTE (Modo Mesas, 2+ terminales): si un terminal tenía una mesa seleccionada en pantalla justo cuando otro terminal la cobraba, podía \"revivir\" la mesa como ocupada otra vez poco después (a veces incluso como un ticket nuevo con el mismo pedido), deshaciendo el cobro visualmente -- ya no puede pasar si la venta ya está confirmada como pagada."
       ]
     },
     {

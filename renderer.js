@@ -10016,7 +10016,19 @@ function applyMesasLayoutFromRemoteForInline(remoteLayout, force = false) {
     // nueva borraba ese producto en silencio -- syncTpvCartWithSelectedMesa
     // (mas abajo) no tenia de donde recuperarlo. El carrito en vivo, si lo
     // hay, gana siempre sobre lo que hubiera guardado antes.
+    // Mismo caso real de Lumi de arriba (localLinkedTicketAlreadyPaid): si el
+    // ticket que este terminal tenia enganchado a esta mesa ya esta pagado
+    // de verdad (cobrado en OTRO terminal mientras esta mesa seguia
+    // seleccionada aqui), ni el carrito en vivo de este terminal ni su
+    // borrador local son de fiar para esta mesa -- los dos son restos de
+    // ANTES del cobro. Verificado en vivo (2 TPV reales, mismo demo):
+    // sin este chequeo, el carrito en vivo con el producto viejo se volcaba
+    // a draftCartByTable, y como Mesas no tiene boton Guardar (autoguardado
+    // desde el primer producto), el siguiente autoguardado lo aparcaba como
+    // un ticket NUEVO -- la mesa "revivia" con el mismo producto y un
+    // numero de ticket distinto, justo lo que reporto el cliente.
     const liveCartBelongsToSelectedTable =
+      !localLinkedTicketAlreadyPaid &&
       MESAS_INLINE_ACTIVE &&
       MESAS_INLINE_VIEW === "transacciones" &&
       Array.isArray(cart) &&
@@ -10025,6 +10037,7 @@ function applyMesasLayoutFromRemoteForInline(remoteLayout, force = false) {
     if (liveCartBelongsToSelectedTable) {
       merged.draftCartByTable[selectedUid] = cart.map((it) => ({ ...it }));
     } else if (
+      !localLinkedTicketAlreadyPaid &&
       Object.prototype.hasOwnProperty.call(
         localDraftByTableForMerge,
         selectedUid,
