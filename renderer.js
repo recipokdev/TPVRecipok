@@ -56047,7 +56047,24 @@ async function syncQueueNow() {
             // como usuario en FacturaScripts) reintentar cada pocos minutos
             // para siempre nunca lo va a arreglar solo -- se avisa YA, en
             // vez de dejarlo en la cola reintentando en silencio.
-            if (isRetryableQueueSyncError(e)) {
+            //
+            // Real de cliente (Asador el Gallo, 2026-10-08): esto tenia el
+            // MISMO hueco que CREATE_FACTURACLIENTE (arreglado 2026-10-07) --
+            // sin limite de tiempo/intentos, una factura clasificada como
+            // "reintentable" podia quedar reintentando para siempre en
+            // silencio. Confirmado real: 2 facturas con 38657 minutos (~27
+            // dias) reintentando sin parar, solo avisadas por el aviso
+            // generico de la barra de estado, nunca dadas por perdidas de
+            // verdad. Mismo limite que CREATE_FACTURACLIENTE (2h o 20
+            // intentos, lo que llegue antes).
+            const isRetryable = isRetryableQueueSyncError(e);
+            const ageMinutes = minutesSinceIso(item?.createdAt);
+            const attemptsSoFar = Number(item?.attempts || 0);
+            const exhaustedRetries =
+              ageMinutes >= CREATE_FACTURA_MAX_RETRY_MINUTES ||
+              attemptsSoFar >= CREATE_FACTURA_MAX_ATTEMPTS;
+
+            if (isRetryable && !exhaustedRetries) {
               await window.TPV_QUEUE.error(item.id, e?.message || String(e));
             } else {
               await window.TPV_QUEUE.done(item.id, {
@@ -56057,9 +56074,12 @@ async function syncQueueNow() {
               });
 
               const idfacturaRef = item?.payload?.idfactura || "";
+              const motivo = exhaustedRetries
+                ? `Lleva más de ${Math.floor(ageMinutes)} min (o ${attemptsSoFar} intentos) reintentando sin éxito. Último motivo: ${String(e?.message || e).slice(0, 140)}`
+                : `${String(e?.message || e).slice(0, 140)}`;
               notifyWorkerSyncIssue(
                 `queue-completion-dropped-${String(item.id)}`,
-                `No se pudo completar el agente/efectivo de la factura ${idfacturaRef} y el motivo no se va a arreglar reintentando (${String(e?.message || e).slice(0, 140)}). Complétala a mano en FacturaScripts.`,
+                `No se pudo completar el agente/efectivo de la factura ${idfacturaRef}. Motivo: ${motivo}. Complétala a mano en FacturaScripts.`,
                 { title: "Sincronizacion", modal: true, cooldownMs: 60 * 60 * 1000 },
               );
             }

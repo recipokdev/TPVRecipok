@@ -5085,7 +5085,7 @@ console.log(
   const endIdx = idx >= 0 ? renderer.indexOf('if (item.type === "tpvterminal.setCodcliente") {', idx) : -1;
   const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
   if (
-    scoped.includes("if (isRetryableQueueSyncError(e)) {") &&
+    scoped.includes("if (isRetryable && !exhaustedRetries) {") &&
     scoped.includes("dropped: true,") &&
     scoped.includes("notifyWorkerSyncIssue(")
   ) {
@@ -9435,6 +9435,24 @@ mustContain(
   renderer,
   "attemptsSoFar >= CREATE_FACTURA_MAX_ATTEMPTS;",
   "Verificado en vivo: un intento fresco sigue reintentando, un item con 25 intentos o uno creado hace 150 minutos activa el limite y se da por perdido aunque el error en si sea retryable",
+);
+
+console.log("\n[SMOKE] Checking 2026-10-08 factura en cola de COMPLETAR: mismo limite de reintento que CREATE_FACTURACLIENTE\n");
+
+mustContain(
+  renderer,
+  "Confirmado real: 2 facturas con 38657 minutos (~27",
+  "Real de cliente (Asador el Gallo, 2026-10-08): COMPLETE_FACTURACLIENTE (asigna agente/efectivo tras crear la factura) tenia el MISMO hueco que CREATE_FACTURACLIENTE (arreglado 2026-10-07, commit 40b391a) -- isRetryableQueueSyncError ya se usaba aqui, pero sin limite de tiempo/intentos una factura 'reintentable' podia quedar reintentando para siempre en silencio. El propio cliente mando una captura real con 2 facturas (8334 y 8327) llevando 38657 minutos (~27 dias) reintentando sin parar, solo avisadas por el aviso generico de la barra de estado. Reutiliza los MISMOS limites que CREATE_FACTURACLIENTE (CREATE_FACTURA_MAX_RETRY_MINUTES=120, CREATE_FACTURA_MAX_ATTEMPTS=20) a proposito, sin duplicar constantes -- verificado en vivo: el caso real exacto (38657 min, 50 intentos) se marca correctamente como agotado y un item recien creado NO se marca como agotado",
+);
+mustContain(
+  renderer,
+  "ageMinutes >= CREATE_FACTURA_MAX_RETRY_MINUTES ||",
+  "El calculo de agotamiento (edad en minutos O numero de intentos, lo que llegue antes) es identico al de CREATE_FACTURACLIENTE, para que las dos colas se comporten igual ante el mismo tipo de fallo -- la unica diferencia es que FINALIZE_FACTURACLIENTE (justo debajo en el codigo) sigue DELIBERADAMENTE sin limite, por peticion explicita anterior de Sergi (no hay motivo de negocio para rendirse ahi)",
+);
+mustContain(
+  renderer,
+  "Lleva más de ${Math.floor(ageMinutes)} min (o ${attemptsSoFar} intentos) reintentando sin éxito",
+  "El aviso de 'complétala a mano' ahora distingue si se dio por perdida por el LIMITE (duracion/intentos, no un error permanente de verdad) o por un error que de verdad no se va a arreglar solo, en vez de un mensaje generico igual en ambos casos",
 );
 
 console.log("\n[SMOKE] Checking 2026-10-08 vinculacion 1:1 agente<->movil (app de camareros)\n");
