@@ -9965,7 +9965,27 @@ function applyMesasLayoutFromRemoteForInline(remoteLayout, force = false) {
 
   if (selectedUid) {
     const localLinked = localState?.tableTicketMap?.[selectedUid];
-    if (localLinked && !merged.tableTicketMap[selectedUid]) {
+    // Real de cliente (Lumi, 2 TPV en Mesas, reportado 2026-10-08): "al
+    // cobrar una mesa, esta no se cierra, se mantiene abierta". Si ESTE
+    // terminal tenia la mesa seleccionada en pantalla y el OTRO la cobro y
+    // la libero justo entre dos sondeos (~8-10s), restaurar a ciegas el
+    // enlace local de abajo deshacia el cobro en esta pantalla -- y si este
+    // terminal guardaba cualquier cosa despues (un sondeo normal, tocar
+    // otra mesa...), lo volvia a mandar al servidor, resucitando la mesa
+    // para todo el mundo. Nunca restaurar si el ticket al que apuntaba el
+    // enlace local ya esta marcado como pagado: ese caso nunca es "una
+    // escritura en vuelo todavia sin confirmar" (el motivo original de esta
+    // restauracion), es un cobro ya confirmado de verdad.
+    const localLinkedTicketAlreadyPaid =
+      !!localLinked &&
+      (Array.isArray(parkedTickets) ? parkedTickets : []).some(
+        (t) => String(t?.id || "") === String(localLinked) && !!t?.paid,
+      );
+    if (
+      localLinked &&
+      !merged.tableTicketMap[selectedUid] &&
+      !localLinkedTicketAlreadyPaid
+    ) {
       merged.tableTicketMap[selectedUid] = localLinked;
     }
 

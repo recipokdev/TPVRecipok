@@ -9549,6 +9549,26 @@ console.log("\n[SMOKE] Checking 2026-10-08 precio de producto: el simbolo € nu
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-08 Modo Mesas: no resucitar el enlace de una mesa ya cobrada (Lumi, 2 TPV)\n");
+
+{
+  const idx = renderer.indexOf("function applyMesasLayoutFromRemoteForInline(");
+  const endIdx = idx >= 0 ? renderer.indexOf("\r\nfunction scheduleMesasLayoutRemoteSync(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("const localLinkedTicketAlreadyPaid =") &&
+    scoped.includes("!localLinkedTicketAlreadyPaid")
+  ) {
+    ok(
+      "Real de cliente (Lumi, 2 TPV en Mesas, 2026-10-08): \"al cobrar una mesa, esta no se cierra, se mantiene abierta\". Si un terminal tenia la mesa seleccionada en pantalla y el OTRO la cobraba y liberaba justo entre dos sondeos, applyMesasLayoutFromRemoteForInline restauraba a ciegas el enlace local viejo (pensado originalmente para proteger una escritura en vuelo sin confirmar todavia) -- deshaciendo el cobro en esa pantalla, y si ese terminal guardaba algo despues, tambien en el servidor. Ahora nunca se restaura si el ticket al que apuntaba ya esta marcado como pagado. Verificado en aislado: un ticket ya pagado NO resucita su enlace (antes si), y un ticket sin pagar (escritura en vuelo real) SIGUE restaurando su enlace igual que siempre -- sin regresion",
+    );
+  } else {
+    fail(
+      "applyMesasLayoutFromRemoteForInline ya no protege contra resucitar el enlace de una mesa ya cobrada -- revisar el fix de Lumi 2026-10-08",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking 2026-10-08 diagnostico: mesa no se libera tras cobrar (Lumi)\n");
 
 mustContain(
