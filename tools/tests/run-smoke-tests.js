@@ -9502,6 +9502,53 @@ mustContain(
   "El banner y el titulo ('DEVOLUCIÓN' en vez de 'COMANDA') se activan desde printComandaWithContext solo cuando isReturn=true -- una comanda normal no se ve afectada en nada",
 );
 
+console.log("\n[SMOKE] Checking 2026-10-08 precio de producto: el simbolo € nunca baja a una segunda linea\n");
+
+{
+  const priceIdx = styles.indexOf("\r\n.product-price {");
+  const priceEndIdx = priceIdx >= 0 ? styles.indexOf("}", priceIdx) : -1;
+  const priceScoped =
+    priceIdx >= 0 && priceEndIdx >= 0
+      ? styles.slice(priceIdx, priceEndIdx)
+      : "";
+  if (
+    priceScoped.includes("white-space: nowrap;") &&
+    priceScoped.includes("flex-shrink: 0;")
+  ) {
+    ok(
+      "Real de cliente (Sergi, con captura de Asador el Gallo, 2026-10-08): .product-price no tenia white-space:nowrap, asi que en una tarjeta de producto estrecha (tamaño de letra/tarjeta configurable, minimo 110px) el navegador partia el texto del precio por el espacio antes del €, dejando el simbolo solo en una segunda linea. Verificado en vivo contra demo real con el peor caso posible (tarjeta al minimo de 110px, con badge de stock de 2 digitos y precio con descuento mostrando precio tachado + precio actual): SIN el arreglo, cada precio ocupaba 2 lineas (el € se iba abajo); CON el arreglo, 1 sola linea -- flex-shrink:0 asegura que el precio nunca sea lo que se encoge para hacer sitio (ese papel lo sigue haciendo el badge de stock, que ya tenia su propio limite con elipsis)",
+    );
+  } else {
+    fail(
+      ".product-price perdio white-space:nowrap o flex-shrink:0 -- el simbolo € podria volver a bajar a una segunda linea en tarjetas estrechas",
+    );
+  }
+}
+{
+  const oldIdx = styles.indexOf(".product-price-old {");
+  const oldEndIdx = oldIdx >= 0 ? styles.indexOf("}", oldIdx) : -1;
+  const oldScoped =
+    oldIdx >= 0 && oldEndIdx >= 0 ? styles.slice(oldIdx, oldEndIdx) : "";
+  if (oldScoped.includes("white-space: nowrap;")) {
+    ok(
+      "El precio tachado (oferta/descuento) tambien necesita nowrap por separado -- es su propio span, con su propio texto y espacio antes del €",
+    );
+  } else {
+    fail(".product-price-old perdio su white-space:nowrap propio");
+  }
+}
+{
+  const curIdx = styles.indexOf(".product-price-current {");
+  const curEndIdx = curIdx >= 0 ? styles.indexOf("}", curIdx) : -1;
+  const curScoped =
+    curIdx >= 0 && curEndIdx >= 0 ? styles.slice(curIdx, curEndIdx) : "";
+  if (curScoped.includes("white-space: nowrap;")) {
+    ok(".product-price-current tambien tiene su propio white-space:nowrap");
+  } else {
+    fail(".product-price-current perdio su white-space:nowrap propio");
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

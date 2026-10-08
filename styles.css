@@ -2350,6 +2350,8 @@ body.theme-dark .open-caja-prompt-text {
   font-weight: 800;
   font-size: 14px;
   margin-left: auto;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .product-price-old {
@@ -2358,11 +2360,13 @@ body.theme-dark .open-caja-prompt-text {
   font-size: 11px;
   font-weight: 600;
   margin-right: 6px;
+  white-space: nowrap;
 }
 
 .product-price-current {
   font-weight: 800;
   font-size: 14px;
+  white-space: nowrap;
 }
 
 .product-tile-resize-handle {
