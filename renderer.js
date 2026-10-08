@@ -9403,6 +9403,66 @@ async function apiUpdatePairedDeviceFamilies(deviceId, hiddenFamilies) {
   }
 }
 
+// Vinculacion 1:1 agente<->movil (peticion del jefe de Sergi, 2026-10-07/08,
+// para la app de camareros): que agente tiene vinculado cada tablet emparejada
+// de este negocio ahora mismo. Para el caso de un movil perdido/reseteado que
+// ya no puede desvincularse solo -- misma pantalla de Opciones de arriba.
+async function apiListAgentLinksAdmin() {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("Falta configuracion de sincronizacion de este TPV.");
+  }
+
+  const url = `${TPV_CAMAREROS_API_URL}?action=list-agent-links-admin&slug=${encodeURIComponent(slug)}`;
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+    },
+    8000,
+  );
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok || !Array.isArray(data?.data)) {
+    throw new Error(data?.error || "No se pudo cargar la lista de agentes vinculados.");
+  }
+
+  return data.data;
+}
+
+async function apiAdminUnlinkAgent(linkId) {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const syncApiKey = getTpvSyncApiKey();
+  if (!slug || !syncApiKey) {
+    throw new Error("Falta configuracion de sincronizacion de este TPV.");
+  }
+
+  const url = `${TPV_CAMAREROS_API_URL}?action=admin-unlink-agent`;
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": syncApiKey,
+      },
+      body: JSON.stringify({ slug, id: Number(linkId) || 0 }),
+    },
+    8000,
+  );
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok) {
+    throw new Error(data?.error || "No se pudo desvincular el agente, intentalo de nuevo.");
+  }
+}
+
 // Feedback de cliente real 2026-09-14: cuando la factura ya se ha creado y
 // cobrado de verdad pero un paso posterior (marcar agente/efectivo, crear el
 // recibo, o actualizar el total de caja) falla, el cliente/cajero NO debe
@@ -32514,7 +32574,7 @@ function formatPairedDeviceMeta(d) {
   return `Emparejada: ${paired} · Ultimo uso: ${lastSeen}`;
 }
 
-function renderPairedDevicesList(devices) {
+function renderPairedDevicesList(devices, agentLinks) {
   const listEl = document.getElementById("pairedDevicesList");
   const trashListEl = document.getElementById("pairedDevicesTrashList");
   const trashSectionEl = document.getElementById("pairedDevicesTrashSection");
@@ -32528,20 +32588,46 @@ function renderPairedDevicesList(devices) {
   const active = all.filter((d) => !d.revoked);
   const revoked = all.filter((d) => d.revoked);
 
+  // Vinculacion 1:1 agente<->movil (2026-10-08): deviceId correlaciona cada
+  // vinculo con su tablet (paired_devices.id), nunca con deviceInfo (texto
+  // libre, no fiable para esto).
+  const linkByDeviceId = new Map(
+    (Array.isArray(agentLinks) ? agentLinks : [])
+      .filter((l) => l?.deviceId != null)
+      .map((l) => [Number(l.deviceId), l]),
+  );
+
   listEl.innerHTML = active.length
     ? active
         .map((d) => {
           const name = d.deviceInfo
             ? String(d.deviceInfo).replace(/</g, "&lt;")
             : "Tablet sin nombre";
+          const link = linkByDeviceId.get(Number(d.id));
+          const agentLabel = link
+            ? `Agente vinculado: ${String(link.codagente).replace(/</g, "&lt;")}`
+            : "Sin agente vinculado";
+          // El boton de desvincular a mano existe para el caso real de un
+          // movil perdido/reseteado que ya no tiene su propio token para
+          // desvincularse solo -- en uso normal, el camarero se desvincula
+          // el mismo desde la app.
+          const unlinkBtn = link
+            ? `<button type="button" class="small-btn paired-device-unlink-agent-btn" data-link-id="${link.id}" title="Desvincular a mano (p.ej. movil perdido/reseteado)">
+                Desvincular agente
+              </button>`
+            : "";
           return `<div class="paired-device-row">
             <div class="paired-device-info">
               <div class="paired-device-name">${name}</div>
               <div class="paired-device-meta">${formatPairedDeviceMeta(d)}</div>
+              <div class="paired-device-agent-link">${agentLabel}</div>
             </div>
-            <button type="button" class="small-btn paired-device-revoke-btn" data-device-id="${d.id}">
-              Revocar
-            </button>
+            <div class="paired-device-actions">
+              ${unlinkBtn}
+              <button type="button" class="small-btn paired-device-revoke-btn" data-device-id="${d.id}">
+                Revocar
+              </button>
+            </div>
           </div>`;
         })
         .join("")
@@ -32582,7 +32668,11 @@ async function refreshPairedDevicesList() {
   if (refreshBtn) refreshBtn.disabled = true;
   try {
     const devices = await apiListPairedDevices();
-    renderPairedDevicesList(devices);
+    // Fail-open a proposito: si esto falla, la lista de tablets se sigue
+    // mostrando igual (sin la etiqueta de agente vinculado) en vez de
+    // romper la pantalla entera por algo secundario.
+    const agentLinks = await apiListAgentLinksAdmin().catch(() => []);
+    renderPairedDevicesList(devices, agentLinks);
   } catch (e) {
     listEl.innerHTML = `<div class="opt-chip-list-empty">${
       e?.message || "No se pudo cargar la lista de tablets."
@@ -32611,6 +32701,42 @@ function bindPairedDevicesOptionsOnce() {
   });
 
   listEl?.addEventListener("click", async (ev) => {
+    const unlinkBtn = ev.target?.closest?.(".paired-device-unlink-agent-btn");
+    if (unlinkBtn) {
+      const linkId = unlinkBtn.getAttribute("data-link-id");
+      const deviceName =
+        unlinkBtn
+          .closest(".paired-device-row")
+          ?.querySelector(".paired-device-name")?.textContent ||
+        "esta tablet";
+      const agentLabel =
+        unlinkBtn
+          .closest(".paired-device-row")
+          ?.querySelector(".paired-device-agent-link")?.textContent || "";
+
+      const confirmed = await confirmModal(
+        "Desvincular agente",
+        `¿Seguro que quieres desvincular el agente de "${deviceName}" (${agentLabel})? Úsalo solo si el camarero no puede desvincularse él mismo desde la app (p.ej. móvil perdido o reseteado).`,
+        { okButtonText: "Desvincular" },
+      );
+      if (!confirmed) return;
+
+      unlinkBtn.disabled = true;
+      try {
+        await apiAdminUnlinkAgent(linkId);
+        toast("Agente desvinculado.", "ok", "Vincular tablet");
+        await refreshPairedDevicesList();
+      } catch (e) {
+        toast(
+          e?.message || "No se pudo desvincular el agente, intentalo de nuevo.",
+          "error",
+          "Vincular tablet",
+        );
+        unlinkBtn.disabled = false;
+      }
+      return;
+    }
+
     const btn = ev.target?.closest?.(".paired-device-revoke-btn");
     if (!btn) return;
 

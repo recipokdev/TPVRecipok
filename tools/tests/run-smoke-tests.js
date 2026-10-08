@@ -8926,7 +8926,7 @@ mustContain(
   "apiDeletePairedDevice() hits the isolated camareros.php endpoint, not index.php",
 );
 {
-  const idx = renderer.indexOf("function renderPairedDevicesList(devices) {");
+  const idx = renderer.indexOf("function renderPairedDevicesList(devices, agentLinks) {");
   const endIdx = idx >= 0 ? renderer.indexOf("async function refreshPairedDevicesList", idx) : -1;
   const scoped = idx >= 0 && endIdx > idx ? renderer.slice(idx, endIdx) : "";
   if (
@@ -9432,6 +9432,24 @@ mustContain(
   renderer,
   "attemptsSoFar >= CREATE_FACTURA_MAX_ATTEMPTS;",
   "Verificado en vivo: un intento fresco sigue reintentando, un item con 25 intentos o uno creado hace 150 minutos activa el limite y se da por perdido aunque el error en si sea retryable",
+);
+
+console.log("\n[SMOKE] Checking 2026-10-08 vinculacion 1:1 agente<->movil (app de camareros)\n");
+
+mustContain(
+  renderer,
+  "async function apiListAgentLinksAdmin() {",
+  "Peticion del jefe de Sergi (2026-10-07/08): cada agente solo puede estar vinculado a UN movil a la vez, y un movil solo a UN agente. Diseño confirmado con el equipo de la app antes de montarlo -- alcance deliberado: el bloqueo es SOLO entre moviles, no afecta en nada al TPV de mostrador ni al CRM (confirmado con Sergi). Servidor nuevo: tabla agent_links + lib/agent_link_db.php + camareros.php (link-agent/unlink-agent/get-agent-link/list-agent-links para la app, list-agent-links-admin/admin-unlink-agent para el TPV) -- verificado en vivo contra el servidor real con los 2 casos de conflicto (dispositivo ya ocupado, agente ya vinculado en otro movil), idempotencia, y el ciclo completo desvincular->re-vincular",
+);
+mustContain(
+  renderer,
+  "async function apiAdminUnlinkAgent(linkId) {",
+  "Desvinculo a mano desde el TPV (Opciones -> Tablets emparejadas), para el caso real de un movil perdido/reseteado que ya no tiene su propio token para desvincularse solo -- reutiliza la pantalla de gestion de dispositivos YA existente en vez de montar una nueva, en vez de montar una pantalla nueva aparte",
+);
+mustContain(
+  renderer,
+  "const linkByDeviceId = new Map(",
+  "Correlaciona cada vinculo con su tablet por deviceId (paired_devices.id), nunca por deviceInfo (texto libre, no fiable) -- verificado en vivo contra demo real: la fila de la tablet muestra 'Agente vinculado: X', el boton 'Desvincular agente' solo aparece si hay uno vinculado, y al pulsarlo la fila pasa a 'Sin agente vinculado' sin que la tablet desaparezca de la lista",
 );
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
