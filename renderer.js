@@ -9060,6 +9060,40 @@ async function apiSaveMesasLayoutRemote(nextState) {
   return true;
 }
 
+// Diagnostico best-effort (Sergi, 2026-10-08): ver unlinkMesaTicketByTicketId.
+// Nunca debe bloquear ni interrumpir el flujo de cobro -- si falla el envio
+// en si, simplemente se pierde este aviso puntual, no pasa nada mas grave.
+function reportMesaUnlinkFailure(ticketId, attemptedUid) {
+  try {
+    const slug = String(getCurrentSlugForReservations() || "").trim();
+    const syncApiKey = getTpvSyncApiKey();
+    if (!slug || !syncApiKey) return;
+
+    const url = `${TPV_SYNC_API_URL}?action=log-mesa-unlink-failed`;
+    fetchWithTimeout(
+      url,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-TPV-API-KEY": syncApiKey,
+        },
+        body: JSON.stringify({
+          slug,
+          ticketId: String(ticketId || ""),
+          mesaUid: String(attemptedUid || ""),
+          terminalId: String(currentTerminal?.id || ""),
+          detail: attemptedUid
+            ? "fallback-uid-no-estaba-en-el-mapa"
+            : "sin-mapa-ni-metadata-del-ticket",
+        }),
+      },
+      4000,
+    ).catch(() => {});
+  } catch {}
+}
+
 async function apiGetClientFeaturesRemote() {
   const slug = String(getCurrentSlugForReservations() || "").trim();
   const syncApiKey = getTpvSyncApiKey();
@@ -11773,17 +11807,30 @@ function unlinkMesaTicketByTicketId(ticketId, ticketRef = null) {
 
   // Compat con tickets antiguos/desincronizados: si no encontramos mapeo por id,
   // intentamos liberar la mesa por metadata del propio ticket.
+  let fallbackUidAttempted = "";
   if (!releasedUids.size && ticketRef) {
     const fallbackUid = String(
       resolveTicketMesaUid(ticketRef, state) || "",
     ).trim();
+    fallbackUidAttempted = fallbackUid;
     if (fallbackUid) {
       delete state.tableTicketMap[fallbackUid];
       releasedUids.add(fallbackUid);
     }
   }
 
-  if (!releasedUids.size) return;
+  if (!releasedUids.size) {
+    // Diagnostico (Sergi, 2026-10-08): cliente real (Lumi) reporta que al
+    // cobrar una mesa a veces "no se mantiene abierta" -- el personal acaba
+    // borrando el ticket a mano (confirmado via el audit log real). Esta es
+    // la rama donde el aviso de arriba ("fallo real: nunca se encontro ni
+    // por mapa ni por metadata del ticket") se pierde en silencio sin dejar
+    // ningun rastro. Se reporta al servidor (best-effort, nunca bloquea ni
+    // lanza) para poder ver el caso real la proxima vez que pase, en vez de
+    // depender de la consola local de un terminal que nadie mira.
+    reportMesaUnlinkFailure(ticketId, fallbackUidAttempted || null);
+    return;
+  }
 
   releasedUids.forEach((uid) => {
     if (!uid) return;

@@ -9549,6 +9549,28 @@ console.log("\n[SMOKE] Checking 2026-10-08 precio de producto: el simbolo € nu
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-08 diagnostico: mesa no se libera tras cobrar (Lumi)\n");
+
+mustContain(
+  renderer,
+  "function reportMesaUnlinkFailure(ticketId, attemptedUid) {",
+  "Real de cliente (Lumi, Mesas activo, 2026-10-08): \"al cobrar una mesa, esta no se cierra, se mantiene abierta\" -- confirmado real en el audit log del servidor (rafagas de delete-parked-reservation manuales, varias cajas, en segundos). No se pudo reproducir limpio contra el demo compartido (contaminado por un script de pruebas propio que se quedo corriendo sin querer). En vez de seguir adivinando, unlinkMesaTicketByTicketId ahora avisa al servidor (best-effort, nunca bloquea el cobro) cuando no consigue liberar la mesa ni por el mapa mesa<->ticket ni por la metadata del propio ticket -- para capturar el caso real la proxima vez que pase, con contexto completo (ticketId, uid intentado, terminal), en vez de depender de que alguien mire la consola local de un terminal que nadie mira. Verificado en vivo contra demo real: la llamada llega al servidor y queda en el audit_log como evento 'mesa-unlink-after-pay-failed'",
+);
+{
+  const idx = renderer.indexOf("if (!releasedUids.size) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("return;", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (scoped.includes("reportMesaUnlinkFailure(ticketId, fallbackUidAttempted || null);")) {
+    ok(
+      "unlinkMesaTicketByTicketId llama al diagnostico justo antes de rendirse en silencio, con el uid de respaldo que haya intentado (o null si ni eso)",
+    );
+  } else {
+    fail(
+      "unlinkMesaTicketByTicketId ya no reporta el fallo de liberar la mesa -- se volveria a perder el aviso en silencio",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
