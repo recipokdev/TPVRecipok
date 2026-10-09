@@ -1107,12 +1107,15 @@ function getParkedSyncHealthSnapshot() {
   let title = "Sync al dia";
   let detail = `Cola: ${queueLen} · Incidencias: ${conflictLen} · Ultimo sync ${formatParkedSyncAgo(__parkedSyncLastOkAt)}`;
 
-  if (conflictLen > 0) {
-    level = "error";
-    title = `Conflictos detectados (${conflictLen})`;
-    detail =
-      "Se aplico remoto por seguridad. Revisa 'Incidencias sync' para contexto.";
-  } else if (hasManualFailure) {
+  // Real de cliente (Asador el Gallo, 2026-10-09, 2 TPV compartiendo la misma
+  // terminal/usuario/agente a proposito): con ese montaje, el guardado de
+  // una termina chocando con la otra de vez en cuando por pura carrera de
+  // tiempos -- normal e inofensivo ahi, pero poner el indicador en rojo
+  // ("Conflictos detectados") cada vez que pasa dejaba la pantalla de
+  // Aparcados pareciendo rota casi siempre, sin que el cliente pudiera
+  // hacer nada al respecto. El contador sigue visible arriba (detail, nivel
+  // normal) para quien quiera mirarlo -- ya no sube de nivel por si solo.
+  if (hasManualFailure) {
     level = "error";
     title = "Ultimo sync manual fallido";
     detail = __parkedSyncLastManualErrorMsg
@@ -38360,11 +38363,12 @@ async function runParkedSyncNowFromToolbar() {
   if (conflictLen > 0) {
     __parkedSyncLastManualOkAt = Date.now();
     __parkedSyncLastManualErrorMsg = "";
-    toast(
-      `Sync completada con incidencias (${conflictLen}). Remoto prevalece en conflicto; revisa 'Incidencias sync'.`,
-      "warn",
-      "Aparcados",
-    );
+    // Antes "warn" con "incidencias" en el texto -- sonaba a que algo iba
+    // mal (real de cliente, Asador el Gallo, 2026-10-09: 2 TPV compartiendo
+    // la misma terminal/usuario/agente a proposito, donde este choque es
+    // normal y casi siempre inofensivo). El contador sigue disponible en el
+    // boton "Incidencias sync" para quien quiera mirarlo.
+    toast("Sync completada.", "ok", "Aparcados");
     return true;
   }
 
@@ -38552,8 +38556,17 @@ async function processParkedSyncQueue() {
     }
 
     if (skippedConflicts > 0) {
+      // Real de cliente (Asador el Gallo, 2026-10-09, 2 TPV compartiendo la
+      // misma terminal/usuario/agente a proposito): ver el mismo motivo en
+      // handleStaleParkedWriteConflict -- este aviso de fondo (disparado por
+      // el sondeo periodico, sin que el cajero toque nada) asustaba a un
+      // cliente no tecnico cada vez que las 2 terminales chocaban guardando
+      // casi lo mismo casi a la vez, un caso casi siempre inofensivo con ese
+      // montaje. Se sigue registrando igual (consola + "Incidencias sync")
+      // para nuestra propia revision -- ya no interrumpe al cajero.
+      const skippedNewer = Math.max(0, skippedConflicts - skippedPaid);
       console.warn(
-        `Se omitieron ${skippedConflicts} cambios locales de aparcados porque remoto era más reciente.`,
+        `Se omitieron ${skippedConflicts} cambios locales de aparcados (${skippedNewer} remoto mas reciente, ${skippedPaid} remoto ya cobrado).`,
       );
 
       syncParkedToolbarUI?.();
@@ -38563,21 +38576,6 @@ async function processParkedSyncQueue() {
       ) {
         renderParkedTicketsModal?.();
       }
-
-      const skippedNewer = Math.max(0, skippedConflicts - skippedPaid);
-      const parts = [];
-      if (skippedNewer > 0) {
-        parts.push(`${skippedNewer} remoto más reciente`);
-      }
-      if (skippedPaid > 0) {
-        parts.push(`${skippedPaid} remoto ya cobrado`);
-      }
-
-      toast(
-        `Incidencias de sincronización detectadas: ${parts.join(" · ") || skippedConflicts}. Revisa "Incidencias sync" en aparcados.`,
-        "warn",
-        "Aparcados",
-      );
     }
 
     saveParkedSyncQueue(remaining);
@@ -39463,10 +39461,17 @@ function handleStaleParkedWriteConflict(ticket, err) {
       renderParkedTicketsModal?.();
     }
 
-    toast(
-      'Incidencias de sincronización detectadas: esta reserva se modificó en otro dispositivo. Revisa "Incidencias sync" en aparcados.',
-      "warn",
-      "Aparcados",
+    // Real de cliente (Asador el Gallo, 2026-10-09, 2 TPV compartiendo la
+    // misma terminal/usuario/agente a proposito): este choque es NORMAL y
+    // casi siempre inofensivo con ese montaje (las 2 terminales guardando
+    // casi lo mismo casi a la vez) -- el aviso emergente sonaba a "algo va
+    // mal" y asustaba a un cliente no tecnico cada vez que pasaba, sin que
+    // hubiera nada que el tuviera que hacer. Se sigue registrando igual
+    // (consola + "Incidencias sync", boton ya existente en Aparcados) para
+    // que nosotros lo podamos revisar si hace falta -- simplemente ya no
+    // interrumpe al cajero con un aviso en pantalla.
+    console.warn(
+      "Incidencia de sincronizacion (bloqueo optimista): esta reserva se modifico en otro dispositivo. Ver 'Incidencias sync' en Aparcados.",
     );
   } catch (e) {
     console.warn("No se pudo registrar el conflicto de bloqueo optimista:", e);

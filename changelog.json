@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "MEJORA: cuando 2 terminales comparten la misma caja/agente (p.ej. una para comandas y otra como visor), ya no aparece un aviso de \"incidencias de sincronización\" cada vez que coinciden guardando casi a la vez -- es un caso normal y sin consecuencias, así que ya no interrumpe. Sigue quedando registrado por si hace falta revisarlo."
+      ]
     },
     {
       "version": "0.2.42",

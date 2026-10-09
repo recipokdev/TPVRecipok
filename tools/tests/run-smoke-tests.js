@@ -9608,6 +9608,44 @@ console.log("\n[SMOKE] Checking 2026-10-08 Modo Mesas: primera carga del plano e
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-09 aparcados: dejar de asustar al cajero con conflictos de sync inofensivos (2 TPV)\n");
+
+{
+  const idx = renderer.indexOf("function handleStaleParkedWriteConflict(");
+  const endIdx = idx >= 0 ? renderer.indexOf("\r\n  // Trae el estado real del servidor", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    !scoped.includes('toast(\r\n      \'Incidencias de sincronización detectadas') &&
+    scoped.includes("registerParkedSyncConflict(") &&
+    scoped.includes("console.warn(")
+  ) {
+    ok(
+      "Real de cliente (Asador el Gallo, 2026-10-09, 2 TPV compartiendo a proposito la misma terminal/usuario/agente -- uno para comandas, otro como visor): un choque de guardado entre las 2 (normal e inofensivo con ese montaje) disparaba un aviso emergente ('Incidencias de sincronización detectadas') que asustaba al cliente sin que hubiera nada que el tuviera que hacer. Ya no se muestra ese aviso -- el conflicto se sigue registrando igual (consola + el boton 'Incidencias sync' de siempre) para que nosotros lo podamos revisar si hace falta",
+    );
+  } else {
+    fail(
+      "handleStaleParkedWriteConflict ya no deja de avisar al cajero con el toast de conflictos, o dejo de registrar el conflicto -- revisar el fix de 2026-10-09",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("function getParkedSyncHealthSnapshot(");
+  const endIdx = idx >= 0 ? renderer.indexOf("return { level, title, detail };", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    !scoped.includes('title = `Conflictos detectados') &&
+    scoped.includes("Incidencias: ${conflictLen}")
+  ) {
+    ok(
+      "El indicador de salud de Aparcados ya no se pone en rojo ('Conflictos detectados') solo por tener incidencias de sync registradas -- con 2 TPV compartiendo identidad se quedaba en rojo casi permanentemente sin que hubiera un problema real. El contador sigue visible en el detalle normal (nivel verde) para quien quiera mirarlo",
+    );
+  } else {
+    fail(
+      "getParkedSyncHealthSnapshot vuelve a subir a nivel 'error' solo por tener conflictos registrados -- revisar el fix de 2026-10-09",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking 2026-10-08 diagnostico: mesa no se libera tras cobrar (Lumi)\n");
 
 mustContain(
