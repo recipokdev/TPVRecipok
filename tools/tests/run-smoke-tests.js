@@ -6602,8 +6602,8 @@ mustContain(
 
 mustContain(
   renderer,
-  "if (e?.staleParkedWrite) {\r\n            saveConflicted = true;\r\n            handleStaleParkedWriteConflict(existing, e);",
-  "finishUpdateParkedTail routes a stale-write conflict to the dedicated handler instead of silently re-queueing it forever, and now also flags saveConflicted so the stock-delta block below skips a base that just lost the save race",
+  "if (e?.staleParkedWrite) {\r\n            handleStaleParkedWriteConflict(existing, e);",
+  "finishUpdateParkedTail routes a stale-write conflict to the dedicated handler instead of silently re-queueing it forever -- saveConfirmed (2026-10-12 rename, was saveConflicted) stays false so the stock-delta block below skips a base that just lost the save race",
 );
 mustContain(
   renderer,
@@ -7939,13 +7939,13 @@ mustContain(
 );
 mustContain(
   renderer,
-  "let saveConflicted = false;",
-  "finishUpdateParkedTail tracks whether the ticket's own save lost an optimistic-lock race",
+  "let saveConfirmed = false;",
+  "finishUpdateParkedTail tracks whether the ticket's own save was CONFIRMED successful this attempt (2026-10-12 rename, was the inverted saveConflicted) -- true only on an immediate live success, never on a stale-write OR a generic failure that just got queued for retry",
 );
 mustContain(
   renderer,
-  "if (!saveConflicted && reservedDelta.size > 0) {",
-  "...and skips applying (or queueing) this attempt's stock delta entirely when it did -- our snapshot no longer reflects the winning version, so its delta is stale; the next successful save (after the merge fix) computes the correct one from the real base",
+  "if (saveConfirmed && reservedDelta.size > 0) {",
+  "...and only applies this attempt's stock delta when the save was actually confirmed -- a stale-write means our snapshot no longer reflects the winning version, and a queued-for-retry failure means it's not confirmed YET either; in both cases the delta travels with the queued retry instead (enqueueParkedSyncOperation) rather than being applied blind",
 );
 mustContain(
   renderer,
@@ -9664,6 +9664,78 @@ mustContain(
   } else {
     fail(
       "unlinkMesaTicketByTicketId ya no reporta el fallo de liberar la mesa -- se volveria a perder el aviso en silencio",
+    );
+  }
+}
+
+console.log("\n[SMOKE] Checking 2026-10-12 stock: el ajuste no se aplica si el guardado del aparcado se abandona (Asador el Gallo)\n");
+
+{
+  const idx = renderer.indexOf("function enqueueParkedSyncOperation(op, ticket, stockDelta = null) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("function getParkedTicketComparableRevisionTs(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("mergedEntries[prodKey] = roundQty3(") &&
+    scoped.includes("stockDelta: mergedEntries")
+  ) {
+    ok(
+      "Real de cliente (Asador el Gallo, 2026-10-12, confirmado con el stock_sync_ledger real del servidor): el ajuste de stock de un guardado de aparcado que fallaba (no un choque inmediato, uno que se encolaba para reintentar) se aplicaba YA en FacturaScripts sin esperar a saber si ese guardado llegaria a tener exito de verdad -- si mas tarde se abandonaba por un conflicto real ('Remoto mas reciente'), el ajuste ya aplicado nunca se deshacia, justo el descuadre de stock que reporto el cliente. Ahora enqueueParkedSyncOperation acepta un ajuste de stock que viaja PEGADO al reintento encolado (acumulado por producto si se reencola varias veces)",
+    );
+  } else {
+    fail(
+      "enqueueParkedSyncOperation ya no acepta/acumula un ajuste de stock pegado al reintento -- revisar el fix de stock de 2026-10-12",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("async function processParkedSyncQueue() {");
+  const endIdx = idx >= 0 ? renderer.indexOf("if (skippedConflicts > 0) {", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("const queuedEntries = entry?.stockDelta?.entries;") &&
+    scoped.includes("const queuedDeltaMap = new Map(")
+  ) {
+    ok(
+      "processParkedSyncQueue solo aplica el ajuste de stock pegado a un reintento DESPUES de confirmar que ese guardado concreto tuvo exito -- si el bucle salta a 'continue' antes (remote-newer/paid, o un choque de bloqueo optimista en el propio reintento), este bloque nunca se alcanza y el ajuste nunca se aplica. Verificado en vivo con mocks: un reintento con exito SI aplica el stock (y vacia la cola); un reintento abandonado por conflicto NUNCA aplica el stock ni intenta guardar",
+    );
+  } else {
+    fail(
+      "processParkedSyncQueue ya no aplica el ajuste de stock encolado solo tras un guardado confirmado -- revisar el fix de stock de 2026-10-12",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("function flushLoadedParkedTicketChangesSync() {");
+  const endIdx = idx >= 0 ? renderer.indexOf("function ensureMesaLinkedTicketLoaded(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes(".then(async () => {") &&
+    scoped.includes("const stockDeltaReason =") &&
+    scoped.includes("{ deltaMap: reservedDelta, reason: stockDeltaReason }")
+  ) {
+    ok(
+      "flushLoadedParkedTicketChangesSync ya solo aplica el ajuste de stock dentro del .then() de un guardado confirmado -- antes se disparaba en paralelo, sin esperar a saber si el guardado tendria exito. En el .catch() (fallo generico), el ajuste viaja pegado al reintento encolado en vez de aplicarse ya",
+    );
+  } else {
+    fail(
+      "flushLoadedParkedTicketChangesSync ya no ata el ajuste de stock al resultado confirmado del guardado -- revisar el fix de 2026-10-12",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("async function mergeMesaPendingTickets(sourceUid, targetUid) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("markParkedTicketAsDeleted(sourceTicket);", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("let targetSaveConfirmed = false;") &&
+    scoped.includes("if (targetSaveConfirmed && reservedDelta.size > 0) {")
+  ) {
+    ok(
+      "mergeMesaPendingTickets ya solo aplica el ajuste de stock de la mesa destino si su guardado se confirma con exito -- antes se aplicaba ANTES incluso de intentar guardar el ticket",
+    );
+  } else {
+    fail(
+      "mergeMesaPendingTickets ya no condiciona el ajuste de stock al guardado confirmado del ticket destino -- revisar el fix de 2026-10-12",
     );
   }
 }

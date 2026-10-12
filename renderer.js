@@ -10815,8 +10815,36 @@ function flushLoadedParkedTicketChangesSync() {
 
   saveParkedTicketsCache();
 
-  apiSaveParkedReservation(ticket)
-    .then(() => refreshRemoteParkedReservationsOnly())
+  const reservedDelta = buildReservedQtyDeltaMap(snapshot, prevItems);
+  const stockDeltaReason = "actualizar aparcado (cambio rapido de aparcado)";
+
+  const tail = apiSaveParkedReservation(ticket)
+    .then(async () => {
+      await refreshRemoteParkedReservationsOnly();
+      // Real de cliente (Asador el Gallo, 2026-10-12): el ajuste de stock
+      // solo es seguro aplicarlo aqui porque el guardado del ticket ACABA
+      // de confirmarse con exito de verdad -- ver enqueueParkedSyncOperation
+      // para el caso contrario (guardado fallido/encolado).
+      if (reservedDelta.size > 0) {
+        try {
+          await syncReservedStockDeltaToFS(
+            reservedDelta,
+            stockDeltaReason,
+            ticket?.id,
+          );
+        } catch (e) {
+          enqueueStockDeltaSync(
+            e?.failedDeltaMap || reservedDelta,
+            stockDeltaReason,
+            ticket?.id,
+          );
+          console.warn(
+            "No se pudo sincronizar stock al cambiar rapido de aparcado:",
+            e?.message || e,
+          );
+        }
+      }
+    })
     .catch((e) => {
       // Real de cliente 2026-09-22 (Asador el Gallo, hora punta): reencolar a
       // ciegas ante CUALQUIER fallo (incluido el bloqueo optimista) dejaba
@@ -10826,8 +10854,19 @@ function flushLoadedParkedTicketChangesSync() {
       // en este terminal mucho despues de que dejara de existir de verdad.
       if (e?.staleParkedWrite) {
         handleStaleParkedWriteConflict(ticket, e);
+        // El guardado choco de verdad: nuestra foto ya no es la que gano, no
+        // se aplica ni se encola ningun ajuste de stock para este intento.
       } else {
-        enqueueParkedSyncOperation("upsert", ticket);
+        // Real de cliente (Asador el Gallo, 2026-10-12): el ajuste de stock
+        // viaja PEGADO a este reintento encolado -- solo se aplicara si este
+        // guardado concreto llega a tener exito de verdad mas tarde.
+        enqueueParkedSyncOperation(
+          "upsert",
+          ticket,
+          reservedDelta.size > 0
+            ? { deltaMap: reservedDelta, reason: stockDeltaReason }
+            : null,
+        );
         console.warn(
           "No se pudo guardar la reserva remota al cambiar de aparcado:",
           e?.message || e,
@@ -10835,27 +10874,9 @@ function flushLoadedParkedTicketChangesSync() {
       }
     });
 
-  const reservedDelta = buildReservedQtyDeltaMap(snapshot, prevItems);
-  if (reservedDelta.size > 0) {
-    const ticketKey = String(ticket?.id || "").trim();
-    const tail = syncReservedStockDeltaToFS(
-      reservedDelta,
-      "actualizar aparcado (cambio rapido de aparcado)",
-      ticket?.id,
-    ).catch((e) => {
-      enqueueStockDeltaSync(
-        e?.failedDeltaMap || reservedDelta,
-        "actualizar aparcado (cambio rapido de aparcado)",
-        ticket?.id,
-      );
-      console.warn(
-        "No se pudo sincronizar stock al cambiar rapido de aparcado:",
-        e?.message || e,
-      );
-    });
-    if (ticketKey) {
-      __pendingParkedStockSyncTailByTicketId.set(ticketKey, tail);
-    }
+  const ticketKey = String(ticket?.id || "").trim();
+  if (ticketKey) {
+    __pendingParkedStockSyncTailByTicketId.set(ticketKey, tail);
   }
 }
 
@@ -11334,20 +11355,37 @@ async function mergeMesaPendingTickets(sourceUid, targetUid) {
   targetTicket.comandaAutoPrintFailedAt = null;
   targetTicket.comandaAutoPrintFailedError = null;
 
-  if (reservedDelta.size > 0) {
+  // Real de cliente (Asador el Gallo, 2026-10-12): el ajuste de stock de la
+  // fusion solo se aplica AHORA (en vez de antes, incondicionalmente) si el
+  // guardado del ticket destino se confirma con exito de verdad -- si falla
+  // y se encola, el ajuste viaja pegado a ese reintento (ver
+  // enqueueParkedSyncOperation) y solo se aplica si ese reintento triunfa.
+  let targetSaveConfirmed = false;
+  try {
+    await apiSaveParkedReservation(targetTicket);
+    targetSaveConfirmed = true;
+  } catch (e) {
+    if (e?.staleParkedWrite) {
+      handleStaleParkedWriteConflict(targetTicket, e);
+    } else {
+      enqueueParkedSyncOperation(
+        "upsert",
+        targetTicket,
+        reservedDelta.size > 0
+          ? { deltaMap: reservedDelta, reason: "fusionar mesas" }
+          : null,
+      );
+      console.warn("No se pudo guardar la mesa destino tras fusionar:", e?.message || e);
+    }
+  }
+
+  if (targetSaveConfirmed && reservedDelta.size > 0) {
     try {
       await syncReservedStockDeltaToFS(reservedDelta, "fusionar mesas", targetTicket.id);
     } catch (e) {
       enqueueStockDeltaSync(e?.failedDeltaMap || reservedDelta, "fusionar mesas", targetTicket.id);
       console.warn("No se pudo sincronizar stock al fusionar mesas:", e?.message || e);
     }
-  }
-
-  try {
-    await apiSaveParkedReservation(targetTicket);
-  } catch (e) {
-    enqueueParkedSyncOperation("upsert", targetTicket);
-    console.warn("No se pudo guardar la mesa destino tras fusionar:", e?.message || e);
   }
 
   // Ahora sí liberamos la mesa origen por completo (su pedido ya vive en el
@@ -19041,16 +19079,35 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
       });
 
       const finishUpdateParkedTail = async () => {
-        let saveConflicted = false;
+        // true SOLO si el guardado se confirma con exito de verdad en este
+        // mismo intento -- ni un choque inmediato (stale-write) ni un fallo
+        // generico que se encola para reintentar cuentan como exito.
+        let saveConfirmed = false;
         try {
           await apiSaveParkedReservation(existing);
           await refreshRemoteParkedReservationsOnly();
+          saveConfirmed = true;
         } catch (e) {
           if (e?.staleParkedWrite) {
-            saveConflicted = true;
             handleStaleParkedWriteConflict(existing, e);
+            // Choco de verdad con otro terminal: nuestra foto ya no es la
+            // que gano, no se aplica ni se encola ningun ajuste de stock.
           } else {
-            enqueueParkedSyncOperation("upsert", existing);
+            // Real de cliente (Asador el Gallo, 2026-10-12): antes, este
+            // caso (fallo generico, no un choque inmediato) SI aplicaba el
+            // ajuste de stock mas abajo -- pero el guardado solo quedaba
+            // EN COLA, no confirmado. Si al reintentarlo mas tarde se
+            // acababa abandonando por un conflicto real ("Remoto mas
+            // reciente"), el ajuste de stock ya aplicado nunca se deshacia
+            // -- el descuadre de stock real que reporto el cliente. Ahora
+            // el ajuste viaja pegado a este mismo reintento encolado.
+            enqueueParkedSyncOperation(
+              "upsert",
+              existing,
+              reservedDelta.size > 0
+                ? { deltaMap: reservedDelta, reason: "actualizar aparcado" }
+                : null,
+            );
             console.warn(
               "No se pudo guardar la reserva remota al actualizar:",
               e?.message || e,
@@ -19067,12 +19124,12 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
         }
 
         // Si el guardado del ticket choco con otro terminal (bloqueo
-        // optimista), nuestra foto local ya no es la que "gano" -- aplicar
-        // (o encolar) su delta de stock partiria de una base que dejo de
-        // ser la actual. El proximo guardado con exito (tras la fusion, ver
-        // mergeMissingRemoteLinesIntoCart) calculara el delta correcto
-        // desde la base real, asi que aqui no se toca el stock para nada.
-        if (!saveConflicted && reservedDelta.size > 0) {
+        // optimista) o se quedo en cola sin confirmar, nuestra foto local ya
+        // no es (o todavia no es) la que "gano" -- aplicar su delta de stock
+        // partiria de una base que dejo de ser la actual. El proximo
+        // guardado con exito (en vivo, o al drenar la cola de arriba)
+        // calculara/aplicara el delta correcto desde la base real.
+        if (saveConfirmed && reservedDelta.size > 0) {
           try {
             await syncReservedStockDeltaToFS(
               reservedDelta,
@@ -38395,20 +38452,59 @@ function snapshotTicketForSync(ticket) {
   };
 }
 
-function enqueueParkedSyncOperation(op, ticket) {
+// Real de cliente (Asador el Gallo, 2026-10-12): cuando el guardado en vivo
+// de un aparcado fallaba (no un bloqueo optimista inmediato, sino un fallo
+// generico que se encolaba para reintentar), el ajuste de stock asociado se
+// aplicaba YA MISMO en FacturaScripts, sin esperar a saber si ese guardado
+// encolado llegaria a tener exito de verdad. Si mas tarde, al drenar la
+// cola, ese guardado se abandonaba por un conflicto real ("remoto mas
+// reciente"/"ya cobrado" -- ver shouldSkipQueuedUpsertDueToRemoteNewer), el
+// ajuste de stock ya aplicado nunca se deshacia: FacturaScripts terminaba
+// reflejando un cambio que el ticket "ganador" en el servidor nunca llego a
+// tener de verdad -- el descuadre de stock real que reporto el cliente,
+// confirmado en el stock_sync_ledger del servidor (una reserva aplicada
+// justo en el mismo minuto que una incidencia de "Remoto mas reciente").
+//
+// Arreglo: el ajuste de stock de un guardado encolado viaja PEGADO a esa
+// misma entrada de la cola (stockDelta, acumulado por producto igual que
+// enqueueStockDeltaSync) y solo se aplica en processParkedSyncQueue cuando
+// ese guardado concreto consigue reintentarse con exito -- si se abandona,
+// el ajuste de stock se descarta con el, nunca se aplica.
+function enqueueParkedSyncOperation(op, ticket, stockDelta = null) {
   const ticketSnapshot = snapshotTicketForSync(ticket);
   const key = getParkedTicketSyncKey(ticketSnapshot);
   if (!key) return;
 
   const queue = loadParkedSyncQueue();
+  const idx = queue.findIndex((q) => q?.key === key);
+  const prevStockDelta = idx >= 0 ? queue[idx]?.stockDelta || null : null;
+
+  let mergedEntries = prevStockDelta?.entries
+    ? { ...prevStockDelta.entries }
+    : null;
+  if (stockDelta?.deltaMap instanceof Map && stockDelta.deltaMap.size > 0) {
+    mergedEntries = mergedEntries || {};
+    stockDelta.deltaMap.forEach((delta, idProducto) => {
+      const prodKey = String(idProducto);
+      mergedEntries[prodKey] = roundQty3(
+        (Number(mergedEntries[prodKey]) || 0) + (Number(delta) || 0),
+      );
+    });
+  }
+
   const nextEntry = {
     op: op === "delete" ? "delete" : "upsert",
     key,
     ticket: ticketSnapshot,
     queuedAt: new Date().toISOString(),
+    stockDelta: mergedEntries
+      ? {
+          entries: mergedEntries,
+          reason: stockDelta?.reason || prevStockDelta?.reason || "",
+        }
+      : null,
   };
 
-  const idx = queue.findIndex((q) => q?.key === key);
   if (idx >= 0) queue[idx] = nextEntry;
   else queue.push(nextEntry);
 
@@ -38522,6 +38618,38 @@ async function processParkedSyncQueue() {
           }
 
           await apiSaveParkedReservation(entry?.ticket || {});
+
+          // El guardado de este aparcado encolado ha tenido exito de verdad
+          // -- SOLO ahora es seguro aplicar el ajuste de stock que viajaba
+          // pegado a el (ver enqueueParkedSyncOperation). Si el guardado se
+          // hubiera saltado arriba (remote-newer/paid) o hubiera fallado de
+          // nuevo, este bloque nunca se alcanza y el ajuste nunca se aplica.
+          const queuedEntries = entry?.stockDelta?.entries;
+          if (queuedEntries && Object.keys(queuedEntries).length) {
+            const queuedDeltaMap = new Map(
+              Object.entries(queuedEntries).map(([k, v]) => [
+                Number(k),
+                Number(v),
+              ]),
+            );
+            try {
+              await syncReservedStockDeltaToFS(
+                queuedDeltaMap,
+                entry.stockDelta.reason || "reintento cola de aparcados",
+                entry?.ticket?.id,
+              );
+            } catch (stockErr) {
+              enqueueStockDeltaSync(
+                stockErr?.failedDeltaMap || queuedDeltaMap,
+                entry.stockDelta.reason || "reintento cola de aparcados",
+                entry?.ticket?.id,
+              );
+              console.warn(
+                "No se pudo sincronizar stock tras reintentar un aparcado en cola:",
+                stockErr?.message || stockErr,
+              );
+            }
+          }
 
           const normalizedLocal = normalizeRemoteParkedTicket(
             entry?.ticket || {},

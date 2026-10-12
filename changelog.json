@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "CORRECCIÓN IMPORTANTE: cuando el guardado de un aparcado fallaba y quedaba en cola (algo más probable con 2+ terminales), el ajuste de stock asociado se aplicaba de inmediato en FacturaScripts sin esperar a saber si ese guardado llegaría a tener éxito de verdad -- si más tarde se abandonaba porque otro terminal había guardado algo más reciente, el ajuste ya aplicado se quedaba así para siempre, descuadrando el stock real. Ahora el ajuste va pegado a ese mismo reintento y solo se aplica si consigue guardarse de verdad."
+      ]
     },
     {
       "version": "0.2.43",
