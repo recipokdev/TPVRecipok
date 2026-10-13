@@ -28457,6 +28457,8 @@ async function apiOpenCashInFS() {
     localStorage.setItem("tpv_remoteCajaId", String(remoteId));
   } catch {}
 
+  notifyRealtimeChangeFromClient("shared-caja");
+
   return resp;
 }
 
@@ -28524,6 +28526,8 @@ async function apiCloseCashInFS() {
     }
     throw e;
   }
+
+  notifyRealtimeChangeFromClient("shared-caja");
 
   // ✅ Si FS responde vacío pero fue OK, apiWrite devuelve null.
   // Normalizamos a {ok:true} para que el caller pueda decidir bien.
@@ -37501,6 +37505,7 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "", ticketId = null
   if (anyChanged) {
     renderProducts?.();
     updateRenderedProductStocks?.();
+    notifyRealtimeChangeFromClient("stock");
   }
 
   if (issues.length) {
@@ -40091,6 +40096,11 @@ function handleRealtimeChangeNotice(topic) {
       // -- ahora se comprueba ya mismo en cuanto llega el aviso, en vez de
       // esperar al proximo tick.
       checkTerminalPresenceOnce?.({ notify: true });
+    } else if (topic === "shared-caja") {
+      checkSharedCajaStateOnce?.({ notify: true });
+      checkSharedCajaHealthOnce?.();
+    } else if (topic === "stock") {
+      runProductsStockRefreshOnce?.();
     }
   } catch (e) {
     console.warn("Error procesando aviso de tiempo real:", e?.message || e);
@@ -40152,6 +40162,31 @@ function connectRealtimeSocket() {
       ws.close();
     } catch {}
   };
+}
+
+// Caja compartida y stock reservado NUNCA pasan por nuestro propio servidor
+// -- el TPV habla DIRECTAMENTE con FacturaScripts para abrir/cerrar caja y
+// ajustar stock (a diferencia de aparcados/Mesas/presencia). Por eso no hay
+// ningun sitio "gratis" donde enganchar el aviso: el propio TPV tiene que
+// avisar el mismo, best-effort, justo DESPUES de que su propia llamada a
+// FacturaScripts ya tuvo exito de verdad -- nunca antes (ver la
+// conversacion sobre el cobro optimista: avisar antes de que el servidor
+// tenga la verdad podria hacer que otra terminal lea datos todavia viejos).
+function notifyRealtimeChangeFromClient(topic) {
+  try {
+    const slug = String(getCurrentSlugForReservations?.() || "").trim();
+    const apiKey = getTpvSyncApiKey();
+    if (!slug || !apiKey) return;
+
+    fetch(`${TPV_SYNC_API_URL}?action=notify-realtime-change`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": apiKey,
+      },
+      body: JSON.stringify({ slug, topic }),
+    }).catch(() => {});
+  } catch {}
 }
 
 function disconnectRealtimeSocket() {

@@ -9826,6 +9826,74 @@ console.log("\n[SMOKE] Checking 2026-10-13 tiempo real: presencia de terminal (a
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-13 tiempo real: caja compartida y stock (avisados por el propio TPV)\n");
+
+{
+  const idx = renderer.indexOf("function handleRealtimeChangeNotice(topic) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("function scheduleRealtimeReconnect() {", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes('topic === "shared-caja"') &&
+    scoped.includes("checkSharedCajaStateOnce?.({ notify: true })") &&
+    scoped.includes("checkSharedCajaHealthOnce?.()") &&
+    scoped.includes('topic === "stock"') &&
+    scoped.includes("runProductsStockRefreshOnce?.()")
+  ) {
+    ok(
+      "handleRealtimeChangeNotice tambien reacciona a 'shared-caja' (comprueba al instante si otro terminal abrio/cerro la caja compartida) y 'stock' (refresca al instante el stock de productos) -- mismos refrescos que ya disparaban el sondeo de siempre",
+    );
+  } else {
+    fail(
+      "handleRealtimeChangeNotice ya no reacciona a shared-caja/stock -- revisar el aviso en tiempo real de 2026-10-13",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("function notifyRealtimeChangeFromClient(topic) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("function disconnectRealtimeSocket() {", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("action=notify-realtime-change") &&
+    scoped.includes("getCurrentSlugForReservations?.()")
+  ) {
+    ok(
+      "notifyRealtimeChangeFromClient existe: caja compartida y stock reservado NUNCA pasan por nuestro propio servidor (el TPV habla directo con FacturaScripts), asi que el propio TPV avisa el mismo, best-effort, justo despues de que su propia escritura directa ya tuvo exito -- nunca antes (evita el mismo problema de datos viejos que ya se discutio para el cobro optimista)",
+    );
+  } else {
+    fail(
+      "notifyRealtimeChangeFromClient ya no existe o no llama a la accion correcta -- revisar el aviso en tiempo real de 2026-10-13",
+    );
+  }
+}
+{
+  const hasOpenHook =
+    renderer.includes('notifyRealtimeChangeFromClient("shared-caja");') &&
+    (renderer.split('notifyRealtimeChangeFromClient("shared-caja");').length - 1) >= 2;
+  if (hasOpenHook) {
+    ok(
+      "apiOpenCashInFS y apiCloseCashInFS avisan de 'shared-caja' justo tras confirmar el exito real contra FacturaScripts (abrir/cerrar), nunca antes del optimismo local de la pantalla",
+    );
+  } else {
+    fail(
+      "Falta el aviso de shared-caja en apertura/cierre de caja -- revisar el aviso en tiempo real de 2026-10-13",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("async function syncReservedStockDeltaToFS(deltaMap, reason = \"\", ticketId = null) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("// ===== Cola de reintento de deltas de stock", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (scoped.includes('notifyRealtimeChangeFromClient("stock");')) {
+    ok(
+      "syncReservedStockDeltaToFS avisa de 'stock' en su unico punto de salida con exito (anyChanged) -- cubre automaticamente TODOS los sitios que ya llaman a esta funcion (aparcar/editar/cobrar/reintento), sin tener que tocar cada uno por separado",
+    );
+  } else {
+    fail(
+      "syncReservedStockDeltaToFS ya no avisa de stock tras un cambio real -- revisar el aviso en tiempo real de 2026-10-13",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
