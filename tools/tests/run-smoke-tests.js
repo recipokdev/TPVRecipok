@@ -9806,6 +9806,26 @@ console.log("\n[SMOKE] Checking 2026-10-13 tiempo real: aviso en vivo de aparcad
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-13 tiempo real: presencia de terminal (aviso de TPV duplicado instantaneo)\n");
+
+{
+  const idx = renderer.indexOf("function handleRealtimeChangeNotice(topic) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("function scheduleRealtimeReconnect() {", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes('topic === "terminal-presence"') &&
+    scoped.includes("checkTerminalPresenceOnce?.({ notify: true })")
+  ) {
+    ok(
+      "Real de cliente (Asador el Gallo, 2 TPV a proposito con la misma identidad, 2026-10-13): handleRealtimeChangeNotice tambien reacciona al tema 'terminal-presence' llamando a checkTerminalPresenceOnce al instante -- antes, enterarse de que otra terminal acababa de entrar o salir dependia del latido de 12s (TERMINAL_PRESENCE_HEARTBEAT_MS), asi que el aviso de 'Hay N TPV activos' podia tardar ese rato en aparecer",
+    );
+  } else {
+    fail(
+      "handleRealtimeChangeNotice ya no reacciona al tema terminal-presence -- revisar el aviso en tiempo real de 2026-10-13",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

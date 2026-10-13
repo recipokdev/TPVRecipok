@@ -40084,6 +40084,13 @@ function handleRealtimeChangeNotice(topic) {
       scheduleParkedReservationsBurstRefresh?.("realtime");
     } else if (topic === "mesas-layout") {
       window.TPV_TUTORIALS_API?.refreshMesasLayoutFromRemoteNow?.();
+    } else if (topic === "terminal-presence") {
+      // Real de cliente (Asador el Gallo, 2 TPV a proposito con la misma
+      // identidad): antes, enterarse de que otra terminal acababa de entrar
+      // (o salir) dependia del latido de 12s (TERMINAL_PRESENCE_HEARTBEAT_MS)
+      // -- ahora se comprueba ya mismo en cuanto llega el aviso, en vez de
+      // esperar al proximo tick.
+      checkTerminalPresenceOnce?.({ notify: true });
     }
   } catch (e) {
     console.warn("Error procesando aviso de tiempo real:", e?.message || e);
