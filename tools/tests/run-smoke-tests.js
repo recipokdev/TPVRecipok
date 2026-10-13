@@ -9740,6 +9740,72 @@ console.log("\n[SMOKE] Checking 2026-10-12 stock: el ajuste no se aplica si el g
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-13 tiempo real: aviso en vivo de aparcados y Mesas (Parte 1 del plan de sync)\n");
+
+{
+  const idx = renderer.indexOf("function handleRealtimeChangeNotice(topic) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("function scheduleRealtimeReconnect() {", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes('topic === "parked-reservations"') &&
+    scoped.includes("scheduleParkedReservationsBurstRefresh?.(\"realtime\")") &&
+    scoped.includes('topic === "mesas-layout"') &&
+    scoped.includes("window.TPV_TUTORIALS_API?.refreshMesasLayoutFromRemoteNow?.()")
+  ) {
+    ok(
+      "Real en tiempo real (2026-10-13, Parte 1 del plan de sync): handleRealtimeChangeNotice reacciona a un aviso del relay WebSocket aparte (ws.plus.recipok.com) llamando a los MISMOS refrescos que ya dispara el sondeo de siempre (scheduleParkedReservationsBurstRefresh para aparcados, refreshMesasLayoutFromRemoteNow para Mesas) -- antes de esperar hasta 8-10s, en vez de sustituir la logica de refresco existente",
+    );
+  } else {
+    fail(
+      "handleRealtimeChangeNotice ya no enruta los avisos de aparcados/Mesas a los refrescos existentes -- revisar el aviso en tiempo real de 2026-10-13",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("function connectRealtimeSocket() {");
+  const endIdx = idx >= 0 ? renderer.indexOf("function disconnectRealtimeSocket() {", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("if (TPV_STATE?.offline) return;") &&
+    scoped.includes("if (__realtimeSocket) return;") &&
+    scoped.includes("getCurrentSlugForReservations?.()")
+  ) {
+    ok(
+      "connectRealtimeSocket respeta TPV_STATE.offline (nunca intenta conectar sin red) y nunca abre una segunda conexion si ya hay una activa",
+    );
+  } else {
+    fail(
+      "connectRealtimeSocket ya no respeta el estado offline o la deduplicacion de conexiones -- revisar el aviso en tiempo real de 2026-10-13",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("await refreshStockAndReservationsOnly().catch(() => {});");
+  const endIdx = idx >= 0 ? renderer.indexOf("logFeatureInfo(\"CAJA\", \"apertura-ok\"", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (scoped.includes("connectRealtimeSocket?.();")) {
+    ok(
+      "El socket de tiempo real se conecta justo al abrir caja, junto al resto de refrescos automaticos que ya arrancaban ahi (stock, aparcados, caja compartida) -- mismo punto del ciclo de vida, nada nuevo que coordinar",
+    );
+  } else {
+    fail(
+      "La apertura de caja ya no conecta el socket de tiempo real -- revisar el aviso en tiempo real de 2026-10-13",
+    );
+  }
+}
+{
+  const count = renderer.split("disconnectRealtimeSocket?.();").length - 1;
+  if (count >= 2) {
+    ok(
+      `El socket de tiempo real se desconecta en los ${count} sitios donde ya se paraban el resto de refrescos automaticos al cerrar caja (manual o detectado remotamente) -- sin conexiones huerfanas`,
+    );
+  } else {
+    fail(
+      "Faltan sitios donde desconectar el socket de tiempo real al cerrar caja -- revisar el aviso en tiempo real de 2026-10-13",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

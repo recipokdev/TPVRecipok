@@ -25097,6 +25097,7 @@ async function checkSharedCajaHealthOnce() {
     stopParkedReservationsAutoRefresh?.();
     stopSharedCajaHealthMonitor?.();
     stopPayMethodsAutoRefresh?.();
+    disconnectRealtimeSocket?.();
 
     try {
       localStorage.removeItem("tpv_remoteCajaId");
@@ -27251,6 +27252,7 @@ async function confirmCashOpening() {
   scheduleParkedReservationsBurstRefresh?.("cash-open-warmup");
   startSharedCajaHealthMonitor?.();
   startPayMethodsAutoRefresh?.();
+  connectRealtimeSocket?.();
 
   logFeatureInfo("CAJA", "apertura-ok", {
     requestId,
@@ -27378,6 +27380,7 @@ async function confirmCashClosing() {
   stopParkedReservationsAutoRefresh?.();
   stopSharedCajaHealthMonitor?.();
   stopPayMethodsAutoRefresh?.();
+  disconnectRealtimeSocket?.();
   pushCustomerState();
 
   cashSession.remoteCajaId = null;
@@ -40055,6 +40058,109 @@ async function refreshStockAndReservationsOnly() {
 
   updateRenderedProductStocks();
   return true;
+}
+
+// Aviso en tiempo real (Parte 1 del plan de sync, 2026-10-13): un relay
+// WebSocket pequeño y aparte (ws.plus.recipok.com) reenvia un "algo cambio"
+// SIN CONTENIDO justo despues de que el servidor guarda algo con exito --
+// reaccionamos llamando a los MISMOS refrescos que ya dispara el sondeo de
+// siempre, solo que antes. El sondeo de 8-10s se queda exactamente igual,
+// como red de seguridad: si este socket nunca conecta, se cae, o el relay
+// esta caido, el TPV se comporta exactamente igual que hoy, sin ningun
+// cambio de comportamiento ni riesgo. Activacion por cliente piloto: vive
+// SOLO en el servidor (si index.php nunca avisa para un slug, este socket
+// simplemente nunca recibe nada -- no hace falta que el cliente sepa si
+// esta o no en el piloto).
+const TPV_REALTIME_RELAY_URL =
+  window.TPV_CONFIG?.realtimeRelayUrl || "wss://ws.plus.recipok.com/ws";
+
+let __realtimeSocket = null;
+let __realtimeReconnectTimer = null;
+let __realtimeReconnectAttempts = 0;
+
+function handleRealtimeChangeNotice(topic) {
+  try {
+    if (topic === "parked-reservations") {
+      scheduleParkedReservationsBurstRefresh?.("realtime");
+    } else if (topic === "mesas-layout") {
+      window.TPV_TUTORIALS_API?.refreshMesasLayoutFromRemoteNow?.();
+    }
+  } catch (e) {
+    console.warn("Error procesando aviso de tiempo real:", e?.message || e);
+  }
+}
+
+function scheduleRealtimeReconnect() {
+  if (__realtimeReconnectTimer) return;
+  if (TPV_STATE?.offline) return;
+  if (!cashSession?.open) return;
+
+  __realtimeReconnectAttempts = Math.min(__realtimeReconnectAttempts + 1, 6);
+  const delayMs = Math.min(30000, 1000 * 2 ** __realtimeReconnectAttempts);
+  __realtimeReconnectTimer = setTimeout(() => {
+    __realtimeReconnectTimer = null;
+    connectRealtimeSocket();
+  }, delayMs);
+}
+
+function connectRealtimeSocket() {
+  if (TPV_STATE?.offline) return;
+  if (__realtimeSocket) return;
+
+  const slug = String(getCurrentSlugForReservations?.() || "").trim();
+  const apiKey = getTpvSyncApiKey();
+  if (!slug || !apiKey) return;
+
+  let ws;
+  try {
+    const url = `${TPV_REALTIME_RELAY_URL}?key=${encodeURIComponent(apiKey)}&slug=${encodeURIComponent(slug)}`;
+    ws = new WebSocket(url);
+  } catch {
+    return;
+  }
+
+  __realtimeSocket = ws;
+
+  ws.onopen = () => {
+    __realtimeReconnectAttempts = 0;
+  };
+
+  ws.onmessage = (ev) => {
+    let data;
+    try {
+      data = JSON.parse(ev?.data || "");
+    } catch {
+      return;
+    }
+    if (data?.type === "changed") handleRealtimeChangeNotice(data.topic);
+  };
+
+  ws.onclose = () => {
+    if (__realtimeSocket === ws) __realtimeSocket = null;
+    scheduleRealtimeReconnect();
+  };
+
+  ws.onerror = () => {
+    try {
+      ws.close();
+    } catch {}
+  };
+}
+
+function disconnectRealtimeSocket() {
+  if (__realtimeReconnectTimer) {
+    clearTimeout(__realtimeReconnectTimer);
+    __realtimeReconnectTimer = null;
+  }
+  __realtimeReconnectAttempts = 0;
+
+  if (__realtimeSocket) {
+    try {
+      __realtimeSocket.onclose = null;
+      __realtimeSocket.close();
+    } catch {}
+    __realtimeSocket = null;
+  }
 }
 
 function scheduleParkedReservationsBurstRefresh(reason = "manual") {
