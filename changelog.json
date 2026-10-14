@@ -10,6 +10,22 @@
       ]
     },
     {
+      "version": "0.2.46",
+      "date": "2026-10-13",
+      "title": "Release 0.2.46",
+      "changes": [
+        "NUEVO (activo por ahora solo en clientes piloto): el aviso instantáneo entre terminales llega a más cosas. Cuando otra terminal con la misma identidad entra o sale, el aviso \"Hay N TPV activos en esta terminal\" aparece al momento en vez de esperar al latido de 12 segundos. También se enteran al instante de que otra terminal abrió o cerró la caja compartida, y de los cambios del stock reservado. El refresco de siempre sigue funcionando como respaldo."
+      ]
+    },
+    {
+      "version": "0.2.45",
+      "date": "2026-10-13",
+      "title": "Release 0.2.45",
+      "changes": [
+        "NUEVO (activo por ahora solo en clientes piloto): aviso instantáneo entre terminales para los aparcados y el Modo Mesas. Cuando otra terminal guarda, cobra o borra un aparcado, o cambia el plano de Mesas, esta terminal lo ve casi al momento en vez de esperar al refresco de 8-10 segundos. Reduce los choques entre 2 TPV que comparten caja. El refresco de siempre sigue como respaldo: si el aviso no llega, todo funciona como antes."
+      ]
+    },
+    {
       "version": "0.2.44",
       "date": "2026-10-13",
       "title": "Release 0.2.44",
