@@ -9953,6 +9953,33 @@ console.log("\n[SMOKE] Checking 2026-10-14 cobrar: sin pop-up numerico redundant
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-14 tiempo real: el socket tambien se conecta al RECUPERAR una caja ya abierta\n");
+
+{
+  const marker = 'scheduleParkedReservationsBurstRefresh?.("recover-cash-warmup");';
+  let from = 0;
+  let found = 0;
+  let withConnect = 0;
+  for (;;) {
+    const i = renderer.indexOf(marker, from);
+    if (i < 0) break;
+    found++;
+    if (renderer.slice(i, i + marker.length + 80).includes("connectRealtimeSocket?.();")) {
+      withConnect++;
+    }
+    from = i + marker.length;
+  }
+  if (found >= 2 && withConnect === found) {
+    ok(
+      `Los ${found} caminos de recuperacion de caja (reinicio o actualizacion de la app con la caja ya abierta) conectan tambien el socket de tiempo real -- antes solo se conectaba al ABRIR caja, asi que tras cualquier reinicio el aviso instantaneo no funcionaba hasta el siguiente cierre/apertura de caja (detectado arrancando el TPV real: socket 'sin-socket' con la caja ya abierta)`,
+    );
+  } else {
+    fail(
+      `Faltan conexiones del socket de tiempo real en la recuperacion de caja (${withConnect}/${found}) -- revisar el aviso en tiempo real de 2026-10-14`,
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

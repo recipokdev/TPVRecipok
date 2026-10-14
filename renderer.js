@@ -25316,6 +25316,7 @@ async function maybeOpenCashOrRecover() {
           startProductsStockAutoRefresh?.();
           startParkedReservationsAutoRefresh?.();
           scheduleParkedReservationsBurstRefresh?.("recover-cash-warmup");
+          connectRealtimeSocket?.();
           startSharedCajaHealthMonitor?.();
           // Misma razon que en confirmCashOpening(): si la caja se recupera
           // (reinicio de la app con caja ya abierta) en vez de abrirse de
@@ -25410,6 +25411,7 @@ async function maybeOpenCashOrRecover() {
           startProductsStockAutoRefresh?.();
           startParkedReservationsAutoRefresh?.();
           scheduleParkedReservationsBurstRefresh?.("recover-cash-warmup");
+          connectRealtimeSocket?.();
           startSharedCajaHealthMonitor?.();
           // Misma razon que en confirmCashOpening(): si la caja se recupera
           // (reinicio de la app con caja ya abierta) en vez de abrirse de
