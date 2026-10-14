@@ -37800,7 +37800,20 @@ function normalizeRemoteParkedTicket(raw) {
     // para poder mandarla de vuelta como expectedUpdatedAt al guardar (ver
     // apiSaveParkedReservation) sin arriesgar falsos rechazos por ediciones
     // locales que nunca tocaron el servidor.
-    _serverUpdatedAtIso: raw.updatedAt || null,
+    // Conserva la fecha EXACTA que dio el servidor. Este objeto se vuelve a
+    // normalizar con ticket ya normalizados (cache local en JSON, instantaneas):
+    // ahi raw.updatedAt ya es un Date / "...000Z" derivado -- no la cadena del
+    // servidor ("...+00:00") -- y mandarlo como expectedUpdatedAt daba un 412
+    // falso tras cada reinicio (cache cargada antes del primer refresco). Orden:
+    // 1) la que ya lleve el propio ticket, 2) la del servidor si llega como
+    // cadena, 3) nada (sin comprobacion) antes que una fecha inventada.
+    _serverUpdatedAtIso:
+      (typeof raw._serverUpdatedAtIso === "string" && raw._serverUpdatedAtIso.trim()
+        ? raw._serverUpdatedAtIso.trim()
+        : null) ||
+      (typeof raw.updatedAt === "string" && raw.updatedAt.trim()
+        ? raw.updatedAt.trim()
+        : null),
     items,
     total: Number(raw.total || 0),
     codcliente:

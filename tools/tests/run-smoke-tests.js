@@ -6552,9 +6552,12 @@ mustContain(
 
 console.log("\n[SMOKE] Checking 2026-09-17: bloqueo optimista al guardar aparcados (evitar sobrescrituras silenciosas entre TPV/camareros)\n");
 
+// 2026-10-14: ya no es "raw.updatedAt || null" a secas (en un ticket ya
+// normalizado eso era un Date / "...000Z" y daba un 412 falso) -- ver el
+// bloque "2026-10-14 bloqueo optimista" mas abajo.
 mustContain(
   renderer,
-  "_serverUpdatedAtIso: raw.updatedAt || null,",
+  "_serverUpdatedAtIso:",
   "normalizeRemoteParkedTicket tracks the last updated_at actually confirmed by the server, separate from the locally-overloaded updatedAt field",
 );
 mustContain(
@@ -10020,6 +10023,28 @@ console.log("\n[SMOKE] Checking 2026-10-14 salida de emergencia: cerrar sin rein
   } else {
     fail(
       "El aviso de salida de emergencia ya no ofrece 'Cerrar sin reiniciar' con confirmacion -- revisar el cambio de 2026-10-14",
+    );
+  }
+}
+
+console.log("\n[SMOKE] Checking 2026-10-14 bloqueo optimista: la fecha exacta del servidor se conserva al re-normalizar\n");
+
+{
+  const idx = renderer.indexOf("_serverUpdatedAtIso:\r\n      (typeof raw._serverUpdatedAtIso");
+  const idxLf = renderer.indexOf("_serverUpdatedAtIso:\n      (typeof raw._serverUpdatedAtIso");
+  const pos = idx >= 0 ? idx : idxLf;
+  const scoped = pos >= 0 ? renderer.slice(pos, pos + 520) : "";
+  if (
+    scoped.includes('typeof raw._serverUpdatedAtIso === "string"') &&
+    scoped.includes('typeof raw.updatedAt === "string"') &&
+    !renderer.includes("_serverUpdatedAtIso: raw.updatedAt || null,")
+  ) {
+    ok(
+      "Real (2026-10-14, escritorio recien arrancado contra el demo): normalizeRemoteParkedTicket tomaba _serverUpdatedAtIso de raw.updatedAt, que en un ticket ya normalizado (cache local en JSON) es '...000Z'/Date en vez de la cadena del servidor ('...+00:00') -- el servidor comparaba texto exacto y devolvia un 412 falso tras cada reinicio. Ahora se conserva la que ya lleve el ticket, o la del servidor si llega como cadena, o ninguna (sin comprobacion) antes que una inventada. Verificado con la funcion real: normalizar, re-normalizar y pasar por JSON dan siempre '...+00:00'. El servidor tambien compara ya instantes (parkedTimestampsEquivalent), no texto",
+    );
+  } else {
+    fail(
+      "normalizeRemoteParkedTicket ya no conserva la fecha exacta del servidor en _serverUpdatedAtIso -- revisar el arreglo del 412 falso de 2026-10-14",
     );
   }
 }

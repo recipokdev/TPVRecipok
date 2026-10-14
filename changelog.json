@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "CORRECCIÓN: tras reiniciar o actualizar el programa, los aparcados que venían de la memoria local mandaban al servidor una fecha de versión con otro formato (\"...000Z\" en vez de \"...+00:00\") y el servidor, que comparaba el texto exacto, los rechazaba como si otro terminal los hubiera modificado (aviso de \"Remoto más reciente\" / incidencia de sync sin que hubiera pasado nada). Ahora el programa conserva la fecha exacta del servidor y el servidor compara instantes, no texto -- los conflictos reales se siguen detectando igual."
+      ]
     },
     {
       "version": "0.2.47",
