@@ -3157,6 +3157,41 @@ ipcMain.handle("tpv:emergencyRestart", async () => {
   }
 });
 
+// Igual que tpv:emergencyRestart pero SIN reabrir el programa: para quien
+// necesita apagarlo de verdad (p.ej. dejar de usar un TPV que esta
+// interfiriendo con otro) y no puede cerrar caja. Mismas garantias: no toca la
+// caja ni los aparcados, que viven en el servidor.
+ipcMain.handle("tpv:emergencyClose", async () => {
+  try {
+    forceEmergencyRestart = true;
+
+    stopPreCashUpdateRetries();
+    destroyCustomerWindow();
+
+    if (mainWin && !mainWin.isDestroyed()) {
+      try {
+        mainWin.close();
+      } catch {}
+    }
+
+    setTimeout(() => {
+      try {
+        app.exit(0);
+      } catch {}
+    }, 20000);
+
+    app.quit();
+    return { ok: true };
+  } catch (e) {
+    forceEmergencyRestart = false;
+    return {
+      ok: false,
+      reason: "emergency-close-failed",
+      message: e?.message || String(e),
+    };
+  }
+});
+
 ipcMain.handle("tpv:attemptQuit", async () => {
   if (!mainWin || mainWin.isDestroyed()) return { ok: true };
 

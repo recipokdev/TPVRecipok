@@ -9980,6 +9980,50 @@ console.log("\n[SMOKE] Checking 2026-10-14 tiempo real: el socket tambien se con
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-14 salida de emergencia: cerrar sin reiniciar (con confirmacion)\n");
+
+{
+  const mainSrc = fs.readFileSync(path.join(__dirname, "..", "..", "main.js"), "utf8");
+  const preloadSrc = fs.readFileSync(path.join(__dirname, "..", "..", "preload.js"), "utf8");
+  const idx = mainSrc.indexOf('ipcMain.handle("tpv:emergencyClose"');
+  const endIdx = idx >= 0 ? mainSrc.indexOf('ipcMain.handle("tpv:attemptQuit"', idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? mainSrc.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("forceEmergencyRestart = true;") &&
+    scoped.includes("app.quit();") &&
+    !scoped.includes("app.relaunch()") &&
+    preloadSrc.includes('emergencyClose: () => ipcRenderer.invoke("tpv:emergencyClose")')
+  ) {
+    ok(
+      "Real de Sergi (2026-10-14, el jefe no conseguia cerrar el TPV con 'Salir sin cerrar caja (incidencia)'): esa salida llama a emergencyRestart, que hace app.relaunch() -- cierra y VUELVE A ABRIR solo, asi que parecia que no cerraba. Nuevo tpv:emergencyClose (main.js + puente en preload.js): mismo salto del guard de caja/aparcados pero SIN app.relaunch(), para apagar el programa de verdad",
+    );
+  } else {
+    fail(
+      "tpv:emergencyClose ya no cierra sin reabrir (o falta el puente en preload.js) -- revisar la salida de emergencia de 2026-10-14",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf("window.TPV_UI?.onGuard?.(async ({ title, text }) => {");
+  const endIdx = idx >= 0 ? renderer.indexOf("// ===== [09] Feedback UI: toasts =====", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes('middleButtonText: "Cerrar sin reiniciar"') &&
+    scoped.includes('okButtonText: "Reiniciar el programa"') &&
+    scoped.includes("¿Seguro que quieres cerrar el programa?") &&
+    scoped.includes("window.TPV_APP?.emergencyClose?.()") &&
+    scoped.includes("window.TPV_APP?.emergencyRestart?.()")
+  ) {
+    ok(
+      "El aviso de salida de emergencia ofrece explicitamente 'Reiniciar el programa' o 'Cerrar sin reiniciar', y cerrar del todo pide una confirmacion aparte ('¿Seguro que quieres cerrar el programa?') avisando de que no se vuelve a abrir solo y de que la caja y los aparcados no se pierden. El texto ya no dice 'se cerrara' cuando en realidad reiniciaba",
+    );
+  } else {
+    fail(
+      "El aviso de salida de emergencia ya no ofrece 'Cerrar sin reiniciar' con confirmacion -- revisar el cambio de 2026-10-14",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

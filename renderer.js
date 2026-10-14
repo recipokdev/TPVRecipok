@@ -16218,6 +16218,7 @@ function confirmModal(title, text, options = {}) {
 // toca la caja ni los aparcados (viven en el servidor, no se pierden), solo
 // cierra y reabre el programa para poder seguir trabajando.
 const EMERGENCY_EXIT_RESULT = "emergency-exit";
+const EMERGENCY_CLOSE_RESULT = "emergency-close";
 
 window.TPV_UI?.onGuard?.(async ({ title, text }) => {
   const choice = await confirmModal(
@@ -16232,13 +16233,33 @@ window.TPV_UI?.onGuard?.(async ({ title, text }) => {
 
   if (choice !== EMERGENCY_EXIT_RESULT) return;
 
-  const reallyExit = await confirmModal(
+  // Antes este aviso decia que el programa "se cerrará" cuando en realidad se
+  // cierra Y SE VUELVE A ABRIR solo (emergencyRestart): quien queria apagarlo
+  // de verdad lo veia reaparecer y pensaba que no cerraba. Ahora se elige
+  // explicitamente entre reiniciar y cerrar del todo.
+  const exitChoice = await confirmModal(
     "Salida de emergencia",
-    "El programa se cerrará ahora sin cerrar la caja ni cobrar los aparcados -- ambos seguirán exactamente igual que ahora. Vuelve a abrir el programa en cuanto puedas para seguir trabajando.\n\nUsa esto solo si el programa de verdad no responde.",
-    { okButtonText: "Sí, salir de emergencia" },
+    "Elige qué quieres hacer. En los dos casos la caja y los aparcados seguirán exactamente igual que ahora (no se cierra la caja ni se cobra nada).\n\n• Reiniciar: el programa se cierra y se vuelve a abrir solo.\n• Cerrar sin reiniciar: el programa se apaga y NO se vuelve a abrir; tendrás que abrirlo a mano.\n\nUsa esto solo si el programa de verdad no responde.",
+    {
+      okButtonText: "Reiniciar el programa",
+      middleButtonText: "Cerrar sin reiniciar",
+      middleButtonResult: EMERGENCY_CLOSE_RESULT,
+    },
   );
 
-  if (reallyExit) {
+  if (exitChoice === EMERGENCY_CLOSE_RESULT) {
+    const reallyClose = await confirmModal(
+      "¿Seguro que quieres cerrar el programa?",
+      "El programa se APAGARÁ y no se volverá a abrir solo. Mientras esté cerrado, este terminal no podrá vender ni sincronizar.\n\nLa caja seguirá abierta y los aparcados no se pierden: al volver a abrir el programa lo encontrarás todo como ahora.\n\n¿Seguro que quieres cerrarlo del todo?",
+      { okButtonText: "Sí, cerrar el programa" },
+    );
+    if (reallyClose) {
+      await window.TPV_APP?.emergencyClose?.();
+    }
+    return;
+  }
+
+  if (exitChoice) {
     await window.TPV_APP?.emergencyRestart?.();
   }
 });

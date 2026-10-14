@@ -79,6 +79,7 @@ contextBridge.exposeInMainWorld("TPV_APP", {
   getGuards: () => ipcRenderer.invoke("tpv:getGuards"),
   attemptQuit: () => ipcRenderer.invoke("tpv:attemptQuit"),
   emergencyRestart: () => ipcRenderer.invoke("tpv:emergencyRestart"),
+  emergencyClose: () => ipcRenderer.invoke("tpv:emergencyClose"),
   setKioskMode: (enabled) => ipcRenderer.invoke("ui:setKioskMode", !!enabled),
   setCurrentUser: (payload) =>
     ipcRenderer.invoke("auth:setCurrentUser", payload),
