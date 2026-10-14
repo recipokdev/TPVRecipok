@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.47",
+      "date": "2026-10-14",
+      "title": "Release 0.2.47",
       "changes": [
         "MEJORA: la salida de emergencia (pulsar X con la caja abierta → \"Salir sin cerrar caja (incidencia)\") ahora deja elegir entre \"Reiniciar el programa\" y \"Cerrar sin reiniciar\". Antes siempre reiniciaba, aunque el aviso decía que se cerraría, y parecía que no se podía cerrar. Cerrar del todo pide una confirmación aparte (\"¿Seguro que quieres cerrar el programa?\"); la caja y los aparcados no se pierden en ningún caso.",
         "CORRECCIÓN: el aviso instantáneo entre terminales (versiones 0.2.45/0.2.46) solo se conectaba al ABRIR la caja, no cuando la app se reiniciaba o se actualizaba con la caja ya abierta -- el caso normal en el día a día --, así que en esas terminales seguía funcionando solo el refresco de 8-10 segundos. Ahora también se conecta al recuperar una caja ya abierta.",
