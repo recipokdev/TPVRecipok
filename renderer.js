@@ -28216,6 +28216,9 @@ if (cashOpenOkBtn) {
       const ok = await confirmCashCloseModal(closeQuestion);
       if (!ok) return;
 
+      // El cierre se guarda a nombre de un usuario: tiene que existir.
+      if (!(await ensureValidUserBeforeCashClose())) return;
+
       // LOG: abrió ventana cerrar caja
       try {
         if (ctx.idcaja) {
@@ -28304,7 +28307,13 @@ async function apiWrite(resource, method = "POST", fields = {}, opts = {}) {
       "Respuesta:",
       text,
     );
-    throw new Error(data?.message || `HTTP ${res.status} en ${resource}`);
+    const apiErr = new Error(data?.message || `HTTP ${res.status} en ${resource}`);
+    // Texto bruto de la respuesta (FacturaScripts devuelve el motivo real en
+    // "error", no en "message"): lo necesita quien quiera distinguir, p.ej.,
+    // un fallo de clave foranea de un fallo cualquiera.
+    apiErr.apiStatus = res.status;
+    apiErr.apiBody = String(text || "");
+    throw apiErr;
   }
 
   return data;
@@ -28494,6 +28503,63 @@ try {
   if (saved && !cashSession.remoteCajaId) cashSession.remoteCajaId = saved;
 } catch (e) {}
 
+function isCashCloseNickRejection(err) {
+  const body = String(err?.apiBody || "").toLowerCase();
+  return (
+    Number(err?.apiStatus) >= 400 &&
+    body.includes("foreign key") &&
+    body.includes("nick")
+  );
+}
+
+// true = el nick existe en FacturaScripts, false = no existe, null = no se ha
+// podido comprobar (sin red, error raro...): en ese caso NO se bloquea nada.
+async function fsUserNickExists(nick) {
+  const safe = String(nick || "").trim();
+  if (!safe) return false;
+  if (TPV_STATE.offline || TPV_STATE.locked) return null;
+  try {
+    const data = await apiRead(`users/${encodeURIComponent(safe)}`);
+    return !!data;
+  } catch (e) {
+    if (/HTTP 404/.test(String(e?.message || ""))) return false;
+    return null;
+  }
+}
+
+// Antes de cerrar la caja: el usuario con el que se va a cerrar tiene que
+// existir de verdad. Si falta (sesion sin usuario) o ya no es valido (cambiado
+// o borrado en FacturaScripts), se deja elegir otro en la pantalla de login en
+// vez de dejar que el cierre falle en bucle. Devuelve false si se cancela.
+async function ensureValidUserBeforeCashClose() {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const nick = String(
+      getLoginUser?.() || localStorage.getItem("tpv_login_user") || "",
+    ).trim();
+
+    let problem = "";
+    if (!nick || !hasActiveLoginSession()) {
+      problem = "No hay ningún usuario con la sesión iniciada.";
+    } else if ((await fsUserNickExists(nick)) === false) {
+      problem = `El usuario "${nick}" ya no existe en FacturaScripts (puede haberse cambiado o borrado).`;
+    }
+    if (!problem) return true;
+
+    await confirmModal(
+      "Elige un usuario para cerrar la caja",
+      `${problem}
+
+Elige un usuario para poder cerrar la caja.`,
+    );
+
+    LOGIN_MODAL_DRAFT = { user: "", pin: "", isAdmin: false };
+    const okLogin = await openLoginModal();
+    refreshLoggedUserUI?.();
+    if (!okLogin || !hasActiveLoginSession()) return false;
+  }
+  return false;
+}
+
 async function apiCloseCashInFS() {
   if (TPV_STATE.offline || TPV_STATE.locked) return null;
 
@@ -28529,10 +28595,15 @@ async function apiCloseCashInFS() {
     totaltickets: Number(cashSession.totalSales || 0),
   };
 
-  payload.nick =
-    String(
-      getLoginUser?.() || localStorage.getItem("tpv_login_user") || "",
-    ).trim() || "—";
+  // Si no hay usuario NO se manda "nick": antes se mandaba "—", que no es un
+  // usuario de FacturaScripts y hacia que la BD rechazara el cierre entero
+  // (clave foranea sobre nick) una y otra vez. La caja conserva el nick de
+  // quien la abrio.
+  const closeNick = String(
+    getLoginUser?.() || localStorage.getItem("tpv_login_user") || "",
+  ).trim();
+  if (closeNick) payload.nick = closeNick;
+  else delete payload.nick;
 
   // ✅ Mantener observaciones (usuario + automático)
   if (remoteCaja) {
@@ -28541,7 +28612,25 @@ async function apiCloseCashInFS() {
 
   let resp = null;
   try {
-    resp = await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
+    try {
+      resp = await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
+    } catch (firstErr) {
+      // Cierre rechazado porque el nick no existe en FacturaScripts (usuario
+      // cambiado/borrado con la sesion aun guardada). Un fallo de usuario
+      // nunca debe dejar la caja imposible de cerrar: se reintenta UNA vez sin
+      // nick (la caja conserva el de quien la abrio).
+      if (isCashCloseNickRejection(firstErr) && payload.nick !== undefined) {
+        logFeatureWarn("CAJA", "cierre-nick-rechazado-reintento-sin-nick", {
+          cajaId: String(remoteId),
+          nick: payload.nick,
+        });
+        const retryPayload = { ...payload };
+        delete retryPayload.nick;
+        resp = await apiWrite(`tpvcajas/${remoteId}`, "PUT", retryPayload);
+      } else {
+        throw firstErr;
+      }
+    }
   } catch (e) {
     if (isNetworkError(e) || isProbablyNetworkError(e)) {
       const wrapped = new Error(e?.message || String(e));

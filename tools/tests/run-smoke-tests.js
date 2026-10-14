@@ -10049,6 +10049,37 @@ console.log("\n[SMOKE] Checking 2026-10-14 bloqueo optimista: la fecha exacta de
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-14 cierre de caja: nick invalido ya no deja la caja imposible de cerrar\n");
+
+{
+  const closeIdx = renderer.indexOf("async function apiCloseCashInFS()");
+  const closeEnd = closeIdx >= 0 ? renderer.indexOf("async function ensureTerminalAgentDefaults", closeIdx) : -1;
+  const closeBody = closeIdx >= 0 && closeEnd > closeIdx ? renderer.slice(closeIdx, closeEnd) : "";
+  const ensureIdx = renderer.indexOf("async function ensureValidUserBeforeCashClose()");
+  const ensureBody = ensureIdx >= 0 ? renderer.slice(ensureIdx, ensureIdx + 1400) : "";
+  const handlerIdx = renderer.indexOf("const ok = await confirmCashCloseModal(closeQuestion);");
+  const handlerBody = handlerIdx >= 0 ? renderer.slice(handlerIdx, handlerIdx + 400) : "";
+  if (
+    closeBody.includes("isCashCloseNickRejection(firstErr)") &&
+    closeBody.includes("delete retryPayload.nick;") &&
+    closeBody.includes("else delete payload.nick;") &&
+    !closeBody.includes('|| "—"') &&
+    renderer.includes("apiErr.apiBody = String(text || ") &&
+    renderer.includes("async function fsUserNickExists(nick)") &&
+    ensureBody.includes("await openLoginModal()") &&
+    ensureBody.includes("fsUserNickExists(nick)) === false") &&
+    handlerBody.includes("ensureValidUserBeforeCashClose()")
+  ) {
+    ok(
+      "Real (2026-10-14, demo, el jefe de Sergi): cerrar caja fallaba en bucle -- el PUT del cierre mandaba un nick que no existe en FacturaScripts (o '-' si no habia usuario) y la BD lo rechazaba por clave foranea, con dos toasts genericos cada vez. Ahora: (1) antes de cerrar se comprueba que el usuario existe (users/<nick>) y si falta o ya no es valido se abre el login para elegir otro; (2) '-' ya no se manda nunca; (3) si FacturaScripts aun asi rechaza el cierre por el nick, se reintenta UNA vez sin nick (la caja conserva el de quien la abrio)",
+    );
+  } else {
+    fail(
+      "El cierre de caja ya no valida el usuario ni reintenta sin nick ante un rechazo por clave foranea -- revisar el arreglo de 2026-10-14",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

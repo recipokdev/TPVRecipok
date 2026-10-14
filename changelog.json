@@ -6,7 +6,8 @@
       "date": "",
       "title": "",
       "changes": [
-        "CORRECCIÓN: tras reiniciar o actualizar el programa, los aparcados que venían de la memoria local mandaban al servidor una fecha de versión con otro formato (\"...000Z\" en vez de \"...+00:00\") y el servidor, que comparaba el texto exacto, los rechazaba como si otro terminal los hubiera modificado (aviso de \"Remoto más reciente\" / incidencia de sync sin que hubiera pasado nada). Ahora el programa conserva la fecha exacta del servidor y el servidor compara instantes, no texto -- los conflictos reales se siguen detectando igual."
+        "CORRECCIÓN: tras reiniciar o actualizar el programa, los aparcados que venían de la memoria local mandaban al servidor una fecha de versión con otro formato (\"...000Z\" en vez de \"...+00:00\") y el servidor, que comparaba el texto exacto, los rechazaba como si otro terminal los hubiera modificado (aviso de \"Remoto más reciente\" / incidencia de sync sin que hubiera pasado nada). Ahora el programa conserva la fecha exacta del servidor y el servidor compara instantes, no texto -- los conflictos reales se siguen detectando igual.",
+        "CORRECCIÓN: cerrar la caja podía fallar una y otra vez (dos avisos de \"No se pudo cerrar la caja\" cada vez) cuando el usuario con el que se había entrado ya no existía en FacturaScripts o no había ninguno. Ahora, al confirmar el cierre, el programa comprueba el usuario y, si falta o ya no es válido, abre la pantalla de inicio de sesión para elegir otro antes de cerrar. Si aun así FacturaScripts rechazara el cierre por el usuario, se reintenta una vez sin él (la caja conserva el de quien la abrió), así que ya no queda un cierre imposible."
       ]
     },
     {
