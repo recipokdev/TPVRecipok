@@ -9894,27 +9894,6 @@ console.log("\n[SMOKE] Checking 2026-10-13 tiempo real: caja compartida y stock 
   }
 }
 
-console.log("\n[SMOKE] Checking 2026-10-14 stock: un pack [stock_derivado] no reserva su propio stock\n");
-
-{
-  const idx = renderer.indexOf("function buildReservedQtyByProductMap(items) {");
-  const endIdx = idx >= 0 ? renderer.indexOf("function buildReservedQtyDeltaMap(", idx) : -1;
-  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
-  if (
-    scoped.includes("const packLineIdsWithChildren = new Set();") &&
-    scoped.includes("packLineIdsWithChildren.has(String(it._lineId))") &&
-    scoped.includes("productHasDerivedStockMarker(packProduct)) return;")
-  ) {
-    ok(
-      "buildReservedQtyByProductMap ya no reserva el stock propio de un producto-pack con la marca [stock_derivado] cuando su linea hija (el ingrediente real) esta en el mismo ticket -- antes escribia tambien 1 unidad en el pack (nostock no protege esa ruta) y su numero oficial en FacturaScripts oscilaba +-1 mientras habia un aparcado. Sin hijo en el ticket, o en packs sin la marca, se reserva como siempre. Verificado en vivo contra el demo: reservar 0,5 pollo entero (610 11->10,5) deja el pack (611) en 22 y al liberar vuelve a 11/22",
-    );
-  } else {
-    fail(
-      "buildReservedQtyByProductMap ya no salta la reserva propia de los packs [stock_derivado] con hijo expandido -- revisar el arreglo de 2026-10-14",
-    );
-  }
-}
-
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

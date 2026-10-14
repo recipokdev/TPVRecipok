@@ -5,9 +5,7 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": [
-        "MEJORA: al aparcar un producto de fracción (\"Medio Pollo\", etc. con la marca [stock_derivado]), el TPV ya no reserva además 1 unidad del propio producto en FacturaScripts -- solo reserva el ingrediente real. Evita que el número de esos productos oscile ±1 en el panel de FacturaScripts mientras hay un aparcado."
-      ]
+      "changes": []
     },
     {
       "version": "0.2.44",

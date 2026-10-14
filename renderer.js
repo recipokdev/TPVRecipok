@@ -37297,37 +37297,9 @@ function roundQty3(value) {
 
 function buildReservedQtyByProductMap(items) {
   const out = new Map();
-  const list = Array.isArray(items) ? items : [];
 
-  // Lineas de pack que ya llevan su(s) hijo(s) expandido(s) en este mismo
-  // ticket (el hijo es el que reserva el ingrediente real).
-  const packLineIdsWithChildren = new Set();
-  list.forEach((it) => {
-    if (it?.meta?.includedInPack && it?.meta?.parentPackLineId) {
-      packLineIdsWithChildren.add(String(it.meta.parentPackLineId));
-    }
-  });
-
-  list.forEach((it) => {
+  (Array.isArray(items) ? items : []).forEach((it) => {
     let idProd = getProductBaseId(it);
-
-    // Un producto-pack con la marca [stock_derivado] ("Medio Pollo") no tiene
-    // stock propio: se calcula a partir de su padre. Antes, ademas de reservar
-    // el ingrediente real via la linea hija, tambien reservaba 1 unidad del
-    // propio pack con una escritura directa a /stocks/:id (que nostock no
-    // protege) -- el numero oficial del pack en FacturaScripts oscilaba +-1
-    // mientras habia un aparcado, hasta que el cron lo corregia. Solo si el
-    // hijo ya esta en el ticket: sin el, se reserva como siempre para no
-    // dejar el ingrediente sin reservar.
-    if (
-      !it?.meta?.includedInPack &&
-      it?._lineId &&
-      idProd &&
-      packLineIdsWithChildren.has(String(it._lineId))
-    ) {
-      const packProduct = findProductByBaseId(idProd);
-      if (packProduct && productHasDerivedStockMarker(packProduct)) return;
-    }
 
     // Para hijos de pack, prioriza resolver por referencia para evitar ids inválidos
     // heredados de líneas de plantilla (p. ej. id de packline en lugar de idproducto).
