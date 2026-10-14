@@ -7520,10 +7520,14 @@ console.log(
   "\n[SMOKE] Checking 2026-09-21 on-screen keyboard audit fixes (real-usage feedback)\n",
 );
 
+// 2026-10-14: la comprobacion que habia aqui (el importe de cada forma de pago
+// abre openNumPad al tocarlo) se retiro a proposito -- el modal de Cobrar ya
+// lleva su propio teclado a la derecha (.pay-keypad), asi que ese pop-up era
+// redundante y lo tapaba. Ver el bloque "2026-10-14 cobrar" mas abajo.
 mustContain(
   renderer,
-  "openNumPad(\r\n        inp.value || \"\",",
-  "Each payment-method amount field in the Cobrar modal now opens the numeric keypad on tap -- previously it had NO keyboard mechanism at all (not even a fallback button), making it impossible to type a payment amount on a touchscreen TPV with no physical keyboard",
+  'inp.addEventListener("click", () => selectPayInput(fp.codpago));',
+  "Each payment-method amount field in the Cobrar modal is typed with the built-in numeric keypad on the right (.pay-keypad) -- tapping the field only selects it, no extra pop-up keypad on top",
 );
 mustContain(
   renderer,
