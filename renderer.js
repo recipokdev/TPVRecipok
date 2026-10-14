@@ -45532,23 +45532,11 @@ function renderPayMethods() {
     inp.value = payModalState.values[fp.codpago] || "";
 
     inp.addEventListener("focus", () => selectPayInput(fp.codpago));
-    inp.addEventListener("click", () => {
-      selectPayInput(fp.codpago);
-      // El importe de cada forma de pago no tenía NINGÚN teclado enganchado
-      // (ni QWERTY ni numérico) -- en un TPV táctil sin teclado físico no se
-      // podía escribir el importe cobrado. Mismo mecanismo "cash" que ya usa
-      // el importe directo de caja (openCashDirectTotalNumPad).
-      openNumPad(
-        inp.value || "",
-        (value, meta = {}) => {
-          if (String(meta?.phase || "") === "cancel") return;
-          inp.value = String(value ?? "");
-          inp.dispatchEvent(new Event("input", { bubbles: true }));
-        },
-        fp.descripcion || fp.codpago,
-        "cash",
-      );
-    });
+    // Sin pop-up numerico al tocar el importe: el modal de cobro ya lleva su
+    // propio teclado a la derecha (.pay-keypad, bindPayKeypadOnce) que escribe
+    // en el importe seleccionado. Un pop-up extra (con la calculadora de
+    // + - x /) tapaba justo ese teclado y era redundante.
+    inp.addEventListener("click", () => selectPayInput(fp.codpago));
 
     inp.addEventListener("input", () => {
       const raw = inp.value;

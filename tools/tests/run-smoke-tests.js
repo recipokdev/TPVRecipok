@@ -9929,6 +9929,26 @@ console.log("\n[SMOKE] Checking 2026-10-14 stock: al cobrar, un pack [stock_deri
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-14 cobrar: sin pop-up numerico redundante sobre el teclado del cobro\n");
+
+{
+  const idx = renderer.indexOf('inp.className = "pay-amount";');
+  const endIdx = idx >= 0 ? renderer.indexOf('inp.addEventListener("input"', idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes('inp.addEventListener("click", () => selectPayInput(fp.codpago));') &&
+    !scoped.includes("openNumPad(")
+  ) {
+    ok(
+      "Real de Sergi (2026-10-14): el importe de cada forma de pago (.pay-amount) ya no abre el pop-up numerico (openNumPad 'cash', con calculadora + - x /) al tocarlo -- el modal de Cobrar ya lleva su propio teclado a la derecha (.pay-keypad) que escribe en el importe seleccionado, y el pop-up lo tapaba. Se anadio por error el 2026-09-21 en una auditoria de teclados que no vio el teclado integrado. Verificado en vivo (app real contra demo): tocar el importe no abre el pop-up, el teclado de la derecha escribe, C vacia y el teclado fisico sigue valiendo",
+    );
+  } else {
+    fail(
+      "El importe de pago vuelve a abrir el pop-up numerico (openNumPad) encima del teclado del cobro -- revisar el arreglo de 2026-10-14",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
