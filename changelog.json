@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "CORRECCIÓN: al cobrar un aparcado con un producto de fracción (\"Medio Pollo\", etc. con la marca [stock_derivado]), el número de ese producto en FacturaScripts quedaba 1 por encima de lo correcto hasta la siguiente corrección automática. Ahora, al cobrar, la unidad reservada al aparcar pasa a ser la venta real y no se devuelve (al borrar sin cobrar sí se devuelve todo, como siempre)."
+      ]
     },
     {
       "version": "0.2.44",

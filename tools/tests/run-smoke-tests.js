@@ -9894,6 +9894,41 @@ console.log("\n[SMOKE] Checking 2026-10-13 tiempo real: caja compartida y stock 
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-14 stock: al cobrar, un pack [stock_derivado] no recupera su unidad reservada\n");
+
+{
+  const idx = renderer.indexOf("function buildReservedQtyByProductMap(items, opts = {}) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("function buildReservedQtyDeltaMap(", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("const skipDerivedPackOwn = !!opts?.skipDerivedPackOwn;") &&
+    scoped.includes("packLineIdsWithChildren.has(String(it._lineId))") &&
+    scoped.includes("productHasDerivedStockMarker(packProduct)) return;")
+  ) {
+    ok(
+      "buildReservedQtyByProductMap acepta skipDerivedPackOwn: salta la linea propia de un pack [stock_derivado] solo si su hijo expandido (meta.parentPackLineId) esta en el mismo ticket. Verificado en vivo contra el demo (aparcar 11->10,5 / pack 22->21; cobrar antes dejaba el pack en 22, ahora 21 = derivado; borrar sin cobrar devuelve 11/22)",
+    );
+  } else {
+    fail(
+      "buildReservedQtyByProductMap ya no soporta skipDerivedPackOwn -- revisar el arreglo de 2026-10-14",
+    );
+  }
+}
+{
+  const idx = renderer.indexOf('"cobrar aparcado",');
+  const start = idx >= 0 ? renderer.lastIndexOf("const reservedDelta = buildReservedQtyDeltaMap([], reservedItems", idx) : -1;
+  const scoped = start >= 0 ? renderer.slice(start, idx) : "";
+  if (scoped.includes("skipDerivedPackOwn: true")) {
+    ok(
+      "markParkedTicketAsPaidByIndex libera la reserva al cobrar con skipDerivedPackOwn: true (la unidad propia del pack ya es la venta real); los borrados siguen sin la opcion y devuelven todo",
+    );
+  } else {
+    fail(
+      "markParkedTicketAsPaidByIndex ya no pasa skipDerivedPackOwn al liberar al cobrar -- revisar el arreglo de 2026-10-14",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

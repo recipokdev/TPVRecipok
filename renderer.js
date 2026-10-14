@@ -22377,7 +22377,11 @@ async function markParkedTicketAsPaidByIndex(
   await waitForPendingParkedStockSyncTail(ticket?.id);
 
   const reservedItems = Array.isArray(ticket?.items) ? ticket.items : [];
-  const reservedDelta = buildReservedQtyDeltaMap([], reservedItems);
+  // skipDerivedPackOwn: ver buildReservedQtyByProductMap -- al cobrar, la
+  // unidad propia reservada de un pack [stock_derivado] ya es la venta real.
+  const reservedDelta = buildReservedQtyDeltaMap([], reservedItems, {
+    skipDerivedPackOwn: true,
+  });
 
   if (reservedDelta.size > 0) {
     try {
@@ -37295,11 +37299,44 @@ function roundQty3(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 1000) / 1000;
 }
 
-function buildReservedQtyByProductMap(items) {
+// skipDerivedPackOwn: SOLO para liberar la reserva al COBRAR un aparcado. Un
+// producto-pack con la marca [stock_derivado] ("Medio Pollo") reserva al
+// aparcar 1 unidad propia ademas del ingrediente real (via la linea hija) --
+// correcto, el numero oficial del pack baja a la vez que el padre. Pero al
+// cobrar, la factura real descuenta 0,5 al padre y NADA al pack (nostock lo
+// protege): si ademas se le devolvia al pack su unidad reservada, quedaba 1
+// por encima de lo correcto (22 en vez de 21) hasta que el cron lo corregia.
+// Al cobrar esa unidad pasa a ser la venta real, asi que no se devuelve. Al
+// BORRAR un aparcado sin cobrar (sin esta opcion) se devuelve todo, como
+// siempre. Solo se salta la linea del pack si su hijo expandido esta en el
+// mismo ticket; sin hijo, o en packs sin la marca, nada cambia.
+function buildReservedQtyByProductMap(items, opts = {}) {
   const out = new Map();
+  const list = Array.isArray(items) ? items : [];
+  const skipDerivedPackOwn = !!opts?.skipDerivedPackOwn;
 
-  (Array.isArray(items) ? items : []).forEach((it) => {
+  const packLineIdsWithChildren = new Set();
+  if (skipDerivedPackOwn) {
+    list.forEach((it) => {
+      if (it?.meta?.includedInPack && it?.meta?.parentPackLineId) {
+        packLineIdsWithChildren.add(String(it.meta.parentPackLineId));
+      }
+    });
+  }
+
+  list.forEach((it) => {
     let idProd = getProductBaseId(it);
+
+    if (
+      skipDerivedPackOwn &&
+      !it?.meta?.includedInPack &&
+      it?._lineId &&
+      idProd &&
+      packLineIdsWithChildren.has(String(it._lineId))
+    ) {
+      const packProduct = findProductByBaseId(idProd);
+      if (packProduct && productHasDerivedStockMarker(packProduct)) return;
+    }
 
     // Para hijos de pack, prioriza resolver por referencia para evitar ids inválidos
     // heredados de líneas de plantilla (p. ej. id de packline en lugar de idproducto).
@@ -37321,9 +37358,9 @@ function buildReservedQtyByProductMap(items) {
   return out;
 }
 
-function buildReservedQtyDeltaMap(nextItems, prevItems) {
-  const nextMap = buildReservedQtyByProductMap(nextItems);
-  const prevMap = buildReservedQtyByProductMap(prevItems);
+function buildReservedQtyDeltaMap(nextItems, prevItems, opts = {}) {
+  const nextMap = buildReservedQtyByProductMap(nextItems, opts);
+  const prevMap = buildReservedQtyByProductMap(prevItems, opts);
 
   const out = new Map();
   const keys = new Set([...nextMap.keys(), ...prevMap.keys()]);
