@@ -10098,7 +10098,7 @@ console.log("\n[SMOKE] Checking 2026-10-15 lineas ya enviadas a cocina: confirma
     renderer.includes("function findUnsentTwinLine(item, sentMap = getKitchenSentQtyByLineId())") &&
     renderer.includes("function getSentUnitsRemovedByReduction(item, newQty)") &&
     renderer.includes("updateCartItemQuantity(lineId, 0, { deleteLine: true });") &&
-    renderer.includes('pendingDivider.textContent = "Pendiente de enviar";') &&
+    renderer.includes('"Pendiente de enviar" : "No va a cocina"') &&
     styles.includes(".cart-batch-divider--pending") &&
     !renderer.includes('"Carrito recuperado tras cierre inesperado."') &&
     renderer.includes('if (MESAS_INLINE_VIEW === "diseno") {') &&
