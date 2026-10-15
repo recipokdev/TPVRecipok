@@ -10080,6 +10080,34 @@ console.log("\n[SMOKE] Checking 2026-10-14 cierre de caja: nick invalido ya no d
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-15 lineas ya enviadas a cocina: confirmacion al tocarlas\n");
+
+{
+  const helperIdx = renderer.indexOf("function getKitchenSentQtyByLineId(");
+  const helperBody = helperIdx >= 0 ? renderer.slice(helperIdx, helperIdx + 1800) : "";
+  const handlersIdx = renderer.indexOf("// ===== QTY (+/-/edit) =====");
+  const handlersEnd = handlersIdx >= 0 ? renderer.indexOf("// ===== [06] UI base: indicador de estado =====", handlersIdx) : -1;
+  const handlers = handlersIdx >= 0 && handlersEnd > handlersIdx ? renderer.slice(handlersIdx - 2500, handlersEnd) : "";
+  const confirmCalls = (handlers.match(/confirmEditOfKitchenSentLine\(/g) || []).length;
+  if (
+    helperBody.includes("getComandaDeltaLinesForTicket(ticket, sourceLines)") &&
+    renderer.includes("async function confirmEditOfKitchenSentLine(item, message)") &&
+    confirmCalls >= 5 &&
+    handlers.includes("previewCartItemQuantity(lineId, qtyAtOpen)") &&
+    renderer.includes("cart-line-kitchen-note") &&
+    renderer.includes('divider.textContent = "Ya en cocina";') &&
+    styles.includes(".cart-line-kitchen-note")
+  ) {
+    ok(
+      "Real (Sergi, 2026-10-15, Modo Mesas): una linea en gris (ya enviada a cocina) se podia bajar, borrar o cambiar de precio sin aviso, y al pulsar + se volvia toda negra como si se hubiera perdido lo ya enviado. Ahora: bajar por debajo de lo enviado, borrar, cambiar precio o descuento piden confirmacion (no bloquean: subir cantidad sigue libre); una linea con parte enviada y parte nueva muestra '2 ya en cocina - 1 nueva'; y las lineas ya en cocina sin marca de camarero se separan con una raya 'Ya en cocina'. Verificado con la app real aislada: sin pregunta en +, en - hasta lo enviado y en lineas nuevas; con pregunta (rechazada no cambia nada, aceptada si) en -/borrar/precio por debajo de lo enviado",
+    );
+  } else {
+    fail(
+      "Las lineas ya enviadas a cocina ya no piden confirmacion al bajarlas/borrarlas/cambiar precio o descuento, o ya no se separan/etiquetan -- revisar el cambio de 2026-10-15",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

@@ -5,7 +5,10 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "MEJORA: en Modo Mesas, las líneas que ya se enviaron a cocina (en gris) ahora piden confirmación antes de bajarles la cantidad por debajo de lo enviado, borrarlas o cambiarles el precio o el descuento (\"Ya está en cocina… ¿seguro?\"). Subir la cantidad sigue siendo libre. Si se baja o borra algo ya enviado, se avisa a cocina como devolución en el próximo envío.",
+        "MEJORA: una línea con parte ya enviada y parte nueva (p. ej. 2 en cocina y 1 que se acaba de sumar) ya no se pone toda en negro como si se hubiera perdido lo enviado: muestra \"2 ya en cocina · 1 nueva\". Además, las líneas ya en cocina que no traen la marca de hora del camarero se separan de las nuevas con una raya \"Ya en cocina\"."
+      ]
     },
     {
       "version": "0.2.48",

@@ -14234,6 +14234,46 @@ async function addToCart(product, quantity = 1) {
   renderCart();
 }
 
+// Real (Sergi, 2026-10-15): una linea en gris (ya enviada a cocina) se podia
+// bajar, borrar o cambiar de precio sin ningun aviso. Cuantas unidades de
+// cada linea se mandaron YA a cocina: cantidad de la linea menos lo que sigue
+// pendiente segun el mismo calculo que usa "Enviar comanda"
+// (getComandaDeltaLinesForTicket). Vacio si no hay ticket cargado (nada se ha
+// podido imprimir todavia).
+function getKitchenSentQtyByLineId(sourceLines = cart) {
+  const map = new Map();
+  const ticket =
+    currentParkedTicketIndex != null
+      ? parkedTickets?.[currentParkedTicketIndex]
+      : null;
+  if (!ticket) return map;
+
+  const pendingByLineId = new Map();
+  getComandaDeltaLinesForTicket(ticket, sourceLines).forEach((l) => {
+    pendingByLineId.set(l._lineId, Number(l.qty) || 0);
+  });
+
+  getComandaPrintableLines(sourceLines || []).forEach((l) => {
+    const qty = Number(l.qty) || 0;
+    const sent = Math.max(0, qty - (pendingByLineId.get(l._lineId) || 0));
+    if (sent > 0.0001) map.set(l._lineId, sent);
+  });
+  return map;
+}
+
+// Pide confirmacion antes de tocar algo que cocina ya tiene. Resuelve true si
+// no hace falta preguntar (la linea no esta enviada) o si el usuario acepta.
+async function confirmEditOfKitchenSentLine(item, message) {
+  const sent = getKitchenSentQtyByLineId().get(item?._lineId) || 0;
+  if (sent <= 0) return true;
+  const name = String(item?.name || "Producto").trim();
+  const ok = await confirmModal(
+    "Ya está en cocina",
+    `${name}: ${fmtQty(sent)} ya enviad${sent === 1 ? "a" : "as"} a cocina.\n\n${message}`,
+  );
+  return !!ok;
+}
+
 function updateCartItemQuantity(lineId, newQty) {
   const editLockReason = getCartEditLockReason();
   if (editLockReason) {
@@ -15007,6 +15047,7 @@ function renderCart() {
     !!comandaPendingLineIds &&
     comandaRelevantLineIds.has(item._lineId) &&
     !comandaPendingLineIds.has(item._lineId);
+  const kitchenSentQtyByLineId = getKitchenSentQtyByLineId(cartItems);
 
   // "Lanzar por tanda": el boton de retener/lanzar solo tiene sentido en
   // Modo Mesas (unico sitio con comanda a cocina) y solo para productos del
@@ -15040,19 +15081,31 @@ function renderCart() {
   // cayendo en el mismo).
   let lastSentBatchAt = "";
 
+  // Real (Sergi, 2026-10-15): lineas ya en cocina SIN marca de envio del
+  // camarero (impresas desde el propio TPV, o la app no mando la hora) no
+  // llevaban ninguna separacion de las nuevas. Ahora se agrupan bajo una raya
+  // "Ya en cocina" -- la marca "hora · camarero" sigue mandando cuando existe.
+  const KITCHEN_GROUP_KEY = "__ya-en-cocina__";
+
   uiLines.forEach((item) => {
     const itemBatchAt = String(item?.sentBatchAt || "").trim();
-    if (itemBatchAt && itemBatchAt !== lastSentBatchAt) {
+    const groupKey =
+      itemBatchAt || (isLineAlreadySentToKitchen(item) ? KITCHEN_GROUP_KEY : "");
+    if (groupKey && groupKey !== lastSentBatchAt) {
       const divider = document.createElement("div");
       divider.className = "cart-batch-divider";
-      const d = new Date(itemBatchAt);
-      const timeLabel = Number.isFinite(d.getTime())
-        ? d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })
-        : "";
-      divider.textContent = timeLabel ? `${timeLabel} · camarero` : "Camarero";
+      if (itemBatchAt) {
+        const d = new Date(itemBatchAt);
+        const timeLabel = Number.isFinite(d.getTime())
+          ? d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })
+          : "";
+        divider.textContent = timeLabel ? `${timeLabel} · camarero` : "Camarero";
+      } else {
+        divider.textContent = "Ya en cocina";
+      }
       container.appendChild(divider);
     }
-    lastSentBatchAt = itemBatchAt;
+    lastSentBatchAt = groupKey;
 
     const pricing = getCartLinePricing(item);
     const unitPrice = Number(pricing.unitGross || 0);
@@ -15123,6 +15176,16 @@ function renderCart() {
         .join(", ");
     }
 
+    // Linea con parte ya en cocina y parte nueva (p.ej. 2 enviadas + 1 que
+    // acaba de sumar el cajero): sin esto, al pulsar "+" sobre una linea gris
+    // se volvia toda negra y parecia que se habia perdido lo ya enviado.
+    const kitchenSentQty = kitchenSentQtyByLineId.get(item._lineId) || 0;
+    const kitchenNewQty = Math.max(0, (Number(item.qty) || 0) - kitchenSentQty);
+    const kitchenPartialNote =
+      kitchenSentQty > 0 && !isLineAlreadySentToKitchen(item)
+        ? `<div class="cart-line-kitchen-note">${fmtQty(kitchenSentQty)} ya en cocina · ${fmtQty(kitchenNewQty)} ${Math.abs(kitchenNewQty - 1) < 0.0001 ? "nueva" : "nuevas"}</div>`
+        : "";
+
     const showComandaHoldBtn =
       isMesasTransView &&
       !isPackChildLine(item) &&
@@ -15144,6 +15207,8 @@ function renderCart() {
               : ""
           }
         </div>
+
+        ${kitchenPartialNote}
 
         ${
           item.comandaHeld
@@ -18112,6 +18177,15 @@ if (cartLinesContainer) {
       const currentPct = getCartLineDiscountPercent(item);
       const globalPct = getCartGlobalDiscountPercent();
 
+      if (
+        !(await confirmEditOfKitchenSentLine(
+          item,
+          "El descuento se aplicará también a lo que ya está en cocina. ¿Cambiarlo de todos modos?",
+        ))
+      ) {
+        return;
+      }
+
       openNumPad(
         String(formatDiscountPercent(currentPct || globalPct || 0)),
         (nextValue, meta = {}) => {
@@ -18155,6 +18229,21 @@ if (cartLinesContainer) {
       }
 
       if (action === "minus") {
+        const sentNow = getKitchenSentQtyByLineId().get(lineId) || 0;
+        if (
+          sentNow > 0 &&
+          !isPackParentLine(item) &&
+          roundQty(item.qty - 1) < sentNow
+        ) {
+          if (
+            !(await confirmEditOfKitchenSentLine(
+              item,
+              "Si quitas una unidad se avisará a cocina como devolución en el próximo envío. ¿Quitarla de todos modos?",
+            ))
+          ) {
+            return;
+          }
+        }
         if (isPackParentLine(item)) {
           const nextQty = roundQty(item.qty - 1);
           if (nextQty <= 0) {
@@ -18172,6 +18261,7 @@ if (cartLinesContainer) {
       }
 
       if (action === "edit") {
+        const qtyAtOpen = item.qty;
         openNumPad(
           String(item.qty ?? 1),
           (newQty, meta = {}) => {
@@ -18191,8 +18281,22 @@ if (cartLinesContainer) {
               return;
             }
 
-            if (isConfirm) updateCartItemQuantity(lineId, qq);
-            else previewCartItemQuantity(lineId, qq);
+            if (isConfirm) {
+              const sentNow = getKitchenSentQtyByLineId().get(lineId) || 0;
+              if (sentNow > 0 && qq < sentNow) {
+                // La vista previa ya ha movido la cantidad: si no se confirma,
+                // se devuelve a la que tenia al abrir el teclado.
+                confirmEditOfKitchenSentLine(
+                  item,
+                  "Si bajas la cantidad se avisará a cocina como devolución en el próximo envío. ¿Bajarla de todos modos?",
+                ).then((okEdit) => {
+                  if (okEdit) updateCartItemQuantity(lineId, qq);
+                  else previewCartItemQuantity(lineId, qtyAtOpen);
+                });
+                return;
+              }
+              updateCartItemQuantity(lineId, qq);
+            } else previewCartItemQuantity(lineId, qq);
           },
           item.name,
           "qty",
@@ -18213,6 +18317,15 @@ if (cartLinesContainer) {
       const editLockReason = getCartEditLockReason();
       if (editLockReason) {
         toast(editLockReason, "warn", "Carrito bloqueado");
+        return;
+      }
+
+      if (
+        !(await confirmEditOfKitchenSentLine(
+          item,
+          "El precio cambiará también en lo que ya está en cocina. ¿Cambiarlo de todos modos?",
+        ))
+      ) {
         return;
       }
 
@@ -18268,6 +18381,15 @@ if (cartLinesContainer) {
       if (isPackParentLine(item)) {
         removePackCascade(item._lineId);
         renderCart();
+        return;
+      }
+
+      if (
+        !(await confirmEditOfKitchenSentLine(
+          item,
+          "Si la quitas se avisará a cocina como devolución en el próximo envío. ¿Quitarla de todos modos?",
+        ))
+      ) {
         return;
       }
 
