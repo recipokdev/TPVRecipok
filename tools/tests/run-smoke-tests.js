@@ -10170,6 +10170,7 @@ console.log("\n[SMOKE] Checking 2026-10-15 barra grande Enviar comanda (Modo Mes
     renderer.includes('lineKind === "pending" ? "Pendiente de enviar" : "No va a cocina"') &&
     renderer.includes('"producto no va" : "productos no van"') &&
     renderer.includes("const orderedUiLines = [") &&
+    renderer.includes("...unsentUiLines.filter((it) => isNoKitchenLine(it)),") &&
     renderer.includes("divider.textContent = `Enviado · ${bits.filter(Boolean).join(\" · \")}`;") &&
     renderer.includes("sentPart: Math.max(0, Number(prev?.seq || 0) || 0) + 1,") &&
     styles.includes(".send-comanda-bar")

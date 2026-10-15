@@ -15226,9 +15226,17 @@ function renderCart() {
     .filter(({ it }) => isLineAlreadySentToKitchen(it))
     .sort((a, b) => lineSentTimeMs(a.it) - lineSentTimeMs(b.it) || a.i - b.i)
     .map(({ it }) => it);
+  // Lo no enviado: primero lo PENDIENTE de enviar (lo que saldra en la proxima
+  // comanda), despues lo que NO va a cocina -- sin mezclarlos.
+  const isNoKitchenLine = (it) =>
+    !!comandaPendingLineIds &&
+    !it?.comandaHeld &&
+    !comandaPendingLineIds.has(it._lineId);
+  const unsentUiLines = uiLines.filter((it) => !isLineAlreadySentToKitchen(it));
   const orderedUiLines = [
     ...sentUiLines,
-    ...uiLines.filter((it) => !isLineAlreadySentToKitchen(it)),
+    ...unsentUiLines.filter((it) => !isNoKitchenLine(it)),
+    ...unsentUiLines.filter((it) => isNoKitchenLine(it)),
   ];
 
   orderedUiLines.forEach((item) => {
