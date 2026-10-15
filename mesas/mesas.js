@@ -1514,13 +1514,16 @@ async function apiSaveMesasLayoutRemote(nextState) {
     }
     const conflictLayout = data?.data?.layout;
     applyMesasLayoutConflictRecovery(conflictLayout);
-    try {
-      window.parent?.toast?.(
-        "El diseño de Mesas se actualizó desde otro terminal. Se ha recargado la versión más reciente.",
-        "warn",
-        "Mesas",
-      );
-    } catch {}
+    // Solo se avisa al editar el diseño (ver renderer.js, mismo criterio).
+    if (state?.activeView === "diseno") {
+      try {
+        window.parent?.toast?.(
+          "El diseño de Mesas se actualizó desde otro terminal. Se ha recargado la versión más reciente.",
+          "warn",
+          "Mesas",
+        );
+      } catch {}
+    }
 
     const conflictErr = new Error("mesas-layout-save-conflict");
     conflictErr.mesasLayoutConflict = true;

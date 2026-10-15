@@ -10095,6 +10095,13 @@ console.log("\n[SMOKE] Checking 2026-10-15 lineas ya enviadas a cocina: confirma
     confirmCalls >= 5 &&
     handlers.includes("else if (sentAtOpen <= 0) previewCartItemQuantity(lineId, qq);") &&
     renderer.includes("function addUnitsAsNewLineAfterSentLine(sentItem, extra)") &&
+    renderer.includes("function findUnsentTwinLine(item, sentMap = getKitchenSentQtyByLineId())") &&
+    renderer.includes("function getSentUnitsRemovedByReduction(item, newQty)") &&
+    renderer.includes("updateCartItemQuantity(lineId, 0, { deleteLine: true });") &&
+    renderer.includes('pendingDivider.textContent = "Pendiente de enviar";') &&
+    styles.includes(".cart-batch-divider--pending") &&
+    !renderer.includes('"Carrito recuperado tras cierre inesperado."') &&
+    renderer.includes('if (MESAS_INLINE_VIEW === "diseno") {') &&
     renderer.includes("addUnitsAsNewLineAfterSentLine(item, q - (Number(item.qty) || 0));") &&
     renderer.includes("const kitchenSentForAdd = getKitchenSentQtyByLineId();") &&
     renderer.includes("waiterSent: !!String(line?.sentBatchAt || \"\").trim(),") &&
@@ -10103,7 +10110,7 @@ console.log("\n[SMOKE] Checking 2026-10-15 lineas ya enviadas a cocina: confirma
     styles.includes(".cart-line-kitchen-note")
   ) {
     ok(
-      "Real (Sergi, 2026-10-15, Modo Mesas): una linea en gris (ya enviada a cocina) se podia bajar, borrar o cambiar de precio sin aviso, y al pulsar + se volvia toda negra como si se hubiera perdido lo ya enviado. Ahora: bajar por debajo de lo enviado, borrar, cambiar precio o descuento piden confirmacion; subir la cantidad (+, teclado numerico o pulsar el producto) deja la linea enviada intacta y pone las unidades extra en una linea nueva debajo (o suma a la nueva ya existente); lo ya impreso se reparte antes a las lineas con marca de camarero y luego a las mas antiguas; una linea con parte enviada y parte nueva muestra '2 ya en cocina - 1 nueva'; y las lineas ya en cocina sin marca de camarero se separan con una raya 'Ya en cocina'. Verificado con la app real aislada: sin pregunta en +, en - hasta lo enviado y en lineas nuevas; con pregunta (rechazada no cambia nada, aceptada si) en -/borrar/precio por debajo de lo enviado",
+      "Real (Sergi, 2026-10-15, Modo Mesas): una linea en gris (ya enviada a cocina) se podia bajar, borrar o cambiar de precio sin aviso, y al pulsar + se volvia toda negra como si se hubiera perdido lo ya enviado. Ahora: bajar por debajo de lo enviado, borrar, cambiar precio o descuento piden confirmacion; subir la cantidad (+, teclado numerico o pulsar el producto) deja la linea enviada intacta y pone las unidades extra en una linea nueva debajo (o suma a la nueva ya existente); al bajar una linea enviada se quita primero la nueva del mismo producto (3 aguas -> 2 deja una sola linea de 2) y solo si no basta se toca lo enviado; una raya 'Pendiente de enviar' separa lo enviado de lo nuevo; los avisos 'Carrito recuperado tras cierre inesperado' (en Mesas) y 'El diseño de Mesas se actualizo desde otro terminal' (salvo editando el diseño) ya no asustan en cada arranque; lo ya impreso se reparte antes a las lineas con marca de camarero y luego a las mas antiguas; una linea con parte enviada y parte nueva muestra '2 ya en cocina - 1 nueva'; y las lineas ya en cocina sin marca de camarero se separan con una raya 'Ya en cocina'. Verificado con la app real aislada: sin pregunta en +, en - hasta lo enviado y en lineas nuevas; con pregunta (rechazada no cambia nada, aceptada si) en -/borrar/precio por debajo de lo enviado",
     );
   } else {
     fail(

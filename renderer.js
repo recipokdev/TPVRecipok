@@ -9040,11 +9040,18 @@ async function apiSaveMesasLayoutRemote(nextState) {
     if (conflictLayout && typeof conflictLayout === "object") {
       applyMesasLayoutFromRemoteForInline(conflictLayout, true);
     }
-    toast?.(
-      "El diseño de Mesas se actualizó desde otro terminal. Se ha recargado la versión más reciente.",
-      "warn",
-      "Mesas",
-    );
+    // Solo se avisa si se esta editando el diseño de las salas: en el resto
+    // de vistas la versión nueva se recarga sola y el aviso (que ademas salia
+    // en cada arranque por un doble guardado inicial) solo asustaba.
+    if (MESAS_INLINE_VIEW === "diseno") {
+      toast?.(
+        "El diseño de Mesas se actualizó desde otro terminal. Se ha recargado la versión más reciente.",
+        "warn",
+        "Mesas",
+      );
+    } else {
+      console.info("[MESAS] layout actualizado desde otro terminal (412), recargado en silencio");
+    }
 
     const conflictErr = new Error("mesas-layout-save-conflict");
     conflictErr.mesasLayoutConflict = true;
@@ -12830,11 +12837,9 @@ async function runBootFlow() {
 
         if (restoredCartAtBoot) {
           renderCart();
-          toast(
-            "Carrito recuperado tras cierre inesperado.",
-            "info",
-            "Recuperación",
-          );
+          // En Modo Mesas el pedido de la mesa simplemente reaparece: avisar de
+          // "cierre inesperado" a cada arranque asustaba sin aportar nada
+          // (2026-10-15).
         } else {
           cart = [];
           setCurrentParkedTicketIndex(null);
@@ -12845,7 +12850,7 @@ async function runBootFlow() {
         if (restoredCartAtBoot) {
           renderCart();
           toast(
-            "Carrito recuperado tras cierre inesperado.",
+            "Se ha recuperado el ticket que tenías abierto.",
             "info",
             "Recuperación",
           );
@@ -14279,7 +14284,7 @@ async function confirmEditOfKitchenSentLine(item, message) {
   return !!ok;
 }
 
-function updateCartItemQuantity(lineId, newQty) {
+function updateCartItemQuantity(lineId, newQty, opts = {}) {
   const editLockReason = getCartEditLockReason();
   if (editLockReason) {
     toast(editLockReason, "warn", "Carrito bloqueado");
@@ -14317,8 +14322,32 @@ function updateCartItemQuantity(lineId, newQty) {
 
   // ✅ Normal
   pushCartHistoryStep(q <= 0 ? "remove-line" : "qty-change");
-  if (q <= 0) {
+  if (q <= 0 && opts?.deleteLine) {
     cart = cart.filter((c) => c._lineId !== lineId);
+  } else if (q < (Number(item.qty) || 0) - 0.0001) {
+    // Bajar una linea ya enviada a cocina cuando hay otra del MISMO producto
+    // sin enviar: lo que se quita es primero lo nuevo (el cajero piensa en el
+    // total: 3 aguas -> 2), y solo si no basta se toca lo enviado (2026-10-15).
+    const cur = Number(item.qty) || 0;
+    let remaining = cur - q;
+    const sentMap = getKitchenSentQtyByLineId();
+    if ((sentMap.get(item._lineId) || 0) >= cur - 0.0001) {
+      const twin = findUnsentTwinLine(item, sentMap);
+      if (twin) {
+        const take = Math.min(remaining, Number(twin.qty) || 0);
+        twin.qty = Math.round(((Number(twin.qty) || 0) - take) * 1000) / 1000;
+        remaining -= take;
+        if (twin.qty <= 0.0001) {
+          cart = cart.filter((c) => c._lineId !== twin._lineId);
+        }
+      }
+    }
+    const nextQty = Math.round((cur - remaining) * 1000) / 1000;
+    if (nextQty <= 0.0001) {
+      cart = cart.filter((c) => c._lineId !== lineId);
+    } else {
+      item.qty = nextQty;
+    }
   } else if (q > (Number(item.qty) || 0) + 0.0001) {
     // Linea ya enviada a cocina (en gris): las unidades extra NO se suman a
     // ella -- van a una linea nueva debajo, para que lo enviado quede intacto
@@ -14340,22 +14369,44 @@ function updateCartItemQuantity(lineId, newQty) {
 // cocina) SIN tocar la linea enviada: si ya hay una linea equivalente sin
 // enviar se suma a esa (colocandola justo detras de la enviada, porque lo ya
 // impreso se reparte a las lineas mas antiguas), y si no, se crea una nueva.
+function findUnsentTwinLine(item, sentMap = getKitchenSentQtyByLineId()) {
+  return (
+    cart.find(
+      (c) =>
+        c !== item &&
+        !isPackParentLine(c) &&
+        !isPackChildLine(c) &&
+        Number(c?.id) === Number(item?.id) &&
+        round2(getUnitGross(c)) === round2(getUnitGross(item)) &&
+        addonsSignature(c.addons) === addonsSignature(item.addons) &&
+        getCartLineDiscountPercent(c) === getCartLineDiscountPercent(item) &&
+        !(sentMap.get(c._lineId) > 0),
+    ) || null
+  );
+}
+
+// Cuantas unidades YA enviadas a cocina se quitarian si esta linea pasara a
+// `newQty`: lo que sobra tras absorberlo las unidades sin enviar de la propia
+// linea y las de otra linea equivalente sin enviar (ver updateCartItemQuantity).
+function getSentUnitsRemovedByReduction(item, newQty) {
+  const sentMap = getKitchenSentQtyByLineId();
+  const sent = sentMap.get(item?._lineId) || 0;
+  if (sent <= 0) return 0;
+  const cur = Number(item.qty) || 0;
+  const reduction = cur - (Number(newQty) || 0);
+  if (reduction <= 0.0001) return 0;
+  const unsentInLine = Math.max(0, cur - sent);
+  const twin = findUnsentTwinLine(item, sentMap);
+  const twinQty = twin ? Number(twin.qty) || 0 : 0;
+  return Math.max(0, reduction - unsentInLine - twinQty);
+}
+
 function addUnitsAsNewLineAfterSentLine(sentItem, extra) {
   const units = Math.round((Number(extra) || 0) * 1000) / 1000;
   if (units <= 0) return;
 
   const sentMap = getKitchenSentQtyByLineId();
-  const sameKindUnsent = (c) =>
-    c !== sentItem &&
-    !isPackParentLine(c) &&
-    !isPackChildLine(c) &&
-    Number(c?.id) === Number(sentItem?.id) &&
-    round2(getUnitGross(c)) === round2(getUnitGross(sentItem)) &&
-    addonsSignature(c.addons) === addonsSignature(sentItem.addons) &&
-    getCartLineDiscountPercent(c) === getCartLineDiscountPercent(sentItem) &&
-    !(sentMap.get(c._lineId) > 0);
-
-  const target = cart.find(sameKindUnsent);
+  const target = findUnsentTwinLine(sentItem, sentMap);
   const sentIdx = cart.indexOf(sentItem);
 
   if (target) {
@@ -15144,6 +15195,7 @@ function renderCart() {
   // llevaban ninguna separacion de las nuevas. Ahora se agrupan bajo una raya
   // "Ya en cocina" -- la marca "hora · camarero" sigue mandando cuando existe.
   const KITCHEN_GROUP_KEY = "__ya-en-cocina__";
+  let lastLineWasSent = false;
 
   uiLines.forEach((item) => {
     const itemBatchAt = String(item?.sentBatchAt || "").trim();
@@ -15164,6 +15216,17 @@ function renderCart() {
       container.appendChild(divider);
     }
     lastSentBatchAt = groupKey;
+
+    // Tras las lineas ya enviadas, una raya bien marcada separa lo que aun
+    // esta por enviar (2026-10-15: "estan muy juntos").
+    const itemIsSent = isLineAlreadySentToKitchen(item);
+    if (!itemIsSent && lastLineWasSent) {
+      const pendingDivider = document.createElement("div");
+      pendingDivider.className = "cart-batch-divider cart-batch-divider--pending";
+      pendingDivider.textContent = "Pendiente de enviar";
+      container.appendChild(pendingDivider);
+    }
+    lastLineWasSent = itemIsSent;
 
     const pricing = getCartLinePricing(item);
     const unitPrice = Number(pricing.unitGross || 0);
@@ -18287,11 +18350,9 @@ if (cartLinesContainer) {
       }
 
       if (action === "minus") {
-        const sentNow = getKitchenSentQtyByLineId().get(lineId) || 0;
         if (
-          sentNow > 0 &&
           !isPackParentLine(item) &&
-          roundQty(item.qty - 1) < sentNow
+          getSentUnitsRemovedByReduction(item, roundQty(item.qty - 1)) > 0
         ) {
           if (
             !(await confirmEditOfKitchenSentLine(
@@ -18343,7 +18404,7 @@ if (cartLinesContainer) {
             }
 
             if (isConfirm) {
-              if (sentAtOpen > 0 && qq < sentAtOpen) {
+              if (getSentUnitsRemovedByReduction(item, qq) > 0) {
                 confirmEditOfKitchenSentLine(
                   item,
                   "Si bajas la cantidad se avisará a cocina como devolución en el próximo envío. ¿Bajarla de todos modos?",
@@ -18469,7 +18530,7 @@ if (cartLinesContainer) {
         }
       } catch {}
 
-      updateCartItemQuantity(lineId, 0);
+      updateCartItemQuantity(lineId, 0, { deleteLine: true });
       return;
     }
   });

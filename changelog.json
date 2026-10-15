@@ -6,8 +6,9 @@
       "date": "",
       "title": "",
       "changes": [
+        "CORRECCIÓN: en Modo Mesas, al abrir el programa ya no salen los avisos \"Carrito recuperado tras cierre inesperado\" ni \"El diseño de Mesas se actualizó desde otro terminal\", que parecían errores y asustaban sin que hubiera ningún problema (el pedido de la mesa simplemente reaparece y el plano se recarga solo). El segundo solo se muestra ahora mientras se edita el diseño de las salas.",
         "MEJORA: en Modo Mesas, las líneas que ya se enviaron a cocina (en gris) ahora piden confirmación antes de bajarles la cantidad por debajo de lo enviado, borrarlas o cambiarles el precio o el descuento (\"Ya está en cocina… ¿seguro?\"). Si se baja o borra algo ya enviado, se avisa a cocina como devolución en el próximo envío.",
-        "MEJORA: al subir la cantidad de una línea que ya se envió a cocina (con +, con el teclado numérico o pulsando de nuevo el producto), la línea enviada se queda intacta en gris y las unidades nuevas aparecen en una línea aparte, en negro, justo debajo (por ejemplo, 2 aguas enviadas y subir a 5 deja 2 en gris y 3 nuevas). A cocina solo se mandan las nuevas. Además, las líneas ya en cocina que no traen la marca de hora del camarero se separan de las nuevas con una raya \"Ya en cocina\"."
+        "MEJORA: al subir la cantidad de una línea que ya se envió a cocina (con +, con el teclado numérico o pulsando de nuevo el producto), la línea enviada se queda intacta en gris y las unidades nuevas aparecen en una línea aparte, en negro, justo debajo (por ejemplo, 2 aguas enviadas y subir a 5 deja 2 en gris y 3 nuevas). A cocina solo se mandan las nuevas. Además, lo ya enviado se separa de lo nuevo con una raya \"Ya en cocina\" (y \"Pendiente de enviar\" antes de lo nuevo), y al bajar con − una línea enviada se quita primero la línea nueva del mismo producto (3 aguas → 2 deja una sola línea de 2 en gris), en vez de tocar lo ya enviado."
       ]
     },
     {

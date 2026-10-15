@@ -5835,6 +5835,22 @@ body.theme-dark #parkObsOverlay .park-quick-flag.is-active {
   margin: 8px 0 6px;
 }
 
+/* Raya fuerte entre lo ya enviado a cocina y lo pendiente (2026-10-15). */
+.cart-batch-divider--pending {
+  margin-top: 18px;
+  padding-top: 8px;
+  border-top: 2px dashed #f59e0b;
+  color: #b45309;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+body.theme-dark .cart-batch-divider.cart-batch-divider--pending {
+  border-top-color: #d97706;
+  color: #fbbf24;
+}
+
+
 .parked-editing-banner .peb-chip.is-ticket {
   border-color: #f5c26b;
   color: #92400e;
