@@ -15108,6 +15108,7 @@ function renderCart() {
     const totalEl = document.getElementById("totalAmount");
     if (totalEl) totalEl.textContent = eur(0);
     refreshCartDiscountUi();
+    refreshSendComandaBar?.();
     pushCustomerState();
     refreshAgentGuardUI?.();
     return;
@@ -15393,6 +15394,7 @@ function renderCart() {
   const totalEl = document.getElementById("totalAmount");
   if (totalEl) totalEl.textContent = eur(getCartTotal(cartItems));
   refreshCartDiscountUi();
+  refreshSendComandaBar?.();
 
   // ✅ Completar imageUrl para customer display (solo si no viene)
   // Completa imageUrl sin O(n*m): crea índice solo si hay líneas sin imagen.
@@ -44951,6 +44953,7 @@ function scheduleAutoComandaForTicket(ticket) {
 // Aviso discreto en la tarjeta de la mesa (carrito): recuerda que las
 // comandas salen solas y, mientras hay una en espera, cuenta atras.
 function updateAutoComandaIndicator() {
+  refreshSendComandaBar?.();
   const el = document.getElementById("pebAutoComanda");
   if (!el) return;
 
@@ -45311,6 +45314,178 @@ async function printComandaFromCurrentMesa() {
 
   closeComandaModal();
 }
+
+// Envio directo de la comanda (barra grande "Enviar comanda", 2026-10-15): lo
+// mismo que el boton "Comanda" + imprimir de la ventana de comanda, pero de un
+// solo toque y sin observacion. Incluye las devoluciones a cocina (algo ya
+// enviado que se ha bajado/quitado), igual que el envio automatico.
+let __sendComandaBusy = false;
+
+function getPendingComandaCountsForCurrentMesa() {
+  const loaded = resolveComandaTicketForSelectedMesa();
+  const lines = loaded
+    ? getComandaDeltaLinesForTicket(loaded, cart)
+    : getComandaPrintableLines(cart);
+  const returned = loaded ? getComandaReturnedLinesForTicket(loaded, cart) : [];
+  const sum = (arr) =>
+    arr.reduce((acc, l) => acc + (Number(l?.qty) || 0), 0);
+  return {
+    loaded,
+    lines,
+    returnedLines: returned,
+    newQty: sum(lines),
+    returnedQty: sum(returned),
+  };
+}
+
+async function sendComandaQuick() {
+  if (__sendComandaBusy) return;
+
+  if (!shouldShowSplitPayAndPreprint()) {
+    toast(
+      "No hay líneas de familias de comanda. Revisa la configuración en Opciones.",
+      "warn",
+      "Comandas",
+    );
+    return;
+  }
+
+  const loadedBefore = resolveComandaTicketForSelectedMesa();
+  if (loadedBefore && mergeMissingRemoteLinesIntoCart(loadedBefore)) renderCart();
+
+  const { loaded, lines, returnedLines } = getPendingComandaCountsForCurrentMesa();
+  if (!lines.length && !returnedLines.length) {
+    toast(
+      "No hay artículos nuevos para enviar a cocina en esta comanda.",
+      "info",
+      "Comandas",
+    );
+    return;
+  }
+
+  const printerName = getConfiguredComandaPrinterForPrint();
+  if (!printerName) {
+    toast("No hay impresora de comandas configurada en Opciones.", "warn", "Comandas");
+    return;
+  }
+
+  const scope = getSelectedMesaScopeContext();
+  __sendComandaBusy = true;
+  refreshSendComandaBar();
+  try {
+    if (returnedLines.length) {
+      const returnRes = await printComandaWithContext({
+        scope,
+        lines: returnedLines,
+        obsText: "",
+        partNumber: null,
+        printerName,
+        isReturn: true,
+        successToastMessage: "Devolución enviada a cocina.",
+        errorPrefix: "No se pudo imprimir la devolución a cocina:",
+      });
+      if (!returnRes?.ok) {
+        toast(returnRes?.error || "No se pudo imprimir la devolución a cocina.", "err", "Comandas");
+        return;
+      }
+    }
+
+    if (lines.length) {
+      const res = await printComandaWithContext({
+        scope,
+        lines,
+        obsText: "",
+        partNumber: loaded ? getNextComandaPartNumber(loaded) : 1,
+        printerName,
+      });
+      if (!res?.ok) {
+        toast(res?.error || "No se pudo imprimir la comanda.", "err", "Comandas");
+        return;
+      }
+    }
+
+    if (loaded) {
+      commitComandaPrintedState(loaded, cart);
+      await persistTicketAfterComandaPrint(loaded);
+    }
+  } finally {
+    __sendComandaBusy = false;
+    refreshSendComandaBar();
+    renderCart();
+  }
+}
+
+// Barra grande "Enviar comanda" sobre los botones de abajo (solo Modo Mesas):
+// contador de lo pendiente, estado "Todo enviado", y -- si la comanda
+// automatica tiene una espera en marcha -- la cuenta atras con su pausa.
+function refreshSendComandaBar() {
+  const bar = document.getElementById("sendComandaBar");
+  if (!bar) return;
+
+  const show =
+    MESAS_INLINE_ACTIVE &&
+    MESAS_INLINE_VIEW === "transacciones" &&
+    shouldShowSplitPayAndPreprint();
+  bar.classList.toggle("hidden", !show);
+  if (!show) return;
+
+  const main = document.getElementById("sendComandaBtn");
+  const pauseBtn = document.getElementById("sendComandaPauseBtn");
+  if (!main) return;
+
+  const counts = getPendingComandaCountsForCurrentMesa();
+  const total = counts.newQty + counts.returnedQty;
+  const loadedKey = counts.loaded ? String(counts.loaded.id ?? "").trim() : "";
+  const auto = loadedKey ? __autoComandaPending.get(loadedKey) : null;
+
+  const countTxt = total > 0 ? fmtQty(total) : "";
+  const extra = auto
+    ? auto.paused
+      ? "envío automático en pausa"
+      : `se envía solo en ${Math.max(1, Math.ceil((auto.dueAt - Date.now()) / 1000))} s`
+    : "";
+
+  const html = `<span class="scb-label">${
+    total > 0
+      ? counts.newQty > 0
+        ? "Enviar comanda"
+        : "Enviar devolución"
+      : "Todo enviado a cocina"
+  }</span>${countTxt ? `<span class="scb-count">${countTxt}</span>` : ""}${
+    extra ? `<span class="scb-extra">${extra}</span>` : ""
+  }`;
+  if (main.dataset.html !== html) {
+    main.dataset.html = html;
+    main.innerHTML = html;
+  }
+  main.disabled = total <= 0 || __sendComandaBusy;
+  bar.classList.toggle("has-pending", total > 0);
+
+  if (pauseBtn) {
+    pauseBtn.classList.toggle("hidden", !auto);
+    pauseBtn.textContent = auto?.paused ? "▶" : "⏸";
+    pauseBtn.title = auto?.paused
+      ? "Reanudar el envío automático"
+      : "Pausar el envío automático";
+  }
+}
+
+document.getElementById("sendComandaBtn")?.addEventListener("click", () => {
+  sendComandaQuick().catch((e) => {
+    console.warn("sendComandaQuick:", e?.message || e);
+  });
+});
+document.getElementById("sendComandaEditBtn")?.addEventListener("click", () => {
+  openComandaModal();
+});
+document.getElementById("sendComandaPauseBtn")?.addEventListener("click", () => {
+  const loaded = resolveComandaTicketForSelectedMesa();
+  const key = loaded ? String(loaded.id ?? "").trim() : "";
+  const entry = key ? __autoComandaPending.get(key) : null;
+  if (!entry) return;
+  if (entry.paused) resumeAutoComandaForTicket(key);
+  else pauseAutoComandaForTicket(key);
+});
 
 function buildMesasPreprintTicketDraft() {
   const scope = getSelectedMesaScopeContext();

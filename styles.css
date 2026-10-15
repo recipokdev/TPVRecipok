@@ -10042,3 +10042,83 @@ body.theme-dark .cash-stepper-clear-btn {
 body.theme-dark .cash-direct-total-help {
   color: #9ca3af;
 }
+
+/* Barra grande "Enviar comanda" (Modo Mesas, 2026-10-15). */
+.send-comanda-bar {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.send-comanda-bar.hidden {
+  display: none;
+}
+
+.send-comanda-bar .scb-main {
+  flex: 1;
+  min-height: 52px;
+  border: none;
+  border-radius: 14px;
+  font-size: 16px;
+  font-weight: 800;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.send-comanda-bar.has-pending .scb-main {
+  background: #f59e0b;
+  color: #fff;
+}
+
+.send-comanda-bar .scb-main:disabled {
+  cursor: default;
+}
+
+.send-comanda-bar .scb-count {
+  background: #fff;
+  color: #b45309;
+  border-radius: 999px;
+  padding: 1px 10px;
+  font-size: 14px;
+}
+
+.send-comanda-bar .scb-extra {
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.95;
+}
+
+.send-comanda-bar .scb-aux {
+  width: 52px;
+  border: 1px solid #f5c26b;
+  background: #fff;
+  color: #92400e;
+  border-radius: 14px;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.send-comanda-bar .scb-aux.hidden {
+  display: none;
+}
+
+body.theme-dark .send-comanda-bar .scb-main {
+  background: #334155;
+  color: #cbd5e1;
+}
+
+body.theme-dark .send-comanda-bar.has-pending .scb-main {
+  background: #d97706;
+  color: #fff;
+}
+
+body.theme-dark .send-comanda-bar .scb-aux {
+  background: #1f2937;
+  border-color: #92400e;
+  color: #fbbf24;
+}

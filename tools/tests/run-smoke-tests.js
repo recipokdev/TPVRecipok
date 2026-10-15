@@ -10151,6 +10151,32 @@ console.log("\n[SMOKE] Checking 2026-10-15 comanda automatica con espera de 10 s
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-15 barra grande Enviar comanda (Modo Mesas)\n");
+
+{
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  if (
+    html.includes('id="sendComandaBar"') &&
+    html.includes('id="sendComandaBtn"') &&
+    html.includes('id="sendComandaPauseBtn"') &&
+    html.includes('id="sendComandaEditBtn"') &&
+    html.indexOf('id="sendComandaBar"') < html.indexOf('id="cartActionGrid"') &&
+    renderer.includes("async function sendComandaQuick()") &&
+    renderer.includes("function refreshSendComandaBar()") &&
+    renderer.includes("isReturn: true,") &&
+    renderer.includes("refreshSendComandaBar?.();") &&
+    styles.includes(".send-comanda-bar")
+  ) {
+    ok(
+      "Real (Sergi, 2026-10-15): enviar la comanda era una pastilla pequeña arriba, en la tarjeta de la mesa, mientras Cobrar/Vaciar/Tickets son botones grandes. Nueva barra grande 'Enviar comanda' encima de la botonera inferior (solo Modo Mesas con pedido abierto): contador de lo pendiente (nuevo + devoluciones), 'Todo enviado a cocina' en gris cuando no hay nada, un toque imprime directamente (devolucion primero y despues lo nuevo, y deja registrado lo enviado), pausa/reanudar del envio automatico con la cuenta atras dentro de la barra, e icono para abrir la ventana de comanda con observacion. Verificado con la app real aislada con la impresion simulada",
+    );
+  } else {
+    fail(
+      "La barra grande 'Enviar comanda' de Modo Mesas ya no esta completa (html/renderer/css) -- revisar el cambio de 2026-10-15",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
