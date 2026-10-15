@@ -23379,6 +23379,12 @@ function restoreParkedCartByIndex(index) {
   renderCart();
 
   setCurrentParkedTicketIndex(index);
+  // Real (Sergi, 2026-10-15): el renderCart() de arriba se hacia ANTES de
+  // fijar el ticket cargado, asi que al abrir una mesa ("Pedido de mesa cargado
+  // en el carrito") las lineas ya enviadas se pintaban como normales (sin gris,
+  // sin cabecera "Enviado a cocina", sin la barra) hasta el siguiente cambio.
+  // Se repinta ya con el ticket cargado.
+  renderCart();
 
   setStatusText(labels.loadStatus);
   refreshParkButtonUI();

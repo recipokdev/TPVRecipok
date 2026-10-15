@@ -10195,6 +10195,24 @@ console.log("\n[SMOKE] Checking 2026-10-15 barra grande Enviar comanda (Modo Mes
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-15 abrir una mesa repinta el carrito con el ticket ya cargado\n");
+
+{
+  const idx = renderer.indexOf("function restoreParkedCartByIndex(index) {");
+  const body = idx >= 0 ? renderer.slice(idx, idx + 9000) : "";
+  const setIdx = body.indexOf("setCurrentParkedTicketIndex(index);");
+  const afterSet = setIdx >= 0 ? body.slice(setIdx, setIdx + 700) : "";
+  if (afterSet.includes("renderCart();") && afterSet.includes("setStatusText(labels.loadStatus);")) {
+    ok(
+      "Real (Sergi, 2026-10-15): al abrir una mesa ('Pedido de mesa cargado en el carrito') restoreParkedCartByIndex pintaba el carrito ANTES de fijar el ticket cargado, asi que lo ya enviado a cocina salia como lineas normales (sin gris, sin cabecera 'Enviado a cocina', sin barra) hasta el siguiente cambio -- justo cuando los toques en cantidad se comportaban raro. Ahora se repinta tras fijar el ticket. Verificado con la app real aislada: tras abrir la mesa la linea enviada sale gris con su cabecera",
+    );
+  } else {
+    fail(
+      "restoreParkedCartByIndex ya no repinta el carrito tras fijar el ticket cargado -- revisar el cambio de 2026-10-15",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
