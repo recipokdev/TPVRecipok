@@ -10093,13 +10093,17 @@ console.log("\n[SMOKE] Checking 2026-10-15 lineas ya enviadas a cocina: confirma
     helperBody.includes("getComandaDeltaLinesForTicket(ticket, sourceLines)") &&
     renderer.includes("async function confirmEditOfKitchenSentLine(item, message)") &&
     confirmCalls >= 5 &&
-    handlers.includes("previewCartItemQuantity(lineId, qtyAtOpen)") &&
+    handlers.includes("else if (sentAtOpen <= 0) previewCartItemQuantity(lineId, qq);") &&
+    renderer.includes("function addUnitsAsNewLineAfterSentLine(sentItem, extra)") &&
+    renderer.includes("addUnitsAsNewLineAfterSentLine(item, q - (Number(item.qty) || 0));") &&
+    renderer.includes("const kitchenSentForAdd = getKitchenSentQtyByLineId();") &&
+    renderer.includes("waiterSent: !!String(line?.sentBatchAt || \"\").trim(),") &&
     renderer.includes("cart-line-kitchen-note") &&
     renderer.includes('divider.textContent = "Ya en cocina";') &&
     styles.includes(".cart-line-kitchen-note")
   ) {
     ok(
-      "Real (Sergi, 2026-10-15, Modo Mesas): una linea en gris (ya enviada a cocina) se podia bajar, borrar o cambiar de precio sin aviso, y al pulsar + se volvia toda negra como si se hubiera perdido lo ya enviado. Ahora: bajar por debajo de lo enviado, borrar, cambiar precio o descuento piden confirmacion (no bloquean: subir cantidad sigue libre); una linea con parte enviada y parte nueva muestra '2 ya en cocina - 1 nueva'; y las lineas ya en cocina sin marca de camarero se separan con una raya 'Ya en cocina'. Verificado con la app real aislada: sin pregunta en +, en - hasta lo enviado y en lineas nuevas; con pregunta (rechazada no cambia nada, aceptada si) en -/borrar/precio por debajo de lo enviado",
+      "Real (Sergi, 2026-10-15, Modo Mesas): una linea en gris (ya enviada a cocina) se podia bajar, borrar o cambiar de precio sin aviso, y al pulsar + se volvia toda negra como si se hubiera perdido lo ya enviado. Ahora: bajar por debajo de lo enviado, borrar, cambiar precio o descuento piden confirmacion; subir la cantidad (+, teclado numerico o pulsar el producto) deja la linea enviada intacta y pone las unidades extra en una linea nueva debajo (o suma a la nueva ya existente); lo ya impreso se reparte antes a las lineas con marca de camarero y luego a las mas antiguas; una linea con parte enviada y parte nueva muestra '2 ya en cocina - 1 nueva'; y las lineas ya en cocina sin marca de camarero se separan con una raya 'Ya en cocina'. Verificado con la app real aislada: sin pregunta en +, en - hasta lo enviado y en lineas nuevas; con pregunta (rechazada no cambia nada, aceptada si) en -/borrar/precio por debajo de lo enviado",
     );
   } else {
     fail(

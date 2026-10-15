@@ -14202,10 +14202,15 @@ async function addToCart(product, quantity = 1) {
     return;
   }
 
+  const kitchenSentForAdd = getKitchenSentQtyByLineId();
   const existing = cart.find((c) => {
     if (Number(c?.id) !== Number(product?.id)) return false;
     // Nunca mezclar una línea independiente con líneas de oferta.
     if (isPackParentLine(c) || isPackChildLine(c)) return false;
+    // Una línea YA enviada a cocina no admite más unidades: las nuevas van
+    // en su propia línea (2026-10-15).
+    const sentOfC = kitchenSentForAdd.get(c._lineId) || 0;
+    if (sentOfC > 0 && sentOfC >= (Number(c.qty) || 0) - 0.0001) return false;
     const existingGross = round2(getUnitGross(c));
     const productGross = round2(
       (Number(product?.price || 0) || 0) *
@@ -14314,11 +14319,64 @@ function updateCartItemQuantity(lineId, newQty) {
   pushCartHistoryStep(q <= 0 ? "remove-line" : "qty-change");
   if (q <= 0) {
     cart = cart.filter((c) => c._lineId !== lineId);
+  } else if (q > (Number(item.qty) || 0) + 0.0001) {
+    // Linea ya enviada a cocina (en gris): las unidades extra NO se suman a
+    // ella -- van a una linea nueva debajo, para que lo enviado quede intacto
+    // y se vea de un vistazo que es nuevo (2026-10-15).
+    const sentQty = getKitchenSentQtyByLineId().get(item._lineId) || 0;
+    if (sentQty > 0 && sentQty >= (Number(item.qty) || 0) - 0.0001) {
+      addUnitsAsNewLineAfterSentLine(item, q - (Number(item.qty) || 0));
+    } else {
+      item.qty = q;
+    }
   } else {
     item.qty = q;
   }
 
   renderCart();
+}
+
+// Añade `extra` unidades del mismo producto que `sentItem` (ya enviada a
+// cocina) SIN tocar la linea enviada: si ya hay una linea equivalente sin
+// enviar se suma a esa (colocandola justo detras de la enviada, porque lo ya
+// impreso se reparte a las lineas mas antiguas), y si no, se crea una nueva.
+function addUnitsAsNewLineAfterSentLine(sentItem, extra) {
+  const units = Math.round((Number(extra) || 0) * 1000) / 1000;
+  if (units <= 0) return;
+
+  const sentMap = getKitchenSentQtyByLineId();
+  const sameKindUnsent = (c) =>
+    c !== sentItem &&
+    !isPackParentLine(c) &&
+    !isPackChildLine(c) &&
+    Number(c?.id) === Number(sentItem?.id) &&
+    round2(getUnitGross(c)) === round2(getUnitGross(sentItem)) &&
+    addonsSignature(c.addons) === addonsSignature(sentItem.addons) &&
+    getCartLineDiscountPercent(c) === getCartLineDiscountPercent(sentItem) &&
+    !(sentMap.get(c._lineId) > 0);
+
+  const target = cart.find(sameKindUnsent);
+  const sentIdx = cart.indexOf(sentItem);
+
+  if (target) {
+    target.qty = Math.round(((Number(target.qty) || 0) + units) * 1000) / 1000;
+    const targetIdx = cart.indexOf(target);
+    if (sentIdx >= 0 && targetIdx >= 0 && targetIdx < sentIdx) {
+      cart.splice(targetIdx, 1);
+      cart.splice(cart.indexOf(sentItem) + 1, 0, target);
+    }
+    return;
+  }
+
+  const fresh = {
+    ...JSON.parse(JSON.stringify(sentItem)),
+    _lineId: makeLineId(),
+    qty: units,
+    cantidad: units,
+    sentBatchAt: null,
+    comandaHeld: false,
+  };
+  cart.splice(sentIdx >= 0 ? sentIdx + 1 : cart.length, 0, fresh);
 }
 
 // "Lanzar por tanda" (peticion de Sergi, 2026-10-06 -- idea de Square/
@@ -18261,7 +18319,10 @@ if (cartLinesContainer) {
       }
 
       if (action === "edit") {
-        const qtyAtOpen = item.qty;
+        // En una linea con algo ya enviado NO hay vista previa mientras se
+        // teclea (moveria la cantidad de la linea enviada antes de decidir si
+        // las unidades extra van a una linea nueva): se aplica al confirmar.
+        const sentAtOpen = getKitchenSentQtyByLineId().get(lineId) || 0;
         openNumPad(
           String(item.qty ?? 1),
           (newQty, meta = {}) => {
@@ -18282,21 +18343,17 @@ if (cartLinesContainer) {
             }
 
             if (isConfirm) {
-              const sentNow = getKitchenSentQtyByLineId().get(lineId) || 0;
-              if (sentNow > 0 && qq < sentNow) {
-                // La vista previa ya ha movido la cantidad: si no se confirma,
-                // se devuelve a la que tenia al abrir el teclado.
+              if (sentAtOpen > 0 && qq < sentAtOpen) {
                 confirmEditOfKitchenSentLine(
                   item,
                   "Si bajas la cantidad se avisará a cocina como devolución en el próximo envío. ¿Bajarla de todos modos?",
                 ).then((okEdit) => {
                   if (okEdit) updateCartItemQuantity(lineId, qq);
-                  else previewCartItemQuantity(lineId, qtyAtOpen);
                 });
                 return;
               }
               updateCartItemQuantity(lineId, qq);
-            } else previewCartItemQuantity(lineId, qq);
+            } else if (sentAtOpen <= 0) previewCartItemQuantity(lineId, qq);
           },
           item.name,
           "qty",
@@ -44318,35 +44375,54 @@ function getComandaDeltaLinesForTicket(ticket, sourceLines = cart) {
   if (!baseLines.length) return [];
 
   const state = normalizeTicketComandaState(ticket?.comandaState);
-  const currentMap = buildComandaQtyMap(baseLines);
-  const pendingByKey = new Map();
 
-  currentMap.forEach((currentQty, key) => {
-    const alreadyPrinted = Math.max(
-      0,
-      Number(state?.printedQtyByLineKey?.[key] || 0) || 0,
+  // Lo ya impreso se guarda por PRODUCTO (no por linea). Cuando hay varias
+  // lineas del mismo producto (p.ej. 2 aguas ya en cocina + 3 nuevas en otra
+  // linea, 2026-10-15) hay que decidir a cuales corresponde lo impreso: primero
+  // a las que traen marca de envio del camarero (sentBatchAt, ya fueron a
+  // cocina por la app) y despues a las mas antiguas del carrito -- las nuevas
+  // se añaden siempre detras. Antes lo PENDIENTE se asignaba a las primeras
+  // lineas, que con dos lineas del mismo producto marcaba como pendiente justo
+  // la ya enviada. El total pendiente por producto no cambia.
+  const printedLeft = new Map();
+  const lineInfo = baseLines.map((line, index) => ({
+    line,
+    index,
+    key: buildComandaLineKey(line),
+    qty: Math.max(0, Number(line?.qty || 0) || 0),
+    waiterSent: !!String(line?.sentBatchAt || "").trim(),
+  }));
+  lineInfo.forEach((info) => {
+    if (printedLeft.has(info.key)) return;
+    printedLeft.set(
+      info.key,
+      Math.max(0, Number(state?.printedQtyByLineKey?.[info.key] || 0) || 0),
     );
-    const delta = Math.max(0, currentQty - alreadyPrinted);
-    if (delta > 0) pendingByKey.set(key, delta);
   });
 
-  if (!pendingByKey.size) return [];
+  const pendingByIndex = new Map();
+  [...lineInfo]
+    .sort((a, b) =>
+      a.waiterSent === b.waiterSent ? a.index - b.index : a.waiterSent ? -1 : 1,
+    )
+    .forEach((info) => {
+      const left = printedLeft.get(info.key) || 0;
+      const sentPart = Math.min(info.qty, left);
+      printedLeft.set(info.key, left - sentPart);
+      const pending = info.qty - sentPart;
+      if (pending > 0.00001) pendingByIndex.set(info.index, pending);
+    });
+
+  if (!pendingByIndex.size) return [];
 
   const out = [];
-  baseLines.forEach((line) => {
-    const key = buildComandaLineKey(line);
-    const pending = Math.max(0, Number(pendingByKey.get(key) || 0) || 0);
-    if (pending <= 0) return;
-
-    const lineQty = Math.max(0, Number(line?.qty || 0) || 0);
-    const take = Math.min(lineQty, pending);
-    if (take <= 0) return;
-
+  lineInfo.forEach((info) => {
+    const pending = pendingByIndex.get(info.index);
+    if (!pending) return;
     out.push({
-      ...line,
-      qty: Math.round(take * 10000) / 10000,
+      ...info.line,
+      qty: Math.round(pending * 10000) / 10000,
     });
-    pendingByKey.set(key, Math.max(0, pending - take));
   });
 
   return out;
