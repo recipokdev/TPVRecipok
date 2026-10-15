@@ -5879,6 +5879,31 @@ body.theme-dark #parkObsOverlay .park-quick-flag.is-active {
   margin: 8px 0 6px;
 }
 
+/* Cabecera plegable "Enviado a cocina" (2026-10-15). */
+.cart-sent-toggle {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin: 0 0 6px;
+  cursor: pointer;
+}
+
+.cart-sent-toggle.is-collapsed {
+  margin-bottom: 10px;
+}
+
+body.theme-dark .cart-sent-toggle {
+  background: #1f2937;
+  color: #cbd5e1;
+}
+
 /* Raya fuerte entre lo ya enviado a cocina y lo pendiente (2026-10-15). */
 .cart-batch-divider--pending {
   margin-top: 18px;

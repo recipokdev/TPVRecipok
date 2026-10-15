@@ -10106,7 +10106,9 @@ console.log("\n[SMOKE] Checking 2026-10-15 lineas ya enviadas a cocina: confirma
     renderer.includes("const kitchenSentForAdd = getKitchenSentQtyByLineId();") &&
     renderer.includes("waiterSent: !!String(line?.sentBatchAt || \"\").trim(),") &&
     renderer.includes("cart-line-kitchen-note") &&
-    renderer.includes('divider.textContent = "Ya en cocina";') &&
+    renderer.includes("const SENT_BLOCK_AUTO_COLLAPSE_LINES = 4;") &&
+    renderer.includes("__sentBlockCollapsedByTicket.set(sentBlockKey, !sentBlockCollapsed);") &&
+    styles.includes(".cart-sent-toggle") &&
     styles.includes(".cart-line-kitchen-note")
   ) {
     ok(

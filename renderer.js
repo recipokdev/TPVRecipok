@@ -2214,6 +2214,9 @@ const DISCOUNT_QUICK_PERCENT_SLOTS_DEFAULT = [10, 20, 50, 100, null];
 let showProductStockBadge = false;
 let enableProductStockEdition = false;
 let allowCloseWithParkedTickets = false;
+// Bloque "Enviado a cocina" del carrito: plegado/desplegado elegido a mano por
+// ticket (si no hay eleccion, se pliega solo a partir de 4 lineas enviadas).
+const __sentBlockCollapsedByTicket = new Map();
 let virtualKeyboardEnabled = true;
 let parkedCustomerResetMode = "previous";
 let productDisplayFieldMode = "both";
@@ -15211,6 +15214,7 @@ function renderCart() {
   const KITCHEN_GROUP_KEY = "__ya-en-cocina__";
   let sentLineSeen = false;
   let lastLineKind = "";
+  const SENT_BLOCK_AUTO_COLLAPSE_LINES = 4;
 
   // Orden de pantalla (2026-10-15): lo ya enviado a cocina va SIEMPRE arriba,
   // agrupado por envio y en orden cronologico (sin marca de envio, primero), y
@@ -15239,7 +15243,37 @@ function renderCart() {
     ...unsentUiLines.filter((it) => isNoKitchenLine(it)),
   ];
 
+  // Bloque "Enviado a cocina" plegable (2026-10-15): una cabecera con el
+  // resumen y, desplegado, los envios agrupados por comanda. Se pliega solo a
+  // partir de SENT_BLOCK_AUTO_COLLAPSE_LINES lineas enviadas para que lo
+  // pendiente nunca quede escondido abajo; lo que el camarero abra o cierre
+  // se recuerda mientras siga en esa mesa.
+  const sentBlockKey = String(loadedTicketForComanda?.id ?? "");
+  const sentBlockOverride = __sentBlockCollapsedByTicket.get(sentBlockKey);
+  const sentBlockCollapsed =
+    sentBlockOverride !== undefined
+      ? sentBlockOverride
+      : sentUiLines.length >= SENT_BLOCK_AUTO_COLLAPSE_LINES;
+  if (sentUiLines.length > 0) {
+    const sentUnits = sentUiLines.reduce(
+      (acc, it) => acc + (Number(it?.qty) || 0),
+      0,
+    );
+    const sentHeader = document.createElement("button");
+    sentHeader.type = "button";
+    sentHeader.className = `cart-sent-toggle${sentBlockCollapsed ? " is-collapsed" : ""}`;
+    sentHeader.setAttribute("aria-expanded", sentBlockCollapsed ? "false" : "true");
+    sentHeader.textContent = `${sentBlockCollapsed ? "▸" : "▾"} Enviado a cocina · ${sentUiLines.length} ${sentUiLines.length === 1 ? "línea" : "líneas"} · ${fmtQty(sentUnits)} ${Math.abs(sentUnits - 1) < 0.0001 ? "unidad" : "unidades"}`;
+    sentHeader.addEventListener("click", () => {
+      __sentBlockCollapsedByTicket.set(sentBlockKey, !sentBlockCollapsed);
+      renderCart();
+    });
+    container.appendChild(sentHeader);
+  }
+  sentLineSeen = sentUiLines.length > 0;
+
   orderedUiLines.forEach((item) => {
+    if (sentBlockCollapsed && isLineAlreadySentToKitchen(item)) return;
     const itemBatchAt = String(item?.sentBatchAt || "").trim();
     const itemSentAt = String(item?.sentAt || "").trim();
     const itemSentByTpv = !itemBatchAt && !!itemSentAt;
@@ -15271,9 +15305,11 @@ function renderCart() {
         if (by) bits.push(by);
         divider.textContent = `Enviado · ${bits.filter(Boolean).join(" · ")}`;
       } else {
-        divider.textContent = "Ya en cocina";
+        divider.textContent = "";
       }
-      container.appendChild(divider);
+      // Lo enviado sin marca de comanda (antes de estos cambios) no necesita
+      // raya propia: ya cuelga de la cabecera "Enviado a cocina".
+      if (divider.textContent) container.appendChild(divider);
     }
     lastSentBatchAt = groupKey;
 
