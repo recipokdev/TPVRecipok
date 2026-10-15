@@ -10119,6 +10119,38 @@ console.log("\n[SMOKE] Checking 2026-10-15 lineas ya enviadas a cocina: confirma
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-15 comanda automatica con espera de 10 s, aviso y pausa\n");
+
+{
+  const hooksOk =
+    renderer.includes("scheduleAutoComandaForTicket(existing);") &&
+    renderer.includes("scheduleAutoComandaForTicket(localTicket);") &&
+    !renderer.includes("maybeAutoPrintComandaOnSave(existing)") &&
+    !renderer.includes("maybeAutoPrintComandaOnSave(localTicket)");
+  if (
+    hooksOk &&
+    renderer.includes("const AUTO_COMANDA_DELAY_MS = 10000;") &&
+    renderer.includes("maybeAutoPrintComandaOnSave(fresh, { fromTimer: true })") &&
+    renderer.includes("!__autoComandaPending.has(String(t.id ?? \"\").trim()) &&") &&
+    renderer.includes("cancelAutoComandaForTicket(ticket?.id);") &&
+    renderer.includes("function pauseAutoComandaForTicket(ticketId)") &&
+    renderer.includes("function resumeAutoComandaForTicket(ticketId)") &&
+    renderer.includes("if (prev?.paused) {") &&
+    renderer.includes('id="pebAutoComanda"') &&
+    renderer.includes("Se envía a cocina en") &&
+    styles.includes(".peb-auto-comanda") &&
+    styles.includes(".peb-auto-btn")
+  ) {
+    ok(
+      "Real (Sergi, 2026-10-15): con 'Enviar comanda automaticamente al guardar' activa, Modo Mesas (que guarda solo tras cada cambio) imprimia una comanda en cada toque de producto o de +/-. Ahora el guardado arma una espera de 10 s por ticket (cada cambio la reinicia) y al cumplirse se envia todo junto; el boton Comanda la cancela; el sondeo remoto no imprime tickets con espera pendiente. La tarjeta de la mesa muestra 'Comanda automatica' y una cuenta atras con boton Pausar/Reanudar (en pausa, los cambios no rearman la espera). Verificado con la app real aislada: no imprime antes de 10 s, un cambio a los 6 s reinicia, pausar detiene el contador y un cambio en pausa no lo rearma, reanudar imprime una sola vez a los 10 s y deja el estado de impreso, la impresion manual cancela la espera y con la opcion apagada no arma nada",
+    );
+  } else {
+    fail(
+      "La comanda automatica ya no espera 10 s / no muestra aviso con cuenta atras y pausa -- revisar el cambio de 2026-10-15",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

@@ -19418,12 +19418,7 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
         // opcional: si quieres actualizar presupuesto remoto más adelante, aquí irá
 
         if (!skipAutoPrint) {
-          maybeAutoPrintComandaOnSave(existing).catch((e) => {
-            console.warn(
-              "No se pudo auto-imprimir comanda al actualizar:",
-              e?.message || e,
-            );
-          });
+          scheduleAutoComandaForTicket(existing);
           await maybeAutoPrintPedidoOnSave(existing).catch((e) => {
             console.warn(
               "No se pudo auto-imprimir pedido al actualizar:",
@@ -19640,12 +19635,7 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
       }
 
       if (!skipAutoPrint) {
-        maybeAutoPrintComandaOnSave(localTicket).catch((e) => {
-          console.warn(
-            "No se pudo auto-imprimir comanda al guardar:",
-            e?.message || e,
-          );
-        });
+        scheduleAutoComandaForTicket(localTicket);
         await maybeAutoPrintPedidoOnSave(localTicket).catch((e) => {
           console.warn(
             "No se pudo auto-imprimir pedido al guardar:",
@@ -21539,11 +21529,14 @@ function refreshParkedEditingBanner() {
       <span class="peb-chip is-${escapeHtml(mesaStatus.kind)}">${escapeHtml(mesaStatus.text)}</span>
       <span class="peb-chip">${escapeHtml(openedHour)}</span>
     </div>
+    <div class="peb-auto-comanda hidden" id="pebAutoComanda"></div>
   `
     : `
     <div class="peb-mesa-main">${escapeHtml(ticketLabel)}</div>
     <div class="peb-mesa-sub">${escapeHtml(String(t?.clientName || "Cliente"))} · ${escapeHtml(openedDate)} ${escapeHtml(openedHour)}</div>
   `;
+
+  updateAutoComandaIndicator();
 
   const activeFlags = normalizeMesaTicketAlerts(t?.mesaAlerts);
   const splitObsInfo = parseSplitInfoFromObs(t?.obs);
@@ -31966,6 +31959,7 @@ autoPrintToggle?.addEventListener("change", () => {
 
 autoComandaOnSaveToggle?.addEventListener("change", () => {
   setAutoComandaOnSaveEnabled(!!autoComandaOnSaveToggle.checked);
+  updateAutoComandaIndicator();
   if (typeof toast === "function") {
     toast(
       autoComandaOnSaveToggle.checked
@@ -44558,6 +44552,7 @@ function commitComandaPrintedState(ticket, sourceLines = cart) {
     printedQtyByLineKey: persisted,
     lastPrintedAt: new Date(),
   };
+  cancelAutoComandaForTicket(ticket?.id);
   ticket.updatedAt = new Date();
   ticket.localRevisionAt = Date.now();
 
@@ -44848,9 +44843,176 @@ async function printComandaWithContext({
   return { ok: true };
 }
 
-async function maybeAutoPrintComandaOnSave(ticket) {
+// Comanda automatica con espera (Sergi, 2026-10-15): Modo Mesas guarda solo
+// tras CADA cambio, asi que imprimir en cada guardado sacaba una comanda por
+// cada toque de producto (o de +/-). Ahora el guardado solo "arma" una espera
+// de AUTO_COMANDA_DELAY_MS por ticket: cada nuevo cambio la reinicia, y al
+// cumplirse se envia todo junto. Una impresion manual (boton Comanda) la
+// cancela. Si la app se cierra antes, el sondeo remoto
+// (maybeAutoPrintComandaFromRemoteSync) imprime lo pendiente al volver.
+const AUTO_COMANDA_DELAY_MS = 10000;
+const __autoComandaPending = new Map(); // ticketId -> { timer, dueAt }
+let __autoComandaTicker = null;
+
+function cancelAutoComandaForTicket(ticketId) {
+  const key = String(ticketId ?? "").trim();
+  const entry = __autoComandaPending.get(key);
+  if (!entry) return;
+  clearTimeout(entry.timer);
+  __autoComandaPending.delete(key);
+  updateAutoComandaIndicator();
+}
+
+function pauseAutoComandaForTicket(ticketId) {
+  const key = String(ticketId ?? "").trim();
+  const entry = __autoComandaPending.get(key);
+  if (!entry || entry.paused) return;
+  clearTimeout(entry.timer);
+  entry.timer = null;
+  entry.paused = true;
+  updateAutoComandaIndicator();
+}
+
+function resumeAutoComandaForTicket(ticketId) {
+  const key = String(ticketId ?? "").trim();
+  const entry = __autoComandaPending.get(key);
+  if (!entry) return;
+  __autoComandaPending.delete(key);
+  const t = (Array.isArray(parkedTickets) ? parkedTickets : []).find(
+    (x) => String(x?.id ?? "") === key && !x?.paid,
+  );
+  if (t) scheduleAutoComandaForTicket(t);
+  updateAutoComandaIndicator();
+}
+
+function scheduleAutoComandaForTicket(ticket) {
+  if (!ticket || ticket.paid) return;
   if (!isAutoComandaOnSaveEnabled()) return;
   if (!MESAS_INLINE_ACTIVE || MESAS_INLINE_VIEW !== "transacciones") return;
+
+  const key = String(ticket.id ?? "").trim();
+  if (!key) return;
+
+  const items = ticket?.items || [];
+  const hasSomethingToSend =
+    getComandaDeltaLinesForTicket(ticket, items).length > 0 ||
+    getComandaReturnedLinesForTicket(ticket, items).length > 0;
+  if (!hasSomethingToSend) {
+    cancelAutoComandaForTicket(key);
+    return;
+  }
+
+  const prev = __autoComandaPending.get(key);
+  // En pausa (boton del aviso): los cambios NO rearman la espera; se envia al
+  // reanudar o con el boton Comanda.
+  if (prev?.paused) {
+    updateAutoComandaIndicator();
+    return;
+  }
+  if (prev) clearTimeout(prev.timer);
+
+  const timer = setTimeout(() => {
+    __autoComandaPending.delete(key);
+    updateAutoComandaIndicator();
+    const fresh = (Array.isArray(parkedTickets) ? parkedTickets : []).find(
+      (t) => String(t?.id ?? "") === key && !t?.paid,
+    );
+    if (!fresh) return;
+    maybeAutoPrintComandaOnSave(fresh, { fromTimer: true })
+      .catch((e) => {
+        console.warn(
+          "No se pudo auto-imprimir comanda tras la espera:",
+          e?.message || e,
+        );
+      })
+      // Las devoluciones a cocina (bajar/quitar algo ya enviado) las imprime
+      // el flujo de sincronizacion: se lanza ahora que ya no hay espera.
+      .then(() => maybeAutoPrintComandaFromRemoteSync?.())
+      .catch(() => {});
+  }, AUTO_COMANDA_DELAY_MS);
+
+  __autoComandaPending.set(key, {
+    timer,
+    dueAt: Date.now() + AUTO_COMANDA_DELAY_MS,
+  });
+
+  if (!__autoComandaTicker) {
+    __autoComandaTicker = setInterval(() => {
+      if (!__autoComandaPending.size) {
+        clearInterval(__autoComandaTicker);
+        __autoComandaTicker = null;
+      }
+      updateAutoComandaIndicator();
+    }, 1000);
+  }
+  updateAutoComandaIndicator();
+}
+
+// Aviso discreto en la tarjeta de la mesa (carrito): recuerda que las
+// comandas salen solas y, mientras hay una en espera, cuenta atras.
+function updateAutoComandaIndicator() {
+  const el = document.getElementById("pebAutoComanda");
+  if (!el) return;
+
+  const show =
+    isAutoComandaOnSaveEnabled() &&
+    MESAS_INLINE_ACTIVE &&
+    MESAS_INLINE_VIEW === "transacciones";
+  el.classList.toggle("hidden", !show);
+  if (!show) return;
+
+  const loaded =
+    currentParkedTicketIndex != null
+      ? parkedTickets?.[currentParkedTicketIndex]
+      : null;
+  const loadedKey = loaded ? String(loaded.id ?? "").trim() : "";
+  const pending = loaded ? __autoComandaPending.get(loadedKey) : null;
+  const state = !pending ? "idle" : pending.paused ? "paused" : "pending";
+
+  // Solo se reconstruye el HTML al cambiar de estado (no cada segundo): si no,
+  // el boton se reemplazaria justo cuando se pulsa y el clic se perderia.
+  const stateKey = `${state}|${loadedKey}`;
+  if (el.dataset.state !== stateKey) {
+    el.dataset.state = stateKey;
+    const chip = `<span class="peb-auto-chip" title="Las comandas se envían solas a cocina ${AUTO_COMANDA_DELAY_MS / 1000} s después del último cambio. Se puede desactivar en Opciones → Mesas.">⚡ Comanda automática</span>`;
+    const keyAttr = escapeHtml(loadedKey);
+    el.innerHTML =
+      state === "pending"
+        ? `${chip}<span class="peb-auto-count">Se envía a cocina en <b class="peb-auto-secs"></b> s</span><button type="button" class="peb-auto-btn" data-auto-comanda-action="pause" data-ticket="${keyAttr}" title="Pausar el envío automático de esta comanda">⏸ Pausar</button>`
+        : state === "paused"
+          ? `${chip}<span class="peb-auto-count is-paused">Envío en pausa</span><button type="button" class="peb-auto-btn" data-auto-comanda-action="resume" data-ticket="${keyAttr}" title="Reanudar: se enviará tras la espera">▶ Reanudar</button>`
+          : chip;
+  }
+
+  if (state === "pending") {
+    const secsEl = el.querySelector(".peb-auto-secs");
+    if (secsEl) {
+      secsEl.textContent = String(
+        Math.max(1, Math.ceil((pending.dueAt - Date.now()) / 1000)),
+      );
+    }
+  }
+}
+
+document.addEventListener("click", (e) => {
+  const btn = e.target?.closest?.("[data-auto-comanda-action]");
+  if (!btn) return;
+  const ticketId = btn.getAttribute("data-ticket");
+  if (btn.getAttribute("data-auto-comanda-action") === "pause") {
+    pauseAutoComandaForTicket(ticketId);
+  } else {
+    resumeAutoComandaForTicket(ticketId);
+  }
+});
+
+async function maybeAutoPrintComandaOnSave(ticket, opts = {}) {
+  if (!isAutoComandaOnSaveEnabled()) return;
+  if (
+    !opts?.fromTimer &&
+    (!MESAS_INLINE_ACTIVE || MESAS_INLINE_VIEW !== "transacciones")
+  ) {
+    return;
+  }
 
   const lines = getComandaDeltaLinesForTicket(ticket, ticket?.items || []);
   if (!lines.length) return;
@@ -44923,6 +45085,7 @@ async function maybeAutoPrintComandaFromRemoteSync() {
     (t) =>
       t &&
       !t.paid &&
+      !__autoComandaPending.has(String(t.id ?? "").trim()) &&
       isMesasModeTicket(t) &&
       (getComandaDeltaLinesForTicket(t, t?.items || []).length > 0 ||
         getComandaReturnedLinesForTicket(t, t?.items || []).length > 0),

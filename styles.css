@@ -5793,6 +5793,50 @@ body.theme-dark #parkObsOverlay .park-quick-flag.is-active {
   font-weight: 700;
 }
 
+/* Aviso de comanda automatica + cuenta atras (2026-10-15). */
+.parked-editing-banner .peb-auto-comanda {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #92400e;
+}
+
+.parked-editing-banner .peb-auto-comanda.hidden {
+  display: none;
+}
+
+.parked-editing-banner .peb-auto-chip {
+  font-weight: 700;
+  opacity: 0.85;
+}
+
+.parked-editing-banner .peb-auto-count {
+  font-weight: 700;
+  color: #b45309;
+  background: #fef3c7;
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.parked-editing-banner .peb-auto-count.is-paused {
+  color: #7c2d12;
+  background: #fee2e2;
+}
+
+.parked-editing-banner .peb-auto-btn {
+  border: 1px solid #f5c26b;
+  background: #fff;
+  color: #92400e;
+  border-radius: 999px;
+  padding: 1px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .parked-editing-banner .peb-mesa-badges {
   display: inline-flex;
   align-items: center;
