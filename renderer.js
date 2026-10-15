@@ -30627,7 +30627,7 @@ const OPTIONS_AUTO_COMANDA_ON_SAVE_KEY = "tpv_autoComandaOnSave";
 // antes de cualquier codigo que la lea al cargar (las const no se pueden usar
 // antes de su linea).
 const OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY = "tpv_autoComandaDelaySec";
-const AUTO_COMANDA_DELAY_DEFAULT_SEC = 10;
+const AUTO_COMANDA_DELAY_DEFAULT_SEC = 60;
 function getAutoComandaDelayMs() {
   let sec = AUTO_COMANDA_DELAY_DEFAULT_SEC;
   try {
