@@ -10672,6 +10672,11 @@ function mergeMissingRemoteLinesIntoCart(ticket) {
       qty: deficit,
       cantidad: deficit,
       sentBatchAt: latestSentBatchAtByKey.get(key)?.raw || null,
+      // El sello de envio desde este TPV no se hereda de la plantilla: estas
+      // unidades las ha añadido otro dispositivo.
+      sentAt: null,
+      sentPart: null,
+      sentBy: null,
     });
   });
 
@@ -14237,6 +14242,11 @@ async function addToCart(product, quantity = 1) {
     // ese envio -- quitamos la marca para no atribuirle al camarero
     // unidades que puso el cajero.
     if (existing.sentBatchAt) existing.sentBatchAt = null;
+    if (existing.sentAt) {
+      existing.sentAt = null;
+      existing.sentPart = null;
+      existing.sentBy = null;
+    }
   } else {
     cart.push(buildCartLine(product, finalQty));
   }
@@ -14425,6 +14435,9 @@ function addUnitsAsNewLineAfterSentLine(sentItem, extra) {
     qty: units,
     cantidad: units,
     sentBatchAt: null,
+    sentAt: null,
+    sentPart: null,
+    sentBy: null,
     comandaHeld: false,
   };
   cart.splice(sentIdx >= 0 ? sentIdx + 1 : cart.length, 0, fresh);
@@ -15199,19 +15212,56 @@ function renderCart() {
   let sentLineSeen = false;
   let lastLineKind = "";
 
-  uiLines.forEach((item) => {
+  // Orden de pantalla (2026-10-15): lo ya enviado a cocina va SIEMPRE arriba,
+  // agrupado por envio y en orden cronologico (sin marca de envio, primero), y
+  // debajo lo pendiente / lo que no va a cocina en el orden del carrito. Antes
+  // una linea enviada despues (p.ej. el pan tras un helado sin comanda) se
+  // quedaba debajo de la raya naranja de "Pendiente de enviar".
+  const lineSentTimeMs = (it) => {
+    const t = Date.parse(String(it?.sentBatchAt || it?.sentAt || ""));
+    return Number.isFinite(t) ? t : 0;
+  };
+  const sentUiLines = uiLines
+    .map((it, i) => ({ it, i }))
+    .filter(({ it }) => isLineAlreadySentToKitchen(it))
+    .sort((a, b) => lineSentTimeMs(a.it) - lineSentTimeMs(b.it) || a.i - b.i)
+    .map(({ it }) => it);
+  const orderedUiLines = [
+    ...sentUiLines,
+    ...uiLines.filter((it) => !isLineAlreadySentToKitchen(it)),
+  ];
+
+  orderedUiLines.forEach((item) => {
     const itemBatchAt = String(item?.sentBatchAt || "").trim();
-    const groupKey =
-      itemBatchAt || (isLineAlreadySentToKitchen(item) ? KITCHEN_GROUP_KEY : "");
+    const itemSentAt = String(item?.sentAt || "").trim();
+    const itemSentByTpv = !itemBatchAt && !!itemSentAt;
+    const groupKey = itemBatchAt
+      ? itemBatchAt
+      : isLineAlreadySentToKitchen(item)
+        ? itemSentByTpv
+          ? `tpv:${itemSentAt}`
+          : KITCHEN_GROUP_KEY
+        : "";
     if (groupKey && groupKey !== lastSentBatchAt) {
       const divider = document.createElement("div");
       divider.className = "cart-batch-divider";
-      if (itemBatchAt) {
-        const d = new Date(itemBatchAt);
-        const timeLabel = Number.isFinite(d.getTime())
+      const hhmm = (iso) => {
+        const d = new Date(iso);
+        return Number.isFinite(d.getTime())
           ? d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })
           : "";
+      };
+      if (itemBatchAt) {
+        const timeLabel = hhmm(itemBatchAt);
         divider.textContent = timeLabel ? `${timeLabel} · camarero` : "Camarero";
+      } else if (itemSentByTpv) {
+        // Envio hecho desde este TPV: hora, numero de comanda y quien la envio.
+        const bits = [hhmm(itemSentAt)];
+        const part = Number(item?.sentPart || 0);
+        if (part > 0) bits.push(`Comanda ${part}`);
+        const by = String(item?.sentBy || "").trim();
+        if (by) bits.push(by);
+        divider.textContent = `Enviado · ${bits.filter(Boolean).join(" · ")}`;
       } else {
         divider.textContent = "Ya en cocina";
       }
@@ -44558,6 +44608,34 @@ function commitComandaPrintedState(ticket, sourceLines = cart) {
   const qtyMap = buildComandaQtyMap(filteredLines);
   const prev = normalizeTicketComandaState(ticket?.comandaState);
 
+  // Sello de envio (2026-10-15): hora, numero de comanda y quien la envio en
+  // las lineas que salen AHORA (lo calcula contra el estado anterior, antes de
+  // sobreescribirlo). Se pinta como cabecera del grupo en el carrito.
+  try {
+    const justSent = getComandaDeltaLinesForTicket(ticket, sourceLines);
+    if (justSent.length) {
+      const stamp = {
+        sentAt: new Date().toISOString(),
+        sentPart: Math.max(0, Number(prev?.seq || 0) || 0) + 1,
+        sentBy: String(getLoginUser?.() || currentAgent?.name || "").trim(),
+      };
+      const ids = new Set(justSent.map((l) => l?._lineId).filter(Boolean));
+      const apply = (arr) =>
+        (Array.isArray(arr) ? arr : []).forEach((it) => {
+          if (it && ids.has(it._lineId)) Object.assign(it, stamp);
+        });
+      apply(sourceLines);
+      apply(ticket?.items);
+      const loadedNow =
+        currentParkedTicketIndex != null
+          ? parkedTickets?.[currentParkedTicketIndex]
+          : null;
+      if (loadedNow && loadedNow === ticket) apply(cart);
+    }
+  } catch (e) {
+    console.warn("No se pudo sellar el envio a cocina en las lineas:", e?.message || e);
+  }
+
   const persisted = {};
   qtyMap.forEach((qty, key) => {
     persisted[key] = Math.max(0, Number(qty || 0) || 0);
@@ -44879,6 +44957,20 @@ function cancelAutoComandaForTicket(ticketId) {
   updateAutoComandaIndicator();
 }
 
+// Cumplida la espera: imprime lo pendiente de ESE ticket (lineas nuevas y
+// devoluciones, con el mismo flujo que el envio automatico de la sincronizacion
+// remota). Si ese flujo esta justo ocupado con otra mesa, reintenta unos
+// segundos en vez de perder el envio.
+async function runAutoComandaForTicket(key) {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    if (!__comandaAutoPrintRunning) {
+      await maybeAutoPrintComandaFromRemoteSync({ onlyTicketId: key });
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
 function pauseAutoComandaForTicket(ticketId) {
   const key = String(ticketId ?? "").trim();
   const entry = __autoComandaPending.get(key);
@@ -44934,17 +45026,12 @@ function scheduleAutoComandaForTicket(ticket) {
       (t) => String(t?.id ?? "") === key && !t?.paid,
     );
     if (!fresh) return;
-    maybeAutoPrintComandaOnSave(fresh, { fromTimer: true })
-      .catch((e) => {
-        console.warn(
-          "No se pudo auto-imprimir comanda tras la espera:",
-          e?.message || e,
-        );
-      })
-      // Las devoluciones a cocina (bajar/quitar algo ya enviado) las imprime
-      // el flujo de sincronizacion: se lanza ahora que ya no hay espera.
-      .then(() => maybeAutoPrintComandaFromRemoteSync?.())
-      .catch(() => {});
+    runAutoComandaForTicket(key).catch((e) => {
+      console.warn(
+        "No se pudo auto-imprimir comanda tras la espera:",
+        e?.message || e,
+      );
+    });
   }, AUTO_COMANDA_DELAY_MS);
 
   __autoComandaPending.set(key, {
@@ -45092,9 +45179,22 @@ async function maybeAutoPrintComandaOnSave(ticket, opts = {}) {
 let __comandaAutoPrintRunning = false;
 const __comandaAutoPrintInFlight = new Set();
 
-async function maybeAutoPrintComandaFromRemoteSync() {
+async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
   if (!isAutoComandaOnSaveEnabled()) return;
   if (__comandaAutoPrintRunning) return;
+
+  // Real (Sergi, 2026-10-15): con el aviso en tiempo real, el propio guardado
+  // de este TPV dispara este sondeo casi al instante -- si llegaba antes de
+  // que el guardado armara la espera de la comanda automatica, imprimia ya y
+  // la espera de 10 s no servia de nada. Un ticket editado aqui hace poco
+  // (localRevisionAt) o con la espera en marcha/pausada NO se imprime desde
+  // el sondeo: lo gestiona la espera. Este sondeo queda para lo que llega de
+  // OTROS dispositivos (app de camareros). La propia espera lo llama con
+  // onlyTicketId para imprimir ese ticket cuando se cumple.
+  const onlyTicketId = String(opts?.onlyTicketId ?? "").trim();
+  const recentlyEditedHere = (t) =>
+    Date.now() - (Number(t?.localRevisionAt || 0) || 0) <
+    AUTO_COMANDA_DELAY_MS + 3000;
 
   const candidates = (
     Array.isArray(parkedTickets) ? parkedTickets : []
@@ -45102,7 +45202,10 @@ async function maybeAutoPrintComandaFromRemoteSync() {
     (t) =>
       t &&
       !t.paid &&
-      !__autoComandaPending.has(String(t.id ?? "").trim()) &&
+      (onlyTicketId
+        ? String(t.id ?? "").trim() === onlyTicketId
+        : !__autoComandaPending.has(String(t.id ?? "").trim()) &&
+          !recentlyEditedHere(t)) &&
       isMesasModeTicket(t) &&
       (getComandaDeltaLinesForTicket(t, t?.items || []).length > 0 ||
         getComandaReturnedLinesForTicket(t, t?.items || []).length > 0),
