@@ -21653,7 +21653,9 @@ function refreshParkedEditingBanner() {
   if (delBtnEl) delBtnEl.textContent = showMesasActions ? "Borrar mesa" : "Borrar";
   setActionButtonsVisible({
     split: showMesasActions,
-    comanda: showMesasActions,
+    // El boton pequeño "Comanda" sobra: la barra grande de abajo (con ✎ para
+    // la ventana con observacion) lo sustituye (2026-10-15).
+    comanda: false,
     meta: true,
     del: showDeleteAction,
   });
@@ -30621,6 +30623,19 @@ function openPostPayModal({ docCode, total, cambio }) {
 // ===== [09] Opciones (panel principal) =====
 const OPTIONS_AUTOPRINT_KEY = "tpv_autoPrint";
 const OPTIONS_AUTO_COMANDA_ON_SAVE_KEY = "tpv_autoComandaOnSave";
+// Espera de la comanda automatica (configurable en Opciones -> Mesas). Va aqui,
+// antes de cualquier codigo que la lea al cargar (las const no se pueden usar
+// antes de su linea).
+const OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY = "tpv_autoComandaDelaySec";
+const AUTO_COMANDA_DELAY_DEFAULT_SEC = 10;
+function getAutoComandaDelayMs() {
+  let sec = AUTO_COMANDA_DELAY_DEFAULT_SEC;
+  try {
+    const raw = Number(localStorage.getItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY));
+    if (Number.isFinite(raw) && raw >= 5 && raw <= 600) sec = Math.round(raw);
+  } catch {}
+  return sec * 1000;
+}
 const OPTIONS_PRODUCT_ADDONS_ENABLED_KEY = "tpv_productAddonsEnabled";
 const OPTIONS_GROUPLINES_KEY = "tpv_groupLines";
 const FAST_TICKET_NUMBER_CACHE_KEY = "tpv_fast_ticket_number_by_type_v1";
@@ -32030,6 +32045,23 @@ autoPrintToggle?.addEventListener("change", () => {
     );
   }
 });
+
+const autoComandaDelaySelect = document.getElementById("autoComandaDelaySelect");
+if (autoComandaDelaySelect) {
+  autoComandaDelaySelect.value = String(getAutoComandaDelayMs() / 1000);
+  if (autoComandaDelaySelect.value !== String(getAutoComandaDelayMs() / 1000)) {
+    autoComandaDelaySelect.value = String(AUTO_COMANDA_DELAY_DEFAULT_SEC);
+  }
+  autoComandaDelaySelect.addEventListener("change", () => {
+    try {
+      localStorage.setItem(
+        OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY,
+        String(autoComandaDelaySelect.value),
+      );
+    } catch {}
+    updateAutoComandaIndicator();
+  });
+}
 
 autoComandaOnSaveToggle?.addEventListener("change", () => {
   setAutoComandaOnSaveEnabled(!!autoComandaOnSaveToggle.checked);
@@ -43256,6 +43288,11 @@ async function runMesasAutoSaveIfNeeded() {
       skipStockConfirm: true,
       parkingMode: PARKED_MODE_MESAS,
     });
+    // El autoguardado NO imprime (skipAutoPrint), asi que nunca armaba la
+    // comanda automatica: se imprimia solo por el sondeo remoto, sin cuenta
+    // atras. Aqui se arma (o reinicia) la espera de ese ticket (2026-10-15).
+    const savedTicket = resolveComandaTicketForSelectedMesa();
+    if (savedTicket) scheduleAutoComandaForTicket(savedTicket);
   } catch (e) {
     console.warn("No se pudo auto-guardar pedido de mesa:", e?.message || e);
   } finally {
@@ -44952,7 +44989,6 @@ async function printComandaWithContext({
 // cumplirse se envia todo junto. Una impresion manual (boton Comanda) la
 // cancela. Si la app se cierra antes, el sondeo remoto
 // (maybeAutoPrintComandaFromRemoteSync) imprime lo pendiente al volver.
-const AUTO_COMANDA_DELAY_MS = 10000;
 const __autoComandaPending = new Map(); // ticketId -> { timer, dueAt }
 let __autoComandaTicker = null;
 
@@ -45027,6 +45063,7 @@ function scheduleAutoComandaForTicket(ticket) {
   }
   if (prev) clearTimeout(prev.timer);
 
+  const delayMs = getAutoComandaDelayMs();
   const timer = setTimeout(() => {
     __autoComandaPending.delete(key);
     updateAutoComandaIndicator();
@@ -45040,11 +45077,11 @@ function scheduleAutoComandaForTicket(ticket) {
         e?.message || e,
       );
     });
-  }, AUTO_COMANDA_DELAY_MS);
+  }, delayMs);
 
   __autoComandaPending.set(key, {
     timer,
-    dueAt: Date.now() + AUTO_COMANDA_DELAY_MS,
+    dueAt: Date.now() + delayMs,
   });
 
   if (!__autoComandaTicker) {
@@ -45078,15 +45115,17 @@ function updateAutoComandaIndicator() {
       ? parkedTickets?.[currentParkedTicketIndex]
       : null;
   const loadedKey = loaded ? String(loaded.id ?? "").trim() : "";
-  const pending = loaded ? __autoComandaPending.get(loadedKey) : null;
-  const state = !pending ? "idle" : pending.paused ? "paused" : "pending";
+  // La cuenta atras y la pausa estan en la barra "Enviar comanda": aqui solo
+  // queda el recordatorio de que la comanda automatica esta activa.
+  const pending = null;
+  const state = "idle";
 
   // Solo se reconstruye el HTML al cambiar de estado (no cada segundo): si no,
   // el boton se reemplazaria justo cuando se pulsa y el clic se perderia.
   const stateKey = `${state}|${loadedKey}`;
   if (el.dataset.state !== stateKey) {
     el.dataset.state = stateKey;
-    const chip = `<span class="peb-auto-chip" title="Las comandas se envían solas a cocina ${AUTO_COMANDA_DELAY_MS / 1000} s después del último cambio. Se puede desactivar en Opciones → Mesas.">⚡ Comanda automática</span>`;
+    const chip = `<span class="peb-auto-chip" title="Las comandas se envían solas a cocina ${getAutoComandaDelayMs() / 1000} s después del último cambio (configurable en Opciones → Mesas).">⚡ Comanda automática</span>`;
     const keyAttr = escapeHtml(loadedKey);
     el.innerHTML =
       state === "pending"
@@ -45202,7 +45241,7 @@ async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
   const onlyTicketId = String(opts?.onlyTicketId ?? "").trim();
   const recentlyEditedHere = (t) =>
     Date.now() - (Number(t?.localRevisionAt || 0) || 0) <
-    AUTO_COMANDA_DELAY_MS + 3000;
+    getAutoComandaDelayMs() + 3000;
 
   const candidates = (
     Array.isArray(parkedTickets) ? parkedTickets : []
@@ -45316,6 +45355,9 @@ async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
 
         commitComandaPrintedState(ticket, ticket?.items || []);
         await persistComandaAutoPrintStateWithoutResync(ticket);
+        // Si es la mesa abierta en pantalla, las lineas enviadas pasan a gris
+        // y desaparecen de "pendiente" sin esperar a otro cambio.
+        if (getCurrentLoadedParkedTicket() === ticket) renderCart();
       } finally {
         __comandaAutoPrintInFlight.delete(dedupeKey);
       }
@@ -45547,10 +45589,17 @@ function refreshSendComandaBar() {
   const bar = document.getElementById("sendComandaBar");
   if (!bar) return;
 
-  const show =
+  const baseShow =
     MESAS_INLINE_ACTIVE &&
     MESAS_INLINE_VIEW === "transacciones" &&
     shouldShowSplitPayAndPreprint();
+  // Solo si hay algo que sea comanda (producto de una familia de comanda,
+  // enviado o no) o una devolucion pendiente: con solo productos que no van a
+  // cocina la barra estorbaba (2026-10-15).
+  const counts = baseShow ? getPendingComandaCountsForCurrentMesa() : null;
+  const show =
+    baseShow &&
+    (getComandaPrintableLines(cart).length > 0 || counts.returnedQty > 0);
   bar.classList.toggle("hidden", !show);
   if (!show) return;
 
@@ -45558,7 +45607,6 @@ function refreshSendComandaBar() {
   const pauseBtn = document.getElementById("sendComandaPauseBtn");
   if (!main) return;
 
-  const counts = getPendingComandaCountsForCurrentMesa();
   const total = counts.newQty + counts.returnedQty;
   const loadedKey = counts.loaded ? String(counts.loaded.id ?? "").trim() : "";
   const auto = loadedKey ? __autoComandaPending.get(loadedKey) : null;
