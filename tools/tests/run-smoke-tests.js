@@ -10172,7 +10172,7 @@ console.log("\n[SMOKE] Checking 2026-10-15 barra grande Enviar comanda (Modo Mes
     renderer.includes("isReturn: true,") &&
     renderer.includes("refreshSendComandaBar?.();") &&
     renderer.includes('lineKind === "pending" ? "Pendiente de enviar" : "No va a cocina"') &&
-    renderer.includes('"producto no va" : "productos no van"') &&
+    renderer.includes("const show = baseShow && counts.newQty + counts.returnedQty > 0;") &&
     renderer.includes("const orderedUiLines = [") &&
     renderer.includes("...unsentUiLines.filter((it) => isNoKitchenLine(it)),") &&
     renderer.includes("divider.textContent = `Enviado · ${bits.filter(Boolean).join(\" · \")}`;") &&
@@ -10180,7 +10180,7 @@ console.log("\n[SMOKE] Checking 2026-10-15 barra grande Enviar comanda (Modo Mes
     styles.includes(".send-comanda-bar")
   ) {
     ok(
-      "Real (Sergi, 2026-10-15): enviar la comanda era una pastilla pequeña arriba, en la tarjeta de la mesa, mientras Cobrar/Vaciar/Tickets son botones grandes. Nueva barra grande 'Enviar comanda' encima de la botonera inferior (solo Modo Mesas con pedido abierto): contador de lo pendiente (nuevo + devoluciones), 'Todo enviado a cocina' en gris cuando no hay nada, un toque imprime directamente (devolucion primero y despues lo nuevo, y deja registrado lo enviado), pausa/reanudar del envio automatico con la cuenta atras dentro de la barra, e icono para abrir la ventana de comanda con observacion. Los productos cuya familia no esta entre las de comanda se marcan 'No va a cocina' (no 'Pendiente de enviar') y la barra lo explica en vez de decir solo 'Todo enviado'. Lo enviado va siempre arriba, agrupado por envio con cabecera 'Enviado - hora - Comanda N - usuario', y lo pendiente / que no va a cocina debajo de la raya naranja. El sondeo remoto ya no imprime tickets editados aqui hace menos de 13 s (con el aviso en tiempo real se adelantaba a la espera de 10 s y la comanda salia al instante); la espera imprime nuevas y devoluciones de ese ticket. Verificado con la app real aislada con la impresion simulada",
+      "Real (Sergi, 2026-10-15): enviar la comanda era una pastilla pequeña arriba, en la tarjeta de la mesa, mientras Cobrar/Vaciar/Tickets son botones grandes. Nueva barra grande 'Enviar comanda' encima de la botonera inferior (solo Modo Mesas con pedido abierto): contador de lo pendiente (nuevo + devoluciones), 'Todo enviado a cocina' en gris cuando no hay nada, un toque imprime directamente (devolucion primero y despues lo nuevo, y deja registrado lo enviado), pausa/reanudar del envio automatico con la cuenta atras dentro de la barra, e icono para abrir la ventana de comanda con observacion. Los productos cuya familia no esta entre las de comanda se marcan 'No va a cocina' (no 'Pendiente de enviar') y la barra solo aparece cuando hay algo por enviar (con todo enviado desaparece). Lo enviado va siempre arriba, agrupado por envio con cabecera 'Enviado - hora - Comanda N - usuario', y lo pendiente / que no va a cocina debajo de la raya naranja. El sondeo remoto ya no imprime tickets editados aqui hace menos de 13 s (con el aviso en tiempo real se adelantaba a la espera de 10 s y la comanda salia al instante); la espera imprime nuevas y devoluciones de ese ticket. Verificado con la app real aislada con la impresion simulada",
     );
   } else {
     fail(

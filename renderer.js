@@ -45593,13 +45593,11 @@ function refreshSendComandaBar() {
     MESAS_INLINE_ACTIVE &&
     MESAS_INLINE_VIEW === "transacciones" &&
     shouldShowSplitPayAndPreprint();
-  // Solo si hay algo que sea comanda (producto de una familia de comanda,
-  // enviado o no) o una devolucion pendiente: con solo productos que no van a
-  // cocina la barra estorbaba (2026-10-15).
+  // Solo cuando hay algo POR ENVIAR (lineas nuevas de comanda o devoluciones):
+  // con todo enviado, o con solo productos que no van a cocina, la barra
+  // estorbaba -- lo enviado ya se ve en gris arriba (2026-10-15).
   const counts = baseShow ? getPendingComandaCountsForCurrentMesa() : null;
-  const show =
-    baseShow &&
-    (getComandaPrintableLines(cart).length > 0 || counts.returnedQty > 0);
+  const show = baseShow && counts.newQty + counts.returnedQty > 0;
   bar.classList.toggle("hidden", !show);
   if (!show) return;
 
@@ -45612,18 +45610,11 @@ function refreshSendComandaBar() {
   const auto = loadedKey ? __autoComandaPending.get(loadedKey) : null;
 
   const countTxt = total > 0 ? fmtQty(total) : "";
-  // Lineas que no van a cocina (su familia no esta entre las de comanda): sin
-  // este aviso, "Todo enviado" con un producto recien añadido parecia un fallo.
-  const noKitchenCount =
-    getVisibleCartLines(cart).filter((l) => !l?.comandaHeld).length -
-    getComandaPrintableLines(cart).length;
   const extra = auto
     ? auto.paused
       ? "envío automático en pausa"
       : `se envía solo en ${Math.max(1, Math.ceil((auto.dueAt - Date.now()) / 1000))} s`
-    : total <= 0 && noKitchenCount > 0
-      ? `${noKitchenCount} ${noKitchenCount === 1 ? "producto no va" : "productos no van"} a cocina`
-      : "";
+    : "";
 
   const html = `<span class="scb-label">${
     total > 0
