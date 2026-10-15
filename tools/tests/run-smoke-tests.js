@@ -10134,7 +10134,7 @@ console.log("\n[SMOKE] Checking 2026-10-15 comanda automatica con espera de 10 s
     renderer.includes("if (savedTicket) scheduleAutoComandaForTicket(savedTicket);") &&
     renderer.includes("if (getCurrentLoadedParkedTicket() === ticket) renderCart();") &&
     renderer.includes("comanda: false,") &&
-    fs.readFileSync(path.join(root, "index.html"), "utf8").includes('id="autoComandaDelaySelect"') &&
+    fs.readFileSync(path.join(root, "index.html"), "utf8").includes('id="autoComandaDelayInput"') &&
     renderer.includes("runAutoComandaForTicket(key).catch((e) => {") &&
     renderer.includes("await maybeAutoPrintComandaFromRemoteSync({ onlyTicketId: key });") &&
     renderer.includes("!__autoComandaPending.has(String(t.id ?? \"\").trim()) &&") &&
@@ -10148,7 +10148,7 @@ console.log("\n[SMOKE] Checking 2026-10-15 comanda automatica con espera de 10 s
     styles.includes(".peb-auto-comanda")
   ) {
     ok(
-      "Real (Sergi, 2026-10-15): con 'Enviar comanda automaticamente al guardar' activa, Modo Mesas (que guarda solo tras cada cambio) imprimia una comanda en cada toque de producto o de +/-. Ahora el autoguardado de Mesas (que antes saltaba el gancho de impresion con skipAutoPrint y solo imprimia el sondeo, sin cuenta atras) arma una espera por ticket (60 s por defecto, configurable en Opciones -> Mesas) (cada cambio la reinicia) y al cumplirse se envia todo junto; el boton Comanda la cancela; el sondeo remoto no imprime tickets con espera pendiente. La tarjeta de la mesa muestra 'Comanda automatica' y una cuenta atras con boton Pausar/Reanudar (en pausa, los cambios no rearman la espera). Verificado con la app real aislada: no imprime antes de 10 s, un cambio a los 6 s reinicia, pausar detiene el contador y un cambio en pausa no lo rearma, reanudar imprime una sola vez a los 10 s y deja el estado de impreso, la impresion manual cancela la espera y con la opcion apagada no arma nada",
+      "Real (Sergi, 2026-10-15): con 'Enviar comanda automaticamente al guardar' activa, Modo Mesas (que guarda solo tras cada cambio) imprimia una comanda en cada toque de producto o de +/-. Ahora el autoguardado de Mesas (que antes saltaba el gancho de impresion con skipAutoPrint y solo imprimia el sondeo, sin cuenta atras) arma una espera por ticket (60 s por defecto, los segundos que se quieran escribir en Opciones -> Mesas) (cada cambio la reinicia) y al cumplirse se envia todo junto; el boton Comanda la cancela; el sondeo remoto no imprime tickets con espera pendiente. La tarjeta de la mesa muestra 'Comanda automatica' y una cuenta atras con boton Pausar/Reanudar (en pausa, los cambios no rearman la espera). Verificado con la app real aislada: no imprime antes de 10 s, un cambio a los 6 s reinicia, pausar detiene el contador y un cambio en pausa no lo rearma, reanudar imprime una sola vez a los 10 s y deja el estado de impreso, la impresion manual cancela la espera y con la opcion apagada no arma nada",
     );
   } else {
     fail(

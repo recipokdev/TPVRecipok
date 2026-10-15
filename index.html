@@ -3102,14 +3102,15 @@
                   </div>
                 </div>
                 <div class="opt-row-actions">
-                  <select id="autoComandaDelaySelect" class="opt-select">
-                    <option value="10">10 segundos</option>
-                    <option value="20">20 segundos</option>
-                    <option value="30">30 segundos</option>
-                    <option value="60">1 minuto</option>
-                    <option value="120">2 minutos</option>
-                    <option value="300">5 minutos</option>
-                  </select>
+                  <input
+                    id="autoComandaDelayInput"
+                    type="number"
+                    class="opt-input opt-input-narrow"
+                    min="1"
+                    max="3600"
+                    step="1"
+                  />
+                  <span class="opt-row-sub">segundos</span>
                 </div>
               </div>
 

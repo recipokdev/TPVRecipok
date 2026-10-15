@@ -30632,7 +30632,7 @@ function getAutoComandaDelayMs() {
   let sec = AUTO_COMANDA_DELAY_DEFAULT_SEC;
   try {
     const raw = Number(localStorage.getItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY));
-    if (Number.isFinite(raw) && raw >= 5 && raw <= 600) sec = Math.round(raw);
+    if (Number.isFinite(raw) && raw >= 1 && raw <= 3600) sec = Math.round(raw);
   } catch {}
   return sec * 1000;
 }
@@ -32046,21 +32046,44 @@ autoPrintToggle?.addEventListener("change", () => {
   }
 });
 
-const autoComandaDelaySelect = document.getElementById("autoComandaDelaySelect");
-if (autoComandaDelaySelect) {
-  autoComandaDelaySelect.value = String(getAutoComandaDelayMs() / 1000);
-  if (autoComandaDelaySelect.value !== String(getAutoComandaDelayMs() / 1000)) {
-    autoComandaDelaySelect.value = String(AUTO_COMANDA_DELAY_DEFAULT_SEC);
-  }
-  autoComandaDelaySelect.addEventListener("change", () => {
+// Espera de la comanda automatica: el usuario escribe los segundos que quiera
+// (1 a 3600; vacio o invalido vuelve al valor por defecto). Con teclado en
+// pantalla se abre el numerico, igual que los accesos rapidos de descuento.
+const autoComandaDelayInput = document.getElementById("autoComandaDelayInput");
+if (autoComandaDelayInput) {
+  const saveAutoComandaDelayFromInput = () => {
+    const n = Math.round(Number(String(autoComandaDelayInput.value).replace(",", ".")));
+    const sec = Number.isFinite(n) && n >= 1 && n <= 3600 ? n : AUTO_COMANDA_DELAY_DEFAULT_SEC;
     try {
-      localStorage.setItem(
-        OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY,
-        String(autoComandaDelaySelect.value),
-      );
+      localStorage.setItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY, String(sec));
     } catch {}
+    autoComandaDelayInput.value = String(sec);
     updateAutoComandaIndicator();
-  });
+  };
+  autoComandaDelayInput.value = String(getAutoComandaDelayMs() / 1000);
+  autoComandaDelayInput.addEventListener("change", saveAutoComandaDelayFromInput);
+
+  let autoComandaDelayPadOpen = false;
+  const openAutoComandaDelayPad = () => {
+    if (autoComandaDelayPadOpen) return;
+    autoComandaDelayPadOpen = true;
+    openNumPad(
+      String(autoComandaDelayInput.value || ""),
+      (val, meta = {}) => {
+        autoComandaDelayPadOpen = false;
+        if (meta?.phase && meta.phase !== "confirm") return;
+        autoComandaDelayInput.value = String(val ?? "").replace(",", ".");
+        saveAutoComandaDelayFromInput();
+        autoComandaDelayInput.blur(); // para que el proximo toque vuelva a abrir el teclado
+      },
+      "Espera de la comanda automática (segundos)",
+      "qty",
+      null,
+      null,
+    );
+  };
+  autoComandaDelayInput.addEventListener("focus", openAutoComandaDelayPad);
+  autoComandaDelayInput.addEventListener("click", openAutoComandaDelayPad);
 }
 
 autoComandaOnSaveToggle?.addEventListener("change", () => {
