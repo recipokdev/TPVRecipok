@@ -14269,12 +14269,13 @@ async function addToCart(product, quantity = 1) {
 // pendiente segun el mismo calculo que usa "Enviar comanda"
 // (getComandaDeltaLinesForTicket). Vacio si no hay ticket cargado (nada se ha
 // podido imprimir todavia).
-function getKitchenSentQtyByLineId(sourceLines = cart) {
+function getKitchenSentQtyByLineId(sourceLines = cart, ticketOverride = null) {
   const map = new Map();
   const ticket =
-    currentParkedTicketIndex != null
+    ticketOverride ||
+    (currentParkedTicketIndex != null
       ? parkedTickets?.[currentParkedTicketIndex]
-      : null;
+      : null);
   if (!ticket) return map;
 
   const pendingByLineId = new Map();
@@ -21461,7 +21462,7 @@ function refreshClearCartButtonUi() {
     btn.textContent = "Vaciar";
     btn.title = isParkingNow
       ? "Hay un guardado de aparcado en curso. Espera por favor."
-      : "Vaciar productos del pedido actual manteniendo la mesa y el ticket.";
+      : "Vaciar los productos SIN enviar del pedido actual, manteniendo la mesa y el ticket (lo ya enviado a cocina no se quita).";
     return;
   }
 
@@ -42923,13 +42924,47 @@ if (clearBtn) {
         : null;
 
       if (linkedActiveIndex !== null && linkedActiveIndex >= 0) {
-        pushCartHistoryStep("clear-cart");
-        cart = [];
-        renderCart();
-        setCurrentParkedTicketIndex(linkedActiveIndex);
-        if (selectedUid) {
-          saveDraftCartForMesaUid(selectedUid, [], { keepEmpty: true });
+        // Real (Sergi, 2026-10-15): "Vaciar" una mesa con productos YA enviados a
+        // cocina los quitaba del carrito y, al instante, se volvian a cargar
+        // desde el pedido guardado -- mientras tanto el sistema los daba por
+        // devueltos a cocina y luego como pendientes otra vez (se reenviaban).
+        // Vaciar solo quita lo que NO se ha enviado; lo enviado se quita linea a
+        // linea (con su confirmacion de devolucion).
+        const linkedTicket = parkedTickets[linkedActiveIndex];
+        const sentMap = getKitchenSentQtyByLineId(cart, linkedTicket);
+        const keptLines = [];
+        let removedSomething = false;
+        cart.forEach((line) => {
+          const sentQty = sentMap.get(line._lineId) || 0;
+          if (sentQty <= 0) {
+            removedSomething = true;
+            return;
+          }
+          if (sentQty < (Number(line.qty) || 0) - 0.0001) {
+            removedSomething = true;
+            line.qty = sentQty;
+            if (line.cantidad !== undefined) line.cantidad = sentQty;
+          }
+          keptLines.push(line);
+        });
+
+        if (keptLines.length && !removedSomething) {
+          toast(
+            "Lo ya enviado a cocina no se vacía. Quita esas líneas una a una con la ✕.",
+            "info",
+            "Vaciar",
+          );
+          return;
         }
+
+        pushCartHistoryStep("clear-cart");
+        cart = keptLines;
+        setCurrentParkedTicketIndex(linkedActiveIndex);
+        renderCart();
+        if (selectedUid) {
+          saveDraftCartForMesaUid(selectedUid, keptLines, { keepEmpty: true });
+        }
+        if (keptLines.length) scheduleMesasAutoSave?.();
         renderMesasTransContextBar();
         updateParkedCountBadge?.();
         refreshParkButtonUI();

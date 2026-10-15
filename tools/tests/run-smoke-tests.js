@@ -1294,7 +1294,7 @@ console.log(
   const fnStart = renderer.indexOf(
     'const clearBtn = document.getElementById("clearCartBtn");',
   );
-  const scoped = fnStart >= 0 ? renderer.slice(fnStart, fnStart + 2000) : "";
+  const scoped = fnStart >= 0 ? renderer.slice(fnStart, fnStart + 5000) : "";
 
   if (fnStart < 0) {
     fail("clearCartBtn handler not found");
@@ -10150,6 +10150,8 @@ console.log("\n[SMOKE] Checking 2026-10-15 comanda automatica con espera de 10 s
     renderer.includes("if (!__mesasComandaRulesLoaded) return;") &&
     renderer.includes("const stampOther = (others) => {") &&
     renderer.includes("stampOther(ticket?.items);") &&
+    renderer.includes("const sentMap = getKitchenSentQtyByLineId(cart, linkedTicket);") &&
+    renderer.includes("Lo ya enviado a cocina no se vacía. Quita esas líneas una a una con la ✕.") &&
     renderer.includes("function pauseAutoComandaForTicket(ticketId)") &&
     renderer.includes("function resumeAutoComandaForTicket(ticketId)") &&
     renderer.includes("if (prev?.paused) {") &&
