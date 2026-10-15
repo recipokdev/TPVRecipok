@@ -2228,6 +2228,10 @@ let discountQuickPercents = DISCOUNT_QUICK_PERCENT_SLOTS_DEFAULT.filter(
 );
 let mesasDinersFamilyRules = [];
 let mesasComandaFamilyRules = [];
+// true en cuanto las familias de comanda de Opciones -> Mesas se han leido (o
+// guardado) alguna vez en esta sesion. Mientras sea false, "sin reglas" significa
+// "aun no cargadas", NO "todo va a cocina": no se imprime nada automatico.
+let __mesasComandaRulesLoaded = false;
 let productDiscountPctById = {};
 let productManualOrderById = {};
 let customerTariffCatalog = [];
@@ -5825,6 +5829,7 @@ async function loadMesasDinersFamilyRules() {
 async function saveMesasComandaFamilyRules(nextRules) {
   const normalized = normalizeMesasComandaFamilyRules(nextRules);
   mesasComandaFamilyRules = normalized;
+  __mesasComandaRulesLoaded = true;
 
   try {
     localStorage.setItem(
@@ -5872,6 +5877,7 @@ async function loadMesasComandaFamilyRules() {
   }
 
   mesasComandaFamilyRules = normalizeMesasComandaFamilyRules(rules);
+  __mesasComandaRulesLoaded = true;
   renderMesasComandaFamilyRuleControls();
   refreshPreprintButtonUI?.();
 }
@@ -45327,6 +45333,10 @@ const __comandaAutoPrintInFlight = new Set();
 async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
   if (!isAutoComandaOnSaveEnabled()) return;
   if (__comandaAutoPrintRunning) return;
+  // Real (Sergi, 2026-10-15): al abrir el TPV salio una comanda con un producto
+  // que NO va a cocina. Con las familias de comanda aun sin cargar, "sin
+  // reglas" se interpreta como "todo va a cocina": no imprimir hasta que esten.
+  if (!__mesasComandaRulesLoaded) return;
 
   // Real (Sergi, 2026-10-15): con el aviso en tiempo real, el propio guardado
   // de este TPV dispara este sondeo casi al instante -- si llegaba antes de

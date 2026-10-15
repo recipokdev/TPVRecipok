@@ -10146,6 +10146,8 @@ console.log("\n[SMOKE] Checking 2026-10-15 comanda automatica con espera de 10 s
     renderer.includes("scb-extra${auto?.paused ? \" is-paused\" : \"\"}") &&
     styles.includes(".cart-batch-divider--nokitchen") &&
     renderer.includes(": \"cart-batch-divider cart-batch-divider--nokitchen\";") &&
+    renderer.includes("let __mesasComandaRulesLoaded = false;") &&
+    renderer.includes("if (!__mesasComandaRulesLoaded) return;") &&
     renderer.includes("function pauseAutoComandaForTicket(ticketId)") &&
     renderer.includes("function resumeAutoComandaForTicket(ticketId)") &&
     renderer.includes("if (prev?.paused) {") &&
