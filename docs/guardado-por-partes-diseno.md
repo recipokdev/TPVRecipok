@@ -1,6 +1,6 @@
 # Guardado de pedidos por partes — diseño
 
-Estado: **diseño para revisar** (2026-10-15). Paso 1 (identidad estable de línea) ya hecho y commiteado (`e441821`). Nada del servidor está tocado todavía.
+Estado (2026-10-15): **aprobado** por Sergi. Paso 1 (identidad estable de línea) hecho (`e441821`). **Servidor hecho y desplegado**, activo solo para `demo` en Modo Mesas (`parked_ops_pilot_slugs_mesas`); TPV normal preparado pero sin activar (`parked_ops_pilot_slugs_tpv` vacío). El cliente (TPV) aún no usa la acción nueva.
 
 ## 1. El problema
 
@@ -31,8 +31,16 @@ Escribir **operaciones pequeñas e idempotentes** sobre partes del pedido, no el
 
 Reglas:
 
-1. **Valor completo, nunca delta** ("cantidad = 3", no "+1"): repetir una operación (la cola de reintento ya existente) no duplica ni corrompe.
-2. **Cada operación lleva su versión esperada** solo de lo que toca (la línea o el grupo de campos), no la del documento. Dos operaciones sobre cosas distintas **nunca chocan**. Solo choca de verdad quien toca *la misma* línea/campo a la vez.
+1. **Cantidades por diferencia, el resto por valor completo.** Subir/bajar una cantidad se manda como "+1"/"−1" (`line-qty-delta`) para que dos dispositivos que suman a la vez **se sumen** (en la realidad se pidieron dos más). Es seguro repetirlas porque **cada petición lleva un `clientOpId`** y el servidor ignora la que ya aplicó (tabla `parked_ops_applied`, limpieza a las 24 h). Precio, descuento, nombre, observaciones y demás campos van por valor completo.
+2. **Reglas de conflicto** (acordadas con Sergi):
+
+| Cambio | Quién gana |
+|---|---|
+| Añadir/subir/bajar cantidad | Se suman los dos cambios |
+| Precio, descuento, nombre, observaciones, campos de línea | El último en llegar al servidor (la fila bloqueada pone el orden); el otro dispositivo lo ve al instante por el aviso en tiempo real |
+| Quitar una línea mientras otro la edita | Gana quitar; la edición vuelve como conflicto `line-missing` |
+| Pedido ya cobrado | Siempre el servidor: las operaciones se ignoran |
+| Pedido borrado | No se resucita (`missing`) |
 3. **El servidor aplica la operación sobre el documento guardado dentro de una transacción con la fila bloqueada** (`SELECT … FOR UPDATE`), y devuelve el documento resultante. No hay tabla nueva de líneas en la primera versión: `items_json` sigue siendo la fuente. Sin migración de datos ni de esquema.
 4. `items_json` sigue siendo el formato que leen la app de camareros y el resto → **cero cambios para quien no use operaciones**.
 
@@ -79,10 +87,18 @@ POST ?action=save-parked-reservation-ops
 - Reutiliza la cola de reintento existente: las ops se encolan igual que hoy los documentos, y por ser idempotentes se reintentan sin riesgo.
 - La app de camareros no cambia: sigue con las acciones de siempre.
 
+## 5b. Operaciones implementadas (v1)
+
+`line-add`, `line-qty-delta`, `line-set`, `line-remove`, `header-set` (ticketName, obs, clientName, codcliente, mesaAlerts en Mesas), `comanda-commit` (comandaState + sellos de envío; solo Mesas). Solo operan sobre un pedido que **ya existe**; crear el pedido sigue siendo el guardado entero de siempre. El `total` lo manda el cliente (tarifas y descuentos se calculan allí); si falta, el servidor calcula uno aproximado.
+
+Respuesta: `{ok, data: <pedido resultante>, applied: [índices], conflicts: [...], duplicate}`; `409 {opsDisabled}` si el cliente/modo no está activado (el TPV sigue con el guardado entero); `404 {missing}`; `200 {paid}`.
+
+Pruebas del servidor (`tools/parked_ops_test.php`, `tools/parked_ops_concurrency_test.php`): 16 casos de motor + 6 procesos en paralelo sumando +1 a la misma línea (60 operaciones → cantidad exacta) + HTTP extremo a extremo + auditoría (`parked-ops`).
+
 ## 6. Pasos
 
 0. ✅ **Identidad estable de línea** (`e441821`).
-1. **Servidor**: `save-parked-reservation-ops` + tests contra las dos tablas, pilotado solo a `demo`, solo Mesas.
+1. ✅ **Servidor**: `save-parked-reservation-ops` desplegado y probado; funciona para las dos tablas, activo solo en `demo`/Mesas.
 2. **Cliente**: punto único de guardado + diff de líneas; protocolo nuevo solo si el servidor lo activa; fallback al guardado entero.
 3. **Prueba en demo con 2 TPV reales a la vez** (cada uno tocando líneas distintas de la misma mesa y la misma línea a la vez), y lo mismo en TPV normal. Incluye: cobro mientras otro edita, borrar mesa, mover/fusionar mesas, división de cuenta, reintento sin red.
 4. Activar TPV normal en demo; después **un cliente piloto** (Asador el Gallo, por Mesas) con interruptor de apagado inmediato; vigilar el audit log varios días.
