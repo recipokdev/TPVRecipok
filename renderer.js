@@ -14305,7 +14305,10 @@ function updateCartItemQuantity(lineId, newQty, opts = {}) {
   }
 
   const item = cart.find((c) => c._lineId === lineId);
-  if (!item) return;
+  if (!item) {
+    console.warn("[CARRITO] updateCartItemQuantity ignorado: linea inexistente", { lineId, newQty });
+    return;
+  }
 
   // ❌ No permitir tocar hijos desde aquí (por seguridad)
   if (isPackChildLine(item)) {
@@ -18447,7 +18450,17 @@ if (cartLinesContainer) {
     const qtyBtn = e.target.closest(".qty-btn");
     if (qtyBtn) {
       const action = qtyBtn.getAttribute("data-action");
-      if (!item) return;
+      if (!item) {
+        // Diagnostico (2026-10-15): un toque en +/-/cantidad que "no hace nada"
+        // a veces es una fila pintada con una linea que ya no esta en el
+        // carrito (el carrito se rehizo desde otro sitio sin repintar).
+        console.warn("[CARRITO] toque en cantidad ignorado: la linea ya no esta en el carrito", {
+          lineId,
+          action,
+          lineasEnCarrito: cart.map((c) => c._lineId),
+        });
+        return;
+      }
 
       const roundQty = (n) => Math.round((Number(n) || 0) * 1000) / 1000;
 
