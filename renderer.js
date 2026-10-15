@@ -44760,17 +44760,48 @@ function commitComandaPrintedState(ticket, sourceLines = cart) {
         sentBy: String(currentAgent?.name || currentAgent?.nick || getLoginUser?.() || "").trim(),
       };
       const ids = new Set(justSent.map((l) => l?._lineId).filter(Boolean));
-      const apply = (arr) =>
-        (Array.isArray(arr) ? arr : []).forEach((it) => {
-          if (it && ids.has(it._lineId)) Object.assign(it, stamp);
+      const stampedLines = [];
+      (Array.isArray(sourceLines) ? sourceLines : []).forEach((it) => {
+        if (it && ids.has(it._lineId)) {
+          Object.assign(it, stamp);
+          stampedLines.push(it);
+        }
+      });
+      // Las mismas lineas en otra lista (items del ticket <-> carrito): al
+      // abrir una mesa el carrito se rehace con _lineId NUEVOS, asi que ademas
+      // de por id se casan por producto/cantidad/precio. Sin esto el sello
+      // solo quedaba en el carrito, nunca llegaba al ticket guardado y se
+      // perdia al reiniciar (2026-10-15).
+      const stampOther = (others) => {
+        const arr = Array.isArray(others) ? others : [];
+        if (arr === sourceLines) return;
+        const used = new Set();
+        stampedLines.forEach((l) => {
+          let target = arr.find((o) => o && !used.has(o) && o._lineId === l._lineId);
+          if (!target) {
+            const k = buildComandaLineKey(l);
+            target = arr.find(
+              (o) =>
+                o &&
+                !used.has(o) &&
+                !o.sentAt &&
+                buildComandaLineKey(o) === k &&
+                Math.abs((Number(o.qty) || 0) - (Number(l.qty) || 0)) < 0.0001 &&
+                round2(getUnitGross(o)) === round2(getUnitGross(l)),
+            );
+          }
+          if (target) {
+            used.add(target);
+            Object.assign(target, stamp);
+          }
         });
-      apply(sourceLines);
-      apply(ticket?.items);
+      };
+      stampOther(ticket?.items);
       const loadedNow =
         currentParkedTicketIndex != null
           ? parkedTickets?.[currentParkedTicketIndex]
           : null;
-      if (loadedNow && loadedNow === ticket) apply(cart);
+      if (loadedNow && loadedNow === ticket) stampOther(cart);
     }
   } catch (e) {
     console.warn("No se pudo sellar el envio a cocina en las lineas:", e?.message || e);
