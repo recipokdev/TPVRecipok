@@ -10140,6 +10140,10 @@ console.log("\n[SMOKE] Checking 2026-10-15 comanda automatica con espera de 10 s
     renderer.includes("!__autoComandaPending.has(String(t.id ?? \"\").trim()) &&") &&
     renderer.includes("!recentlyEditedHere(t)) &&") &&
     renderer.includes("cancelAutoComandaForTicket(ticket?.id);") &&
+    renderer.includes("entry.remainingMs = Math.max(0, entry.dueAt - Date.now());") &&
+    renderer.includes("scb-extra${auto?.paused ? \" is-paused\" : \"\"}") &&
+    styles.includes(".cart-batch-divider--nokitchen") &&
+    renderer.includes(": \"cart-batch-divider cart-batch-divider--nokitchen\";") &&
     renderer.includes("function pauseAutoComandaForTicket(ticketId)") &&
     renderer.includes("function resumeAutoComandaForTicket(ticketId)") &&
     renderer.includes("if (prev?.paused) {") &&

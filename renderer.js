@@ -15294,7 +15294,10 @@ function renderCart() {
     if (itemIsSent) sentLineSeen = true;
     if (sentLineSeen && lineKind !== "sent" && lineKind !== lastLineKind) {
       const kindDivider = document.createElement("div");
-      kindDivider.className = "cart-batch-divider cart-batch-divider--pending";
+      kindDivider.className =
+        lineKind === "pending"
+          ? "cart-batch-divider cart-batch-divider--pending"
+          : "cart-batch-divider cart-batch-divider--nokitchen";
       kindDivider.textContent =
         lineKind === "pending" ? "Pendiente de enviar" : "No va a cocina";
       container.appendChild(kindDivider);
@@ -45051,6 +45054,9 @@ function pauseAutoComandaForTicket(ticketId) {
   if (!entry || entry.paused) return;
   clearTimeout(entry.timer);
   entry.timer = null;
+  // Se congela lo que quedaba: al reanudar continua desde ahi, no desde el
+  // maximo (2026-10-15).
+  entry.remainingMs = Math.max(0, entry.dueAt - Date.now());
   entry.paused = true;
   updateAutoComandaIndicator();
 }
@@ -45063,11 +45069,15 @@ function resumeAutoComandaForTicket(ticketId) {
   const t = (Array.isArray(parkedTickets) ? parkedTickets : []).find(
     (x) => String(x?.id ?? "") === key && !x?.paid,
   );
-  if (t) scheduleAutoComandaForTicket(t);
+  if (t) {
+    scheduleAutoComandaForTicket(t, {
+      delayMs: Number.isFinite(entry.remainingMs) ? entry.remainingMs : undefined,
+    });
+  }
   updateAutoComandaIndicator();
 }
 
-function scheduleAutoComandaForTicket(ticket) {
+function scheduleAutoComandaForTicket(ticket, opts = {}) {
   if (!ticket || ticket.paid) return;
   if (!isAutoComandaOnSaveEnabled()) return;
   if (!MESAS_INLINE_ACTIVE || MESAS_INLINE_VIEW !== "transacciones") return;
@@ -45093,7 +45103,9 @@ function scheduleAutoComandaForTicket(ticket) {
   }
   if (prev) clearTimeout(prev.timer);
 
-  const delayMs = getAutoComandaDelayMs();
+  const delayMs = Number.isFinite(opts?.delayMs)
+    ? Math.max(0, opts.delayMs)
+    : getAutoComandaDelayMs();
   const timer = setTimeout(() => {
     __autoComandaPending.delete(key);
     updateAutoComandaIndicator();
@@ -45640,11 +45652,16 @@ function refreshSendComandaBar() {
   const auto = loadedKey ? __autoComandaPending.get(loadedKey) : null;
 
   const countTxt = total > 0 ? fmtQty(total) : "";
-  const extra = auto
-    ? auto.paused
-      ? "envío automático en pausa"
-      : `se envía solo en ${Math.max(1, Math.ceil((auto.dueAt - Date.now()) / 1000))} s`
-    : "";
+  // En pausa se sigue viendo lo que queda (congelado), solo cambia el color.
+  const autoSecs = auto
+    ? Math.max(
+        1,
+        Math.ceil(
+          (auto.paused ? auto.remainingMs : auto.dueAt - Date.now()) / 1000,
+        ),
+      )
+    : 0;
+  const extra = auto ? `se envía solo en ${autoSecs} s` : "";
 
   const html = `<span class="scb-label">${
     total > 0
@@ -45653,7 +45670,9 @@ function refreshSendComandaBar() {
         : "Enviar devolución"
       : "Todo enviado a cocina"
   }</span>${countTxt ? `<span class="scb-count">${countTxt}</span>` : ""}${
-    extra ? `<span class="scb-extra">${extra}</span>` : ""
+    extra
+      ? `<span class="scb-extra${auto?.paused ? " is-paused" : ""}">${extra}</span>`
+      : ""
   }`;
   if (main.dataset.html !== html) {
     main.dataset.html = html;

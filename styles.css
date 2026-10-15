@@ -5889,6 +5889,28 @@ body.theme-dark #parkObsOverlay .park-quick-flag.is-active {
   letter-spacing: 0.02em;
 }
 
+/* "No va a cocina": raya continua negra, distinta de la naranja a trozos de "Pendiente de enviar". */
+.cart-batch-divider--nokitchen {
+  margin-top: 18px;
+  padding-top: 8px;
+  border-top: 2px solid #111827;
+  color: #111827;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+body.theme-dark .cart-batch-divider.cart-batch-divider--nokitchen {
+  border-top-color: #e5e7eb;
+  color: #e5e7eb;
+}
+
+.send-comanda-bar .scb-extra.is-paused {
+  color: #7c2d12;
+  background: #fff;
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
 body.theme-dark .cart-batch-divider.cart-batch-divider--pending {
   border-top-color: #d97706;
   color: #fbbf24;
