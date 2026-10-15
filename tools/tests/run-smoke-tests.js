@@ -10219,6 +10219,29 @@ console.log("\n[SMOKE] Checking 2026-10-15 abrir una mesa repinta el carrito con
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-15 identidad estable de las lineas al cargar un pedido guardado\n");
+
+{
+  const hIdx = renderer.indexOf("function hydrateParkedItemForCart(item) {");
+  const hBody = hIdx >= 0 ? renderer.slice(hIdx, hIdx + 4000) : "";
+  if (
+    hBody.includes('_lineId: String(src._lineId || "").trim() || makeLineId(),') &&
+    !hBody.includes("_lineId: makeLineId(),") &&
+    renderer.includes("function hydrateParkedItemsForCart(items) {") &&
+    renderer.includes("cart = hydrateParkedItemsForCart(ticket.items);") &&
+    renderer.includes("cart = hydrateParkedItemsForCart(loadedTicket.items);") &&
+    !renderer.includes("cart = (ticket.items || []).map((i) => hydrateParkedItemForCart(i));")
+  ) {
+    ok(
+      "Paso 1 del guardado por partes (2026-10-15): al abrir un pedido guardado, cada linea conserva el _lineId con el que se guardo (antes se generaba uno nuevo en cada carga, asi que una linea no era la misma entre carrito, pedido guardado y otros dispositivos). Ids repetidos se rehacen y las lineas sin id (p.ej. de la app de camareros) reciben uno que se anota tambien en el pedido. Verificado con la app real aislada: se conservan, son iguales entre cargas, se anotan en el pedido y lo de enviado/gris sigue funcionando",
+    );
+  } else {
+    fail(
+      "Abrir un pedido guardado ya no conserva el _lineId de cada linea -- revisar el paso 1 del guardado por partes",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

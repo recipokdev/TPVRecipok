@@ -10971,9 +10971,7 @@ async function restoreLoadedParkedTicket() {
 
   const isDirty = hasUnsavedChangesForLoadedParkedTicket(loadedTicket);
   if (isDirty) {
-    cart = (Array.isArray(loadedTicket.items) ? loadedTicket.items : []).map(
-      (it) => hydrateParkedItemForCart(it),
-    );
+    cart = hydrateParkedItemsForCart(loadedTicket.items);
     renderCart();
 
     const mesasState = loadMesasTablesStateForInline();
@@ -23063,7 +23061,11 @@ function hydrateParkedItemForCart(item) {
     ...(built || {}),
     ...src,
     qty,
-    _lineId: makeLineId(),
+    // Identidad estable de la linea (paso 1 del guardado por partes, 2026-10-15):
+    // se conserva el _lineId con el que se guardo. Antes se generaba uno nuevo
+    // en cada carga, asi que una linea no era "la misma" entre el carrito, el
+    // pedido guardado y los demas dispositivos.
+    _lineId: String(src._lineId || "").trim() || makeLineId(),
     id: resolvedProductId,
     baseProductId: resolvedProductId,
     name: String(src.name || src.descripcion || built?.name || "Producto"),
@@ -23082,6 +23084,28 @@ function hydrateParkedItemForCart(item) {
     codimpuesto: src.codimpuesto || built?.codimpuesto || null,
     __parkedPrevLineId: String(src._lineId || "").trim() || null,
   };
+}
+
+// Carga las lineas de un pedido guardado en el carrito manteniendo su
+// identidad: ids repetidos (copias antiguas) se rehacen, y las lineas que no
+// traian id (p.ej. creadas por la app de camareros) reciben uno que se anota
+// tambien en el propio pedido para que sea el mismo la proxima vez.
+function hydrateParkedItemsForCart(items) {
+  const list = Array.isArray(items) ? items : [];
+  const seen = new Set();
+  return list.map((raw) => {
+    const hydrated = hydrateParkedItemForCart(raw);
+    let id = String(hydrated._lineId || "").trim();
+    if (!id || seen.has(id)) {
+      id = makeLineId();
+      hydrated._lineId = id;
+    }
+    seen.add(id);
+    if (raw && typeof raw === "object" && String(raw._lineId || "").trim() !== id) {
+      raw._lineId = id;
+    }
+    return hydrated;
+  });
 }
 
 function applyCustomerSelectionForParkedTicket(ticket) {
@@ -23341,7 +23365,7 @@ function restoreParkedCartByIndex(index) {
     }
   }
 
-  cart = (ticket.items || []).map((i) => hydrateParkedItemForCart(i));
+  cart = hydrateParkedItemsForCart(ticket.items);
 
   const explicitGlobalPct = clampDiscountPercent(
     parseNumericLike(ticket?.cartGlobalDiscountPct, 0),
