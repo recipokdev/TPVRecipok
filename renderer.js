@@ -30631,8 +30631,13 @@ const AUTO_COMANDA_DELAY_DEFAULT_SEC = 60;
 function getAutoComandaDelayMs() {
   let sec = AUTO_COMANDA_DELAY_DEFAULT_SEC;
   try {
-    const raw = Number(localStorage.getItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY));
-    if (Number.isFinite(raw) && raw >= 1 && raw <= 3600) sec = Math.round(raw);
+    // Sin nada guardado -> valor por defecto (Number(null) seria 0 = instantaneo,
+    // por eso se mira antes). 0 guardado a proposito SI significa envio inmediato.
+    const stored = localStorage.getItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY);
+    if (stored !== null && String(stored).trim() !== "") {
+      const raw = Number(stored);
+      if (Number.isFinite(raw) && raw >= 0 && raw <= 3600) sec = Math.round(raw);
+    }
   } catch {}
   return sec * 1000;
 }
@@ -32047,13 +32052,15 @@ autoPrintToggle?.addEventListener("change", () => {
 });
 
 // Espera de la comanda automatica: el usuario escribe los segundos que quiera
-// (1 a 3600; vacio o invalido vuelve al valor por defecto). Con teclado en
+// (0 a 3600, 0 = al instante; vacio o invalido vuelve al valor por defecto). Con teclado en
 // pantalla se abre el numerico, igual que los accesos rapidos de descuento.
 const autoComandaDelayInput = document.getElementById("autoComandaDelayInput");
 if (autoComandaDelayInput) {
   const saveAutoComandaDelayFromInput = () => {
-    const n = Math.round(Number(String(autoComandaDelayInput.value).replace(",", ".")));
-    const sec = Number.isFinite(n) && n >= 1 && n <= 3600 ? n : AUTO_COMANDA_DELAY_DEFAULT_SEC;
+    const rawTxt = String(autoComandaDelayInput.value).replace(",", ".").trim();
+    const n = rawTxt === "" ? NaN : Math.round(Number(rawTxt));
+    // 0 = enviar al instante (lo decide el cliente); vacio o invalido -> 60.
+    const sec = Number.isFinite(n) && n >= 0 && n <= 3600 ? n : AUTO_COMANDA_DELAY_DEFAULT_SEC;
     try {
       localStorage.setItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY, String(sec));
     } catch {}
