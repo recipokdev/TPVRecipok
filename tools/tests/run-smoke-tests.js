@@ -10165,10 +10165,12 @@ console.log("\n[SMOKE] Checking 2026-10-15 barra grande Enviar comanda (Modo Mes
     renderer.includes("function refreshSendComandaBar()") &&
     renderer.includes("isReturn: true,") &&
     renderer.includes("refreshSendComandaBar?.();") &&
+    renderer.includes('lineKind === "pending" ? "Pendiente de enviar" : "No va a cocina"') &&
+    renderer.includes('"producto no va" : "productos no van"') &&
     styles.includes(".send-comanda-bar")
   ) {
     ok(
-      "Real (Sergi, 2026-10-15): enviar la comanda era una pastilla pequeña arriba, en la tarjeta de la mesa, mientras Cobrar/Vaciar/Tickets son botones grandes. Nueva barra grande 'Enviar comanda' encima de la botonera inferior (solo Modo Mesas con pedido abierto): contador de lo pendiente (nuevo + devoluciones), 'Todo enviado a cocina' en gris cuando no hay nada, un toque imprime directamente (devolucion primero y despues lo nuevo, y deja registrado lo enviado), pausa/reanudar del envio automatico con la cuenta atras dentro de la barra, e icono para abrir la ventana de comanda con observacion. Verificado con la app real aislada con la impresion simulada",
+      "Real (Sergi, 2026-10-15): enviar la comanda era una pastilla pequeña arriba, en la tarjeta de la mesa, mientras Cobrar/Vaciar/Tickets son botones grandes. Nueva barra grande 'Enviar comanda' encima de la botonera inferior (solo Modo Mesas con pedido abierto): contador de lo pendiente (nuevo + devoluciones), 'Todo enviado a cocina' en gris cuando no hay nada, un toque imprime directamente (devolucion primero y despues lo nuevo, y deja registrado lo enviado), pausa/reanudar del envio automatico con la cuenta atras dentro de la barra, e icono para abrir la ventana de comanda con observacion. Los productos cuya familia no esta entre las de comanda se marcan 'No va a cocina' (no 'Pendiente de enviar') y la barra lo explica en vez de decir solo 'Todo enviado'. Verificado con la app real aislada con la impresion simulada",
     );
   } else {
     fail(

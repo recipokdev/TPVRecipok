@@ -15196,7 +15196,8 @@ function renderCart() {
   // llevaban ninguna separacion de las nuevas. Ahora se agrupan bajo una raya
   // "Ya en cocina" -- la marca "hora · camarero" sigue mandando cuando existe.
   const KITCHEN_GROUP_KEY = "__ya-en-cocina__";
-  let lastLineWasSent = false;
+  let sentLineSeen = false;
+  let lastLineKind = "";
 
   uiLines.forEach((item) => {
     const itemBatchAt = String(item?.sentBatchAt || "").trim();
@@ -15220,14 +15221,27 @@ function renderCart() {
 
     // Tras las lineas ya enviadas, una raya bien marcada separa lo que aun
     // esta por enviar (2026-10-15: "estan muy juntos").
+    // Tres tipos de linea: enviada a cocina, pendiente de enviar, y "no va a
+    // cocina" (su familia no esta entre las de comanda de Opciones -> Mesas):
+    // estas ultimas NUNCA estan "pendientes" -- (2026-10-15) se etiquetaban
+    // como "Pendiente de enviar" y la barra decia "Todo enviado" a la vez.
     const itemIsSent = isLineAlreadySentToKitchen(item);
-    if (!itemIsSent && lastLineWasSent) {
-      const pendingDivider = document.createElement("div");
-      pendingDivider.className = "cart-batch-divider cart-batch-divider--pending";
-      pendingDivider.textContent = "Pendiente de enviar";
-      container.appendChild(pendingDivider);
+    const lineKind = itemIsSent
+      ? "sent"
+      : item.comandaHeld ||
+          !comandaPendingLineIds ||
+          comandaPendingLineIds.has(item._lineId)
+        ? "pending"
+        : "nokitchen";
+    if (itemIsSent) sentLineSeen = true;
+    if (sentLineSeen && lineKind !== "sent" && lineKind !== lastLineKind) {
+      const kindDivider = document.createElement("div");
+      kindDivider.className = "cart-batch-divider cart-batch-divider--pending";
+      kindDivider.textContent =
+        lineKind === "pending" ? "Pendiente de enviar" : "No va a cocina";
+      container.appendChild(kindDivider);
     }
-    lastLineWasSent = itemIsSent;
+    lastLineKind = lineKind;
 
     const pricing = getCartLinePricing(item);
     const unitPrice = Number(pricing.unitGross || 0);
@@ -45439,11 +45453,18 @@ function refreshSendComandaBar() {
   const auto = loadedKey ? __autoComandaPending.get(loadedKey) : null;
 
   const countTxt = total > 0 ? fmtQty(total) : "";
+  // Lineas que no van a cocina (su familia no esta entre las de comanda): sin
+  // este aviso, "Todo enviado" con un producto recien añadido parecia un fallo.
+  const noKitchenCount =
+    getVisibleCartLines(cart).filter((l) => !l?.comandaHeld).length -
+    getComandaPrintableLines(cart).length;
   const extra = auto
     ? auto.paused
       ? "envío automático en pausa"
       : `se envía solo en ${Math.max(1, Math.ceil((auto.dueAt - Date.now()) / 1000))} s`
-    : "";
+    : total <= 0 && noKitchenCount > 0
+      ? `${noKitchenCount} ${noKitchenCount === 1 ? "producto no va" : "productos no van"} a cocina`
+      : "";
 
   const html = `<span class="scb-label">${
     total > 0
