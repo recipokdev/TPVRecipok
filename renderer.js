@@ -44695,7 +44695,8 @@ function commitComandaPrintedState(ticket, sourceLines = cart) {
       const stamp = {
         sentAt: new Date().toISOString(),
         sentPart: Math.max(0, Number(prev?.seq || 0) || 0) + 1,
-        sentBy: String(getLoginUser?.() || currentAgent?.name || "").trim(),
+        // El agente (camarero) que envia, no el usuario con el que se entro al TPV.
+        sentBy: String(currentAgent?.name || currentAgent?.nick || getLoginUser?.() || "").trim(),
       };
       const ids = new Set(justSent.map((l) => l?._lineId).filter(Boolean));
       const apply = (arr) =>
