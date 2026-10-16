@@ -41074,6 +41074,135 @@ async function parkedComandaTurn(ticket, action, extra = {}) {
   }
 }
 
+// ===== "Mesa en uso": aviso SUAVE de que otro dispositivo tiene abierta la misma mesa =====
+// No bloquea nada (el guardado por operaciones ya hace inofensivas las ediciones simultaneas):
+// solo informa, p.ej. "Ana (Barra) tiene esta mesa abierta". Latido al servidor cada 15 s mientras
+// hay una mesa seleccionada (o al cambiar de mesa); la respuesta trae los OTROS dispositivos en
+// ella. Solo para clientes con el guardado por operaciones de Mesas activo; fail-open/silencioso.
+const MESA_VIEWER_HEARTBEAT_MS = 15000;
+let __mesaViewerLast = { uid: "", sentAt: 0 };
+let __mesaViewerOffUntil = 0;
+let __mesaViewerBusy = false;
+
+async function mesaViewerPost(action, uid) {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const res = await fetchWithTimeout(
+    `${TPV_SYNC_API_URL}?action=mesa-viewer`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": getTpvSyncApiKey(),
+      },
+      body: JSON.stringify({
+        slug,
+        codalmacen: getCurrentWarehouseCode(),
+        sessionId: ensureTerminalPresenceSessionId(),
+        viewerAction: action,
+        mesaUid: uid || "",
+        agentName: String(currentAgent?.name || currentAgent?.nick || "").trim(),
+        deviceName: String(currentTerminal?.name || "").trim(),
+      }),
+    },
+    4000,
+  );
+  const body = await res.json().catch(() => null);
+  if (res.status === 409 && body?.opsDisabled) {
+    __mesaViewerOffUntil = Date.now() + 10 * 60 * 1000;
+    return null;
+  }
+  if (!res.ok || !body) return null;
+  return Array.isArray(body.others) ? body.others : [];
+}
+
+function renderMesaInUseNotice(others) {
+  const el = document.getElementById("mesaInUseNotice");
+  if (!el) return;
+  const list = Array.isArray(others) ? others : [];
+  if (!list.length) {
+    el.classList.add("hidden");
+    el.textContent = "";
+    return;
+  }
+  const names = list.map((o) => {
+    const agent = String(o?.agentName || "").trim() || "Otro dispositivo";
+    const dev = String(o?.deviceName || "").trim();
+    return dev ? `${agent} (${dev})` : agent;
+  });
+  const who =
+    names.length === 1
+      ? `${names[0]} tiene`
+      : `${names.slice(0, -1).join(", ")} y ${names[names.length - 1]} tienen`;
+  const oldest = Math.max(...list.map((o) => Number(o?.openSec) || 0));
+  const since = oldest >= 60 ? ` desde hace ${Math.floor(oldest / 60)} min` : "";
+  el.textContent = `${who} esta mesa abierta${since}`;
+  el.classList.remove("hidden");
+}
+
+async function mesaViewerTick() {
+  if (__mesaViewerBusy) return;
+  try {
+    const slug = String(getCurrentSlugForReservations() || "").trim();
+    const on =
+      !!slug &&
+      MESAS_INLINE_ACTIVE &&
+      MESAS_INLINE_VIEW === "transacciones" &&
+      !!cashSession?.open &&
+      Date.now() >= __mesaViewerOffUntil &&
+      !TPV_STATE?.offline &&
+      parkedOpsIsEnabled(slug, "mesas");
+    const uid = on ? String(getSelectedMesaUidForInline() || "").trim() : "";
+
+    if (!uid) {
+      if (__mesaViewerLast.uid) {
+        __mesaViewerLast = { uid: "", sentAt: 0 };
+        renderMesaInUseNotice([]);
+        mesaViewerPost("leave", "").catch(() => {});
+      }
+      return;
+    }
+
+    const now = Date.now();
+    if (uid === __mesaViewerLast.uid && now - __mesaViewerLast.sentAt < MESA_VIEWER_HEARTBEAT_MS) return;
+    if (uid !== __mesaViewerLast.uid) renderMesaInUseNotice([]);
+
+    __mesaViewerBusy = true;
+    const others = await mesaViewerPost("heartbeat", uid);
+    __mesaViewerLast = { uid, sentAt: now };
+    // Si mientras tanto cambio la mesa seleccionada, esta respuesta ya no vale.
+    if (String(getSelectedMesaUidForInline() || "").trim() === uid) {
+      renderMesaInUseNotice(others || []);
+    }
+  } catch {
+    // silencioso: es solo informativo
+  } finally {
+    __mesaViewerBusy = false;
+  }
+}
+setInterval(mesaViewerTick, 2000);
+
+window.addEventListener("beforeunload", () => {
+  try {
+    if (!__mesaViewerLast.uid) return;
+    fetch(`${TPV_SYNC_API_URL}?action=mesa-viewer`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": getTpvSyncApiKey(),
+      },
+      body: JSON.stringify({
+        slug: String(getCurrentSlugForReservations() || "").trim(),
+        codalmacen: getCurrentWarehouseCode(),
+        sessionId: ensureTerminalPresenceSessionId(),
+        viewerAction: "leave",
+      }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch {}
+});
+
 // Tras un guardado entero correcto, el servidor tiene exactamente lo que mandamos: esa es la base.
 function parkedOpsRememberAfterFullSave(payload, saved, ticket) {
   try {

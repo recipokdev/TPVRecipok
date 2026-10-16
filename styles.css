@@ -10169,3 +10169,21 @@ body.theme-dark .send-comanda-bar .scb-aux {
   border-color: #92400e;
   color: #fbbf24;
 }
+
+/* Aviso suave "mesa en uso": otro dispositivo tiene abierta esta misma mesa (no bloquea nada). */
+.mesa-in-use-notice {
+  margin: 0 0 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  background: rgba(245, 158, 11, 0.16);
+  color: #92400e;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+}
+.mesa-in-use-notice.hidden {
+  display: none;
+}
+.mesa-in-use-notice::before {
+  content: "👤 ";
+}

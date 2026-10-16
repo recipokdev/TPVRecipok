@@ -26,7 +26,8 @@
         "CORRECCIÓN: con la conexión inestable, si una operación llegaba al servidor pero la respuesta se perdía, una cantidad podía acabar contada dos veces en el pedido. Ahora el TPV reenvía esa misma operación antes de seguir y el servidor no la repite.",
         "CORRECCIÓN: en Modo Mesas, al pulsar el primer producto en una mesa libre, si justo entonces llegaba un aviso de otro terminal el producto podía desaparecer antes de guardarse el pedido. Ahora el carrito se respeta hasta que el pedido está creado.",
         "CORRECCIÓN: con dos TPV en Modo Mesas, la comanda automática podía salir dos veces o salir antes de la espera del TPV que estaba editando. Ahora el servidor decide cuál imprime (el que está editando la última vez) y el otro no la repite.",
-        "CORRECCIÓN: en Modo Mesas, al seleccionar una mesa cuyo pedido era el primero de la lista, el carrito se quedaba vacío y al añadir algo se borraba lo que ya había el otro TPV."
+        "CORRECCIÓN: en Modo Mesas, al seleccionar una mesa cuyo pedido era el primero de la lista, el carrito se quedaba vacío y al añadir algo se borraba lo que ya había el otro TPV.",
+        "MEJORA: en Modo Mesas, si otro dispositivo tiene abierta la misma mesa, aparece un aviso discreto (\"Ana (Barra) tiene esta mesa abierta\"). Solo informa, no bloquea nada."
       ]
     },
     {
