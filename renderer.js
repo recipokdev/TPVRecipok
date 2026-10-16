@@ -8803,6 +8803,9 @@ function renderCashIdChip() {
 
 let BOOT_IN_FLIGHT = false;
 let TPV_LOADING = true;
+// Declaradas junto a TPV_LOADING (se leen desde setTpvLoadingState): ver switchToMesasMode.
+let __pendingMesasEntry = false;
+let __mesasModuleResolved = false;
 const APP_MODE_KEY = "tpv_app_mode";
 const APP_MODE_CFG_KEY = "app.mode";
 const TPV_THEME_KEY = "tpv_theme_mode";
@@ -8882,15 +8885,34 @@ async function persistAppMode(mode) {
   return next;
 }
 
+// Pulsar el boton de Mesas mientras el TPV aun carga (red lenta, tablet) no hacia NADA y sin aviso;
+// y si las features del cliente no habian llegado (fallo de red) salia "el modulo de Mesas no esta
+// activo" aunque lo estuviera. Ahora la peticion se recuerda y se ejecuta al terminar la carga, y
+// "no activo" solo se dice si el servidor lo ha dicho de verdad (2026-10-16, aviso de la tablet).
 async function switchToMesasMode() {
-  if (TPV_LOADING) return;
-  if (!MESAS_MODULE_ENABLED) {
-    toast(
-      "El modulo de Mesas no esta activo para este cliente.",
-      "warn",
-      "Modo mesas",
-    );
+  if (TPV_LOADING) {
+    if (!__pendingMesasEntry) {
+      __pendingMesasEntry = true;
+      toast("Cargando el TPV… entrará en Modo Mesas al terminar.", "info", "Modo mesas");
+    }
     return;
+  }
+  __pendingMesasEntry = false;
+  if (!MESAS_MODULE_ENABLED) {
+    if (!__mesasModuleResolved) {
+      // Las features no llegaron (red): un reintento ahora antes de decir nada.
+      await loadMesasModuleAvailability();
+    }
+    if (!MESAS_MODULE_ENABLED) {
+      toast(
+        __mesasModuleResolved
+          ? "El modulo de Mesas no esta activo para este cliente."
+          : "No se pudo comprobar el módulo de Mesas (sin conexión). Vuelve a intentarlo en unos segundos.",
+        "warn",
+        "Modo mesas",
+      );
+      return;
+    }
   }
   bindMesasInlineEventsOnce();
   refreshMesasLayoutFromRemote().catch(() => {});
@@ -9813,6 +9835,7 @@ async function loadMesasModuleAvailability() {
       return false;
     }
 
+    __mesasModuleResolved = true;
     MESAS_MODULE_ENABLED =
       features.mesasEnabled === true ||
       features.mesasEnabled === 1 ||
@@ -12769,6 +12792,14 @@ function syncHeaderIdentityLoadingState() {
 
 function setTpvLoadingState(isLoading) {
   TPV_LOADING = !!isLoading;
+  if (!TPV_LOADING && __pendingMesasEntry) {
+    // Alguien pulso el boton de Mesas durante la carga: se atiende ya.
+    setTimeout(() => {
+      switchToMesasMode().catch(() => {
+        toast("No se pudo cambiar modo mesas.", "err", "Modo mesas");
+      });
+    }, 0);
+  }
   if (cashHeaderBtn) {
     cashHeaderBtn.disabled = TPV_LOADING;
     if (TPV_LOADING) {

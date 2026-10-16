@@ -30,7 +30,8 @@
         "MEJORA: en Modo Mesas, si otro dispositivo tiene abierta la misma mesa, aparece un aviso discreto (\"Ana (Barra) tiene esta mesa abierta\"). Solo informa, no bloquea nada.",
         "CORRECCIÓN: si la app de camareros guardaba un pedido sin los identificadores internos de línea, el TPV podía dar por borradas las líneas que ya tenía y dejar el pedido casi vacío. Ahora las reconoce y no pierde nada.",
         "CORRECCIÓN: al cambiar un pedido a otra mesa, el cambio solo quedaba en este TPV: otro TPV o la app de camareros seguían viéndolo en la mesa antigua y podían seguir añadiéndole productos creyendo que era la otra. Ahora el cambio se guarda en el servidor y el otro TPV suelta la mesa con un aviso. Además, fusionar dos mesas ya no puede borrar el pedido si ambas apuntaban al mismo.",
-        "CORRECCIÓN: con el guardado por partes activado, al cambiar entre dos mesas ocupadas, la mesa que se abandonaba podía quedarse con los productos de la nueva."
+        "CORRECCIÓN: con el guardado por partes activado, al cambiar entre dos mesas ocupadas, la mesa que se abandonaba podía quedarse con los productos de la nueva.",
+        "CORRECCIÓN: si se pulsaba el botón de Modo Mesas mientras el TPV aún estaba cargando (red lenta), no pasaba nada y sin aviso; y si fallaba la conexión al comprobar el cliente, decía \"el módulo de Mesas no está activo\" aunque lo estuviera. Ahora entra en Mesas al terminar de cargar y, si falla la red, avisa de que no se pudo comprobar."
       ]
     },
     {
