@@ -39513,6 +39513,12 @@ function syncParkedTicketsFromRemote(list) {
       const prev = getParkedTicketSyncKeyVariants(ticket)
         .map((key) => previousByKey.get(key))
         .find(Boolean);
+      // Lineas remotas sin _lineId (app de camareros u otro cliente): heredan/reciben uno estable.
+      const idFix = inheritMissingLineIds(ticket.items, prev?.items, ticket.id);
+      if (idFix.filled) {
+        ticket.items = idFix.items;
+        ticket.__opsNeedsIdStamp = true;
+      }
       const merged = { ...(prev || {}), ...ticket };
 
       const prevTs =
@@ -41074,6 +41080,92 @@ async function parkedComandaTurn(ticket, action, extra = {}) {
   }
 }
 
+// ===== Lineas del servidor SIN _lineId (app de camareros / clientes que no conocen el campo) =====
+// El guardado por operaciones y la integracion de cambios remotos casan las lineas por _lineId.
+// Si otro cliente reescribe el pedido sin esos ids, no habia forma de saber que linea es cual: se
+// trataba todo como "linea quitada + lineas nuevas" y el TPV borraba lo suyo y reescribia el
+// pedido casi vacio (visto con 2026-10-16: 3 lineas -> 1). Ahora las lineas sin id heredan el de la
+// linea local equivalente (mismo producto/impuesto/descuento/añadidos, en orden) y, si no hay,
+// reciben uno DETERMINISTA (mismo en todos los dispositivos). Despues se sellan en el servidor.
+function deterministicLineId(ticketId, key, occurrence) {
+  const s = `${ticketId}|${key}|${occurrence}`;
+  let h1 = 5381;
+  let h2 = 52711;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = ((h1 << 5) + h1 + c) | 0;
+    h2 = ((h2 << 5) ^ h2 ^ c) | 0;
+  }
+  return `Ld${(h1 >>> 0).toString(36)}${(h2 >>> 0).toString(36)}`;
+}
+
+function inheritMissingLineIds(remoteItems, prevItems, ticketId) {
+  const items = Array.isArray(remoteItems) ? remoteItems : [];
+  const hasId = (l) => !!String(l?._lineId || "").trim();
+  if (items.every(hasId)) return { items, filled: false };
+
+  const prev = Array.isArray(prevItems) ? prevItems : [];
+  const used = new Set(items.filter(hasId).map((l) => String(l._lineId).trim()));
+  const keyOf = (l) =>
+    JSON.stringify({
+      id: getProductBaseId(l) || String(l?.id || ""),
+      tax: Number(l?.taxRate ?? 0) || 0,
+      disc: clampDiscountPercent(parseNumericLike(l?.cartLineDiscountPct, 0)),
+      addons: addonsSignature(l?.addons),
+    });
+  const pool = new Map();
+  prev.forEach((l) => {
+    const id = String(l?._lineId || "").trim();
+    if (!id || used.has(id)) return;
+    const k = keyOf(l);
+    if (!pool.has(k)) pool.set(k, []);
+    pool.get(k).push(id);
+  });
+  const seen = new Map();
+  const out = items.map((l) => {
+    if (hasId(l)) return l;
+    const k = keyOf(l);
+    const occ = seen.get(k) || 0;
+    seen.set(k, occ + 1);
+    const arr = pool.get(k);
+    let id = arr && arr.length ? arr.shift() : deterministicLineId(ticketId, k, occ);
+    while (used.has(id)) id = `${id}x`;
+    used.add(id);
+    return { ...l, _lineId: id };
+  });
+  return { items: out, filled: true };
+}
+
+// Sella en el servidor los _lineId asignados (guardado entero con el bloqueo optimista de siempre:
+// si otro lo toco entre medias, se rechaza y el siguiente refresco lo reintenta).
+async function parkedOpsStampLineIds(ticket) {
+  try {
+    const slug = String(ticket?.slug || getCurrentSlugForReservations() || "");
+    const mode = isMesasModeTicket(ticket) ? "mesas" : "tpv";
+    if (!ticket?.id || ticket.paid || !parkedOpsIsEnabled(slug, mode)) return;
+    const cajaId = String(ticket?.cajaId || getCajaIdSafe?.() || currentTerminal?.id || "");
+    const key = parkedOpsKey(slug, ticket.id);
+    await parkedOpsRunExclusive(key, async () => {
+      const payload = buildParkedSavePayload(ticket, slug, cajaId);
+      const res = await fetchWithTimeout(`${TPV_SYNC_API_URL}?action=create-parked-reservation`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-TPV-API-KEY": getTpvSyncApiKey(),
+        },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        const saved = await res.json().catch(() => ({}));
+        parkedOpsRememberAfterFullSave(payload, saved, ticket);
+      }
+    });
+  } catch (e) {
+    console.warn("[OPS] no se pudieron sellar los ids de linea:", e?.message || e);
+  }
+}
+
 // ===== "Mesa en uso": aviso SUAVE de que otro dispositivo tiene abierta la misma mesa =====
 // No bloquea nada (el guardado por operaciones ya hace inofensivas las ediciones simultaneas):
 // solo informa, p.ej. "Ana (Barra) tiene esta mesa abierta". Latido al servidor cada 15 s mientras
@@ -41388,6 +41480,14 @@ async function refreshRemoteParkedReservationsOnlyImpl() {
     const list = await apiListParkedReservations();
     REMOTE_PARKED_RESERVATIONS = Array.isArray(list) ? list : [];
     syncParkedTicketsFromRemote(REMOTE_PARKED_RESERVATIONS);
+    // Pedidos con lineas sin id en el servidor: se sellan (en segundo plano, de uno en uno).
+    (Array.isArray(parkedTickets) ? parkedTickets : [])
+      .filter((t) => t?.__opsNeedsIdStamp && !t?.paid)
+      .slice(0, 3)
+      .forEach((t) => {
+        delete t.__opsNeedsIdStamp;
+        parkedOpsStampLineIds(t).catch(() => {});
+      });
     // Guarda la cache local aqui mismo (no solo cuando se auto-imprime una
     // comanda) para que el aviso "sin enviar a cocina" del plano de mesas
     // (mesas/mesas.js, que solo lee esta cache) se actualice cada ciclo de
