@@ -6,6 +6,7 @@
 // Escenarios:
 //   S1 la app añade una linea nueva SIN _lineId conservando los _lineId de las demas
 //   S2 la app reescribe el pedido SIN ningun _lineId (modelo que no conoce el campo) y añade otra linea
+//      con solo pvpunitario (sin price/grossPrice/taxRate): el TPV no debe ponerle precio 0
 //   S3 la app sube la cantidad de una linea mientras el TPV sube otra (a la vez)
 //   S4 la app manda la version vieja (expectedUpdatedAt caducado) -> 412 y no pisa nada
 // Uso: node tools/tests/run-app-writes-vs-tpv-ops.js   (despues: node tools/tests/two-tpv-clean-m3.js)
@@ -95,11 +96,12 @@ async function launch(dirName, label) {
     await state("S1_tras_A_sube");
 
     // S2: la app reescribe el pedido SIN ningun _lineId y añade otra linea
-    out.S2_status = await A.win.evaluate((i) => __appSave((items) => { items.forEach((l) => { delete l._lineId; }); const p = __prods[i]; items.push({ id: p.id, baseProductId: p.baseProductId || p.id, name: p.name, descripcion: p.name, qty: 1, cantidad: 1, price: p.price, grossPrice: p.grossPrice || p.price, taxRate: p.taxRate || 0, codimpuesto: p.codimpuesto || "" }); return items; }), 4);
+    out.S2_status = await A.win.evaluate((i) => __appSave((items) => { items.forEach((l) => { delete l._lineId; }); const p = __prods[i]; items.push({ idproducto: p.baseProductId || p.id, name: p.name, referencia: p.name, qty: 1, cantidad: 1, pvpunitario: 0.85 }); return items; }), 4);
     out.S2_servidor_nada_mas_guardar = await A.win.evaluate(() => __srv());
     out.S2_items_crudos = await A.win.evaluate(async () => JSON.stringify(((await __srvRaw()).items || []).map((l) => [String(l.name).slice(0, 6), l.qty, l._lineId ? 'id' : 'sinid'])));
     await sleep(3000);
     await state("S2");
+    out.S2_linea_de_la_app = await A.win.evaluate(async () => { const l = ((await __srvRaw()).items || []).find((x) => x.pvpunitario != null || x.name === __prods[4].name); return l ? { pvpunitario: l.pvpunitario, price: l.price, grossPrice: l.grossPrice, lineId: l._lineId ? 'si' : 'no' } : '(no esta)'; });
     await A.win.evaluate(() => { const l = cart[0]; updateCartItemQuantity(l._lineId, (Number(l.qty) || 1) + 1); });
     await sleep(6000);
     await state("S2_tras_A_sube");

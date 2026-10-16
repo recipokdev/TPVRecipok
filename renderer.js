@@ -40912,9 +40912,13 @@ function serializeParkedItemForSave(it) {
     descripcion: String(it.descripcion || it.name || ""),
     descripcion2: String(it.descripcion2 || it.secondaryName || ""),
     referencia: String(it.referencia || ""),
-    price: Number(it?.price || 0),
-    grossPrice: Number(it?.grossPrice || 0),
-    taxRate: Number(it?.taxRate || 0),
+    // Lineas que vienen de OTRO cliente (app de camareros) pueden traer los nombres de FacturaScripts
+    // (pvpunitario / pvptotalunitario / iva) en vez de price/grossPrice/taxRate: se aprovechan en
+    // lugar de convertirlos en 0, y pvpunitario se conserva tal cual.
+    price: Number(it?.price ?? it?.pvpunitario ?? 0),
+    grossPrice: Number(it?.grossPrice ?? it?.pvptotalunitario ?? 0),
+    taxRate: Number(it?.taxRate ?? it?.iva ?? 0),
+    ...(it?.pvpunitario != null ? { pvpunitario: Number(it.pvpunitario) } : {}),
     codimpuesto: it?.codimpuesto || null,
     originalNetPrice: Number(it?.originalNetPrice || 0),
     originalGrossPrice: Number(it?.originalGrossPrice || 0),
@@ -41299,6 +41303,12 @@ async function parkedOpsStampLineIds(ticket) {
     const key = parkedOpsKey(slug, ticket.id);
     await parkedOpsRunExclusive(key, async () => {
       const payload = buildParkedSavePayload(ticket, slug, cajaId);
+      // Solo se añaden los _lineId: las lineas se mandan TAL CUAL llegaron del servidor. Pasarlas por
+      // serializeParkedItemForSave (pensado para lineas del carrito) reescribia las de otros clientes
+      // y les ponia price/grossPrice/taxRate a 0 al no encontrar esos campos (la app de camareros
+      // manda pvpunitario) -- visto 2026-10-16 con un pedido real de la app en TDA2.
+      payload.items = (Array.isArray(ticket.items) ? ticket.items : []).map((l) => ({ ...l }));
+      if (Number.isFinite(Number(ticket.total))) payload.total = Number(ticket.total);
       const res = await fetchWithTimeout(`${TPV_SYNC_API_URL}?action=create-parked-reservation`, {
         method: "POST",
         headers: {

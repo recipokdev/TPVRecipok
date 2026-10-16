@@ -32,7 +32,8 @@
         "CORRECCIÓN: al cambiar un pedido a otra mesa, el cambio solo quedaba en este TPV: otro TPV o la app de camareros seguían viéndolo en la mesa antigua y podían seguir añadiéndole productos creyendo que era la otra. Ahora el cambio se guarda en el servidor y el otro TPV suelta la mesa con un aviso. Además, fusionar dos mesas ya no puede borrar el pedido si ambas apuntaban al mismo.",
         "CORRECCIÓN: con el guardado por partes activado, al cambiar entre dos mesas ocupadas, la mesa que se abandonaba podía quedarse con los productos de la nueva.",
         "CORRECCIÓN: si se pulsaba el botón de Modo Mesas mientras el TPV aún estaba cargando (red lenta), no pasaba nada y sin aviso; y si fallaba la conexión al comprobar el cliente, decía \"el módulo de Mesas no está activo\" aunque lo estuviera. Ahora entra en Mesas al terminar de cargar y, si falla la red, avisa de que no se pudo comprobar.",
-        "MEJORA: en Opciones → Tablets emparejadas, el agente vinculado a cada móvil se muestra con su nombre (por ejemplo \"Alejandro (3)\") y no solo con el código."
+        "MEJORA: en Opciones → Tablets emparejadas, el agente vinculado a cada móvil se muestra con su nombre (por ejemplo \"Alejandro (3)\") y no solo con el código.",
+        "CORRECCIÓN: un producto enviado desde la app de camareros podía quedar con precio 0 € en el pedido guardado (al repararle el identificador de línea, el TPV reescribía la línea y perdía su precio). Ahora la línea se conserva tal cual llegó y, si solo trae el precio con los nombres de FacturaScripts (pvpunitario), se aprovecha."
       ]
     },
     {
