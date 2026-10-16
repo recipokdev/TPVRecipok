@@ -41231,7 +41231,15 @@ async function refreshRemoteParkedReservationsOnlyImpl() {
     if (
       MESAS_INLINE_ACTIVE &&
       MESAS_INLINE_VIEW === "transacciones" &&
-      currentParkedTicketIndex == null
+      currentParkedTicketIndex == null &&
+      // Primer producto en una mesa libre: hasta que el autoguardado (700 ms + red) crea el pedido
+      // el carrito solo existe en memoria. Un refresco que llegara justo entonces (aviso en tiempo
+      // real de otro terminal) lo vaciaba y el producto desaparecia (visto con 2 TPV reales, 2026-10-16).
+      !(
+        Array.isArray(cart) &&
+        cart.length > 0 &&
+        (MESAS_AUTO_SAVE_TIMER || MESAS_AUTO_SAVE_IN_FLIGHT)
+      )
     ) {
       syncTpvCartWithSelectedMesa();
     }
