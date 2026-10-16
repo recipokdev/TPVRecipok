@@ -18912,6 +18912,27 @@ function beginParkedCheckoutLock(index) {
 
 function syncParkedTicketClosingState(ticket, reason = "") {
   if (!ticket || ticket.paid) return;
+
+  // Guardado por operaciones: el candado se toma (acquire, ver el flujo de cobro) y se suelta
+  // (release) con su propia accion atomica; el guardado entero no lo transporta.
+  if (
+    parkedOpsIsEnabled(
+      String(ticket?.slug || getCurrentSlugForReservations() || ""),
+      isMesasModeTicket(ticket) ? "mesas" : "tpv",
+    )
+  ) {
+    if (reason === "unlock" && !TPV_STATE?.offline) {
+      parkedClosingRemote(ticket, "release")
+        .then(() => {
+          if (typeof scheduleParkedReservationsBurstRefresh === "function") {
+            scheduleParkedReservationsBurstRefresh("closing-unlock");
+          }
+        })
+        .catch((e) => console.warn("[OPS] no se pudo soltar el candado:", e?.message || e));
+    }
+    return;
+  }
+
   if (TPV_STATE?.offline) {
     enqueueParkedSyncOperation("upsert", ticket);
     return;
@@ -39262,6 +39283,19 @@ function shouldSkipQueuedUpsertDueToRemoteNewer(entry, remoteTicket) {
     return false;
   }
 
+  // Guardado por operaciones: que el remoto sea mas nuevo es lo normal (otro dispositivo
+  // tocando el mismo pedido) y las operaciones se fusionan solas -- saltar el reintento
+  // perderia los cambios de este TPV.
+  {
+    const qSlug = String(localTicket?.slug || getCurrentSlugForReservations() || "");
+    if (
+      parkedOpsIsEnabled(qSlug, isMesasModeTicket(localTicket) ? "mesas" : "tpv") &&
+      __parkedOpsBase.has(parkedOpsKey(qSlug, localTicket.id))
+    ) {
+      return false;
+    }
+  }
+
   const localTs = getParkedTicketComparableRevisionTs(localTicket);
   const remoteTs = getParkedTicketComparableRevisionTs(remoteTicket);
   if (localTs <= 0 || remoteTs <= 0) return false;
@@ -39875,7 +39909,9 @@ function syncParkedTicketsFromRemote(list) {
       const variants = getParkedTicketSyncKeyVariants(t);
       return variants.some((k) => prevLoadedVariants.has(k));
     });
-    if (nextIdx >= 0) {
+    if (nextIdx >= 0 && parkedTickets[nextIdx]?.paid && !isPayingNow) {
+      handleLoadedTicketPaidElsewhere(parkedTickets[nextIdx]);
+    } else if (nextIdx >= 0) {
       setCurrentParkedTicketIndex(nextIdx);
     } else if (isPayingNow) {
       // Nunca vaciar el carrito ni soltar el aparcado mientras hay un cobro en
@@ -39929,6 +39965,52 @@ function syncParkedTicketsFromRemote(list) {
   ) {
     renderParkedTicketsModal?.();
   }
+}
+
+// El pedido que este TPV tenia abierto lo cobro OTRO TPV: el carrito seguia mostrando sus lineas
+// (y cobrarlas de nuevo habria sido un doble cobro). Se quitan las lineas ya cobradas; lo que el
+// cajero habia añadido DESPUES (lineas nuevas o unidades de mas) se deja como un pedido nuevo
+// sin guardar (2026-10-16, probado con 2 TPV reales).
+function handleLoadedTicketPaidElsewhere(paidTicket) {
+  const paidQtyById = new Map();
+  (Array.isArray(paidTicket?.items) ? paidTicket.items : []).forEach((l) => {
+    const id = String(l?._lineId || "").trim();
+    if (id) paidQtyById.set(id, (Number(l?.qty ?? l?.cantidad ?? 0) || 0));
+  });
+
+  const leftovers = [];
+  (Array.isArray(cart) ? cart : []).forEach((line) => {
+    const id = String(line?._lineId || "").trim();
+    const paidQty = id ? paidQtyById.get(id) : undefined;
+    if (paidQty === undefined) {
+      leftovers.push(line); // linea que no estaba en lo cobrado
+      return;
+    }
+    const extra = round3Safe((Number(line?.qty) || 0) - paidQty);
+    if (extra > 0.0001) {
+      leftovers.push({ ...line, _lineId: makeLineId(), qty: extra, cantidad: extra });
+    }
+  });
+
+  restorePreParkedCustomerSelection();
+  setCurrentParkedTicketIndex(null);
+  cart = leftovers;
+  renderCart();
+  if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+    clearCurrentMesaDraft?.();
+    renderMesasTransContextBar?.();
+  }
+  toast?.(
+    leftovers.length
+      ? "Este pedido se cobró en otro TPV. Lo que añadiste después se ha dejado en el carrito como pedido nuevo."
+      : "Este pedido se cobró en otro TPV; se vació el carrito.",
+    "info",
+    "Aparcados",
+  );
+}
+
+function round3Safe(n) {
+  return Math.round((Number(n) || 0) * 1000) / 1000;
 }
 
 function getReservedQtyForProduct(productOrId) {
@@ -40460,6 +40542,7 @@ async function tryParkedOpsSave(ticket, payload) {
           terminalId: payload.terminalId,
           terminalName: payload.terminalName,
           userName: payload.userName,
+          sessionId: ensureTerminalPresenceSessionId(),
           total: payload.total,
           clientOpId,
           ops,
@@ -40478,6 +40561,14 @@ async function tryParkedOpsSave(ticket, payload) {
       // (no lo resucita si fue borrado).
       parkedOpsForgetBase(payload.slug, payload.ticketId);
       return null;
+    }
+    if (res.status === 423 && body?.locked) {
+      // Otro dispositivo esta cobrando este pedido: las operaciones esperan (la cola de
+      // reintentos las vuelve a mandar cuando termine) para no perder lineas en un ticket
+      // que se esta cobrando.
+      const lockedErr = new Error("Este pedido se está cobrando en otro TPV: tus cambios se enviarán cuando termine.");
+      lockedErr.parkedLockedByOther = true;
+      throw lockedErr;
     }
     if (!res.ok) {
       throw new Error(`Error guardando reserva remota (operaciones): HTTP ${res.status}`);
@@ -40717,6 +40808,9 @@ function buildParkedSavePayload(ticket, slug, cajaId) {
     // proposito, para no afectar a clientes reales ya en uso.
     codalmacen: getCurrentWarehouseCode(),
     userName: String(currentAgent?.name || currentAgent?.nick || ""),
+    // Id de SESION de este TPV: el servidor lo usa para saber si otro dispositivo esta cobrando
+    // el pedido (candado de cobro) y no pisarlo con un guardado entero.
+    sessionId: ensureTerminalPresenceSessionId(),
     parkingMode: inferTicketParkingMode(ticket),
     modoMesas: isMesasModeTicket(ticket) ? 1 : 0,
     modeMesas: isMesasModeTicket(ticket) ? 1 : 0,
@@ -40791,6 +40885,12 @@ async function apiSaveParkedReservation(ticket) {
     throw await buildStaleParkedWriteError(res);
   }
 
+  if (res.status === 423) {
+    const lockedErr = new Error("Este pedido se está cobrando en otro TPV: tus cambios se enviarán cuando termine.");
+    lockedErr.parkedLockedByOther = true;
+    throw lockedErr;
+  }
+
   // Compat: if backend expects update for existing rows, retry once.
   if (res.status === 409 || res.status === 422 || res.status === 404) {
     const updateUrl = `${TPV_SYNC_API_URL}?action=update-parked-reservation`;
@@ -40814,9 +40914,54 @@ async function apiSaveParkedReservation(ticket) {
     if (retryRes.status === 412) {
       throw await buildStaleParkedWriteError(retryRes);
     }
+
+    if (retryRes.status === 423) {
+      const lockedErr2 = new Error("Este pedido se está cobrando en otro TPV: tus cambios se enviarán cuando termine.");
+      lockedErr2.parkedLockedByOther = true;
+      throw lockedErr2;
+    }
   }
 
   throw new Error(`Error guardando reserva remota: HTTP ${res.status}`);
+}
+
+// Candado de cobro entre dispositivos (acquire/release con comparacion atomica en el servidor).
+// Antes el candado solo existia en local: nunca se mandaba, asi que dos TPV podian cobrar el
+// mismo pedido a la vez. Mismo interruptor por cliente/modo que el guardado por operaciones.
+async function parkedClosingRemote(ticket, action) {
+  const slug = String(ticket?.slug || getCurrentSlugForReservations() || "");
+  const mode = isMesasModeTicket(ticket) ? "mesas" : "tpv";
+  if (!ticket?.id || !parkedOpsIsEnabled(slug, mode)) return { skipped: true };
+
+  const cajaId = String(ticket?.cajaId || getCajaIdSafe?.() || currentTerminal?.id || "");
+  const res = await fetchWithTimeout(`${TPV_SYNC_API_URL}?action=parked-closing`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-TPV-API-KEY": getTpvSyncApiKey(),
+    },
+    body: JSON.stringify({
+      slug,
+      cajaId,
+      ticketId: String(ticket.id),
+      codalmacen: getCurrentWarehouseCode(),
+      parkingMode: mode,
+      modoMesas: mode === "mesas" ? 1 : 0,
+      modeMesas: mode === "mesas" ? 1 : 0,
+      mesaUid: ticket?.mesaUid || null,
+      sessionId: ensureTerminalPresenceSessionId(),
+      closingAction: action,
+      terminalName: String(currentTerminal?.name || ""),
+    }),
+  });
+  const body = await res.json().catch(() => null);
+  if (res.status === 409 && body?.opsDisabled) return { skipped: true };
+  if (res.status === 404 && body?.missing) return { missing: true };
+  if (res.status === 423 && body?.locked) return { locked: true, by: body?.by || "" };
+  if (!res.ok) throw new Error(`Error en el candado de cobro: HTTP ${res.status}`);
+  if (body?.paid) return { paid: true };
+  return { ok: true };
 }
 
 // Tras un guardado entero correcto, el servidor tiene exactamente lo que mandamos: esa es la base.
@@ -41889,6 +42034,32 @@ async function onPayButtonClick() {
       }
 
       releaseParkedCheckoutLock = beginParkedCheckoutLock(parkedIndexToClose);
+
+      // Candado remoto con comparacion atomica: si otro TPV ya esta cobrando este pedido, se
+      // aborta ANTES de cobrar (antes los dos podian cobrarlo a la vez).
+      if (releaseParkedCheckoutLock) {
+        let lockRes = { skipped: true };
+        try {
+          lockRes = await parkedClosingRemote(
+            parkedTickets[parkedIndexToClose],
+            "acquire",
+          );
+        } catch (e) {
+          console.warn("[OPS] candado de cobro no disponible, se sigue:", e?.message || e);
+        }
+        if (lockRes?.locked) {
+          releaseParkedCheckoutLock();
+          releaseParkedCheckoutLock = null;
+          throw new Error(
+            "Ese ticket aparcado se está cobrando en otro TPV. Espera unos segundos y vuelve a intentarlo.",
+          );
+        }
+        if (lockRes?.paid) {
+          releaseParkedCheckoutLock();
+          releaseParkedCheckoutLock = null;
+          throw new Error("El ticket aparcado ya está cobrado en otro TPV.");
+        }
+      }
 
       if (!prefetchedParkedFreshnessPromise) {
         await refreshRemoteParkedReservationsOnly();

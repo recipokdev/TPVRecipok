@@ -10298,6 +10298,30 @@ console.log("\n[SMOKE] Checking 2026-10-16 guardado por operaciones (cliente)\n"
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-16 cobro seguro entre dispositivos (candado + pedido cobrado en otro TPV)\n");
+
+{
+  if (
+    renderer.includes("async function parkedClosingRemote(ticket, action) {") &&
+    renderer.includes("action=parked-closing") &&
+    renderer.includes('"acquire",') &&
+    renderer.includes("sessionId: ensureTerminalPresenceSessionId(),") &&
+    renderer.includes("lockedErr.parkedLockedByOther = true;") &&
+    renderer.includes("if (res.status === 423) {") &&
+    renderer.includes("function handleLoadedTicketPaidElsewhere(paidTicket) {") &&
+    renderer.includes("handleLoadedTicketPaidElsewhere(parkedTickets[nextIdx]);") &&
+    renderer.includes("parkedOpsIsEnabled(qSlug, isMesasModeTicket(localTicket)")
+  ) {
+    ok(
+      "Real (2026-10-16, 2 TPV reales contra el demo): el candado de cobro (closingInProgress) solo existia en local -- apiSaveParkedReservation nunca lo mandaba al servidor, asi que dos TPV podian cobrar el mismo pedido a la vez, y el guardado entero ponia siempre closing_in_progress=0. Ahora: accion parked-closing con acquire/release atomicos (fila bloqueada, caducan a los 3 min), las operaciones y los guardados enteros de OTRO dispositivo esperan (423, la cola de reintentos los manda al terminar) mientras se cobra, el guardado entero sin candado conserva el que hubiera, cobrado limpia el candado, y el flujo de cobro toma el candado remoto antes de cobrar. Si OTRO TPV cobra el pedido que tienes abierto, el carrito deja de mostrar sus lineas (riesgo de doble cobro): se quitan las cobradas y lo añadido despues queda como pedido nuevo. Verificado cobrando de verdad en el demo con dos instancias: cobro simultaneo -> una sola factura y el otro recibe 'se esta cobrando en otro TPV'; añadir una linea durante el cobro -> no entra en el ticket cobrado y queda en el carrito del otro como pedido nuevo",
+    );
+  } else {
+    fail(
+      "El cobro seguro entre dispositivos ya no esta completo (candado remoto / 423 / pedido cobrado en otro TPV) -- revisar el cambio de 2026-10-16",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
