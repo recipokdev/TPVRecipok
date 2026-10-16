@@ -33568,8 +33568,12 @@ function renderPairedDevicesList(devices, agentLinks) {
             ? String(d.deviceInfo).replace(/</g, "&lt;")
             : "Tablet sin nombre";
           const link = linkByDeviceId.get(Number(d.id));
+          // Nombre del agente (con su codigo entre parentesis): antes solo salia el codigo y no
+          // se sabia de quien era el vinculo (pedido de la app de camareros, 2026-10-16).
+          const linkedCode = link ? String(link.codagente ?? "").trim() : "";
+          const linkedName = link ? String(agentNameByCode[linkedCode] || "").trim() : "";
           const agentLabel = link
-            ? `Agente vinculado: ${String(link.codagente).replace(/</g, "&lt;")}`
+            ? `Agente vinculado: ${(linkedName ? `${linkedName} (${linkedCode})` : linkedCode).replace(/</g, "&lt;")}`
             : "Sin agente vinculado";
           // El boton de desvincular a mano existe para el caso real de un
           // movil perdido/reseteado que ya no tiene su propio token para
