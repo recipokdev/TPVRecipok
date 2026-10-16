@@ -40239,6 +40239,69 @@ function handleStaleParkedWriteConflict(ticket, err) {
   refreshRemoteParkedReservationsOnly?.().catch(() => {});
 }
 
+// Linea de pedido tal y como se manda al servidor (guardado entero y operaciones).
+// 2026-10-16: antes el mapeo NO incluia los sellos de envio (sentBatchAt/sentAt/
+// sentPart/sentBy) ni comandaHeld, asi que cada autoguardado del TPV los borraba
+// del servidor -- por eso "camarero" desaparecia de la linea y las cabeceras de
+// comanda se perdian al reiniciar.
+function serializeParkedItemForSave(it) {
+  return {
+    _lineId: String(it?._lineId || "").trim() || null,
+    id: Number(it?.id || 0) || null,
+    baseProductId: Number(it?.baseProductId || 0) || null,
+    idproducto: getProductBaseId(it),
+    qty: getCartItemReservedQty(it),
+    cantidad: getCartItemReservedQty(it),
+    name: String(it.name || it.nombre || it.descripcion || ""),
+    secondaryName: String(it.secondaryName || it.descripcion2 || ""),
+    descripcion: String(it.descripcion || it.name || ""),
+    descripcion2: String(it.descripcion2 || it.secondaryName || ""),
+    referencia: String(it.referencia || ""),
+    price: Number(it?.price || 0),
+    grossPrice: Number(it?.grossPrice || 0),
+    taxRate: Number(it?.taxRate || 0),
+    codimpuesto: it?.codimpuesto || null,
+    originalNetPrice: Number(it?.originalNetPrice || 0),
+    originalGrossPrice: Number(it?.originalGrossPrice || 0),
+    grossPriceOverride:
+      it?.grossPriceOverride == null
+        ? null
+        : Number(it.grossPriceOverride),
+    // Campos de descuento: hay que persistirlos para que al restaurar el
+    // aparcado (sobre todo desde remoto) no se pierda el descuento de
+    // linea/general aplicado. Antes se omitian y el ticket volvia a precio
+    // normal al reabrirlo.
+    cartLineDiscountPct:
+      it?.cartLineDiscountPct == null
+        ? null
+        : Number(it.cartLineDiscountPct),
+    cartGlobalDiscountPctApplied:
+      it?.cartGlobalDiscountPctApplied == null
+        ? null
+        : Number(it.cartGlobalDiscountPctApplied),
+    discountPctApplied:
+      it?.discountPctApplied == null
+        ? null
+        : Number(it.discountPctApplied),
+    discountBaseNetPrice:
+      it?.discountBaseNetPrice == null
+        ? null
+        : Number(it.discountBaseNetPrice),
+    imageUrl: it?.imageUrl || null,
+    meta: it?.meta && typeof it.meta === "object" ? it.meta : null,
+    // Añadidos de producto: sin esto, se pierden al
+    // guardar el aparcado -- el refresh remoto que sigue al guardado
+    // sobrescribe el carrito local con la copia del servidor, que
+    // nunca los tuvo si no se mandan aquí.
+    addons: Array.isArray(it?.addons) ? it.addons : [],
+    sentBatchAt: it?.sentBatchAt ? String(it.sentBatchAt) : null,
+    sentAt: it?.sentAt ? String(it.sentAt) : null,
+    sentPart: it?.sentPart ? Number(it.sentPart) || null : null,
+    sentBy: it?.sentBy ? String(it.sentBy) : null,
+    comandaHeld: it?.comandaHeld ? true : false,
+  };
+}
+
 async function apiSaveParkedReservation(ticket) {
   const slug = String(ticket?.slug || getCurrentSlugForReservations() || "");
   const cajaId = String(
@@ -40333,56 +40396,7 @@ async function apiSaveParkedReservation(ticket) {
     mesaAlerts: normalizeMesaTicketAlerts(ticket?.mesaAlerts),
     fs: ticket?.fs || null,
     items: Array.isArray(ticket.items)
-      ? ticket.items.map((it) => ({
-          _lineId: String(it?._lineId || "").trim() || null,
-          id: Number(it?.id || 0) || null,
-          baseProductId: Number(it?.baseProductId || 0) || null,
-          idproducto: getProductBaseId(it),
-          qty: getCartItemReservedQty(it),
-          cantidad: getCartItemReservedQty(it),
-          name: String(it.name || it.nombre || it.descripcion || ""),
-          secondaryName: String(it.secondaryName || it.descripcion2 || ""),
-          descripcion: String(it.descripcion || it.name || ""),
-          descripcion2: String(it.descripcion2 || it.secondaryName || ""),
-          referencia: String(it.referencia || ""),
-          price: Number(it?.price || 0),
-          grossPrice: Number(it?.grossPrice || 0),
-          taxRate: Number(it?.taxRate || 0),
-          codimpuesto: it?.codimpuesto || null,
-          originalNetPrice: Number(it?.originalNetPrice || 0),
-          originalGrossPrice: Number(it?.originalGrossPrice || 0),
-          grossPriceOverride:
-            it?.grossPriceOverride == null
-              ? null
-              : Number(it.grossPriceOverride),
-          // Campos de descuento: hay que persistirlos para que al restaurar el
-          // aparcado (sobre todo desde remoto) no se pierda el descuento de
-          // linea/general aplicado. Antes se omitian y el ticket volvia a precio
-          // normal al reabrirlo.
-          cartLineDiscountPct:
-            it?.cartLineDiscountPct == null
-              ? null
-              : Number(it.cartLineDiscountPct),
-          cartGlobalDiscountPctApplied:
-            it?.cartGlobalDiscountPctApplied == null
-              ? null
-              : Number(it.cartGlobalDiscountPctApplied),
-          discountPctApplied:
-            it?.discountPctApplied == null
-              ? null
-              : Number(it.discountPctApplied),
-          discountBaseNetPrice:
-            it?.discountBaseNetPrice == null
-              ? null
-              : Number(it.discountBaseNetPrice),
-          imageUrl: it?.imageUrl || null,
-          meta: it?.meta && typeof it.meta === "object" ? it.meta : null,
-          // Añadidos de producto: sin esto, se pierden al
-          // guardar el aparcado -- el refresh remoto que sigue al guardado
-          // sobrescribe el carrito local con la copia del servidor, que
-          // nunca los tuvo si no se mandan aquí.
-          addons: Array.isArray(it?.addons) ? it.addons : [],
-        }))
+      ? ticket.items.map((it) => serializeParkedItemForSave(it))
       : [],
     // Bloqueo optimista (server-side en saveParkedReservationDb): si esto no
     // coincide con lo que el servidor tiene guardado AHORA MISMO, rechaza en

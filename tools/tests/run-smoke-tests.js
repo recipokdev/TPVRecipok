@@ -10242,6 +10242,28 @@ console.log("\n[SMOKE] Checking 2026-10-15 identidad estable de las lineas al ca
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-16 el guardado manda los sellos de envio de cada linea\n");
+
+{
+  const fIdx = renderer.indexOf("function serializeParkedItemForSave(it) {");
+  const fBody = fIdx >= 0 ? renderer.slice(fIdx, fIdx + 3200) : "";
+  if (
+    fBody.includes("sentBatchAt: it?.sentBatchAt ? String(it.sentBatchAt) : null,") &&
+    fBody.includes("sentAt: it?.sentAt ? String(it.sentAt) : null,") &&
+    fBody.includes("sentBy: it?.sentBy ? String(it.sentBy) : null,") &&
+    fBody.includes("comandaHeld: it?.comandaHeld ? true : false,") &&
+    renderer.includes("? ticket.items.map((it) => serializeParkedItemForSave(it))")
+  ) {
+    ok(
+      "Real (Sergi, 2026-10-16): apiSaveParkedReservation mapeaba cada linea con una lista fija de campos que NO incluia sentBatchAt (hora del envio del camarero), sentAt/sentPart/sentBy (cabecera de comanda) ni comandaHeld (retenido): cada autoguardado del TPV los borraba del servidor. Por eso el 'camarero' desaparecia de la linea y las cabeceras de comanda se perdian al reiniciar. Ahora el mapeo esta en serializeParkedItemForSave e incluye esos campos",
+    );
+  } else {
+    fail(
+      "El guardado de aparcados ya no manda los sellos de envio de cada linea (sentBatchAt/sentAt/sentPart/sentBy/comandaHeld) -- revisar el cambio de 2026-10-16",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
