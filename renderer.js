@@ -10572,6 +10572,25 @@ function hasUnsavedChangesForLoadedParkedTicket(ticket) {
 function mergeMissingRemoteLinesIntoCart(ticket) {
   if (!ticket?.__remoteChangedWhileLoaded) return false;
 
+  // Guardado por operaciones: integracion linea a linea por _lineId (los cambios locales
+  // pendientes se conservan, los remotos se incorporan: suma de cantidades, lineas nuevas,
+  // lineas quitadas). Ver parkedOpsReconcileRemoteIntoMerged.
+  if (ticket.__opsReconcile && window.TPV_PARKED_OPS) {
+    const r = ticket.__opsReconcile;
+    delete ticket.__opsReconcile;
+    delete ticket.__remoteChangedWhileLoaded;
+    const reconciled = window.TPV_PARKED_OPS.reconcileItems(r.baseItems, r.remoteItems, cart);
+    const cartIds = new Set(cart.map((l) => String(l?._lineId || "")));
+    const next = reconciled.map((l) =>
+      cartIds.has(String(l?._lineId || "")) ? l : hydrateParkedItemForCart(l),
+    );
+    const changed =
+      JSON.stringify(normalizeTicketLinesForCompare(next)) !==
+      JSON.stringify(normalizeTicketLinesForCompare(cart));
+    if (changed) cart = next;
+    return changed;
+  }
+
   // Real (app de camareros, 2026-10-02): la clave de comparacion incluia el
   // precio EXACTO de la linea (pensado para no fusionar una linea con un
   // precio manual distinto con la "normal" del mismo producto). Pero una
@@ -39542,6 +39561,9 @@ function syncParkedTicketsFromRemote(list) {
         merged.mesaAlerts = normalizeMesaTicketAlerts(prev?.mesaAlerts);
       }
 
+      // Guardado por operaciones: integra lo remoto sin pisar lo local pendiente.
+      parkedOpsReconcileRemoteIntoMerged(prev, ticket, merged);
+
       // Confirmado presente en remoto: si en un poll posterior desaparece,
       // es un borrado remoto real (otro TPV) y no hay que conservarlo.
       merged.__remoteSeen = true;
@@ -40175,6 +40197,7 @@ async function apiListParkedReservations() {
   }
 
   const data = await res.json().catch(() => null);
+  parkedOpsLearnFeatures(slug, data?.features);
   return Array.isArray(data?.data) ? data.data : [];
 }
 
@@ -40237,6 +40260,287 @@ function handleStaleParkedWriteConflict(ticket, err) {
   // Trae el estado real del servidor -- el ticket cargado localmente puede
   // llevar datos que ya no coinciden con lo que hay guardado de verdad.
   refreshRemoteParkedReservationsOnly?.().catch(() => {});
+}
+
+// ===== Guardado por OPERACIONES (diseno: docs/guardado-por-partes-diseno.md) ===============
+// En vez de reenviar el pedido entero, el TPV compara lo que tiene con la ultima version que
+// el servidor confirmo ("base") y manda solo la diferencia (anadir/quitar linea, +1/-1, un
+// campo). Se activa SOLO si el servidor lo dice para este cliente y modo (list-parked-
+// reservations devuelve features.parkedOps); si algo no encaja se usa el guardado entero.
+// Interruptor de emergencia local: localStorage tpv_parkedOpsDisabled = "1".
+const __parkedOpsEnabledBySlug = new Map(); // slug -> { mesas: bool, tpv: bool }
+const __parkedOpsBase = new Map(); // slug|ticketId -> { doc, updatedAt, ts }
+const __parkedOpsLocks = new Map(); // slug|ticketId -> Promise (serializa los envios)
+const __parkedOpsServerOffUntil = new Map(); // slug|modo -> ms (el servidor dijo "no activado")
+
+function parkedOpsKey(slug, ticketId) {
+  return `${String(slug || "")}|${String(ticketId || "")}`;
+}
+
+function parkedOpsLocallyDisabled() {
+  try {
+    return localStorage.getItem("tpv_parkedOpsDisabled") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function parkedOpsIsEnabled(slug, mode) {
+  if (parkedOpsLocallyDisabled()) return false;
+  if (!window.TPV_PARKED_OPS) return false;
+  if ((__parkedOpsServerOffUntil.get(`${slug}|${mode}`) || 0) > Date.now()) return false;
+  const f = __parkedOpsEnabledBySlug.get(String(slug || ""));
+  return !!(f && f[mode]);
+}
+
+function parkedOpsLearnFeatures(slug, features) {
+  const po = features && typeof features === "object" ? features.parkedOps : null;
+  if (!po || typeof po !== "object") return;
+  __parkedOpsEnabledBySlug.set(String(slug || ""), {
+    mesas: !!po.mesas,
+    tpv: !!po.tpv,
+  });
+}
+
+function parkedOpsDocFromPayload(p) {
+  return {
+    items: Array.isArray(p.items) ? p.items : [],
+    header: {
+      ticketName: p.ticketName,
+      obs: p.obs,
+      clientName: p.clientName,
+      codcliente: p.codcliente,
+      mesaAlerts: p.mesaAlerts,
+      comandaState: p.comandaState,
+      docType: p.docType,
+      pedidoStatus: p.pedidoStatus,
+      collectedAt: p.collectedAt,
+      splitGroupId: p.splitGroupId,
+      splitPart: p.splitPart,
+      splitTotal: p.splitTotal,
+      displayNo: p.displayNo,
+      paid: p.paid,
+      paidAt: p.paidAt,
+      paidTicketCode: p.paidTicketCode,
+      paidTicketId: p.paidTicketId,
+      mesaUid: p.mesaUid,
+      mesaRoomId: p.mesaRoomId,
+      mesaRoomName: p.mesaRoomName,
+      mesaTableId: p.mesaTableId,
+      mesaTableName: p.mesaTableName,
+      fs: p.fs,
+    },
+  };
+}
+
+function parkedOpsDocFromTicket(ticket) {
+  const slug = String(ticket?.slug || getCurrentSlugForReservations() || "");
+  return parkedOpsDocFromPayload(buildParkedSavePayload(ticket, slug, ""));
+}
+
+function parkedOpsSetBase(slug, ticketId, doc, updatedAt) {
+  __parkedOpsBase.set(parkedOpsKey(slug, ticketId), {
+    doc,
+    updatedAt: String(updatedAt || ""),
+    ts: Date.parse(String(updatedAt || "")) || 0,
+  });
+}
+
+function parkedOpsForgetBase(slug, ticketId) {
+  __parkedOpsBase.delete(parkedOpsKey(slug, ticketId));
+}
+
+// Un envio a la vez por pedido: el siguiente recalcula su diferencia con la base ya avanzada.
+async function parkedOpsRunExclusive(key, fn) {
+  const prev = __parkedOpsLocks.get(key) || Promise.resolve();
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const mine = prev.then(() => gate);
+  __parkedOpsLocks.set(key, mine);
+  try {
+    await prev.catch(() => {});
+    return await fn();
+  } finally {
+    release();
+    if (__parkedOpsLocks.get(key) === mine) __parkedOpsLocks.delete(key);
+  }
+}
+
+// Devuelve la respuesta (como el guardado entero) o null si hay que usar el guardado entero.
+async function tryParkedOpsSave(ticket, payload) {
+  const OPS = window.TPV_PARKED_OPS;
+  const mode = payload.modoMesas ? "mesas" : "tpv";
+  if (!OPS || !parkedOpsIsEnabled(payload.slug, mode)) return null;
+
+  if (payload.paid || ticket?.paid) {
+    parkedOpsForgetBase(payload.slug, payload.ticketId);
+    return null;
+  }
+
+  const key = parkedOpsKey(payload.slug, payload.ticketId);
+  return await parkedOpsRunExclusive(key, async () => {
+    const entry = __parkedOpsBase.get(key);
+    if (!entry) return null; // primera vez que se guarda: guardado entero
+
+    const cur = parkedOpsDocFromPayload(payload);
+    const { ops, unsupported } = OPS.diffToOps(entry.doc, cur);
+    if (unsupported.length) {
+      console.info("[OPS] guardado entero:", unsupported.join(","));
+      return null;
+    }
+    if (!ops.length) {
+      return { ok: true, noChanges: true, data: { updatedAt: entry.updatedAt } };
+    }
+
+    const clientOpId = OPS.makeClientOpId(
+      ensureTerminalPresenceSessionId(),
+      key,
+      entry.updatedAt,
+      ops,
+    );
+    const res = await fetchWithTimeout(
+      `${TPV_SYNC_API_URL}?action=save-parked-reservation-ops`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-TPV-API-KEY": getTpvSyncApiKey(),
+        },
+        body: JSON.stringify({
+          slug: payload.slug,
+          cajaId: payload.cajaId,
+          ticketId: payload.ticketId,
+          codalmacen: payload.codalmacen,
+          parkingMode: payload.parkingMode,
+          modoMesas: payload.modoMesas,
+          modeMesas: payload.modeMesas,
+          mesaUid: payload.mesaUid,
+          terminalId: payload.terminalId,
+          terminalName: payload.terminalName,
+          userName: payload.userName,
+          total: payload.total,
+          clientOpId,
+          ops,
+        }),
+      },
+    );
+
+    const body = await res.json().catch(() => null);
+
+    if (res.status === 409 && body?.opsDisabled) {
+      __parkedOpsServerOffUntil.set(`${payload.slug}|${mode}`, Date.now() + 10 * 60 * 1000);
+      return null;
+    }
+    if (res.status === 404 && body?.missing) {
+      // El pedido ya no existe en el servidor: el guardado entero aplica sus protecciones
+      // (no lo resucita si fue borrado).
+      parkedOpsForgetBase(payload.slug, payload.ticketId);
+      return null;
+    }
+    if (!res.ok) {
+      throw new Error(`Error guardando reserva remota (operaciones): HTTP ${res.status}`);
+    }
+    if (body?.paid) {
+      parkedOpsForgetBase(payload.slug, payload.ticketId);
+      return null;
+    }
+
+    // Base = base anterior + MIS operaciones (no la respuesta: puede traer cambios ajenos que
+    // aun no hemos integrado; el siguiente refresco los incorpora comparando con esta base).
+    entry.doc = OPS.applyOpsToDoc(entry.doc, ops);
+    const newTs = body?.data?.updatedAt || entry.updatedAt;
+    entry.updatedAt = String(newTs || "");
+    entry.ts = Date.parse(entry.updatedAt) || entry.ts;
+    // Lo siguiente que se guarde por el camino entero (un cambio no soportado) debe llevar
+    // ESTA version como esperada, no la del ultimo refresco (anterior a nuestro propio guardado).
+    if (entry.updatedAt) ticket._serverUpdatedAtIso = entry.updatedAt;
+
+    if (Array.isArray(body?.conflicts) && body.conflicts.length) {
+      console.info("[OPS] conflictos:", JSON.stringify(body.conflicts));
+    }
+    return { ok: true, viaOps: true, data: body?.data || null, conflicts: body?.conflicts || [] };
+  });
+}
+
+// Tras un refresco del servidor: integra la version remota en el pedido local sin perder los
+// cambios locales aun no enviados, y avanza la base. Solo para pedidos con guardado por
+// operaciones activo.
+function parkedOpsReconcileRemoteIntoMerged(prev, remoteTicket, merged) {
+  const OPS = window.TPV_PARKED_OPS;
+  if (!OPS) return;
+  const slug = String(remoteTicket?.slug || getCurrentSlugForReservations() || "");
+  const mode = isMesasModeTicket(merged) ? "mesas" : "tpv";
+  if (!parkedOpsIsEnabled(slug, mode)) return;
+
+  if (remoteTicket?.paid) {
+    parkedOpsForgetBase(slug, merged.id);
+    return;
+  }
+
+  const key = parkedOpsKey(slug, merged.id);
+  const remoteDoc = parkedOpsDocFromTicket(remoteTicket);
+  // La cadena EXACTA del servidor (con microsegundos): ticket.updatedAt es un Date y pierde precision.
+  const remoteUpdatedAt = String(
+    remoteTicket?._serverUpdatedAtIso || remoteTicket?.updatedAt || "",
+  );
+  const remoteTs = Date.parse(remoteUpdatedAt) || 0;
+  const entry = __parkedOpsBase.get(key);
+
+  if (!entry) {
+    parkedOpsSetBase(slug, merged.id, remoteDoc, remoteUpdatedAt);
+    return;
+  }
+
+  const prevItems = Array.isArray(prev?.items) ? prev.items : null;
+  const keepLocalHeader = () => {
+    if (!prev) return;
+    ["name", "obs", "clientName", "codcliente", "mesaAlerts", "comandaState"].forEach((k) => {
+      if (prev[k] !== undefined) merged[k] = prev[k];
+    });
+  };
+
+  // Version del servidor mas vieja que la que ya tenemos: se ignora (conserva lo local).
+  if (remoteTs && entry.ts && remoteTs < entry.ts) {
+    if (prevItems) merged.items = prevItems.map((it) => ({ ...it }));
+    keepLocalHeader();
+    return;
+  }
+
+  const rawRemoteItems = Array.isArray(remoteTicket?.items) ? remoteTicket.items : [];
+  const ids = (arr) => (arr || []).map((l) => String(l?._lineId || "").trim());
+  const idsOk = (arr) => {
+    const a = ids(arr);
+    return a.every(Boolean) && new Set(a).size === a.length;
+  };
+  if (!prevItems || !idsOk(prevItems) || !idsOk(rawRemoteItems) || !idsOk(entry.doc.items)) {
+    // No se puede casar linea a linea con seguridad: se queda el comportamiento de siempre.
+    parkedOpsSetBase(slug, merged.id, remoteDoc, remoteUpdatedAt);
+    return;
+  }
+
+  merged.items = OPS.reconcileItems(entry.doc.items, rawRemoteItems, prevItems);
+  const localDoc = parkedOpsDocFromTicket(prev);
+  const hdr = OPS.reconcileHeader(entry.doc.header, remoteDoc.header, localDoc.header);
+  merged.name = hdr.ticketName;
+  merged.obs = hdr.obs;
+  merged.clientName = hdr.clientName;
+  merged.codcliente = hdr.codcliente;
+  merged.mesaAlerts = hdr.mesaAlerts;
+  if (hdr.comandaState) merged.comandaState = hdr.comandaState;
+
+  // Si el pedido esta abierto en pantalla, el carrito se integra igual (ver
+  // mergeMissingRemoteLinesIntoCart); si hay una integracion pendiente sin consumir, se
+  // conserva su base mas antigua para no perder cambios intermedios.
+  if (OPS.stable(entry.doc) !== OPS.stable(remoteDoc)) {
+    merged.__opsReconcile = {
+      baseItems: prev?.__opsReconcile?.baseItems || entry.doc.items,
+      remoteItems: rawRemoteItems,
+    };
+    merged.__remoteChangedWhileLoaded = true;
+  }
+
+  parkedOpsSetBase(slug, merged.id, remoteDoc, remoteUpdatedAt);
 }
 
 // Linea de pedido tal y como se manda al servidor (guardado entero y operaciones).
@@ -40302,22 +40606,9 @@ function serializeParkedItemForSave(it) {
   };
 }
 
-async function apiSaveParkedReservation(ticket) {
-  const slug = String(ticket?.slug || getCurrentSlugForReservations() || "");
-  const cajaId = String(
-    ticket?.cajaId || getCajaIdSafe?.() || currentTerminal?.id || "",
-  );
-  const syncApiKey = getTpvSyncApiKey();
-
-  if (!slug || !cajaId || !ticket?.id) {
-    throw new Error("Faltan datos para guardar la reserva remota.");
-  }
-  if (!syncApiKey) {
-    throw new Error(
-      "Falta TPV_CONFIG.tpvApiKey para guardar reservas remotas.",
-    );
-  }
-
+// Documento completo que se manda al servidor para un pedido (guardado entero y base del
+// guardado por operaciones). Extraido de apiSaveParkedReservation sin cambiar su contenido.
+function buildParkedSavePayload(ticket, slug, cajaId) {
   const payload = {
     slug,
     cajaId,
@@ -40405,8 +40696,32 @@ async function apiSaveParkedReservation(ticket) {
     // vio confirmado por el servidor: sin comprobacion, igual que siempre.
     expectedUpdatedAt: ticket?._serverUpdatedAtIso || null,
   };
+  return payload;
+}
+
+async function apiSaveParkedReservation(ticket) {
+  const slug = String(ticket?.slug || getCurrentSlugForReservations() || "");
+  const cajaId = String(
+    ticket?.cajaId || getCajaIdSafe?.() || currentTerminal?.id || "",
+  );
+  const syncApiKey = getTpvSyncApiKey();
+
+  if (!slug || !cajaId || !ticket?.id) {
+    throw new Error("Faltan datos para guardar la reserva remota.");
+  }
+  if (!syncApiKey) {
+    throw new Error(
+      "Falta TPV_CONFIG.tpvApiKey para guardar reservas remotas.",
+    );
+  }
+
+  const payload = buildParkedSavePayload(ticket, slug, cajaId);
 
   rememberTicketParkingMode(ticket, payload.parkingMode);
+
+  // Guardado por operaciones (solo si el servidor lo activo para este cliente y modo).
+  const opsResult = await tryParkedOpsSave(ticket, payload);
+  if (opsResult) return opsResult;
 
   const createUrl = `${TPV_SYNC_API_URL}?action=create-parked-reservation`;
 
@@ -40421,7 +40736,9 @@ async function apiSaveParkedReservation(ticket) {
   });
 
   if (res.ok) {
-    return await res.json().catch(() => ({}));
+    const saved = await res.json().catch(() => ({}));
+    parkedOpsRememberAfterFullSave(payload, saved, ticket);
+    return saved;
   }
 
   // Bloqueo optimista (ver expectedUpdatedAt arriba): el servidor rechazo el
@@ -40448,7 +40765,9 @@ async function apiSaveParkedReservation(ticket) {
     });
 
     if (retryRes.ok) {
-      return await retryRes.json().catch(() => ({}));
+      const savedRetry = await retryRes.json().catch(() => ({}));
+      parkedOpsRememberAfterFullSave(payload, savedRetry, ticket);
+      return savedRetry;
     }
 
     if (retryRes.status === 412) {
@@ -40457,6 +40776,29 @@ async function apiSaveParkedReservation(ticket) {
   }
 
   throw new Error(`Error guardando reserva remota: HTTP ${res.status}`);
+}
+
+// Tras un guardado entero correcto, el servidor tiene exactamente lo que mandamos: esa es la base.
+function parkedOpsRememberAfterFullSave(payload, saved, ticket) {
+  try {
+    const mode = payload.modoMesas ? "mesas" : "tpv";
+    if (!parkedOpsIsEnabled(payload.slug, mode)) return;
+    if (ticket && typeof saved?.data?.updatedAt === "string" && saved.data.updatedAt) {
+      ticket._serverUpdatedAtIso = saved.data.updatedAt;
+    }
+    if (payload.paid) {
+      parkedOpsForgetBase(payload.slug, payload.ticketId);
+      return;
+    }
+    parkedOpsSetBase(
+      payload.slug,
+      payload.ticketId,
+      parkedOpsDocFromPayload(payload),
+      saved?.data?.updatedAt || "",
+    );
+  } catch (e) {
+    console.warn("[OPS] no se pudo recordar la base:", e?.message || e);
+  }
 }
 
 async function apiDeleteParkedReservation(ticket) {
@@ -40479,6 +40821,8 @@ async function apiDeleteParkedReservation(ticket) {
     // nunca sabia desde que terminal se habia borrado un aparcado.
     terminalId: String(currentTerminal?.id || ""),
   };
+
+  parkedOpsForgetBase(slug, ticket.id);
 
   const deleteUrl = `${TPV_SYNC_API_URL}?action=delete-parked-reservation`;
 

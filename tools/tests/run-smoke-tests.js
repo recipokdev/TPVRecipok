@@ -10264,6 +10264,37 @@ console.log("\n[SMOKE] Checking 2026-10-16 el guardado manda los sellos de envio
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-16 guardado por operaciones (cliente)\n");
+
+{
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const apiIdx = renderer.indexOf("async function apiSaveParkedReservation(ticket) {");
+  const apiBody = apiIdx >= 0 ? renderer.slice(apiIdx, apiIdx + 4500) : "";
+  if (
+    html.includes('src="js/tpv/parked-ops.js"') &&
+    html.indexOf('js/tpv/parked-ops.js') < html.indexOf('src="renderer.js"') &&
+    renderer.includes("function buildParkedSavePayload(ticket, slug, cajaId) {") &&
+    apiBody.includes("const payload = buildParkedSavePayload(ticket, slug, cajaId);") &&
+    apiBody.includes("const opsResult = await tryParkedOpsSave(ticket, payload);") &&
+    renderer.includes("async function tryParkedOpsSave(ticket, payload) {") &&
+    renderer.includes("action=save-parked-reservation-ops") &&
+    renderer.includes("parkedOpsLearnFeatures(slug, data?.features);") &&
+    renderer.includes("parkedOpsReconcileRemoteIntoMerged(prev, ticket, merged);") &&
+    renderer.includes("if (ticket.__opsReconcile && window.TPV_PARKED_OPS) {") &&
+    renderer.includes('localStorage.getItem("tpv_parkedOpsDisabled") === "1"') &&
+    renderer.includes("remoteTicket?._serverUpdatedAtIso || remoteTicket?.updatedAt") &&
+    renderer.includes("parkedOpsForgetBase(slug, ticket.id);")
+  ) {
+    ok(
+      "Guardado por partes, cliente (2026-10-16): el TPV compara el pedido con la ultima version confirmada por el servidor (base) y manda solo la diferencia (anadir/quitar linea, +1/-1, campo, cabecera, comanda) a save-parked-reservation-ops; se activa solo si el servidor lo declara para su cliente y modo (list-parked-reservations devuelve features.parkedOps), cae al guardado entero ante cualquier cambio no soportado/lineas sin id/pedido cobrado o borrado, y tiene interruptor local tpv_parkedOpsDisabled. Al refrescar integra lo remoto linea a linea (por _lineId) conservando lo local pendiente, tambien en el carrito. Verificado de extremo a extremo contra el servidor real del demo con un pedido de prueba: primer guardado entero, siguiente por operaciones, sin cambios no manda nada, cambios de otro dispositivo (+2, linea nueva, linea quitada) se integran sin perder lo local y el guardado siguiente manda solo lo propio, cambio de mesa y interruptor -> guardado entero",
+    );
+  } else {
+    fail(
+      "El guardado por operaciones del cliente ya no esta completo (modulo/payload/envio/capacidades/reconciliacion) -- revisar el cambio de 2026-10-16",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
