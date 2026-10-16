@@ -1,6 +1,6 @@
 # Guardado de pedidos por partes — diseño
 
-Estado (2026-10-15): **aprobado** por Sergi. Paso 1 (identidad estable de línea) hecho (`e441821`). **Servidor hecho y desplegado**, activo solo para `demo` en Modo Mesas (`parked_ops_pilot_slugs_mesas`); TPV normal preparado pero sin activar (`parked_ops_pilot_slugs_tpv` vacío). **Cliente hecho** (2026-10-16): el TPV de escritorio ya usa la acción nueva cuando el servidor la activa (solo `demo`/Mesas).
+Estado (2026-10-15): **aprobado** por Sergi. Paso 1 (identidad estable de línea) hecho (`e441821`). **Servidor hecho y desplegado**, activo solo para `demo`, en Modo Mesas (`parked_ops_pilot_slugs_mesas`) y desde 2026-10-16 también en TPV normal (`parked_ops_pilot_slugs_tpv`). **Cliente hecho** (2026-10-16): el TPV de escritorio ya usa la acción nueva cuando el servidor la activa (solo `demo`/Mesas).
 
 ## 1. El problema
 
@@ -105,6 +105,10 @@ Pruebas del servidor (`tools/parked_ops_test.php`, `tools/parked_ops_concurrency
 - Encontrado de paso: el guardado entero **no mandaba** `sentBatchAt`, `sentAt/sentPart/sentBy` ni `comandaHeld`, y cada autoguardado los borraba del servidor (arreglado, `acf4b85`).
 - Prueba de extremo a extremo contra el servidor real del demo (pedido de prueba, ya borrado): creación por guardado entero → siguientes cambios por operaciones → sin cambios no manda nada → cambios de "otro dispositivo" (+2, línea nueva, línea quitada) se integran sin perder lo local y el siguiente guardado manda solo lo propio.
 - Ruido conocido: una línea creada por otro dispositivo con menos campos genera un `line-set` inofensivo con los campos que este TPV completa del catálogo.
+
+## 5d. Prueba con dos TPV reales (2026-10-16)
+
+`tools/tests/run-two-tpv-ops.js` (Mesas, mesa M3) y `tools/tests/run-two-tpv-ops-normal.js` (TPV normal, aparcados): dos instancias reales a la vez contra el demo. Escenarios: cambios a la vez en líneas distintas, +1 simultáneo a la misma línea (de 2 pasa a 4) y quitar-contra-editar (gana quitar; el otro registra `line-missing`). En los dos modos los dos carritos convergen sin perder nada. Hallazgo: los borradores compartidos del plano (copia del carrito en el layout) pisaban el carrito del otro dispositivo; en modo operaciones no se escriben ni se aplican para una mesa con pedido guardado.
 
 ## 6. Pasos
 
