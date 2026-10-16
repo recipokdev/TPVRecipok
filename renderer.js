@@ -10434,6 +10434,16 @@ function syncTpvCartWithSelectedMesa(opts = {}) {
 
   let ticketId = state?.tableTicketMap?.[uid];
 
+  // Vinculo desfasado tras un cambio de mesa (ver getMesasPendingTicketByUid): se corrige.
+  if (ticketId) {
+    const better = getMesasPendingTicketByUid(state, uid);
+    if (better && String(better.id) !== String(ticketId)) {
+      ticketId = better.id;
+      state.tableTicketMap[uid] = ticketId;
+      saveMesasTablesStateForInline(state);
+    }
+  }
+
   // Si falta el mapeo de mesa, lo intentamos reconstruir por metadata del ticket.
   if (!ticketId) {
     const inferredIdx = (
@@ -10863,6 +10873,50 @@ function mergeRemoteChangesIntoLoadedParkedTicketIfAny() {
   return true;
 }
 
+// Otro TPV cambio el pedido que tengo abierto a OTRA mesa: esta mesa queda libre aqui (sin llevarme
+// el pedido). Doble confirmacion para no vaciar el carrito por error: el pedido guardado dice otra
+// mesa Y el plano compartido lo enlaza a esa otra mesa y no a la seleccionada. Con cambios locales
+// sin guardar no se toca (se avisaria del conflicto por otro lado).
+function handleLoadedTicketMovedToAnotherMesa() {
+  try {
+    if (!MESAS_INLINE_ACTIVE || MESAS_INLINE_VIEW !== "transacciones") return false;
+    const idx = currentParkedTicketIndex;
+    const ticket = idx != null && Array.isArray(parkedTickets) ? parkedTickets[idx] : null;
+    if (!ticket || ticket.paid || !isMesasModeTicket(ticket)) return false;
+
+    const state = loadMesasTablesStateForInline();
+    const selUid = String(state?.selectedTableId || "").trim();
+    const ticketUid = String(ticket.mesaUid || "").trim();
+    if (!selUid || !ticketUid || selUid === ticketUid) return false;
+
+    const id = String(ticket.id || "");
+    // El pedido guardado (confirmado por el servidor) dice otra mesa que existe en el plano, y aqui
+    // sigue enlazado a la seleccionada. (El vinculo local mesa->pedido de este TPV puede ir por
+    // detras del de quien hizo el cambio, por eso no se exige que el plano ya lo refleje.)
+    // Evidencia de que el cambio acaba de llegar de otro dispositivo (la mesa que tenia antes aqui
+    // era la seleccionada): sin esto, un pedido movido hace tiempo con una version vieja del TPV
+    // (cuyo servidor sigue diciendo la mesa de origen) se soltaria por error.
+    if (!ticket.__remoteSeen || String(ticket.__movedFromMesaUid || "") !== selUid) return false;
+    const dest = getMesasRoomAndTableByUid(state, ticketUid);
+    if (!dest?.table) return false;
+    if (hasUnsavedChangesForLoadedParkedTicket(ticket)) return false;
+    if (!state.tableTicketMap || typeof state.tableTicketMap !== "object") state.tableTicketMap = {};
+    if (String(state.tableTicketMap[selUid] || "") === id) delete state.tableTicketMap[selUid];
+    state.tableTicketMap[ticketUid] = ticket.id;
+    saveMesasTablesStateForInline(state);
+
+    const destName = String(dest?.table?.name || dest?.table?.id || ticket.mesaTableName || "otra mesa").trim();
+    delete ticket.__movedFromMesaUid;
+    setCurrentParkedTicketIndex(null);
+    syncTpvCartWithSelectedMesa({ preferLinkedTicketOnEmptyDraft: true });
+    toast(`El pedido de esta mesa se ha cambiado a ${destName} desde otro dispositivo.`, "info", "Mesas");
+    return true;
+  } catch (e) {
+    console.warn("No se pudo comprobar el cambio de mesa remoto:", e?.message || e);
+    return false;
+  }
+}
+
 function flushLoadedParkedTicketChangesSync() {
   const idx = currentParkedTicketIndex;
   if (idx == null || !Array.isArray(parkedTickets) || !parkedTickets[idx]) {
@@ -10965,6 +11019,7 @@ function flushLoadedParkedTicketChangesSync() {
 }
 
 function ensureMesaLinkedTicketLoaded() {
+  if (__RESTORING_PARKED_CART) return false;
   if (!MESAS_INLINE_ACTIVE || MESAS_INLINE_VIEW !== "transacciones")
     return false;
 
@@ -11070,7 +11125,19 @@ function getMesasPendingTicketByUid(state, uid) {
       (t) => String(t?.id || "") === String(linkedTicketId || "") && !t?.paid,
     );
 
-    if (linkedTicket) return linkedTicket;
+    if (linkedTicket) {
+      // El plano compartido solo AÑADE vinculos mesa->pedido: tras un cambio de mesa puede quedar
+      // el de la mesa vieja apuntando al pedido ya movido. Si ese pedido dice (guardado) que esta
+      // en otra mesa del plano y hay OTRO pedido que de verdad es de esta mesa, gana el segundo.
+      const own = String(linkedTicket?.mesaUid || "").trim();
+      if (own && own !== uid && getMesasRoomAndTableByUid(state, own)?.table) {
+        const competitor = (Array.isArray(parkedTickets) ? parkedTickets : []).find(
+          (t) => t && !t.paid && t !== linkedTicket && String(t?.mesaUid || "").trim() === uid,
+        );
+        if (competitor) return competitor;
+      }
+      return linkedTicket;
+    }
   }
 
   const inferredTicket = (
@@ -11385,6 +11452,26 @@ function moveMesaPendingTicket(sourceUid, targetUid) {
   saveMesasTablesStateForInline(mesasState);
   syncTpvCartWithSelectedMesa({ preferLinkedTicketOnEmptyDraft: true });
 
+  // Antes el cambio de mesa solo quedaba en la copia local y en el plano compartido: el pedido
+  // guardado en el servidor seguia diciendo "mesa origen" hasta que se editara por otra razon, asi
+  // que otro TPV (o la app de camareros) lo seguia viendo en la mesa vieja y, al añadir algo desde
+  // ella, trabajaba sobre el pedido ya movido (visto con 2 TPV reales, 2026-10-16).
+  sourceTicket.localRevisionAt = Date.now();
+  sourceTicket.updatedAt = new Date();
+  saveParkedTicketsCache();
+  void (async () => {
+    try {
+      await apiSaveParkedReservation(sourceTicket);
+    } catch (e) {
+      if (e?.staleParkedWrite) {
+        handleStaleParkedWriteConflict(sourceTicket, e);
+      } else {
+        enqueueParkedSyncOperation("upsert", sourceTicket);
+        console.warn("No se pudo guardar el cambio de mesa en remoto:", e?.message || e);
+      }
+    }
+  })();
+
   return true;
 }
 
@@ -11415,6 +11502,15 @@ async function mergeMesaPendingTickets(sourceUid, targetUid) {
   const targetTicket = getMesasPendingTicketByUid(mesasState, toUid);
   if (!sourceTicket || !targetTicket) {
     toast("No se pudo fusionar: falta el pedido de alguna de las 2 mesas.", "warn", "Mesas");
+    return false;
+  }
+  // Si las dos mesas apuntan al MISMO pedido (p.ej. tras un cambio de mesa visto a medias entre
+  // dos TPV), fusionar duplicaria las lineas y luego borraria el "origen" = el unico pedido.
+  if (
+    sourceTicket === targetTicket ||
+    String(sourceTicket?.id || "") === String(targetTicket?.id || "")
+  ) {
+    toast("Las dos mesas ya tienen el mismo pedido: no hay nada que fusionar.", "warn", "Mesas");
     return false;
   }
 
@@ -23372,7 +23468,23 @@ function restorePreParkedCustomerSelection() {
 }
 
 // Recuperar ticket por índice (lo usa el modal)
+// Mientras se carga un pedido en el carrito, renderCart() (que se llama antes de fijar el pedido
+// cargado) no debe "re-enlazar" la mesa: con el guardado por operaciones eso volvia a entrar en
+// restoreParkedCartByIndex a mitad de la carga y su flushLoadedParkedTicketChangesSync() guardaba
+// las lineas de la mesa NUEVA dentro del pedido de la mesa que se abandonaba (visto 2026-10-16 al
+// cambiar entre dos mesas ocupadas: la primera perdia sus lineas).
+let __RESTORING_PARKED_CART = false;
 function restoreParkedCartByIndex(index) {
+  const wasRestoring = __RESTORING_PARKED_CART;
+  __RESTORING_PARKED_CART = true;
+  try {
+    return restoreParkedCartByIndexImpl(index);
+  } finally {
+    __RESTORING_PARKED_CART = wasRestoring;
+  }
+}
+
+function restoreParkedCartByIndexImpl(index) {
   const labels = getParkingLabels();
   if (!parkedTickets || parkedTickets.length === 0) {
     return;
@@ -39563,6 +39675,11 @@ function syncParkedTicketsFromRemote(list) {
       // deben refrescar `cart` antes de usarlo, en vez de arriesgarse a
       // sobreescribir en el servidor lineas que ya llegaron por otro lado.
       if (!shouldPreferLocalSnapshot) {
+        const prevMesaUid = String(prev?.mesaUid || "").trim();
+        const remoteMesaUid = String(ticket?.mesaUid || "").trim();
+        if (prevMesaUid && remoteMesaUid && prevMesaUid !== remoteMesaUid) {
+          merged.__movedFromMesaUid = prevMesaUid;
+        }
         const isLoadedTicket =
           currentParkedTicketIndex != null &&
           getParkedTicketSyncKeyVariants(ticket).some((k) =>
@@ -41499,6 +41616,7 @@ async function refreshRemoteParkedReservationsOnlyImpl() {
     // repinta aqui mismo, sin esperar a que el cajero cambie de mesa o
     // cobre para enterarse.
     mergeRemoteChangesIntoLoadedParkedTicketIfAny();
+    handleLoadedTicketMovedToAnotherMesa();
     // Real de cliente 2026-10-07 (Sergi): lo de arriba solo cubre una mesa
     // que YA tenia un ticket cargado -- si la mesa seleccionada estaba
     // LIBRE (nada cargado, currentParkedTicketIndex null) y la app de
