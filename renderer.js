@@ -40514,6 +40514,106 @@ async function tryParkedOpsSave(ticket, payload) {
     const entry = __parkedOpsBase.get(key);
     if (!entry) return null; // primera vez que se guarda: guardado entero
 
+    // Envia un lote de operaciones. Devuelve { body } si el servidor lo ha aceptado, { fallback: true }
+    // si hay que usar el guardado entero, o lanza (red/5xx: no se sabe si se aplico -> queda "en duda").
+    const postOps = async (opsToSend, clientOpId) => {
+      let res;
+      try {
+        res = await fetchWithTimeout(
+          `${TPV_SYNC_API_URL}?action=save-parked-reservation-ops`,
+          {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+              "X-TPV-API-KEY": getTpvSyncApiKey(),
+            },
+            body: JSON.stringify({
+              slug: payload.slug,
+              cajaId: payload.cajaId,
+              ticketId: payload.ticketId,
+              codalmacen: payload.codalmacen,
+              parkingMode: payload.parkingMode,
+              modoMesas: payload.modoMesas,
+              modeMesas: payload.modeMesas,
+              mesaUid: payload.mesaUid,
+              terminalId: payload.terminalId,
+              terminalName: payload.terminalName,
+              userName: payload.userName,
+              sessionId: ensureTerminalPresenceSessionId(),
+              total: payload.total,
+              clientOpId,
+              ops: opsToSend,
+            }),
+          },
+        );
+      } catch (netErr) {
+        // Sin respuesta: el servidor pudo aplicarlas o no. Se recuerdan con su MISMO clientOpId para
+        // reenviarlas tal cual (el servidor no las aplica dos veces) antes de calcular nada nuevo.
+        entry.pending = { clientOpId, ops: opsToSend };
+        throw netErr;
+      }
+
+      const body = await res.json().catch(() => null);
+
+      if (res.status >= 500) {
+        entry.pending = { clientOpId, ops: opsToSend };
+        throw new Error(`Error guardando reserva remota (operaciones): HTTP ${res.status}`);
+      }
+      // El servidor contesto: ya no hay duda sobre este lote.
+      entry.pending = null;
+
+      if (res.status === 409 && body?.opsDisabled) {
+        __parkedOpsServerOffUntil.set(`${payload.slug}|${mode}`, Date.now() + 10 * 60 * 1000);
+        return { fallback: true };
+      }
+      if (res.status === 404 && body?.missing) {
+        // El pedido ya no existe en el servidor: el guardado entero aplica sus protecciones
+        // (no lo resucita si fue borrado).
+        parkedOpsForgetBase(payload.slug, payload.ticketId);
+        return { fallback: true };
+      }
+      if (res.status === 423 && body?.locked) {
+        // Otro dispositivo esta cobrando este pedido: las operaciones esperan (la cola de
+        // reintentos las vuelve a mandar cuando termine) para no perder lineas en un ticket
+        // que se esta cobrando.
+        const lockedErr = new Error("Este pedido se está cobrando en otro TPV: tus cambios se enviarán cuando termine.");
+        lockedErr.parkedLockedByOther = true;
+        throw lockedErr;
+      }
+      if (!res.ok) {
+        throw new Error(`Error guardando reserva remota (operaciones): HTTP ${res.status}`);
+      }
+      if (body?.paid) {
+        parkedOpsForgetBase(payload.slug, payload.ticketId);
+        return { fallback: true };
+      }
+
+      // Base = base anterior + MIS operaciones (no la respuesta: puede traer cambios ajenos que
+      // aun no hemos integrado; el siguiente refresco los incorpora comparando con esta base).
+      entry.doc = OPS.applyOpsToDoc(entry.doc, opsToSend);
+      const newTs = body?.data?.updatedAt || entry.updatedAt;
+      entry.updatedAt = String(newTs || "");
+      entry.ts = Date.parse(entry.updatedAt) || entry.ts;
+      // Lo siguiente que se guarde por el camino entero (un cambio no soportado) debe llevar
+      // ESTA version como esperada, no la del ultimo refresco (anterior a nuestro propio guardado).
+      if (entry.updatedAt) ticket._serverUpdatedAtIso = entry.updatedAt;
+
+      if (Array.isArray(body?.conflicts) && body.conflicts.length) {
+        console.info("[OPS] conflictos:", JSON.stringify(body.conflicts));
+      }
+      return { body };
+    };
+
+    // 1) Un lote anterior sin respuesta (corte de red / 5xx): se reenvia IDENTICO antes que nada.
+    //    Si ya se habia aplicado, el servidor lo reconoce y no lo repite; asi un +1 nunca acaba en +2
+    //    por haber seguido editando mientras estaba en duda.
+    if (entry.pending && Array.isArray(entry.pending.ops) && entry.pending.ops.length) {
+      const p = entry.pending;
+      const r = await postOps(p.ops, p.clientOpId);
+      if (r.fallback) return null;
+    }
+
     const cur = parkedOpsDocFromPayload(payload);
     const { ops, unsupported } = OPS.diffToOps(entry.doc, cur);
     if (unsupported.length) {
@@ -40530,76 +40630,9 @@ async function tryParkedOpsSave(ticket, payload) {
       entry.updatedAt,
       ops,
     );
-    const res = await fetchWithTimeout(
-      `${TPV_SYNC_API_URL}?action=save-parked-reservation-ops`,
-      {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          "X-TPV-API-KEY": getTpvSyncApiKey(),
-        },
-        body: JSON.stringify({
-          slug: payload.slug,
-          cajaId: payload.cajaId,
-          ticketId: payload.ticketId,
-          codalmacen: payload.codalmacen,
-          parkingMode: payload.parkingMode,
-          modoMesas: payload.modoMesas,
-          modeMesas: payload.modeMesas,
-          mesaUid: payload.mesaUid,
-          terminalId: payload.terminalId,
-          terminalName: payload.terminalName,
-          userName: payload.userName,
-          sessionId: ensureTerminalPresenceSessionId(),
-          total: payload.total,
-          clientOpId,
-          ops,
-        }),
-      },
-    );
-
-    const body = await res.json().catch(() => null);
-
-    if (res.status === 409 && body?.opsDisabled) {
-      __parkedOpsServerOffUntil.set(`${payload.slug}|${mode}`, Date.now() + 10 * 60 * 1000);
-      return null;
-    }
-    if (res.status === 404 && body?.missing) {
-      // El pedido ya no existe en el servidor: el guardado entero aplica sus protecciones
-      // (no lo resucita si fue borrado).
-      parkedOpsForgetBase(payload.slug, payload.ticketId);
-      return null;
-    }
-    if (res.status === 423 && body?.locked) {
-      // Otro dispositivo esta cobrando este pedido: las operaciones esperan (la cola de
-      // reintentos las vuelve a mandar cuando termine) para no perder lineas en un ticket
-      // que se esta cobrando.
-      const lockedErr = new Error("Este pedido se está cobrando en otro TPV: tus cambios se enviarán cuando termine.");
-      lockedErr.parkedLockedByOther = true;
-      throw lockedErr;
-    }
-    if (!res.ok) {
-      throw new Error(`Error guardando reserva remota (operaciones): HTTP ${res.status}`);
-    }
-    if (body?.paid) {
-      parkedOpsForgetBase(payload.slug, payload.ticketId);
-      return null;
-    }
-
-    // Base = base anterior + MIS operaciones (no la respuesta: puede traer cambios ajenos que
-    // aun no hemos integrado; el siguiente refresco los incorpora comparando con esta base).
-    entry.doc = OPS.applyOpsToDoc(entry.doc, ops);
-    const newTs = body?.data?.updatedAt || entry.updatedAt;
-    entry.updatedAt = String(newTs || "");
-    entry.ts = Date.parse(entry.updatedAt) || entry.ts;
-    // Lo siguiente que se guarde por el camino entero (un cambio no soportado) debe llevar
-    // ESTA version como esperada, no la del ultimo refresco (anterior a nuestro propio guardado).
-    if (entry.updatedAt) ticket._serverUpdatedAtIso = entry.updatedAt;
-
-    if (Array.isArray(body?.conflicts) && body.conflicts.length) {
-      console.info("[OPS] conflictos:", JSON.stringify(body.conflicts));
-    }
+    const r = await postOps(ops, clientOpId);
+    if (r.fallback) return null;
+    const body = r.body;
     return { ok: true, viaOps: true, data: body?.data || null, conflicts: body?.conflicts || [] };
   });
 }
@@ -40639,7 +40672,7 @@ function parkedOpsReconcileRemoteIntoMerged(prev, remoteTicket, merged, opts = {
   // mis propias operaciones (el aviso en tiempo real dispara este refresco casi a la vez), y la
   // base aun no las incluye -- integrar ahora contaria mi propio cambio como "ajeno" y lo sumaria
   // dos veces (visto con 2 TPV reales: 2 -> 3). Se deja para el siguiente refresco.
-  if (__parkedOpsLocks.has(key)) {
+  if (__parkedOpsLocks.has(key) || entry.pending) {
     if (prevItems) merged.items = prevItems.map((it) => ({ ...it }));
     ["name", "obs", "clientName", "codcliente", "mesaAlerts", "comandaState"].forEach((k) => {
       if (prev && prev[k] !== undefined) merged[k] = prev[k];
