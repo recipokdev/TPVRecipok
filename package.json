@@ -5,7 +5,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "test": "npm run test:quick && npm run test:smoke",
+    "test": "npm run test:quick && npm run test:smoke && node tools/tests/run-parked-ops-tests.js",
     "test:prepush": "node tools/tests/run-prepush-tests.js",
     "test:quick": "node tools/tests/run-quick-tests.js",
     "test:smoke": "node tools/tests/run-smoke-tests.js",

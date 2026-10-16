@@ -15,6 +15,7 @@ const filesToCheck = [
   "js/tpv/config.js",
   "js/tpv/fsApi.js",
   "js/tpv/lockClient.js",
+  "js/tpv/parked-ops.js",
   "js/tpv/quit-shortcut.js",
   "js/tpv/scale/scale-cart.js",
   "js/tpv/scale/scale-manager.js",
