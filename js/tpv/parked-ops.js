@@ -38,6 +38,21 @@
     "fs",
   ];
   const QTY_KEYS = ["qty", "cantidad"];
+  // Campos de linea que salen del catalogo / de la representacion (no son una edicion del
+  // usuario): una linea creada por otro dispositivo con menos campos se completa aqui desde
+  // el catalogo, y eso NO debe viajar como cambio.
+  const LINE_SET_IGNORE_KEYS = [
+    "id",
+    "baseProductId",
+    "idproducto",
+    "name",
+    "secondaryName",
+    "descripcion",
+    "descripcion2",
+    "referencia",
+    "codimpuesto",
+    "imageUrl",
+  ];
 
   function stable(x) {
     if (x === null || typeof x !== "object") return JSON.stringify(x === undefined ? null : x);
@@ -132,7 +147,7 @@
         const fields = {};
         const keys = new Set([...Object.keys(l), ...Object.keys(b)]);
         for (const k of keys) {
-          if (k === "_lineId" || QTY_KEYS.includes(k)) continue;
+          if (k === "_lineId" || QTY_KEYS.includes(k) || LINE_SET_IGNORE_KEYS.includes(k)) continue;
           if (!same(l[k] ?? null, b[k] ?? null)) fields[k] = l[k] === undefined ? null : clone(l[k]);
         }
         if (Object.keys(fields).length) ops.push({ type: "line-set", lineId: id, fields });

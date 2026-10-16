@@ -92,6 +92,12 @@ test("diff: añadir, quitar, cambiar cantidad, campo de linea, cabecera y comand
   assert.deepStrictEqual(ops.find((o) => o.type === "line-set").fields, { price: 5 });
 });
 
+test("diff: los campos que salen del catalogo no viajan como cambio", () => {
+  const base = doc([L("A", "Agua", 1)]);
+  const cur = doc([L("A", "Agua", 1, { id: 542, imageUrl: "x.png", referencia: "R", codimpuesto: "IVA10", descripcion: "Agua 33" })]);
+  assert.deepStrictEqual(OPS.diffToOps(base, cur).ops, []);
+});
+
 test("diff: sin cambios -> sin operaciones", () => {
   const d = doc([L("A", "Agua", 2)]);
   assert.deepStrictEqual(OPS.diffToOps(d, JSON.parse(JSON.stringify(d))).ops, []);
@@ -107,7 +113,7 @@ test("diff: campos de cabecera no soportados o lineas sin id obligan al guardado
 
 test("aplicar las operaciones de un diff a la base reproduce lo actual (ida y vuelta)", () => {
   const base = doc([L("A", "Agua", 2), L("B", "Pan", 1), L("C", "Vino", 4)]);
-  const cur = doc([L("D", "Cafe", 1), L("A", "Agua", 1), L("C", "Vino", 4, { name: "Vino tinto" }), L("E", "Te", 2)], { clientName: "Ana" });
+  const cur = doc([L("D", "Cafe", 1), L("A", "Agua", 1), L("C", "Vino", 4, { price: 9 }), L("E", "Te", 2)], { clientName: "Ana" });
   const { ops } = OPS.diffToOps(base, cur);
   const out = OPS.applyOpsToDoc(base, ops);
   // mismo contenido (el orden de lineas nuevas depende de afterLineId; comparamos por id y por contenido)

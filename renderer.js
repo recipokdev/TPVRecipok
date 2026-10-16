@@ -10260,6 +10260,21 @@ function getSelectedMesaUidForInline() {
   return String(state?.selectedTableId || "").trim();
 }
 
+// true si la mesa tiene un pedido sin cobrar ya guardado y el guardado por operaciones esta
+// activo para este cliente en Modo Mesas.
+function mesaHasOpsManagedTicket(state, mesaUid) {
+  try {
+    if (!parkedOpsIsEnabled(getCurrentSlugForReservations(), "mesas")) return false;
+    const linkedId = state?.tableTicketMap?.[mesaUid];
+    if (!linkedId) return false;
+    return (Array.isArray(parkedTickets) ? parkedTickets : []).some(
+      (t) => String(t?.id || "") === String(linkedId) && !t?.paid,
+    );
+  } catch {
+    return false;
+  }
+}
+
 function saveDraftCartForMesaUid(uid, draftItems, opts = {}) {
   const mesaUid = String(uid || "").trim();
   if (!mesaUid) return;
@@ -10268,6 +10283,18 @@ function saveDraftCartForMesaUid(uid, draftItems, opts = {}) {
 
   const state = loadMesasTablesStateForInline();
   if (!state || typeof state !== "object") return;
+
+  // Guardado por operaciones: si la mesa YA tiene su pedido guardado en el servidor, ese
+  // pedido (que se actualiza solo, por partes) es la fuente de verdad. Un borrador
+  // compartido por el plano era una segunda copia que otro dispositivo aplicaba encima del
+  // carrito y le pisaba los cambios (2026-10-16, probado con 2 TPV reales).
+  if (mesaHasOpsManagedTicket(state, mesaUid)) {
+    if (state.draftCartByTable && state.draftCartByTable[mesaUid] !== undefined) {
+      delete state.draftCartByTable[mesaUid];
+      saveMesasTablesStateForInline(state);
+    }
+    return;
+  }
 
   if (!state.draftCartByTable || typeof state.draftCartByTable !== "object") {
     state.draftCartByTable = {};
@@ -10452,6 +10479,20 @@ function syncTpvCartWithSelectedMesa(opts = {}) {
   );
 
   if (idx >= 0) {
+    // Guardado por operaciones: el pedido guardado es la fuente de verdad; los borradores
+    // compartidos no se aplican. Si ya es el pedido cargado, el carrito es la copia de
+    // trabajo (no se toca); si no, se carga desde el pedido.
+    if (mesaHasOpsManagedTicket(state, uid)) {
+      if (Number(currentParkedTicketIndex) === idx) {
+        refreshParkButtonUI?.();
+        refreshParkedEditingBanner?.();
+        return;
+      }
+      restoreParkedCartByIndex(idx);
+      updateParkedCountBadge?.();
+      return;
+    }
+
     const draftItems = Array.isArray(draftByTable?.[uid])
       ? draftByTable[uid]
       : [];

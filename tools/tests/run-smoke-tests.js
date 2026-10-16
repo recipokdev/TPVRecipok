@@ -10283,10 +10283,13 @@ console.log("\n[SMOKE] Checking 2026-10-16 guardado por operaciones (cliente)\n"
     renderer.includes("if (ticket.__opsReconcile && window.TPV_PARKED_OPS) {") &&
     renderer.includes('localStorage.getItem("tpv_parkedOpsDisabled") === "1"') &&
     renderer.includes("remoteTicket?._serverUpdatedAtIso || remoteTicket?.updatedAt") &&
-    renderer.includes("parkedOpsForgetBase(slug, ticket.id);")
+    renderer.includes("parkedOpsForgetBase(slug, ticket.id);") &&
+    renderer.includes("function mesaHasOpsManagedTicket(state, mesaUid) {") &&
+    renderer.includes("if (mesaHasOpsManagedTicket(state, mesaUid)) {") &&
+    renderer.includes("if (mesaHasOpsManagedTicket(state, uid)) {")
   ) {
     ok(
-      "Guardado por partes, cliente (2026-10-16): el TPV compara el pedido con la ultima version confirmada por el servidor (base) y manda solo la diferencia (anadir/quitar linea, +1/-1, campo, cabecera, comanda) a save-parked-reservation-ops; se activa solo si el servidor lo declara para su cliente y modo (list-parked-reservations devuelve features.parkedOps), cae al guardado entero ante cualquier cambio no soportado/lineas sin id/pedido cobrado o borrado, y tiene interruptor local tpv_parkedOpsDisabled. Al refrescar integra lo remoto linea a linea (por _lineId) conservando lo local pendiente, tambien en el carrito. Verificado de extremo a extremo contra el servidor real del demo con un pedido de prueba: primer guardado entero, siguiente por operaciones, sin cambios no manda nada, cambios de otro dispositivo (+2, linea nueva, linea quitada) se integran sin perder lo local y el guardado siguiente manda solo lo propio, cambio de mesa y interruptor -> guardado entero",
+      "Guardado por partes, cliente (2026-10-16): el TPV compara el pedido con la ultima version confirmada por el servidor (base) y manda solo la diferencia (anadir/quitar linea, +1/-1, campo, cabecera, comanda) a save-parked-reservation-ops; se activa solo si el servidor lo declara para su cliente y modo (list-parked-reservations devuelve features.parkedOps), cae al guardado entero ante cualquier cambio no soportado/lineas sin id/pedido cobrado o borrado, y tiene interruptor local tpv_parkedOpsDisabled. Al refrescar integra lo remoto linea a linea (por _lineId) conservando lo local pendiente, tambien en el carrito. Verificado de extremo a extremo contra el servidor real del demo con un pedido de prueba: primer guardado entero, siguiente por operaciones, sin cambios no manda nada, cambios de otro dispositivo (+2, linea nueva, linea quitada) se integran sin perder lo local y el guardado siguiente manda solo lo propio, cambio de mesa y interruptor -> guardado entero. Con dos instancias REALES del TPV a la vez contra el demo (mesa M3): cambios en lineas distintas, +1 simultaneo a la misma linea (+2) y quitar-contra-editar (gana quitar, el otro lo ve como conflicto) convergen sin perder nada; los borradores compartidos del plano ya no se aplican ni se escriben para mesas con pedido guardado en modo operaciones (pisaban el carrito del otro dispositivo)",
     );
   } else {
     fail(
