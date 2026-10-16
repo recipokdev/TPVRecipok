@@ -52,7 +52,31 @@ async function cleanTable(A, B) {
     saveParkedTicketsCache(parkedTickets);
     renderCart();
   }, TABLE);
-  await sleep(4000);
+  // B recibe el plano YA limpio de A y, por si acaso, quita tambien su vinculo/borrador de la mesa
+  // (un borrador con contenido en la copia de B volvia a crear el pedido fantasma).
+  await B.win.evaluate(async (TABLE) => {
+    try { await refreshMesasLayoutFromRemote(); } catch (e) {}
+    const st = loadMesasTablesStateForInline();
+    if (st?.tableTicketMap?.[TABLE] !== undefined || st?.draftCartByTable?.[TABLE] !== undefined) {
+      if (st.tableTicketMap) delete st.tableTicketMap[TABLE];
+      if (st.draftCartByTable) delete st.draftCartByTable[TABLE];
+      saveMesasTablesStateForInline(st);
+    }
+  }, TABLE);
+  await sleep(2500);
+  await A.win.evaluate(async () => { try { await refreshMesasLayoutFromRemote(); } catch (e) {} });
+  await sleep(2500);
+  // La copia de seguridad del carrito (recuperacion tras cierre inesperado) tambien debe quedar vacia:
+  // si no, al volver a abrir la instancia recrea el pedido fantasma de la mesa.
+  for (const X of [A, B]) {
+    await X.win.evaluate(() => { cart = []; setCurrentParkedTicketIndex(null); renderCart(); persistRuntimeCartSnapshot({ force: true }); }).catch(() => {});
+  }
+  await sleep(3000);
+  // Las instancias se cierran a la fuerza: se pide a Electron que vuelque el almacenamiento a disco
+  // para que lo limpio no se pierda.
+  for (const X of [A, B]) {
+    await Promise.race([X.app.evaluate(({ session }) => session.defaultSession.flushStorageData()).catch(() => {}), sleep(4000)]);
+  }
   return del;
 }
 

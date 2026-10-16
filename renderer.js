@@ -10483,7 +10483,7 @@ function syncTpvCartWithSelectedMesa(opts = {}) {
     // compartidos no se aplican. Si ya es el pedido cargado, el carrito es la copia de
     // trabajo (no se toca); si no, se carga desde el pedido.
     if (mesaHasOpsManagedTicket(state, uid)) {
-      if (Number(currentParkedTicketIndex) === idx) {
+      if (currentParkedTicketIndex != null && Number(currentParkedTicketIndex) === idx) {
         refreshParkButtonUI?.();
         refreshParkedEditingBanner?.();
         return;
@@ -11004,7 +11004,10 @@ function ensureMesaLinkedTicketLoaded() {
     normalizeTicketLinesForCompare(linkedTicket?.items),
   );
   const isSameCart = current === saved;
-  const isSameIndex = Number(currentParkedTicketIndex) === Number(linkedIndex);
+  // Number(null) es 0: sin esto, "nada cargado" casaba con el pedido en la posicion 0 de la lista.
+  const isSameIndex =
+    currentParkedTicketIndex != null &&
+    Number(currentParkedTicketIndex) === Number(linkedIndex);
 
   // Si hay cambios locales sobre el ticket cargado, respetarlos como borrador.
   if (!isSameCart && isSameIndex) {
@@ -41022,6 +41025,55 @@ async function parkedClosingRemote(ticket, action) {
   return { ok: true };
 }
 
+// Turno de impresion de la comanda automatica entre dispositivos (servidor: parked-comanda-claim).
+// Con 2+ TPV, todos los que veian un pedido con lineas pendientes las imprimian (y el que
+// sondeaba primero ignoraba la espera del que habia editado). register = "yo imprimo dentro de
+// dueInMs"; claim = "voy a imprimir ahora" (el servidor concede o deniega); release = "ya esta
+// impreso" (anota la tanda). Fail-open: sin respuesta o sin activar para el cliente -> concede
+// (se imprime como siempre; peor caso, una comanda repetida, nunca una perdida).
+const COMANDA_REMOTE_GRACE_MS = 3000;
+async function parkedComandaTurn(ticket, action, extra = {}) {
+  const open = { granted: true, failOpen: true };
+  try {
+    const slug = String(ticket?.slug || getCurrentSlugForReservations() || "");
+    const mode = isMesasModeTicket(ticket) ? "mesas" : "tpv";
+    if (!ticket?.id || !parkedOpsIsEnabled(slug, mode)) return open;
+    const cajaId = String(ticket?.cajaId || getCajaIdSafe?.() || currentTerminal?.id || "");
+    const res = await fetchWithTimeout(
+      `${TPV_SYNC_API_URL}?action=parked-comanda-claim`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-TPV-API-KEY": getTpvSyncApiKey(),
+        },
+        body: JSON.stringify({
+          slug,
+          cajaId,
+          ticketId: String(ticket.id),
+          codalmacen: getCurrentWarehouseCode(),
+          parkingMode: mode,
+          modoMesas: mode === "mesas" ? 1 : 0,
+          modeMesas: mode === "mesas" ? 1 : 0,
+          mesaUid: ticket?.mesaUid || null,
+          sessionId: ensureTerminalPresenceSessionId(),
+          claimAction: action,
+          dueInMs: Math.max(0, Math.round(Number(extra.dueInMs) || 0)),
+          force: !!extra.force,
+          seq: Number.isFinite(Number(extra.seq)) ? Number(extra.seq) : -1,
+        }),
+      },
+      4000,
+    );
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body) return open;
+    return { granted: !!body.granted, reason: String(body.reason || "") };
+  } catch {
+    return open;
+  }
+}
+
 // Tras un guardado entero correcto, el servidor tiene exactamente lo que mandamos: esa es la base.
 function parkedOpsRememberAfterFullSave(payload, saved, ticket) {
   try {
@@ -44069,6 +44121,17 @@ async function runMesasAutoSaveIfNeeded() {
   MESAS_AUTO_SAVE_RERUN = false;
   try {
     const loaded = intent.loaded;
+    // Abrir en otro TPV un pedido cuyas lineas solo difieren en el id de producto (se rehidrata con
+    // el id base) provoca un autoguardado sin cambios reales: no debe armar la espera de la comanda
+    // (el que la arma pasa a ser quien la imprime).
+    const linesSig = (lines) =>
+      JSON.stringify(
+        normalizeTicketLinesForCompare(lines).map((l) => {
+          const { id: _ignored, ...rest } = l;
+          return rest;
+        }),
+      );
+    const noRealLineChange = !!loaded && linesSig(loaded.items) === linesSig(cart);
     await parkCurrentCart(loaded?.name || "", loaded?.obs || "", {
       mesaAlerts: normalizeMesaTicketAlerts(loaded?.mesaAlerts),
       openListAfterSave: false,
@@ -44081,7 +44144,7 @@ async function runMesasAutoSaveIfNeeded() {
     // comanda automatica: se imprimia solo por el sondeo remoto, sin cuenta
     // atras. Aqui se arma (o reinicia) la espera de ese ticket (2026-10-15).
     const savedTicket = resolveComandaTicketForSelectedMesa();
-    if (savedTicket) scheduleAutoComandaForTicket(savedTicket);
+    if (savedTicket && !noRealLineChange) scheduleAutoComandaForTicket(savedTicket);
   } catch (e) {
     console.warn("No se pudo auto-guardar pedido de mesa:", e?.message || e);
   } finally {
@@ -45545,6 +45608,12 @@ async function persistTicketAfterComandaPrint(ticket) {
       );
     }
   }
+
+  // Impresion manual (o al guardar): anota la tanda en el turno de impresion para que ningun otro
+  // TPV repita lo que acaba de salir a cocina.
+  parkedComandaTurn(ticket, "release", {
+    seq: Math.max(0, Number(normalizeTicketComandaState(ticket?.comandaState)?.seq || 0) || 0),
+  }).catch(() => {});
 }
 
 // Version SIN el refreshRemoteParkedReservationsOnly() final, para usar desde
@@ -45850,6 +45919,13 @@ function pauseAutoComandaForTicket(ticketId) {
   // maximo (2026-10-15).
   entry.remainingMs = Math.max(0, entry.dueAt - Date.now());
   entry.paused = true;
+  const pausedTicket = (Array.isArray(parkedTickets) ? parkedTickets : []).find(
+    (x) => String(x?.id ?? "") === key && !x?.paid,
+  );
+  // En pausa: nadie mas debe imprimirlo mientras tanto (10 min; al reanudar se vuelve a reservar).
+  if (pausedTicket) {
+    parkedComandaTurn(pausedTicket, "register", { dueInMs: 600000, force: true }).catch(() => {});
+  }
   updateAutoComandaIndicator();
 }
 
@@ -45882,6 +45958,10 @@ function scheduleAutoComandaForTicket(ticket, opts = {}) {
     getComandaDeltaLinesForTicket(ticket, items).length > 0 ||
     getComandaReturnedLinesForTicket(ticket, items).length > 0;
   if (!hasSomethingToSend) {
+    // Ya no hay nada que enviar: si yo tenia reservada la impresion, se libera (sin anotar tanda).
+    if (__autoComandaPending.has(key)) {
+      parkedComandaTurn(ticket, "release", { seq: -1 }).catch(() => {});
+    }
     cancelAutoComandaForTicket(key);
     return;
   }
@@ -45917,6 +45997,8 @@ function scheduleAutoComandaForTicket(ticket, opts = {}) {
     timer,
     dueAt: Date.now() + delayMs,
   });
+  // Los demas TPV no deben imprimir esto antes de mi espera.
+  parkedComandaTurn(ticket, "register", { dueInMs: delayMs, force: true }).catch(() => {});
 
   if (!__autoComandaTicker) {
     __autoComandaTicker = setInterval(() => {
@@ -46059,6 +46141,8 @@ async function maybeAutoPrintComandaOnSave(ticket, opts = {}) {
 // stock_locks) -- pasada aparte, a confirmar antes de tocar produccion.
 let __comandaAutoPrintRunning = false;
 const __comandaAutoPrintInFlight = new Set();
+const __comandaRemoteFirstSeen = new Map(); // ticketId -> { ts (updatedAt del servidor), at (reloj local) }
+let __comandaGraceRecheckTimer = null;
 
 async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
   if (!isAutoComandaOnSaveEnabled()) return;
@@ -46081,6 +46165,31 @@ async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
     Date.now() - (Number(t?.localRevisionAt || 0) || 0) <
     getAutoComandaDelayMs() + 3000;
 
+  // Con el turno de impresion activo para este cliente, un pedido que acaba de cambiar en el
+  // servidor no se imprime desde el sondeo hasta que lleve COMANDA_REMOTE_GRACE_MS sin cambios:
+  // da tiempo al TPV que lo edito a reservar su impresion (y a que lleguen sus cambios seguidos).
+  let graceBlocked = false;
+  const settledForRemotePrint = (t) => {
+    if (onlyTicketId) return true;
+    const mode = isMesasModeTicket(t) ? "mesas" : "tpv";
+    if (!parkedOpsIsEnabled(String(t?.slug || getCurrentSlugForReservations() || ""), mode)) return true;
+    const ts = String(t?._serverUpdatedAtIso || "");
+    if (!ts) return true;
+    const key = String(t.id ?? "").trim();
+    const prev = __comandaRemoteFirstSeen.get(key);
+    const now = Date.now();
+    if (!prev || prev.ts !== ts) {
+      __comandaRemoteFirstSeen.set(key, { ts, at: now });
+      graceBlocked = true;
+      return false;
+    }
+    if (now - prev.at < COMANDA_REMOTE_GRACE_MS) {
+      graceBlocked = true;
+      return false;
+    }
+    return true;
+  };
+
   const candidates = (
     Array.isArray(parkedTickets) ? parkedTickets : []
   ).filter(
@@ -46093,8 +46202,15 @@ async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
           !recentlyEditedHere(t)) &&
       isMesasModeTicket(t) &&
       (getComandaDeltaLinesForTicket(t, t?.items || []).length > 0 ||
-        getComandaReturnedLinesForTicket(t, t?.items || []).length > 0),
+        getComandaReturnedLinesForTicket(t, t?.items || []).length > 0) &&
+      settledForRemotePrint(t),
   );
+  if (graceBlocked && !__comandaGraceRecheckTimer) {
+    __comandaGraceRecheckTimer = setTimeout(() => {
+      __comandaGraceRecheckTimer = null;
+      maybeAutoPrintComandaFromRemoteSync().catch(() => {});
+    }, COMANDA_REMOTE_GRACE_MS + 300);
+  }
   if (!candidates.length) return;
 
   __comandaAutoPrintRunning = true;
@@ -46104,6 +46220,8 @@ async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
       if (!dedupeKey || __comandaAutoPrintInFlight.has(dedupeKey)) continue;
 
       __comandaAutoPrintInFlight.add(dedupeKey);
+      let turnClaimed = false;
+      let turnCommitted = false;
       try {
         // Delta recalculado sobre el ticket en memoria (ya viene fresco del
         // sync que acaba de terminar justo antes de llamar a esta funcion;
@@ -46117,6 +46235,15 @@ async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
           ticket?.items || [],
         );
         if (!lines.length && !returnedLines.length) continue;
+
+        // Turno de impresion entre TPV: solo imprime quien lo consigue (ver parkedComandaTurn).
+        const turn = await parkedComandaTurn(ticket, "claim", {
+          seq: lines.length
+            ? Math.max(0, Number(normalizeTicketComandaState(ticket?.comandaState)?.seq || 0) || 0)
+            : -1,
+        });
+        if (!turn.granted) continue;
+        turnClaimed = !turn.failOpen;
 
         const printerName = getConfiguredComandaPrinterForPrint();
         if (!printerName) {
@@ -46192,12 +46319,21 @@ async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
         }
 
         commitComandaPrintedState(ticket, ticket?.items || []);
+        turnCommitted = true;
         await persistComandaAutoPrintStateWithoutResync(ticket);
         // Si es la mesa abierta en pantalla, las lineas enviadas pasan a gris
         // y desaparecen de "pendiente" sin esperar a otro cambio.
         if (getCurrentLoadedParkedTicket() === ticket) renderCart();
       } finally {
         __comandaAutoPrintInFlight.delete(dedupeKey);
+        if (turnClaimed) {
+          // Libera el turno y anota la tanda impresa (tras guardar el estado impreso).
+          await parkedComandaTurn(ticket, "release", {
+            seq: turnCommitted
+              ? Math.max(0, Number(normalizeTicketComandaState(ticket?.comandaState)?.seq || 0) || 0)
+              : -1,
+          }).catch(() => {});
+        }
       }
     }
   } finally {
