@@ -10620,6 +10620,9 @@ function mergeMissingRemoteLinesIntoCart(ticket) {
     const r = ticket.__opsReconcile;
     delete ticket.__opsReconcile;
     delete ticket.__remoteChangedWhileLoaded;
+    // El carrito ya coincide con lo remoto (se cargo despues del aviso): nada que integrar.
+    const cartNorm = JSON.stringify(normalizeTicketLinesForCompare(cart));
+    if (cartNorm === JSON.stringify(normalizeTicketLinesForCompare(r.remoteItems))) return false;
     const reconciled = window.TPV_PARKED_OPS.reconcileItems(r.baseItems, r.remoteItems, cart);
     const cartIds = new Set(cart.map((l) => String(l?._lineId || "")));
     const next = reconciled.map((l) =>
@@ -39637,7 +39640,13 @@ function syncParkedTicketsFromRemote(list) {
       }
 
       // Guardado por operaciones: integra lo remoto sin pisar lo local pendiente.
-      parkedOpsReconcileRemoteIntoMerged(prev, ticket, merged);
+      parkedOpsReconcileRemoteIntoMerged(prev, ticket, merged, {
+        loadedInCart:
+          currentParkedTicketIndex != null &&
+          getParkedTicketSyncKeyVariants(ticket).some((k) =>
+            prevLoadedVariants.has(k),
+          ),
+      });
 
       // Confirmado presente en remoto: si en un poll posterior desaparece,
       // es un borrado remoto real (otro TPV) y no hay que conservarlo.
@@ -40598,7 +40607,7 @@ async function tryParkedOpsSave(ticket, payload) {
 // Tras un refresco del servidor: integra la version remota en el pedido local sin perder los
 // cambios locales aun no enviados, y avanza la base. Solo para pedidos con guardado por
 // operaciones activo.
-function parkedOpsReconcileRemoteIntoMerged(prev, remoteTicket, merged) {
+function parkedOpsReconcileRemoteIntoMerged(prev, remoteTicket, merged, opts = {}) {
   const OPS = window.TPV_PARKED_OPS;
   if (!OPS) return;
   const slug = String(remoteTicket?.slug || getCurrentSlugForReservations() || "");
@@ -40625,6 +40634,19 @@ function parkedOpsReconcileRemoteIntoMerged(prev, remoteTicket, merged) {
   }
 
   const prevItems = Array.isArray(prev?.items) ? prev.items : null;
+
+  // Hay un guardado por operaciones de ESTE pedido en vuelo: el servidor puede estar ya aplicando
+  // mis propias operaciones (el aviso en tiempo real dispara este refresco casi a la vez), y la
+  // base aun no las incluye -- integrar ahora contaria mi propio cambio como "ajeno" y lo sumaria
+  // dos veces (visto con 2 TPV reales: 2 -> 3). Se deja para el siguiente refresco.
+  if (__parkedOpsLocks.has(key)) {
+    if (prevItems) merged.items = prevItems.map((it) => ({ ...it }));
+    ["name", "obs", "clientName", "codcliente", "mesaAlerts", "comandaState"].forEach((k) => {
+      if (prev && prev[k] !== undefined) merged[k] = prev[k];
+    });
+    return;
+  }
+
   const keepLocalHeader = () => {
     if (!prev) return;
     ["name", "obs", "clientName", "codcliente", "mesaAlerts", "comandaState"].forEach((k) => {
@@ -40664,7 +40686,10 @@ function parkedOpsReconcileRemoteIntoMerged(prev, remoteTicket, merged) {
   // Si el pedido esta abierto en pantalla, el carrito se integra igual (ver
   // mergeMissingRemoteLinesIntoCart); si hay una integracion pendiente sin consumir, se
   // conserva su base mas antigua para no perder cambios intermedios.
-  if (OPS.stable(entry.doc) !== OPS.stable(remoteDoc)) {
+  // Solo si el pedido esta CARGADO en el carrito: si no, el carrito se construira mas tarde desde
+  // `merged.items` (que ya trae lo remoto) y una integracion pendiente se sumaria otra vez
+  // (visto con 2 TPV reales: la mesa se abria con 3 en vez de 2 en el TPV que no la tenia abierta).
+  if (opts.loadedInCart !== false && OPS.stable(entry.doc) !== OPS.stable(remoteDoc)) {
     merged.__opsReconcile = {
       baseItems: prev?.__opsReconcile?.baseItems || entry.doc.items,
       remoteItems: rawRemoteItems,
@@ -45110,6 +45135,10 @@ async function confirmSplitTicket() {
       : buildShareLines();
     const splitTicket = {
       id: nextId,
+      // Igual que un aparcado normal: sin slug/cajaId su clave local no casa con la del servidor y,
+      // al refrescar, la parte aparecia DUPLICADA en la lista (visto con 2 TPV reales, 2026-10-16).
+      slug: String(getCurrentSlugForReservations() || loaded?.slug || "").trim(),
+      cajaId: String(loaded?.cajaId || getCajaIdSafe?.() || currentTerminal?.id || "").trim(),
       createdAt: new Date(),
       updatedAt: null,
       localRevisionAt: Date.now(),
