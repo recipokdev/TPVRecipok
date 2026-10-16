@@ -1,6 +1,6 @@
 # Guardado de pedidos por partes — diseño
 
-Estado (2026-10-15): **aprobado** por Sergi. Paso 1 (identidad estable de línea) hecho (`e441821`). **Servidor hecho y desplegado**, activo solo para `demo` en Modo Mesas (`parked_ops_pilot_slugs_mesas`); TPV normal preparado pero sin activar (`parked_ops_pilot_slugs_tpv` vacío). El cliente (TPV) aún no usa la acción nueva.
+Estado (2026-10-15): **aprobado** por Sergi. Paso 1 (identidad estable de línea) hecho (`e441821`). **Servidor hecho y desplegado**, activo solo para `demo` en Modo Mesas (`parked_ops_pilot_slugs_mesas`); TPV normal preparado pero sin activar (`parked_ops_pilot_slugs_tpv` vacío). **Cliente hecho** (2026-10-16): el TPV de escritorio ya usa la acción nueva cuando el servidor la activa (solo `demo`/Mesas).
 
 ## 1. El problema
 
@@ -95,11 +95,22 @@ Respuesta: `{ok, data: <pedido resultante>, applied: [índices], conflicts: [...
 
 Pruebas del servidor (`tools/parked_ops_test.php`, `tools/parked_ops_concurrency_test.php`): 16 casos de motor + 6 procesos en paralelo sumando +1 a la misma línea (60 operaciones → cantidad exacta) + HTTP extremo a extremo + auditoría (`parked-ops`).
 
+## 5c. Cliente (estado 2026-10-16)
+
+- `js/tpv/parked-ops.js`: parte pura (diff → operaciones, aplicar operaciones, reconciliar remoto con local, id de petición determinista por dispositivo+pedido+base+operaciones). Probada en `tools/tests/run-parked-ops-tests.js` (13 casos, incluida una simulación de dos dispositivos contra un servidor en memoria y 300 casos aleatorios de ida y vuelta). Corre dentro de `npm test`.
+- `renderer.js`: `buildParkedSavePayload` (el documento de siempre), `tryParkedOpsSave` (compara con la **base** = última versión confirmada del servidor y manda la diferencia), `parkedOpsReconcileRemoteIntoMerged` (al refrescar integra lo remoto sin pisar lo local pendiente, y avanza la base), y la integración del carrito en `mergeMissingRemoteLinesIntoCart`.
+- **Activación**: `list-parked-reservations` devuelve `features.parkedOps {mesas, tpv}` para el cliente; sin eso el TPV no usa operaciones. **Interruptor de emergencia local**: `localStorage.setItem("tpv_parkedOpsDisabled","1")`.
+- **Cae al guardado entero** si: no hay base (primer guardado), líneas sin `_lineId` o repetidas, cambia algo que las operaciones no cubren (mesa, división, cobro, tipo de documento…), el pedido está cobrado o ya no existe, o el servidor no lo tiene activado.
+- **Base tras un guardado**: base anterior + *mis* operaciones (no la respuesta, que puede traer cambios ajenos aún sin integrar). Versiones del servidor más viejas que la base se ignoran (se compara la marca con microsegundos).
+- Encontrado de paso: el guardado entero **no mandaba** `sentBatchAt`, `sentAt/sentPart/sentBy` ni `comandaHeld`, y cada autoguardado los borraba del servidor (arreglado, `acf4b85`).
+- Prueba de extremo a extremo contra el servidor real del demo (pedido de prueba, ya borrado): creación por guardado entero → siguientes cambios por operaciones → sin cambios no manda nada → cambios de "otro dispositivo" (+2, línea nueva, línea quitada) se integran sin perder lo local y el siguiente guardado manda solo lo propio.
+- Ruido conocido: una línea creada por otro dispositivo con menos campos genera un `line-set` inofensivo con los campos que este TPV completa del catálogo.
+
 ## 6. Pasos
 
 0. ✅ **Identidad estable de línea** (`e441821`).
 1. ✅ **Servidor**: `save-parked-reservation-ops` desplegado y probado; funciona para las dos tablas, activo solo en `demo`/Mesas.
-2. **Cliente**: punto único de guardado + diff de líneas; protocolo nuevo solo si el servidor lo activa; fallback al guardado entero.
+2. ✅ **Cliente**: guardado por diferencia + reconciliación; protocolo nuevo solo si el servidor lo activa; fallback al guardado entero.
 3. **Prueba en demo con 2 TPV reales a la vez** (cada uno tocando líneas distintas de la misma mesa y la misma línea a la vez), y lo mismo en TPV normal. Incluye: cobro mientras otro edita, borrar mesa, mover/fusionar mesas, división de cuenta, reintento sin red.
 4. Activar TPV normal en demo; después **un cliente piloto** (Asador el Gallo, por Mesas) con interruptor de apagado inmediato; vigilar el audit log varios días.
 5. Extender al resto.
