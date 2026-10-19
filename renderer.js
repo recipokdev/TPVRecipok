@@ -41375,7 +41375,12 @@ async function mesaViewerPost(action, uid) {
 function renderMesaInUseNotice(others) {
   const el = document.getElementById("mesaInUseNotice");
   if (!el) return;
-  const list = Array.isArray(others) ? others : [];
+  // El mismo agente (la misma persona) en otro dispositivo no es un aviso util: solo se avisa de
+  // OTROS agentes (peticion de Sergi, 2026-10-19: dos TPV con el mismo agente salia el aviso).
+  const myAgent = String(currentAgent?.name || currentAgent?.nick || "").trim().toLowerCase();
+  const list = (Array.isArray(others) ? others : []).filter(
+    (o) => !myAgent || String(o?.agentName || "").trim().toLowerCase() !== myAgent,
+  );
   if (!list.length) {
     el.classList.add("hidden");
     el.textContent = "";

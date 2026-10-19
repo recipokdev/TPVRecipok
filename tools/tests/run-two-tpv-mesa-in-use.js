@@ -28,7 +28,7 @@ async function launch(dirName, label) {
 }
 
 (async () => {
-  const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kills.forEach((f) => f()); process.exit(1); }, 200000);
+  const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kills.forEach((f) => f()); process.exit(1); }, 280000);
   const out = {};
   let A, B;
   try {
@@ -39,14 +39,17 @@ async function launch(dirName, label) {
     const sel = (X, uid) => X.win.evaluate((u) => { updateMesasSelectionFromContext({ tableUid: u }); syncTpvCartWithSelectedMesa(); }, uid);
     out.modo = await Promise.all([A, B].map((X) => X.win.evaluate(() => ({ mesas: MESAS_INLINE_ACTIVE, ops: parkedOpsIsEnabled(getCurrentSlugForReservations(), "mesas"), agente: String(currentAgent?.name || currentAgent?.nick || ""), term: String(currentTerminal?.name || "") }))));
 
+    // Mismo agente en los dos TPV: NO debe haber aviso
     await sel(A, M3);
-    await sleep(4500);
-    out.A_sola = await notice(A);
-
     await sel(B, M3);
-    await sleep(4500);
+    await sleep(6000);
+    out.mismo_agente_A = await notice(A);
+    out.mismo_agente_B = await notice(B);
+    // B pasa a ser otro agente: ahora si
+    await B.win.evaluate(() => { currentAgent = { id: 2, codagente: "2", name: "Marcela" }; });
+    await sleep(33000);
+    out.A_sola = "(ver siguiente)";
     out.B_ve_a_A = await notice(B);
-    await sleep(14000); // siguiente latido de A: ya ve a B
     out.A_ve_a_B = await notice(A);
 
     // B cambia de mesa
