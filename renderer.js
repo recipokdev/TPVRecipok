@@ -46285,6 +46285,38 @@ async function printComandaWithContext({
 const __autoComandaPending = new Map(); // ticketId -> { timer, dueAt }
 let __autoComandaTicker = null;
 
+// Controles de la comanda automatica DENTRO de la ventana "Comanda cocina" (peticion de Sergi,
+// 2026-10-19): espera propia de la mesa y "no enviar solo". Solo en memoria (se pierden al reiniciar).
+const __autoComandaDelaySecByTicket = new Map(); // ticketId -> segundos (sobreescribe Opciones)
+const __autoComandaOffSigByTicket = new Map(); // ticketId -> firma de lo pendiente cuando se desactivo
+
+function getAutoComandaDelayMsForTicket(ticketOrKey) {
+  const key = String(
+    ticketOrKey && typeof ticketOrKey === "object" ? ticketOrKey.id ?? "" : ticketOrKey ?? "",
+  ).trim();
+  const own = __autoComandaDelaySecByTicket.get(key);
+  return Number.isFinite(own) ? own * 1000 : getAutoComandaDelayMs();
+}
+
+// Firma de lo que hay pendiente de enviar (lineas nuevas y devoluciones): "no enviar solo" dura
+// mientras esa firma no cambie; si el pedido cambia, la comanda automatica vuelve a armarse.
+function autoComandaPendingSig(ticket, lines) {
+  const src = Array.isArray(lines) ? lines : ticket?.items || [];
+  const added = getComandaDeltaLinesForTicket(ticket, src)
+    .map((l) => `${buildComandaLineKey(l)}x${Number(l?.qty) || 0}`)
+    .sort();
+  const returned = getComandaReturnedLinesForTicket(ticket, src)
+    .map((l) => `R${String(l?.name || "")}x${Number(l?.qty) || 0}`)
+    .sort();
+  return JSON.stringify([added, returned]);
+}
+
+function isAutoComandaOffForTicket(ticket, lines) {
+  const key = String(ticket?.id ?? "").trim();
+  if (!key || !__autoComandaOffSigByTicket.has(key)) return false;
+  return __autoComandaOffSigByTicket.get(key) === autoComandaPendingSig(ticket, lines);
+}
+
 function cancelAutoComandaForTicket(ticketId) {
   const key = String(ticketId ?? "").trim();
   const entry = __autoComandaPending.get(key);
@@ -46311,10 +46343,11 @@ async function runAutoComandaForTicket(key) {
 // La espera cambio en Opciones: las cuentas atras ya armadas la adoptan (las pausadas conservan la
 // pausa pero con la espera nueva; las que corren se reinician con ella).
 function applyAutoComandaDelayChange() {
-  const newMs = getAutoComandaDelayMs();
   Array.from(__autoComandaPending.keys()).forEach((key) => {
     const entry = __autoComandaPending.get(key);
     if (!entry) return;
+    if (__autoComandaDelaySecByTicket.has(key)) return; // esa mesa tiene su propia espera
+    const newMs = getAutoComandaDelayMs();
     if (entry.paused) {
       entry.remainingMs = newMs;
       entry.armedDelayMs = newMs;
@@ -46407,13 +46440,22 @@ function scheduleAutoComandaForTicket(ticket, opts = {}) {
     return;
   }
 
+  // "No enviar solo" (ventana Comanda cocina): mientras lo pendiente no cambie, no se arma nada.
+  if (__autoComandaOffSigByTicket.has(key)) {
+    if (isAutoComandaOffForTicket(ticket, items)) {
+      cancelAutoComandaForTicket(key);
+      return;
+    }
+    __autoComandaOffSigByTicket.delete(key); // el pedido cambio: vuelve a armarse
+  }
+
   const prev = __autoComandaPending.get(key);
   // En pausa (boton del aviso): los cambios NO rearman la espera; se envia al
   // reanudar o con el boton Comanda. Pero si desde que se armo se ha cambiado la espera en
   // Opciones, la pausada adopta la nueva (antes se quedaba con los segundos viejos para
   // siempre: caso de Sergi 2026-10-19, 8 s -> 60 s sin efecto).
   if (prev?.paused) {
-    const currentDelayMs = getAutoComandaDelayMs();
+    const currentDelayMs = getAutoComandaDelayMsForTicket(key);
     if (Number.isFinite(opts?.delayMs) === false && prev.armedDelayMs !== currentDelayMs) {
       prev.remainingMs = currentDelayMs;
       prev.armedDelayMs = currentDelayMs;
@@ -46425,7 +46467,7 @@ function scheduleAutoComandaForTicket(ticket, opts = {}) {
 
   const delayMs = Number.isFinite(opts?.delayMs)
     ? Math.max(0, opts.delayMs)
-    : getAutoComandaDelayMs();
+    : getAutoComandaDelayMsForTicket(key);
   const timer = setTimeout(() => {
     __autoComandaPending.delete(key);
     updateAutoComandaIndicator();
@@ -46444,7 +46486,7 @@ function scheduleAutoComandaForTicket(ticket, opts = {}) {
   __autoComandaPending.set(key, {
     timer,
     dueAt: Date.now() + delayMs,
-    armedDelayMs: Number.isFinite(opts?.delayMs) ? getAutoComandaDelayMs() : delayMs,
+    armedDelayMs: Number.isFinite(opts?.delayMs) ? getAutoComandaDelayMsForTicket(key) : delayMs,
   });
   // Los demas TPV no deben imprimir esto antes de mi espera.
   parkedComandaTurn(ticket, "register", { dueInMs: delayMs, force: true }).catch(() => {});
@@ -46463,7 +46505,78 @@ function scheduleAutoComandaForTicket(ticket, opts = {}) {
 
 // Aviso discreto en la tarjeta de la mesa (carrito): recuerda que las
 // comandas salen solas y, mientras hay una en espera, cuenta atras.
+// Seccion "Envio automatico (esta mesa)" de la ventana Comanda cocina.
+function refreshComandaAutoSection() {
+  const sec = document.getElementById("comandaAutoSection");
+  if (!sec) return;
+  const open = comandaOverlay && !comandaOverlay.classList.contains("hidden");
+  const loaded = open ? resolveComandaTicketForSelectedMesa() : null;
+  const show =
+    !!loaded &&
+    isAutoComandaOnSaveEnabled() &&
+    MESAS_INLINE_ACTIVE &&
+    MESAS_INLINE_VIEW === "transacciones";
+  sec.classList.toggle("hidden", !show);
+  if (!show) return;
+
+  const key = String(loaded.id ?? "").trim();
+  const entry = __autoComandaPending.get(key);
+  const off = isAutoComandaOffForTicket(loaded, cart);
+  const statusEl = document.getElementById("comandaAutoStatus");
+  const pauseBtn = document.getElementById("comandaAutoPauseBtn");
+  const offBtn = document.getElementById("comandaAutoOffBtn");
+  const delayInput = document.getElementById("comandaAutoDelayInput");
+  const resetBtn = document.getElementById("comandaAutoDelayResetBtn");
+
+  let text;
+  if (entry) {
+    const secs = Math.max(
+      1,
+      Math.ceil((entry.paused ? entry.remainingMs : entry.dueAt - Date.now()) / 1000),
+    );
+    text = entry.paused ? `En pausa (quedan ${secs} s)` : `Se envía solo en ${secs} s`;
+  } else if (off) {
+    text = "Desactivado para esta mesa: no se enviará solo hasta que cambie el pedido";
+  } else {
+    text = "Sin envío automático en marcha";
+  }
+  if (statusEl) statusEl.textContent = text;
+  if (pauseBtn) {
+    pauseBtn.classList.toggle("hidden", !entry);
+    pauseBtn.textContent = entry?.paused ? "Reanudar" : "Pausar";
+  }
+  if (offBtn) {
+    offBtn.classList.toggle("hidden", !entry && !off);
+    offBtn.textContent = off ? "Activar de nuevo" : "No enviar solo";
+  }
+  if (delayInput && document.activeElement !== delayInput) {
+    const own = __autoComandaDelaySecByTicket.get(key);
+    delayInput.value = String(Number.isFinite(own) ? own : getAutoComandaDelayMs() / 1000);
+  }
+  if (resetBtn) resetBtn.classList.toggle("hidden", !__autoComandaDelaySecByTicket.has(key));
+}
+
+function setAutoComandaDelayForLoadedTicket(sec) {
+  const loaded = resolveComandaTicketForSelectedMesa();
+  if (!loaded) return;
+  const key = String(loaded.id ?? "").trim();
+  if (sec == null) __autoComandaDelaySecByTicket.delete(key);
+  else __autoComandaDelaySecByTicket.set(key, Math.max(0, Math.min(3600, Math.round(sec))));
+  const entry = __autoComandaPending.get(key);
+  const newMs = getAutoComandaDelayMsForTicket(key);
+  if (entry?.paused) {
+    entry.remainingMs = newMs;
+    entry.armedDelayMs = newMs;
+  } else {
+    // en marcha, o sin cuenta atras pero con algo pendiente: se (re)arma con la espera nueva
+    __autoComandaOffSigByTicket.delete(key);
+    scheduleAutoComandaForTicket(loaded, { delayMs: undefined });
+  }
+  updateAutoComandaIndicator();
+}
+
 function updateAutoComandaIndicator() {
+  refreshComandaAutoSection?.();
   refreshSendComandaBar?.();
   const el = document.getElementById("pebAutoComanda");
   if (!el) return;
@@ -46648,6 +46761,7 @@ async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
       (onlyTicketId
         ? String(t.id ?? "").trim() === onlyTicketId
         : !__autoComandaPending.has(String(t.id ?? "").trim()) &&
+          !isAutoComandaOffForTicket(t) &&
           !recentlyEditedHere(t)) &&
       isMesasModeTicket(t) &&
       (getComandaDeltaLinesForTicket(t, t?.items || []).length > 0 ||
@@ -46850,6 +46964,7 @@ function openComandaModal() {
 
   renderComandaLinesPreview(lines);
   comandaOverlay?.classList.remove("hidden");
+  refreshComandaAutoSection();
 }
 
 async function printComandaFromCurrentMesa() {
@@ -47079,6 +47194,56 @@ document.getElementById("sendComandaBtn")?.addEventListener("click", () => {
 document.getElementById("sendComandaEditBtn")?.addEventListener("click", () => {
   openComandaModal();
 });
+document.getElementById("comandaAutoPauseBtn")?.addEventListener("click", () => {
+  const loaded = resolveComandaTicketForSelectedMesa();
+  const key = loaded ? String(loaded.id ?? "").trim() : "";
+  const entry = key ? __autoComandaPending.get(key) : null;
+  if (!entry) return;
+  if (entry.paused) resumeAutoComandaForTicket(key);
+  else pauseAutoComandaForTicket(key);
+  refreshComandaAutoSection();
+});
+document.getElementById("comandaAutoOffBtn")?.addEventListener("click", () => {
+  const loaded = resolveComandaTicketForSelectedMesa();
+  if (!loaded) return;
+  const key = String(loaded.id ?? "").trim();
+  if (isAutoComandaOffForTicket(loaded, cart)) {
+    __autoComandaOffSigByTicket.delete(key);
+    scheduleAutoComandaForTicket(loaded);
+  } else {
+    __autoComandaOffSigByTicket.set(key, autoComandaPendingSig(loaded, cart));
+    parkedComandaTurn(loaded, "release", { seq: -1 }).catch(() => {});
+    cancelAutoComandaForTicket(key);
+  }
+  updateAutoComandaIndicator();
+});
+document.getElementById("comandaAutoDelayResetBtn")?.addEventListener("click", () => {
+  setAutoComandaDelayForLoadedTicket(null);
+});
+{
+  const delayInput = document.getElementById("comandaAutoDelayInput");
+  let padOpen = false;
+  const openPad = () => {
+    if (padOpen || !delayInput) return;
+    padOpen = true;
+    openNumPad(
+      String(delayInput.value || ""),
+      (val, meta = {}) => {
+        padOpen = false;
+        if (meta?.phase && meta.phase !== "confirm") return;
+        const n = Math.round(Number(String(val ?? "").replace(",", ".").trim()));
+        if (Number.isFinite(n) && n >= 0 && n <= 3600) setAutoComandaDelayForLoadedTicket(n);
+        delayInput.blur();
+      },
+      "Espera de esta mesa (segundos)",
+      "qty",
+      null,
+      null,
+    );
+  };
+  delayInput?.addEventListener("focus", openPad);
+  delayInput?.addEventListener("click", openPad);
+}
 document.getElementById("sendComandaPauseBtn")?.addEventListener("click", () => {
   const loaded = resolveComandaTicketForSelectedMesa();
   const key = loaded ? String(loaded.id ?? "").trim() : "";

@@ -10187,3 +10187,31 @@ body.theme-dark .send-comanda-bar .scb-aux {
 .mesa-in-use-notice::before {
   content: "👤 ";
 }
+
+/* Controles del envio automatico de la comanda dentro de la ventana "Comanda cocina". */
+.comanda-auto-section {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.comanda-auto-section.hidden { display: none; }
+.comanda-auto-section .cas-title { font-weight: 700; font-size: 0.9rem; }
+.comanda-auto-section .cas-status { font-size: 0.9rem; }
+.comanda-auto-section .cas-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.comanda-auto-section .cas-btn {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  background: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+.comanda-auto-section .cas-btn.hidden { display: none; }
+.comanda-auto-section .cas-link { border-color: transparent; background: transparent; text-decoration: underline; }
+.comanda-auto-section .cas-delay { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.comanda-auto-section .cas-delay input { width: 4.5rem; text-align: center; padding: 6px; border-radius: 8px; border: 1px solid rgba(0, 0, 0, 0.25); }

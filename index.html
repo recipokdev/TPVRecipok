@@ -1894,6 +1894,21 @@
               </button>
             </div>
 
+            <div id="comandaAutoSection" class="comanda-auto-section hidden">
+              <div class="cas-title">Envío automático (esta mesa)</div>
+              <div id="comandaAutoStatus" class="cas-status"></div>
+              <div class="cas-controls">
+                <button id="comandaAutoPauseBtn" type="button" class="cas-btn hidden">Pausar</button>
+                <button id="comandaAutoOffBtn" type="button" class="cas-btn hidden">No enviar solo</button>
+                <label class="cas-delay" for="comandaAutoDelayInput">
+                  Espera
+                  <input id="comandaAutoDelayInput" type="text" inputmode="numeric" readonly />
+                  s
+                </label>
+                <button id="comandaAutoDelayResetBtn" type="button" class="cas-btn cas-link hidden" title="Volver a la espera de Opciones">Usar la de Opciones</button>
+              </div>
+            </div>
+
             <div
               style="
                 margin-top: 12px;
