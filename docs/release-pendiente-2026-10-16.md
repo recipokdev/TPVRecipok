@@ -1,6 +1,8 @@
-# Resumen para el próximo release (pendiente, NO publicado)
+# Resumen del release 0.2.49 (publicado el 2026-10-19)
 
-Estado a 2026-10-16. Última versión publicada: **0.2.48**. Todo lo de abajo está commiteado en `main`
+> Nota: redactado el 2026-10-16 como borrador del release; finalmente salió como **0.2.49** (commits posteriores incluidos: aviso de mesa en uso sin avisar al mismo agente, controles de la comanda automática, presencia con almacén).
+
+Estado a 2026-10-16. Última versión publicada entonces: **0.2.48**. Todo lo de abajo está commiteado en `main`
 (38 commits desde `v0.2.48`, ~2.700 líneas tocadas, casi todo `renderer.js`), `npm test` en verde, y
 sin lanzar `stable:patch`. Las entradas ya están en el changelog "actual" (23 puntos).
 
