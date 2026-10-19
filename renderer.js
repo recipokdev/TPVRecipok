@@ -9179,6 +9179,8 @@ async function apiUpsertTerminalPresenceRemote() {
     userName: String(currentAgent?.name || currentAgent?.nick || "").trim(),
     host: String(location?.hostname || "").trim(),
     appVersion: appVersionText,
+    // Almacen (tienda) del terminal: la app de camareros cuenta solo los TPV de SU almacen.
+    codalmacen: String(getCurrentWarehouseCode() || "").trim(),
     silent: isTerminalPresenceSilentMode(),
     ttlSec: 35,
   };

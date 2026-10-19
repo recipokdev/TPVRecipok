@@ -35,7 +35,8 @@
         "MEJORA: en Opciones → Tablets emparejadas, el agente vinculado a cada móvil se muestra con su nombre (por ejemplo \"Alejandro (3)\") y no solo con el código.",
         "CORRECCIÓN: un producto enviado desde la app de camareros podía quedar con precio 0 € en el pedido guardado (al repararle el identificador de línea, el TPV reescribía la línea y perdía su precio). Ahora la línea se conserva tal cual llegó y, si solo trae el precio con los nombres de FacturaScripts (pvpunitario), se aprovecha.",
         "CORRECCIÓN: en Modo Mesas, la cuenta atrás de la comanda automática se quedaba viva aunque quitaras el producto, y al cambiar la espera en Opciones no cambiaba (si la habías pausado, seguía con los segundos viejos y no había forma de pararla o cambiarla). Ahora quitar lo pendiente cancela la cuenta atrás y el cambio de espera se aplica a las cuentas atrás ya en marcha, también a las pausadas.",
-        "MEJORA: en la ventana \"Comanda cocina\" (icono ✎ de la barra) hay ahora una sección \"Envío automático (esta mesa)\": muestra la cuenta atrás, permite pausarla o reanudarla, cambiar la espera solo para esa mesa (con el teclado numérico) y \"No enviar solo\" para que esa mesa no se envíe sola hasta que cambie el pedido. La opción de apagar la comanda automática del todo sigue en Opciones."
+        "MEJORA: en la ventana \"Comanda cocina\" (icono ✎ de la barra) hay ahora una sección \"Envío automático (esta mesa)\": muestra la cuenta atrás, permite pausarla o reanudarla, cambiar la espera solo para esa mesa (con el teclado numérico) y \"No enviar solo\" para que esa mesa no se envíe sola hasta que cambie el pedido. La opción de apagar la comanda automática del todo sigue en Opciones.",
+        "MEJORA: cada TPV indica ahora a qué almacén (tienda) pertenece en su aviso de presencia, para que la app de camareros avise de \"TPV cerrado\" solo según los TPV de su propia tienda."
       ]
     },
     {
