@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.49",
+      "date": "2026-10-19",
+      "title": "Release 0.2.49",
       "changes": [
         "CORRECCIÓN: en Modo Mesas, al abrir el programa ya no salen los avisos \"Carrito recuperado tras cierre inesperado\" ni \"El diseño de Mesas se actualizó desde otro terminal\", que parecían errores y asustaban sin que hubiera ningún problema (el pedido de la mesa simplemente reaparece y el plano se recarga solo). El segundo solo se muestra ahora mientras se edita el diseño de las salas.",
         "MEJORA: en Modo Mesas hay una barra grande \"Enviar comanda\" encima de los botones de abajo. Muestra cuántos productos faltan por enviar a cocina (y devoluciones, si has quitado algo ya enviado), y con un toque imprime la comanda directamente. Si la comanda automática tiene una espera en marcha, la cuenta atrás y el botón de pausa aparecen también ahí; un icono ✎ abre la ventana de comanda para añadir una observación. Los productos cuya familia no está entre las de comanda (Opciones → Mesas) se separan con \"No va a cocina\" para que no parezca un fallo que no se envíen. Lo ya enviado se muestra siempre arriba, agrupado por envío con una cabecera \"Enviado · hora · Comanda N · agente\", y lo pendiente debajo de la raya naranja.",
