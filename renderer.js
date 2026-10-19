@@ -15783,6 +15783,7 @@ function renderCart() {
   persistRuntimeCartSnapshot();
   scheduleMesasAutoSave();
   scheduleTpvAutoSave();
+  cancelAutoComandaIfNothingPending();
 
   if (currentParkedTicketIndex == null && PENDING_RUNTIME_PARKED_SYNC_KEY) {
     if (tryResolvePendingParkedTicketIndex()) {
@@ -32384,6 +32385,7 @@ if (autoComandaDelayInput) {
       localStorage.setItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY, String(sec));
     } catch {}
     autoComandaDelayInput.value = String(sec);
+    applyAutoComandaDelayChange();
     updateAutoComandaIndicator();
   };
   autoComandaDelayInput.value = String(getAutoComandaDelayMs() / 1000);
@@ -46301,6 +46303,48 @@ async function runAutoComandaForTicket(key) {
   }
 }
 
+// La espera cambio en Opciones: las cuentas atras ya armadas la adoptan (las pausadas conservan la
+// pausa pero con la espera nueva; las que corren se reinician con ella).
+function applyAutoComandaDelayChange() {
+  const newMs = getAutoComandaDelayMs();
+  Array.from(__autoComandaPending.keys()).forEach((key) => {
+    const entry = __autoComandaPending.get(key);
+    if (!entry) return;
+    if (entry.paused) {
+      entry.remainingMs = newMs;
+      entry.armedDelayMs = newMs;
+      return;
+    }
+    const t = (Array.isArray(parkedTickets) ? parkedTickets : []).find(
+      (x) => String(x?.id ?? "") === key && !x?.paid,
+    );
+    if (t) scheduleAutoComandaForTicket(t);
+  });
+  updateAutoComandaIndicator();
+}
+
+// Si lo que habia pendiente de enviar a cocina ya no existe (se quito del carrito), la cuenta atras
+// -pausada o no- se cancela: antes se quedaba viva y enviaba/mostraba una espera de algo que ya no
+// estaba (visto 2026-10-19: quitar el producto no la cancelaba porque sin lineas no hay autoguardado).
+function cancelAutoComandaIfNothingPending() {
+  try {
+    if (!__autoComandaPending.size) return;
+    const loaded = getCurrentLoadedParkedTicket();
+    if (!loaded) return;
+    const key = String(loaded.id ?? "").trim();
+    if (!__autoComandaPending.has(key)) return;
+    const live = Array.isArray(cart) ? cart : [];
+    const pending =
+      getComandaDeltaLinesForTicket(loaded, live).length > 0 ||
+      getComandaReturnedLinesForTicket(loaded, live).length > 0;
+    if (pending) return;
+    parkedComandaTurn(loaded, "release", { seq: -1 }).catch(() => {});
+    cancelAutoComandaForTicket(key);
+  } catch (e) {
+    console.warn("No se pudo comprobar la comanda pendiente:", e?.message || e);
+  }
+}
+
 function pauseAutoComandaForTicket(ticketId) {
   const key = String(ticketId ?? "").trim();
   const entry = __autoComandaPending.get(key);
@@ -46360,8 +46404,15 @@ function scheduleAutoComandaForTicket(ticket, opts = {}) {
 
   const prev = __autoComandaPending.get(key);
   // En pausa (boton del aviso): los cambios NO rearman la espera; se envia al
-  // reanudar o con el boton Comanda.
+  // reanudar o con el boton Comanda. Pero si desde que se armo se ha cambiado la espera en
+  // Opciones, la pausada adopta la nueva (antes se quedaba con los segundos viejos para
+  // siempre: caso de Sergi 2026-10-19, 8 s -> 60 s sin efecto).
   if (prev?.paused) {
+    const currentDelayMs = getAutoComandaDelayMs();
+    if (Number.isFinite(opts?.delayMs) === false && prev.armedDelayMs !== currentDelayMs) {
+      prev.remainingMs = currentDelayMs;
+      prev.armedDelayMs = currentDelayMs;
+    }
     updateAutoComandaIndicator();
     return;
   }
@@ -46388,6 +46439,7 @@ function scheduleAutoComandaForTicket(ticket, opts = {}) {
   __autoComandaPending.set(key, {
     timer,
     dueAt: Date.now() + delayMs,
+    armedDelayMs: Number.isFinite(opts?.delayMs) ? getAutoComandaDelayMs() : delayMs,
   });
   // Los demas TPV no deben imprimir esto antes de mi espera.
   parkedComandaTurn(ticket, "register", { dueInMs: delayMs, force: true }).catch(() => {});
