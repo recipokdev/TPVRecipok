@@ -1008,7 +1008,7 @@ mustContain(
 ].forEach((fnName) => {
   const fnStart = renderer.indexOf(`async function ${fnName}(`);
   const fnBody =
-    fnStart >= 0 ? renderer.slice(fnStart, fnStart + 1500) : "";
+    fnStart >= 0 ? renderer.slice(fnStart, fnStart + 2000) : "";
   const fnEnd = fnBody.indexOf("\n}\n");
   const scoped = fnEnd >= 0 ? fnBody.slice(0, fnEnd) : fnBody;
 
