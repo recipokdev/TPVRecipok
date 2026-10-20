@@ -10399,6 +10399,31 @@ function getSelectedMesaScopeContext() {
   };
 }
 
+// Pedido creado por la app de camareros (id "camarero-..."): su camarero es el `userName` del
+// primer guardado de la app (el servidor lo guarda en user_name). Sin esto el TPV lo pisaba con SU
+// agente activo en el primer guardado entero (prueba con la app, 2026-10-20: el pedido de "Cintia"
+// quedaba a nombre de "TPV", y la comanda de cocina salia "enviado por TPV"). Solo afecta a
+// pedidos de la app; los creados en el TPV siguen igual. El agente del COBRO no se toca.
+function isCamarerosAppTicket(ticket) {
+  const id = String(ticket?.id ?? ticket?.ticketId ?? "");
+  const caja = String(ticket?.cajaId || "");
+  return id.startsWith("camarero-") || caja.startsWith("camarero-app");
+}
+
+function getCamarerosAppAuthorName(ticket) {
+  if (!isCamarerosAppTicket(ticket)) return "";
+  return String(ticket?.userName || "").trim();
+}
+
+function findAgentCodeByName(name) {
+  const n = String(name || "").trim().toLowerCase();
+  if (!n) return "";
+  for (const [code, agentName] of Object.entries(agentNameByCode || {})) {
+    if (String(agentName || "").trim().toLowerCase() === n) return String(code);
+  }
+  return "";
+}
+
 function applyMesaScopeToTicket(
   ticket,
   scopeCtx = getSelectedMesaScopeContext(),
@@ -10419,7 +10444,12 @@ function applyMesaScopeToTicket(
   // de estado que ya existia). Mismo patron que .clientName: solo se
   // sobrescribe si de verdad hay un agente activo, nunca se borra por un
   // guardado de fondo sin agente real detras.
-  if (currentAgent?.codagente) {
+  const appAuthor = getCamarerosAppAuthorName(ticket);
+  if (appAuthor) {
+    ticket.agentName = appAuthor;
+    const authorCode = findAgentCodeByName(appAuthor);
+    if (authorCode) ticket.agentCode = authorCode;
+  } else if (currentAgent?.codagente) {
     ticket.agentCode = String(currentAgent.codagente);
     ticket.agentName = String(
       currentAgent.name || currentAgent.nick || ticket.agentName || "",
@@ -38577,6 +38607,7 @@ function normalizeRemoteParkedTicket(raw) {
     })(),
     slug: String(raw.slug || "").trim(),
     cajaId: String(raw.cajaId || raw.cajaid || "").trim(),
+    userName: String(raw.userName || raw.user_name || "").trim(),
     createdAt,
     updatedAt,
     // Distinto de `updatedAt`: ese se sobreescribe con new Date() en cada
@@ -41034,7 +41065,9 @@ function buildParkedSavePayload(ticket, slug, cajaId) {
     // aparcados de TPV normal se acepta pero no se filtra por el, a
     // proposito, para no afectar a clientes reales ya en uso.
     codalmacen: getCurrentWarehouseCode(),
-    userName: String(currentAgent?.name || currentAgent?.nick || ""),
+    userName:
+      getCamarerosAppAuthorName(ticket) ||
+      String(currentAgent?.name || currentAgent?.nick || ""),
     // Id de SESION de este TPV: el servidor lo usa para saber si otro dispositivo esta cobrando
     // el pedido (candado de cobro) y no pisarlo con un guardado entero.
     sessionId: ensureTerminalPresenceSessionId(),
@@ -45945,7 +45978,9 @@ function commitComandaPrintedState(ticket, sourceLines = cart) {
         sentAt: new Date().toISOString(),
         sentPart: Math.max(0, Number(prev?.seq || 0) || 0) + 1,
         // El agente (camarero) que envia, no el usuario con el que se entro al TPV.
-        sentBy: String(currentAgent?.name || currentAgent?.nick || getLoginUser?.() || "").trim(),
+        sentBy:
+          getCamarerosAppAuthorName(ticket) ||
+          String(currentAgent?.name || currentAgent?.nick || getLoginUser?.() || "").trim(),
       };
       const ids = new Set(justSent.map((l) => l?._lineId).filter(Boolean));
       const stampedLines = [];
@@ -46178,6 +46213,8 @@ async function printComandaWithContext({
   // siempre, pero con un aviso imposible de confundir con un pedido nuevo
   // en una impresora termica monocromo -- ver comanda_print.html.
   isReturn = false,
+  // Camarero a poner en el impreso cuando el pedido viene de la app (si no, el agente activo del TPV).
+  agentLabel = "",
 }) {
   let templateHtml = "";
   try {
@@ -46202,7 +46239,7 @@ async function printComandaWithContext({
   const table = String(scope?.tableName || scope?.tableId || "Mesa").trim();
   const mesaBig = String(scope?.tableName || scope?.tableId || "Mesa").trim();
   const agent =
-    String(currentAgent?.name || currentAgent?.nick || "-").trim() || "-";
+    String(agentLabel || currentAgent?.name || currentAgent?.nick || "-").trim() || "-";
 
   const doc = new DOMParser().parseFromString(templateHtml, "text/html");
   if (isReturn) {
@@ -46693,6 +46730,7 @@ async function maybeAutoPrintComandaOnSave(ticket, opts = {}) {
     obsText,
     partNumber,
     printerName,
+    agentLabel: getCamarerosAppAuthorName(ticket),
     successToastMessage: "Comanda enviada automáticamente al guardar.",
     errorPrefix: "No se pudo imprimir la comanda automática:",
   });
@@ -46866,6 +46904,7 @@ async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
             partNumber: null,
             printerName,
             isReturn: true,
+            agentLabel: getCamarerosAppAuthorName(ticket),
             successToastMessage:
               "Devolución enviada a cocina (pedido desde app de camareros).",
             errorPrefix: "No se pudo imprimir la devolución a cocina:",
@@ -46891,6 +46930,7 @@ async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
             obsText,
             partNumber,
             printerName,
+            agentLabel: getCamarerosAppAuthorName(ticket),
             successToastMessage:
               "Comanda enviada automáticamente (pedido desde app de camareros).",
             errorPrefix: "No se pudo imprimir la comanda automática:",
@@ -47028,6 +47068,7 @@ async function printComandaFromCurrentMesa() {
     obsText,
     partNumber,
     printerName,
+    agentLabel: getCamarerosAppAuthorName(loaded),
   });
 
   if (!result?.ok) {
@@ -47113,6 +47154,7 @@ async function sendComandaQuick() {
         partNumber: null,
         printerName,
         isReturn: true,
+        agentLabel: getCamarerosAppAuthorName(loaded),
         successToastMessage: "Devolución enviada a cocina.",
         errorPrefix: "No se pudo imprimir la devolución a cocina:",
       });
@@ -47129,6 +47171,7 @@ async function sendComandaQuick() {
         obsText: "",
         partNumber: loaded ? getNextComandaPartNumber(loaded) : 1,
         printerName,
+        agentLabel: getCamarerosAppAuthorName(loaded),
       });
       if (!res?.ok) {
         toast(res?.error || "No se pudo imprimir la comanda.", "err", "Comandas");

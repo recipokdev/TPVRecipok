@@ -10393,6 +10393,29 @@ console.log("\n[SMOKE] Checking 2026-10-20 cobro: el pedido cambia con la ventan
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-20 pedidos de la app de camareros conservan a su camarero \n");
+{
+  if (
+    renderer.includes("function isCamarerosAppTicket(ticket) {") &&
+    renderer.includes("function getCamarerosAppAuthorName(ticket) {") &&
+    renderer.includes("function findAgentCodeByName(name) {") &&
+    renderer.includes('userName: String(raw.userName || raw.user_name || "").trim(),') &&
+    renderer.includes("getCamarerosAppAuthorName(ticket) ||") &&
+    renderer.includes("agentLabel = \"\",") &&
+    renderer.includes("String(agentLabel || currentAgent?.name") &&
+    renderer.includes("agentLabel: getCamarerosAppAuthorName(ticket),") &&
+    renderer.includes("agentLabel: getCamarerosAppAuthorName(loaded),")
+  ) {
+    ok(
+      "Real (prueba con la app de camareros, 2026-10-20): el TPV pisaba al camarero de un pedido de la app (userName 'Cintia') con su agente activo en el primer guardado entero, y la comanda salia 'enviado por TPV' -- ahora userName/sentBy/impreso/anillo conservan al camarero de la app (solo ids 'camarero-...'; el agente del cobro no cambia)",
+    );
+  } else {
+    fail(
+      "Falta conservar al camarero original en pedidos de la app de camareros (renderer.js: isCamarerosAppTicket/getCamarerosAppAuthorName/agentLabel) -- revisar el cambio de 2026-10-20",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

@@ -6,6 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
+        "CORRECCIÓN: en los pedidos que llegan de la app de camareros, el TPV ya no sustituye al camarero por su propio agente: el pedido sigue a nombre de quien lo hizo en el móvil (por ejemplo \"Cintia\"), el envío a cocina sale con ese nombre (\"Enviado · hora · Comanda N · Cintia\" y también en la comanda impresa) y la mesa conserva su color de camarero. Los pedidos hechos en el TPV no cambian, y el cobro sigue yendo al agente que cobra.",
         "CORRECCIÓN: al cobrar una mesa o un pedido, si alguien lo modifica mientras la ventana de cobro está abierta (otro TPV o la app de camareros añade o quita algo), el TPV ya no cobra el importe antiguo: avisa del nuevo total (\"El pedido ha cambiado\"), no cobra nada y basta con volver a pulsar Cobrar. Antes podía cobrarse de menos y quedar la línea nueva sin cobrar."
       ]
     },
