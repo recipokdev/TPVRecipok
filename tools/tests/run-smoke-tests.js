@@ -10503,6 +10503,25 @@ console.log("\n[SMOKE] Checking 2026-10-20 pedido de la app de camareros se impr
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-20 sin impresora de comandas se abre el selector \n");
+{
+  const n = (renderer.match(/await ensureComandaPrinterOrPrompt\(/g) || []).length;
+  if (
+    renderer.includes("async function ensureComandaPrinterOrPrompt({ manual = false } = {}) {") &&
+    renderer.includes("__comandaPrinterPromptCooldownUntil = Date.now() + 60000;") &&
+    renderer.includes("const chosen = await openPrinterPicker(" + '""' + ");") &&
+    n >= 4
+  ) {
+    ok(
+      "Peticion de Sergi 2026-10-20: sin impresora de comandas configurada, el TPV abre el selector de impresora (envio manual, ventana de comanda, comanda automatica y pedido de la app) en vez de solo avisar y dejar el pedido sin salir a cocina; un solo selector a la vez y sin reabrirse solo durante 60 s tras cancelar",
+    );
+  } else {
+    fail(
+      "Falta abrir el selector de impresora de comandas cuando no hay ninguna (renderer.js: ensureComandaPrinterOrPrompt en los 4 sitios) -- revisar el cambio de 2026-10-20",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

@@ -6,6 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
+        "MEJORA: si no hay impresora de comandas configurada al enviar una comanda (botón Enviar comanda, ventana de comanda, comanda automática o pedido de la app), el TPV abre directamente el selector de impresora en vez de solo avisar, para que el pedido pueda salir a cocina. Si se cierra sin elegir, no se vuelve a abrir solo durante un minuto.",
         "MEJORA: un pedido que el camarero envía desde la app de camareros se imprime en cocina al instante (en pocos segundos) en vez de esperar los segundos de la comanda automática (60 por defecto). Se imprime siempre, aunque la comanda automática esté apagada en ese TPV, porque en la app el camarero pulsa Enviar a propósito. La espera sigue aplicándose a lo que se monta en el propio TPV.",
         "CORRECCIÓN: al cobrar una mesa se podía crear un SEGUNDO pedido con las mismas líneas (con una segunda comanda a cocina y hasta un \"Enviar devolución\" fantasma), y ese duplicado podía hacer fallar el cobro por stock. El pedido que se está cobrando ya no se vuelve a cargar en el carrito mientras dura el cobro.",
         "CORRECCIÓN: si un cobro de una mesa o de un pedido aparcado falla de verdad, ya no se crea un pedido duplicado \"Cobro fallido\": el pedido original sigue abierto una sola vez (con su stock reservado una sola vez) y el aviso lo indica.",

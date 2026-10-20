@@ -46312,6 +46312,41 @@ function getConfiguredComandaPrinterForPrint() {
   return String(getSavedComandaPrinterReal() || "").trim();
 }
 
+// Sin impresora de comandas configurada, en vez de solo avisar (el pedido se quedaba sin salir a
+// cocina), se abre directamente el selector de impresora (peticion de Sergi, 2026-10-20). Un solo
+// selector a la vez; si se cierra sin elegir, no se vuelve a abrir solo durante 60 s (para que un
+// pedido de la app pendiente no reabra el selector sin parar) y se avisa con el mensaje de siempre.
+let __comandaPrinterPromptOpen = false;
+let __comandaPrinterPromptCooldownUntil = 0;
+async function ensureComandaPrinterOrPrompt({ manual = false } = {}) {
+  const already = getConfiguredComandaPrinterForPrint();
+  if (already) return already;
+  if (__comandaPrinterPromptOpen) return "";
+  if (!manual && Date.now() < __comandaPrinterPromptCooldownUntil) return "";
+  __comandaPrinterPromptOpen = true;
+  try {
+    toast?.(
+      "Elige la impresora de comandas para poder enviar los pedidos a cocina.",
+      "info",
+      "Comandas",
+    );
+    const chosen = await openPrinterPicker("");
+    if (chosen) {
+      saveComandaPrinterReal(chosen);
+      toast?.("Impresora de comandas guardada ✅", "ok", "Impresión");
+      return String(chosen).trim();
+    }
+    __comandaPrinterPromptCooldownUntil = Date.now() + 60000;
+    return "";
+  } catch (e) {
+    console.warn("No se pudo abrir el selector de impresora de comandas:", e?.message || e);
+    __comandaPrinterPromptCooldownUntil = Date.now() + 60000;
+    return "";
+  } finally {
+    __comandaPrinterPromptOpen = false;
+  }
+}
+
 function resolveComandaTicketForSelectedMesa() {
   let loaded = getCurrentLoadedParkedTicket();
   // Un pedido YA COBRADO no tiene nada pendiente de cocina: si el indice del carrito aun apunta a
@@ -46876,7 +46911,7 @@ async function maybeAutoPrintComandaOnSave(ticket, opts = {}) {
   const lines = getComandaDeltaLinesForTicket(ticket, ticket?.items || []);
   if (!lines.length) return;
 
-  const printerName = getConfiguredComandaPrinterForPrint();
+  const printerName = await ensureComandaPrinterOrPrompt();
   if (!printerName) {
     toast(
       "Auto-comanda activa pero no hay impresora de comandas configurada.",
@@ -47054,7 +47089,7 @@ async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
         if (!turn.granted) continue;
         turnClaimed = !turn.failOpen;
 
-        const printerName = getConfiguredComandaPrinterForPrint();
+        const printerName = await ensureComandaPrinterOrPrompt();
         if (!printerName) {
           const isNewFailure = !ticket.comandaAutoPrintFailedAt;
           const errorMsg =
@@ -47232,7 +47267,7 @@ async function printComandaFromCurrentMesa() {
     return;
   }
 
-  const printerName = getConfiguredComandaPrinterForPrint();
+  const printerName = await ensureComandaPrinterOrPrompt({ manual: true });
   if (!printerName) {
     if (comandaError) {
       comandaError.textContent =
@@ -47317,7 +47352,7 @@ async function sendComandaQuick() {
     return;
   }
 
-  const printerName = getConfiguredComandaPrinterForPrint();
+  const printerName = await ensureComandaPrinterOrPrompt({ manual: true });
   if (!printerName) {
     toast("No hay impresora de comandas configurada en Opciones.", "warn", "Comandas");
     return;
