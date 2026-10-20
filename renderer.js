@@ -11191,6 +11191,22 @@ function getMesasPendingTicketByUid(state, uid) {
         );
         if (competitor) return competitor;
       }
+      // Un pedido VACIO vinculado a la mesa no debe tapar a otro de la misma mesa que si tiene
+      // lineas (real, prueba con la app de camareros 2026-10-20: tras "devolver todo" queda un
+      // pedido de 0 lineas y el siguiente pedido de la app es otro ticket; el vinculo seguia
+      // apuntando al vacio y el TPV enseñaba la mesa vacia con el pedido real en el servidor).
+      if (!Array.isArray(linkedTicket.items) || linkedTicket.items.length === 0) {
+        const withLines = (Array.isArray(parkedTickets) ? parkedTickets : []).find(
+          (t) =>
+            t &&
+            !t.paid &&
+            t !== linkedTicket &&
+            Array.isArray(t.items) &&
+            t.items.length > 0 &&
+            resolveTicketMesaUid(t, state) === uid,
+        );
+        if (withLines) return withLines;
+      }
       return linkedTicket;
     }
   }
