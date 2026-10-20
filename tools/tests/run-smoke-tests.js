@@ -10489,10 +10489,12 @@ console.log("\n[SMOKE] Checking 2026-10-20 pedido de la app de camareros se impr
   if (
     renderer.includes("const appSentPending = (t) =>") &&
     renderer.includes("t.items.some((l) => l && l.sentBatchAt && !l.sentAt);") &&
-    renderer.includes("(!recentlyEditedHere(t) || appSentPending(t))) &&")
+    renderer.includes("(!recentlyEditedHere(t) || appSentPending(t))) &&") &&
+    renderer.includes("const autoOn = isAutoComandaOnSaveEnabled();") &&
+    renderer.includes("(autoOn || appSentPending(t)) &&")
   ) {
     ok(
-      "Real (cuenta de pruebas a_reciplus, 2026-10-20): el pedido enviado desde la app tardaba la espera de la comanda automatica (60 s por defecto) en imprimirse porque el TPV lo re-guarda al adoptarlo y eso contaba como 'editado aqui'; ahora las lineas con sentBatchAt y sin sentAt (orden explicita del camarero) se imprimen sin esa espera (medido con 2 TPV reales: 3,3 s con espera de 60 s)",
+      "Real (cuenta de pruebas a_reciplus, 2026-10-20; ademas se imprime SIEMPRE aunque la comanda automatica este apagada, porque en la app el camarero pulsa Enviar a proposito): el pedido enviado desde la app tardaba la espera de la comanda automatica (60 s por defecto) en imprimirse porque el TPV lo re-guarda al adoptarlo y eso contaba como 'editado aqui'; ahora las lineas con sentBatchAt y sin sentAt (orden explicita del camarero) se imprimen sin esa espera (medido con 2 TPV reales: 3,3 s con espera de 60 s)",
     );
   } else {
     fail(

@@ -46938,7 +46938,10 @@ const __comandaRemoteFirstSeen = new Map(); // ticketId -> { ts (updatedAt del s
 let __comandaGraceRecheckTimer = null;
 
 async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
-  if (!isAutoComandaOnSaveEnabled()) return;
+  // Con la comanda automatica APAGADA el TPV no imprime solo lo que se monta aqui, pero un pedido
+  // que el camarero envio desde la app (orden explicita: en la app no hay autoguardado, solo
+  // "Enviar") se imprime siempre. Peticion de Sergi, 2026-10-20.
+  const autoOn = isAutoComandaOnSaveEnabled();
   if (__comandaAutoPrintRunning) return;
   // Real (Sergi, 2026-10-15): al abrir el TPV salio una comanda con un producto
   // que NO va a cocina. Con las familias de comanda aun sin cargar, "sin
@@ -46967,6 +46970,7 @@ async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
     isCamarerosAppTicket(t) &&
     Array.isArray(t?.items) &&
     t.items.some((l) => l && l.sentBatchAt && !l.sentAt);
+  if (!autoOn && !(Array.isArray(parkedTickets) ? parkedTickets : []).some((t) => t && !t.paid && appSentPending(t))) return;
 
   // Con el turno de impresion activo para este cliente, un pedido que acaba de cambiar en el
   // servidor no se imprime desde el sondeo hasta que lleve COMANDA_REMOTE_GRACE_MS sin cambios:
@@ -46999,6 +47003,7 @@ async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
     (t) =>
       t &&
       !t.paid &&
+      (autoOn || appSentPending(t)) &&
       (onlyTicketId
         ? String(t.id ?? "").trim() === onlyTicketId
         : !__autoComandaPending.has(String(t.id ?? "").trim()) &&
