@@ -6,6 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
+        "MEJORA: cuando dos o más TPV ven la misma mesa, todos muestran ahora la cuenta atrás de la comanda automática (\"se envía solo en N s (desde otro TPV)\"), no solo el TPV que hizo el último cambio. Antes los demás veían la barra de Enviar comanda sin ninguna indicación de que iba a salir sola.",
         "CAMBIO: en Modo Mesas, al cobrar una mesa queda LIBRE al instante. Ya no existe la etapa intermedia \"Cuenta cobrada\" ni el botón \"Cobrada y liberar\" para las mesas que se cobran a partir de ahora (esa etapa dejaba mesas colgadas como cobradas con un pedido abierto, y permitía cobrarlas otra vez). Las mesas que ya estuvieran en \"cobrada\" antes de actualizar se pueden seguir liberando con el botón de siempre.",
         "CORRECCIÓN: tras cobrar una mesa, la barra de comanda podía mostrar \"Enviar devolución (N)\" por lo que acababa de cobrarse y llegar a imprimir una devolución a cocina que nadie había pedido. Un pedido ya cobrado ya no cuenta como pendiente de cocina y su cuenta atrás se cancela al cobrar.",
         "CORRECCIÓN: si en una mesa quedaba un pedido vacío (por ejemplo tras devolver todo desde la app de camareros) y luego llegaba otro pedido con productos, el TPV abría la mesa vacía y no enseñaba el pedido real. Ahora un pedido vacío nunca tapa a otro de la misma mesa que sí tiene líneas.",

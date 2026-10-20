@@ -10441,6 +10441,27 @@ console.log("\n[SMOKE] Checking 2026-10-20 mesa libre al cobrar + sin devolucion
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-20 cuenta atras de comanda visible en todos los TPV de la mesa \n");
+{
+  if (
+    renderer.includes("const __autoComandaRemote = new Map();") &&
+    renderer.includes("async function remoteComandaStatusTick() {") &&
+    renderer.includes('const r = await parkedComandaTurn(loaded, "status");') &&
+    renderer.includes("setInterval(remoteComandaStatusTick, 3000);") &&
+    renderer.includes("(desde otro TPV)") &&
+    renderer.includes("active: !!body.active,") &&
+    renderer.includes("const remoteDue = !auto && loadedKey ? __autoComandaRemote.get(loadedKey) || 0 : 0;")
+  ) {
+    ok(
+      "Real (Sergi 2026-10-20, 2 TPV en la misma mesa): solo el TPV que edito el ultimo veia 'se envia solo en N s'; los demas veian la barra sin indicacion. Ahora todos consultan (parked-comanda-claim, accion status, solo lectura) y muestran la misma cuenta atras con '(desde otro TPV)', sin boton de pausa",
+    );
+  } else {
+    fail(
+      "Falta la cuenta atras de comanda de otro TPV (renderer.js: remoteComandaStatusTick/__autoComandaRemote/status) -- revisar el cambio de 2026-10-20",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

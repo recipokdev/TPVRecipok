@@ -41306,7 +41306,14 @@ async function parkedComandaTurn(ticket, action, extra = {}) {
     );
     const body = await res.json().catch(() => null);
     if (!res.ok || !body) return open;
-    return { granted: !!body.granted, reason: String(body.reason || "") };
+    return {
+      granted: !!body.granted,
+      reason: String(body.reason || ""),
+      // Solo "status": hay una cuenta atras de otro TPV en marcha para este pedido.
+      active: !!body.active,
+      dueInMs: Number(body.dueInMs) || 0,
+      mine: !!body.mine,
+    };
   } catch {
     return open;
   }
@@ -41474,6 +41481,61 @@ function renderMesaInUseNotice(others) {
   el.textContent = `${who} esta mesa abierta${since}`;
   el.classList.remove("hidden");
 }
+
+// Cuenta atras de la comanda automatica de OTRO TPV (servidor: parked-comanda-claim, accion status).
+// Solo el TPV que edito el ultimo arma la espera y la imprime; los demas TPV en la misma mesa veian
+// la barra "Enviar comanda N" sin ninguna indicacion de que iba a salir sola. Se consulta cada 3 s
+// solo si hay algo pendiente, la mesa esta en pantalla y este TPV no tiene su propia cuenta atras.
+const __autoComandaRemote = new Map(); // id del pedido -> hora local (ms) en que se enviara
+let __remoteComandaStatusBusy = false;
+async function remoteComandaStatusTick() {
+  if (__remoteComandaStatusBusy) return;
+  try {
+    if (
+      !MESAS_INLINE_ACTIVE ||
+      MESAS_INLINE_VIEW !== "transacciones" ||
+      !isAutoComandaOnSaveEnabled() ||
+      TPV_STATE?.offline
+    ) {
+      if (__autoComandaRemote.size) {
+        __autoComandaRemote.clear();
+        refreshSendComandaBar();
+      }
+      return;
+    }
+    const loaded = resolveComandaTicketForSelectedMesa();
+    const key = loaded ? String(loaded.id ?? "").trim() : "";
+    if (!key || loaded.paid || __autoComandaPending.has(key)) {
+      if (__autoComandaRemote.size) {
+        __autoComandaRemote.clear();
+        refreshSendComandaBar();
+      }
+      return;
+    }
+    const counts = getPendingComandaCountsForCurrentMesa();
+    if (counts.newQty + counts.returnedQty <= 0) {
+      if (__autoComandaRemote.delete(key)) refreshSendComandaBar();
+      return;
+    }
+    __remoteComandaStatusBusy = true;
+    const r = await parkedComandaTurn(loaded, "status");
+    const had = __autoComandaRemote.has(key);
+    if (r && r.active && !r.mine && r.dueInMs > 0) {
+      __autoComandaRemote.set(key, Date.now() + r.dueInMs);
+    } else {
+      __autoComandaRemote.delete(key);
+    }
+    if (had || __autoComandaRemote.has(key)) refreshSendComandaBar();
+  } catch (e) {
+    /* sin red o sin activar: simplemente no se muestra */
+  } finally {
+    __remoteComandaStatusBusy = false;
+  }
+}
+setInterval(remoteComandaStatusTick, 3000);
+setInterval(() => {
+  if (__autoComandaRemote.size) refreshSendComandaBar();
+}, 1000);
 
 async function mesaViewerTick() {
   if (__mesaViewerBusy) return;
@@ -47271,7 +47333,15 @@ function refreshSendComandaBar() {
         ),
       )
     : 0;
-  const extra = auto ? `se envía solo en ${autoSecs} s` : "";
+  // Cuenta atras de OTRO TPV (el que edito el ultimo y tiene el turno de impresion): todos los TPV
+  // que ven esta mesa la muestran (sin boton de pausa, que solo tiene el TPV que la gestiona).
+  const remoteDue = !auto && loadedKey ? __autoComandaRemote.get(loadedKey) || 0 : 0;
+  const remoteSecs = remoteDue ? Math.ceil((remoteDue - Date.now()) / 1000) : 0;
+  const extra = auto
+    ? `se envía solo en ${autoSecs} s`
+    : remoteSecs > 0
+      ? `se envía solo en ${remoteSecs} s (desde otro TPV)`
+      : "";
 
   const html = `<span class="scb-label">${
     total > 0
