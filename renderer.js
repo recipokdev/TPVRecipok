@@ -46957,6 +46957,16 @@ async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
   const recentlyEditedHere = (t) =>
     Date.now() - (Number(t?.localRevisionAt || 0) || 0) <
     getAutoComandaDelayMs() + 3000;
+  // Pedido de la app de camareros con lineas que el camarero acaba de ENVIAR (la app las sella con
+  // sentBatchAt al pulsar "Enviar" y el TPV aun no las ha sellado con sentAt): es una orden
+  // explicita, no un pedido que se sigue montando, asi que no hay espera que respetar. Sin esto el
+  // TPV (que re-guarda el pedido de la app al adoptarlo, y eso cuenta como "editado aqui") esperaba
+  // los segundos de la comanda automatica (60 s por defecto) antes de imprimir (cuenta a_reciplus,
+  // 2026-10-20).
+  const appSentPending = (t) =>
+    isCamarerosAppTicket(t) &&
+    Array.isArray(t?.items) &&
+    t.items.some((l) => l && l.sentBatchAt && !l.sentAt);
 
   // Con el turno de impresion activo para este cliente, un pedido que acaba de cambiar en el
   // servidor no se imprime desde el sondeo hasta que lleve COMANDA_REMOTE_GRACE_MS sin cambios:
@@ -46993,7 +47003,7 @@ async function maybeAutoPrintComandaFromRemoteSync(opts = {}) {
         ? String(t.id ?? "").trim() === onlyTicketId
         : !__autoComandaPending.has(String(t.id ?? "").trim()) &&
           !isAutoComandaOffForTicket(t) &&
-          !recentlyEditedHere(t)) &&
+          (!recentlyEditedHere(t) || appSentPending(t))) &&
       isMesasModeTicket(t) &&
       (getComandaDeltaLinesForTicket(t, t?.items || []).length > 0 ||
         getComandaReturnedLinesForTicket(t, t?.items || []).length > 0) &&

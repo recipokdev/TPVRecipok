@@ -1,7 +1,8 @@
 // run-app-ticket-author.js -- prueba MANUAL (no entra en npm test): un pedido de la APP DE CAMAREROS
 // (creado por la API a nombre de "Cintia") no debe quedar a nombre del agente del TPV: el TPV conserva
 // userName en sus guardados, las lineas enviadas llevan sentBy "Cintia" y la comanda de cocina se
-// imprime con agentLabel "Cintia". Dos TPV reales contra el demo (mesa M3, que deja limpia).
+// imprime con agentLabel "Cintia" Y SIN esperar la espera de la comanda automatica (60 s): se mide la
+// latencia hasta la primera impresion (esperada: pocos segundos). Dos TPV reales contra el demo (mesa M3, que deja limpia).
 // Impresion simulada. Uso: node tools/tests/run-app-ticket-author.js
 process.env.TPV_RUN_BACKGROUND = "1";
 const path = require("path"), os = require("os");
@@ -89,9 +90,9 @@ async function cleanTable(A, B) {
     const prep = (X) => X.win.evaluate((TABLE) => {
       window.__saved = { on: localStorage.getItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY), delay: localStorage.getItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY) };
       localStorage.setItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY, "1");
-      localStorage.setItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY, "8");
+      localStorage.setItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY, "60");
       window.__prints = []; window.__net = []; const __of = window.fetch.bind(window); window.fetch = (u, o) => { const m = String(u && u.url || u).match(/action=([a-z-]+)/); if (m && /parked|mesas-layout/.test(m[1]) && String((o && o.method) || 'GET') !== 'GET') __net.push(Date.now() % 100000 + ' ' + m[1]); return __of(u, o); };
-      window.__prints2 = []; printComandaWithContext = async (o) => { __prints2.push({ agentLabel: o.agentLabel || "", dev: !!o.isReturn, lines: (o.lines || []).map((l) => String(l.name).slice(0, 8) + ":" + l.qty) }); __prints.push((o.isReturn ? "DEV " : "") + (o.lines || []).map((l) => String(l.name).slice(0, 7) + ":" + l.qty).sort().join(",")); return { ok: true }; };
+      window.__prints2 = []; printComandaWithContext = async (o) => { __prints2.push({ t: Date.now(), agentLabel: o.agentLabel || "", dev: !!o.isReturn, lines: (o.lines || []).map((l) => String(l.name).slice(0, 8) + ":" + l.qty) }); __prints.push((o.isReturn ? "DEV " : "") + (o.lines || []).map((l) => String(l.name).slice(0, 7) + ":" + l.qty).sort().join(",")); return { ok: true }; };
       getConfiguredComandaPrinterForPrint = () => "FAKE";
       window.__prods = products.filter((x) => Number(x.price) > 0);
       window.__sel = () => { updateMesasSelectionFromContext({ tableUid: TABLE }); syncTpvCartWithSelectedMesa(); };
@@ -115,6 +116,7 @@ async function cleanTable(A, B) {
       parkingMode: "mesas", modoMesas: 1, modeMesas: 1, mesaUid: TABLE, mesaRoomId: "tut-room-1", mesaRoomName: "Sala 1", mesaTableId: "m3", mesaTableName: "M3",
       codalmacen: "ALG", paid: false, docType: "ticket", pedidoStatus: "pendiente" };
     const post = await fetch(API + "?action=create-parked-reservation", { method: "POST", headers: { "Content-Type": "application/json", "X-TPV-API-KEY": apiKey }, body: JSON.stringify(body) });
+    out.t_post = Date.now();
     out.app_create_status = post.status;
     out.app_ticket = TICKET;
     await sleep(30000);
@@ -130,6 +132,7 @@ async function cleanTable(A, B) {
       await A.win.screenshot({ path: path.join(process.env.TPV_SHOT_DIR, "mesa-pedido-app.png") });
     }
     out.prints_A = await A.win.evaluate(() => __prints2.slice());
+    out.latencia_primera_impresion_s = (() => { const ts = out.prints_A.map((p) => p.t).filter(Boolean); return ts.length ? Math.round((Math.min(...ts) - out.t_post) / 100) / 10 : null; })();
     out.prints_B = await B.win.evaluate(() => __prints2.slice());
     out.local_A = await A.win.evaluate((T) => { const t = parkedTickets.find((x) => String(x.id) === T); return t ? { userName: t.userName, agentName: t.agentName, agentCode: t.agentCode } : "(no esta)"; }, TICKET);
     out.OK = !!srv && srv.userName === "Cintia" && (srv.items || []).every((l) => !l.sentBy || l.sentBy === "Cintia") && [...out.prints_A, ...out.prints_B].length >= 1 && [...out.prints_A, ...out.prints_B].every((p) => p.agentLabel === "Cintia");

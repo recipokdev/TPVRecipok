@@ -10484,6 +10484,23 @@ console.log("\n[SMOKE] Checking 2026-10-20 cobro: sin pedido duplicado al cobrar
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-20 pedido de la app de camareros se imprime sin esperar la espera \n");
+{
+  if (
+    renderer.includes("const appSentPending = (t) =>") &&
+    renderer.includes("t.items.some((l) => l && l.sentBatchAt && !l.sentAt);") &&
+    renderer.includes("(!recentlyEditedHere(t) || appSentPending(t))) &&")
+  ) {
+    ok(
+      "Real (cuenta de pruebas a_reciplus, 2026-10-20): el pedido enviado desde la app tardaba la espera de la comanda automatica (60 s por defecto) en imprimirse porque el TPV lo re-guarda al adoptarlo y eso contaba como 'editado aqui'; ahora las lineas con sentBatchAt y sin sentAt (orden explicita del camarero) se imprimen sin esa espera (medido con 2 TPV reales: 3,3 s con espera de 60 s)",
+    );
+  } else {
+    fail(
+      "Falta imprimir sin espera los pedidos enviados desde la app (renderer.js: appSentPending en maybeAutoPrintComandaFromRemoteSync) -- revisar el cambio de 2026-10-20",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
