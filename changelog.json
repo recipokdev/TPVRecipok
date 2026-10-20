@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "CORRECCIÓN: al cobrar una mesa o un pedido, si alguien lo modifica mientras la ventana de cobro está abierta (otro TPV o la app de camareros añade o quita algo), el TPV ya no cobra el importe antiguo: avisa del nuevo total (\"El pedido ha cambiado\"), no cobra nada y basta con volver a pulsar Cobrar. Antes podía cobrarse de menos y quedar la línea nueva sin cobrar."
+      ]
     },
     {
       "version": "0.2.49",

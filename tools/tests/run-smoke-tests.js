@@ -10372,6 +10372,27 @@ console.log("\n[SMOKE] Checking 2026-10-16 cobro seguro entre dispositivos (cand
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-20 cobro: el pedido cambia con la ventana de cobro abierta\n");
+{
+  if (
+    renderer.includes("const totalNowC = toCents(round2(getCartTotal(cart)));") &&
+    renderer.includes("const totalModalC = toCents(totalCart);") &&
+    renderer.includes("if (totalNowC !== totalModalC) {") &&
+    renderer.includes('"importe-cambiado-en-modal"') &&
+    renderer.includes('"El pedido ha cambiado"') &&
+    renderer.indexOf("const totalNowC = toCents(round2(getCartTotal(cart)));") <
+      renderer.indexOf("// ✅ FAILSAFE: revalidar (por si cambió algo mientras el modal estaba abierto)")
+  ) {
+    ok(
+      "Real (prueba con la app de camareros, 2026-10-20): el modal de cobro conserva el total con el que se abrio aunque el pedido cambie por debajo (el carrito se actualiza solo desde otro TPV/app) -- al confirmar se compara el total actual con el del modal ANTES de tomar el candado y, si difiere, no se cobra nada y se avisa para volver a pulsar Cobrar (evita cobrar de menos dejando una linea sin cobrar)",
+    );
+  } else {
+    fail(
+      "Falta la comprobacion de total cambiado al confirmar el cobro (renderer.js, justo despues de openPayModal) -- revisar el cambio de 2026-10-20",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

@@ -42433,6 +42433,31 @@ async function onPayButtonClick() {
       return;
     }
 
+    // Real (prueba con la app de camareros, 2026-10-20): el pedido puede cambiar MIENTRAS la
+    // ventana de cobro esta abierta (el camarero de la app o el otro TPV añade/quita algo y el
+    // carrito se actualiza solo), pero el modal conserva el total con el que se abrio. Sin esta
+    // comprobacion se cobraba el importe viejo y la linea nueva quedaba sin cobrar en un pedido
+    // ya cerrado. Se compara el total actual con el del modal ANTES de tomar el candado: si no
+    // coincide, no se cobra nada y se pide revisar el importe nuevo.
+    {
+      const totalNowC = toCents(round2(getCartTotal(cart)));
+      const totalModalC = toCents(totalCart);
+      if (totalNowC !== totalModalC) {
+        logFeatureInfo("COBRO", "importe-cambiado-en-modal", {
+          requestId,
+          totalModal: Number(totalCart || 0),
+          totalAhora: totalNowC / 100,
+        });
+        customerSetMode("CART");
+        setStatusText("Cobro cancelado (el pedido cambió)");
+        showMessageModal(
+          "El pedido ha cambiado",
+          `Mientras cobrabas, el pedido se modificó (desde otro terminal o la app de camareros): antes eran ${eurES(totalCart)} y ahora son ${eurES(totalNowC / 100)}.\n\nNo se ha cobrado nada. Revisa el importe actualizado y vuelve a pulsar Cobrar.`,
+        );
+        return;
+      }
+    }
+
     // ✅ FAILSAFE: revalidar (por si cambió algo mientras el modal estaba abierto)
     const okAgent2 = await requireAssignedAgentOrBlock({ showModal: true });
     if (!okAgent2) return;
