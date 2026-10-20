@@ -22927,11 +22927,16 @@ function applyOptimisticMesaCobrada(ticket) {
         ? { ...mesasState.tableMeta[uid] }
         : null;
 
-    mesasState.tableStates[uid] = "cuenta";
-    mesasState.tableMeta[uid] = {
-      ...(previousMeta || {}),
-      serviceStage: "cobro-realizado",
-    };
+    // Peticion de Sergi (2026-10-20): ya no existe la etapa "Cuenta cobrada / Cobrada y liberar"
+    // -- al cobrar, la mesa queda LIBRE al instante. (Esa etapa intermedia dejaba mesas colgadas
+    // como "cobrada" con un pedido abierto y permitia cobrarlas otra vez.) Si el cobro real falla,
+    // revertOptimisticMesaCobrada devuelve la mesa a su estado anterior.
+    mesasState.tableStates[uid] = "libre";
+    {
+      const nextMeta = { ...(previousMeta || {}) };
+      delete nextMeta.serviceStage;
+      mesasState.tableMeta[uid] = nextMeta;
+    }
     saveMesasTablesStateForInline(mesasState);
 
     return { uid, previousStatus, previousMeta };
@@ -22956,7 +22961,9 @@ function revertOptimisticMesaCobrada(optimisticMesaState) {
     if (!mesasState.tableMeta || typeof mesasState.tableMeta !== "object") return;
 
     const { uid, previousStatus, previousMeta } = optimisticMesaState;
-    if (mesasState.tableMeta[uid]?.serviceStage !== "cobro-realizado") return;
+    // La mesa solo se revierte si sigue tal cual la dejo el optimismo (libre): si otra cosa la
+    // toco (otro estado, otro pedido), no se pisa nada.
+    if (String(mesasState.tableStates?.[uid] || "") !== "libre") return;
 
     if (!mesasState.tableStates || typeof mesasState.tableStates !== "object") {
       mesasState.tableStates = {};
@@ -23120,23 +23127,34 @@ async function markParkedTicketAsPaidByIndex(
       const prevMeta =
         mesasState.tableMeta[uid] &&
         typeof mesasState.tableMeta[uid] === "object"
-          ? mesasState.tableMeta[uid]
+          ? { ...mesasState.tableMeta[uid] }
           : {};
-      mesasState.tableStates[uid] = "cuenta";
-      mesasState.tableMeta[uid] = {
-        ...prevMeta,
-        serviceStage: "cobro-realizado",
-      };
+      delete prevMeta.serviceStage;
+      // Mesa LIBRE al cobrar (sin etapa "Cuenta cobrada", ver applyOptimisticMesaCobrada): se
+      // libera aqui mismo, sin depender de que el desvinculo posterior encuentre el pedido.
+      mesasState.tableStates[uid] = "libre";
+      mesasState.tableMeta[uid] = prevMeta;
+      if (mesasState.tableTicketMap && typeof mesasState.tableTicketMap === "object") {
+        delete mesasState.tableTicketMap[uid];
+      }
+      if (mesasState.draftCartByTable && typeof mesasState.draftCartByTable === "object") {
+        delete mesasState.draftCartByTable[uid];
+      }
       saveMesasTablesStateForInline(mesasState);
     }
   } catch (e) {
     console.warn(
-      "No se pudo marcar la mesa como cuenta cobrada:",
+      "No se pudo dejar la mesa libre al cobrar:",
       e?.message || e,
     );
   }
 
   ticket.paid = true;
+  // Ya cobrado: ninguna cuenta atras de comanda automatica (ni de pedido ni de devolucion) debe
+  // seguir viva para este pedido.
+  try {
+    cancelAutoComandaForTicket(String(ticket.id ?? "").trim());
+  } catch {}
   ticket.closingInProgress = false;
   ticket.closingByTerminalId = "";
   ticket.closingByTerminalName = "";
@@ -46173,7 +46191,12 @@ function getConfiguredComandaPrinterForPrint() {
 }
 
 function resolveComandaTicketForSelectedMesa() {
-  const loaded = getCurrentLoadedParkedTicket();
+  let loaded = getCurrentLoadedParkedTicket();
+  // Un pedido YA COBRADO no tiene nada pendiente de cocina: si el indice del carrito aun apunta a
+  // el tras cobrar, el carrito vacio frente a lo ya impreso se leia como "devolucion de todo" y
+  // armaba "Enviar devolucion (N)" y hasta imprimia una devolucion fantasma (visto por Sergi
+  // 2026-10-20 y reproducido con 2 TPV: tras cobrar la barra mostraba "Enviar devolucion 2").
+  if (loaded && loaded.paid) loaded = null;
   if (!isMesasTransaccionesMode()) return loaded;
 
   const selectedScope = getSelectedMesaScopeContext();

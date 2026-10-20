@@ -10419,6 +10419,28 @@ console.log("\n[SMOKE] Checking 2026-10-20 pedidos de la app de camareros conser
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-20 mesa libre al cobrar + sin devolucion fantasma tras cobrar \n");
+{
+  if (
+    renderer.includes('mesasState.tableStates[uid] = "libre";') &&
+    renderer.includes("Peticion de Sergi (2026-10-20): ya no existe la etapa") &&
+    renderer.includes('if (String(mesasState.tableStates?.[uid] || "") !== "libre") return;') &&
+    renderer.includes("Mesa LIBRE al cobrar (sin etapa") &&
+    renderer.includes("delete mesasState.tableTicketMap[uid];") &&
+    renderer.includes("if (loaded && loaded.paid) loaded = null;") &&
+    renderer.includes("cancelAutoComandaForTicket(String(ticket.id ?? " + '""' + ").trim());") &&
+    !renderer.includes('serviceStage: "cobro-realizado",')
+  ) {
+    ok(
+      "Peticion de Sergi 2026-10-20: al cobrar en Modo Mesas la mesa queda LIBRE al instante (sin etapa 'Cuenta cobrada'/'Cobrada y liberar', que dejaba mesas colgadas con pedido abierto y permitia re-cobrar) y un pedido ya cobrado no cuenta como pendiente de cocina (antes armaba 'Enviar devolucion N' fantasma y llegaba a imprimir una devolucion)",
+    );
+  } else {
+    fail(
+      "Falta 'mesa libre al cobrar' o el arreglo de la devolucion fantasma tras cobrar (renderer.js: applyOptimisticMesaCobrada/markParkedTicketAsPaidByIndex/resolveComandaTicketForSelectedMesa) -- revisar el cambio de 2026-10-20",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
