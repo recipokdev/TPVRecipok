@@ -10140,7 +10140,7 @@ console.log("\n[SMOKE] Checking 2026-10-15 comanda automatica con espera de 10 s
     renderer.includes("runAutoComandaForTicket(key).catch((e) => {") &&
     renderer.includes("await maybeAutoPrintComandaFromRemoteSync({ onlyTicketId: key });") &&
     renderer.includes("!__autoComandaPending.has(String(t.id ?? \"\").trim()) &&") &&
-    renderer.includes("!recentlyEditedHere(t)) &&") &&
+    renderer.includes("(!recentlyEditedHere(t) || appSentPending(t))) &&") &&
     renderer.includes("cancelAutoComandaForTicket(ticket?.id);") &&
     renderer.includes("entry.remainingMs = Math.max(0, entry.dueAt - Date.now());") &&
     renderer.includes("scb-extra${auto?.paused ? \" is-paused\" : \"\"}") &&
