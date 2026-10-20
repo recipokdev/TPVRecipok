@@ -15528,7 +15528,12 @@ function renderCart() {
       };
       if (itemBatchAt) {
         const timeLabel = hhmm(itemBatchAt);
-        divider.textContent = timeLabel ? `${timeLabel} · camarero` : "Camarero";
+        // Con el nombre del camarero de la app (sentBy lo estampa el TPV al enviar la comanda)
+        // en vez del "camarero" generico.
+        const waiter = String(item?.sentBy || "").trim() || "camarero";
+        divider.textContent = timeLabel
+          ? `${timeLabel} · ${waiter}`
+          : waiter.charAt(0).toUpperCase() + waiter.slice(1);
       } else if (itemSentByTpv) {
         // Envio hecho desde este TPV: hora, numero de comanda y quien la envio.
         const bits = [hhmm(itemSentAt)];

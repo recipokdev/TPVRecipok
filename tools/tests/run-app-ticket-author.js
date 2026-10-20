@@ -123,6 +123,12 @@ async function cleanTable(A, B) {
     const lst = await (await fetch(API + "?action=list-parked-reservations&slug=demo&codalmacen=ALG", { headers: { "X-TPV-API-KEY": apiKey } })).json();
     const srv = (lst.data || []).find((t) => String(t.ticketId || t.id) === TICKET);
     out.servidor = srv ? { userName: srv.userName, total: srv.total, lineas: (srv.items || []).map((l) => ({ n: String(l.name).slice(0, 8), q: l.qty, sentBy: l.sentBy || null, sentPart: l.sentPart || null })) } : "(no esta)";
+    // Captura opcional de la mesa abierta en A (TPV_SHOT_DIR=carpeta) para ver como queda en pantalla
+    if (process.env.TPV_SHOT_DIR) {
+      await A.win.evaluate(() => { __sel(); });
+      await sleep(2500);
+      await A.win.screenshot({ path: path.join(process.env.TPV_SHOT_DIR, "mesa-pedido-app.png") });
+    }
     out.prints_A = await A.win.evaluate(() => __prints2.slice());
     out.prints_B = await B.win.evaluate(() => __prints2.slice());
     out.local_A = await A.win.evaluate((T) => { const t = parkedTickets.find((x) => String(x.id) === T); return t ? { userName: t.userName, agentName: t.agentName, agentCode: t.agentCode } : "(no esta)"; }, TICKET);

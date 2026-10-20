@@ -10404,7 +10404,8 @@ console.log("\n[SMOKE] Checking 2026-10-20 pedidos de la app de camareros conser
     renderer.includes("agentLabel = \"\",") &&
     renderer.includes("String(agentLabel || currentAgent?.name") &&
     renderer.includes("agentLabel: getCamarerosAppAuthorName(ticket),") &&
-    renderer.includes("agentLabel: getCamarerosAppAuthorName(loaded),")
+    renderer.includes("agentLabel: getCamarerosAppAuthorName(loaded),") &&
+    renderer.includes('const waiter = String(item?.sentBy || "").trim() || "camarero";')
   ) {
     ok(
       "Real (prueba con la app de camareros, 2026-10-20): el TPV pisaba al camarero de un pedido de la app (userName 'Cintia') con su agente activo en el primer guardado entero, y la comanda salia 'enviado por TPV' -- ahora userName/sentBy/impreso/anillo conservan al camarero de la app (solo ids 'camarero-...'; el agente del cobro no cambia)",
