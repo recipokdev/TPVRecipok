@@ -10462,6 +10462,28 @@ console.log("\n[SMOKE] Checking 2026-10-20 cuenta atras de comanda visible en to
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-20 cobro: sin pedido duplicado al cobrar ni tras un cobro fallido \n");
+{
+  if (
+    renderer.includes("const originLive =") &&
+    renderer.includes("originLive.__failedCobroKept = true;") &&
+    renderer.includes("return originLive;") &&
+    renderer.includes("recoveredTicket.__failedCobroKept") &&
+    renderer.includes("closingTicket?.closingInProgress &&") &&
+    renderer.includes("!isParkedTicketLockedByAnotherTerminal(closingTicket) &&") &&
+    renderer.indexOf("closingTicket?.closingInProgress &&") <
+      renderer.indexOf("if (mesaHasOpsManagedTicket(state, uid)) {", renderer.indexOf("function syncTpvCartWithSelectedMesa"))
+  ) {
+    ok(
+      "Real (Sergi 2026-10-20, 2 TPV): al cobrar en Modo Mesas, el refresco del plano recargaba el pedido (aun sin cobrar) en el carrito ya vaciado y el autoguardado creaba un 2o pedido con las mismas lineas (2a comanda, 'Enviar devolucion' fantasma, doble reserva de stock que hacia fallar el cobro con E_COBRO_STOCK); y un cobro fallido creaba otro 'Cobro fallido' duplicado ademas del pedido original -- ahora un pedido que se esta cobrando no se recarga y el fallo conserva el original",
+    );
+  } else {
+    fail(
+      "Faltan los arreglos de pedido duplicado al cobrar / tras cobro fallido (renderer.js: syncTpvCartWithSelectedMesa closingInProgress, parkFailedSaleForRetry originLive) -- revisar el cambio de 2026-10-20",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

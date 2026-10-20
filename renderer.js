@@ -10544,6 +10544,23 @@ function syncTpvCartWithSelectedMesa(opts = {}) {
   );
 
   if (idx >= 0) {
+    // El pedido se esta COBRANDO desde este TPV (candado local de cobro puesto y carrito ya vaciado
+    // para el siguiente cliente): no se vuelve a cargar en el carrito. Antes, cualquier refresco del
+    // plano (p.ej. el que provoca el propio cobro al liberar la mesa) recargaba el pedido aun sin
+    // cobrar, y el autoguardado de Mesas creaba un SEGUNDO pedido con las mismas lineas (duplicado,
+    // 2a comanda e incluso "Enviar devolucion" fantasma). Visto con 2 TPV reales, 2026-10-20.
+    {
+      const closingTicket = parkedTickets[idx];
+      if (
+        closingTicket?.closingInProgress &&
+        !isParkedTicketLockedByAnotherTerminal(closingTicket) &&
+        !(Array.isArray(cart) && cart.length > 0)
+      ) {
+        refreshParkButtonUI?.();
+        refreshParkedEditingBanner?.();
+        return;
+      }
+    }
     // Guardado por operaciones: el pedido guardado es la fuente de verdad; los borradores
     // compartidos no se aplican. Si ya es el pedido cargado, el carrito es la copia de
     // trabajo (no se toca); si no, se carga desde el pedido.
@@ -42239,6 +42256,47 @@ async function parkFailedSaleForRetry(
       : [];
     if (!items.length) return null;
 
+    // Si lo que se cobraba YA era un aparcado o una mesa (originTicket), NO se crea un segundo
+    // pedido "Cobro fallido" con las mismas lineas: el original sigue abierto (y con su reserva de
+    // stock), asi que el duplicado dejaba dos pedidos iguales, doble reserva de stock y riesgo de
+    // cobrar los dos (visto con 2 TPV reales, 2026-10-20). Se conserva el original, se le libera el
+    // candado de cobro y se guarda el numero2 del intento para que el reintento no duplique factura.
+    const originLive =
+      originTicket && !originTicket.paid
+        ? (Array.isArray(parkedTickets) ? parkedTickets : []).find(
+            (t) => t && String(t.id) === String(originTicket.id) && !t.paid,
+          ) || null
+        : null;
+    if (originLive) {
+      originLive.recoveredNumero2 =
+        String(ticketPayload?.numero2 || "").trim() ||
+        originLive.recoveredNumero2 ||
+        null;
+      originLive.closingInProgress = false;
+      originLive.closingByTerminalId = "";
+      originLive.closingByTerminalName = "";
+      originLive.closingByAt = null;
+      originLive.localRevisionAt = Date.now();
+      originLive.__failedCobroKept = true;
+      saveParkedTicketsCache();
+      refreshParkButtonUI();
+      updateParkedCountBadge();
+      try {
+        await apiSaveParkedReservation(originLive);
+      } catch (e) {
+        enqueueParkedSyncOperation("upsert", originLive);
+      }
+      try {
+        parkedClosingRemote(originLive, "release").catch(() => {});
+      } catch {}
+      logFeatureWarn("COBRO", "fallo-pedido-original-conservado", {
+        id: originLive.id,
+        total: Number(ticketPayload?.total || getCartTotal(items) || 0),
+        reason: String(reason || "").slice(0, 200),
+      });
+      return originLive;
+    }
+
     const nextDisplayNo = getNextSuggestedParkTicketDisplayNo();
     const nextTicketId = getNextSuggestedParkTicketId();
     parkedCounter = nextDisplayNo;
@@ -43862,7 +43920,9 @@ async function processConfirmedSale(ctx) {
         "Cobro fallido -- venta recuperada",
         `No se pudo completar un cobro de ${eurES(Number(recoveredTicket.total || 0))} que se estaba procesando en segundo plano.\n\n` +
           `Motivo: [${errCode}] ${msg}\n\n` +
-          `Se ha guardado como aparcado ("${recoveredTicket.name}") para revisarlo y volver a cobrarlo cuando quieras.`,
+          (recoveredTicket.__failedCobroKept
+            ? `El pedido sigue abierto ("${recoveredTicket.name}"): no se ha cobrado nada y puedes volver a cobrarlo cuando quieras.`
+            : `Se ha guardado como aparcado ("${recoveredTicket.name}") para revisarlo y volver a cobrarlo cuando quieras.`),
       );
     } else if (saleCommitted && committedFacturaId) {
       // La factura YA existe en FacturaScripts (crearFacturaCliente ya se
