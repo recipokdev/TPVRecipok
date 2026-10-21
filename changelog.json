@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.51",
+      "date": "2026-10-21",
+      "title": "Release 0.2.51",
       "changes": [
         "CORRECCIÓN: en el mapa de mesas, una mesa Ocupada sin ningún producto (marcada a mano o con un pedido vacío) se puede liberar con el botón \"Liberar mesa\" del menú de la mesa. Con productos hay que cobrarla o usar \"Borrar mesa\" en el carrito.",
         "MEJORA: los resúmenes de Opciones también muestran los botones de cada apartado (\"▸ Familias: visibilidad, color e icono\", \"▸ Restablecer tamaño de familias\", \"▸ Alérgenos\"...) con borde discontinuo, para que no parezca que solo hay interruptores. Al pulsarlos llevan a esa opción.",
