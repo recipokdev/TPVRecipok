@@ -10471,12 +10471,43 @@ function stopMesasLayoutRemotePolling() {
   MESAS_LAYOUT_REMOTE_POLL_TIMER = null;
 }
 
+// Peticion de Sergi (2026-10-21): las etapas "Pide cuenta" y "Cuenta cobrada" desaparecen: una mesa
+// solo es libre, ocupada o reservada (al cobrar queda libre sola). Lo que quedo guardado con esas
+// etapas (p.ej. mesas colgadas como "cobrada" con un pedido sin cobrar, que ademas bloqueaban el
+// carrito) se reconvierte al leerlo: con pedido abierto -> ocupada; sin pedido -> libre.
+function normalizeLegacyMesaStages(st) {
+  if (!st || typeof st !== "object") return false;
+  const states = st.tableStates && typeof st.tableStates === "object" ? st.tableStates : null;
+  const meta = st.tableMeta && typeof st.tableMeta === "object" ? st.tableMeta : null;
+  const map = st.tableTicketMap && typeof st.tableTicketMap === "object" ? st.tableTicketMap : {};
+  let changed = false;
+  if (states) {
+    Object.keys(states).forEach((uid) => {
+      if (String(states[uid] || "").trim().toLowerCase() === "cuenta") {
+        states[uid] = map[uid] ? "ocupada" : "libre";
+        changed = true;
+      }
+    });
+  }
+  if (meta) {
+    Object.keys(meta).forEach((uid) => {
+      const stage = String(meta[uid]?.serviceStage || "").trim().toLowerCase();
+      if (stage === "cuenta-pedida" || stage === "cobro-realizado") {
+        meta[uid] = { ...meta[uid], serviceStage: map[uid] ? "pedido" : "" };
+        changed = true;
+      }
+    });
+  }
+  return changed;
+}
+
 function loadMesasTablesStateForInline() {
   try {
     const raw = readMesasTablesStateRawLocal();
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return null;
+    normalizeLegacyMesaStages(parsed);
     return parsed;
   } catch {
     return null;
@@ -11500,18 +11531,6 @@ function getMesaQuickStatusMeta(state, uid) {
     .toLowerCase();
 
   if (linkedTicket) {
-    if (manualState === "cuenta" && serviceStage === "cobro-realizado") {
-      return {
-        kind: "cobrada",
-        text: "Cuenta cobrada",
-      };
-    }
-    if (manualState === "cuenta") {
-      return {
-        kind: "cuenta",
-        text: "Pide cuenta",
-      };
-    }
     return {
       kind: "ocupada",
       text: "Ocupada",
@@ -11528,18 +11547,6 @@ function getMesaQuickStatusMeta(state, uid) {
     return {
       kind: "ocupada",
       text: "Ocupada",
-    };
-  }
-  if (manualState === "cuenta") {
-    if (serviceStage === "cobro-realizado") {
-      return {
-        kind: "cobrada",
-        text: "Cuenta cobrada",
-      };
-    }
-    return {
-      kind: "cuenta",
-      text: "Pide cuenta",
     };
   }
   if (manualState === "reservada") {
@@ -15097,17 +15104,8 @@ function getCartEditLockReason() {
     return "";
   }
 
-  const state = loadMesasTablesStateForInline();
-  const uid = String(state?.selectedTableId || "").trim();
-  if (!uid) return "";
-
-  const stage = String(state?.tableMeta?.[uid]?.serviceStage || "")
-    .trim()
-    .toLowerCase();
-  if (stage === "cobro-realizado") {
-    return "Esta mesa ya está cobrada y lista para limpieza. No se puede modificar.";
-  }
-
+  // (2026-10-21) Ya no hay etapa "Cuenta cobrada": una mesa cobrada queda libre, asi que nunca se
+  // bloquea el carrito por el estado de la mesa (antes dejaba mesas colgadas sin poder editarse).
   return "";
 }
 
@@ -23317,13 +23315,6 @@ function applyOptimisticMesaCobrada(ticket) {
     }
     if (!mesasState.tableMeta || typeof mesasState.tableMeta !== "object") {
       mesasState.tableMeta = {};
-    }
-
-    // Si otra cosa ya la puso en "cuenta cobrada" (p.ej. otro terminal
-    // cobrando la misma mesa a la vez), no pisamos nada -- no hay optimismo
-    // que aplicar ni que revertir despues.
-    if (mesasState.tableMeta[uid]?.serviceStage === "cobro-realizado") {
-      return null;
     }
 
     const previousStatus = mesasState.tableStates[uid] ?? null;
@@ -48614,16 +48605,14 @@ function markMesaAsPendingPaymentByUid(uid) {
       ? mesasState.tableMeta[mesaUid]
       : {};
 
-  mesasState.tableStates[mesaUid] = "cuenta";
+  // (2026-10-21) Ya no existe el estado "Pide cuenta": preimprimir no cambia la mesa, que sigue ocupada.
+  mesasState.tableStates[mesaUid] = "ocupada";
   const linkedTicket = resolveComandaTicketForSelectedMesa();
   const linkedTicketId = String(linkedTicket?.id || "").trim();
   if (linkedTicketId) {
     mesasState.tableTicketMap[mesaUid] = linkedTicketId;
   }
-  mesasState.tableMeta[mesaUid] = {
-    ...prevMeta,
-    serviceStage: "cuenta-pedida",
-  };
+  mesasState.tableMeta[mesaUid] = { ...prevMeta };
 
   saveMesasTablesStateForInline(mesasState);
   renderMesasTransContextBar?.();

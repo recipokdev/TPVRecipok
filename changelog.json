@@ -6,6 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
+        "CORRECCIÓN: Modo Mesas ya no tiene las etapas \"Pide cuenta\" ni \"Cuenta cobrada\" (solo Libre, Ocupada y Reservada). Una mesa en \"Cuenta cobrada\" bloqueaba el carrito (no dejaba añadir ni quitar nada) y se quedaba colgada aunque se hubiera cobrado. Las mesas que ya estaban así se reconvierten solas al abrir: con pedido abierto pasan a Ocupada (se puede seguir añadiendo o cobrar) y sin pedido pasan a Libre. Preimprimir la cuenta ya no cambia el estado de la mesa.",
         "MEJORA: la flecha ← para volver a las familias (modo \"Familias primero\") es más grande (56 px de alto) para pulsarla bien con el dedo en una tablet; igual la barra \"Volver a las familias\" dentro de las subfamilias.",
         "MEJORA: en \"Familias primero\" hay un primer botón \"Todos los productos\" (borde discontinuo) que muestra la lista completa sin elegir familia, con la flecha ← para volver. Y dentro de una familia con subfamilias, el \"Volver\" ya no es un botón grande que ocupa el sitio de una familia: es una barra fina \"← Volver a las familias\" de ancho completo.",
         "MEJORA: con \"Familias primero\", los botones de familia son iguales (anchos y bajos, hasta 4 por fila) tanto con las familias arriba como en la disposición lateral; antes en lateral salían cuadrados enormes que llenaban la pantalla con pocas familias.",

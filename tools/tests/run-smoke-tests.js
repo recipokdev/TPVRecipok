@@ -8322,7 +8322,7 @@ console.log(
 
 mustContain(
   mesasJs,
-  'const orderByUid = new Map();\r\n  objects\r\n    .filter((obj) => !!obj?.tableUid)\r\n    .map((obj) => {\r\n      const uid = String(obj.tableUid || "").trim();\r\n      const ticket = getMappedTicketForTable(uid);\r\n      const statusCode = getTableStatus(uid).code;\r\n      if (!ticket || (statusCode !== "ocupada" && statusCode !== "cuenta")) {\r\n        return null;\r\n      }\r\n      return {\r\n        uid,\r\n        createdAt: new Date(',
+  'const orderByUid = new Map();\r\n  objects\r\n    .filter((obj) => !!obj?.tableUid)\r\n    .map((obj) => {\r\n      const uid = String(obj.tableUid || "").trim();\r\n      const ticket = getMappedTicketForTable(uid);\r\n      const statusCode = getTableStatus(uid).code;\r\n      if (!ticket || statusCode !== "ocupada") {\r\n        return null;\r\n      }\r\n      return {\r\n        uid,\r\n        createdAt: new Date(',
   "renderMapCards no longer computes this badge's number from the ticket's own internal id (a large, effectively-always-truthy value, in practice a creation timestamp) -- it only carries the uid and createdAt now, so the small 20px round badge (mesas.css .gestion-order) can never again be asked to display a 13-digit number",
 );
 mustContain(
@@ -10724,6 +10724,27 @@ console.log("\n[SMOKE] Checking 2026-10-21 familias primero: boton Todos los pro
     ok("Peticion de Sergi 2026-10-21: Familias primero tiene boton 'Todos los productos' (lista completa, se sale con la flecha) y el Volver de las subfamilias es una barra fina de ancho completo");
   } else {
     fail("Falta el boton 'Todos los productos' o el Volver fino de Familias primero (renderer.js familiesFirstShowAll / renderCategories; styles.css)");
+  }
+}
+
+console.log("\n[SMOKE] Checking 2026-10-21 Mesas sin etapas Pide cuenta / Cuenta cobrada \n");
+{
+  const mesasJs = fs.readFileSync(path.join(root, "mesas", "mesas.js"), "utf8");
+  if (
+    renderer.includes("function normalizeLegacyMesaStages(st) {") &&
+    mesasJs.includes("function normalizeLegacyMesaStages(st) {") &&
+    renderer.includes("normalizeLegacyMesaStages(parsed);") &&
+    mesasJs.includes("normalizeLegacyMesaStages(state);") &&
+    !mesasJs.includes('label: "Pide cuenta"') &&
+    !mesasJs.includes('setTableManualState(tableInfo.uid, "cuenta")') &&
+    !mesasJs.includes("Cobrada y liberar") &&
+    !renderer.includes("Esta mesa ya está cobrada y lista para limpieza") &&
+    !renderer.includes('mesasState.tableStates[mesaUid] = "cuenta";') &&
+    mesasJs.includes('const order = ["", "reservada", "ocupada", ""];')
+  ) {
+    ok("Peticion de Sergi 2026-10-21: sin etapas Pide cuenta / Cuenta cobrada (solo libre, ocupada, reservada); lo que quedo guardado con ellas se reconvierte al cargar (con pedido -> ocupada, sin pedido -> libre) y el carrito ya no se bloquea por el estado de la mesa");
+  } else {
+    fail("Siguen existiendo (o falta la migracion de) las etapas Pide cuenta / Cuenta cobrada (mesas/mesas.js, renderer.js normalizeLegacyMesaStages / getCartEditLockReason)");
   }
 }
 

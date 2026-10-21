@@ -1779,6 +1779,36 @@ function normalizeTables(rawTables, roomId) {
   return out;
 }
 
+// Peticion de Sergi (2026-10-21): las etapas "Pide cuenta" y "Cuenta cobrada" desaparecen: una mesa
+// solo es libre, ocupada o reservada (al cobrar queda libre sola). Lo que quedo guardado con esas
+// etapas (p.ej. mesas colgadas como "cobrada" con un pedido sin cobrar, que ademas bloqueaban el
+// carrito) se reconvierte al leerlo: con pedido abierto -> ocupada; sin pedido -> libre.
+function normalizeLegacyMesaStages(st) {
+  if (!st || typeof st !== "object") return false;
+  const states = st.tableStates && typeof st.tableStates === "object" ? st.tableStates : null;
+  const meta = st.tableMeta && typeof st.tableMeta === "object" ? st.tableMeta : null;
+  const map = st.tableTicketMap && typeof st.tableTicketMap === "object" ? st.tableTicketMap : {};
+  let changed = false;
+  if (states) {
+    Object.keys(states).forEach((uid) => {
+      if (String(states[uid] || "").trim().toLowerCase() === "cuenta") {
+        states[uid] = map[uid] ? "ocupada" : "libre";
+        changed = true;
+      }
+    });
+  }
+  if (meta) {
+    Object.keys(meta).forEach((uid) => {
+      const stage = String(meta[uid]?.serviceStage || "").trim().toLowerCase();
+      if (stage === "cuenta-pedida" || stage === "cobro-realizado") {
+        meta[uid] = { ...meta[uid], serviceStage: map[uid] ? "pedido" : "" };
+        changed = true;
+      }
+    });
+  }
+  return changed;
+}
+
 function loadState() {
   try {
     const raw =
@@ -1848,6 +1878,7 @@ function loadState() {
           : {},
       roomList,
     };
+    normalizeLegacyMesaStages(state);
     designSnapToGrid = state.designSnapMode === "grid";
     updateDesignSnapToggleUI();
   } catch {
@@ -2149,14 +2180,11 @@ function getTableStatus(uid) {
     .trim()
     .toLowerCase();
 
-  // Un ticket activo siempre implica mesa ocupada (o pide cuenta si se marcó manualmente).
+  // Un ticket activo siempre implica mesa ocupada.
   if (ticket) {
     const computed = computeTicketTotalFromItems(ticket?.items);
     const fallback = Number(ticket?.total || 0) || 0;
     const total = computed > 0 ? computed : fallback;
-    if (manualState === "cuenta") {
-      return { code: "cuenta", label: "Pide cuenta", total };
-    }
     return { code: "ocupada", label: "Ocupada", total };
   }
 
@@ -2164,8 +2192,6 @@ function getTableStatus(uid) {
     return { code: "reservada", label: "Reservada", total: 0 };
   if (manualState === "ocupada")
     return { code: "ocupada", label: "Ocupada", total: 0 };
-  if (manualState === "cuenta")
-    return { code: "cuenta", label: "Pide cuenta", total: 0 };
   return { code: "libre", label: "Libre", total: 0 };
 }
 
@@ -2174,8 +2200,6 @@ function getTableServiceStage(uid, ticket, statusCode = "") {
     .trim()
     .toLowerCase();
 
-  if (raw === "cuenta-pedida") return "Cuenta pedida";
-  if (raw === "cobro-realizado") return "Cuenta cobrada";
   if (raw === "sin-pedir") return "Sin pedir";
   if (raw === "pedido") return "Pedido";
   if (raw === "entregado") return "Entregado";
@@ -2183,8 +2207,7 @@ function getTableServiceStage(uid, ticket, statusCode = "") {
   const st = String(statusCode || "")
     .trim()
     .toLowerCase();
-  if (st !== "ocupada" && st !== "cuenta") return "";
-  if (st === "cuenta") return "Cuenta pedida";
+  if (st !== "ocupada") return "";
   if (ticket) {
     const hasItems = Array.isArray(ticket?.items) && ticket.items.length > 0;
     return hasItems ? "Pedido" : "Sin pedir";
@@ -2197,22 +2220,13 @@ function getTableServiceStageKey(uid, ticket, statusCode = "") {
   const raw = String(state?.tableMeta?.[uid]?.serviceStage || "")
     .trim()
     .toLowerCase();
-  if (
-    [
-      "sin-pedir",
-      "pedido",
-      "entregado",
-      "cuenta-pedida",
-      "cobro-realizado",
-    ].includes(raw)
-  ) {
+  if (["sin-pedir", "pedido", "entregado"].includes(raw)) {
     return raw;
   }
   const st = String(statusCode || "")
     .trim()
     .toLowerCase();
-  if (st !== "ocupada" && st !== "cuenta") return "";
-  if (st === "cuenta") return "cuenta-pedida";
+  if (st !== "ocupada") return "";
   if (ticket) {
     const hasItems = Array.isArray(ticket?.items) && ticket.items.length > 0;
     return hasItems ? "pedido" : "sin-pedir";
@@ -2231,13 +2245,13 @@ function setTableManualState(uid, nextState) {
     state.tableStates = {};
   }
 
-  if (["libre", "reservada", "ocupada", "cuenta"].includes(next)) {
+  if (["libre", "reservada", "ocupada"].includes(next)) {
     state.tableStates[key] = next;
   } else {
     delete state.tableStates[key];
   }
 
-  if (next !== "ocupada" && next !== "cuenta") {
+  if (next !== "ocupada") {
     const meta = getTableMeta(key);
     state.tableMeta[key] = { ...meta, serviceStage: "" };
   }
@@ -2248,14 +2262,6 @@ function setTableManualState(uid, nextState) {
     state.tableMeta[key] = {
       ...meta,
       serviceStage: "sin-pedir",
-    };
-  }
-
-  if (next === "cuenta") {
-    const meta = getTableMeta(key);
-    state.tableMeta[key] = {
-      ...meta,
-      serviceStage: "cuenta-pedida",
     };
   }
 
@@ -2274,7 +2280,7 @@ function setTableServiceStage(uid, stage) {
   if (!key) return;
 
   const status = getTableStatus(key).code;
-  if (status !== "ocupada" && status !== "cuenta") return;
+  if (status !== "ocupada") return;
 
   const next = String(stage || "")
     .trim()
@@ -2284,10 +2290,7 @@ function setTableServiceStage(uid, stage) {
   }
 
   const currentMeta = getTableMeta(key);
-  const allowed =
-    status === "cuenta"
-      ? ["cuenta-pedida", "cobro-realizado"]
-      : ["sin-pedir", "pedido", "entregado"];
+  const allowed = ["sin-pedir", "pedido", "entregado"];
   state.tableMeta[key] = {
     ...currentMeta,
     serviceStage: allowed.includes(next)
@@ -2307,14 +2310,7 @@ function getAvailableStateTransitions(statusCode = "", uid = "") {
     ];
   }
   if (current === "ocupada") {
-    return [{ code: "cuenta", label: "Pide cuenta" }];
-  }
-  if (current === "cuenta") {
-    const stage = String(state?.tableMeta?.[uid]?.serviceStage || "")
-      .trim()
-      .toLowerCase();
-    if (stage !== "cobro-realizado") return [];
-    return [{ code: "libre", label: "Cobrada y liberar" }];
+    return [];
   }
   return [
     { code: "ocupada", label: "Pasar a ocupada" },
@@ -2324,7 +2320,7 @@ function getAvailableStateTransitions(statusCode = "", uid = "") {
 
 function cycleTableServiceStage(uid) {
   const status = getTableStatus(uid).code;
-  if (status !== "ocupada" && status !== "cuenta") return;
+  if (status !== "ocupada") return;
 
   const current = String(state?.tableMeta?.[uid]?.serviceStage || "")
     .trim()
@@ -2348,7 +2344,7 @@ function cycleTableStatus(uid) {
   const current = String(state.tableStates?.[uid] || "")
     .trim()
     .toLowerCase();
-  const order = ["", "reservada", "ocupada", "cuenta", ""];
+  const order = ["", "reservada", "ocupada", ""];
   const idx = order.indexOf(current);
   const next = order[idx >= 0 ? idx + 1 : 1] || "";
 
@@ -2551,7 +2547,7 @@ function renderMapCards() {
       const uid = String(obj.tableUid || "").trim();
       const ticket = getMappedTicketForTable(uid);
       const statusCode = getTableStatus(uid).code;
-      if (!ticket || (statusCode !== "ocupada" && statusCode !== "cuenta")) {
+      if (!ticket || statusCode !== "ocupada") {
         return null;
       }
       return {
@@ -2672,41 +2668,19 @@ function renderMapCards() {
           </label>
         </div>
       `;
-    } else if (statusCode === "cuenta") {
-      rows.push(
-        `<div class="gestion-tip-row"><span>Comensales</span><strong>${meta.diners}</strong></div>`,
-      );
-      rows.push(
-        `<div class="gestion-tip-row"><span>Total</span><strong>${totalText || eur(0)}</strong></div>`,
-      );
-      rows.push(
-        `<div class="gestion-tip-row"><span>Inicio</span><strong>${startedAt}</strong></div>`,
-      );
-      if (stageLabel)
-        rows.push(
-          `<div class="gestion-tip-row"><span>Servicio</span><strong>${stageLabel}</strong></div>`,
-        );
-      quickAction = `<button type="button" class="gestion-tip-primary is-cash" data-table-act="charge" data-table-uid="${uid}">Cobrar mesa</button>`;
     }
 
     if (quickAction) rows.push(quickAction);
 
     const transitionEntries = getAvailableStateTransitions(statusCode, uid);
     const stateActions = transitionEntries
-      .filter((entry) => entry.code !== "cuenta")
       .map(
         (entry) =>
           `<button type="button" class="gestion-tip-btn" data-table-act="set-state" data-table-state="${entry.code}" data-table-uid="${uid}">${entry.label}</button>`,
       )
       .join("");
 
-    const cashActions = transitionEntries
-      .filter((entry) => entry.code === "cuenta")
-      .map(
-        (entry) =>
-          `<button type="button" class="gestion-tip-btn is-cash" data-table-act="set-state" data-table-state="${entry.code}" data-table-uid="${uid}">${entry.label}</button>`,
-      )
-      .join("");
+    const cashActions = "";
 
     let phaseActions = "";
     if (statusCode === "ocupada") {
@@ -2721,16 +2695,6 @@ function renderMapCards() {
               : phase === "pedido"
                 ? "Pedido"
                 : "Entregado";
-          return `<button type="button" class="gestion-tip-btn" data-table-act="set-phase" data-table-phase="${phase}" data-table-uid="${uid}">${label}</button>`;
-        })
-        .join("");
-    } else if (statusCode === "cuenta") {
-      const currentPhase = getTableServiceStageKey(uid, ticket, statusCode);
-      phaseActions = ["cuenta-pedida", "cobro-realizado"]
-        .filter((phase) => phase !== currentPhase)
-        .map((phase) => {
-          const label =
-            phase === "cuenta-pedida" ? "Cuenta pedida" : "Cuenta cobrada";
           return `<button type="button" class="gestion-tip-btn" data-table-act="set-phase" data-table-phase="${phase}" data-table-uid="${uid}">${label}</button>`;
         })
         .join("");
@@ -2749,11 +2713,6 @@ function renderMapCards() {
     if (stateActions) {
       rows.push(`<div class="gestion-tip-group-title">Estado mesa</div>`);
       rows.push(`<div class="gestion-tip-actions">${stateActions}</div>`);
-    } else if (statusCode === "cuenta") {
-      rows.push(`<div class="gestion-tip-group-title">Estado mesa</div>`);
-      rows.push(
-        `<div class="gestion-tip-row"><span></span><strong>Marca "Cuenta cobrada" para liberar</strong></div>`,
-      );
     }
 
     if (editBlock) rows.push(editBlock);
@@ -2824,15 +2783,11 @@ function renderMapCards() {
 
       const reservationNameText = String(meta.reservationName || "").trim();
       const totalText =
-        st.code === "cuenta"
-          ? stageKey === "cobro-realizado"
-            ? "Recoger"
-            : eur(Math.max(0, Number(st.total || 0) || 0))
-          : st.code === "reservada"
-            ? reservationNameText || "Reservada"
-            : st.total > 0
-              ? eur(st.total)
-              : "";
+        st.code === "reservada"
+          ? reservationNameText || "Reservada"
+          : st.total > 0
+            ? eur(st.total)
+            : "";
       const reservationBadgeText = String(meta.reservationTime || "").trim();
       const badgeText =
         st.code === "reservada"
@@ -3433,8 +3388,7 @@ async function chargeSelectedTable() {
     ticket.paidAt = new Date().toISOString();
     ticket.paidTicketCode = `MESA-${ticket.id}`;
     delete state.tableTicketMap[tableInfo.uid];
-    setTableManualState(tableInfo.uid, "cuenta");
-    setTableServiceStage(tableInfo.uid, "cobro-realizado");
+    setTableManualState(tableInfo.uid, "libre");
     saveParkedTickets();
     saveState();
   }
@@ -4216,11 +4170,8 @@ function renderDesignSelectionPanel() {
       )
       .join("");
     const phaseButtons =
-      st.code === "ocupada" || st.code === "cuenta"
-        ? (st.code === "cuenta"
-            ? ["cuenta-pedida", "cobro-realizado"]
-            : ["sin-pedir", "pedido", "entregado"]
-          )
+      st.code === "ocupada"
+        ? ["sin-pedir", "pedido", "entregado"]
             .filter((phase) => phase !== stageKey)
             .map((phase) => {
               const label =
@@ -4228,11 +4179,7 @@ function renderDesignSelectionPanel() {
                   ? "Sin pedir"
                   : phase === "pedido"
                     ? "Pedido"
-                    : phase === "entregado"
-                      ? "Entregado"
-                      : phase === "cuenta-pedida"
-                        ? "Cuenta pedida"
-                        : "Cuenta cobrada";
+                    : "Entregado";
               return `<button type="button" data-design-action="set-phase" data-table-uid="${selected.tableUid}" data-phase="${phase}">${label}</button>`;
             })
             .join("")
