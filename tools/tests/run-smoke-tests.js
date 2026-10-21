@@ -10580,6 +10580,31 @@ console.log("\n[SMOKE] Checking 2026-10-21 comanda: reimprimir una enviada, agru
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-21 familias en columna lateral (A/B) con boton rapido \n");
+{
+  const stylesCss = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+  if (
+    renderer.includes('const OPTIONS_FAMILIES_LAYOUT_KEY = "ui.familiesLayout";') &&
+    renderer.includes("async function toggleFamiliesLayout() {") &&
+    renderer.includes("async function loadFamiliesLayoutSetting() {") &&
+    renderer.includes("await loadFamiliesLayoutSetting?.();") &&
+    renderer.includes("const createFamiliesLayoutBtn = () => {") &&
+    renderer.includes("agentActions.appendChild(createFamiliesLayoutBtn());") &&
+    renderer.includes('document.body.classList.toggle("families-layout-left", familiesLayoutMode === "B");') &&
+    stylesCss.includes("body.families-layout-left.mesas-inline-trans-mode .products-area {") &&
+    stylesCss.includes("body.families-layout-left .families-first-back-bar .category-btn {") &&
+    stylesCss.includes("body.families-layout-left.families-first-families-view")
+  ) {
+    ok(
+      "Peticion de Lumi 2026-10-21: disposicion B de las familias (cuadrados en columna a la izquierda, tambien en Modo Mesas) con un boton rapido junto a Modo Mesas/Actualizar/Cajon que alterna con la A de siempre, combinable con 'Familias primero' (A1/A2/B1/B2); cada hijo de .products-area se coloca por grid-area y el boton Volver a familias no se convierte en cuadrado",
+    );
+  } else {
+    fail(
+      "Falta la disposicion B de familias (renderer.js toggleFamiliesLayout/createFamiliesLayoutBtn; styles.css body.families-layout-left) -- revisar el cambio de 2026-10-21",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

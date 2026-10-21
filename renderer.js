@@ -5432,6 +5432,44 @@ async function saveAgentAdminPinModeToggle(enabled) {
   recomputeAdminAccessForCurrentAgent?.();
 }
 
+// Disposicion de las familias (peticion de Lumi, 2026-10-21): A = barra de rectangulos arriba (la de
+// siempre), B = columna a la izquierda con cuadrados. Es un cambio rapido (boton pequeno junto a los de
+// Modo Mesas / Actualizar / Abrir cajon), se guarda por TPV. Se combina con el modo "familias primero"
+// de Opciones (que oculta las familias al elegir una y deja una flecha para volver): A1/A2/B1/B2.
+const OPTIONS_FAMILIES_LAYOUT_KEY = "ui.familiesLayout";
+let familiesLayoutMode = "A";
+
+function applyFamiliesLayoutUI() {
+  document.body.classList.toggle("families-layout-left", familiesLayoutMode === "B");
+  document.querySelectorAll(".agent-families-layout-btn").forEach((btn) => {
+    btn.classList.toggle("is-active", familiesLayoutMode === "B");
+    btn.title =
+      familiesLayoutMode === "B"
+        ? "Familias en barra superior"
+        : "Familias en columna lateral (cuadrados)";
+  });
+}
+
+async function loadFamiliesLayoutSetting() {
+  let mode = "A";
+  try {
+    const v = await window.TPV_CFG?.get?.(OPTIONS_FAMILIES_LAYOUT_KEY);
+    mode = String(v || "").trim().toUpperCase() === "B" ? "B" : "A";
+  } catch {}
+  familiesLayoutMode = mode;
+  applyFamiliesLayoutUI();
+}
+
+async function toggleFamiliesLayout() {
+  familiesLayoutMode = familiesLayoutMode === "B" ? "A" : "B";
+  applyFamiliesLayoutUI();
+  try {
+    await window.TPV_CFG?.set?.(OPTIONS_FAMILIES_LAYOUT_KEY, familiesLayoutMode);
+  } catch (e) {
+    console.warn("No se pudo guardar la disposicion de familias:", e);
+  }
+}
+
 async function loadFamiliesFirstModeToggle() {
   const el = document.getElementById("familiesFirstModeToggle");
   let enabled = false;
@@ -13044,6 +13082,7 @@ async function runBootFlow() {
     await loadProductTileResizeModeToggle?.();
     await loadAgentAdminPinModeToggle?.();
     await loadFamiliesFirstModeToggle?.();
+    await loadFamiliesLayoutSetting?.();
     await loadFamilyButtonResizeModeToggle?.();
     await loadFamilyButtonFontSizeSetting?.();
     await loadCartPanelWidthSetting?.();
@@ -24143,6 +24182,17 @@ function renderMainAgentBar() {
     return drawerBtn;
   };
 
+  const createFamiliesLayoutBtn = () => {
+    const layoutBtn = document.createElement("button");
+    layoutBtn.type = "button";
+    layoutBtn.className = "agent-btn agent-families-layout-btn";
+    layoutBtn.textContent = "▦";
+    layoutBtn.onclick = () => {
+      toggleFamiliesLayout().catch(() => {});
+    };
+    return layoutBtn;
+  };
+
   const createTablesBtn = () => {
     const tablesBtn = document.createElement("button");
     tablesBtn.type = "button";
@@ -24236,6 +24286,7 @@ function renderMainAgentBar() {
   }
   agentActions.appendChild(createRefreshBtn());
   agentActions.appendChild(createDrawerBtn());
+  agentActions.appendChild(createFamiliesLayoutBtn());
 
   // Real (2026-09-23), pedido directo de Sergi tras ver la barra con muchos
   // agentes en produccion: los 3 botones fijos (mesas/actualizar/cajon) ya
@@ -24247,6 +24298,7 @@ function renderMainAgentBar() {
     searchBarActionsSlot.appendChild(modeSwitchWrap);
     searchBarActionsSlot.appendChild(agentActions);
   }
+  applyFamiliesLayoutUI();
 
   // Con 0 o 1 agente no hay nada que elegir en esta barra -- el nombre del
   // agente activo ya se ve en la cabecera de info (#agentName) -- se

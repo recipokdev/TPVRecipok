@@ -10231,3 +10231,151 @@ body.theme-dark .send-comanda-bar .scb-aux {
 .comanda-auto-section .cas-link { border-color: transparent; background: transparent; text-decoration: underline; }
 .comanda-auto-section .cas-delay { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
 .comanda-auto-section .cas-delay input { width: 4.5rem; text-align: center; padding: 6px; border-radius: 8px; border: 1px solid rgba(0, 0, 0, 0.25); }
+
+/* ===== Familias en columna lateral (disposicion B, 2026-10-21) =====
+   A = barra de rectangulos arriba (la de siempre). B = columna con cuadrados a la izquierda de los
+   productos. Se activa con el boton pequeno junto a Modo Mesas / Actualizar / Cajon
+   (body.families-layout-left) y se combina con "familias primero" de Opciones (A1/A2/B1/B2).
+   Todos los hijos de .products-area se colocan por grid-area: los que no tienen area propia se
+   irian a una fila implicita y descolocarian la rejilla (ver el aviso de modo reordenar mas arriba). */
+body.families-layout-left:not(.mesas-inline-full-mode):not(.mesas-inline-trans-mode) .products-area {
+  --fam-col: clamp(150px, 19vw, 270px);
+  display: grid;
+  grid-template-columns: var(--fam-col) minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "agent agent"
+    "search search"
+    "categories panel"
+    "categories notice"
+    "categories back"
+    "categories products"
+    "status status";
+  column-gap: 12px;
+  row-gap: 6px;
+}
+body.families-layout-left:not(.mesas-inline-full-mode):not(.mesas-inline-trans-mode) .products-area > #mainAgentBar { grid-area: agent; }
+body.families-layout-left:not(.mesas-inline-full-mode):not(.mesas-inline-trans-mode) .products-area > .search-bar { grid-area: search; }
+body.families-layout-left:not(.mesas-inline-full-mode):not(.mesas-inline-trans-mode) .products-area > #mesasInlinePanelWrap { grid-area: panel; }
+body.families-layout-left:not(.mesas-inline-full-mode):not(.mesas-inline-trans-mode) .products-area > #productReorderModeNotice { grid-area: notice; }
+body.families-layout-left:not(.mesas-inline-full-mode):not(.mesas-inline-trans-mode) .products-area > #familiesFirstBackBar { grid-area: back; }
+body.families-layout-left:not(.mesas-inline-full-mode):not(.mesas-inline-trans-mode) .products-area > .products-grid-wrap { grid-area: products; min-height: 0; }
+body.families-layout-left:not(.mesas-inline-full-mode):not(.mesas-inline-trans-mode) .products-area > #statusBar { grid-area: status; }
+
+/* Modo Mesas (transacciones): ademas de la columna de la mesa (a la izquierda), la de familias. */
+body.families-layout-left.mesas-inline-trans-mode .products-area {
+  --fam-col: clamp(140px, 13vw, 220px);
+  grid-template-columns: 220px var(--fam-col) minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "agent agent agent"
+    "tabs tabs tabs"
+    "left search search"
+    "left categories notice"
+    "left categories back"
+    "left categories products"
+    "status status status";
+}
+body.families-layout-left.mesas-inline-trans-mode #familiesFirstBackBar { grid-area: back; }
+
+/* Columna de familias: cuadrados */
+body.families-layout-left:not(.mesas-inline-full-mode) .categories-wrapper {
+  grid-area: categories;
+  align-items: stretch;
+  min-height: 0;
+  margin-top: 0;
+}
+body.families-layout-left:not(.mesas-inline-full-mode) .categories {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  align-content: start;
+  gap: 8px;
+  max-height: none;
+  height: 100%;
+}
+body.families-layout-left:not(.mesas-inline-full-mode) .category-btn {
+  aspect-ratio: 1 / 1;
+  min-height: 0;
+  padding: 6px;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.15;
+}
+body.families-layout-left:not(.mesas-inline-full-mode) .category-btn::before {
+  font-size: 22px;
+}
+
+/* El boton "Volver a familias" (familias primero) NO es un cuadrado de familia. */
+body.families-layout-left .families-first-back-bar .category-btn {
+  aspect-ratio: auto;
+  flex-direction: row;
+  justify-content: flex-start;
+  text-align: left;
+  min-height: 46px;
+  padding: 12px 16px;
+  white-space: nowrap;
+}
+body.families-layout-left .families-first-back-bar .category-btn::before {
+  font-size: 14px;
+}
+
+/* B + "familias primero": antes de elegir familia, cuadrados grandes en toda la zona; al elegir una
+   la columna se oculta y los productos ocupan todo el ancho (con la flecha para volver). */
+body.families-layout-left.families-first-families-view:not(.mesas-inline-full-mode):not(.mesas-inline-trans-mode) .products-area {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "agent"
+    "search"
+    "categories"
+    "categories"
+    "categories"
+    "categories"
+    "status";
+}
+body.families-layout-left.families-first-families-view.mesas-inline-trans-mode .products-area {
+  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-areas:
+    "agent agent"
+    "tabs tabs"
+    "left search"
+    "left categories"
+    "left categories"
+    "left categories"
+    "status status";
+}
+body.families-layout-left.families-first-families-view:not(.mesas-inline-full-mode) .categories {
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+}
+body.families-layout-left.families-first-families-view:not(.mesas-inline-full-mode) .category-btn {
+  flex: none;
+  min-width: 0;
+  min-height: 0;
+  font-size: 22px;
+}
+body.families-layout-left.families-first-products-view:not(.mesas-inline-full-mode):not(.mesas-inline-trans-mode) .products-area {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "agent"
+    "search"
+    "panel"
+    "notice"
+    "back"
+    "products"
+    "status";
+}
+body.families-layout-left.families-first-products-view.mesas-inline-trans-mode .products-area {
+  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-areas:
+    "agent agent"
+    "tabs tabs"
+    "left search"
+    "left notice"
+    "left back"
+    "left products"
+    "status status";
+}
