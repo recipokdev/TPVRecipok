@@ -10613,6 +10613,7 @@ console.log("\n[SMOKE] Checking 2026-10-21 iconos de familia, nombres largos en 
   if (
     renderer.includes('const FAMILY_ICONS_CFG_KEY = "ui.familyIcons";') &&
     renderer.includes("function openFamilyIconPicker(current) {") &&
+    renderer.includes('overlay.style.zIndex = "2200000";') &&
     renderer.includes("const FAMILY_ICON_CHOICES = [") &&
     renderer.includes("saveFamilyIconsMap(familyIconsCache)") &&
     renderer.includes("familyIconsCache = await getFamilyIconsMap();") &&

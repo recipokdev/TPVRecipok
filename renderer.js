@@ -7153,7 +7153,7 @@ function openFamilyIconPicker(current) {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
     overlay.className = "simple-overlay family-icon-picker-overlay";
-    overlay.style.zIndex = "99999";
+    overlay.style.zIndex = "2200000"; // por encima de TODO (los overlays van hasta ~2100001)
     const dialog = document.createElement("div");
     dialog.className = "simple-dialog family-icon-picker";
     const title = document.createElement("div");
