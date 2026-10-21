@@ -6,7 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
-        "MEJORA: iconos de familia. Además del color, cada familia puede tener un icono (emoji básico de comida, bebida y TPV, o ninguno) que se elige en el mismo diálogo de familias, junto al botón de color. Se ve en los botones de familia, arriba y en la columna lateral.",
+        "MEJORA: iconos de familia. Además del color, cada familia puede tener un icono (emoji básico de comida, bebida y TPV, o ninguno) que se elige en el mismo diálogo de familias, junto al botón de color. Se ve en los botones de familia, arriba y en la columna lateral. Se encuentra en Opciones → Terminales → \"Familias: visibilidad, color e icono\" → Configurar (solo para el terminal, no para tablets).",
         "MEJORA: en la columna lateral de familias, un nombre largo ya no se corta: la letra se reduce lo necesario (hasta un mínimo legible) para que quepa en 3 líneas y, si aun así no cabe, termina en \"…\" (el nombre completo sale al mantener pulsado).",
         "CORRECCIÓN: el botón para cambiar la disposición de las familias es redondo, del mismo tamaño y estilo que los de Modo Mesas, Actualizar y Abrir cajón, y su icono dibuja la disposición a la que se cambia: una pantalla con columna a la izquierda (para pasar a B) o con barra arriba (para volver a A).",
         "MEJORA: el botón para volver a las familias (modo \"Familias primero\") es ahora una flecha pequeña (←) que ocupa poco espacio, y sube UN nivel: desde los productos de una subfamilia vuelve a las subfamilias de su familia, y desde ahí \"Volver\" sube a todas las familias. La comanda con subfamilias pone la familia grande arriba y, debajo, cada subfamilia con sus productos.",
