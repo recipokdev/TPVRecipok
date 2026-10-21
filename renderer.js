@@ -2337,6 +2337,8 @@ let familyButtonFontSize = FAMILY_BUTTON_FONT_SIZE_DEFAULT;
 let familyButtonResizeMode = false;
 let agentAdminPinModeEnabled = false;
 let familiesFirstModeEnabled = false;
+// "Familias primero" + boton "Todos los productos": ve toda la lista de productos sin elegir familia.
+let familiesFirstShowAll = false;
 let scaleManualCaptureMode = false;
 let productsFilterStockOnly = false;
 let productsFilterIncludeUnmanaged = true;
@@ -5588,6 +5590,7 @@ async function loadFamiliesFirstModeToggle() {
 
 async function saveFamiliesFirstModeToggle(enabled) {
   familiesFirstModeEnabled = !!enabled;
+  familiesFirstShowAll = false;
   try {
     await window.TPV_CFG?.set?.(OPTIONS_FAMILIES_FIRST_MODE_KEY, familiesFirstModeEnabled);
   } catch (e) {
@@ -13571,6 +13574,7 @@ function updateOpenCajaPrompt(cashOpen, hasLogin) {
 // como "ya quiero ver productos".
 function isFamiliesOnlyViewActive() {
   if (!familiesFirstModeEnabled) return false;
+  if (familiesFirstShowAll) return false;
   if (activeSubfamilyId || selectedCategory) return false;
   if (normalizeSearchText((searchTerm || "").trim())) return false;
   return true;
@@ -13594,6 +13598,7 @@ function applyFamiliesFirstModeUI() {
 }
 
 function backToFamiliesFirstView() {
+  familiesFirstShowAll = false;
   // Un nivel hacia atras: si se esta viendo una SUBFAMILIA, se vuelve a las subfamilias de su familia
   // (y desde ahi el boton "Volver" de la propia lista sube a todas las familias). Antes saltaba
   // directamente a la lista de familias principales.
@@ -13760,6 +13765,24 @@ function renderCategories() {
   if (!inDrillDown) {
     const rootFamilies = visibleCategories.filter((c) => !c.parentId);
 
+    // "Familias primero": primer boton "Todos los productos" (toda la lista, sin elegir familia).
+    if (familiesFirstModeEnabled) {
+      const allBtn = document.createElement("button");
+      allBtn.type = "button";
+      allBtn.className = "category-btn category-btn-all";
+      setCategoryButtonLabel(allBtn, "Todos los productos");
+      allBtn.style.setProperty("--cat-icon", JSON.stringify("🗂️"));
+      allBtn.onclick = () => {
+        familiesFirstShowAll = true;
+        selectedCategory = null;
+        activeFamilyParentId = null;
+        activeSubfamilyId = null;
+        renderCategories();
+        renderProducts();
+      };
+      container.appendChild(allBtn);
+    }
+
     rootFamilies.forEach((cat) => {
       const btn = document.createElement("button");
       btn.type = "button";
@@ -13808,7 +13831,15 @@ function renderCategories() {
   const backBtn = document.createElement("button");
   backBtn.type = "button";
   backBtn.className = "category-btn category-btn-back";
-  backBtn.textContent = "Volver";
+  if (familiesFirstModeEnabled) {
+    // En "familias primero" el Volver es una barra fina de ancho completo (como la flecha de los productos),
+    // no un boton grande que ocupa el sitio de una familia.
+    backBtn.classList.add("families-first-back-tile");
+    backBtn.textContent = "← Volver a las familias";
+    backBtn.title = "Volver a las familias";
+  } else {
+    backBtn.textContent = "Volver";
+  }
   backBtn.onclick = () => {
     activeFamilyParentId = null;
     activeSubfamilyId = null;
@@ -28520,6 +28551,7 @@ async function confirmCashClosing() {
   selectedCategory = null;
   activeFamilyParentId = null;
   activeSubfamilyId = null;
+  familiesFirstShowAll = false;
   cart = [];
   renderCart();
 

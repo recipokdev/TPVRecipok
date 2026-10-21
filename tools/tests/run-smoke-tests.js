@@ -10708,6 +10708,24 @@ console.log("\n[SMOKE] Checking 2026-10-21 familias primero: nombres largos en e
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-21 familias primero: boton Todos los productos y Volver fino \n");
+{
+  const stylesCss = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+  if (
+    renderer.includes("let familiesFirstShowAll = false;") &&
+    renderer.includes("if (familiesFirstShowAll) return false;") &&
+    renderer.includes('allBtn.className = "category-btn category-btn-all";') &&
+    renderer.includes('backBtn.classList.add("families-first-back-tile");') &&
+    /function backToFamiliesFirstView\(\) {\s*familiesFirstShowAll = false;/.test(renderer) &&
+    stylesCss.includes(".category-btn.category-btn-all {") &&
+    stylesCss.includes(".category-btn.families-first-back-tile.families-first-back-tile {")
+  ) {
+    ok("Peticion de Sergi 2026-10-21: Familias primero tiene boton 'Todos los productos' (lista completa, se sale con la flecha) y el Volver de las subfamilias es una barra fina de ancho completo");
+  } else {
+    fail("Falta el boton 'Todos los productos' o el Volver fino de Familias primero (renderer.js familiesFirstShowAll / renderCategories; styles.css)");
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
