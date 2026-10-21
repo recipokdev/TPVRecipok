@@ -6,6 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
+        "MEJORA: la flecha ← para volver a las familias (modo \"Familias primero\") es más grande (56 px de alto) para pulsarla bien con el dedo en una tablet; igual la barra \"Volver a las familias\" dentro de las subfamilias.",
         "MEJORA: en \"Familias primero\" hay un primer botón \"Todos los productos\" (borde discontinuo) que muestra la lista completa sin elegir familia, con la flecha ← para volver. Y dentro de una familia con subfamilias, el \"Volver\" ya no es un botón grande que ocupa el sitio de una familia: es una barra fina \"← Volver a las familias\" de ancho completo.",
         "MEJORA: con \"Familias primero\", los botones de familia son iguales (anchos y bajos, hasta 4 por fila) tanto con las familias arriba como en la disposición lateral; antes en lateral salían cuadrados enormes que llenaban la pantalla con pocas familias.",
         "CORRECCIÓN: en \"Familias primero\", un nombre de familia largo (p. ej. \"Pasteles individuales\") ya no se sale del botón: el icono va arriba y el nombre se parte en hasta 3 líneas (la letra baja un poco si hace falta). Además, en el TPV normal los botones recuperan su tamaño grande, que otra regla les quitaba.",

@@ -10391,10 +10391,12 @@ body.families-layout-left.families-first-products-view.mesas-inline-trans-mode .
 
 /* Flecha para volver a las familias ("familias primero"): pequena, para no gastar espacio que
    podrian usar los productos (peticion de Sergi, 2026-10-21). Vale para A y para B. */
-.families-first-back-bar .category-btn {
-  min-height: 34px;
-  padding: 4px 16px;
-  font-size: 20px;
+#familiesFirstBackBar .category-btn {
+  /* Grande para el dedo en una tablet (peticion del jefe de Sergi, 2026-10-21). */
+  min-height: 56px;
+  min-width: 120px;
+  padding: 6px 32px;
+  font-size: 30px;
   line-height: 1;
   font-weight: 700;
   justify-content: center;
@@ -10402,7 +10404,7 @@ body.families-layout-left.families-first-products-view.mesas-inline-trans-mode .
   flex-direction: row;
   white-space: nowrap;
 }
-.families-first-back-bar .category-btn::before {
+#familiesFirstBackBar .category-btn::before {
   display: none;
 }
 
@@ -10684,10 +10686,10 @@ body.families-first-families-view .categories .category-btn.families-first-back-
   grid-column: 1 / -1;
   min-width: 0;
   width: 100%;
-  min-height: 38px;
+  min-height: 56px;
   aspect-ratio: auto;
-  padding: 4px 16px;
-  font-size: 18px;
+  padding: 6px 16px;
+  font-size: 24px;
   font-weight: 700;
   line-height: 1;
   flex-direction: row;

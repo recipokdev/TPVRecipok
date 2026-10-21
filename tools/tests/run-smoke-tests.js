@@ -10592,7 +10592,7 @@ console.log("\n[SMOKE] Checking 2026-10-21 familias en columna lateral (A/B) con
     renderer.includes("agentActions.appendChild(createFamiliesLayoutBtn());") &&
     renderer.includes('document.body.classList.toggle("families-layout-left", familiesLayoutMode === "B");') &&
     stylesCss.includes("body.families-layout-left.mesas-inline-trans-mode .products-area {") &&
-    stylesCss.includes(".families-first-back-bar .category-btn {") &&
+    stylesCss.includes("#familiesFirstBackBar .category-btn {") &&
     renderer.includes("if (activeSubfamilyId && activeFamilyParentId) {") &&
     renderer.includes('subEl.className = "comanda-subfamily";') &&
     stylesCss.includes("body.families-layout-left.families-first-families-view")
@@ -10718,6 +10718,7 @@ console.log("\n[SMOKE] Checking 2026-10-21 familias primero: boton Todos los pro
     renderer.includes('backBtn.classList.add("families-first-back-tile");') &&
     /function backToFamiliesFirstView\(\) {\s*familiesFirstShowAll = false;/.test(renderer) &&
     stylesCss.includes(".category-btn.category-btn-all {") &&
+    stylesCss.includes("min-height: 56px;") &&
     stylesCss.includes(".category-btn.families-first-back-tile.families-first-back-tile {")
   ) {
     ok("Peticion de Sergi 2026-10-21: Familias primero tiene boton 'Todos los productos' (lista completa, se sale con la flecha) y el Volver de las subfamilias es una barra fina de ancho completo");
