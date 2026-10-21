@@ -13649,9 +13649,11 @@ function fitFamilyLabels() {
   const labels = document.querySelectorAll(
     "#categories .category-btn:not(.category-btn-back) .category-btn-label",
   );
+  // Columna lateral (B) o botones grandes de "Familias primero": el nombre se reduce para caber.
   const sideColumn =
-    document.body.classList.contains("families-layout-left") &&
-    !document.body.classList.contains("families-first-families-view");
+    (document.body.classList.contains("families-layout-left") &&
+      !document.body.classList.contains("families-first-families-view")) ||
+    document.body.classList.contains("families-first-families-view");
   labels.forEach((label) => {
     label.style.fontSize = "";
     if (!sideColumn) return;

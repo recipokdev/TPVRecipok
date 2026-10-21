@@ -1934,15 +1934,29 @@ body.families-first-families-view .categories {
   align-content: flex-start;
   gap: 12px;
 }
-body.families-first-families-view .category-btn {
+/* .categories delante: gana a "body:not(.mesas-inline-...) .category-btn" (TPV normal) y los botones siguen siendo grandes. */
+body.families-first-families-view .categories .category-btn {
   flex: 1 1 calc(25% - 12px);
   min-width: 160px;
   min-height: 110px;
   font-size: 22px;
   justify-content: center;
   text-align: center;
+  /* Icono arriba y nombre debajo, que se parte en lineas en vez de salirse del boton. */
+  flex-direction: column;
+  white-space: normal;
+  line-height: 1.15;
+  padding: 8px 10px;
 }
-body.families-first-families-view .category-btn::before {
+body.families-first-families-view .categories .category-btn .category-btn-label {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+body.families-first-families-view .categories .category-btn::before {
   font-size: 28px;
 }
 

@@ -10693,6 +10693,20 @@ console.log("\n[SMOKE] Checking 2026-10-21 rework de Opciones: etiquetas por tip
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-21 familias primero: nombres largos en el boton \n");
+{
+  const stylesCss = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+  if (
+    stylesCss.includes("body.families-first-families-view .categories .category-btn {") &&
+    stylesCss.includes("body.families-first-families-view .categories .category-btn .category-btn-label {") &&
+    renderer.includes('document.body.classList.contains("families-first-families-view");')
+  ) {
+    ok("Peticion de Sergi 2026-10-21: en Familias primero el nombre largo se parte en lineas dentro del boton (icono arriba) y la regla gana a la del TPV normal");
+  } else {
+    fail("Falta el ajuste de nombres largos en Familias primero (styles.css .categories .category-btn / renderer.js fitFamilyLabels)");
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
