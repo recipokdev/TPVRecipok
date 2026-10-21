@@ -368,7 +368,18 @@ function isKioskMode() {
   if (IS_E2E) return false;
   try {
     const cfg = readCfg();
-    return cfg.kioskMode !== false; // default true
+    // Instalacion NUEVA (sin ninguna configuracion guardada todavia): el kiosko arranca APAGADO
+    // para poder instalar/configurar el TPV (drivers, wifi, impresora...) sin quedar atrapado en
+    // pantalla completa siempre encima de todo. Se guarda explicito para que siga apagado en los
+    // siguientes arranques (quien lo quiera lo activa en Opciones -> Pantalla). Las instalaciones
+    // que ya tienen configuracion NO cambian (siguen con su valor, o con el de siempre: activo).
+    if (cfg.kioskMode === undefined && Object.keys(cfg).length === 0) {
+      try {
+        writeCfg({ kioskMode: false });
+      } catch {}
+      return false;
+    }
+    return cfg.kioskMode !== false; // instalaciones existentes: activo salvo que se desactive
   } catch {
     return true;
   }

@@ -10522,6 +10522,33 @@ console.log("\n[SMOKE] Checking 2026-10-20 sin impresora de comandas se abre el 
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-21 kiosko apagado en instalacion nueva y cambiar de empresa sin teclado \n");
+{
+  const indexHtml = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  if (
+    main.includes("cfg.kioskMode === undefined && Object.keys(cfg).length === 0") &&
+    main.includes("writeCfg({ kioskMode: false });") &&
+    main.includes("return cfg.kioskMode !== false; // instalaciones existentes: activo salvo que se desactive") &&
+    renderer.includes("async function performFactoryReset() {") &&
+    renderer.includes("await performFactoryReset();") &&
+    renderer.includes("function isCurrentCompanyDemo() {") &&
+    renderer.includes('classList.toggle("hidden", !isCurrentCompanyDemo())') &&
+    renderer.includes("if (!isCurrentCompanyDemo()) return;") &&
+    renderer.includes('document.getElementById("optionsResetCompanyBtn")') &&
+    /optionsResetCompanyBtn"\)\?\.addEventListener\("click", async \(\) => \{\s*if \(!isAdminUser\(\)\)/.test(renderer) &&
+    indexHtml.includes('id="loginChangeCompanyBtn"') &&
+    indexHtml.includes('id="optionsResetCompanyBtn"')
+  ) {
+    ok(
+      "Peticion de Sergi 2026-10-21 (instalar TPV desde imagen sin teclado): instalacion nueva = kiosko apagado y guardado explicito (las instalaciones con configuracion no cambian); 'Cambiar de empresa' sin teclado solo en el login si la empresa es demo y en Opciones solo para administradores (un trabajador de un cliente real no puede resetear el TPV)",
+    );
+  } else {
+    fail(
+      "Falta kiosko apagado en instalacion nueva o 'Cambiar de empresa' sin teclado (main.js isKioskMode / renderer.js performFactoryReset, isCurrentCompanyDemo) -- revisar el cambio de 2026-10-21",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

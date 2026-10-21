@@ -5,7 +5,10 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "MEJORA: una instalación NUEVA del TPV (sin configuración guardada) arranca con el modo kiosko APAGADO, para poder instalar y configurar la máquina sin quedar atrapado en pantalla completa. Quien lo quiera lo activa en Opciones → Pantalla. Los TPV que ya están instalados no cambian.",
+        "MEJORA: se puede cambiar de empresa sin teclado: botón \"Cambiar de empresa\" en la pantalla de inicio de sesión (solo aparece si la empresa guardada es demo, nunca en un cliente real) y opción \"Cambiar de empresa\" en Opciones → Terminales (solo administradores). Hace lo mismo que Ctrl+Shift+R."
+      ]
     },
     {
       "version": "0.2.50",

@@ -3894,6 +3894,24 @@
                   Restablecer
                 </button>
               </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Cambiar de empresa</div>
+                  <div class="opt-row-sub">
+                    Quita la empresa, el usuario, el terminal y la caja guardada
+                    de ESTE TPV y vuelve a pedir el email de la empresa (igual
+                    que Ctrl+Shift+R, sin necesitar teclado).
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  id="optionsResetCompanyBtn"
+                  class="small-btn"
+                >
+                  Cambiar
+                </button>
+              </div>
             </div>
           </section>
 
@@ -4167,6 +4185,7 @@
         <div id="loginStatus" class="login-status" aria-live="polite"></div>
 
         <div class="dialog-actions">
+          <button id="loginChangeCompanyBtn" class="hidden" type="button" title="Quita la empresa de pruebas (demo) de este TPV para vincularlo a otra">Cambiar de empresa</button>
           <button id="loginExitBtn">Salir</button>
           <button id="loginOkBtn">Entrar</button>
         </div>

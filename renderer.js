@@ -16058,6 +16058,13 @@ async function openLoginModal() {
 
   console.log("🚀 [LOGIN] Iniciando con endpoint /users...");
 
+  // "Cambiar de empresa" (sin teclado) solo se ofrece si la empresa guardada es demo.
+  try {
+    document
+      .getElementById("loginChangeCompanyBtn")
+      ?.classList.toggle("hidden", !isCurrentCompanyDemo());
+  } catch {}
+
   const overlay = document.getElementById("loginOverlay");
   const usersBar = document.getElementById("loginUsersBar");
   const passInp = document.getElementById("loginPass");
@@ -57751,6 +57758,9 @@ async function refreshTicketsCacheFromServer() {
 }
 
 // ===== [06] Atajos globales: reset de fabrica (Ctrl+Shift+R) =====
+// El reset en si vive en performFactoryReset() para poder lanzarlo tambien SIN teclado: boton
+// "Cambiar de empresa" de la pantalla de inicio de sesion (solo si la empresa es demo) y de
+// Opciones (solo administradores).
 window.addEventListener("keydown", async (e) => {
   if (!(e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "r")) return;
 
@@ -57762,6 +57772,10 @@ window.addEventListener("keydown", async (e) => {
   );
   if (!ok) return;
 
+  await performFactoryReset();
+});
+
+async function performFactoryReset() {
   // 1) Limpiar localStorage (compat + cachés)
   try {
     // empresa (viejo + nuevo)
@@ -57857,6 +57871,39 @@ window.addEventListener("keydown", async (e) => {
 
   // 4) Recargar app para volver a flujo inicial
   window.location.reload();
+}
+
+// Cambiar de empresa SIN teclado. Dos puertas, las dos pensadas para que un trabajador de un
+// cliente real no pueda usarlo (peticion de Sergi, 2026-10-21):
+//  - pantalla de inicio de sesion: el boton solo existe si la empresa guardada es demo (TPV de
+//    pruebas/oficina o imagen sin limpiar), nunca en un cliente real;
+//  - Opciones: seccion solo para administradores.
+function isCurrentCompanyDemo() {
+  return String(getCurrentSlugForReservations() || "").trim().toLowerCase() === "demo";
+}
+
+async function confirmChangeCompanyAndReset() {
+  const ok = await confirmModal(
+    "Cambiar de empresa",
+    "Esto quitará la empresa, el usuario, el terminal, el agente y la caja guardada de ESTE TPV y volverá a pedir el email de la empresa.\n\n¿Continuar?",
+  );
+  if (!ok) return;
+  await performFactoryReset();
+}
+
+document.getElementById("optionsResetCompanyBtn")?.addEventListener("click", async () => {
+  if (!isAdminUser()) {
+    toast?.("Solo administradores.", "warn", "Opciones");
+    return;
+  }
+  closeOptions?.();
+  await confirmChangeCompanyAndReset();
+});
+
+document.getElementById("loginChangeCompanyBtn")?.addEventListener("click", async () => {
+  // Doble seguro: aunque alguien lograra mostrar el boton, solo actua si la empresa es demo.
+  if (!isCurrentCompanyDemo()) return;
+  await confirmChangeCompanyAndReset();
 });
 
 // ===== [08][Z08.3] Caja UI: stepper + teclado numerico/calculadora =====
