@@ -5486,10 +5486,34 @@ async function saveAgentAdminPinModeToggle(enabled) {
 const OPTIONS_FAMILIES_LAYOUT_KEY = "ui.familiesLayout";
 let familiesLayoutMode = "A";
 
+// Pictogramas del boton de disposicion (muestran la disposicion a la que se CAMBIA al pulsar):
+//  - desde A (barra arriba) -> icono "columna a la izquierda";
+//  - desde B (columna) -> icono "barra arriba".
+const FAMILIES_LAYOUT_ICON_TO_LEFT =
+  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect x="3" y="4" width="18" height="16" rx="2.5"/>' +
+  '<line x1="9.5" y1="4" x2="9.5" y2="20"/>' +
+  '<rect x="5.2" y="7" width="2.6" height="2.6" rx="0.6" fill="currentColor" stroke="none"/>' +
+  '<rect x="5.2" y="11" width="2.6" height="2.6" rx="0.6" fill="currentColor" stroke="none"/>' +
+  '<rect x="5.2" y="15" width="2.6" height="2.6" rx="0.6" fill="currentColor" stroke="none"/>' +
+  "</svg>";
+const FAMILIES_LAYOUT_ICON_TO_TOP =
+  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect x="3" y="4" width="18" height="16" rx="2.5"/>' +
+  '<line x1="3" y1="10" x2="21" y2="10"/>' +
+  '<rect x="5.5" y="5.9" width="3.6" height="2.2" rx="0.6" fill="currentColor" stroke="none"/>' +
+  '<rect x="10.2" y="5.9" width="3.6" height="2.2" rx="0.6" fill="currentColor" stroke="none"/>' +
+  '<rect x="14.9" y="5.9" width="3.6" height="2.2" rx="0.6" fill="currentColor" stroke="none"/>' +
+  "</svg>";
+
 function applyFamiliesLayoutUI() {
   document.body.classList.toggle("families-layout-left", familiesLayoutMode === "B");
   scheduleFitFamilyLabels?.();
   document.querySelectorAll(".agent-families-layout-btn").forEach((btn) => {
+    btn.innerHTML =
+      familiesLayoutMode === "B"
+        ? FAMILIES_LAYOUT_ICON_TO_TOP
+        : FAMILIES_LAYOUT_ICON_TO_LEFT;
     btn.classList.toggle("is-active", familiesLayoutMode === "B");
     btn.title =
       familiesLayoutMode === "B"
@@ -24378,7 +24402,7 @@ function renderMainAgentBar() {
     const layoutBtn = document.createElement("button");
     layoutBtn.type = "button";
     layoutBtn.className = "agent-btn agent-families-layout-btn";
-    layoutBtn.textContent = "▦";
+    layoutBtn.innerHTML = FAMILIES_LAYOUT_ICON_TO_LEFT;
     layoutBtn.onclick = () => {
       toggleFamiliesLayout().catch(() => {});
     };

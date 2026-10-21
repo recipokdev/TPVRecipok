@@ -10447,3 +10447,9 @@ body.families-layout-left:not(.mesas-inline-full-mode):not(.families-first-famil
 .family-icon-picker-item.is-default {
   font-size: 22px;
 }
+
+/* Pictograma (SVG) del boton de disposicion de familias. */
+.search-bar-actions .agent-families-layout-btn svg {
+  display: block;
+  pointer-events: none;
+}
