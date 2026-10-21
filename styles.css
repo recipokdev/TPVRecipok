@@ -1555,6 +1555,7 @@ body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode)
 
 .search-bar-actions .agent-drawer-btn,
 .search-bar-actions .agent-refresh-btn,
+.search-bar-actions .agent-families-layout-btn,
 .search-bar-actions .agent-tables-btn {
   background: #eef3ff;
   color: #198cff;
@@ -1577,12 +1578,14 @@ body:not(.mesas-inline-trans-mode):not(.mesas-inline-full-mode)
 
 .search-bar-actions .agent-drawer-btn:hover,
 .search-bar-actions .agent-refresh-btn:hover,
+.search-bar-actions .agent-families-layout-btn:hover,
 .search-bar-actions .agent-tables-btn:hover {
   background: #d9e6ff;
   transform: translateY(-1px);
 }
 
-.search-bar-actions .agent-tables-btn.is-active {
+.search-bar-actions .agent-tables-btn.is-active,
+.search-bar-actions .agent-families-layout-btn.is-active {
   background: #198cff;
   color: #fff;
 }
@@ -1752,7 +1755,7 @@ body.theme-dark .input-clear-btn:hover {
 }
 
 .category-btn::before {
-  content: "📁";
+  content: var(--cat-icon, "📁");
   font-size: 14px;
 }
 
@@ -10381,4 +10384,66 @@ body.families-layout-left.families-first-products-view.mesas-inline-trans-mode .
 }
 .families-first-back-bar .category-btn::before {
   display: none;
+}
+
+/* Nombre de la familia: en la columna lateral, maximo 3 lineas y "..." si aun asi no cabe. */
+.category-btn .category-btn-label {
+  min-width: 0;
+}
+body.families-layout-left:not(.mesas-inline-full-mode):not(.families-first-families-view) .category-btn .category-btn-label {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+
+/* Selector de icono de familia (dialogo de familias de Opciones). */
+.family-icon-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 2px solid #d1d5db;
+  background: #ffffff;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.family-icon-picker {
+  width: min(560px, 92vw);
+  max-height: 86vh;
+  overflow: auto;
+}
+.family-icon-picker-title {
+  font-weight: 800;
+  font-size: 18px;
+  margin-bottom: 10px;
+}
+.family-icon-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.family-icon-picker-item {
+  height: 52px;
+  border-radius: 10px;
+  border: 2px solid #e5e7eb;
+  background: #ffffff;
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+}
+.family-icon-picker-item:hover {
+  background: #eef3ff;
+}
+.family-icon-picker-item.is-current {
+  border-color: #198cff;
+  background: #e0edff;
+}
+.family-icon-picker-item.is-none,
+.family-icon-picker-item.is-default {
+  font-size: 22px;
 }

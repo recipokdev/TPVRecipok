@@ -10607,6 +10607,33 @@ console.log("\n[SMOKE] Checking 2026-10-21 familias en columna lateral (A/B) con
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-21 iconos de familia, nombres largos en columna y boton redondo \n");
+{
+  const stylesCss = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+  if (
+    renderer.includes('const FAMILY_ICONS_CFG_KEY = "ui.familyIcons";') &&
+    renderer.includes("function openFamilyIconPicker(current) {") &&
+    renderer.includes("const FAMILY_ICON_CHOICES = [") &&
+    renderer.includes("saveFamilyIconsMap(familyIconsCache)") &&
+    renderer.includes("familyIconsCache = await getFamilyIconsMap();") &&
+    renderer.includes("applyFamilyIcon(btn, cat.id);") &&
+    renderer.includes("applyFamilyIcon(b, child.id);") &&
+    renderer.includes("function fitFamilyLabels() {") &&
+    renderer.includes("setCategoryButtonLabel(btn, cat.name);") &&
+    stylesCss.includes('content: var(--cat-icon, "📁");') &&
+    stylesCss.includes("-webkit-line-clamp: 3;") &&
+    stylesCss.includes(".search-bar-actions .agent-families-layout-btn,")
+  ) {
+    ok(
+      "Peticion de Lumi/Sergi 2026-10-21: iconos de familia (emoji de comida/TPV o sin icono) elegibles junto al color en el dialogo de familias y guardados en ui.familyIcons; en la columna lateral el nombre largo reduce la letra hasta un minimo y termina en puntos suspensivos a las 3 lineas; el boton de disposicion es circular como los otros 3 de la barra de busqueda",
+    );
+  } else {
+    fail(
+      "Faltan iconos de familia / ajuste de nombres largos / boton redondo (renderer.js openFamilyIconPicker, fitFamilyLabels; styles.css --cat-icon) -- revisar el cambio de 2026-10-21",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

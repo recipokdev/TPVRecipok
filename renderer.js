@@ -2010,6 +2010,53 @@ async function saveFamilyColorsMap(map) {
 
 async function reloadFamilyColorsCache() {
   familyColorsCache = await getFamilyColorsMap();
+  familyIconsCache = await getFamilyIconsMap();
+}
+
+// ===== Iconos de familia (peticion de Lumi, 2026-10-21): ademas del color, un emoji basico =====
+// Se elige en el mismo dialogo que el color. "" = icono por defecto (carpeta); "none" = sin icono.
+const FAMILY_ICONS_CFG_KEY = "ui.familyIcons";
+let familyIconsCache = {};
+
+const FAMILY_ICON_CHOICES = [
+  "☕", "🍵", "🥤", "🧃", "🥛", "🍺", "🍻", "🍷", "🥂", "🍹", "🍸", "🧉",
+  "🍞", "🥐", "🥖", "🥨", "🧀", "🥓", "🍳", "🥪", "🌮", "🌯", "🍕", "🍔",
+  "🌭", "🍟", "🍗", "🍖", "🥩", "🍝", "🍜", "🍣", "🍤", "🐟", "🥗", "🍲",
+  "🍰", "🎂", "🧁", "🍪", "🍩", "🍦", "🍫", "🍬", "🍎", "🍌", "🍓", "🍇",
+  "🥕", "🥔", "🥦", "🍅", "🌽", "🥑", "🎁", "⭐", "🔥", "🏷️", "🛒", "🧾",
+];
+
+async function getFamilyIconsMap() {
+  try {
+    const raw = await window.TPV_CFG?.get?.(FAMILY_ICONS_CFG_KEY);
+    if (!raw) return {};
+    if (typeof raw === "object") return raw;
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+async function saveFamilyIconsMap(map) {
+  try {
+    await window.TPV_CFG?.set?.(FAMILY_ICONS_CFG_KEY, map);
+    return true;
+  } catch (e) {
+    console.warn("No se pudo guardar ui.familyIcons:", e);
+    return false;
+  }
+}
+
+function getFamilyIconSync(familyId) {
+  return String(familyIconsCache?.[String(familyId)] || "");
+}
+
+// Valor de la variable CSS --cat-icon (contenido del ::before del boton de familia).
+function familyIconCssValue(familyId) {
+  const v = getFamilyIconSync(familyId);
+  if (!v) return "";
+  if (v === "none") return '""';
+  return JSON.stringify(v);
 }
 
 function getFamilyColorSync(familyId) {
@@ -5441,6 +5488,7 @@ let familiesLayoutMode = "A";
 
 function applyFamiliesLayoutUI() {
   document.body.classList.toggle("families-layout-left", familiesLayoutMode === "B");
+  scheduleFitFamilyLabels?.();
   document.querySelectorAll(".agent-families-layout-btn").forEach((btn) => {
     btn.classList.toggle("is-active", familiesLayoutMode === "B");
     btn.title =
@@ -6942,6 +6990,27 @@ function renderTerminalFamiliesList() {
       familyColorsCache[String(catId)] = nextColor;
     });
 
+    // Icono (emoji) de la familia, ademas del color (2026-10-21).
+    const iconBtn = document.createElement("button");
+    iconBtn.type = "button";
+    iconBtn.className = "family-icon-btn";
+    iconBtn.title = "Cambiar icono de la familia";
+    const paintIconBtn = () => {
+      const v = getFamilyIconSync(catId);
+      iconBtn.textContent = v === "none" ? "∅" : v || "📁";
+    };
+    paintIconBtn();
+    iconBtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const chosen = await openFamilyIconPicker(getFamilyIconSync(catId));
+      if (chosen === null) return;
+      if (chosen === "") delete familyIconsCache[String(catId)];
+      else familyIconsCache[String(catId)] = chosen;
+      paintIconBtn();
+    });
+
+    wrap.appendChild(iconBtn);
     wrap.appendChild(colorBtn);
     wrap.appendChild(colorInput);
 
@@ -7054,6 +7123,55 @@ function renderTerminalFamiliesList() {
   });
 }
 
+// Cuadricula de iconos para una familia. Devuelve el emoji elegido, "" (icono por defecto), "none"
+// (sin icono) o null si se cancela.
+function openFamilyIconPicker(current) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "simple-overlay family-icon-picker-overlay";
+    overlay.style.zIndex = "99999";
+    const dialog = document.createElement("div");
+    dialog.className = "simple-dialog family-icon-picker";
+    const title = document.createElement("div");
+    title.className = "family-icon-picker-title";
+    title.textContent = "Icono de la familia";
+    const grid = document.createElement("div");
+    grid.className = "family-icon-picker-grid";
+    const finish = (v) => {
+      overlay.remove();
+      resolve(v);
+    };
+    const mk = (label, value, extraClass, tip) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "family-icon-picker-item" + (extraClass ? " " + extraClass : "");
+      b.textContent = label;
+      if (tip) b.title = tip;
+      if ((current || "") === value) b.classList.add("is-current");
+      b.addEventListener("click", () => finish(value));
+      return b;
+    };
+    grid.appendChild(mk("📁", "", "is-default", "Icono por defecto (carpeta)"));
+    grid.appendChild(mk("∅", "none", "is-none", "Sin icono"));
+    FAMILY_ICON_CHOICES.forEach((e) => grid.appendChild(mk(e, e)));
+    const actions = document.createElement("div");
+    actions.className = "dialog-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancelar";
+    cancel.addEventListener("click", () => finish(null));
+    actions.appendChild(cancel);
+    dialog.appendChild(title);
+    dialog.appendChild(grid);
+    dialog.appendChild(actions);
+    overlay.appendChild(dialog);
+    overlay.addEventListener("click", (ev) => {
+      if (ev.target === overlay) finish(null);
+    });
+    document.body.appendChild(overlay);
+  });
+}
+
 async function saveTerminalFamiliesDialog() {
   // Cada uno guarda una clave de configuracion distinta e independiente --
   // van a la vez en vez de en fila. Las tablets van por su cuenta (piden al
@@ -7063,7 +7181,10 @@ async function saveTerminalFamiliesDialog() {
   const [okHidden, okMode, okColors, okDevices] = await Promise.all([
     saveTerminalFamilyHiddenMap(terminalFamiliesDraftHiddenMap),
     saveTerminalFamilyModeMap(terminalFamiliesDraftModeMap),
-    saveFamilyColorsMap(familyColorsCache),
+    saveFamilyColorsMap(familyColorsCache).then(async (ok) => {
+      const okIcons = await saveFamilyIconsMap(familyIconsCache);
+      return ok && okIcons;
+    }),
     Promise.all(
       pairedDevicesForFamiliesDialog.map((d) =>
         apiUpdatePairedDeviceFamilies(
@@ -13432,6 +13553,62 @@ function backToFamiliesFirstView() {
   renderProducts();
 }
 
+// El nombre va en su propio <span> para poder ajustarlo (columna lateral: letra que se reduce y
+// maximo 3 lineas con "...") sin tocar el icono ni el tirador de tamano.
+function setCategoryButtonLabel(btn, name) {
+  const span = document.createElement("span");
+  span.className = "category-btn-label";
+  span.textContent = String(name || "");
+  btn.appendChild(span);
+  btn.title = String(name || "");
+}
+
+function applyFamilyIcon(btn, familyId) {
+  const css = familyIconCssValue(familyId);
+  if (css) btn.style.setProperty("--cat-icon", css);
+}
+
+// Columna lateral (disposicion B): si el nombre no cabe en 3 lineas, se va reduciendo la letra hasta
+// un minimo legible; si aun asi no cabe, se corta con "..." (el nombre completo sale en el title).
+let __fitFamilyLabelsScheduled = false;
+function scheduleFitFamilyLabels() {
+  if (__fitFamilyLabelsScheduled) return;
+  __fitFamilyLabelsScheduled = true;
+  requestAnimationFrame(() => {
+    __fitFamilyLabelsScheduled = false;
+    try {
+      fitFamilyLabels();
+    } catch {}
+  });
+}
+function fitFamilyLabels() {
+  const labels = document.querySelectorAll(
+    "#categories .category-btn:not(.category-btn-back) .category-btn-label",
+  );
+  const sideColumn =
+    document.body.classList.contains("families-layout-left") &&
+    !document.body.classList.contains("families-first-families-view");
+  labels.forEach((label) => {
+    label.style.fontSize = "";
+    if (!sideColumn) return;
+    if (!label.offsetParent) return;
+    let fs = parseFloat(getComputedStyle(label).fontSize) || 16;
+    const min = 11;
+    let guard = 20;
+    while (guard-- > 0 && fs > min && label.scrollHeight > label.clientHeight + 1) {
+      fs -= 1;
+      label.style.fontSize = fs + "px";
+    }
+  });
+}
+{
+  const cats = document.getElementById("categories");
+  if (cats && typeof MutationObserver !== "undefined") {
+    new MutationObserver(() => scheduleFitFamilyLabels()).observe(cats, { childList: true });
+  }
+  window.addEventListener("resize", scheduleFitFamilyLabels);
+}
+
 function renderCategories() {
   debugTrace("[TRACE] renderCategories()");
 
@@ -13522,7 +13699,8 @@ function renderCategories() {
       btn.type = "button";
       btn.className = "category-btn";
       btn.dataset.cat = cat.id;
-      btn.textContent = cat.name;
+      setCategoryButtonLabel(btn, cat.name);
+      applyFamilyIcon(btn, cat.id);
 
       const hasChildren = visibleCategories.some((c) => c.parentId === cat.id);
       const isActive = !hasChildren && selectedCategory === cat.id;
@@ -13584,7 +13762,8 @@ function renderCategories() {
     b.type = "button";
     b.className = "category-btn subcategory-btn";
     b.dataset.cat = child.id;
-    b.textContent = child.name;
+    setCategoryButtonLabel(b, child.name);
+    applyFamilyIcon(b, child.id);
 
     const isActive = activeSubfamilyId === child.id;
     if (isActive) {
