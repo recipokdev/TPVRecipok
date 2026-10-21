@@ -10698,6 +10698,7 @@ console.log("\n[SMOKE] Checking 2026-10-21 familias primero: nombres largos en e
   const stylesCss = fs.readFileSync(path.join(root, "styles.css"), "utf8");
   if (
     stylesCss.includes("body.families-first-families-view .categories .category-btn {") &&
+    stylesCss.includes("minmax(max(160px, calc(25% - 12px)), 1fr)") &&
     stylesCss.includes("body.families-first-families-view .categories .category-btn .category-btn-label {") &&
     renderer.includes('document.body.classList.contains("families-first-families-view");')
   ) {

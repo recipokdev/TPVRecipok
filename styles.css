@@ -10350,14 +10350,20 @@ body.families-layout-left.families-first-families-view.mesas-inline-trans-mode .
     "left categories"
     "status status";
 }
+/* Con "familias primero" los botones son iguales en A y en B: anchos y bajos (hasta 4 por fila), no
+   cuadrados, para que quepan mas familias en pantalla sin scroll. */
 body.families-layout-left.families-first-families-view:not(.mesas-inline-full-mode) .categories {
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(max(160px, calc(25% - 12px)), 1fr));
   gap: 12px;
+}
+body.families-layout-left.families-first-families-view:not(.mesas-inline-full-mode) .category-btn::before {
+  font-size: 28px;
 }
 body.families-layout-left.families-first-families-view:not(.mesas-inline-full-mode) .category-btn {
   flex: none;
   min-width: 0;
-  min-height: 0;
+  aspect-ratio: auto;
+  min-height: 110px;
   font-size: 22px;
 }
 body.families-layout-left.families-first-products-view:not(.mesas-inline-full-mode):not(.mesas-inline-trans-mode) .products-area {
