@@ -10648,6 +10648,16 @@ if (
   fail("Contador de Enviar comanda en lineas / sin cabecera de envio para lineas que no van a cocina -- revisar renderer.js (refreshSendComandaBar, renderCart groupKey)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-21 aviso de cantidad por comensales \n");
+if (
+  renderer.includes('"Cantidad por comensales",') &&
+  renderer.includes("(${diners} comensales)`")
+) {
+  ok("Peticion de Sergi 2026-10-21: al multiplicar la cantidad por comensales sale un aviso (Pan x3 (3 comensales))");
+} else {
+  fail("Falta el aviso de cantidad por comensales en resolveMesaDinersQuantityForProduct (renderer.js)");
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

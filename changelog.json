@@ -6,6 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
+        "MEJORA: en Modo Mesas, cuando una familia de \"Familias por comensales\" multiplica la cantidad al añadir un producto, sale un aviso (\"Pan ×3 (3 comensales)\") para que no parezca un fallo.",
         "CORRECCIÓN: en Modo Mesas, el contador de la barra \"Enviar comanda\" cuenta líneas (productos distintos) y no unidades, igual que el resumen \"Enviado a cocina · N líneas\" (las unidades salen al pasar el ratón). Y ya no sale una cabecera de envío con \"Reimprimir\" suelta encima de \"No va a cocina\".",
         "MEJORA: el selector de icono de familia tiene ahora muchos más iconos, ordenados por secciones: bebidas, desayuno y panadería, comidas, pescado y marisco, dulces, fruta y verdura, tienda y accesorios (ropa, bolsos, joyería, regalos, flores…), hogar/material/tecnología y TPV/servicios.",
         "MEJORA: iconos de familia. Además del color, cada familia puede tener un icono (emoji básico de comida, bebida y TPV, o ninguno) que se elige en el mismo diálogo de familias, junto al botón de color. Se ve en los botones de familia, arriba y en la columna lateral. Se encuentra en Opciones → Terminales → \"Familias: visibilidad, color e icono\" → Configurar (solo para el terminal, no para tablets).",

@@ -6081,7 +6081,18 @@ function resolveMesaDinersQuantityForProduct(product, requestedQty) {
   const diners = getSelectedMesaDinersCount();
   if (!(diners > 0)) return qty;
 
-  return Math.max(1, diners) * Math.max(1, Math.round(qty));
+  const finalQty = Math.max(1, diners) * Math.max(1, Math.round(qty));
+  // Aviso de que la cantidad se ha multiplicado (Opciones -> Mesas -> Familias por
+  // comensales): sin esto, pulsar 1 y ver 3 parecia un fallo (2026-10-21).
+  if (finalQty > qty) {
+    const nm = String(product?.name || product?.descripcion || "").trim();
+    toast(
+      `${escapeHtml(nm || "Producto")} ×${finalQty} (${diners} comensales)`,
+      "info",
+      "Cantidad por comensales",
+    );
+  }
+  return finalQty;
 }
 
 let mesasDinersFamilyRulesBound = false;
