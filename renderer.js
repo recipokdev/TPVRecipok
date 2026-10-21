@@ -15838,7 +15838,14 @@ function renderCart() {
     const itemBatchAt = String(item?.sentBatchAt || "").trim();
     const itemSentAt = String(item?.sentAt || "").trim();
     const itemSentByTpv = !itemBatchAt && !!itemSentAt;
-    const groupKey = itemBatchAt
+    // Una linea que NO va a cocina (ni enviada ni pendiente) nunca abre cabecera
+    // de envio, aunque arrastre el sello de un envio anterior: salia un
+    // "14:32 · TPV · Reimprimir" suelto encima de "No va a cocina" (2026-10-21).
+    const itemIsNoKitchen =
+      !isLineAlreadySentToKitchen(item) && isNoKitchenLine(item);
+    const groupKey = itemIsNoKitchen
+      ? ""
+      : itemBatchAt
       ? itemBatchAt
       : isLineAlreadySentToKitchen(item)
         ? itemSentByTpv
@@ -47951,7 +47958,10 @@ function refreshSendComandaBar() {
   const loadedKey = counts.loaded ? String(counts.loaded.id ?? "").trim() : "";
   const auto = loadedKey ? __autoComandaPending.get(loadedKey) : null;
 
-  const countTxt = total > 0 ? fmtQty(total) : "";
+  // El numero es de LINEAS (productos distintos), no de unidades: 3 panes y 3 espeltas son 2,
+  // como en "Enviado a cocina · N lineas"; las unidades salen al pasar el raton.
+  const pendingLinesCount = counts.lines.length + counts.returnedLines.length;
+  const countTxt = total > 0 ? String(pendingLinesCount) : "";
   // En pausa se sigue viendo lo que queda (congelado), solo cambia el color.
   const autoSecs = auto
     ? Math.max(
@@ -47977,7 +47987,7 @@ function refreshSendComandaBar() {
         ? "Enviar comanda"
         : "Enviar devolución"
       : "Todo enviado a cocina"
-  }</span>${countTxt ? `<span class="scb-count">${countTxt}</span>` : ""}${
+  }</span>${countTxt ? `<span class="scb-count" title="${fmtQty(total)} ${Math.abs(total - 1) < 0.0001 ? "unidad" : "unidades"}">${countTxt}</span>` : ""}${
     extra
       ? `<span class="scb-extra${auto?.paused ? " is-paused" : ""}">${extra}</span>`
       : ""

@@ -10636,6 +10636,18 @@ console.log("\n[SMOKE] Checking 2026-10-21 iconos de familia, nombres largos en 
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-21 contador Enviar comanda en lineas y sin cabecera suelta en No va a cocina \n");
+if (
+  renderer.includes("const pendingLinesCount = counts.lines.length + counts.returnedLines.length;") &&
+  renderer.includes('const countTxt = total > 0 ? String(pendingLinesCount) : "";') &&
+  renderer.includes("!isLineAlreadySentToKitchen(item) && isNoKitchenLine(item);") &&
+  /const groupKey = itemIsNoKitchen\s*\? ""/.test(renderer)
+) {
+  ok("Peticion de Sergi 2026-10-21: el contador de Enviar comanda cuenta lineas (no unidades) y las lineas que no van a cocina no abren cabecera de envio con Reimprimir");
+} else {
+  fail("Contador de Enviar comanda en lineas / sin cabecera de envio para lineas que no van a cocina -- revisar renderer.js (refreshSendComandaBar, renderCart groupKey)");
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
