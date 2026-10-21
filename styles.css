@@ -1936,7 +1936,8 @@ body.families-first-families-view .categories {
 }
 /* .categories delante: gana a "body:not(.mesas-inline-...) .category-btn" (TPV normal) y los botones siguen siendo grandes. */
 body.families-first-families-view .categories .category-btn {
-  flex: 1 1 calc(25% - 12px);
+  /* Ancho fijo (1/4 de la fila): una familia que se queda sola en la ultima fila NO se estira a todo el ancho. */
+  flex: 0 0 calc(25% - 9px);
   min-width: 160px;
   min-height: 110px;
   font-size: 22px;
@@ -10697,4 +10698,16 @@ body.families-first-families-view .categories .category-btn.families-first-back-
 }
 body.families-first-families-view .categories .category-btn.families-first-back-tile.families-first-back-tile::before {
   display: none;
+}
+
+.opt-pv.is-action {
+  color: #475569;
+  background: transparent;
+  border-style: dashed;
+  border-color: #94a3b8;
+}
+body.theme-dark .opt-pv.is-action {
+  color: #cbd5e1;
+  background: transparent;
+  border-color: #64748b;
 }

@@ -2234,6 +2234,19 @@ function getTableServiceStageKey(uid, ticket, statusCode = "") {
   return "";
 }
 
+// Libera una mesa ocupada sin productos. Si tiene un pedido (vacio) enlazado, hay que borrarlo del
+// servidor: eso lo hace el TPV anfitrion (el plano solo lee los pedidos). Devuelve true si lo delego.
+function requestReleaseTable(uid) {
+  if (!getMappedTicketForTable(uid)) return false;
+  if (MESAS_EMBED_MODE && window.parent && window.parent !== window) {
+    try {
+      window.parent.postMessage({ type: "tpv:mesas-release-table", uid }, "*");
+      return true;
+    } catch {}
+  }
+  return false;
+}
+
 function setTableManualState(uid, nextState) {
   const key = String(uid || "").trim();
   if (!key) return;
@@ -2310,7 +2323,11 @@ function getAvailableStateTransitions(statusCode = "", uid = "") {
     ];
   }
   if (current === "ocupada") {
-    return [];
+    // Una mesa ocupada que no tiene ningun producto (p.ej. marcada ocupada a mano o con un pedido
+    // vacio) se puede liberar desde aqui. Con productos hay que cobrarla o borrar el pedido.
+    const ticket = getMappedTicketForTable(uid);
+    const hasItems = Array.isArray(ticket?.items) && ticket.items.length > 0;
+    return hasItems ? [] : [{ code: "libre", label: "Liberar mesa" }];
   }
   return [
     { code: "ocupada", label: "Pasar a ocupada" },
@@ -4721,6 +4738,10 @@ function bindEvents() {
         reopenTooltip();
         return;
       }
+      if (nextState === "libre" && requestReleaseTable(uid)) {
+        closeMapTooltip();
+        return;
+      }
       setTableManualState(uid, nextState);
       saveState();
       renderEverything();
@@ -5048,6 +5069,9 @@ function bindEvents() {
           .toLowerCase();
         if (nextState === "reservada") {
           reserveTable(uid);
+          return;
+        }
+        if (nextState === "libre" && requestReleaseTable(uid)) {
           return;
         }
         setTableManualState(uid, nextState);

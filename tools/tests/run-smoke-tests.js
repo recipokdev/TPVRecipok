@@ -10668,12 +10668,12 @@ console.log("\n[SMOKE] Checking 2026-10-21 rework de Opciones: etiquetas por tip
     renderer.indexOf("const OPT_PREVIEW_DEFS = {"),
     renderer.indexOf("function computeOptPreviewItem(def) {"),
   );
-  const defIds = [...defsSrc.matchAll(/OPT_PV\.[TVCX]\("[^"]*",\s*"([A-Za-z0-9_]+)"/g)].map((m) => m[1]);
+  const defIds = [...defsSrc.matchAll(/OPT_PV\.[TVCXA]\("[^"]*",\s*"([A-Za-z0-9_]+)"/g)].map((m) => m[1]);
   const missingIds = defIds.filter((id) => !idxHtml.includes('id="' + id + '"'));
   const subgroupCount = (idxHtml.match(/class="opt-subgroup"/g) || []).length;
   const groupTitles = (idxHtml.match(/class="opt-group-title"/g) || []).length;
   if (
-    defIds.length >= 50 &&
+    defIds.length >= 65 &&
     missingIds.length === 0 &&
     subgroupCount >= 15 &&
     groupTitles === 4 &&
@@ -10745,6 +10745,26 @@ console.log("\n[SMOKE] Checking 2026-10-21 Mesas sin etapas Pide cuenta / Cuenta
     ok("Peticion de Sergi 2026-10-21: sin etapas Pide cuenta / Cuenta cobrada (solo libre, ocupada, reservada); lo que quedo guardado con ellas se reconvierte al cargar (con pedido -> ocupada, sin pedido -> libre) y el carrito ya no se bloquea por el estado de la mesa");
   } else {
     fail("Siguen existiendo (o falta la migracion de) las etapas Pide cuenta / Cuenta cobrada (mesas/mesas.js, renderer.js normalizeLegacyMesaStages / getCartEditLockReason)");
+  }
+}
+
+console.log("\n[SMOKE] Checking 2026-10-21 Liberar mesa, botones en resumen de Opciones y familias de ancho fijo \n");
+{
+  const mesasJs = fs.readFileSync(path.join(root, "mesas", "mesas.js"), "utf8");
+  const stylesCss = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+  if (
+    mesasJs.includes('label: "Liberar mesa"') &&
+    mesasJs.includes("function requestReleaseTable(uid) {") &&
+    mesasJs.includes('type: "tpv:mesas-release-table"') &&
+    renderer.includes('data.type === "tpv:mesas-release-table"') &&
+    renderer.includes("A: (label, id) => ({ kind: " + JSON.stringify("action") + ", label, id }),") &&
+    renderer.includes('state: "action"') &&
+    stylesCss.includes(".opt-pv.is-action {") &&
+    stylesCss.includes("flex: 0 0 calc(25% - 9px);")
+  ) {
+    ok("Peticion de Sergi 2026-10-21: una mesa ocupada sin productos se libera desde el mapa; los resumenes de Opciones muestran tambien los botones; una familia sola en la ultima fila no se estira");
+  } else {
+    fail("Falta 'Liberar mesa' (mesas.js/renderer.js), los botones en el resumen de Opciones o el ancho fijo de las familias (styles.css)");
   }
 }
 

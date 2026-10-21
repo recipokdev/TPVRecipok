@@ -12931,6 +12931,53 @@ function bindMesasInlineEventsOnce() {
     const data = event?.data;
     if (!data || !data.type) return;
 
+    // "Liberar mesa" desde el plano (mesa ocupada sin productos): se borra su pedido vacio, si lo hay,
+    // y la mesa queda libre. Con productos no se toca: hay que cobrarla o borrar el pedido a proposito.
+    if (data.type === "tpv:mesas-release-table") {
+      const uid = String(data?.uid || "").trim();
+      if (!uid) return;
+      (async () => {
+        try {
+          const mesasState = loadMesasTablesStateForInline();
+          const pending = getMesasPendingTicketByUid(mesasState, uid);
+          if (pending && Array.isArray(pending.items) && pending.items.length) {
+            toast(
+              "Esta mesa tiene un pedido sin cobrar. Cóbralo, o usa «Borrar mesa» en el carrito si quieres descartarlo.",
+              "warn",
+              "Mesas",
+            );
+            return;
+          }
+          const idx = pending
+            ? (Array.isArray(parkedTickets) ? parkedTickets : []).findIndex(
+                (t) => String(t?.id || "") === String(pending.id || "") && !t?.paid,
+              )
+            : -1;
+          if (idx >= 0) {
+            await deleteParkedTicketByIndex(idx, { confirm: false });
+          }
+          // Sin pedido (o si el borrado no libero la mesa): se deja libre y sin vinculos.
+          const st = loadMesasTablesStateForInline();
+          if (st && typeof st === "object") {
+            st.tableStates = st.tableStates && typeof st.tableStates === "object" ? st.tableStates : {};
+            st.tableTicketMap = st.tableTicketMap && typeof st.tableTicketMap === "object" ? st.tableTicketMap : {};
+            st.tableMeta = st.tableMeta && typeof st.tableMeta === "object" ? st.tableMeta : {};
+            st.draftCartByTable = st.draftCartByTable && typeof st.draftCartByTable === "object" ? st.draftCartByTable : {};
+            st.tableStates[uid] = "libre";
+            delete st.tableTicketMap[uid];
+            delete st.draftCartByTable[uid];
+            st.tableMeta[uid] = { ...(st.tableMeta[uid] || {}), serviceStage: "" };
+            saveMesasTablesStateForInline(st);
+          }
+          renderMesasTransContextBar?.();
+          toast("Mesa liberada.", "ok", "Mesas");
+        } catch (e) {
+          console.warn("No se pudo liberar la mesa:", e?.message || e);
+        }
+      })();
+      return;
+    }
+
     if (data.type === "tpv:mesas-open-table") {
       const uid = String(data?.uid || "").trim();
       if (!uid) return;
@@ -32135,6 +32182,7 @@ function syncOptionsPreviewItemStates() {
 //   T = interruptor      -> verde con ✓ si esta activado, gris si no
 //   V = valor            -> azul "Etiqueta: valor" (desplegable o numero); gris si esta vacio
 //   C = lista            -> azul "Etiqueta: N" (nº de elementos); gris si esta vacia
+//   A = accion (boton)   -> "▸ Etiqueta" con borde discontinuo; no tiene estado, solo avisa de que existe
 //   X = a medida         -> fn(el) devuelve { text, state: on|off|val|warn } o null (no se muestra)
 // Al pulsar una etiqueta se abre el apartado y se salta a esa opcion (id).
 const OPT_PV = {
@@ -32142,6 +32190,7 @@ const OPT_PV = {
   V: (label, id, fmt) => ({ kind: "value", label, id, fmt }),
   C: (label, id, selector) => ({ kind: "count", label, id, selector }),
   X: (label, id, fn) => ({ kind: "custom", label, id, fn }),
+  A: (label, id) => ({ kind: "action", label, id }),
 };
 
 const optPvText = (el) => String(el?.textContent || "").trim();
@@ -32156,8 +32205,13 @@ const OPT_PREVIEW_DEFS = {
     OPT_PV.V("Comprobar", "updateNoticeIntervalSelect", (t) =>
       t.replace(/^Cada\s+/i, "cada "),
     ),
+    OPT_PV.A("Comprobar ahora", "updateNoticeCheckNowBtn"),
+    OPT_PV.A("Ver changelog", "updateNoticeChangelogBtn"),
   ],
-  caja: [OPT_PV.T("Abrir cajón con todos los pagos", "openDrawerAlwaysToggle")],
+  caja: [
+    OPT_PV.T("Abrir cajón con todos los pagos", "openDrawerAlwaysToggle"),
+    OPT_PV.A("Abrir cajón ahora", "optionsOpenDrawerBtn"),
+  ],
   impresora: [
     OPT_PV.X("Impresora de tickets", "currentPrinterName", (el) => {
       const t = optPvText(el);
@@ -32173,6 +32227,8 @@ const OPT_PREVIEW_DEFS = {
         : { text: `Comandas: ${t}`, state: "val" };
     }),
     OPT_PV.T("Imprimir al cobrar", "autoPrintToggle"),
+    OPT_PV.A("Cambiar / probar impresora de tickets", "optionsChangePrinterBtn"),
+    OPT_PV.A("Cambiar / probar impresora de comandas", "optionsChangeComandaPrinterBtn"),
   ],
   bascula: [
     OPT_PV.X("Báscula", "scaleEnabledToggle", (el) => {
@@ -32206,6 +32262,8 @@ const OPT_PREVIEW_DEFS = {
     OPT_PV.V("Tarifa activa", "tariffSelect"),
     OPT_PV.T("No vender bajo coste", "tariffMinCosteToggle"),
     OPT_PV.T("No vender sobre PVP", "tariffMaxPvpToggle"),
+    OPT_PV.A("Crear tarifa", "tariffCreateBtn"),
+    OPT_PV.A("Guardar cambios de tarifa", "tariffSaveAllBtn"),
   ],
   mesas: [
     OPT_PV.T("Comanda automática", "autoComandaOnSaveToggle"),
@@ -32213,6 +32271,8 @@ const OPT_PREVIEW_DEFS = {
     OPT_PV.T("Comanda agrupada por familias", "comandaGroupFamiliesToggle"),
     OPT_PV.C("Familias por comensales", "mesasDinersFamilyList", ".opt-chip-item"),
     OPT_PV.C("Familias para comanda", "mesasComandaFamilyList", ".opt-chip-item"),
+    OPT_PV.A("Vincular tablet de camarero", "pairingCodeGenerateBtn"),
+    OPT_PV.A("Tablets emparejadas", "pairedDevicesRefreshBtn"),
   ],
   productos: [
     OPT_PV.V("Texto en la tarjeta", "productDisplayFieldModeSelect"),
@@ -32228,6 +32288,11 @@ const OPT_PREVIEW_DEFS = {
     OPT_PV.V("Orden", "productSortModeSelect"),
     OPT_PV.T("Reordenar por arrastre", "productReorderModeToggle"),
     OPT_PV.T("Familias primero", "familiesFirstModeToggle"),
+    OPT_PV.A("Restablecer prioridades", "productManualOrderResetBtn"),
+    OPT_PV.A("Restablecer tamaño de productos", "productTileSizeResetBtn"),
+    OPT_PV.A("Restablecer tamaño de letra", "productNameFontSizeResetBtn"),
+    OPT_PV.A("Producto medio/cuarto (stock derivado)", "derivedStockFractionConfigBtn"),
+    OPT_PV.A("Alérgenos", "allergensManageBtn"),
   ],
   "cierre-caja": [
     OPT_PV.T("Cerrar con aparcados", "allowCloseWithParkedToggle"),
@@ -32240,10 +32305,14 @@ const OPT_PREVIEW_DEFS = {
     OPT_PV.T("Agente", "infoBarShowAgentToggle"),
     OPT_PV.T("Usuario", "infoBarShowUserToggle"),
     OPT_PV.T("Caja", "infoBarShowCashToggle"),
+    OPT_PV.A("Acciones alternativas", "infoBarAltTerminalBtn"),
   ],
   terminales: [
     OPT_PV.T("PIN de administrador por agente", "agentAdminPinModeToggle"),
     OPT_PV.T("Redimensionar familias", "familyButtonResizeModeToggle"),
+    OPT_PV.A("Familias: visibilidad, color e icono", "optionsTerminalFamiliesBtn"),
+    OPT_PV.A("Restablecer tamaño de familias", "familyButtonFontSizeResetBtn"),
+    OPT_PV.A("Cambiar de empresa", "optionsResetCompanyBtn"),
   ],
   pantalla: [
     OPT_PV.T("Modo kiosk", "kioskToggle"),
@@ -32281,6 +32350,14 @@ function computeOptPreviewItem(def) {
       ? { text: `${def.label}: ${n}`, state: "val" }
       : { text: def.label, state: "off" };
   }
+  if (def.kind === "action") {
+    // Los botones de filas ocultas (solo demo, solo Mesas...) no se muestran.
+    const row = el.closest(".opt-row");
+    const hiddenBox = el.closest("[hidden]");
+    const gated = optPvIsGatedOff(el);
+    if (hiddenBox || gated || row?.hidden || row?.style.display === "none") return null;
+    return { text: def.label, state: "action" };
+  }
   if (def.kind === "custom") return def.fn(el);
   return null;
 }
@@ -32305,7 +32382,8 @@ function renderOptionsPreviews() {
       chip.dataset.optTarget = def.id;
       chip.title = "Ir a esta opción";
       chip.textContent =
-        (r.state === "on" ? "✓ " : r.state === "warn" ? "⚠ " : "") + r.text;
+        (r.state === "on" ? "✓ " : r.state === "warn" ? "⚠ " : r.state === "action" ? "▸ " : "") +
+        r.text;
       frag.appendChild(chip);
     });
     // Sin nada que pintar (p.ej. controles aun sin cargar): se deja el texto del HTML.
