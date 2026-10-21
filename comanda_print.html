@@ -118,6 +118,27 @@
         margin: 4px 0;
       }
 
+      /* Reimpresion de una comanda ya enviada (2026-10-21): imposible de confundir con un pedido nuevo. */
+      .comanda-reprint-banner {
+        text-align: center;
+        font-size: 15px;
+        font-weight: 900;
+        letter-spacing: 0.5px;
+        border: 2px solid #000;
+        padding: 3px 2px;
+        margin: 4px 0;
+      }
+
+      /* Comanda agrupada por familias (2026-10-21): la familia una vez y sus productos debajo. */
+      .comanda-family {
+        font-weight: 900;
+        font-size: 13px;
+        text-transform: uppercase;
+        border-bottom: 1px solid #000;
+        margin: 6px 0 2px;
+        padding-bottom: 1px;
+      }
+
       .comanda-desc-return-tag {
         font-weight: 900;
         font-size: 13px;
@@ -149,6 +170,13 @@
         style="display: none"
       >
         ⚠ DEVOLVER A COCINA ⚠
+      </div>
+      <div
+        class="comanda-reprint-banner"
+        id="comandaReprintBanner"
+        style="display: none"
+      >
+        REIMPRESIÓN
       </div>
       <div class="mesa-big" id="comandaMesaBig">MESA</div>
 

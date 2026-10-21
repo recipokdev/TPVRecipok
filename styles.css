@@ -5879,6 +5879,22 @@ body.theme-dark #parkObsOverlay .park-quick-flag.is-active {
   margin: 8px 0 6px;
 }
 
+/* Reimprimir una comanda ya enviada (2026-10-21): boton pequeno en la cabecera de cada envio. */
+.cart-batch-divider .cart-batch-reprint {
+  float: right;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.cart-batch-divider .cart-batch-reprint:hover {
+  background: #e2e8f0;
+}
+
 /* Cabecera plegable "Enviado a cocina" (2026-10-15). */
 .cart-sent-toggle {
   display: block;

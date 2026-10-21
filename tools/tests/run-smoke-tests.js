@@ -10549,6 +10549,36 @@ console.log("\n[SMOKE] Checking 2026-10-21 kiosko apagado en instalacion nueva y
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-21 comanda: reimprimir una enviada, agrupada por familias, solo nombre; Opciones con caja cerrada \n");
+{
+  const indexHtml = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const comandaHtml = fs.readFileSync(path.join(root, "comanda_print.html"), "utf8");
+  if (
+    renderer.includes("async function reprintComandaPartFlow(ticket, part) {") &&
+    renderer.includes('reprintBtn.className = "cart-batch-reprint";') &&
+    renderer.includes("isReprint: true,") &&
+    renderer.includes('const reprintBanner = doc.getElementById("comandaReprintBanner");') &&
+    comandaHtml.includes('id="comandaReprintBanner"') &&
+    comandaHtml.includes(".comanda-family {") &&
+    renderer.includes("function buildComandaFamilyGroups(lines) {") &&
+    renderer.includes("? buildComandaFamilyGroups(lineList)") &&
+    renderer.includes("function isComandaGroupByFamilyEnabled() {") &&
+    indexHtml.includes('id="comandaGroupFamiliesToggle"') &&
+    renderer.includes("descEl.textContent = desc || ref;") &&
+    !renderer.includes("descEl.textContent = ref ? ") &&
+    renderer.includes("!cashOpen && !hasActiveLoginSession(),") &&
+    renderer.includes("if (readonly && !cashOpen) {")
+  ) {
+    ok(
+      "Peticion de Lumi 2026-10-21 (informe de reunion): reimprimir SOLO una comanda ya enviada (boton en la cabecera de cada envio, papel con aviso REIMPRESION, sin tocar el estado de lo enviado), comanda agrupada por familias principales (cada familia una vez, productos debajo, orden de las familias del TPV, opcion en Opciones -> Mesas, activa por defecto), nombre sin referencia en el papel de cocina; y (Sergi) Opciones accesibles con sesion iniciada aunque la caja este cerrada",
+    );
+  } else {
+    fail(
+      "Falta reimprimir comanda / comanda por familias / solo nombre / Opciones con caja cerrada (renderer.js reprintComandaPartFlow, buildComandaFamilyGroups, openOptions; comanda_print.html) -- revisar el cambio de 2026-10-21",
+    );
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

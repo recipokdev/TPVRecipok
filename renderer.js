@@ -15578,6 +15578,22 @@ function renderCart() {
       } else {
         divider.textContent = "";
       }
+      // Reimprimir esta comanda (solo si ya salio de este TPV: tiene numero de comanda y hora).
+      const reprintPart = Number(item?.sentPart || 0);
+      if (divider.textContent && reprintPart > 0 && itemSentAt) {
+        const reprintBtn = document.createElement("button");
+        reprintBtn.type = "button";
+        reprintBtn.className = "cart-batch-reprint";
+        reprintBtn.title = `Reimprimir la comanda ${reprintPart}`;
+        reprintBtn.textContent = "🖨 Reimprimir";
+        reprintBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          reprintComandaPartFlow(loadedTicketForComanda, reprintPart).catch((e) => {
+            console.warn("No se pudo reimprimir la comanda:", e?.message || e);
+          });
+        });
+        divider.appendChild(reprintBtn);
+      }
       // Lo enviado sin marca de comanda (antes de estos cambios) no necesita
       // raya propia: ya cuelga de la cabecera "Enviado a cocina".
       if (divider.textContent) container.appendChild(divider);
@@ -31160,6 +31176,9 @@ const autoPrintToggle = document.getElementById("autoPrintToggle");
 const autoComandaOnSaveToggle = document.getElementById(
   "autoComandaOnSaveToggle",
 );
+const comandaGroupFamiliesToggle = document.getElementById(
+  "comandaGroupFamiliesToggle",
+);
 const productAddonsEnabledToggle = document.getElementById(
   "productAddonsEnabledToggle",
 );
@@ -31612,6 +31631,8 @@ function refreshOptionsUI() {
   autoPrintToggle && (autoPrintToggle.checked = isAutoPrintEnabled());
   autoComandaOnSaveToggle &&
     (autoComandaOnSaveToggle.checked = isAutoComandaOnSaveEnabled());
+  comandaGroupFamiliesToggle &&
+    (comandaGroupFamiliesToggle.checked = isComandaGroupByFamilyEnabled());
   productAddonsEnabledToggle &&
     (productAddonsEnabledToggle.checked = isProductAddonsFeatureEnabled());
   groupLinesToggle && (groupLinesToggle.checked = isGroupLinesEnabled());
@@ -31839,8 +31860,13 @@ async function openOptions() {
   const setOptionsReadOnlyMode = (readonly) => {
     optionsOverlay?.classList.toggle("options-readonly", !!readonly);
 
-    // Caja cerrada: mostrar modal mínimo (acciones del footer únicamente).
-    optionsOverlay?.classList.toggle("options-cash-closed-mode", !cashOpen);
+    // Sin caja abierta Y sin sesion iniciada: modal minimo (acciones del footer unicamente). Con
+    // sesion iniciada las Opciones se ven normalmente aunque la caja este cerrada (peticion de Sergi,
+    // 2026-10-21: p.ej. para salir del modo kiosko sin tener que abrir caja).
+    optionsOverlay?.classList.toggle(
+      "options-cash-closed-mode",
+      !cashOpen && !hasActiveLoginSession(),
+    );
 
     const acc = document.getElementById("optionsAccordion");
     if (acc) {
@@ -31862,7 +31888,7 @@ async function openOptions() {
     }
 
     if (note) {
-      if (!cashOpen) {
+      if (readonly && !cashOpen) {
         note.textContent =
           "Caja cerrada: solo están disponibles Actualizar programa y Salir del programa.";
         note.classList.remove("hidden");
@@ -31874,15 +31900,12 @@ async function openOptions() {
     }
   };
 
-  if (!cashOpen) {
-    setOptionsReadOnlyMode(true);
-    optionsOverlay?.classList.remove("hidden");
-    return;
-  }
-
+  // Sin sesion iniciada: solo lo minimo (con la caja cerrada, solo "Actualizar programa" y
+  // "Salir del programa"; con caja abierta, aviso de iniciar sesion). Con sesion iniciada se
+  // sigue de largo aunque la caja este cerrada.
   if (!hasActiveLoginSession()) {
     setOptionsReadOnlyMode(true);
-    updateThemeButtonsUI();
+    if (cashOpen) updateThemeButtonsUI();
     optionsOverlay?.classList.remove("hidden");
     return;
   }
@@ -32398,6 +32421,15 @@ function setAutoComandaOnSaveEnabled(v) {
   localStorage.setItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY, v ? "1" : "0");
 }
 
+// Comanda agrupada por familias (peticion de Lumi, 2026-10-21): activa por defecto.
+const OPTIONS_COMANDA_GROUP_FAMILIES_KEY = "tpv_comandaGroupByFamily";
+function isComandaGroupByFamilyEnabled() {
+  return localStorage.getItem(OPTIONS_COMANDA_GROUP_FAMILIES_KEY) !== "0";
+}
+function setComandaGroupByFamilyEnabled(v) {
+  localStorage.setItem(OPTIONS_COMANDA_GROUP_FAMILIES_KEY, v ? "1" : "0");
+}
+
 function isProductAddonsFeatureEnabled() {
   return localStorage.getItem(OPTIONS_PRODUCT_ADDONS_ENABLED_KEY) === "1";
 }
@@ -32517,6 +32549,19 @@ autoComandaOnSaveToggle?.addEventListener("change", () => {
       autoComandaOnSaveToggle.checked
         ? "Auto-comanda al guardar activada ✅"
         : "Auto-comanda al guardar desactivada",
+      "info",
+      "Opciones",
+    );
+  }
+});
+
+comandaGroupFamiliesToggle?.addEventListener("change", () => {
+  setComandaGroupByFamilyEnabled(!!comandaGroupFamiliesToggle.checked);
+  if (typeof toast === "function") {
+    toast(
+      comandaGroupFamiliesToggle.checked
+        ? "Comanda agrupada por familias activada ✅"
+        : "Comanda agrupada por familias desactivada",
       "info",
       "Opciones",
     );
@@ -46125,6 +46170,50 @@ function getComandaReturnedLinesForTicket(ticket, sourceLines = cart) {
   return out;
 }
 
+// Reimprime UNA comanda ya enviada (la parte N del pedido), no el ticket ni la venta: por si el papel
+// se pierde (peticion de Lumi, 2026-10-21). No toca el estado de lo enviado ni crea nada nuevo.
+async function reprintComandaPartFlow(ticket, part) {
+  const n = Number(part || 0);
+  if (!ticket || !(n > 0)) return;
+  const partLines = (Array.isArray(ticket.items) ? ticket.items : []).filter(
+    (l) => l && Number(l.sentPart || 0) === n && l.sentAt,
+  );
+  const printable = getComandaPrintableLines(partLines);
+  if (!printable.length) {
+    toast?.("No hay nada que reimprimir de esa comanda.", "info", "Comandas");
+    return;
+  }
+  const units = printable.reduce((s, l) => s + (Number(l?.qty) || 0), 0);
+  const ok = await confirmModal(
+    "Reimprimir comanda",
+    `Se volverá a imprimir la Comanda ${n} (${fmtQty(units)} ${units === 1 ? "unidad" : "unidades"}) con el aviso REIMPRESIÓN. No se envía nada nuevo.`,
+  );
+  if (!ok) return;
+  const printerName = await ensureComandaPrinterOrPrompt({ manual: true });
+  if (!printerName) {
+    toast?.("No hay impresora de comandas configurada en Opciones.", "warn", "Comandas");
+    return;
+  }
+  const scope = resolveMesaScopeFromTicket(ticket);
+  const splitObsInfo = parseSplitInfoFromObs(ticket?.obs);
+  const obsText = String(splitObsInfo?.cleanObs || ticket?.obs || "").trim();
+  const sentBy = String(printable[0]?.sentBy || "").trim();
+  const res = await printComandaWithContext({
+    scope,
+    lines: printable,
+    obsText,
+    partNumber: n,
+    printerName,
+    agentLabel: getCamarerosAppAuthorName(ticket) || sentBy,
+    isReprint: true,
+    successToastMessage: `Comanda ${n} reimpresa ✅`,
+    errorPrefix: "No se pudo reimprimir la comanda:",
+  });
+  if (!res?.ok && res?.error) {
+    toast?.(res.error, "err", "Comandas");
+  }
+}
+
 function getNextComandaPartNumber(ticket) {
   const state = normalizeTicketComandaState(ticket?.comandaState);
   return Math.max(1, Number(state?.seq || 0) + 1);
@@ -46409,6 +46498,53 @@ function resolveMesaScopeFromTicket(ticket) {
   };
 }
 
+// Agrupa las lineas de una comanda por familia PRINCIPAL del producto (la raiz de su arbol de
+// familias), en el orden en que el TPV muestra las familias. Las lineas cuyo producto no se
+// encuentra van en un grupo "Otros" al final (y si TODAS son asi, no se pone ninguna cabecera).
+function buildComandaFamilyGroups(lines) {
+  const list = Array.isArray(lines) ? lines : [];
+  const cats = Array.isArray(categories) ? categories : [];
+  const byId = new Map(cats.map((c) => [String(c?.id || ""), c]));
+  const order = new Map(cats.map((c, i) => [String(c?.id || ""), i]));
+  const rootOf = (catId) => {
+    let cur = String(catId || "").trim();
+    const seen = new Set();
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const node = byId.get(cur);
+      const parent = String(node?.parentId || "").trim();
+      if (!parent || !byId.has(parent)) return cur;
+      cur = parent;
+    }
+    return cur;
+  };
+  const groups = new Map();
+  list.forEach((line) => {
+    let root = "";
+    try {
+      const product = resolveProductByCartLine(line);
+      root = product ? rootOf(product.category) : "";
+    } catch {}
+    const key = root && byId.has(root) ? root : "__otros";
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        name: key === "__otros" ? "Otros" : String(byId.get(key)?.name || key).trim(),
+        lines: [],
+      });
+    }
+    groups.get(key).lines.push(line);
+  });
+  const arr = Array.from(groups.values());
+  arr.sort((a, b) => {
+    if (a.key === "__otros") return b.key === "__otros" ? 0 : 1;
+    if (b.key === "__otros") return -1;
+    return (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0);
+  });
+  if (arr.length === 1 && arr[0].key === "__otros") arr[0].name = "";
+  return arr;
+}
+
 async function printComandaWithContext({
   scope,
   lines,
@@ -46423,6 +46559,8 @@ async function printComandaWithContext({
   isReturn = false,
   // Camarero a poner en el impreso cuando el pedido viene de la app (si no, el agente activo del TPV).
   agentLabel = "",
+  // Reimpresion de una comanda YA enviada (2026-10-21): mismo papel con el aviso "REIMPRESION".
+  isReprint = false,
 }) {
   let templateHtml = "";
   try {
@@ -46455,6 +46593,10 @@ async function printComandaWithContext({
     const banner = doc.getElementById("comandaReturnBanner");
     if (banner) banner.style.display = "block";
   }
+  if (isReprint) {
+    const reprintBanner = doc.getElementById("comandaReprintBanner");
+    if (reprintBanner) reprintBanner.style.display = "block";
+  }
   setText(doc, "comandaMesaBig", mesaBig);
   setText(doc, "comandaMesa", `${room} · ${table}`);
   setText(doc, "comandaAgent", agent);
@@ -46474,7 +46616,7 @@ async function printComandaWithContext({
   const itemsEl = doc.getElementById("comandaItems");
   if (itemsEl) {
     itemsEl.innerHTML = "";
-    (Array.isArray(lines) ? lines : []).forEach((line) => {
+    const appendComandaRow = (line) => {
       const qty = Number(line?.qty || 0) || 0;
       const ref = String(line?.referencia || "").trim();
       const desc = String(line?.name || line?.descripcion || "Producto").trim();
@@ -46493,7 +46635,9 @@ async function printComandaWithContext({
 
       const descEl = doc.createElement("div");
       descEl.className = "comanda-desc";
-      descEl.textContent = ref ? `${ref} - ${desc}` : desc;
+      // Solo el nombre del producto en el papel de cocina (antes salia "referencia - descripcion", y
+      // con referencias tipo codigo se leia el codigo en vez del nombre -- informe de Lumi, 2026-10-20).
+      descEl.textContent = desc || ref;
 
       row.appendChild(qtyEl);
       row.appendChild(descEl);
@@ -46527,6 +46671,21 @@ async function printComandaWithContext({
       }
 
       itemsEl.appendChild(row);
+    };
+
+    // Agrupado por familias: la familia una sola vez y sus productos debajo.
+    const lineList = Array.isArray(lines) ? lines : [];
+    const groups = isComandaGroupByFamilyEnabled()
+      ? buildComandaFamilyGroups(lineList)
+      : [{ name: "", lines: lineList }];
+    groups.forEach((g) => {
+      if (g.name) {
+        const famEl = doc.createElement("div");
+        famEl.className = "comanda-family";
+        famEl.textContent = g.name;
+        itemsEl.appendChild(famEl);
+      }
+      g.lines.forEach(appendComandaRow);
     });
   }
 
