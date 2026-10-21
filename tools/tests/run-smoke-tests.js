@@ -10648,14 +10648,15 @@ if (
   fail("Contador de Enviar comanda en lineas / sin cabecera de envio para lineas que no van a cocina -- revisar renderer.js (refreshSendComandaBar, renderCart groupKey)");
 }
 
-console.log("\n[SMOKE] Checking 2026-10-21 aviso de cantidad por comensales \n");
+console.log("\n[SMOKE] Checking 2026-10-21 pastilla fija de comensales en la cabecera de la mesa \n");
 if (
-  renderer.includes('"Cantidad por comensales",') &&
-  renderer.includes("(${diners} comensales)`")
+  renderer.includes('class="peb-diners-pill') &&
+  renderer.includes("const dinersFamilyNames =") &&
+  !renderer.includes('"Cantidad por comensales",')
 ) {
-  ok("Peticion de Sergi 2026-10-21: al multiplicar la cantidad por comensales sale un aviso (Pan x3 (3 comensales))");
+  ok("Peticion de Sergi 2026-10-21: la cabecera de la mesa muestra siempre los comensales y las familias que multiplican la cantidad (en vez de un aviso temporal)");
 } else {
-  fail("Falta el aviso de cantidad por comensales en resolveMesaDinersQuantityForProduct (renderer.js)");
+  fail("Falta el pastilla fija de comensales en la cabecera de la mesa en resolveMesaDinersQuantityForProduct (renderer.js)");
 }
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");

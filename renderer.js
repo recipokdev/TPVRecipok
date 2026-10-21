@@ -6081,18 +6081,7 @@ function resolveMesaDinersQuantityForProduct(product, requestedQty) {
   const diners = getSelectedMesaDinersCount();
   if (!(diners > 0)) return qty;
 
-  const finalQty = Math.max(1, diners) * Math.max(1, Math.round(qty));
-  // Aviso de que la cantidad se ha multiplicado (Opciones -> Mesas -> Familias por
-  // comensales): sin esto, pulsar 1 y ver 3 parecia un fallo (2026-10-21).
-  if (finalQty > qty) {
-    const nm = String(product?.name || product?.descripcion || "").trim();
-    toast(
-      `${escapeHtml(nm || "Producto")} ×${finalQty} (${diners} comensales)`,
-      "info",
-      "Cantidad por comensales",
-    );
-  }
-  return finalQty;
+  return Math.max(1, diners) * Math.max(1, Math.round(qty));
 }
 
 let mesasDinersFamilyRulesBound = false;
@@ -22273,10 +22262,40 @@ function refreshParkedEditingBanner() {
     ? `Ticket #${ticketDisplayNo}`
     : `${docTypeTexts.shortLabel}: ${bannerTicketName}${splitSuffix}`;
 
+  // Pastilla fija arriba a la derecha con los comensales y, si hay familias por
+  // comensales, cuales multiplican la cantidad: asi "pulso 1 y salen 3" no
+  // sorprende (2026-10-21; antes era un aviso que desaparecia).
+  const dinersFamilyNames =
+    diners > 1
+      ? (Array.isArray(mesasDinersFamilyRules) ? mesasDinersFamilyRules : [])
+          .map((id) => {
+            const cat = (Array.isArray(categories) ? categories : []).find(
+              (c) => String(c?.id) === String(id),
+            );
+            return String(cat?.name || "").trim();
+          })
+          .filter(Boolean)
+      : [];
+  const dinersPillHtml =
+    diners > 0
+      ? `<div class="peb-diners-pill${dinersFamilyNames.length ? " is-multiplying" : ""}"${
+          dinersFamilyNames.length
+            ? ` title="${escapeHtml(`Al añadir un producto de estas familias, la cantidad se multiplica por ${diners}: ${dinersFamilyNames.join(", ")}`)}"`
+            : ""
+        }><span class="peb-diners-main">👥 ${escapeHtml(String(diners))} ${diners === 1 ? "comensal" : "comensales"}</span>${
+          dinersFamilyNames.length
+            ? `<span class="peb-diners-sub">×${escapeHtml(String(diners))} en: ${escapeHtml(dinersFamilyNames.join(", "))}</span>`
+            : ""
+        }</div>`
+      : "";
+
   mesaMeta.innerHTML = showMesaMeta
     ? `
-    <div class="peb-mesa-main">Mesa ${escapeHtml(mesaName)} <span class="peb-ticket-inline">${escapeHtml(ticketLabel)}</span></div>
-    <div class="peb-mesa-sub">${escapeHtml(roomName)}${diners > 0 ? ` · Comensales: ${escapeHtml(String(diners))}` : ""}</div>
+    <div class="peb-mesa-top">
+      <div class="peb-mesa-main">Mesa ${escapeHtml(mesaName)} <span class="peb-ticket-inline">${escapeHtml(ticketLabel)}</span></div>
+      ${dinersPillHtml}
+    </div>
+    <div class="peb-mesa-sub">${escapeHtml(roomName)}</div>
     <div class="peb-mesa-badges">
       <span class="peb-chip is-${escapeHtml(mesaStatus.kind)}">${escapeHtml(mesaStatus.text)}</span>
       <span class="peb-chip">${escapeHtml(openedHour)}</span>

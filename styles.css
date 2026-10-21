@@ -10468,3 +10468,47 @@ body.families-layout-left:not(.mesas-inline-full-mode):not(.families-first-famil
   background: inherit;
   padding-top: 8px;
 }
+
+/* Cabecera de la mesa: titulo a la izquierda y pastilla de comensales arriba a la derecha. */
+.parked-editing-banner .peb-mesa-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.parked-editing-banner .peb-mesa-top .peb-mesa-main {
+  min-width: 0;
+}
+.parked-editing-banner .peb-diners-pill {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 48%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  border-radius: 10px;
+  border: 1px solid #dbe7f5;
+  background: #ffffff;
+  color: #334155;
+  padding: 3px 8px;
+  text-align: right;
+}
+.parked-editing-banner .peb-diners-pill.is-multiplying {
+  border-color: #f5c26b;
+  background: #fff7e0;
+  color: #92400e;
+}
+.parked-editing-banner .peb-diners-main {
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.parked-editing-banner .peb-diners-sub {
+  font-size: 11px;
+  font-weight: 700;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
