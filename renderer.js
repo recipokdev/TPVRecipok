@@ -2019,11 +2019,42 @@ const FAMILY_ICONS_CFG_KEY = "ui.familyIcons";
 let familyIconsCache = {};
 
 const FAMILY_ICON_CHOICES = [
-  "☕", "🍵", "🥤", "🧃", "🥛", "🍺", "🍻", "🍷", "🥂", "🍹", "🍸", "🧉",
-  "🍞", "🥐", "🥖", "🥨", "🧀", "🥓", "🍳", "🥪", "🌮", "🌯", "🍕", "🍔",
-  "🌭", "🍟", "🍗", "🍖", "🥩", "🍝", "🍜", "🍣", "🍤", "🐟", "🥗", "🍲",
-  "🍰", "🎂", "🧁", "🍪", "🍩", "🍦", "🍫", "🍬", "🍎", "🍌", "🍓", "🍇",
-  "🥕", "🥔", "🥦", "🍅", "🌽", "🥑", "🎁", "⭐", "🔥", "🏷️", "🛒", "🧾",
+  {
+    title: "Bebidas",
+    icons: ["☕", "🍵", "🥤", "🧃", "🥛", "🍼", "🍺", "🍻", "🍷", "🥂", "🥃", "🍸", "🍹", "🍾", "🍶", "🧉", "🧊"],
+  },
+  {
+    title: "Desayuno y panadería",
+    icons: ["🥐", "🍞", "🥖", "🥨", "🥯", "🥞", "🧇", "🧀", "🥓", "🍳", "🥪", "🥙"],
+  },
+  {
+    title: "Comidas",
+    icons: ["🍕", "🍔", "🌭", "🍟", "🌮", "🌯", "🍗", "🍖", "🥩", "🍝", "🍜", "🍲", "🥘", "🍛", "🍚", "🍱", "🥟", "🍢", "🥡", "🥗"],
+  },
+  {
+    title: "Pescado y marisco",
+    icons: ["🐟", "🍣", "🍤", "🦐", "🦑", "🐙", "🦀", "🦞", "🦪"],
+  },
+  {
+    title: "Dulces y postres",
+    icons: ["🍰", "🎂", "🧁", "🥧", "🍪", "🍩", "🍮", "🍦", "🍨", "🍧", "🍫", "🍬", "🍭", "🍡"],
+  },
+  {
+    title: "Fruta y verdura",
+    icons: ["🍎", "🍐", "🍊", "🍋", "🍌", "🍉", "🍇", "🍓", "🍒", "🍑", "🍍", "🥭", "🥝", "🍅", "🥕", "🥔", "🥦", "🌽", "🥑", "🥬", "🥒", "🍆", "🌶️", "🧅", "🧄", "🍄"],
+  },
+  {
+    title: "Tienda y accesorios",
+    icons: ["👕", "👚", "👖", "👗", "👜", "👛", "🎒", "👓", "🕶️", "⌚", "💍", "👟", "👠", "🧢", "🧣", "🧤", "🎩", "💄", "🧴", "🧼", "🕯️", "🧸", "🎈", "🎀", "💐", "🌹", "🎁", "📦"],
+  },
+  {
+    title: "Hogar, material y tecnología",
+    icons: ["🧰", "🔧", "🔨", "💡", "🔋", "🔌", "📱", "💻", "🎧", "🎮", "📚", "✏️", "📎", "🧹", "🧽", "🧯", "🛏️", "🪑"],
+  },
+  {
+    title: "TPV, servicios y otros",
+    icons: ["🛒", "🏷️", "🧾", "💶", "💳", "⭐", "🔥", "❤️", "🆕", "✅", "🔔", "🛎️", "🍽️", "🏆", "🐶", "🐱", "🌿", "☀️"],
+  },
 ];
 
 async function getFamilyIconsMap() {
@@ -7177,7 +7208,18 @@ function openFamilyIconPicker(current) {
     };
     grid.appendChild(mk("📁", "", "is-default", "Icono por defecto (carpeta)"));
     grid.appendChild(mk("∅", "none", "is-none", "Sin icono"));
-    FAMILY_ICON_CHOICES.forEach((e) => grid.appendChild(mk(e, e)));
+    dialog.appendChild(title);
+    dialog.appendChild(grid);
+    FAMILY_ICON_CHOICES.forEach((section) => {
+      const sTitle = document.createElement("div");
+      sTitle.className = "family-icon-picker-section";
+      sTitle.textContent = section.title;
+      const sGrid = document.createElement("div");
+      sGrid.className = "family-icon-picker-grid";
+      section.icons.forEach((e) => sGrid.appendChild(mk(e, e)));
+      dialog.appendChild(sTitle);
+      dialog.appendChild(sGrid);
+    });
     const actions = document.createElement("div");
     actions.className = "dialog-actions";
     const cancel = document.createElement("button");
@@ -7185,8 +7227,6 @@ function openFamilyIconPicker(current) {
     cancel.textContent = "Cancelar";
     cancel.addEventListener("click", () => finish(null));
     actions.appendChild(cancel);
-    dialog.appendChild(title);
-    dialog.appendChild(grid);
     dialog.appendChild(actions);
     overlay.appendChild(dialog);
     overlay.addEventListener("click", (ev) => {

@@ -10453,3 +10453,18 @@ body.families-layout-left:not(.mesas-inline-full-mode):not(.families-first-famil
   display: block;
   pointer-events: none;
 }
+
+.family-icon-picker-section {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+  margin: 10px 0 6px;
+}
+.family-icon-picker .dialog-actions {
+  position: sticky;
+  bottom: 0;
+  background: inherit;
+  padding-top: 8px;
+}
