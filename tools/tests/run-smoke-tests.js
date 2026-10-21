@@ -10592,7 +10592,9 @@ console.log("\n[SMOKE] Checking 2026-10-21 familias en columna lateral (A/B) con
     renderer.includes("agentActions.appendChild(createFamiliesLayoutBtn());") &&
     renderer.includes('document.body.classList.toggle("families-layout-left", familiesLayoutMode === "B");') &&
     stylesCss.includes("body.families-layout-left.mesas-inline-trans-mode .products-area {") &&
-    stylesCss.includes("body.families-layout-left .families-first-back-bar .category-btn {") &&
+    stylesCss.includes(".families-first-back-bar .category-btn {") &&
+    renderer.includes("if (activeSubfamilyId && activeFamilyParentId) {") &&
+    renderer.includes('subEl.className = "comanda-subfamily";') &&
     stylesCss.includes("body.families-layout-left.families-first-families-view")
   ) {
     ok(

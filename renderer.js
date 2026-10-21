@@ -13409,6 +13409,19 @@ function applyFamiliesFirstModeUI() {
 }
 
 function backToFamiliesFirstView() {
+  // Un nivel hacia atras: si se esta viendo una SUBFAMILIA, se vuelve a las subfamilias de su familia
+  // (y desde ahi el boton "Volver" de la propia lista sube a todas las familias). Antes saltaba
+  // directamente a la lista de familias principales.
+  if (activeSubfamilyId && activeFamilyParentId) {
+    activeSubfamilyId = null;
+    selectedCategory = null;
+    searchTerm = "";
+    if (searchInput) searchInput.value = "";
+    syncSearchClearBtnVisibility?.();
+    renderCategories();
+    renderProducts();
+    return;
+  }
   selectedCategory = null;
   activeFamilyParentId = null;
   activeSubfamilyId = null;
@@ -46573,9 +46586,13 @@ function buildComandaFamilyGroups(lines) {
   const groups = new Map();
   list.forEach((line) => {
     let root = "";
+    let sub = "";
     try {
       const product = resolveProductByCartLine(line);
-      root = product ? rootOf(product.category) : "";
+      const catId = product ? String(product.category || "").trim() : "";
+      root = catId ? rootOf(catId) : "";
+      // Subfamilia: el producto cuelga de una familia que NO es la principal.
+      sub = root && catId && catId !== root && byId.has(catId) ? catId : "";
     } catch {}
     const key = root && byId.has(root) ? root : "__otros";
     if (!groups.has(key)) {
@@ -46583,9 +46600,16 @@ function buildComandaFamilyGroups(lines) {
         key,
         name: key === "__otros" ? "Otros" : String(byId.get(key)?.name || key).trim(),
         lines: [],
+        subs: new Map(),
       });
     }
-    groups.get(key).lines.push(line);
+    const g = groups.get(key);
+    g.lines.push(line);
+    const sk = sub || "";
+    if (!g.subs.has(sk)) {
+      g.subs.set(sk, { name: sk ? String(byId.get(sk)?.name || sk).trim() : "", lines: [] });
+    }
+    g.subs.get(sk).lines.push(line);
   });
   const arr = Array.from(groups.values());
   arr.sort((a, b) => {
@@ -46594,6 +46618,17 @@ function buildComandaFamilyGroups(lines) {
     return (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0);
   });
   if (arr.length === 1 && arr[0].key === "__otros") arr[0].name = "";
+  // Dentro de cada familia principal: primero lo suelto (sin subfamilia) y luego cada subfamilia
+  // con su nombre y sus productos, en el orden en que el TPV muestra las familias.
+  arr.forEach((g) => {
+    const subs = Array.from(g.subs.values());
+    subs.sort((x, y) => {
+      if (!x.name) return y.name ? -1 : 0;
+      if (!y.name) return 1;
+      return 0;
+    });
+    g.sections = subs;
+  });
   return arr;
 }
 
@@ -46746,7 +46781,20 @@ async function printComandaWithContext({
         famEl.textContent = g.name;
         itemsEl.appendChild(famEl);
       }
-      g.lines.forEach(appendComandaRow);
+      if (Array.isArray(g.sections) && g.sections.length) {
+        g.sections.forEach((sec) => {
+          // Subfamilia: su nombre debajo de la familia grande y sus productos debajo de ella.
+          if (sec.name && g.name) {
+            const subEl = doc.createElement("div");
+            subEl.className = "comanda-subfamily";
+            subEl.textContent = sec.name;
+            itemsEl.appendChild(subEl);
+          }
+          sec.lines.forEach(appendComandaRow);
+        });
+      } else {
+        g.lines.forEach(appendComandaRow);
+      }
     });
   }
 

@@ -6,6 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
+        "MEJORA: el botón para volver a las familias (modo \"Familias primero\") es ahora una flecha pequeña (←) que ocupa poco espacio, y sube UN nivel: desde los productos de una subfamilia vuelve a las subfamilias de su familia, y desde ahí \"Volver\" sube a todas las familias. La comanda con subfamilias pone la familia grande arriba y, debajo, cada subfamilia con sus productos.",
         "MEJORA: nueva disposición de las familias en la pantalla de venta. Un botón pequeño (junto a Modo Mesas, Actualizar y Abrir cajón) alterna entre la de siempre (A: barra de rectángulos arriba) y la B (cuadrados en una columna a la izquierda, con los productos a la derecha; también en Modo Mesas). Se combina con \"Familias primero\" de Opciones → Productos (al elegir una familia se ocultan las demás y queda una flecha para volver): A1, A2, B1 y B2. Se recuerda en cada TPV.",
         "MEJORA: se puede REIMPRIMIR una comanda ya enviada (solo esa comanda, no el ticket ni la venta), por si el papel se pierde: en la mesa, cada envío (\"Enviado · hora · Comanda N\") tiene un botón \"Reimprimir\". El papel sale con el aviso REIMPRESIÓN para que cocina no lo tome por un pedido nuevo, y no se envía nada nuevo.",
         "MEJORA: la comanda sale AGRUPADA POR FAMILIAS: cada familia una sola vez, con todos sus productos debajo (por ejemplo, los 5 cafés y los 3 panes bajo CAFÉS y PANES), en el orden de las familias del TPV. Se puede desactivar en Opciones → Mesas (\"Comanda agrupada por familias\").",

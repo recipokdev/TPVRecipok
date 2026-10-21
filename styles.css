@@ -10309,20 +10309,6 @@ body.families-layout-left:not(.mesas-inline-full-mode) .category-btn::before {
   font-size: 22px;
 }
 
-/* El boton "Volver a familias" (familias primero) NO es un cuadrado de familia. */
-body.families-layout-left .families-first-back-bar .category-btn {
-  aspect-ratio: auto;
-  flex-direction: row;
-  justify-content: flex-start;
-  text-align: left;
-  min-height: 46px;
-  padding: 12px 16px;
-  white-space: nowrap;
-}
-body.families-layout-left .families-first-back-bar .category-btn::before {
-  font-size: 14px;
-}
-
 /* B + "familias primero": antes de elegir familia, cuadrados grandes en toda la zona; al elegir una
    la columna se oculta y los productos ocupan todo el ancho (con la flecha para volver). */
 body.families-layout-left.families-first-families-view:not(.mesas-inline-full-mode):not(.mesas-inline-trans-mode) .products-area {
@@ -10378,4 +10364,21 @@ body.families-layout-left.families-first-products-view.mesas-inline-trans-mode .
     "left back"
     "left products"
     "status status";
+}
+
+/* Flecha para volver a las familias ("familias primero"): pequena, para no gastar espacio que
+   podrian usar los productos (peticion de Sergi, 2026-10-21). Vale para A y para B. */
+.families-first-back-bar .category-btn {
+  min-height: 34px;
+  padding: 4px 16px;
+  font-size: 20px;
+  line-height: 1;
+  font-weight: 700;
+  justify-content: center;
+  aspect-ratio: auto;
+  flex-direction: row;
+  white-space: nowrap;
+}
+.families-first-back-bar .category-btn::before {
+  display: none;
 }
