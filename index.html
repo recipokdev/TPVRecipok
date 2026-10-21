@@ -2123,89 +2123,975 @@
         </div>
 
         <div class="opt-acc" id="optionsAccordion">
-          <section class="opt-sec" data-sec="actualizacion">
+          <div class="opt-search">
+            <input
+              type="text"
+              id="optionsSearchInput"
+              class="opt-input"
+              placeholder="Buscar una opción… (p. ej. stock, impresora, cajón)"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button type="button" id="optionsSearchClear" class="small-btn hidden" title="Borrar la búsqueda" aria-label="Borrar la búsqueda">✕</button>
+          </div>
+          <div id="optionsSearchEmpty" class="opt-search-empty hidden">Ninguna opción coincide con la búsqueda.</div>
+
+          <div class="opt-group-title">Venta</div>
+          <!-- CARRITO -->
+          <section class="opt-sec" data-sec="carrito">
             <button type="button" class="opt-sec-h">
-              <span>Actualización automática</span>
+              <span>Carrito</span>
               <span class="opt-sec-chev">▾</span>
             </button>
             <div class="opt-sec-preview">
+              <span class="opt-preview-item" data-toggle-id="groupLinesToggle"
+                >Desagrupar lineas</span
+              >,
               <span
                 class="opt-preview-item"
-                data-toggle-id="updateNoticeEnabledToggle"
-                >Avisos de version nueva</span
-              >, frecuencia de comprobacion, changelog
+                data-toggle-id="cartDiscountToolsToggle"
+                >descuentos manuales</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="cartWidthControlsToggle"
+                >ancho</span
+              >, cliente por defecto, cliente al salir de un aparcado,
+              accesos rapidos de descuento,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="autoPrintTicketOnParkToggle"
+                >imprimir ticket al guardar</span
+              >
             </div>
             <div class="opt-sec-b">
               <div class="opt-row">
                 <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Mostrar avisos de actualización
-                  </div>
+                  <div class="opt-row-title">Desagrupar líneas</div>
                   <div class="opt-row-sub">
-                    Comprueba en segundo plano si hay una versión nueva.
+                    Cada toque crea una línea nueva aunque sea el mismo
+                    producto.
                   </div>
                 </div>
                 <label class="switch">
-                  <input type="checkbox" id="updateNoticeEnabledToggle" />
+                  <input type="checkbox" id="groupLinesToggle" />
                   <span class="slider"></span>
                 </label>
               </div>
-
               <div class="opt-row">
                 <div class="opt-row-txt">
-                  <div class="opt-row-title">Frecuencia de comprobación</div>
-                  <div class="opt-row-sub" id="updateNoticeCountdownText">
-                    Próxima comprobación: --
+                  <div class="opt-row-title">
+                    Descuentos manuales en carrito
+                  </div>
+                  <div class="opt-row-sub">
+                    Permite descuento por línea en el carrito y descuento
+                    general con prioridad por línea.
                   </div>
                 </div>
-                <div class="opt-row-actions">
-                  <select id="updateNoticeIntervalSelect" class="opt-select">
-                    <option value="1800000">Cada 30 minutos</option>
-                    <option value="3600000">Cada 1 hora</option>
-                    <option value="7200000">Cada 2 horas</option>
-                    <option value="14400000">Cada 4 horas</option>
-                  </select>
-                </div>
+                <label class="switch">
+                  <input type="checkbox" id="cartDiscountToolsToggle" />
+                  <span class="slider"></span>
+                </label>
               </div>
-
               <div class="opt-row">
                 <div class="opt-row-txt">
-                  <div class="opt-row-title">Comprobar ahora</div>
-                  <div class="opt-row-sub" id="updateNoticeCurrentVersionText">
-                    Versión actual: --
+                  <div class="opt-row-title">
+                    Imprimir ticket automáticamente al guardar/aparcar
+                  </div>
+                  <div class="opt-row-sub">
+                    Al aparcar o actualizar un pedido (Mesas o TPV normal),
+                    imprime el ticket al instante, sin tener que pulsar
+                    ningún botón aparte.
                   </div>
                 </div>
+                <label class="switch">
+                  <input type="checkbox" id="autoPrintTicketOnParkToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Alargar carrito</div>
+                  <div class="opt-row-sub">
+                    Muestra un asa junto al carrito para arrastrar su ancho
+                    horizontalmente.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="cartWidthControlsToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <!-- Cliente por defecto de la terminal -->
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Cliente por defecto del terminal
+                  </div>
+                  <div class="opt-row-sub">
+                    Se guarda en FacturaScripts para este TPV.
+                  </div>
+                </div>
+
                 <div class="opt-row-actions">
+                  <select
+                    id="terminalDefaultCustomerSelect"
+                    class="opt-select"
+                  ></select>
                   <button
                     type="button"
-                    id="updateNoticeCheckNowBtn"
+                    id="terminalDefaultCustomerSaveBtn"
                     class="small-btn"
                   >
-                    Comprobar
+                    Guardar
                   </button>
                 </div>
               </div>
-
+              <!-- Cliente al terminar/salir de un aparcado -->
               <div class="opt-row">
                 <div class="opt-row-txt">
-                  <div class="opt-row-title">Changelog</div>
+                  <div class="opt-row-title">
+                    Cliente al salir de un aparcado
+                  </div>
                   <div class="opt-row-sub">
-                    Consulta notas de cambios por versión.
+                    Al terminar de aparcar/cobrar un ticket que tenía un
+                    cliente distinto, ¿a qué cliente vuelve el selector?
                   </div>
                 </div>
                 <div class="opt-row-actions">
+                  <select id="parkedCustomerResetModeSelect" class="opt-select">
+                    <option value="previous">
+                      Al cliente anterior (el que había antes de abrirlo)
+                    </option>
+                    <option value="default">Al cliente por defecto</option>
+                  </select>
+                </div>
+              </div>
+              <!-- Accesos rapidos de descuento (%) en el teclado numerico -->
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Accesos rápidos de descuento (%)
+                  </div>
+                  <div class="opt-row-sub">
+                    Botones de porcentaje en el teclado de descuento (línea o
+                    carrito entero). Deja un campo en blanco para no mostrar
+                    ese botón. Máximo 5.
+                  </div>
+                </div>
+                <div class="opt-row-actions opt-discount-quick-pcts">
+                  <input
+                    id="discountQuickPct1"
+                    type="number"
+                    class="opt-input opt-input-narrow"
+                    min="1"
+                    max="100"
+                  />
+                  <input
+                    id="discountQuickPct2"
+                    type="number"
+                    class="opt-input opt-input-narrow"
+                    min="1"
+                    max="100"
+                  />
+                  <input
+                    id="discountQuickPct3"
+                    type="number"
+                    class="opt-input opt-input-narrow"
+                    min="1"
+                    max="100"
+                  />
+                  <input
+                    id="discountQuickPct4"
+                    type="number"
+                    class="opt-input opt-input-narrow"
+                    min="1"
+                    max="100"
+                  />
+                  <input
+                    id="discountQuickPct5"
+                    type="number"
+                    class="opt-input opt-input-narrow"
+                    min="1"
+                    max="100"
+                  />
                   <button
                     type="button"
-                    id="updateNoticeChangelogBtn"
+                    id="discountQuickPctsSaveBtn"
                     class="small-btn"
                   >
-                    Ver changelog
+                    Guardar
                   </button>
                 </div>
               </div>
             </div>
           </section>
 
+          <!-- PRODUCTOS (ADMIN ONLY) -->
+          <section class="opt-sec" data-sec="productos" data-admin-only>
+            <button type="button" class="opt-sec-h">
+              <span>Productos <span class="opt-admin-pill">ADMIN</span></span>
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-preview">
+              <span
+                class="opt-preview-item"
+                data-toggle-id="priceEditModeToggle"
+                >Modo edición de precio</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="productStockToggle"
+                >Mostrar stock</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="productsStockOnlyToggle"
+                >solo con stock</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="productsIncludeUnmanagedToggle"
+                >incluir sin stock</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="productStockEditToggle"
+                >editar stock</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="parkStockWarningToggle"
+                >aviso al aparcar</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="askStockBulkDeletePendingToggle"
+                >preguntar en borrado masivo</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="productAddonsEnabledToggle"
+                >añadidos de producto</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="productTileResizeModeToggle"
+                >modo redimensionar</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="productReorderModeToggle"
+                >modo reordenar</span
+              >, texto de la tarjeta, producto medio/cuarto,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="familiesFirstModeToggle"
+                >familias primero</span
+              >
+            </div>
+            <div class="opt-sec-b">
+              <div class="opt-subgroup">Tarjeta y venta</div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Texto en la tarjeta de producto</div>
+                  <div class="opt-row-sub">
+                    Qué mostrar en cada producto: la descripción de
+                    FacturaScripts, la referencia, o ambas (si falta una, se
+                    usa la otra — igual que ahora).
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <select id="productDisplayFieldModeSelect" class="opt-select">
+                    <option value="both">Ambas (como ahora)</option>
+                    <option value="descripcion">Solo descripción</option>
+                    <option value="referencia">Solo referencia</option>
+                  </select>
+                </div>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Modo edición de precio y prioridad
+                  </div>
+                  <div class="opt-row-sub">
+                    Muestra el icono ✎ en los productos para cambiar precio (IVA
+                    incl.) y prioridad.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="priceEditModeToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Añadidos de producto</div>
+                  <div class="opt-row-sub">
+                    Activa el botón de gestión de añadidos (p.ej. "+leche",
+                    "+azúcar") en cada producto y el selector al venderlo, en
+                    Modo Mesas y también al vender directo desde el TPV
+                    normal. Gratuitos por ahora.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="productAddonsEnabledToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Familias primero (ocultar productos hasta elegir una)
+                  </div>
+                  <div class="opt-row-sub">
+                    En vez de ver todos los productos de golpe, la pantalla
+                    muestra solo botones grandes de familia; al elegir una,
+                    se ven sus productos con un botón para volver a las
+                    familias. Diseño distinto, pensado para catálogos
+                    grandes. Apagado por defecto.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="familiesFirstModeToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-subgroup">Stock</div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Mostrar stock en productos</div>
+                  <div class="opt-row-sub">
+                    Muestra/oculta el número de stock en la esquina inferior
+                    izquierda.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="productStockToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Solo productos con stock</div>
+                  <div class="opt-row-sub">
+                    Oculta productos con stock 0 o sin stock disponible.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="productsStockOnlyToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Incluir sin control stock</div>
+                  <div class="opt-row-sub">
+                    Muestra productos que no tienen filas reales de stock en
+                    FacturaScripts.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="productsIncludeUnmanagedToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Permitir editar stock</div>
+                  <div class="opt-row-sub">
+                    Muestra un botón ✎ junto al stock para modificarlo desde el
+                    TPV (solo administradores).
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="productStockEditToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Aviso de stock al aparcar</div>
+                  <div class="opt-row-sub">
+                    Muestra un aviso si la cantidad a aparcar supera el stock.
+                    Si no trabajas con stock, puedes desactivarlo.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="parkStockWarningToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="opt-row" data-admin-only>
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Preguntar por el stock al "Borrar pendientes"
+                  </div>
+                  <div class="opt-row-sub">
+                    Al borrar aparcados sin cobrar, pregunta si son pedidos
+                    reales (devuelve su stock) o duplicados por un fallo de
+                    sincronizacion (no toca el stock). Desactívalo si siempre
+                    van a ser pedidos reales: no volverá a preguntar y
+                    devolverá el stock directamente, como al borrar uno solo.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input
+                    type="checkbox"
+                    id="askStockBulkDeletePendingToggle"
+                  />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Producto "medio/cuarto" de otro (stock derivado)
+                  </div>
+                  <div class="opt-row-sub">
+                    Configura un producto para que su stock se calcule
+                    automáticamente a partir de otro (p.ej. "Medio Pollo" a
+                    partir de "Pollo asado"), en vez de llevar su propio
+                    contador. Hace todo lo necesario en FacturaScripts por ti.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  id="derivedStockFractionConfigBtn"
+                  class="small-btn"
+                >
+                  Configurar...
+                </button>
+              </div>
+              <div class="opt-subgroup">Orden y tamaño de los productos</div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Orden de productos</div>
+                  <div class="opt-row-sub">
+                    Elige cómo ordenar las tarjetas en la cuadrícula.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <select id="productSortModeSelect" class="opt-select">
+                    <option value="default">
+                      Por defecto (FacturaScripts)
+                    </option>
+                    <option value="manual">Manual (prioridad)</option>
+                    <option value="reference">Referencia</option>
+                    <option value="description">Descripción</option>
+                    <option value="id">ID de producto</option>
+                  </select>
+                </div>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Reordenar por arrastre</div>
+                  <div class="opt-row-sub">
+                    Permite arrastrar con dedo/ratón para cambiar orden manual.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="productReorderModeToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Restablecer prioridades</div>
+                  <div class="opt-row-sub">
+                    Elimina todas las prioridades manuales y vuelve al orden
+                    base.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  id="productManualOrderResetBtn"
+                  class="small-btn"
+                >
+                  Restablecer prioridades
+                </button>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Modo redimensionar productos</div>
+                  <div class="opt-row-sub">
+                    Muestra dos asas sobre cada tarjeta para arrastrar y ver
+                    el cambio al momento: una para el tamaño de la tarjeta
+                    (abajo a la derecha) y otra ("Aa") para el tamaño de
+                    letra del nombre (abajo a la izquierda). Afecta a todos
+                    los productos.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="productTileResizeModeToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Restablecer tamaño de productos
+                  </div>
+                  <div class="opt-row-sub">
+                    Vuelve al tamaño recomendado por defecto.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  id="productTileSizeResetBtn"
+                  class="small-btn"
+                >
+                  Restablecer
+                </button>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Restablecer tamaño de letra
+                  </div>
+                  <div class="opt-row-sub">
+                    Vuelve al tamaño de letra por defecto del nombre del
+                    producto.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  id="productNameFontSizeResetBtn"
+                  class="small-btn"
+                >
+                  Restablecer
+                </button>
+              </div>
+              <div class="opt-subgroup">Información al cliente</div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Alérgenos</div>
+                  <div class="opt-row-sub">
+                    Marca qué productos llevan cada uno de los 14 alérgenos
+                    oficiales de la UE (o alguno propio que añadas). Se
+                    destaca en la tarjeta, en el carrito y en la comanda
+                    impresa a cocina.
+                  </div>
+                </div>
+                <button type="button" id="allergensManageBtn" class="small-btn">
+                  Gestionar...
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section class="opt-sec" data-sec="tarifas">
+            <button type="button" class="opt-sec-h">
+              <span>Tarifas</span>
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-preview">
+              Crear/editar tarifas, descuentos, clientes asignados,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="tariffMinCosteToggle"
+                >no vender bajo coste</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="tariffMaxPvpToggle"
+                >no vender sobre PVP</span
+              >
+            </div>
+            <div class="opt-sec-b">
+              <div class="opt-subgroup">Tarifa en uso</div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Tarifa activa en TPV</div>
+                  <div class="opt-row-sub">
+                    Selecciona una tarifa para editarla o asignarla.
+                  </div>
+                </div>
+
+                <div class="opt-row-actions">
+                  <select id="tariffSelect" class="opt-select"></select>
+                  <button type="button" id="tariffRefreshBtn" class="small-btn">
+                    Recargar
+                  </button>
+                </div>
+              </div>
+
+              <div class="opt-subgroup">Crear tarifa</div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Crear nueva tarifa</div>
+                  <div class="opt-row-sub">
+                    Crea una tarifa desde cero y quedará seleccionada.
+                  </div>
+                </div>
+
+                <div class="opt-row-actions">
+                  <input
+                    id="tariffCreateNameInput"
+                    type="text"
+                    class="opt-input"
+                    placeholder="Nombre tarifa"
+                  />
+                  <button type="button" id="tariffCreateBtn" class="small-btn">
+                    Crear tarifa
+                  </button>
+                </div>
+              </div>
+
+              <div class="opt-subgroup">Editar la tarifa seleccionada</div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Resumen de tarifa</div>
+                  <div class="opt-row-sub" id="tariffSummaryText">
+                    Selecciona una tarifa para ver sus datos.
+                  </div>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Editar tarifa seleccionada</div>
+                  <div class="opt-row-sub">
+                    Cambios directos sobre la tarifa en la API.
+                  </div>
+                </div>
+
+                <div class="opt-row-actions">
+                  <input
+                    id="tariffNameInput"
+                    type="text"
+                    class="opt-input"
+                    placeholder="Nombre tarifa"
+                  />
+                  <select id="tariffFormulaSelect" class="opt-select">
+                    <option value="pvp">Descuento</option>
+                    <option value="coste">Aumento</option>
+                  </select>
+                  <label
+                    class="opt-input-affix-wrap"
+                    title="Porcentaje de descuento"
+                  >
+                    <input
+                      id="tariffValorXInput"
+                      type="number"
+                      step="1"
+                      class="opt-input opt-input-affix"
+                      placeholder="0"
+                    />
+                    <span class="opt-input-affix-suffix">%</span>
+                  </label>
+                  <label
+                    class="opt-input-affix-wrap"
+                    title="Importe fijo en euros"
+                  >
+                    <input
+                      id="tariffValorYInput"
+                      type="number"
+                      step="1"
+                      class="opt-input opt-input-affix"
+                      placeholder="0"
+                    />
+                    <span class="opt-input-affix-suffix">€</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Restricciones de tarifa</div>
+                  <div class="opt-row-sub">
+                    Reproduce las opciones del TPV original.
+                  </div>
+                </div>
+
+                <div class="opt-row-actions">
+                  <label class="product-filter-check">
+                    <input type="checkbox" id="tariffMinCosteToggle" />
+                    <span>No vender por debajo de coste</span>
+                  </label>
+                  <label class="product-filter-check">
+                    <input type="checkbox" id="tariffMaxPvpToggle" />
+                    <span>No vender por encima de PVP</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Clientes con esta tarifa</div>
+                  <div class="opt-row-sub">
+                    Marca todos los clientes que deben usar esta tarifa.
+                  </div>
+                </div>
+
+                <div class="opt-row-actions">
+                  <div class="input-clear-wrap">
+                    <input
+                      id="tariffCustomerSearchInput"
+                      type="text"
+                      class="opt-input"
+                      placeholder="Buscar cliente..."
+                    />
+                    <button
+                      type="button"
+                      id="tariffCustomerSearchClearBtn"
+                      class="input-clear-btn hidden"
+                      title="Limpiar búsqueda"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    id="tariffCustomersSelectVisibleBtn"
+                    class="small-btn"
+                  >
+                    Marcar visibles
+                  </button>
+                  <button
+                    type="button"
+                    id="tariffCustomersClearVisibleBtn"
+                    class="small-btn"
+                  >
+                    Desmarcar visibles
+                  </button>
+                  <span id="tariffCustomersSelectedCount" class="opt-chip"
+                    >0 seleccionados</span
+                  >
+                  <div
+                    id="tariffCustomerChecklist"
+                    class="tariff-customer-checklist"
+                  ></div>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Guardar cambios</div>
+                  <div class="opt-row-sub">
+                    Aplica edición de tarifa y cliente asignado en un solo paso.
+                  </div>
+                </div>
+
+                <div class="opt-row-actions">
+                  <button type="button" id="tariffRevertBtn" class="small-btn">
+                    Revertir cambios
+                  </button>
+                  <button type="button" id="tariffDeleteBtn" class="small-btn">
+                    Borrar tarifa
+                  </button>
+                  <button type="button" id="tariffSaveAllBtn" class="small-btn">
+                    Guardar cambios de tarifa
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- MODO MESAS (ADMIN ONLY, solo clientes con Mesas contratado) -->
+          <section
+            class="opt-sec"
+            data-sec="mesas"
+            data-admin-only
+            data-mesas-only
+          >
+            <button type="button" class="opt-sec-h">
+              <span
+                >Modo Mesas <span class="opt-admin-pill">ADMIN</span>
+                <span class="opt-mesas-pill">MESAS</span></span
+              >
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-preview">
+              <span
+                class="opt-preview-item"
+                data-toggle-id="autoComandaOnSaveToggle"
+                >Comanda automatica</span
+              >, familias por comensales, familias para comanda
+            </div>
+            <div class="opt-sec-b">
+              <div class="opt-subgroup">Comanda a cocina</div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Enviar comanda automáticamente al guardar
+                  </div>
+                  <div class="opt-row-sub">
+                    Si está activado, al guardar pedido en Mesas se envía
+                    comanda a cocina.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="autoComandaOnSaveToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Comanda agrupada por familias
+                  </div>
+                  <div class="opt-row-sub">
+                    En el papel de cocina se pone cada familia una sola vez y
+                    sus productos debajo, en el orden de las familias del TPV.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="comandaGroupFamiliesToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Espera antes de enviar la comanda</div>
+                  <div class="opt-row-sub">
+                    Con la comanda automática activada, segundos que pasan desde
+                    el último cambio de la mesa hasta que se envía a cocina.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <input
+                    id="autoComandaDelayInput"
+                    type="number"
+                    class="opt-input opt-input-narrow"
+                    min="0"
+                    max="3600"
+                    step="1"
+                  />
+                  <span class="opt-row-sub">segundos</span>
+                </div>
+              </div>
+
+              <div class="opt-row opt-row-stack">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Familias para comandas</div>
+                  <div class="opt-row-sub">
+                    Solo estas familias se incluirán al imprimir comandas de
+                    cocina.
+                  </div>
+                </div>
+                <div class="opt-inline-fields">
+                  <select
+                    id="mesasComandaFamilySelect"
+                    class="opt-select"
+                  ></select>
+                  <button
+                    type="button"
+                    id="mesasComandaFamilyAddBtn"
+                    class="small-btn"
+                  >
+                    Añadir
+                  </button>
+                </div>
+                <div id="mesasComandaFamilyList" class="opt-chip-list"></div>
+              </div>
+
+              <div class="opt-subgroup">Comensales</div>
+              <div class="opt-row opt-row-stack">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Familias por comensales</div>
+                  <div class="opt-row-sub">
+                    Los productos de estas familias usarán automáticamente el
+                    número de comensales de la mesa como cantidad al añadirse.
+                  </div>
+                </div>
+                <div class="opt-inline-fields">
+                  <select
+                    id="mesasDinersFamilySelect"
+                    class="opt-select"
+                  ></select>
+                  <button
+                    type="button"
+                    id="mesasDinersFamilyAddBtn"
+                    class="small-btn"
+                  >
+                    Añadir
+                  </button>
+                </div>
+                <div id="mesasDinersFamilyList" class="opt-chip-list"></div>
+              </div>
+
+              <div class="opt-subgroup">Tablets de camareros</div>
+              <div class="opt-row opt-row-stack">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Vincular tablet de camarero</div>
+                  <div class="opt-row-sub">
+                    Genera un código de un solo uso para introducir en la app
+                    de camareros. Una vez introducido, esa tablet queda
+                    emparejada de forma permanente con este negocio -- no
+                    hace falta volver a introducir ningún código al abrir la
+                    app. El código en sí caduca a los 10 minutos si no se
+                    usa.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <button
+                    type="button"
+                    id="pairingCodeGenerateBtn"
+                    class="small-btn"
+                  >
+                    Generar código
+                  </button>
+                </div>
+                <div id="pairingCodeResult" class="pairing-code-result hidden">
+                  <div id="pairingCodeValue" class="pairing-code-value">
+                    ------
+                  </div>
+                  <div id="pairingCodeCountdown" class="pairing-code-countdown">
+                    Caduca en 10:00
+                  </div>
+                </div>
+              </div>
+
+              <div class="opt-row opt-row-stack">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Tablets emparejadas</div>
+                  <div class="opt-row-sub">
+                    Dispositivos con acceso permanente a este negocio. Revoca
+                    uno si se pierde, se vende, o ya no debería tener acceso
+                    -- necesitará un código nuevo para volver a emparejarse.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <button
+                    type="button"
+                    id="pairedDevicesRefreshBtn"
+                    class="small-btn"
+                  >
+                    Actualizar lista
+                  </button>
+                  <button
+                    type="button"
+                    id="pairedDevicesTrashToggleBtn"
+                    class="small-btn paired-devices-trash-toggle-btn hidden"
+                  >
+                    🗑 Papelera (<span id="pairedDevicesTrashCount">0</span>)
+                  </button>
+                </div>
+                <div id="pairedDevicesList" class="paired-devices-list"></div>
+                <div
+                  id="pairedDevicesTrashSection"
+                  class="paired-devices-trash-section hidden"
+                >
+                  <div class="paired-devices-trash-header">
+                    Dispositivos revocados. No tienen ningun acceso; puedes
+                    olvidarlos para siempre para que dejen de aparecer aqui.
+                  </div>
+                  <div
+                    id="pairedDevicesTrashList"
+                    class="paired-devices-list"
+                  ></div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <div class="opt-group-title">Cobro y caja</div>
           <!-- CAJA -->
           <section class="opt-sec" data-sec="caja">
             <button type="button" class="opt-sec-h">
@@ -2249,6 +3135,80 @@
                 >
                   🧾 Abrir cajón
                 </button>
+              </div>
+            </div>
+          </section>
+
+          <!-- CIERRE DE CAJA (ADMIN ONLY) -->
+          <section class="opt-sec" data-sec="cierre-caja" data-admin-only>
+            <button type="button" class="opt-sec-h">
+              <span>Cierre de Caja <span class="opt-admin-pill">ADMIN</span></span>
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-preview">
+              <span
+                class="opt-preview-item"
+                data-toggle-id="allowCloseWithParkedToggle"
+                >Cerrar con aparcados</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="printCajaAutoLogToggle"
+                >registro de avisos</span
+              >
+              en el cierre,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="printCajaDrawerLogsToggle"
+                >aperturas de cajón</span
+              >
+            </div>
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Permitir cerrar con aparcados</div>
+                  <div class="opt-row-sub">
+                    Si hay tickets aparcados, permite cerrar caja mostrando una
+                    confirmación. Los tickets aparcados se conservan.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="allowCloseWithParkedToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Cierre de caja: mostrar registro de avisos
+                  </div>
+                  <div class="opt-row-sub">
+                    Al cerrar caja, imprime también un listado de eventos
+                    (abrir cajón, quitar productos, etc.). Desactívalo si solo
+                    quieres ver el resumen de ventas.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="printCajaAutoLogToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div
+                class="opt-row opt-row-suboption"
+                id="printCajaDrawerLogsRow"
+              >
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Incluir aperturas de cajón</div>
+                  <div class="opt-row-sub">
+                    Dentro del registro anterior, oculta solo las líneas de
+                    "abrió cajón" (suelen ser las más numerosas).
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="printCajaDrawerLogsToggle" />
+                  <span class="slider"></span>
+                </label>
               </div>
             </div>
           </section>
@@ -2361,6 +3321,7 @@
             </div>
 
             <div class="opt-sec-b">
+              <div class="opt-subgroup">Conexión</div>
               <div class="opt-row">
                 <div class="opt-row-txt">
                   <div class="opt-row-title">Activar báscula</div>
@@ -2397,6 +3358,7 @@
                 </div>
               </div>
 
+              <div class="opt-subgroup">Uso</div>
               <div class="opt-row opt-row-scale-help">
                 <div class="opt-row-txt">
                   <div class="opt-row-title">Cobrar en</div>
@@ -2450,6 +3412,7 @@
                 </div>
               </div>
 
+              <div class="opt-subgroup">Estado</div>
               <div class="opt-row">
                 <div class="opt-row-txt">
                   <div class="opt-row-title">Estado</div>
@@ -2466,6 +3429,7 @@
                 </div>
               </div>
 
+              <div class="opt-subgroup">Avanzado</div>
               <div class="opt-row">
                 <div class="opt-row-txt">
                   <div class="opt-row-title">Opciones avanzadas</div>
@@ -2679,1020 +3643,122 @@
             </div>
           </section>
 
-          <!-- CARRITO -->
-          <section class="opt-sec" data-sec="carrito">
+          <div class="opt-group-title">Equipo y pantalla</div>
+          <!-- PANTALLA (ADMIN ONLY) -->
+          <section class="opt-sec" data-sec="pantalla" data-admin-only>
             <button type="button" class="opt-sec-h">
-              <span>Carrito</span>
+              <span>Pantalla <span class="opt-admin-pill">ADMIN</span></span>
               <span class="opt-sec-chev">▾</span>
             </button>
             <div class="opt-sec-preview">
-              <span class="opt-preview-item" data-toggle-id="groupLinesToggle"
-                >Desagrupar lineas</span
+              <span class="opt-preview-item" data-toggle-id="kioskToggle"
+                >Modo kiosk</span
               >,
               <span
                 class="opt-preview-item"
-                data-toggle-id="cartDiscountToolsToggle"
-                >descuentos manuales</span
+                data-toggle-id="customerDisplayToggle"
+                >pantalla de cliente</span
               >,
               <span
                 class="opt-preview-item"
-                data-toggle-id="cartWidthControlsToggle"
-                >ancho</span
-              >, cliente por defecto, cliente al salir de un aparcado,
-              accesos rapidos de descuento,
-              <span
-                class="opt-preview-item"
-                data-toggle-id="autoPrintTicketOnParkToggle"
-                >imprimir ticket al guardar</span
+                data-toggle-id="virtualKeyboardToggle"
+                >teclado en pantalla</span
+              >,
+              <span class="opt-preview-item" id="uiZoomPreviewItem"
+                >escala de la interfaz</span
               >
             </div>
             <div class="opt-sec-b">
+              <div class="opt-subgroup">Ventana y teclado</div>
               <div class="opt-row">
                 <div class="opt-row-txt">
-                  <div class="opt-row-title">Desagrupar líneas</div>
+                  <div class="opt-row-title">Modo TPV (kiosk)</div>
                   <div class="opt-row-sub">
-                    Cada toque crea una línea nueva aunque sea el mismo
-                    producto.
+                    Si desactivas, podrás minimizar y usar el equipo como un PC
+                    normal.
                   </div>
                 </div>
                 <label class="switch">
-                  <input type="checkbox" id="groupLinesToggle" />
+                  <input type="checkbox" id="kioskToggle" />
                   <span class="slider"></span>
                 </label>
               </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Descuentos manuales en carrito
-                  </div>
-                  <div class="opt-row-sub">
-                    Permite descuento por línea en el carrito y descuento
-                    general con prioridad por línea.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="cartDiscountToolsToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Imprimir ticket automáticamente al guardar/aparcar
-                  </div>
-                  <div class="opt-row-sub">
-                    Al aparcar o actualizar un pedido (Mesas o TPV normal),
-                    imprime el ticket al instante, sin tener que pulsar
-                    ningún botón aparte.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="autoPrintTicketOnParkToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Alargar carrito</div>
-                  <div class="opt-row-sub">
-                    Muestra un asa junto al carrito para arrastrar su ancho
-                    horizontalmente.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="cartWidthControlsToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <!-- Cliente por defecto de la terminal -->
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Cliente por defecto del terminal
-                  </div>
-                  <div class="opt-row-sub">
-                    Se guarda en FacturaScripts para este TPV.
-                  </div>
-                </div>
-
-                <div class="opt-row-actions">
-                  <select
-                    id="terminalDefaultCustomerSelect"
-                    class="opt-select"
-                  ></select>
-                  <button
-                    type="button"
-                    id="terminalDefaultCustomerSaveBtn"
-                    class="small-btn"
-                  >
-                    Guardar
-                  </button>
-                </div>
-              </div>
-              <!-- Cliente al terminar/salir de un aparcado -->
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Cliente al salir de un aparcado
-                  </div>
-                  <div class="opt-row-sub">
-                    Al terminar de aparcar/cobrar un ticket que tenía un
-                    cliente distinto, ¿a qué cliente vuelve el selector?
-                  </div>
-                </div>
-                <div class="opt-row-actions">
-                  <select id="parkedCustomerResetModeSelect" class="opt-select">
-                    <option value="previous">
-                      Al cliente anterior (el que había antes de abrirlo)
-                    </option>
-                    <option value="default">Al cliente por defecto</option>
-                  </select>
-                </div>
-              </div>
-              <!-- Accesos rapidos de descuento (%) en el teclado numerico -->
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Accesos rápidos de descuento (%)
-                  </div>
-                  <div class="opt-row-sub">
-                    Botones de porcentaje en el teclado de descuento (línea o
-                    carrito entero). Deja un campo en blanco para no mostrar
-                    ese botón. Máximo 5.
-                  </div>
-                </div>
-                <div class="opt-row-actions opt-discount-quick-pcts">
-                  <input
-                    id="discountQuickPct1"
-                    type="number"
-                    class="opt-input opt-input-narrow"
-                    min="1"
-                    max="100"
-                  />
-                  <input
-                    id="discountQuickPct2"
-                    type="number"
-                    class="opt-input opt-input-narrow"
-                    min="1"
-                    max="100"
-                  />
-                  <input
-                    id="discountQuickPct3"
-                    type="number"
-                    class="opt-input opt-input-narrow"
-                    min="1"
-                    max="100"
-                  />
-                  <input
-                    id="discountQuickPct4"
-                    type="number"
-                    class="opt-input opt-input-narrow"
-                    min="1"
-                    max="100"
-                  />
-                  <input
-                    id="discountQuickPct5"
-                    type="number"
-                    class="opt-input opt-input-narrow"
-                    min="1"
-                    max="100"
-                  />
-                  <button
-                    type="button"
-                    id="discountQuickPctsSaveBtn"
-                    class="small-btn"
-                  >
-                    Guardar
-                  </button>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section class="opt-sec" data-sec="tarifas">
-            <button type="button" class="opt-sec-h">
-              <span>Tarifas</span>
-              <span class="opt-sec-chev">▾</span>
-            </button>
-            <div class="opt-sec-preview">
-              Crear/editar tarifas, descuentos, clientes asignados,
-              <span
-                class="opt-preview-item"
-                data-toggle-id="tariffMinCosteToggle"
-                >no vender bajo coste</span
-              >,
-              <span
-                class="opt-preview-item"
-                data-toggle-id="tariffMaxPvpToggle"
-                >no vender sobre PVP</span
-              >
-            </div>
-            <div class="opt-sec-b">
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Tarifa activa en TPV</div>
-                  <div class="opt-row-sub">
-                    Selecciona una tarifa para editarla o asignarla.
-                  </div>
-                </div>
-
-                <div class="opt-row-actions">
-                  <select id="tariffSelect" class="opt-select"></select>
-                  <button type="button" id="tariffRefreshBtn" class="small-btn">
-                    Recargar
-                  </button>
-                </div>
-              </div>
-
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Crear nueva tarifa</div>
-                  <div class="opt-row-sub">
-                    Crea una tarifa desde cero y quedará seleccionada.
-                  </div>
-                </div>
-
-                <div class="opt-row-actions">
-                  <input
-                    id="tariffCreateNameInput"
-                    type="text"
-                    class="opt-input"
-                    placeholder="Nombre tarifa"
-                  />
-                  <button type="button" id="tariffCreateBtn" class="small-btn">
-                    Crear tarifa
-                  </button>
-                </div>
-              </div>
-
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Resumen de tarifa</div>
-                  <div class="opt-row-sub" id="tariffSummaryText">
-                    Selecciona una tarifa para ver sus datos.
-                  </div>
-                </div>
-              </div>
-
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Editar tarifa seleccionada</div>
-                  <div class="opt-row-sub">
-                    Cambios directos sobre la tarifa en la API.
-                  </div>
-                </div>
-
-                <div class="opt-row-actions">
-                  <input
-                    id="tariffNameInput"
-                    type="text"
-                    class="opt-input"
-                    placeholder="Nombre tarifa"
-                  />
-                  <select id="tariffFormulaSelect" class="opt-select">
-                    <option value="pvp">Descuento</option>
-                    <option value="coste">Aumento</option>
-                  </select>
-                  <label
-                    class="opt-input-affix-wrap"
-                    title="Porcentaje de descuento"
-                  >
-                    <input
-                      id="tariffValorXInput"
-                      type="number"
-                      step="1"
-                      class="opt-input opt-input-affix"
-                      placeholder="0"
-                    />
-                    <span class="opt-input-affix-suffix">%</span>
-                  </label>
-                  <label
-                    class="opt-input-affix-wrap"
-                    title="Importe fijo en euros"
-                  >
-                    <input
-                      id="tariffValorYInput"
-                      type="number"
-                      step="1"
-                      class="opt-input opt-input-affix"
-                      placeholder="0"
-                    />
-                    <span class="opt-input-affix-suffix">€</span>
-                  </label>
-                </div>
-              </div>
-
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Restricciones de tarifa</div>
-                  <div class="opt-row-sub">
-                    Reproduce las opciones del TPV original.
-                  </div>
-                </div>
-
-                <div class="opt-row-actions">
-                  <label class="product-filter-check">
-                    <input type="checkbox" id="tariffMinCosteToggle" />
-                    <span>No vender por debajo de coste</span>
-                  </label>
-                  <label class="product-filter-check">
-                    <input type="checkbox" id="tariffMaxPvpToggle" />
-                    <span>No vender por encima de PVP</span>
-                  </label>
-                </div>
-              </div>
-
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Clientes con esta tarifa</div>
-                  <div class="opt-row-sub">
-                    Marca todos los clientes que deben usar esta tarifa.
-                  </div>
-                </div>
-
-                <div class="opt-row-actions">
-                  <div class="input-clear-wrap">
-                    <input
-                      id="tariffCustomerSearchInput"
-                      type="text"
-                      class="opt-input"
-                      placeholder="Buscar cliente..."
-                    />
-                    <button
-                      type="button"
-                      id="tariffCustomerSearchClearBtn"
-                      class="input-clear-btn hidden"
-                      title="Limpiar búsqueda"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    id="tariffCustomersSelectVisibleBtn"
-                    class="small-btn"
-                  >
-                    Marcar visibles
-                  </button>
-                  <button
-                    type="button"
-                    id="tariffCustomersClearVisibleBtn"
-                    class="small-btn"
-                  >
-                    Desmarcar visibles
-                  </button>
-                  <span id="tariffCustomersSelectedCount" class="opt-chip"
-                    >0 seleccionados</span
-                  >
-                  <div
-                    id="tariffCustomerChecklist"
-                    class="tariff-customer-checklist"
-                  ></div>
-                </div>
-              </div>
-
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Guardar cambios</div>
-                  <div class="opt-row-sub">
-                    Aplica edición de tarifa y cliente asignado en un solo paso.
-                  </div>
-                </div>
-
-                <div class="opt-row-actions">
-                  <button type="button" id="tariffRevertBtn" class="small-btn">
-                    Revertir cambios
-                  </button>
-                  <button type="button" id="tariffDeleteBtn" class="small-btn">
-                    Borrar tarifa
-                  </button>
-                  <button type="button" id="tariffSaveAllBtn" class="small-btn">
-                    Guardar cambios de tarifa
-                  </button>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <!-- MODO MESAS (ADMIN ONLY, solo clientes con Mesas contratado) -->
-          <section
-            class="opt-sec"
-            data-sec="mesas"
-            data-admin-only
-            data-mesas-only
-          >
-            <button type="button" class="opt-sec-h">
-              <span
-                >Modo Mesas <span class="opt-admin-pill">ADMIN</span>
-                <span class="opt-mesas-pill">MESAS</span></span
-              >
-              <span class="opt-sec-chev">▾</span>
-            </button>
-            <div class="opt-sec-preview">
-              <span
-                class="opt-preview-item"
-                data-toggle-id="autoComandaOnSaveToggle"
-                >Comanda automatica</span
-              >, familias por comensales, familias para comanda
-            </div>
-            <div class="opt-sec-b">
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Enviar comanda automáticamente al guardar
-                  </div>
-                  <div class="opt-row-sub">
-                    Si está activado, al guardar pedido en Mesas se envía
-                    comanda a cocina.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="autoComandaOnSaveToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Comanda agrupada por familias
-                  </div>
-                  <div class="opt-row-sub">
-                    En el papel de cocina se pone cada familia una sola vez y
-                    sus productos debajo, en el orden de las familias del TPV.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="comandaGroupFamiliesToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Espera antes de enviar la comanda</div>
-                  <div class="opt-row-sub">
-                    Con la comanda automática activada, segundos que pasan desde
-                    el último cambio de la mesa hasta que se envía a cocina.
-                  </div>
-                </div>
-                <div class="opt-row-actions">
-                  <input
-                    id="autoComandaDelayInput"
-                    type="number"
-                    class="opt-input opt-input-narrow"
-                    min="0"
-                    max="3600"
-                    step="1"
-                  />
-                  <span class="opt-row-sub">segundos</span>
-                </div>
-              </div>
-
               <div class="opt-row opt-row-stack">
                 <div class="opt-row-txt">
-                  <div class="opt-row-title">Familias por comensales</div>
+                  <div class="opt-row-title">Escala de la interfaz</div>
                   <div class="opt-row-sub">
-                    Los productos de estas familias usarán automáticamente el
-                    número de comensales de la mesa como cantidad al añadirse.
-                  </div>
-                </div>
-                <div class="opt-inline-fields">
-                  <select
-                    id="mesasDinersFamilySelect"
-                    class="opt-select"
-                  ></select>
-                  <button
-                    type="button"
-                    id="mesasDinersFamilyAddBtn"
-                    class="small-btn"
-                  >
-                    Añadir
-                  </button>
-                </div>
-                <div id="mesasDinersFamilyList" class="opt-chip-list"></div>
-              </div>
-
-              <div class="opt-row opt-row-stack">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Familias para comandas</div>
-                  <div class="opt-row-sub">
-                    Solo estas familias se incluirán al imprimir comandas de
-                    cocina.
-                  </div>
-                </div>
-                <div class="opt-inline-fields">
-                  <select
-                    id="mesasComandaFamilySelect"
-                    class="opt-select"
-                  ></select>
-                  <button
-                    type="button"
-                    id="mesasComandaFamilyAddBtn"
-                    class="small-btn"
-                  >
-                    Añadir
-                  </button>
-                </div>
-                <div id="mesasComandaFamilyList" class="opt-chip-list"></div>
-              </div>
-
-              <div class="opt-row opt-row-stack">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Vincular tablet de camarero</div>
-                  <div class="opt-row-sub">
-                    Genera un código de un solo uso para introducir en la app
-                    de camareros. Una vez introducido, esa tablet queda
-                    emparejada de forma permanente con este negocio -- no
-                    hace falta volver a introducir ningún código al abrir la
-                    app. El código en sí caduca a los 10 minutos si no se
-                    usa.
+                    "Automático" ajusta letra/iconos/botones según la
+                    resolución real de esta pantalla, para que quepa todo en
+                    equipos con pantalla pequeña. Cambia esto solo si en este
+                    equipo concreto el automático no acierta.
                   </div>
                 </div>
                 <div class="opt-row-actions">
-                  <button
-                    type="button"
-                    id="pairingCodeGenerateBtn"
-                    class="small-btn"
-                  >
-                    Generar código
-                  </button>
-                </div>
-                <div id="pairingCodeResult" class="pairing-code-result hidden">
-                  <div id="pairingCodeValue" class="pairing-code-value">
-                    ------
-                  </div>
-                  <div id="pairingCodeCountdown" class="pairing-code-countdown">
-                    Caduca en 10:00
-                  </div>
-                </div>
-              </div>
-
-              <div class="opt-row opt-row-stack">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Tablets emparejadas</div>
-                  <div class="opt-row-sub">
-                    Dispositivos con acceso permanente a este negocio. Revoca
-                    uno si se pierde, se vende, o ya no debería tener acceso
-                    -- necesitará un código nuevo para volver a emparejarse.
-                  </div>
-                </div>
-                <div class="opt-row-actions">
-                  <button
-                    type="button"
-                    id="pairedDevicesRefreshBtn"
-                    class="small-btn"
-                  >
-                    Actualizar lista
-                  </button>
-                  <button
-                    type="button"
-                    id="pairedDevicesTrashToggleBtn"
-                    class="small-btn paired-devices-trash-toggle-btn hidden"
-                  >
-                    🗑 Papelera (<span id="pairedDevicesTrashCount">0</span>)
-                  </button>
-                </div>
-                <div id="pairedDevicesList" class="paired-devices-list"></div>
-                <div
-                  id="pairedDevicesTrashSection"
-                  class="paired-devices-trash-section hidden"
-                >
-                  <div class="paired-devices-trash-header">
-                    Dispositivos revocados. No tienen ningun acceso; puedes
-                    olvidarlos para siempre para que dejen de aparecer aqui.
-                  </div>
-                  <div
-                    id="pairedDevicesTrashList"
-                    class="paired-devices-list"
-                  ></div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <!-- PRODUCTOS (ADMIN ONLY) -->
-          <section class="opt-sec" data-sec="productos" data-admin-only>
-            <button type="button" class="opt-sec-h">
-              <span>Productos <span class="opt-admin-pill">ADMIN</span></span>
-              <span class="opt-sec-chev">▾</span>
-            </button>
-            <div class="opt-sec-preview">
-              <span
-                class="opt-preview-item"
-                data-toggle-id="priceEditModeToggle"
-                >Modo edición de precio</span
-              >,
-              <span
-                class="opt-preview-item"
-                data-toggle-id="productStockToggle"
-                >Mostrar stock</span
-              >,
-              <span
-                class="opt-preview-item"
-                data-toggle-id="productsStockOnlyToggle"
-                >solo con stock</span
-              >,
-              <span
-                class="opt-preview-item"
-                data-toggle-id="productsIncludeUnmanagedToggle"
-                >incluir sin stock</span
-              >,
-              <span
-                class="opt-preview-item"
-                data-toggle-id="productStockEditToggle"
-                >editar stock</span
-              >,
-              <span
-                class="opt-preview-item"
-                data-toggle-id="parkStockWarningToggle"
-                >aviso al aparcar</span
-              >,
-              <span
-                class="opt-preview-item"
-                data-toggle-id="askStockBulkDeletePendingToggle"
-                >preguntar en borrado masivo</span
-              >,
-              <span
-                class="opt-preview-item"
-                data-toggle-id="productAddonsEnabledToggle"
-                >añadidos de producto</span
-              >,
-              <span
-                class="opt-preview-item"
-                data-toggle-id="productTileResizeModeToggle"
-                >modo redimensionar</span
-              >,
-              <span
-                class="opt-preview-item"
-                data-toggle-id="productReorderModeToggle"
-                >modo reordenar</span
-              >, texto de la tarjeta, producto medio/cuarto,
-              <span
-                class="opt-preview-item"
-                data-toggle-id="familiesFirstModeToggle"
-                >familias primero</span
-              >
-            </div>
-            <div class="opt-sec-b">
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Texto en la tarjeta de producto</div>
-                  <div class="opt-row-sub">
-                    Qué mostrar en cada producto: la descripción de
-                    FacturaScripts, la referencia, o ambas (si falta una, se
-                    usa la otra — igual que ahora).
-                  </div>
-                </div>
-                <div class="opt-row-actions">
-                  <select id="productDisplayFieldModeSelect" class="opt-select">
-                    <option value="both">Ambas (como ahora)</option>
-                    <option value="descripcion">Solo descripción</option>
-                    <option value="referencia">Solo referencia</option>
+                  <select id="uiZoomSelect" class="opt-select">
+                    <option value="auto">Automático</option>
+                    <option value="1">100%</option>
+                    <option value="0.9">90%</option>
+                    <option value="0.8">80%</option>
+                    <option value="0.7">70%</option>
                   </select>
                 </div>
               </div>
               <div class="opt-row">
                 <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Modo edición de precio y prioridad
-                  </div>
+                  <div class="opt-row-title">Teclado en pantalla</div>
                   <div class="opt-row-sub">
-                    Muestra el icono ✎ en los productos para cambiar precio (IVA
-                    incl.) y prioridad.
+                    Desactívalo si el TPV tiene un teclado físico conectado:
+                    al tocar un campo de texto ya no se abrirá el teclado
+                    táctil y podrás escribir directamente con el teclado
+                    físico.
                   </div>
                 </div>
                 <label class="switch">
-                  <input type="checkbox" id="priceEditModeToggle" />
+                  <input type="checkbox" id="virtualKeyboardToggle" />
                   <span class="slider"></span>
                 </label>
               </div>
+              <div class="opt-subgroup">Pantalla de cliente</div>
               <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Mostrar stock en productos</div>
-                  <div class="opt-row-sub">
-                    Muestra/oculta el número de stock en la esquina inferior
-                    izquierda.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="productStockToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Solo productos con stock</div>
-                  <div class="opt-row-sub">
-                    Oculta productos con stock 0 o sin stock disponible.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="productsStockOnlyToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Incluir sin control stock</div>
-                  <div class="opt-row-sub">
-                    Muestra productos que no tienen filas reales de stock en
-                    FacturaScripts.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="productsIncludeUnmanagedToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Permitir editar stock</div>
-                  <div class="opt-row-sub">
-                    Muestra un botón ✎ junto al stock para modificarlo desde el
-                    TPV (solo administradores).
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="productStockEditToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Añadidos de producto</div>
-                  <div class="opt-row-sub">
-                    Activa el botón de gestión de añadidos (p.ej. "+leche",
-                    "+azúcar") en cada producto y el selector al venderlo, en
-                    Modo Mesas y también al vender directo desde el TPV
-                    normal. Gratuitos por ahora.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="productAddonsEnabledToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Aviso de stock al aparcar</div>
-                  <div class="opt-row-sub">
-                    Muestra un aviso si la cantidad a aparcar supera el stock.
-                    Si no trabajas con stock, puedes desactivarlo.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="parkStockWarningToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-
-              <div class="opt-row" data-admin-only>
                 <div class="opt-row-txt">
                   <div class="opt-row-title">
-                    Preguntar por el stock al "Borrar pendientes"
+                    Pantalla cliente (2ª pantalla)
                   </div>
                   <div class="opt-row-sub">
-                    Al borrar aparcados sin cobrar, pregunta si son pedidos
-                    reales (devuelve su stock) o duplicados por un fallo de
-                    sincronizacion (no toca el stock). Desactívalo si siempre
-                    van a ser pedidos reales: no volverá a preguntar y
-                    devolverá el stock directamente, como al borrar uno solo.
+                    Actívala solo si el equipo tiene pantalla secundaria.
                   </div>
                 </div>
                 <label class="switch">
-                  <input
-                    type="checkbox"
-                    id="askStockBulkDeletePendingToggle"
-                  />
+                  <input type="checkbox" id="customerDisplayToggle" />
                   <span class="slider"></span>
                 </label>
               </div>
-
-              <div class="opt-row">
+              <div class="opt-row opt-row-stack" id="customerDisplayPickerRow" hidden>
                 <div class="opt-row-txt">
-                  <div class="opt-row-title">Modo redimensionar productos</div>
-                  <div class="opt-row-sub">
-                    Muestra dos asas sobre cada tarjeta para arrastrar y ver
-                    el cambio al momento: una para el tamaño de la tarjeta
-                    (abajo a la derecha) y otra ("Aa") para el tamaño de
-                    letra del nombre (abajo a la izquierda). Afecta a todos
-                    los productos.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="productTileResizeModeToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Orden de productos</div>
-                  <div class="opt-row-sub">
-                    Elige cómo ordenar las tarjetas en la cuadrícula.
+                  <div class="opt-row-title">Pantalla a usar</div>
+                  <div class="opt-row-sub" id="customerDisplayPickerHint">
+                    Elige en qué pantalla física se muestra la pantalla de
+                    cliente. Usa "Identificar" para ver qué número le
+                    corresponde a cada monitor.
                   </div>
                 </div>
                 <div class="opt-row-actions">
-                  <select id="productSortModeSelect" class="opt-select">
-                    <option value="default">
-                      Por defecto (FacturaScripts)
-                    </option>
-                    <option value="manual">Manual (prioridad)</option>
-                    <option value="reference">Referencia</option>
-                    <option value="description">Descripción</option>
-                    <option value="id">ID de producto</option>
-                  </select>
+                  <select id="customerDisplaySelect" class="opt-select"></select>
+                  <button
+                    type="button"
+                    id="customerDisplayIdentifyBtn"
+                    class="small-btn"
+                  >
+                    Identificar
+                  </button>
+                  <button
+                    type="button"
+                    id="customerDisplayRefreshBtn"
+                    class="small-btn"
+                  >
+                    Actualizar
+                  </button>
                 </div>
-              </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Reordenar por arrastre</div>
-                  <div class="opt-row-sub">
-                    Permite arrastrar con dedo/ratón para cambiar orden manual.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="productReorderModeToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Restablecer prioridades</div>
-                  <div class="opt-row-sub">
-                    Elimina todas las prioridades manuales y vuelve al orden
-                    base.
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  id="productManualOrderResetBtn"
-                  class="small-btn"
-                >
-                  Restablecer prioridades
-                </button>
-              </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Restablecer tamaño de productos
-                  </div>
-                  <div class="opt-row-sub">
-                    Vuelve al tamaño recomendado por defecto.
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  id="productTileSizeResetBtn"
-                  class="small-btn"
-                >
-                  Restablecer
-                </button>
-              </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Restablecer tamaño de letra
-                  </div>
-                  <div class="opt-row-sub">
-                    Vuelve al tamaño de letra por defecto del nombre del
-                    producto.
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  id="productNameFontSizeResetBtn"
-                  class="small-btn"
-                >
-                  Restablecer
-                </button>
-              </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Familias primero (ocultar productos hasta elegir una)
-                  </div>
-                  <div class="opt-row-sub">
-                    En vez de ver todos los productos de golpe, la pantalla
-                    muestra solo botones grandes de familia; al elegir una,
-                    se ven sus productos con un botón para volver a las
-                    familias. Diseño distinto, pensado para catálogos
-                    grandes. Apagado por defecto.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="familiesFirstModeToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Producto "medio/cuarto" de otro (stock derivado)
-                  </div>
-                  <div class="opt-row-sub">
-                    Configura un producto para que su stock se calcule
-                    automáticamente a partir de otro (p.ej. "Medio Pollo" a
-                    partir de "Pollo asado"), en vez de llevar su propio
-                    contador. Hace todo lo necesario en FacturaScripts por ti.
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  id="derivedStockFractionConfigBtn"
-                  class="small-btn"
-                >
-                  Configurar...
-                </button>
-              </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Alérgenos</div>
-                  <div class="opt-row-sub">
-                    Marca qué productos llevan cada uno de los 14 alérgenos
-                    oficiales de la UE (o alguno propio que añadas). Se
-                    destaca en la tarjeta, en el carrito y en la comanda
-                    impresa a cocina.
-                  </div>
-                </div>
-                <button type="button" id="allergensManageBtn" class="small-btn">
-                  Gestionar...
-                </button>
-              </div>
-            </div>
-          </section>
-
-          <!-- CIERRE DE CAJA (ADMIN ONLY) -->
-          <section class="opt-sec" data-sec="cierre-caja" data-admin-only>
-            <button type="button" class="opt-sec-h">
-              <span>Cierre de Caja <span class="opt-admin-pill">ADMIN</span></span>
-              <span class="opt-sec-chev">▾</span>
-            </button>
-            <div class="opt-sec-preview">
-              <span
-                class="opt-preview-item"
-                data-toggle-id="allowCloseWithParkedToggle"
-                >Cerrar con aparcados</span
-              >,
-              <span
-                class="opt-preview-item"
-                data-toggle-id="printCajaAutoLogToggle"
-                >registro de avisos</span
-              >
-              en el cierre,
-              <span
-                class="opt-preview-item"
-                data-toggle-id="printCajaDrawerLogsToggle"
-                >aperturas de cajón</span
-              >
-            </div>
-            <div class="opt-sec-b">
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Permitir cerrar con aparcados</div>
-                  <div class="opt-row-sub">
-                    Si hay tickets aparcados, permite cerrar caja mostrando una
-                    confirmación. Los tickets aparcados se conservan.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="allowCloseWithParkedToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Cierre de caja: mostrar registro de avisos
-                  </div>
-                  <div class="opt-row-sub">
-                    Al cerrar caja, imprime también un listado de eventos
-                    (abrir cajón, quitar productos, etc.). Desactívalo si solo
-                    quieres ver el resumen de ventas.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="printCajaAutoLogToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-
-              <div
-                class="opt-row opt-row-suboption"
-                id="printCajaDrawerLogsRow"
-              >
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Incluir aperturas de cajón</div>
-                  <div class="opt-row-sub">
-                    Dentro del registro anterior, oculta solo las líneas de
-                    "abrió cajón" (suelen ser las más numerosas).
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="printCajaDrawerLogsToggle" />
-                  <span class="slider"></span>
-                </label>
               </div>
             </div>
           </section>
@@ -3838,26 +3904,7 @@
               >
             </div>
             <div class="opt-sec-b">
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    PIN de administrador por agente
-                  </div>
-                  <div class="opt-row-sub">
-                    Desactivado (recomendado si solo usas usuarios
-                    administradores de FacturaScripts): cualquier agente ve
-                    las Opciones de administrador con un usuario admin.
-                    Actívalo si además quieres exigir un PIN al elegir un
-                    agente marcado como administrador (gestionado desde el
-                    CRM) — más seguro, pero un paso más lento al cambiar de
-                    agente.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="agentAdminPinModeToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
+              <div class="opt-subgroup">Familias de productos</div>
               <div class="opt-row">
                 <div class="opt-row-txt">
                   <div class="opt-row-title">
@@ -3913,6 +3960,28 @@
                 </button>
               </div>
 
+              <div class="opt-subgroup">Seguridad</div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    PIN de administrador por agente
+                  </div>
+                  <div class="opt-row-sub">
+                    Desactivado (recomendado si solo usas usuarios
+                    administradores de FacturaScripts): cualquier agente ve
+                    las Opciones de administrador con un usuario admin.
+                    Actívalo si además quieres exigir un PIN al elegir un
+                    agente marcado como administrador (gestionado desde el
+                    CRM) — más seguro, pero un paso más lento al cambiar de
+                    agente.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="agentAdminPinModeToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-subgroup">Empresa</div>
               <div class="opt-row">
                 <div class="opt-row-txt">
                   <div class="opt-row-title">Cambiar de empresa</div>
@@ -3929,123 +3998,6 @@
                 >
                   Cambiar
                 </button>
-              </div>
-            </div>
-          </section>
-
-          <!-- PANTALLA (ADMIN ONLY) -->
-          <section class="opt-sec" data-sec="pantalla" data-admin-only>
-            <button type="button" class="opt-sec-h">
-              <span>Pantalla <span class="opt-admin-pill">ADMIN</span></span>
-              <span class="opt-sec-chev">▾</span>
-            </button>
-            <div class="opt-sec-preview">
-              <span class="opt-preview-item" data-toggle-id="kioskToggle"
-                >Modo kiosk</span
-              >,
-              <span
-                class="opt-preview-item"
-                data-toggle-id="customerDisplayToggle"
-                >pantalla de cliente</span
-              >,
-              <span
-                class="opt-preview-item"
-                data-toggle-id="virtualKeyboardToggle"
-                >teclado en pantalla</span
-              >,
-              <span class="opt-preview-item" id="uiZoomPreviewItem"
-                >escala de la interfaz</span
-              >
-            </div>
-            <div class="opt-sec-b">
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Modo TPV (kiosk)</div>
-                  <div class="opt-row-sub">
-                    Si desactivas, podrás minimizar y usar el equipo como un PC
-                    normal.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="kioskToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="opt-row opt-row-stack">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Escala de la interfaz</div>
-                  <div class="opt-row-sub">
-                    "Automático" ajusta letra/iconos/botones según la
-                    resolución real de esta pantalla, para que quepa todo en
-                    equipos con pantalla pequeña. Cambia esto solo si en este
-                    equipo concreto el automático no acierta.
-                  </div>
-                </div>
-                <div class="opt-row-actions">
-                  <select id="uiZoomSelect" class="opt-select">
-                    <option value="auto">Automático</option>
-                    <option value="1">100%</option>
-                    <option value="0.9">90%</option>
-                    <option value="0.8">80%</option>
-                    <option value="0.7">70%</option>
-                  </select>
-                </div>
-              </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">
-                    Pantalla cliente (2ª pantalla)
-                  </div>
-                  <div class="opt-row-sub">
-                    Actívala solo si el equipo tiene pantalla secundaria.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="customerDisplayToggle" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="opt-row opt-row-stack" id="customerDisplayPickerRow" hidden>
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Pantalla a usar</div>
-                  <div class="opt-row-sub" id="customerDisplayPickerHint">
-                    Elige en qué pantalla física se muestra la pantalla de
-                    cliente. Usa "Identificar" para ver qué número le
-                    corresponde a cada monitor.
-                  </div>
-                </div>
-                <div class="opt-row-actions">
-                  <select id="customerDisplaySelect" class="opt-select"></select>
-                  <button
-                    type="button"
-                    id="customerDisplayIdentifyBtn"
-                    class="small-btn"
-                  >
-                    Identificar
-                  </button>
-                  <button
-                    type="button"
-                    id="customerDisplayRefreshBtn"
-                    class="small-btn"
-                  >
-                    Actualizar
-                  </button>
-                </div>
-              </div>
-              <div class="opt-row">
-                <div class="opt-row-txt">
-                  <div class="opt-row-title">Teclado en pantalla</div>
-                  <div class="opt-row-sub">
-                    Desactívalo si el TPV tiene un teclado físico conectado:
-                    al tocar un campo de texto ya no se abrirá el teclado
-                    táctil y podrás escribir directamente con el teclado
-                    físico.
-                  </div>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="virtualKeyboardToggle" />
-                  <span class="slider"></span>
-                </label>
               </div>
             </div>
           </section>
@@ -4073,6 +4025,90 @@
                   <input type="checkbox" id="autostartToggle" />
                   <span class="slider"></span>
                 </label>
+              </div>
+            </div>
+          </section>
+
+          <div class="opt-group-title">Programa</div>
+          <section class="opt-sec" data-sec="actualizacion">
+            <button type="button" class="opt-sec-h">
+              <span>Actualización automática</span>
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-preview">
+              <span
+                class="opt-preview-item"
+                data-toggle-id="updateNoticeEnabledToggle"
+                >Avisos de version nueva</span
+              >, frecuencia de comprobacion, changelog
+            </div>
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">
+                    Mostrar avisos de actualización
+                  </div>
+                  <div class="opt-row-sub">
+                    Comprueba en segundo plano si hay una versión nueva.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="updateNoticeEnabledToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Frecuencia de comprobación</div>
+                  <div class="opt-row-sub" id="updateNoticeCountdownText">
+                    Próxima comprobación: --
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <select id="updateNoticeIntervalSelect" class="opt-select">
+                    <option value="1800000">Cada 30 minutos</option>
+                    <option value="3600000">Cada 1 hora</option>
+                    <option value="7200000">Cada 2 horas</option>
+                    <option value="14400000">Cada 4 horas</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Comprobar ahora</div>
+                  <div class="opt-row-sub" id="updateNoticeCurrentVersionText">
+                    Versión actual: --
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <button
+                    type="button"
+                    id="updateNoticeCheckNowBtn"
+                    class="small-btn"
+                  >
+                    Comprobar
+                  </button>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Changelog</div>
+                  <div class="opt-row-sub">
+                    Consulta notas de cambios por versión.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <button
+                    type="button"
+                    id="updateNoticeChangelogBtn"
+                    class="small-btn"
+                  >
+                    Ver changelog
+                  </button>
+                </div>
               </div>
             </div>
           </section>

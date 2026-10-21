@@ -10659,6 +10659,40 @@ if (
   fail("Falta el pastilla fija de comensales en la cabecera de la mesa en resolveMesaDinersQuantityForProduct (renderer.js)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-21 rework de Opciones: etiquetas por tipo, subgrupos, grupos y buscador \n");
+{
+  const idxHtml = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const stylesCss = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+  // Cada id de la tabla de resumenes debe existir en index.html (si se renombra un control, falla aqui).
+  const defsSrc = renderer.slice(
+    renderer.indexOf("const OPT_PREVIEW_DEFS = {"),
+    renderer.indexOf("function computeOptPreviewItem(def) {"),
+  );
+  const defIds = [...defsSrc.matchAll(/OPT_PV\.[TVCX]\("[^"]*",\s*"([A-Za-z0-9_]+)"/g)].map((m) => m[1]);
+  const missingIds = defIds.filter((id) => !idxHtml.includes('id="' + id + '"'));
+  const subgroupCount = (idxHtml.match(/class="opt-subgroup"/g) || []).length;
+  const groupTitles = (idxHtml.match(/class="opt-group-title"/g) || []).length;
+  if (
+    defIds.length >= 50 &&
+    missingIds.length === 0 &&
+    subgroupCount >= 15 &&
+    groupTitles === 4 &&
+    idxHtml.includes('id="optionsSearchInput"') &&
+    renderer.includes("function renderOptionsPreviews() {") &&
+    renderer.includes("async function jumpToOption(targetId) {") &&
+    renderer.includes("function applyOptionsSearch() {") &&
+    renderer.includes("function syncOptionsGroupTitles() {") &&
+    renderer.includes('"#optionsAccordion .opt-pv[data-opt-target]"') &&
+    renderer.includes("resetOptionsSearch();") &&
+    stylesCss.includes(".opt-pv.is-warn {") &&
+    stylesCss.includes(".opt-search-hide {")
+  ) {
+    ok("Peticion de Sergi 2026-10-21: Opciones con etiquetas de resumen por tipo (verde/gris/azul/ambar) generadas desde OPT_PREVIEW_DEFS, clic para saltar a la opcion, subgrupos, 4 grupos de apartados y buscador (" + defIds.length + " etiquetas, " + subgroupCount + " subgrupos)");
+  } else {
+    fail("Rework de Opciones incompleto o con ids de OPT_PREVIEW_DEFS que ya no existen en index.html: " + (missingIds.join(", ") || "ver renderer.js/index.html/styles.css"));
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

@@ -32103,6 +32103,366 @@ function syncOptionsPreviewItemStates() {
     });
 }
 
+// ===== Resumen de cada apartado de Opciones (2026-10-21) =====
+// Etiquetas que se ven con el apartado plegado. Se GENERAN desde esta tabla leyendo
+// el estado real de cada control del DOM (nunca puede quedar desactualizado y no hay
+// que acordarse de tocar el HTML al añadir una opcion: se añade una linea aqui).
+//   T = interruptor      -> verde con ✓ si esta activado, gris si no
+//   V = valor            -> azul "Etiqueta: valor" (desplegable o numero); gris si esta vacio
+//   C = lista            -> azul "Etiqueta: N" (nº de elementos); gris si esta vacia
+//   X = a medida         -> fn(el) devuelve { text, state: on|off|val|warn } o null (no se muestra)
+// Al pulsar una etiqueta se abre el apartado y se salta a esa opcion (id).
+const OPT_PV = {
+  T: (label, id) => ({ kind: "toggle", label, id }),
+  V: (label, id, fmt) => ({ kind: "value", label, id, fmt }),
+  C: (label, id, selector) => ({ kind: "count", label, id, selector }),
+  X: (label, id, fn) => ({ kind: "custom", label, id, fn }),
+};
+
+const optPvText = (el) => String(el?.textContent || "").trim();
+const optPvIsGatedOff = (el) => {
+  const gate = el?.closest?.("[data-mesas-only]");
+  return !!gate && gate.style.display === "none";
+};
+
+const OPT_PREVIEW_DEFS = {
+  actualizacion: [
+    OPT_PV.T("Avisos de versión nueva", "updateNoticeEnabledToggle"),
+    OPT_PV.V("Comprobar", "updateNoticeIntervalSelect", (t) =>
+      t.replace(/^Cada\s+/i, "cada "),
+    ),
+  ],
+  caja: [OPT_PV.T("Abrir cajón con todos los pagos", "openDrawerAlwaysToggle")],
+  impresora: [
+    OPT_PV.X("Impresora de tickets", "currentPrinterName", (el) => {
+      const t = optPvText(el);
+      return !t || t === "—"
+        ? { text: "Sin impresora de tickets", state: "warn" }
+        : { text: `Tickets: ${t}`, state: "val" };
+    }),
+    OPT_PV.X("Impresora de comandas", "currentComandaPrinterName", (el) => {
+      if (optPvIsGatedOff(el)) return null;
+      const t = optPvText(el);
+      return !t || t === "—"
+        ? { text: "Sin impresora de comandas", state: "warn" }
+        : { text: `Comandas: ${t}`, state: "val" };
+    }),
+    OPT_PV.T("Imprimir al cobrar", "autoPrintToggle"),
+  ],
+  bascula: [
+    OPT_PV.X("Báscula", "scaleEnabledToggle", (el) => {
+      if (!el.checked) return { text: "Báscula", state: "off" };
+      const st = optPvText(document.getElementById("scaleStatusText"));
+      if (/^Error|no conectada/i.test(st))
+        return { text: "Báscula sin conexión", state: "warn" };
+      return { text: "Báscula", state: "on" };
+    }),
+    OPT_PV.V("Puerto", "scalePortSelect", (t, el) => (el.value ? t.split(" — ")[0] : "")),
+    OPT_PV.V("Cobrar en", "scaleChargeUnitSelect"),
+    OPT_PV.V("Modo", "scaleConsumeModeSelect"),
+  ],
+  carrito: [
+    OPT_PV.T("Desagrupar líneas", "groupLinesToggle"),
+    OPT_PV.T("Descuentos manuales", "cartDiscountToolsToggle"),
+    OPT_PV.T("Imprimir ticket al guardar", "autoPrintTicketOnParkToggle"),
+    OPT_PV.T("Alargar carrito", "cartWidthControlsToggle"),
+    OPT_PV.V("Cliente por defecto", "terminalDefaultCustomerSelect"),
+    OPT_PV.V("Al salir de un aparcado", "parkedCustomerResetModeSelect"),
+    OPT_PV.X("Descuentos rápidos", "discountQuickPct1", () => {
+      const vals = [1, 2, 3, 4, 5]
+        .map((n) => String(document.getElementById(`discountQuickPct${n}`)?.value || "").trim())
+        .filter(Boolean);
+      return vals.length
+        ? { text: `Descuentos rápidos: ${vals.join(", ")}%`, state: "val" }
+        : { text: "Descuentos rápidos", state: "off" };
+    }),
+  ],
+  tarifas: [
+    OPT_PV.V("Tarifa activa", "tariffSelect"),
+    OPT_PV.T("No vender bajo coste", "tariffMinCosteToggle"),
+    OPT_PV.T("No vender sobre PVP", "tariffMaxPvpToggle"),
+  ],
+  mesas: [
+    OPT_PV.T("Comanda automática", "autoComandaOnSaveToggle"),
+    OPT_PV.V("Espera", "autoComandaDelayInput", (t, el) => (el.value !== "" ? `${el.value} s` : "")),
+    OPT_PV.T("Comanda agrupada por familias", "comandaGroupFamiliesToggle"),
+    OPT_PV.C("Familias por comensales", "mesasDinersFamilyList", ".opt-chip-item"),
+    OPT_PV.C("Familias para comanda", "mesasComandaFamilyList", ".opt-chip-item"),
+  ],
+  productos: [
+    OPT_PV.V("Texto en la tarjeta", "productDisplayFieldModeSelect"),
+    OPT_PV.T("Modo edición de precio", "priceEditModeToggle"),
+    OPT_PV.T("Mostrar stock", "productStockToggle"),
+    OPT_PV.T("Solo con stock", "productsStockOnlyToggle"),
+    OPT_PV.T("Incluir sin stock", "productsIncludeUnmanagedToggle"),
+    OPT_PV.T("Editar stock", "productStockEditToggle"),
+    OPT_PV.T("Añadidos de producto", "productAddonsEnabledToggle"),
+    OPT_PV.T("Aviso de stock al aparcar", "parkStockWarningToggle"),
+    OPT_PV.T("Preguntar en borrado masivo", "askStockBulkDeletePendingToggle"),
+    OPT_PV.T("Redimensionar productos", "productTileResizeModeToggle"),
+    OPT_PV.V("Orden", "productSortModeSelect"),
+    OPT_PV.T("Reordenar por arrastre", "productReorderModeToggle"),
+    OPT_PV.T("Familias primero", "familiesFirstModeToggle"),
+  ],
+  "cierre-caja": [
+    OPT_PV.T("Cerrar con aparcados", "allowCloseWithParkedToggle"),
+    OPT_PV.T("Registro de avisos en el cierre", "printCajaAutoLogToggle"),
+    OPT_PV.T("Aperturas de cajón en el cierre", "printCajaDrawerLogsToggle"),
+  ],
+  "barra-info": [
+    OPT_PV.T("Barra visible", "infoBarVisibleToggle"),
+    OPT_PV.T("Terminal", "infoBarShowTerminalToggle"),
+    OPT_PV.T("Agente", "infoBarShowAgentToggle"),
+    OPT_PV.T("Usuario", "infoBarShowUserToggle"),
+    OPT_PV.T("Caja", "infoBarShowCashToggle"),
+  ],
+  terminales: [
+    OPT_PV.T("PIN de administrador por agente", "agentAdminPinModeToggle"),
+    OPT_PV.T("Redimensionar familias", "familyButtonResizeModeToggle"),
+  ],
+  pantalla: [
+    OPT_PV.T("Modo kiosk", "kioskToggle"),
+    OPT_PV.V("Escala", "uiZoomSelect", (t) => t.toLowerCase()),
+    OPT_PV.T("Pantalla de cliente", "customerDisplayToggle"),
+    OPT_PV.T("Teclado en pantalla", "virtualKeyboardToggle"),
+  ],
+  inicio: [OPT_PV.T("Iniciar el TPV al encender el PC", "autostartToggle")],
+};
+
+function computeOptPreviewItem(def) {
+  const el = document.getElementById(def.id);
+  if (!el) return null;
+  if (def.kind === "toggle") {
+    return { text: def.label, state: el.checked ? "on" : "off" };
+  }
+  if (def.kind === "value") {
+    let txt = "";
+    if (el.tagName === "SELECT") {
+      txt = el.value === "" ? "" : String(el.selectedOptions?.[0]?.textContent || "").trim();
+    } else {
+      txt = String(el.value || "").trim();
+    }
+    if (def.fmt) txt = String(def.fmt(txt, el) || "").trim();
+    // Valores largos: sin el parentesco explicativo y recortados.
+    txt = txt.replace(/\s*\([^)]*\)\s*$/, "").trim();
+    if (txt.length > 26) txt = txt.slice(0, 25).trimEnd() + "…";
+    return txt
+      ? { text: `${def.label}: ${txt}`, state: "val" }
+      : { text: def.label, state: "off" };
+  }
+  if (def.kind === "count") {
+    const n = el.querySelectorAll(def.selector).length;
+    return n > 0
+      ? { text: `${def.label}: ${n}`, state: "val" }
+      : { text: def.label, state: "off" };
+  }
+  if (def.kind === "custom") return def.fn(el);
+  return null;
+}
+
+function renderOptionsPreviews() {
+  const acc = document.getElementById("optionsAccordion");
+  if (!acc) return;
+  syncOptionsGroupTitles();
+  Object.entries(OPT_PREVIEW_DEFS).forEach(([key, defs]) => {
+    const box = acc.querySelector(`.opt-sec[data-sec="${key}"] .opt-sec-preview`);
+    if (!box) return;
+    const frag = document.createDocumentFragment();
+    defs.forEach((def) => {
+      let r = null;
+      try {
+        r = computeOptPreviewItem(def);
+      } catch {}
+      if (!r) return;
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = `opt-pv is-${r.state}`;
+      chip.dataset.optTarget = def.id;
+      chip.title = "Ir a esta opción";
+      chip.textContent =
+        (r.state === "on" ? "✓ " : r.state === "warn" ? "⚠ " : "") + r.text;
+      frag.appendChild(chip);
+    });
+    // Sin nada que pintar (p.ej. controles aun sin cargar): se deja el texto del HTML.
+    if (!frag.childNodes.length) return;
+    box.classList.add("is-chips");
+    box.replaceChildren(frag);
+  });
+}
+
+let optionsPreviewRenderTimer = null;
+function scheduleRenderOptionsPreviews() {
+  if (optionsPreviewRenderTimer) return;
+  optionsPreviewRenderTimer = setTimeout(() => {
+    optionsPreviewRenderTimer = null;
+    if (optionsOverlay?.classList.contains("hidden")) return;
+    renderOptionsPreviews();
+  }, 150);
+}
+
+// Abre el apartado de una opcion (recordando que quedo abierto, como al pulsar su cabecera)
+// y salta hasta la fila, resaltandola un momento.
+async function jumpToOption(targetId) {
+  const el = document.getElementById(targetId);
+  const sec = el?.closest?.(".opt-sec");
+  if (!el || !sec) return;
+  const key = sec.getAttribute("data-sec");
+  if (sec.hasAttribute("data-admin-only") && !window.TPV_STATE?.isAdmin) return;
+  if (sec.dataset.open !== "1") {
+    sec.dataset.open = "1";
+    if (key === "bascula") {
+      window.ensureScalePortsLoadedOnSectionOpen?.()?.catch(() => {});
+    }
+    try {
+      const state = await loadOptionsAccordionState();
+      state[key] = true;
+      await saveOptionsAccordionState(state);
+    } catch {}
+  }
+  const row = el.closest(".opt-row") || el;
+  const target = row.offsetParent ? row : sec;
+  requestAnimationFrame(() => {
+    target.scrollIntoView({ block: "center", behavior: "smooth" });
+    target.classList.remove("opt-row-flash");
+    void target.offsetWidth;
+    target.classList.add("opt-row-flash");
+    setTimeout(() => target.classList.remove("opt-row-flash"), 1800);
+  });
+}
+
+// ----- Titulos de grupo y buscador de Opciones (2026-10-21) -----
+// Un titulo de grupo ("Venta", "Cobro y caja"...) solo se ve si alguno de los apartados que
+// tiene debajo se ve (los de admin o de Mesas pueden estar ocultos por permisos/modulo).
+function syncOptionsGroupTitles() {
+  const acc = document.getElementById("optionsAccordion");
+  if (!acc) return;
+  acc.querySelectorAll(".opt-group-title").forEach((title) => {
+    let visible = false;
+    for (let n = title.nextElementSibling; n && !n.classList.contains("opt-group-title"); n = n.nextElementSibling) {
+      if (
+        n.classList.contains("opt-sec") &&
+        n.style.display !== "none" &&
+        !n.classList.contains("opt-search-hide")
+      ) {
+        visible = true;
+        break;
+      }
+    }
+    title.classList.toggle("opt-search-hide", !visible);
+  });
+}
+
+const normalizeOptSearch = (s) =>
+  String(s || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+let optSearchSavedOpen = null;
+
+function clearOptionsSearchMarks() {
+  const acc = document.getElementById("optionsAccordion");
+  acc?.classList.remove("opt-searching");
+  acc?.querySelectorAll(".opt-search-hide").forEach((el) => {
+    if (!el.classList.contains("opt-group-title")) el.classList.remove("opt-search-hide");
+  });
+  document.getElementById("optionsSearchEmpty")?.classList.add("hidden");
+}
+
+function applyOptionsSearch() {
+  const acc = document.getElementById("optionsAccordion");
+  const input = document.getElementById("optionsSearchInput");
+  if (!acc || !input) return;
+  const q = normalizeOptSearch(input.value);
+  document.getElementById("optionsSearchClear")?.classList.toggle("hidden", !q);
+  const secs = [...acc.querySelectorAll(".opt-sec")];
+
+  clearOptionsSearchMarks();
+  if (!q) {
+    if (optSearchSavedOpen) {
+      secs.forEach((sec) => {
+        const key = sec.getAttribute("data-sec");
+        if (optSearchSavedOpen.has(key)) sec.dataset.open = optSearchSavedOpen.get(key) ? "1" : "0";
+      });
+      optSearchSavedOpen = null;
+    }
+    syncOptionsGroupTitles();
+    return;
+  }
+  if (!optSearchSavedOpen) {
+    optSearchSavedOpen = new Map(
+      secs.map((sec) => [sec.getAttribute("data-sec"), sec.dataset.open === "1"]),
+    );
+  }
+  acc.classList.add("opt-searching");
+
+  let anyVisible = false;
+  secs.forEach((sec) => {
+    if (sec.style.display === "none") return;
+    const titleMatch = normalizeOptSearch(sec.querySelector(".opt-sec-h")?.textContent).includes(q);
+    let secHasMatch = false;
+    sec.querySelectorAll(".opt-sec-b").forEach((body) => {
+      // Una "unidad" = una fila + lo que cuelga de ella hasta la siguiente fila o titulo de subgrupo.
+      const units = [];
+      let curSub = null;
+      let cur = null;
+      [...body.children].forEach((el) => {
+        if (el.classList.contains("opt-subgroup")) {
+          curSub = { el, units: [] };
+          units.push({ header: curSub });
+          cur = null;
+        } else if (el.classList.contains("opt-row")) {
+          cur = { els: [el], sub: curSub, hidden: el.style.display === "none" || el.hidden };
+          units.push(cur);
+          curSub?.units.push(cur);
+        } else if (cur) {
+          cur.els.push(el);
+        }
+      });
+      units.forEach((u) => {
+        if (!u.els) return;
+        const text = normalizeOptSearch(
+          u.els
+            .map((el) => {
+              const parts = [...el.querySelectorAll(".opt-row-title, .opt-row-sub")];
+              return parts.length ? parts.map((p) => p.textContent).join(" ") : el.textContent;
+            })
+            .join(" "),
+        );
+        u.match = !u.hidden && (titleMatch || text.includes(q));
+        if (u.match) secHasMatch = true;
+        else u.els.forEach((el) => el.classList.add("opt-search-hide"));
+      });
+      units.forEach((u) => {
+        if (u.header) {
+          const any = u.header.units.some((x) => x.match);
+          if (!any) u.header.el.classList.add("opt-search-hide");
+        }
+      });
+    });
+    const secVisible = titleMatch || secHasMatch;
+    sec.classList.toggle("opt-search-hide", !secVisible);
+    if (secVisible) {
+      sec.dataset.open = "1";
+      anyVisible = true;
+    }
+  });
+  syncOptionsGroupTitles();
+  document.getElementById("optionsSearchEmpty")?.classList.toggle("hidden", anyVisible);
+}
+
+// Deja el buscador vacio y todo visible (al abrir/cerrar Opciones).
+function resetOptionsSearch() {
+  const input = document.getElementById("optionsSearchInput");
+  if (input) input.value = "";
+  optSearchSavedOpen = null;
+  clearOptionsSearchMarks();
+  document.getElementById("optionsSearchClear")?.classList.add("hidden");
+  syncOptionsGroupTitles();
+}
+
 function bindOptionsAccordionOnce() {
   if (optionsAccordionBound) return;
   optionsAccordionBound = true;
@@ -32116,7 +32476,50 @@ function bindOptionsAccordionOnce() {
     },
   );
 
+  // Las etiquetas del resumen se repintan solas cuando cambia cualquier control de
+  // Opciones (interruptor, desplegable, numero, listas de familias, estado de la
+  // bascula...). Lo que cambia dentro del propio resumen se ignora (evita bucles).
+  const searchInput = document.getElementById("optionsSearchInput");
+  if (searchInput) {
+    searchInput.addEventListener("input", applyOptionsSearch);
+    searchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && searchInput.value) {
+        e.stopPropagation();
+        searchInput.value = "";
+        applyOptionsSearch();
+      }
+    });
+    // Pantalla tactil: el teclado en pantalla (respeta el interruptor de Opciones -> Pantalla).
+    searchInput.addEventListener("click", () => {
+      if (typeof openQwertyForInput === "function") openQwertyForInput(searchInput, "text");
+    });
+  }
+  document.getElementById("optionsSearchClear")?.addEventListener("click", () => {
+    if (searchInput) searchInput.value = "";
+    applyOptionsSearch();
+    searchInput?.focus();
+  });
+
+  const accEl = document.getElementById("optionsAccordion");
+  if (accEl) {
+    ["change", "input", "click"].forEach((evt) =>
+      accEl.addEventListener(evt, scheduleRenderOptionsPreviews),
+    );
+    new MutationObserver((muts) => {
+      const outside = muts.some((m) => {
+        const node = m.target?.nodeType === 1 ? m.target : m.target?.parentElement;
+        return !node?.closest?.(".opt-sec-preview");
+      });
+      if (outside) scheduleRenderOptionsPreviews();
+    }).observe(accEl, { subtree: true, childList: true, characterData: true });
+  }
+
   document.addEventListener("click", async (e) => {
+    const pv = e.target.closest("#optionsAccordion .opt-pv[data-opt-target]");
+    if (pv) {
+      jumpToOption(pv.dataset.optTarget).catch(() => {});
+      return;
+    }
     const btn = e.target.closest(
       "#optionsAccordion .opt-sec-h, #optionsAccordion .opt-sec-preview",
     );
@@ -32200,6 +32603,7 @@ function bindAutostartToggleOnce() {
 }
 
 async function openOptions() {
+  resetOptionsSearch();
   const cashOpen = !!cashSession?.open;
 
   const setOptionsReadOnlyMode = (readonly) => {
@@ -32391,10 +32795,12 @@ async function openOptions() {
   optionsLoadingBanner?.classList.add("hidden");
   optionsAccordionEl?.classList.remove("opt-loading");
   syncOptionsPreviewItemStates();
+  renderOptionsPreviews();
 }
 
 function closeOptions() {
   optionsOverlay?.classList.add("hidden");
+  resetOptionsSearch();
 }
 
 var TPV_TUTORIAL_BLANK_MODE = false;
