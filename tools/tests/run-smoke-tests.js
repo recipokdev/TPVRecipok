@@ -10564,13 +10564,14 @@ console.log("\n[SMOKE] Checking 2026-10-21 comanda: reimprimir una enviada, agru
     renderer.includes("? buildComandaFamilyGroups(lineList)") &&
     renderer.includes("function isComandaGroupByFamilyEnabled() {") &&
     indexHtml.includes('id="comandaGroupFamiliesToggle"') &&
-    renderer.includes("descEl.textContent = desc || ref;") &&
+    renderer.includes("const names = computeProductDisplayNames(") &&
+    renderer.includes("? `${names.name} - ${names.secondaryName}`") &&
     !renderer.includes("descEl.textContent = ref ? ") &&
     renderer.includes("!cashOpen && !hasActiveLoginSession(),") &&
     renderer.includes("if (readonly && !cashOpen) {")
   ) {
     ok(
-      "Peticion de Lumi 2026-10-21 (informe de reunion): reimprimir SOLO una comanda ya enviada (boton en la cabecera de cada envio, papel con aviso REIMPRESION, sin tocar el estado de lo enviado), comanda agrupada por familias principales (cada familia una vez, productos debajo, orden de las familias del TPV, opcion en Opciones -> Mesas, activa por defecto), nombre sin referencia en el papel de cocina; y (Sergi) Opciones accesibles con sesion iniciada aunque la caja este cerrada",
+      "Peticion de Lumi 2026-10-21 (informe de reunion): reimprimir SOLO una comanda ya enviada (boton en la cabecera de cada envio, papel con aviso REIMPRESION, sin tocar el estado de lo enviado), comanda agrupada por familias principales (cada familia una vez, productos debajo, orden de las familias del TPV, opcion en Opciones -> Mesas, activa por defecto), el papel de cocina respeta la opcion Texto en la tarjeta (ambas sin repetir, solo descripcion o solo referencia); y (Sergi) Opciones accesibles con sesion iniciada aunque la caja este cerrada",
     );
   } else {
     fail(

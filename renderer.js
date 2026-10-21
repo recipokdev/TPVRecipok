@@ -46635,9 +46635,18 @@ async function printComandaWithContext({
 
       const descEl = doc.createElement("div");
       descEl.className = "comanda-desc";
-      // Solo el nombre del producto en el papel de cocina (antes salia "referencia - descripcion", y
-      // con referencias tipo codigo se leia el codigo en vez del nombre -- informe de Lumi, 2026-10-20).
-      descEl.textContent = desc || ref;
+      // Mismo criterio que las tarjetas del TPV (Opciones -> Productos -> "Texto en la tarjeta"):
+      // "ambas" pone referencia - descripcion SOLO si son distintas (si son iguales, una vez), y
+      // "solo descripcion" / "solo referencia" fuerzan ese unico campo. Asi cada cliente ve en la
+      // comanda lo mismo que eligio ver en el TPV (unos usan la referencia como nombre, otros la
+      // descripcion, otros las dos repetidas).
+      const names = computeProductDisplayNames(
+        line?.descripcion ?? line?.name ?? "",
+        line?.referencia ?? "",
+      );
+      descEl.textContent = names.secondaryName
+        ? `${names.name} - ${names.secondaryName}`
+        : names.name || desc || ref;
 
       row.appendChild(qtyEl);
       row.appendChild(descEl);
