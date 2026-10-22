@@ -10790,6 +10790,17 @@ if (
   fail("Falta getMultiVariantLineName / isMultiVariant en la factura de variantes (renderer.js buildFsLinesFromCart)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-22 aviso mesa-unlink-after-pay-failed solo para pedidos de Mesas \n");
+if (
+  renderer.includes("const mayBeMesaTicket = ticketRef") &&
+  renderer.includes("hasTicketMesaScope(ticketRef) || isMesasModeTicket(ticketRef)") &&
+  renderer.includes("if (mayBeMesaTicket) {")
+) {
+  ok("El aviso interno mesa-unlink-after-pay-failed solo se manda para pedidos de Modo Mesas (o si no se sabe cual era): un cobro de TPV normal ya no lo dispara (Ben_Trempat lo generaba en cada cobro de un aparcado)");
+} else {
+  fail("Falta el filtro mayBeMesaTicket en unlinkMesaTicketByTicketId (renderer.js)");
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

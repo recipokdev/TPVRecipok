@@ -12437,7 +12437,15 @@ function unlinkMesaTicketByTicketId(ticketId, ticketRef = null) {
     // ningun rastro. Se reporta al servidor (best-effort, nunca bloquea ni
     // lanza) para poder ver el caso real la proxima vez que pase, en vez de
     // depender de la consola local de un terminal que nadie mira.
-    reportMesaUnlinkFailure(ticketId, fallbackUidAttempted || null);
+    // (2026-10-22) Solo si el pedido ES de Modo Mesas (o no se sabe cual era): un pedido de TPV normal
+    // nunca tuvo mesa que liberar, y en clientes sin Mesas (Ben_Trempat) esto saltaba en cada cobro de
+    // un aparcado como si fuera un fallo.
+    const mayBeMesaTicket = ticketRef
+      ? hasTicketMesaScope(ticketRef) || isMesasModeTicket(ticketRef)
+      : MESAS_MODULE_ENABLED;
+    if (mayBeMesaTicket) {
+      reportMesaUnlinkFailure(ticketId, fallbackUidAttempted || null);
+    }
     return;
   }
 
