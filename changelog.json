@@ -6,6 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
+        "CORRECCIÓN: en la factura, la descripción de una variante (p. ej. el pack \"6x1 Croissant\" o \"Agua 0,5 Lt.\") es ahora el nombre de la variante vendida y no el del producto base (antes salía \"1 x Croissant\" o \"Agua 33 c.\" aunque la referencia y el precio eran los de la variante). Solo afecta a productos con varias variantes; el resto queda igual.",
         "CORRECCIÓN: en la comanda impresa, las variantes de un producto (p. ej. \"Agua 0,5 Lt.\", \"Agua 1,5 Lt.\") ya no salen todas con el nombre del producto base cuando el cliente tiene \"Texto en la tarjeta\" en solo descripción: sale el nombre de la variante, como en la tarjeta del TPV."]
     },
     {

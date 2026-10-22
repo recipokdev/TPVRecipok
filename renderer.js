@@ -30521,6 +30521,9 @@ async function loadDataFromApi(opts = {}) {
             sortKey: baseSortKey + pos,
             baseProductId: baseId,
             isVariant: true,
+            // Producto con VARIAS variantes (cada variante es una tarjeta distinta): en la factura la
+            // descripcion de la linea es el nombre de la variante, no el del producto base.
+            isMultiVariant: !isSingleVariant,
             variantOrder: pos,
             isPrimaryVariant: pos === 0,
             codimpuesto: codImpuestoBase,
@@ -36352,6 +36355,21 @@ function grossToNetUnit(unitGross, taxRate) {
   return Math.round((unitNetRaw + Number.EPSILON) * 1e8) / 1e8;
 }
 
+// Nombre de una linea de VARIANTE (producto con varias variantes) para la descripcion de la factura:
+// la descripcion/descripcion2 de esas lineas es el nombre del producto base, igual en todas las
+// variantes ("1 x Croissant" para el pack "6x1 Croissant", "Agua 33 c." para "Agua 0,5 Lt."), y la
+// factura no distinguia que se habia vendido. Se mira en el catalogo (no en la propia linea) para
+// que valga igual con lineas de la app de camareros o de aparcados antiguos. Productos normales y
+// de una sola variante: "" (se mantiene la descripcion de siempre).
+function getMultiVariantLineName(item) {
+  const id = Number(item?.id || 0) || 0;
+  const baseId = Number(item?.baseProductId || 0) || 0;
+  if (!(id > 0 && baseId > 0 && id !== baseId)) return "";
+  const cat = (Array.isArray(products) ? products : []).find((p) => Number(p?.id) === id);
+  if (!cat?.isMultiVariant) return "";
+  return String(item?.name || cat?.name || "").trim();
+}
+
 function buildFsLinesFromCart(cartArr) {
   if (!Array.isArray(cartArr) || cartArr.length === 0) return [];
 
@@ -36382,6 +36400,7 @@ function buildFsLinesFromCart(cartArr) {
 
         // ✅ Descripción: SIEMPRE la original, sin "Incluye"
         const baseDesc =
+          getMultiVariantLineName(item) ||
           item.descripcion2 ||
           item.secondaryName ||
           item.descripcion ||

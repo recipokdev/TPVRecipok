@@ -10779,6 +10779,17 @@ if (
   fail("Falta getComandaItemNames para variantes en la comanda (renderer.js)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-22 factura: descripcion de la variante vendida \n");
+if (
+  renderer.includes("function getMultiVariantLineName(item) {") &&
+  renderer.includes("isMultiVariant: !isSingleVariant,") &&
+  renderer.includes("getMultiVariantLineName(item) ||")
+) {
+  ok("Las lineas de variantes (productos con varias variantes) llevan en la factura el nombre de la variante como descripcion, no el del producto base; productos normales y de una sola variante no cambian");
+} else {
+  fail("Falta getMultiVariantLineName / isMultiVariant en la factura de variantes (renderer.js buildFsLinesFromCart)");
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
