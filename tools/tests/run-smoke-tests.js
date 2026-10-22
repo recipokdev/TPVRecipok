@@ -10768,6 +10768,17 @@ console.log("\n[SMOKE] Checking 2026-10-21 Liberar mesa, botones en resumen de O
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-22 comanda: nombre de la variante (no del producto base) \n");
+if (
+  renderer.includes("function getComandaItemNames(line) {") &&
+  renderer.includes("const names = getComandaItemNames(line);") &&
+  /id > 0 && baseId > 0 && id !== baseId && mainName/.test(renderer)
+) {
+  ok("La comanda impresa usa el nombre de la variante (el que ya calculo el catalogo) en lineas de variante, en vez de recalcularlo desde descripcion/referencia (que da el nombre del producto base con 'solo descripcion')");
+} else {
+  fail("Falta getComandaItemNames para variantes en la comanda (renderer.js)");
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

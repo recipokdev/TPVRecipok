@@ -5,7 +5,8 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "CORRECCIÓN: en la comanda impresa, las variantes de un producto (p. ej. \"Agua 0,5 Lt.\", \"Agua 1,5 Lt.\") ya no salen todas con el nombre del producto base cuando el cliente tiene \"Texto en la tarjeta\" en solo descripción: sale el nombre de la variante, como en la tarjeta del TPV."]
     },
     {
       "version": "0.2.51",

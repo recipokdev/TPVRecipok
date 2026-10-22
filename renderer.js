@@ -5216,6 +5216,27 @@ function computeProductDisplayNames(descripcionText, referenciaText) {
   return { name: desc || ref, secondaryName: "" };
 }
 
+// Texto de una linea en la comanda impresa. Igual que la tarjeta del TPV (Opciones -> Productos ->
+// "Texto en la tarjeta"), salvo en las VARIANTES (linea con id de variante distinto del producto
+// base): ahi el nombre principal es el que ya calculo el catalogo (la referencia de la variante, p.ej.
+// "Agua 0,5 Lt."), porque su `descripcion` es el nombre del producto BASE, igual en todas las
+// variantes: con "solo descripcion" la comanda sacaba "Agua 33 c." para cualquier tamano (2026-10-22).
+function getComandaItemNames(line) {
+  const id = Number(line?.id || 0) || 0;
+  const baseId = Number(line?.baseProductId || 0) || 0;
+  const mainName = String(line?.name || "").trim();
+  if (id > 0 && baseId > 0 && id !== baseId && mainName) {
+    return {
+      name: mainName,
+      secondaryName: String(line?.descripcion2 || line?.secondaryName || "").trim(),
+    };
+  }
+  return computeProductDisplayNames(
+    line?.descripcion ?? line?.name ?? "",
+    line?.referencia ?? "",
+  );
+}
+
 // Valor de UN campo de Opciones -> valor real de ese hueco, o null si el
 // hueco esta "vacio". Feedback de cliente: escribir 0 debe tratarse igual
 // que dejarlo en blanco (un descuento del 0% no tiene sentido como boton).
@@ -47516,10 +47537,7 @@ async function printComandaWithContext({
       // "solo descripcion" / "solo referencia" fuerzan ese unico campo. Asi cada cliente ve en la
       // comanda lo mismo que eligio ver en el TPV (unos usan la referencia como nombre, otros la
       // descripcion, otros las dos repetidas).
-      const names = computeProductDisplayNames(
-        line?.descripcion ?? line?.name ?? "",
-        line?.referencia ?? "",
-      );
+      const names = getComandaItemNames(line);
       descEl.textContent = names.secondaryName
         ? `${names.name} - ${names.secondaryName}`
         : names.name || desc || ref;
