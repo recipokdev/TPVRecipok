@@ -36362,10 +36362,23 @@ function grossToNetUnit(unitGross, taxRate) {
 // que valga igual con lineas de la app de camareros o de aparcados antiguos. Productos normales y
 // de una sola variante: "" (se mantiene la descripcion de siempre).
 function getMultiVariantLineName(item) {
-  const id = Number(item?.id || 0) || 0;
-  const baseId = Number(item?.baseProductId || 0) || 0;
-  if (!(id > 0 && baseId > 0 && id !== baseId)) return "";
-  const cat = (Array.isArray(products) ? products : []).find((p) => Number(p?.id) === id);
+  const baseId = Number(item?.baseProductId || item?.idproducto || 0) || 0;
+  if (!baseId) return "";
+  const list = Array.isArray(products) ? products : [];
+  // Al recargar un pedido guardado, la linea pierde el id de la variante (id = id del producto base),
+  // asi que se identifica por idvariante si viene, y si no por producto base + referencia de la variante.
+  const idVar = Number(item?.idvariante || 0) || 0;
+  const ref = String(item?.referencia || "").trim().toLowerCase();
+  const cat = idVar
+    ? list.find((p) => Number(p?.id) === idVar)
+    : ref
+      ? list.find(
+          (p) =>
+            p?.isMultiVariant &&
+            getProductBaseId(p) === baseId &&
+            String(p?.referencia || "").trim().toLowerCase() === ref,
+        )
+      : null;
   if (!cat?.isMultiVariant) return "";
   return String(item?.name || cat?.name || "").trim();
 }
