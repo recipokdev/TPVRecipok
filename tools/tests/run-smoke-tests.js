@@ -10814,6 +10814,19 @@ if (
   fail("Falta el respaldo por idproducto en syncReservedStockDeltaToFS o la anotacion de packs derivados al cobrar (renderer.js)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-23 productos nuevos: recarga del catalogo al verlos en el refresco \n");
+if (
+  renderer.includes("function noteNewProductsFromDelta(list) {") &&
+  renderer.includes("function scheduleCatalogReloadForNewProducts(delayMs = 3000) {") &&
+  renderer.includes("const hadPriorSync = __productsLastFullSyncAt > 0;") &&
+  renderer.includes("if (hadPriorSync) noteNewProductsFromDelta(list);") &&
+  renderer.includes("await loadDataFromApi({ refresh: true, silentRetry: true });")
+) {
+  ok("El refresco de stock detecta productos que no estan en el catalogo local (creados en FacturaScripts con el TPV abierto) y recarga el catalogo una vez por producto, esperando si se esta cobrando/aparcando, con un minimo de 2 minutos entre recargas");
+} else {
+  fail("Falta la deteccion de productos nuevos en refreshProductsStockOnly (renderer.js noteNewProductsFromDelta / scheduleCatalogReloadForNewProducts)");
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

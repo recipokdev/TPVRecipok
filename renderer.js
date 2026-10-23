@@ -43123,6 +43123,58 @@ function parseFsProductTimestamp(str) {
   return Number.isFinite(t) ? t : null;
 }
 
+// Productos NUEVOS creados en FacturaScripts con el TPV ya abierto (2026-10-23): este refresco solo
+// actualiza el stock de los productos que el TPV YA tiene en su catalogo, asi que uno nuevo no aparecia
+// hasta reiniciar el programa -- ni para venderlo, ni para reservar/liberar su stock (Asador el Gallo:
+// "Macarrones al curry" quedo con 4 unidades reservadas de mas). Si el lote trae productos que no estan
+// en el catalogo local, se recarga el catalogo (una vez por producto y como mucho cada 2 minutos), sin
+// molestar si se esta cobrando o aparcando.
+const __newProductReloadSeen = new Set();
+let __newProductReloadTimer = null;
+let __newProductReloadLastAt = 0;
+function noteNewProductsFromDelta(list) {
+  try {
+    if (!Array.isArray(list) || !list.length || !Array.isArray(products) || !products.length) return;
+    const known = new Set(products.map((p) => Number(p?.baseProductId || p?.id || 0)));
+    let found = 0;
+    list.forEach((p) => {
+      const id = Number(p?.idproducto ?? p?.id ?? 0) || 0;
+      if (!id || known.has(id) || __newProductReloadSeen.has(id)) return;
+      if (p?.bloqueado || isFalseFlag(p?.sevende)) return;
+      // Sin nombre (ni descripcion ni referencia) el catalogo tampoco lo muestra: no cuenta como nuevo.
+      if (!String(p?.descripcion ?? "").trim() && !String(p?.referencia ?? "").trim()) return;
+      __newProductReloadSeen.add(id);
+      found += 1;
+    });
+    if (found > 0) scheduleCatalogReloadForNewProducts();
+  } catch {}
+}
+
+function scheduleCatalogReloadForNewProducts(delayMs = 3000) {
+  if (__newProductReloadTimer) return;
+  __newProductReloadTimer = setTimeout(async () => {
+    __newProductReloadTimer = null;
+    const busy =
+      TPV_STATE?.offline ||
+      (typeof isPayingNow !== "undefined" && isPayingNow) ||
+      (typeof isParkingNow !== "undefined" && isParkingNow) ||
+      (typeof payOverlay !== "undefined" && payOverlay && !payOverlay.classList.contains("hidden")) ||
+      manualUpdateActionInFlight ||
+      __refreshingAll;
+    const tooSoon = Date.now() - __newProductReloadLastAt < 2 * 60 * 1000;
+    if (busy || tooSoon) {
+      scheduleCatalogReloadForNewProducts(30 * 1000);
+      return;
+    }
+    __newProductReloadLastAt = Date.now();
+    try {
+      await loadDataFromApi({ refresh: true, silentRetry: true });
+    } catch (e) {
+      console.warn("No se pudo recargar el catalogo por productos nuevos:", e?.message || e);
+    }
+  }, delayMs);
+}
+
 async function refreshProductsStockOnly() {
   if (TPV_STATE?.offline) return false;
 
@@ -43134,6 +43186,8 @@ async function refreshProductsStockOnly() {
   const needsFullSync =
     !__productsDeltaWatermark ||
     Date.now() - __productsLastFullSyncAt > PRODUCTS_FULL_RESYNC_INTERVAL_MS;
+  // La primera pasada tras arrancar (o tras recargar el catalogo) compara contra un catalogo recien cargado.
+  const hadPriorSync = __productsLastFullSyncAt > 0;
 
   try {
     const productosData = needsFullSync
@@ -43175,6 +43229,10 @@ async function refreshProductsStockOnly() {
     if (!Array.isArray(products) || !products.length) {
       return false;
     }
+
+    // Productos nuevos (ver noteNewProductsFromDelta). En la primera pasada completa tras arrancar el
+    // catalogo acaba de cargarse, no hay nada "nuevo" que detectar.
+    if (hadPriorSync) noteNewProductsFromDelta(list);
 
     let changed = false;
 

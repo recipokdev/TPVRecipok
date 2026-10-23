@@ -6,6 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
+        "MEJORA: los productos nuevos creados en FacturaScripts con el TPV abierto aparecen solos en unos segundos (antes no salían hasta reiniciar el programa, y mientras tanto ese TPV no podía venderlos bien ni gestionar su stock). Se recarga el catálogo una vez por producto nuevo, sin molestar si se está cobrando o aparcando.",
         "CORRECCIÓN: stock de productos nuevos. Si un producto se creaba en FacturaScripts después de arrancar el TPV (p. ej. importaciones diarias), ese TPV no lo tenía en su catálogo y no liberaba su reserva de stock al cobrar un aparcado creado en otro TPV, con lo que el stock quedaba de menos. Ahora el stock se busca por el id del producto y se libera igual.",
         "CORRECCIÓN: en la factura, la descripción de una variante (p. ej. el pack \"6x1 Croissant\" o \"Agua 0,5 Lt.\") es ahora el nombre de la variante vendida y no el del producto base (antes salía \"1 x Croissant\" o \"Agua 33 c.\" aunque la referencia y el precio eran los de la variante). Solo afecta a productos con varias variantes; el resto queda igual.",
         "CORRECCIÓN: en la comanda impresa, las variantes de un producto (p. ej. \"Agua 0,5 Lt.\", \"Agua 1,5 Lt.\") ya no salen todas con el nombre del producto base cuando el cliente tiene \"Texto en la tarjeta\" en solo descripción: sale el nombre de la variante, como en la tarjeta del TPV."]
