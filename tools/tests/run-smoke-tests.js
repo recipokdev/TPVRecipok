@@ -10889,6 +10889,26 @@ if (
   fail("Falta el timeout adaptativo / la recuperacion por huella de la factura sin numero2 (renderer.js createTicketInFacturaScripts)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-23 comanda compacta opcional\n");
+{
+  const tpl = fs.readFileSync(path.join(root, "comanda_print.html"), "utf8");
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  if (
+    renderer.includes('const OPTIONS_COMANDA_COMPACT_KEY = "tpv_comandaCompact";') &&
+    renderer.includes('return localStorage.getItem(OPTIONS_COMANDA_COMPACT_KEY) === "1";') &&
+    renderer.includes('doc.getElementById("comanda")?.classList.add("compact");') &&
+    renderer.includes('OPT_PV.T("Comanda compacta", "comandaCompactToggle")') &&
+    html.includes('id="comandaCompactToggle"') &&
+    tpl.includes('id="comandaCompactMeta"') &&
+    tpl.includes('id="comandaObsBlock"') &&
+    tpl.includes("#comanda.compact .items-head")
+  ) {
+    ok("Comanda compacta opcional (Opciones -> Mesas, apagada por defecto): mesa, agente, fecha y hora en una sola linea, sin cabecera de columnas y sin bloque de observaciones vacio");
+  } else {
+    fail("Falta la comanda compacta opcional (renderer.js printComandaWithContext / comanda_print.html / index.html)");
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

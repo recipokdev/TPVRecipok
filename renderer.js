@@ -31766,6 +31766,7 @@ const autoComandaOnSaveToggle = document.getElementById(
 const comandaGroupFamiliesToggle = document.getElementById(
   "comandaGroupFamiliesToggle",
 );
+const comandaCompactToggle = document.getElementById("comandaCompactToggle");
 const productAddonsEnabledToggle = document.getElementById(
   "productAddonsEnabledToggle",
 );
@@ -32220,6 +32221,8 @@ function refreshOptionsUI() {
     (autoComandaOnSaveToggle.checked = isAutoComandaOnSaveEnabled());
   comandaGroupFamiliesToggle &&
     (comandaGroupFamiliesToggle.checked = isComandaGroupByFamilyEnabled());
+  comandaCompactToggle &&
+    (comandaCompactToggle.checked = isComandaCompactEnabled());
   productAddonsEnabledToggle &&
     (productAddonsEnabledToggle.checked = isProductAddonsFeatureEnabled());
   groupLinesToggle && (groupLinesToggle.checked = isGroupLinesEnabled());
@@ -32439,6 +32442,7 @@ const OPT_PREVIEW_DEFS = {
     OPT_PV.T("Comanda automática", "autoComandaOnSaveToggle"),
     OPT_PV.V("Espera", "autoComandaDelayInput", (t, el) => (el.value !== "" ? `${el.value} s` : "")),
     OPT_PV.T("Comanda agrupada por familias", "comandaGroupFamiliesToggle"),
+    OPT_PV.T("Comanda compacta", "comandaCompactToggle"),
     OPT_PV.C("Familias por comensales", "mesasDinersFamilyList", ".opt-chip-item"),
     OPT_PV.C("Familias para comanda", "mesasComandaFamilyList", ".opt-chip-item"),
     OPT_PV.A("Vincular tablet de camarero", "pairingCodeGenerateBtn"),
@@ -33454,6 +33458,16 @@ function setComandaGroupByFamilyEnabled(v) {
   localStorage.setItem(OPTIONS_COMANDA_GROUP_FAMILIES_KEY, v ? "1" : "0");
 }
 
+// Comanda compacta (informe Lumi 2026-10-20, 2026-10-23): ahorra papel -- mesa, agente, fecha y hora en
+// UNA linea, sin la cabecera "Cant./Producto" ni el bloque de observaciones vacio. Apagada por defecto.
+const OPTIONS_COMANDA_COMPACT_KEY = "tpv_comandaCompact";
+function isComandaCompactEnabled() {
+  return localStorage.getItem(OPTIONS_COMANDA_COMPACT_KEY) === "1";
+}
+function setComandaCompactEnabled(v) {
+  localStorage.setItem(OPTIONS_COMANDA_COMPACT_KEY, v ? "1" : "0");
+}
+
 function isProductAddonsFeatureEnabled() {
   return localStorage.getItem(OPTIONS_PRODUCT_ADDONS_ENABLED_KEY) === "1";
 }
@@ -33577,6 +33591,20 @@ autoComandaOnSaveToggle?.addEventListener("change", () => {
       "Opciones",
     );
   }
+});
+
+comandaCompactToggle?.addEventListener("change", () => {
+  setComandaCompactEnabled(!!comandaCompactToggle.checked);
+  if (typeof toast === "function") {
+    toast(
+      comandaCompactToggle.checked
+        ? "Comanda compacta activada ✅"
+        : "Comanda compacta desactivada",
+      "info",
+      "Opciones",
+    );
+  }
+  renderOptionsPreviews?.();
 });
 
 comandaGroupFamiliesToggle?.addEventListener("change", () => {
@@ -47920,6 +47948,16 @@ async function printComandaWithContext({
     "comandaObs",
     String(obsText || "").trim() || "Sin observaciones",
   );
+  if (isComandaCompactEnabled()) {
+    doc.getElementById("comanda")?.classList.add("compact");
+    const compactMeta = doc.getElementById("comandaCompactMeta");
+    if (compactMeta) {
+      compactMeta.textContent = [`${room} · ${table}`, agent, partText, `${fecha} ${hora}`]
+        .filter(Boolean)
+        .join(" · ");
+    }
+    if (!String(obsText || "").trim()) doc.getElementById("comandaObsBlock")?.remove();
+  }
 
   const itemsEl = doc.getElementById("comandaItems");
   if (itemsEl) {

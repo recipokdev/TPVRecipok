@@ -158,6 +158,38 @@
         display: inline-block;
       }
 
+      /* Comanda compacta (opcional, 2026-10-23): menos papel. */
+      .meta-compact {
+        display: none;
+        text-align: center;
+        font-size: 11px;
+      }
+      #comanda.compact .title {
+        font-size: 14px;
+      }
+      #comanda.compact .mesa-big {
+        font-size: 22px;
+        margin: 2px 0;
+      }
+      #comanda.compact .sep {
+        margin: 3px 0;
+      }
+      #comanda.compact .meta,
+      #comanda.compact .items-head,
+      #comanda.compact .items-head + .sep,
+      #comanda.compact .row.meta + .sep {
+        display: none !important;
+      }
+      #comanda.compact .meta-compact {
+        display: block;
+      }
+      #comanda.compact .comanda-item {
+        margin: 1px 0;
+      }
+      #comanda.compact .comanda-family {
+        margin: 3px 0 1px;
+      }
+
       .obs-title {
         font-size: 11px;
         font-weight: 700;
@@ -188,6 +220,7 @@
         REIMPRESIÓN
       </div>
       <div class="mesa-big" id="comandaMesaBig">MESA</div>
+      <div class="meta-compact" id="comandaCompactMeta"></div>
 
       <div class="sep"></div>
 
@@ -213,8 +246,10 @@
 
       <div class="sep"></div>
 
-      <div class="obs-title">Observaciones</div>
-      <div class="obs-text" id="comandaObs">Sin observaciones</div>
+      <div id="comandaObsBlock">
+        <div class="obs-title">Observaciones</div>
+        <div class="obs-text" id="comandaObs">Sin observaciones</div>
+      </div>
     </div>
   </body>
 </html>
