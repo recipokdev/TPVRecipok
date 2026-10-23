@@ -10717,3 +10717,8 @@ body.theme-dark .opt-pv.is-action {
   background: #f59e0b !important;
   color: #111827 !important;
 }
+
+/* "Enviar factura" cuando el correo de la empresa no esta configurado en FacturaScripts (2026-10-23). */
+.ticket-send-invoice.is-unconfigured {
+  opacity: 0.45;
+}

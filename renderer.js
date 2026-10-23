@@ -37453,10 +37453,55 @@ async function apiSendInvoiceEmail({
   return data;
 }
 
+// Estado del correo de la empresa en FacturaScripts (2026-10-23): Ben_Trempat, Asador y Lumi no lo tienen
+// configurado y "Enviar factura" fallaba DESPUES de rellenar el formulario y generar el PDF. Se consulta
+// al servidor (invoice-email-status), se recuerda 10 min y, si no esta configurado, se avisa antes de
+// pedir nada y el boton sale atenuado. Si la consulta falla (null) se deja intentar como siempre.
+let __invoiceEmailStatus = { configured: null, at: 0 };
+
+function applyInvoiceEmailStatusToButtons() {
+  const off = __invoiceEmailStatus.configured === false;
+  document.querySelectorAll(".ticket-send-invoice").forEach((btn) => {
+    btn.classList.toggle("is-unconfigured", off);
+    if (off) btn.title = "Correo no configurado en FacturaScripts";
+  });
+}
+
+async function getInvoiceEmailStatus(force = false) {
+  const now = Date.now();
+  if (!force && __invoiceEmailStatus.configured !== null && now - __invoiceEmailStatus.at < 10 * 60 * 1000) {
+    return __invoiceEmailStatus.configured;
+  }
+  try {
+    const slug = String(getCurrentSlugForReservations() || "").trim();
+    if (!slug || TPV_STATE?.offline) return __invoiceEmailStatus.configured;
+    const res = await fetchWithTimeout(
+      `${TPV_SYNC_API_URL}?action=invoice-email-status&slug=${encodeURIComponent(slug)}`,
+      { method: "GET", headers: { Accept: "application/json", "X-TPV-API-KEY": getTpvSyncApiKey() } },
+      8000,
+    );
+    const data = res.ok ? await res.json().catch(() => null) : null;
+    if (data?.ok && typeof data.configured === "boolean") {
+      __invoiceEmailStatus = { configured: data.configured, at: now };
+      applyInvoiceEmailStatusToButtons();
+      return data.configured;
+    }
+  } catch {}
+  return null;
+}
+
 // Punto de entrada desde el boton "Enviar factura" en el modal de Tickets:
 // pide email/mensaje, genera el PDF (via IPC, nunca toca el disco desde el
 // renderer) y lo manda.
 async function sendInvoiceEmailForTicket(ticket) {
+  if ((await getInvoiceEmailStatus()) === false) {
+    showMessageModal(
+      "Enviar factura",
+      "El correo de esta empresa no está configurado en FacturaScripts, así que no se pueden enviar facturas por email." +
+        "\n\nUn administrador debe configurarlo en FacturaScripts (Administración → Correo: servidor, usuario y contraseña).",
+    );
+    return;
+  }
   const prefill = await getInvoiceCustomerBillingInfo(ticket).catch(() => null);
   const overlayResult = await openSendInvoiceEmailModal({
     ticket,
@@ -52155,6 +52200,12 @@ function renderTicketsList(tickets) {
 
     const sendInvoiceBtn = div.querySelector(".ticket-send-invoice");
     if (sendInvoiceBtn) {
+      if (__invoiceEmailStatus.configured === false) {
+        sendInvoiceBtn.classList.add("is-unconfigured");
+        sendInvoiceBtn.title = "Correo no configurado en FacturaScripts";
+      } else if (__invoiceEmailStatus.configured === null) {
+        getInvoiceEmailStatus().catch(() => {});
+      }
       sendInvoiceBtn.onclick = async (e) => {
         e.stopPropagation();
         await sendInvoiceEmailForTicket(t);

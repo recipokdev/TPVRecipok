@@ -10951,6 +10951,19 @@ if (
   fail("Falta el borrador del carrito del camarero en el TPV (renderer.js mesaDraftIsEnabled / renderMesaInUseNotice / handleRealtimeChangeNotice)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-23 aviso si el correo de la empresa no esta configurado (Enviar factura)\n");
+if (
+  renderer.includes("async function getInvoiceEmailStatus(force = false) {") &&
+  renderer.includes("`${TPV_SYNC_API_URL}?action=invoice-email-status&slug=${encodeURIComponent(slug)}`") &&
+  renderer.includes("if ((await getInvoiceEmailStatus()) === false) {") &&
+  renderer.includes('sendInvoiceBtn.classList.add("is-unconfigured");') &&
+  styles.includes(".ticket-send-invoice.is-unconfigured {")
+) {
+  ok("'Enviar factura' consulta antes al servidor si el correo de la empresa esta configurado en FacturaScripts (invoice-email-status, recordado 10 min): si no, avisa de como configurarlo SIN pedir el formulario ni generar el PDF, y el boton sale atenuado; si la consulta falla, se intenta como siempre");
+} else {
+  fail("Falta el aviso de correo no configurado en Enviar factura (renderer.js getInvoiceEmailStatus / sendInvoiceEmailForTicket, styles.css)");
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

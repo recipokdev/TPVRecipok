@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "MEJORA: «Enviar factura» por email avisa antes de empezar si la empresa no tiene el correo configurado en FacturaScripts (antes había que rellenar el formulario y esperar a que se generase el PDF para ver el error). Explica dónde configurarlo (Administración → Correo: servidor, usuario y contraseña) y el botón sale atenuado mientras no esté configurado."
+      ]
     },
     {
       "version": "0.2.52",
