@@ -10711,3 +10711,9 @@ body.theme-dark .opt-pv.is-action {
   background: transparent;
   border-color: #64748b;
 }
+
+/* Contador de aparcados con pedidos de dias anteriores sin cobrar (2026-10-23). */
+#parkedCountBadge.has-stale {
+  background: #f59e0b !important;
+  color: #111827 !important;
+}

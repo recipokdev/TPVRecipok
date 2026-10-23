@@ -10909,6 +10909,21 @@ console.log("\n[SMOKE] Checking 2026-10-23 comanda compacta opcional\n");
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-23 aviso de pedidos de dias anteriores sin cobrar\n");
+if (
+  renderer.includes("function getStaleUnpaidParkedTickets() {") &&
+  renderer.includes("(t) => !isPedidoTpvTicket(t) && !isParkedTicketFromToday(t),") &&
+  renderer.includes('badge.classList.toggle("has-stale", stale > 0);') &&
+  renderer.includes("async function maybePromptStaleParkedTickets() {") &&
+  renderer.includes('const STALE_PARKED_PROMPT_DAY_KEY = "tpv_staleParkedPromptDay";') &&
+  renderer.includes('parkedViewState.pendingScope = "older";') &&
+  styles.includes("#parkedCountBadge.has-stale {")
+) {
+  ok("Los pedidos/mesas de dias anteriores sin cobrar pintan el contador de aparcados en naranja y, una vez al dia con la caja abierta y sin otra ventana encima, se ofrece revisarlos (abre Sin cobrar > dias anteriores)");
+} else {
+  fail("Falta el aviso de pedidos de dias anteriores sin cobrar (renderer.js getStaleUnpaidParkedTickets / maybePromptStaleParkedTickets, styles.css)");
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

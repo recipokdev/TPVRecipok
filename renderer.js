@@ -19535,12 +19535,89 @@ function updateOnlineBadge(state) {
   if (strong) strong.textContent = LABELS[normalized] || LABELS.offline;
 }
 
+// Pedidos de DIAS ANTERIORES sin cobrar (informe de Lumi 2026-10-20, punto 2): una mesa o un pedido
+// que se queda abierto de un dia para otro no avisaba de nada, solo se veia "ocupada" en el plano.
+// Ahora el contador de aparcados se pinta de naranja con el numero de antiguos, y una vez al dia
+// (con la caja abierta y sin otra ventana encima) se ofrece revisarlos.
+function getStaleUnpaidParkedTickets() {
+  return getScopedPendingParkedTickets(parkedTickets).filter(
+    (t) => !isPedidoTpvTicket(t) && !isParkedTicketFromToday(t),
+  );
+}
+
+function syncStaleParkedBadge(badge) {
+  const stale = getStaleUnpaidParkedTickets().length;
+  badge.classList.toggle("has-stale", stale > 0);
+  badge.title = stale > 0 ? `${stale} pedido(s) sin cobrar de dias anteriores` : "";
+  if (stale > 0) scheduleStaleParkedPrompt();
+}
+
+const STALE_PARKED_PROMPT_DAY_KEY = "tpv_staleParkedPromptDay";
+let __staleParkedPromptTimer = null;
+function scheduleStaleParkedPrompt() {
+  if (__staleParkedPromptTimer) return;
+  __staleParkedPromptTimer = setTimeout(async () => {
+    __staleParkedPromptTimer = null;
+    try {
+      await maybePromptStaleParkedTickets();
+    } catch (e) {
+      console.warn("[STALE-PARKED] aviso:", e?.message || e);
+    }
+  }, 8000);
+}
+
+async function maybePromptStaleParkedTickets() {
+  if (!cashSession?.open) return;
+  const today = new Date().toISOString().slice(0, 10);
+  let lastDay = "";
+  try {
+    lastDay = localStorage.getItem(STALE_PARKED_PROMPT_DAY_KEY) || "";
+  } catch {}
+  if (lastDay === today) return;
+
+  // Con otra ventana encima (cobro, aparcados, mensajes...) se deja para mas tarde, sin gastar el aviso del dia.
+  const busy = ["msgOverlay", "parkedTicketsOverlay", "payOverlay", "optionsOverlay"].some((id) => {
+    const el = document.getElementById(id);
+    return el && !el.classList.contains("hidden");
+  });
+  if (busy) {
+    __staleParkedPromptTimer = setTimeout(() => {
+      __staleParkedPromptTimer = null;
+      scheduleStaleParkedPrompt();
+    }, 60000);
+    return;
+  }
+
+  const stale = getStaleUnpaidParkedTickets();
+  if (!stale.length) return;
+  try {
+    localStorage.setItem(STALE_PARKED_PROMPT_DAY_KEY, today);
+  } catch {}
+
+  const names = stale
+    .slice(0, 4)
+    .map((t) => String(t?.mesaTableName || t?.name || t?.clientName || "pedido").trim())
+    .filter(Boolean)
+    .join(", ");
+  const ok = await confirmModal(
+    "Pedidos de días anteriores",
+    `Hay ${stale.length} pedido(s) sin cobrar de días anteriores${names ? ` (${names}${stale.length > 4 ? "..." : ""})` : ""}.\n\nSi ya están cobrados o no hacen falta, revísalos para liberar las mesas.`,
+    { okButtonText: "Revisar ahora" },
+  );
+  if (!ok) return;
+  parkedViewState.filter = "pending";
+  parkedViewState.pendingScope = "older";
+  openParkedModal();
+  syncParkedToolbarUI?.();
+}
+
 function updateParkedCountBadge() {
   const badge = document.getElementById("parkedCountBadge");
   if (!badge) return;
 
   if (!cashSession?.open) {
     badge.textContent = "0";
+    badge.classList.remove("has-stale");
     return;
   }
 
@@ -19561,12 +19638,14 @@ function updateParkedCountBadge() {
     // sin filtrar (ver openParkedModal), asi que el numero debe coincidir
     // con eso siempre, no solo cuando no hay ninguna mesa "seleccionada".
     badge.textContent = String(pendingMesas.length);
+    syncStaleParkedBadge(badge);
     return;
   }
 
   const pendingCount = getScopedPendingParkedTickets(parkedTickets).length;
 
   badge.textContent = String(pendingCount);
+  syncStaleParkedBadge(badge);
 }
 
 function getParkedClosingLockAgeMs(ticket) {
