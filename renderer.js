@@ -36547,11 +36547,35 @@ function buildFsLinesFromCart(cartArr) {
         // se cobraba gratis en el TPV pero la factura real de FacturaScripts
         // se creaba con el precio completo. Number.isFinite si distingue un
         // 0 real de "no hay pricing.unitGross".
-        const unitGross = Number.isFinite(pricing?.unitGross)
+        const fullUnitGross = Number.isFinite(pricing?.unitGross)
           ? pricing.unitGross
           : Number(getUnitGross(item) || 0);
 
         const tax = Number(item.taxRate || 0);
+
+        // Los añadidos CON PRECIO ya van dentro de pricing.unitGross (el carrito
+        // los suma al precio de la linea), pero a FS se mandan ademas como
+        // lineas propias "Añadido: ..." (mas abajo). Si la linea principal
+        // llevase tambien su importe, la factura de FS los cobraba DOS veces
+        // (carrito 14,56 -> factura 14,66; en Asador el Gallo, un "Frito"
+        // de 0,50 sobre un Flamenquin facturaba 0,50 de mas por unidad).
+        // Por eso la linea principal va SIN ellos, y cada linea de añadido
+        // lleva su precio con el mismo descuento de carrito que la principal.
+        // Con precio fijado a mano no se suma ningun añadido (ver
+        // getCartLinePricing), asi que tampoco se mandan lineas de añadido.
+        const addonFactor = 1 - (Number(pricing?.cartDiscountPct) || 0) / 100;
+        const pricedAddons =
+          !pricing?.manualPriceLocked && Array.isArray(item.addons)
+            ? item.addons.filter((a) => Number(a?.precio) > 0)
+            : [];
+        const addonsGrossDiscounted = pricedAddons.reduce(
+          (s, a) => s + (Number(a.precio) || 0) * addonFactor,
+          0,
+        );
+        const unitGross = Math.max(
+          0,
+          round2(fullUnitGross - addonsGrossDiscounted),
+        );
         const unitNet = grossToNetUnit(unitGross, tax);
 
         // referencia separada (FS)
@@ -36586,16 +36610,12 @@ function buildFsLinesFromCart(cartArr) {
         // esto, no un hack. Los añadidos gratis (precio 0, el caso de
         // siempre) NO generan ninguna linea -- siguen siendo solo la
         // anotacion cosmetica de siempre.
-        const addonLines = Array.isArray(item.addons)
-          ? item.addons
-              .filter((a) => Number(a?.precio) > 0)
-              .map((a) => ({
-                descripcion: `Añadido: ${String(a?.nombre || "").trim() || "?"}`,
-                cantidad: qty,
-                pvpunitario: grossToNetUnit(Number(a.precio) || 0, tax),
-                ...(item.codimpuesto ? { codimpuesto: item.codimpuesto } : {}),
-              }))
-          : [];
+        const addonLines = pricedAddons.map((a) => ({
+          descripcion: `Añadido: ${String(a?.nombre || "").trim() || "?"}`,
+          cantidad: qty,
+          pvpunitario: grossToNetUnit((Number(a.precio) || 0) * addonFactor, tax),
+          ...(item.codimpuesto ? { codimpuesto: item.codimpuesto } : {}),
+        }));
 
         return [linea, ...addonLines];
       })

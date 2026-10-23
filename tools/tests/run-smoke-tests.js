@@ -10855,6 +10855,23 @@ if (
   fail("Falta conservar sentBy al sellar la comanda (renderer.js commitComandaPrintedState applyStamp)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-23 factura: añadidos con precio no se cobran dos veces\n");
+{
+  const idx = renderer.indexOf("function buildFsLinesFromCart(cartArr) {");
+  const endIdx = idx >= 0 ? renderer.indexOf("\r\n}\r\n", idx) : -1;
+  const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
+  if (
+    scoped.includes("const fullUnitGross = Number.isFinite(pricing?.unitGross)") &&
+    scoped.includes("round2(fullUnitGross - addonsGrossDiscounted)") &&
+    scoped.includes("!pricing?.manualPriceLocked && Array.isArray(item.addons)") &&
+    scoped.includes("grossToNetUnit((Number(a.precio) || 0) * addonFactor, tax)")
+  ) {
+    ok("buildFsLinesFromCart manda la linea principal SIN el importe de los añadidos con precio (que ya van en sus lineas 'Añadido: ...'), con el mismo descuento de carrito, y sin lineas de añadido si el precio es manual; antes la factura de FS cobraba el añadido dos veces (carrito 14,56 -> factura 14,66)");
+  } else {
+    fail("Falta evitar el doble cobro de añadidos con precio en la factura (renderer.js buildFsLinesFromCart)");
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

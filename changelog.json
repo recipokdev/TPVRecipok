@@ -6,12 +6,14 @@
       "date": "",
       "title": "",
       "changes": [
+        "CORRECCIÓN: en la factura, los añadidos con precio (p. ej. \"+Frito 0,50 €\" sobre un Flamenquín) ya no se cobran dos veces. La factura de FacturaScripts llevaba el añadido dentro del precio del producto y además en su línea \"Añadido: ...\", con lo que salía más cara que el ticket (p. ej. 14,66 € la factura frente a 14,56 € cobrados). Ahora la factura coincide con lo cobrado; con descuento de carrito, el añadido lleva el mismo descuento.",
         "CORRECCIÓN: en un pedido creado en el TPV al que la app de camareros añade líneas, la comanda ya no pone el nombre del agente del TPV a las líneas del camarero: se conserva el camarero que trae cada línea (la cabecera sale como \"10:10 · Cintia\" y no como \"TPV\").",
         "MEJORA: al cobrar o borrar un aparcado, el stock reservado se libera según lo que el servidor tiene anotado de ese ticket (reservas y liberaciones reales) y no según lo que cree cada TPV. Así el stock no se descuadra aunque el ticket se haya creado en otro TPV, el catálogo de este esté desfasado o la reserva original se hubiera ignorado. Si el servidor no responde, se libera como siempre.",
         "MEJORA: los productos nuevos creados en FacturaScripts con el TPV abierto aparecen solos en unos segundos (antes no salían hasta reiniciar el programa, y mientras tanto ese TPV no podía venderlos bien ni gestionar su stock). Se recarga el catálogo una vez por producto nuevo, sin molestar si se está cobrando o aparcando.",
         "CORRECCIÓN: stock de productos nuevos. Si un producto se creaba en FacturaScripts después de arrancar el TPV (p. ej. importaciones diarias), ese TPV no lo tenía en su catálogo y no liberaba su reserva de stock al cobrar un aparcado creado en otro TPV, con lo que el stock quedaba de menos. Ahora el stock se busca por el id del producto y se libera igual.",
         "CORRECCIÓN: en la factura, la descripción de una variante (p. ej. el pack \"6x1 Croissant\" o \"Agua 0,5 Lt.\") es ahora el nombre de la variante vendida y no el del producto base (antes salía \"1 x Croissant\" o \"Agua 33 c.\" aunque la referencia y el precio eran los de la variante). Solo afecta a productos con varias variantes; el resto queda igual.",
-        "CORRECCIÓN: en la comanda impresa, las variantes de un producto (p. ej. \"Agua 0,5 Lt.\", \"Agua 1,5 Lt.\") ya no salen todas con el nombre del producto base cuando el cliente tiene \"Texto en la tarjeta\" en solo descripción: sale el nombre de la variante, como en la tarjeta del TPV."]
+        "CORRECCIÓN: en la comanda impresa, las variantes de un producto (p. ej. \"Agua 0,5 Lt.\", \"Agua 1,5 Lt.\") ya no salen todas con el nombre del producto base cuando el cliente tiene \"Texto en la tarjeta\" en solo descripción: sale el nombre de la variante, como en la tarjeta del TPV."
+      ]
     },
     {
       "version": "0.2.51",
