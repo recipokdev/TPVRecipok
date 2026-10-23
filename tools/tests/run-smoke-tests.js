@@ -9923,7 +9923,7 @@ console.log("\n[SMOKE] Checking 2026-10-14 stock: al cobrar, un pack [stock_deri
 }
 {
   const idx = renderer.indexOf('"cobrar aparcado",');
-  const start = idx >= 0 ? renderer.lastIndexOf("const reservedDelta = buildReservedQtyDeltaMap([], reservedItems", idx) : -1;
+  const start = idx >= 0 ? renderer.lastIndexOf("reservedDelta = buildReservedQtyDeltaMap([], reservedItems", idx) : -1;
   const scoped = start >= 0 ? renderer.slice(start, idx) : "";
   if (scoped.includes("skipDerivedPackOwn: true")) {
     ok(
@@ -10825,6 +10825,23 @@ if (
   ok("El refresco de stock detecta productos que no estan en el catalogo local (creados en FacturaScripts con el TPV abierto) y recarga el catalogo una vez por producto, esperando si se esta cobrando/aparcando, con un minimo de 2 minutos entre recargas");
 } else {
   fail("Falta la deteccion de productos nuevos en refreshProductsStockOnly (renderer.js noteNewProductsFromDelta / scheduleCatalogReloadForNewProducts)");
+}
+
+console.log("\n[SMOKE] Checking 2026-10-23 liberar stock segun el balance del servidor \n");
+if (
+  renderer.includes("async function fetchServerStockBalance(ticketId) {") &&
+  renderer.includes("async function buildReleaseDeltaFromServerBalance(") &&
+  renderer.includes("action=get-stock-ledger-balance") &&
+  renderer.includes("data.hasCreate !== true") &&
+  renderer.includes("await waitForStockLedgerWrites(ticket);") &&
+  renderer.includes("trackStockLedgerWrite(") &&
+  renderer.includes("await buildReleaseDeltaFromServerBalance(ticket?.id, reservedDelta, {") &&
+  renderer.includes("await buildReleaseDeltaFromServerBalance(removedTicket?.id, releaseDelta)") &&
+  renderer.includes("await buildReleaseDeltaFromServerBalance(ticket?.id, releaseDelta)")
+) {
+  ok("Cobrar, eliminar y borrado masivo de aparcados liberan el stock segun el balance del registro del servidor (solo si el historial del ticket esta completo y responde), esperando antes las escrituras pendientes del registro; si no, por los items como siempre");
+} else {
+  fail("Falta la liberacion de stock por balance del servidor en cobrar/eliminar/borrado masivo (renderer.js buildReleaseDeltaFromServerBalance)");
 }
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");

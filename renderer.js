@@ -9526,6 +9526,114 @@ async function apiReleaseStockLock(idProducto) {
 // nunca debe poder afectar al cobro/aparcado real que lo origina, por eso
 // fail-open silencioso igual que el candado de stock, y solo esta activo
 // para los clientes piloto configurados en el servidor (stock_ledger_pilot_slugs).
+// ===== Liberar stock segun el BALANCE del servidor (2026-10-23) =====
+// Al cobrar/borrar un aparcado, el TPV liberaba "lo que cree" que reservo segun los items del ticket que
+// tiene en memoria. Eso falla cuando ese TPV no es el que reservo: catalogo desfasado (producto nuevo,
+// Asador el Gallo: 231), lineas editadas desde otro TPV, o una reserva que se ignoro al crear (la
+// liberacion de mas que ya se vio el 2026-09-03). El registro del servidor (stock_sync_ledger) tiene cada
+// reserva/liberacion real de ese ticket: su suma por producto es lo que de verdad queda reservado.
+// Si el servidor no lo da, o el historial no esta completo, se sigue como siempre (por los items).
+const __stockLedgerWritesPending = new Map();
+function trackStockLedgerWrite(ticketId, promise) {
+  const key = String(ticketId || "").trim();
+  const p = Promise.resolve(promise).catch(() => {});
+  if (!key) return p;
+  let set = __stockLedgerWritesPending.get(key);
+  if (!set) {
+    set = new Set();
+    __stockLedgerWritesPending.set(key, set);
+  }
+  set.add(p);
+  p.finally(() => {
+    set.delete(p);
+    if (!set.size) __stockLedgerWritesPending.delete(key);
+  });
+  return p;
+}
+
+async function waitForStockLedgerWrites(ticketId, timeoutMs = 4000) {
+  const set = __stockLedgerWritesPending.get(String(ticketId || "").trim());
+  if (!set || !set.size) return;
+  await Promise.race([
+    Promise.allSettled([...set]),
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+}
+
+// -> Map(idProducto -> unidades que el ticket tiene reservadas ahora) o null si no se puede fiar.
+async function fetchServerStockBalance(ticketId) {
+  try {
+    const ticket = String(ticketId || "").trim();
+    const slug = String(getCurrentSlugForReservations() || "").trim();
+    const syncApiKey = getTpvSyncApiKey();
+    if (!ticket || !slug || !syncApiKey || TPV_STATE?.offline) return null;
+
+    await waitForStockLedgerWrites(ticket);
+
+    const url =
+      `${TPV_SYNC_API_URL}?action=get-stock-ledger-balance` +
+      `&slug=${encodeURIComponent(slug)}&ticketId=${encodeURIComponent(ticket)}`;
+    const res = await fetchWithTimeout(
+      url,
+      { method: "GET", headers: { Accept: "application/json", "X-TPV-API-KEY": syncApiKey } },
+      3500,
+    );
+    if (!res.ok) return null;
+    const body = await res.json().catch(() => null);
+    const data = body?.data;
+    if (!data || data.enabled !== true || data.hasCreate !== true) return null;
+    const map = new Map();
+    (Array.isArray(data.balances) ? data.balances : []).forEach((r) => {
+      const id = Number(r?.idProducto || 0) || 0;
+      const bal = Number(r?.balance);
+      if (id && Number.isFinite(bal)) map.set(id, roundQty3(bal));
+    });
+    return map;
+  } catch {
+    return null;
+  }
+}
+
+// localReleaseDelta = lo que liberaria el TPV por sus items (se usa si el servidor no responde).
+// keepDerivedPacks: al COBRAR, la unidad propia de un pack [stock_derivado] no se devuelve (ver
+// buildReservedQtyByProductMap); se anota en skippedOut para dejarla anotada en el registro.
+async function buildReleaseDeltaFromServerBalance(
+  ticketId,
+  localReleaseDelta,
+  { keepDerivedPacks = false, skippedOut = null } = {},
+) {
+  const balance = await fetchServerStockBalance(ticketId);
+  if (!balance) return { delta: localReleaseDelta, source: "local" };
+
+  const out = new Map();
+  balance.forEach((bal, idProd) => {
+    if (!(bal > 0.0005)) return; // nada reservado (o liberado de mas antes: no se toca)
+    if (keepDerivedPacks) {
+      const prod = findProductByBaseId(idProd);
+      if (prod && productHasDerivedStockMarker(prod)) {
+        if (skippedOut) skippedOut.set(idProd, bal);
+        return;
+      }
+    }
+    out.set(idProd, -roundQty3(bal));
+  });
+
+  try {
+    const same =
+      out.size === localReleaseDelta.size &&
+      [...out.entries()].every(([k, v]) => Math.abs((localReleaseDelta.get(k) ?? NaN) - v) < 0.0006);
+    if (!same) {
+      console.warn("[STOCK] La liberacion segun el servidor difiere de la de los items del ticket", {
+        ticketId,
+        servidor: [...out.entries()],
+        local: [...localReleaseDelta.entries()],
+      });
+    }
+  } catch {}
+
+  return { delta: out, source: "servidor" };
+}
+
 async function apiLogStockLedgerEntry({ ticketId, idProducto, delta, reason }) {
   const idProd = Number(idProducto || 0) || 0;
   const ticket = String(ticketId || "").trim();
@@ -21729,7 +21837,8 @@ async function deleteAllPendingParkedTickets({ releaseStock = true } = {}) {
       }
 
       if (releaseStock) {
-        const releaseDelta = buildReservedQtyDeltaMap([], ticket?.items || []);
+        let releaseDelta = buildReservedQtyDeltaMap([], ticket?.items || []);
+        releaseDelta = (await buildReleaseDeltaFromServerBalance(ticket?.id, releaseDelta)).delta;
         try {
           if (releaseDelta.size > 0) {
             await syncReservedStockDeltaToFS(
@@ -22773,6 +22882,8 @@ async function deleteParkedTicketByIndex(
     let releaseDelta = new Map();
     if (releaseStock && !removedTicket?.paid) {
       releaseDelta = buildReservedQtyDeltaMap([], removedTicket?.items || []);
+      // Lo que el servidor tiene anotado como reservado de este ticket (si responde).
+      releaseDelta = (await buildReleaseDeltaFromServerBalance(removedTicket?.id, releaseDelta)).delta;
     }
     try {
       if (releaseDelta.size > 0) {
@@ -23513,11 +23624,24 @@ async function markParkedTicketAsPaidByIndex(
   const reservedItems = Array.isArray(ticket?.items) ? ticket.items : [];
   // skipDerivedPackOwn: ver buildReservedQtyByProductMap -- al cobrar, la
   // unidad propia reservada de un pack [stock_derivado] ya es la venta real.
-  const skippedDerivedPacks = new Map();
-  const reservedDelta = buildReservedQtyDeltaMap([], reservedItems, {
+  let skippedDerivedPacks = new Map();
+  let reservedDelta = buildReservedQtyDeltaMap([], reservedItems, {
     skipDerivedPackOwn: true,
     skippedOut: skippedDerivedPacks,
   });
+  // Se libera lo que el servidor tiene anotado como reservado de este ticket (ver
+  // buildReleaseDeltaFromServerBalance); si no responde, lo de siempre (por los items).
+  {
+    const skippedFromBalance = new Map();
+    const viaServer = await buildReleaseDeltaFromServerBalance(ticket?.id, reservedDelta, {
+      keepDerivedPacks: true,
+      skippedOut: skippedFromBalance,
+    });
+    if (viaServer.source === "servidor") {
+      reservedDelta = viaServer.delta;
+      skippedDerivedPacks = skippedFromBalance;
+    }
+  }
 
   // La unidad propia de un pack [stock_derivado] no se devuelve al cobrar (pasa a ser la venta real, ver
   // buildReservedQtyByProductMap). Se anota en el registro de stock (SIN tocar el stock) para que el
@@ -39420,8 +39544,9 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "", ticketId = null
       // Fire-and-forget a proposito: es un registro de apoyo para revisar
       // despues por lotes (ver reconcileStockLedgerDb), nunca debe anadir
       // latencia al aparcar/cobrar real ni poder hacerlo fallar.
-      apiLogStockLedgerEntry({ ticketId, idProducto: idProd, delta, reason }).catch(
-        () => {},
+      trackStockLedgerWrite(
+        ticketId,
+        apiLogStockLedgerEntry({ ticketId, idProducto: idProd, delta, reason }),
       );
     } catch (e) {
       issues.push(`${idProd}: ${e?.message || e}`);
