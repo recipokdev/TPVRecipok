@@ -4907,6 +4907,72 @@ async function saveProductSortModeSetting(mode) {
   } catch (e) {
     console.warn("No se pudo guardar orden de productos:", e);
   }
+  publishDisplaySettingsToServer({ productSortMode });
+}
+
+// Ajustes de pantalla publicados POR TIENDA para que la app de camareros los lea al abrir (pedido de
+// Sergi, 2026-10-23): "Familias primero" y el orden de productos viven en el cfg LOCAL de cada TPV, y la
+// app no los veia. Se publican al cambiarlos y, la primera vez, si el servidor aun no tiene nada para
+// esta tienda (un TPV que arranca con ajustes por defecto NO pisa lo que ya publico otro). Con varios TPV
+// en la misma tienda gana el ultimo que cambie algo. Todo es "mejor esfuerzo": si falla, no pasa nada.
+async function publishDisplaySettingsToServer(partial) {
+  try {
+    if (!partial || typeof partial !== "object") return;
+    if (typeof isSafeTrainingModeEnabled === "function" && isSafeTrainingModeEnabled()) return;
+    const slug = String(getCurrentSlugForReservations() || "").trim();
+    if (!slug || TPV_STATE?.offline) return;
+    const body = {
+      slug,
+      codalmacen: getCurrentWarehouseCode(),
+      terminalId: String(currentTerminal?.id || "").trim(),
+    };
+    if (typeof partial.familiesFirst === "boolean") body.familiesFirst = partial.familiesFirst;
+    if (typeof partial.productSortMode === "string") body.productSortMode = partial.productSortMode;
+    await fetchWithTimeout(
+      `${TPV_SYNC_API_URL}?action=set-display-settings`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-TPV-API-KEY": getTpvSyncApiKey(),
+        },
+        body: JSON.stringify(body),
+      },
+      6000,
+    );
+  } catch (e) {
+    console.warn("[DISPLAY-SETTINGS] no se pudo publicar:", e?.message || e);
+  }
+}
+
+let __displaySettingsStartupSynced = false;
+async function syncDisplaySettingsOnStartup(attempt = 0) {
+  if (__displaySettingsStartupSynced) return;
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  if (!slug || !currentTerminal?.id) {
+    // Al arrancar todavia no hay empresa/terminal cargados: se reintenta unas veces.
+    if (attempt < 6) setTimeout(() => syncDisplaySettingsOnStartup(attempt + 1), 20000);
+    return;
+  }
+  __displaySettingsStartupSynced = true;
+  try {
+    const q = new URLSearchParams({ action: "get-display-settings", slug, codalmacen: getCurrentWarehouseCode() });
+    const res = await fetchWithTimeout(
+      `${TPV_SYNC_API_URL}?${q.toString()}`,
+      { method: "GET", headers: { Accept: "application/json", "X-TPV-API-KEY": getTpvSyncApiKey() } },
+      6000,
+    );
+    if (!res.ok) return;
+    const data = (await res.json().catch(() => null))?.data;
+    if (!data) return;
+    const partial = {};
+    if (data.familiesFirst === null || data.familiesFirst === undefined) partial.familiesFirst = !!familiesFirstModeEnabled;
+    if (!data.productSortMode) partial.productSortMode = normalizeProductSortMode(productSortMode);
+    if (Object.keys(partial).length) await publishDisplaySettingsToServer(partial);
+  } catch (e) {
+    console.warn("[DISPLAY-SETTINGS] sincronizacion inicial:", e?.message || e);
+  }
 }
 
 async function loadProductReorderModeSetting() {
@@ -5617,6 +5683,7 @@ async function saveFamiliesFirstModeToggle(enabled) {
   } catch (e) {
     console.warn("No se pudo guardar modo familias primero:", e);
   }
+  publishDisplaySettingsToServer({ familiesFirst: familiesFirstModeEnabled });
 
   renderCategories?.();
   renderProducts?.();
@@ -13461,6 +13528,8 @@ async function runBootFlow() {
     await loadProductTileResizeModeToggle?.();
     await loadAgentAdminPinModeToggle?.();
     await loadFamiliesFirstModeToggle?.();
+    // Publica los ajustes de pantalla de esta tienda (solo si el servidor aun no los tiene).
+    setTimeout(() => syncDisplaySettingsOnStartup(), 15000);
     await loadFamiliesLayoutSetting?.();
     await loadFamilyButtonResizeModeToggle?.();
     await loadFamilyButtonFontSizeSetting?.();

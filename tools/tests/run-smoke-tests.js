@@ -10924,6 +10924,20 @@ if (
   fail("Falta el aviso de pedidos de dias anteriores sin cobrar (renderer.js getStaleUnpaidParkedTickets / maybePromptStaleParkedTickets, styles.css)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-23 ajustes de pantalla publicados por tienda (app de camareros)\n");
+if (
+  renderer.includes("async function publishDisplaySettingsToServer(partial) {") &&
+  renderer.includes("`${TPV_SYNC_API_URL}?action=set-display-settings`") &&
+  renderer.includes("async function syncDisplaySettingsOnStartup(attempt = 0) {") &&
+  renderer.includes("publishDisplaySettingsToServer({ productSortMode });") &&
+  renderer.includes("publishDisplaySettingsToServer({ familiesFirst: familiesFirstModeEnabled });") &&
+  renderer.includes("if (data.familiesFirst === null || data.familiesFirst === undefined) partial.familiesFirst")
+) {
+  ok("El TPV publica 'Familias primero' y el orden de productos por tienda (set-display-settings) al cambiarlos y, la primera vez, solo si el servidor aun no tiene nada; la app de camareros los lee con get-display-settings");
+} else {
+  fail("Falta publicar los ajustes de pantalla por tienda (renderer.js publishDisplaySettingsToServer / syncDisplaySettingsOnStartup)");
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
