@@ -42113,7 +42113,17 @@ function parkedOpsIsEnabled(slug, mode) {
   return !!(f && f[mode]);
 }
 
+// Borrador del carrito del camarero (app) visible en el TPV: el servidor lo activa por cliente
+// (features.mesaDraft); con el, "mesa en uso" funciona aunque el guardado por operaciones no este activo.
+const __mesaDraftEnabledBySlug = new Map();
+function mesaDraftIsEnabled(slug) {
+  return !!__mesaDraftEnabledBySlug.get(String(slug || ""));
+}
+
 function parkedOpsLearnFeatures(slug, features) {
+  if (features && typeof features === "object" && "mesaDraft" in features) {
+    __mesaDraftEnabledBySlug.set(String(slug || ""), !!features.mesaDraft);
+  }
   const po = features && typeof features === "object" ? features.parkedOps : null;
   if (!po || typeof po !== "object") return;
   __parkedOpsEnabledBySlug.set(String(slug || ""), {
@@ -42915,9 +42925,29 @@ function renderMesaInUseNotice(others) {
   const list = (Array.isArray(others) ? others : []).filter(
     (o) => !myAgent || String(o?.agentName || "").trim().toLowerCase() !== myAgent,
   );
-  if (!list.length) {
+  // Borrador del carrito de otro dispositivo (app de camareros): lo que esta preparando SIN enviar,
+  // en solo lectura. No es parte del pedido: no toca stock, comanda ni cobro.
+  const draftParts = (Array.isArray(others) ? others : [])
+    .filter((o) => o?.draft && Array.isArray(o.draft.lines) && o.draft.lines.length)
+    .map((o) => {
+      const agent = String(o?.agentName || "").trim() || "Otro dispositivo";
+      const lines = o.draft.lines;
+      const items = lines
+        .slice(0, 6)
+        .map((l) => `${fmtQty(Number(l?.qty) || 0)}× ${String(l?.name || "").trim()}`)
+        .join(", ");
+      const more = lines.length > 6 ? ` y ${lines.length - 6} más` : "";
+      const total = Number(o.draft.total) > 0 ? ` (${Number(o.draft.total).toFixed(2).replace(".", ",")} €)` : "";
+      return `${agent} está preparando: ${items}${more}${total}`;
+    });
+  if (!list.length && !draftParts.length) {
     el.classList.add("hidden");
     el.textContent = "";
+    return;
+  }
+  if (!list.length) {
+    el.textContent = draftParts.join(" · ");
+    el.classList.remove("hidden");
     return;
   }
   const names = list.map((o) => {
@@ -42931,7 +42961,7 @@ function renderMesaInUseNotice(others) {
       : `${names.slice(0, -1).join(", ")} y ${names[names.length - 1]} tienen`;
   const oldest = Math.max(...list.map((o) => Number(o?.openSec) || 0));
   const since = oldest >= 60 ? ` desde hace ${Math.floor(oldest / 60)} min` : "";
-  el.textContent = `${who} esta mesa abierta${since}`;
+  el.textContent = [`${who} esta mesa abierta${since}`, ...draftParts].join(" · ");
   el.classList.remove("hidden");
 }
 
@@ -43001,7 +43031,7 @@ async function mesaViewerTick() {
       !!cashSession?.open &&
       Date.now() >= __mesaViewerOffUntil &&
       !TPV_STATE?.offline &&
-      parkedOpsIsEnabled(slug, "mesas");
+      (parkedOpsIsEnabled(slug, "mesas") || mesaDraftIsEnabled(slug));
     const uid = on ? String(getSelectedMesaUidForInline() || "").trim() : "";
 
     if (!uid) {
@@ -43372,6 +43402,10 @@ function handleRealtimeChangeNotice(topic) {
       checkSharedCajaHealthOnce?.();
     } else if (topic === "stock") {
       runProductsStockRefreshOnce?.();
+    } else if (topic === "mesa-viewer") {
+      // Cambio en el borrador de otro dispositivo en la misma tienda: se refresca ya la franja de la mesa.
+      __mesaViewerLast.sentAt = 0;
+      mesaViewerTick?.();
     }
   } catch (e) {
     console.warn("Error procesando aviso de tiempo real:", e?.message || e);

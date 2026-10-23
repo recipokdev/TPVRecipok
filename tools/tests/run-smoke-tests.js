@@ -10938,6 +10938,19 @@ if (
   fail("Falta publicar los ajustes de pantalla por tienda (renderer.js publishDisplaySettingsToServer / syncDisplaySettingsOnStartup)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-23 borrador del carrito del camarero visible en el TPV\n");
+if (
+  renderer.includes("function mesaDraftIsEnabled(slug) {") &&
+  renderer.includes('__mesaDraftEnabledBySlug.set(String(slug || ""), !!features.mesaDraft);') &&
+  renderer.includes('(parkedOpsIsEnabled(slug, "mesas") || mesaDraftIsEnabled(slug));') &&
+  renderer.includes("está preparando: ${items}${more}${total}") &&
+  renderer.includes('} else if (topic === "mesa-viewer") {')
+) {
+  ok("El TPV muestra en solo lectura lo que un camarero (app) esta preparando SIN enviar en la mesa abierta ('Cintia esta preparando: 2x Cafe...'): viaja en el latido de mesa-viewer (draft), no es parte del pedido (sin stock ni comanda), se refresca al instante por el tema de tiempo real 'mesa-viewer' y se activa por cliente (features.mesaDraft)");
+} else {
+  fail("Falta el borrador del carrito del camarero en el TPV (renderer.js mesaDraftIsEnabled / renderMesaInUseNotice / handleRealtimeChangeNotice)");
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
