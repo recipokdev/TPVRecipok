@@ -9910,7 +9910,7 @@ console.log("\n[SMOKE] Checking 2026-10-14 stock: al cobrar, un pack [stock_deri
   if (
     scoped.includes("const skipDerivedPackOwn = !!opts?.skipDerivedPackOwn;") &&
     scoped.includes("packLineIdsWithChildren.has(String(it._lineId))") &&
-    scoped.includes("productHasDerivedStockMarker(packProduct)) return;")
+    scoped.includes("productHasDerivedStockMarker(packProduct)) {")
   ) {
     ok(
       "buildReservedQtyByProductMap acepta skipDerivedPackOwn: salta la linea propia de un pack [stock_derivado] solo si su hijo expandido (meta.parentPackLineId) esta en el mismo ticket. Verificado en vivo contra el demo (aparcar 11->10,5 / pack 22->21; cobrar antes dejaba el pack en 22, ahora 21 = derivado; borrar sin cobrar devuelve 11/22)",
