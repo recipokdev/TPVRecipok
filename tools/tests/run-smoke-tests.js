@@ -10801,6 +10801,19 @@ if (
   fail("Falta el filtro mayBeMesaTicket en unlinkMesaTicketByTicketId (renderer.js)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-23 stock: producto fuera del catalogo local y packs derivados en el registro \n");
+if (
+  renderer.includes('if (!stockRowsByReference.length && !product) {') &&
+  renderer.includes('fetchStockRowsByParams({ "filter[idproducto]": idProd })') &&
+  renderer.includes("const skippedOut = opts?.skippedOut instanceof Map ? opts.skippedOut : null;") &&
+  renderer.includes("skippedOut: skippedDerivedPacks,") &&
+  renderer.includes("cobrar aparcado (pack derivado: se vende, no se devuelve)")
+) {
+  ok("La reserva/liberacion de stock busca por idproducto si el producto no esta en el catalogo local (antes se ignoraba en silencio y la reserva no se liberaba al cobrar), y la unidad propia de un pack derivado que no se devuelve al cobrar queda anotada en el registro (sin tocar stock)");
+} else {
+  fail("Falta el respaldo por idproducto en syncReservedStockDeltaToFS o la anotacion de packs derivados al cobrar (renderer.js)");
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

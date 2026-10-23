@@ -23513,8 +23513,22 @@ async function markParkedTicketAsPaidByIndex(
   const reservedItems = Array.isArray(ticket?.items) ? ticket.items : [];
   // skipDerivedPackOwn: ver buildReservedQtyByProductMap -- al cobrar, la
   // unidad propia reservada de un pack [stock_derivado] ya es la venta real.
+  const skippedDerivedPacks = new Map();
   const reservedDelta = buildReservedQtyDeltaMap([], reservedItems, {
     skipDerivedPackOwn: true,
+    skippedOut: skippedDerivedPacks,
+  });
+
+  // La unidad propia de un pack [stock_derivado] no se devuelve al cobrar (pasa a ser la venta real, ver
+  // buildReservedQtyByProductMap). Se anota en el registro de stock (SIN tocar el stock) para que el
+  // cuadre por ticket (+1 al aparcar, -1 al cobrar) no la dé por "reservada de más" (2026-10-23).
+  skippedDerivedPacks.forEach((qty, idProducto) => {
+    apiLogStockLedgerEntry({
+      ticketId: ticket?.id,
+      idProducto,
+      delta: -qty,
+      reason: "cobrar aparcado (pack derivado: se vende, no se devuelve)",
+    }).catch(() => {});
   });
 
   if (reservedDelta.size > 0) {
@@ -39176,6 +39190,8 @@ function buildReservedQtyByProductMap(items, opts = {}) {
   const out = new Map();
   const list = Array.isArray(items) ? items : [];
   const skipDerivedPackOwn = !!opts?.skipDerivedPackOwn;
+  // skippedOut (opcional): Map donde se anota la cantidad propia de cada pack derivado que se SALTA.
+  const skippedOut = opts?.skippedOut instanceof Map ? opts.skippedOut : null;
 
   const packLineIdsWithChildren = new Set();
   if (skipDerivedPackOwn) {
@@ -39197,7 +39213,15 @@ function buildReservedQtyByProductMap(items, opts = {}) {
       packLineIdsWithChildren.has(String(it._lineId))
     ) {
       const packProduct = findProductByBaseId(idProd);
-      if (packProduct && productHasDerivedStockMarker(packProduct)) return;
+      if (packProduct && productHasDerivedStockMarker(packProduct)) {
+        if (skippedOut) {
+          const q = getCartItemReservedQty(it);
+          if (Number.isFinite(q) && Math.abs(q) >= 0.0005) {
+            skippedOut.set(idProd, roundQty3(Number(skippedOut.get(idProd) || 0) + q));
+          }
+        }
+        return;
+      }
     }
 
     // Para hijos de pack, prioriza resolver por referencia para evitar ids inválidos
@@ -39350,9 +39374,21 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "", ticketId = null
 
     try {
       const product = findProductByBaseId(idProd);
-      const stockRowsByReference = await fetchStockRowsByProductReference(
+      let stockRowsByReference = await fetchStockRowsByProductReference(
         product || { id: idProd, baseProductId: idProd },
       );
+      // Un producto que ESTE TPV aun no tiene en su catalogo (creado en FacturaScripts despues de arrancar
+      // el programa, p.ej. los "R-xxxxx" de Asador el Gallo) no tiene referencia local: la busqueda por
+      // referencia no encontraba nada y la reserva se IGNORABA en silencio como "sin control de stock", asi
+      // que un aparcado creado en otro TPV nunca liberaba su reserva al cobrar aqui (2026-10-23). Se busca
+      // por idproducto, que no depende del catalogo local.
+      if (!stockRowsByReference.length && !product) {
+        try {
+          stockRowsByReference = await fetchStockRowsByParams({ "filter[idproducto]": idProd });
+        } catch {
+          stockRowsByReference = [];
+        }
+      }
 
       // Regla operativa: si no existen filas en stocks por referencia,
       // el producto se considera sin control de stock y se ignora.
