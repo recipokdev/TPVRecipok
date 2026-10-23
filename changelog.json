@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.52",
+      "date": "2026-10-23",
+      "title": "Release 0.2.52",
       "changes": [
         "MEJORA (activo por cliente): lo que un camarero está preparando en la app del móvil SIN enviar aún se ve en el TPV, en solo lectura, en la franja de la mesa abierta («Cintia está preparando: 2× Café, 1× Tostada (2,80 €)») y se actualiza al instante. No forma parte del pedido: no reserva stock, no sale en la comanda y no se puede cobrar hasta que el camarero pulsa Enviar. Desaparece solo si la app se cierra.",
         "MEJORA: la app de camareros ya puede seguir los ajustes de pantalla del TPV de su tienda. El TPV publica en el servidor, por tienda, la opción «Familias primero» y el orden de los productos cuando se cambian (y una primera vez al arrancar si el servidor aún no tiene nada), y la app los lee al abrir. Con varios TPV en la misma tienda manda el último que cambie algo.",
