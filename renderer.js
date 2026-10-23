@@ -35378,6 +35378,83 @@ async function findExistingFacturaByNumero2(cfg, numero2, idtpv) {
   }
 }
 
+// Facturas que ESTE TPV ya ha creado en esta sesion (idfactura). La recuperacion por huella (mas
+// abajo) las descarta: una venta anterior con el mismo importe no puede confundirse con la que
+// se esta reintentando.
+const recentCreatedFacturaIds = new Set();
+function noteCreatedFacturaId(resp) {
+  const id = String(
+    resp?.idfactura || resp?.doc?.idfactura || resp?.data?.idfactura || "",
+  ).trim();
+  if (!id) return;
+  recentCreatedFacturaIds.add(id);
+  if (recentCreatedFacturaIds.size > 200) {
+    recentCreatedFacturaIds.delete(recentCreatedFacturaIds.values().next().value);
+  }
+}
+
+// FS devuelve fecha "DD-MM-YYYY" (o "YYYY-MM-DD") y hora "HH:MM:SS" en hora local del servidor.
+function parseFsInvoiceDateTimeMs(fecha, hora) {
+  const f = String(fecha || "").trim().split(/[-/]/).map((x) => Number(x));
+  const h = String(hora || "00:00:00").trim().split(":").map((x) => Number(x) || 0);
+  if (f.length !== 3 || f.some((x) => !Number.isFinite(x))) return NaN;
+  const [y, m, d] = f[0] > 31 ? f : [f[2], f[1], f[0]];
+  return new Date(y, m - 1, d, h[0] || 0, h[1] || 0, h[2] || 0).getTime();
+}
+
+// Real (2026-10-23, probado en demo): crearFacturaCliente tarda ~2,7 s POR LINEA, asi que una
+// venta de 10 lineas superaba el timeout de 20 s del TPV aunque FacturaScripts SI acababa
+// creando la factura; el reintento (cola) creaba otra identica y salian 3 gemelas. En ventas
+// normales numero2 va vacio (es el campo "Numero" del cobro, no una clave de intento), asi que
+// la comprobacion por numero2 no servia. Aqui se busca la factura por "huella": mismo terminal,
+// caja, cliente, agente e importe, creada DESDE que empezo el primer intento (con 45 s de margen
+// por si los relojes difieren), y que este TPV no hubiera creado ya antes. Si no hay datos
+// suficientes o la consulta falla, devuelve null (se sigue como siempre).
+async function findRecentFacturaByFingerprint(cfg, ticketPayload) {
+  const startedAt = Number(ticketPayload?._firstAttemptAt) || 0;
+  const expected = Number(ticketPayload?._expectedTotal);
+  const idtpv = ticketPayload?.idtpv;
+  if (!startedAt || !Number.isFinite(expected) || !idtpv) return null;
+
+  const base = String(cfg.baseUrl || "").replace(/\/+$/, "");
+  const params = new URLSearchParams();
+  params.set("filter[idtpv]", String(idtpv));
+  if (ticketPayload.idcaja) params.set("filter[idcaja]", String(ticketPayload.idcaja));
+  params.set("sort[idfactura]", "DESC");
+  params.set("limit", "15");
+
+  try {
+    const res = await fetch(`${base}/facturaclientes?${params.toString()}`, {
+      method: "GET",
+      headers: { Accept: "application/json", Token: cfg.apiKey },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    const rows = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+    const wantClient = String(ticketPayload.codcliente || "").trim();
+    const wantAgent = String(ticketPayload.codagente || "").trim();
+    const matches = rows
+      .filter((r) => {
+        const id = String(r?.idfactura || r?.id || "").trim();
+        if (!id || recentCreatedFacturaIds.has(id)) return false;
+        if (Math.abs(Number(r?.total) - expected) > 0.02) return false;
+        if (wantClient && String(r?.codcliente || "").trim() !== wantClient) return false;
+        if (wantAgent && String(r?.codagente || "").trim() !== wantAgent) return false;
+        const at = parseFsInvoiceDateTimeMs(r?.fecha, r?.hora);
+        return Number.isFinite(at) && at >= startedAt - 45000;
+      })
+      .sort((a, b) => Number(a.idfactura || a.id) - Number(b.idfactura || b.id));
+    return matches.length ? matches[0] : null;
+  } catch (e) {
+    console.warn(
+      "[crearFacturaCliente] No se pudo comprobar duplicados por huella:",
+      e?.message || e,
+    );
+    return null;
+  }
+}
+
 async function createTicketInFacturaScripts(ticketPayload) {
   const cfg = window.RECIPOK_API || {};
   if (!cfg.baseUrl || !cfg.apiKey) {
@@ -35388,6 +35465,11 @@ async function createTicketInFacturaScripts(ticketPayload) {
 
   const base = cfg.baseUrl.replace(/\/+$/, "");
   const url = `${base}/crearFacturaCliente`;
+
+  // Marca del primer intento (viaja con el payload a la cola offline): sirve para reconocer
+  // despues una factura creada por un intento que dio timeout (ver findRecentFacturaByFingerprint).
+  const isRetryAttempt = !!ticketPayload._firstAttemptAt;
+  if (!ticketPayload._firstAttemptAt) ticketPayload._firstAttemptAt = Date.now();
 
   if (ticketPayload.numero2) {
     const existing = await findExistingFacturaByNumero2(
@@ -35401,6 +35483,21 @@ async function createTicketInFacturaScripts(ticketPayload) {
           `(idfactura=${existing.idfactura || existing.id}). Evitando duplicado.`,
       );
       return { doc: existing, dedup: true };
+    }
+  } else if (isRetryAttempt) {
+    const existing = await findRecentFacturaByFingerprint(cfg, ticketPayload);
+    if (existing) {
+      console.warn(
+        `[crearFacturaCliente] Reintento: ya existe la factura de un intento anterior (idfactura=${existing.idfactura || existing.id}). Evitando gemela.`,
+      );
+      logFeatureWarn?.("COBRO", "factura-recuperada-por-huella", {
+        idfactura: existing.idfactura || existing.id,
+        codigo: existing.codigo || "",
+        total: existing.total,
+        fase: "reintento",
+      });
+      noteCreatedFacturaId(existing);
+      return { doc: existing, dedup: true, recovered: true };
     }
   }
 
@@ -35469,7 +35566,9 @@ async function createTicketInFacturaScripts(ticketPayload) {
     // Sin timeout, una red inestable deja este fetch colgado para siempre
     // (ni resuelve ni rechaza) y el botón de cobrar se queda bloqueado sin
     // ningún error visible. Ver mismo fix en apiWrite().
-    const timeoutMs = 20000;
+    // FS tarda ~2,7 s por linea (medido en demo): el limite crece con las lineas (20 s minimo, 2 min maximo).
+    const lineCount = Array.isArray(ticketPayload.lineas) ? ticketPayload.lineas.length : 0;
+    const timeoutMs = Math.min(120000, Math.max(20000, 12000 + 4000 * lineCount));
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -35512,7 +35611,19 @@ async function createTicketInFacturaScripts(ticketPayload) {
   // que el dedup de arriba) en vez de arriesgarnos a que el ticket se quede
   // como "no cobrado" y se vuelva a cobrar por duplicado.
   const tryRecoverExistingFactura = async () => {
-    if (!ticketPayload.numero2) return null;
+    if (!ticketPayload.numero2) {
+      const byFingerprint = await findRecentFacturaByFingerprint(cfg, ticketPayload);
+      if (byFingerprint) {
+        logFeatureWarn?.("COBRO", "factura-recuperada-por-huella", {
+          idfactura: byFingerprint.idfactura || byFingerprint.id,
+          codigo: byFingerprint.codigo || "",
+          total: byFingerprint.total,
+          fase: "tras-fallo",
+        });
+        noteCreatedFacturaId(byFingerprint);
+      }
+      return byFingerprint;
+    }
     try {
       return await findExistingFacturaByNumero2(
         cfg,
@@ -35670,6 +35781,7 @@ async function createTicketInFacturaScripts(ticketPayload) {
 
   console.log("Respuesta OK crearFacturaCliente:", data);
 
+  noteCreatedFacturaId(data);
   return data;
 }
 
@@ -43478,6 +43590,10 @@ async function parkFailedSaleForRetry(
         String(ticketPayload?.numero2 || "").trim() ||
         originLive.recoveredNumero2 ||
         null;
+      // Cuando empezo el primer intento: el reintento lo usa para reconocer la factura que aquel
+      // pudo crear aunque diera timeout (ver findRecentFacturaByFingerprint).
+      originLive.recoveredFirstAttemptAt =
+        Number(ticketPayload?._firstAttemptAt) || originLive.recoveredFirstAttemptAt || null;
       originLive.closingInProgress = false;
       originLive.closingByTerminalId = "";
       originLive.closingByTerminalName = "";
@@ -43575,6 +43691,7 @@ async function parkFailedSaleForRetry(
       // Guardar aqui el numero2 original para que el proximo cobro de este
       // aparcado lo reutilice (ver onPayButtonClick).
       recoveredNumero2: String(ticketPayload?.numero2 || "").trim() || null,
+      recoveredFirstAttemptAt: Number(ticketPayload?._firstAttemptAt) || null,
     };
     clearMesaScopeFromTicket(localTicket);
 
@@ -44127,6 +44244,9 @@ async function onPayButtonClick() {
       parkedTickets?.[parkedIndexToClose]?.recoveredNumero2 || "",
     ).trim();
     ticketPayload.numero2 = recoveredNumero2 || payResult.numero || "";
+    const recoveredFirstAttemptAt =
+      Number(parkedTickets?.[parkedIndexToClose]?.recoveredFirstAttemptAt) || 0;
+    if (recoveredFirstAttemptAt) ticketPayload._firstAttemptAt = recoveredFirstAttemptAt;
     const serieVenta = (payResult.serie || "S").toString().trim().toUpperCase();
     ticketPayload.serie = serieVenta;
     ticketPayload.codserie = serieVenta;
@@ -44194,6 +44314,8 @@ async function onPayButtonClick() {
       ticketPayload.codalmacen = ticketPayload._payCodAlmacen;
     }
     ticketPayload.nick = ticketPayload._payNick;
+    // Importe cobrado, para reconocer la factura de este intento si el TPV da timeout (huella).
+    ticketPayload._expectedTotal = round2(getCartTotal(cartSnapshot));
     ticketPayload.tpv_efectivo = Number(tpv_efectivo || 0);
     ticketPayload.tpv_cambio = Number(tpv_cambio || 0);
 

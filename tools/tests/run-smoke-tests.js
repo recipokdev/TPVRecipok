@@ -10872,6 +10872,23 @@ console.log("\n[SMOKE] Checking 2026-10-23 factura: añadidos con precio no se c
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-23 factura: timeout adaptativo y recuperacion sin numero2 (facturas gemelas)\n");
+if (
+  renderer.includes("const timeoutMs = Math.min(120000, Math.max(20000, 12000 + 4000 * lineCount));") &&
+  renderer.includes("async function findRecentFacturaByFingerprint(cfg, ticketPayload) {") &&
+  renderer.includes("if (!id || recentCreatedFacturaIds.has(id)) return false;") &&
+  renderer.includes("return Number.isFinite(at) && at >= startedAt - 45000;") &&
+  renderer.includes("} else if (isRetryAttempt) {") &&
+  renderer.includes("const byFingerprint = await findRecentFacturaByFingerprint(cfg, ticketPayload);") &&
+  renderer.includes("noteCreatedFacturaId(data);") &&
+  renderer.includes("ticketPayload._expectedTotal = round2(getCartTotal(cartSnapshot));") &&
+  renderer.includes("if (recoveredFirstAttemptAt) ticketPayload._firstAttemptAt = recoveredFirstAttemptAt;")
+) {
+  ok("crearFacturaCliente: el limite de espera crece con las lineas (FS tarda ~2,7 s por linea; antes 20 s fijos y una venta de 10 lineas daba timeout aunque FS creaba la factura) y, sin numero2 (ventas normales), un reintento o un fallo ambiguo busca la factura del intento anterior por huella (terminal, caja, cliente, agente, importe y hora de inicio, descartando las que este TPV ya creo) en vez de crear una gemela; tambien en el reintento manual de un Cobro fallido");
+} else {
+  fail("Falta el timeout adaptativo / la recuperacion por huella de la factura sin numero2 (renderer.js createTicketInFacturaScripts)");
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
