@@ -47375,9 +47375,17 @@ function commitComandaPrintedState(ticket, sourceLines = cart) {
       };
       const ids = new Set(justSent.map((l) => l?._lineId).filter(Boolean));
       const stampedLines = [];
+      // Una linea pendiente que YA trae `sentBy` viene de otro cliente (la app de camareros la puso con el
+      // nombre del camarero): al sellar la comanda se conserva ese nombre en vez de pisarlo con el agente del
+      // TPV (visto 2026-10-23: la linea de Cintia añadida a un pedido creado en el TPV quedaba como "TPV").
+      const applyStamp = (target) => {
+        const keepSentBy = String(target?.sentBy || "").trim();
+        Object.assign(target, stamp);
+        if (keepSentBy) target.sentBy = keepSentBy;
+      };
       (Array.isArray(sourceLines) ? sourceLines : []).forEach((it) => {
         if (it && ids.has(it._lineId)) {
-          Object.assign(it, stamp);
+          applyStamp(it);
           stampedLines.push(it);
         }
       });
@@ -47406,7 +47414,9 @@ function commitComandaPrintedState(ticket, sourceLines = cart) {
           }
           if (target) {
             used.add(target);
+            // mismo sentBy que ya quedo en la linea del carrito/origen (conservado o el del sello)
             Object.assign(target, stamp);
+            target.sentBy = String(l?.sentBy || "").trim() || stamp.sentBy;
           }
         });
       };

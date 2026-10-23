@@ -10844,6 +10844,17 @@ if (
   fail("Falta la liberacion de stock por balance del servidor en cobrar/eliminar/borrado masivo (renderer.js buildReleaseDeltaFromServerBalance)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-23 sello de comanda conserva el camarero de la linea \n");
+if (
+  renderer.includes("const applyStamp = (target) => {") &&
+  renderer.includes("if (keepSentBy) target.sentBy = keepSentBy;") &&
+  renderer.includes('target.sentBy = String(l?.sentBy || "").trim() || stamp.sentBy;')
+) {
+  ok("Al sellar la comanda (commitComandaPrintedState) una linea pendiente que ya trae sentBy (camarero de la app) lo conserva en vez de pisarlo con el agente del TPV, tambien en la copia del ticket guardado");
+} else {
+  fail("Falta conservar sentBy al sellar la comanda (renderer.js commitComandaPrintedState applyStamp)");
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
