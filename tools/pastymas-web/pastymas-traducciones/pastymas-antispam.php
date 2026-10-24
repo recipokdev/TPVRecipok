@@ -4,12 +4,15 @@
  * Capas, todas en el servidor:
  *   1. Campo trampa (honeypot) que los humanos no ven y los bots rellenan.
  *   2. Control de tiempo firmado: el formulario debe tardar al menos 4 s en enviarse y no más de 3 h.
- *   3. Comprobación de JavaScript: un campo que sólo rellena el navegador.
+ *   3. Comprobación de JavaScript: un campo que sólo rellena el navegador (respuesta calculada a partir del sello de tiempo).
  *   4. Límite por IP: máximo 3 registros por hora.
  *   5. Correo: dominio con registros MX/A y lista de dominios desechables.
- *   6. reCAPTCHA v3 (si Contact Form 7 tiene claves configuradas): puntuación mínima 0,3.
- *   7. Registro nativo de WordPress desactivado.
- * Cada bloqueo se contabiliza y se muestra en Usuarios > Todos los usuarios.
+ *   6. reCAPTCHA v3 (claves de Contact Form 7): token OBLIGATORIO, acción "registro" y puntuación mínima 0,5.
+ *   7. Huella de los bots de registro: nombre igual al apellido, empresa "google", teléfonos rusos de 11 cifras,
+ *      cirílico o URLs en los campos.
+ *   8. Registro nativo de WordPress desactivado.
+ * Cada bloqueo se contabiliza y se muestra en Usuarios > Todos los usuarios; cada alta permitida guarda IP y
+ * puntuación en los metadatos del usuario (columna "Antispam" en la lista de usuarios).
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -19,7 +22,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 define( 'PASTYMAS_AS_MIN_SEG', 4 );
 define( 'PASTYMAS_AS_MAX_SEG', 3 * HOUR_IN_SECONDS );
 define( 'PASTYMAS_AS_MAX_IP_HORA', 3 );
-define( 'PASTYMAS_AS_SCORE_MIN', 0.3 );
+define( 'PASTYMAS_AS_SCORE_MIN', 0.5 );
 
 function pastymas_as_ip() {
 	$ip = isset( $_SERVER['REMOTE_ADDR'] ) ? (string) $_SERVER['REMOTE_ADDR'] : '0.0.0.0';
@@ -55,6 +58,16 @@ function pastymas_as_tiempo_valido( $token ) {
 	return true;
 }
 
+/** Respuesta que debe calcular el navegador a partir del sello de tiempo (misma fórmula en assets/pastymas-registro.js). */
+function pastymas_as_js_hash( $pm_t ) {
+	$h = 7;
+	$s = (string) $pm_t;
+	for ( $i = 0, $l = strlen( $s ); $i < $l; $i++ ) {
+		$h = ( $h * 31 + ord( $s[ $i ] ) ) % 1000000007;
+	}
+	return 'ok-' . base_convert( (string) $h, 10, 36 );
+}
+
 /** Claves reCAPTCHA v3 reutilizadas de Contact Form 7 (si existen). */
 function pastymas_as_recaptcha_keys() {
 	$opt = get_option( 'wpcf7' );
@@ -70,8 +83,11 @@ function pastymas_as_recaptcha_keys() {
 
 function pastymas_as_recaptcha_score( $token ) {
 	$keys = pastymas_as_recaptcha_keys();
-	if ( ! $keys || ! $token ) {
-		return null; // no se puede comprobar: se confía en el resto de capas
+	if ( ! $keys ) {
+		return null; // sin claves no se puede comprobar: se confía en el resto de capas
+	}
+	if ( ! $token ) {
+		return 'sin_recaptcha'; // con claves configuradas el token es obligatorio
 	}
 	$r = wp_remote_post( 'https://www.google.com/recaptcha/api/siteverify', array(
 		'timeout' => 6,
@@ -87,7 +103,44 @@ function pastymas_as_recaptcha_score( $token ) {
 	if ( empty( $d['success'] ) ) {
 		return 0.0;
 	}
+	if ( isset( $d['action'] ) && 'registro' !== $d['action'] ) {
+		return 0.0; // token generado para otra acción (servicios de resolución de captchas)
+	}
 	return isset( $d['score'] ) ? (float) $d['score'] : null;
+}
+
+/** Huella de los bots de registro masivo en los campos de facturación. Devuelve true o el motivo. */
+function pastymas_as_huella_bot( $post ) {
+	$campo = function ( $k ) use ( $post ) {
+		return isset( $post[ $k ] ) ? trim( wp_unslash( (string) $post[ $k ] ) ) : '';
+	};
+	$nombre   = $campo( 'billing_first_name' );
+	$apellido = $campo( 'billing_last_name' );
+	$empresa  = $campo( 'billing_company' );
+	$telefono = $campo( 'billing_phone' );
+	$ciudad   = $campo( 'billing_city' );
+	if ( '' !== $nombre && '' !== $apellido && mb_strtolower( $nombre ) === mb_strtolower( $apellido ) ) {
+		return 'nombre_igual_apellido';
+	}
+	if ( '' !== $empresa && in_array( mb_strtolower( $empresa ), array( 'google', 'gmail', 'yahoo', 'bing', 'facebook', 'test' ), true ) ) {
+		return 'empresa_bot';
+	}
+	$digitos = preg_replace( '/\D+/', '', $telefono );
+	if ( '' !== $digitos && preg_match( '/^[78]\d{10}$/', $digitos ) ) {
+		return 'telefono_bot'; // formato ruso de 11 cifras que usan estos bots
+	}
+	foreach ( array( $nombre, $apellido, $empresa, $ciudad ) as $v ) {
+		if ( '' === $v ) {
+			continue;
+		}
+		if ( preg_match( '/\p{Cyrillic}/u', $v ) ) {
+			return 'cirilico';
+		}
+		if ( preg_match( '#https?://|www\.#i', $v ) ) {
+			return 'url_en_campos';
+		}
+	}
+	return true;
 }
 
 function pastymas_as_dominios_desechables() {
@@ -117,7 +170,7 @@ function pastymas_as_registrar_bloqueo( $motivo, $email ) {
 		$log = array();
 	}
 	array_unshift( $log, array( 't' => time(), 'm' => $motivo, 'e' => substr( (string) $email, 0, 80 ), 'ip' => pastymas_as_ip() ) );
-	update_option( 'pastymas_as_log', array_slice( $log, 0, 50 ), false );
+	update_option( 'pastymas_as_log', array_slice( $log, 0, 100 ), false );
 }
 
 /**
@@ -133,8 +186,8 @@ function pastymas_as_evaluar( $post, $email ) {
 	if ( true !== $t ) {
 		return $t;
 	}
-	// 3. JavaScript
-	if ( empty( $post['pm_js'] ) || 'ok' !== substr( (string) $post['pm_js'], 0, 2 ) ) {
+	// 3. JavaScript: el navegador debe calcular la respuesta a partir del sello de tiempo
+	if ( empty( $post['pm_js'] ) || ! hash_equals( pastymas_as_js_hash( $post['pm_t'] ), (string) $post['pm_js'] ) ) {
 		return 'sin_javascript';
 	}
 	// 4. Límite por IP
@@ -148,11 +201,20 @@ function pastymas_as_evaluar( $post, $email ) {
 	if ( true !== $e ) {
 		return $e;
 	}
-	// 6. reCAPTCHA v3 (sólo si hay token y claves)
+	// 6. Huella de los bots de registro
+	$h = pastymas_as_huella_bot( $post );
+	if ( true !== $h ) {
+		return $h;
+	}
+	// 7. reCAPTCHA v3 (obligatorio si hay claves configuradas)
 	$score = pastymas_as_recaptcha_score( isset( $post['pm_rc'] ) ? $post['pm_rc'] : '' );
+	if ( is_string( $score ) ) {
+		return $score;
+	}
 	if ( null !== $score && $score < PASTYMAS_AS_SCORE_MIN ) {
 		return 'recaptcha_' . $score;
 	}
+	$GLOBALS['pastymas_as_score'] = $score;
 	return true;
 }
 
@@ -177,8 +239,8 @@ add_action( 'woocommerce_after_order_notes', 'pastymas_as_campos' );
 /* ---------- Validación: registro en Mi cuenta ---------- */
 add_filter( 'woocommerce_registration_errors', 'pastymas_as_validar_registro', 5, 3 );
 function pastymas_as_validar_registro( $errors, $username, $email ) {
-	if ( is_admin() || ( defined( 'REST_REQUEST' ) && REST_REQUEST ) ) {
-		return $errors;
+	if ( current_user_can( 'create_users' ) ) {
+		return $errors; // alta hecha por un administrador (escritorio o API autenticada)
 	}
 	$r = pastymas_as_evaluar( $_POST, $email );
 	if ( true !== $r ) {
@@ -205,6 +267,36 @@ function pastymas_as_validar_checkout( $data, $errors ) {
 	}
 	pastymas_as_contar_ip();
 }
+
+/* ---------- Trazabilidad: IP y puntuación de cada alta permitida ---------- */
+add_action( 'woocommerce_created_customer', function ( $customer_id ) {
+	if ( current_user_can( 'create_users' ) ) {
+		return;
+	}
+	update_user_meta( $customer_id, 'pm_as_ip', pastymas_as_ip() );
+	if ( isset( $GLOBALS['pastymas_as_score'] ) && null !== $GLOBALS['pastymas_as_score'] ) {
+		update_user_meta( $customer_id, 'pm_as_score', (string) $GLOBALS['pastymas_as_score'] );
+	}
+	$ua = isset( $_SERVER['HTTP_USER_AGENT'] ) ? substr( sanitize_text_field( wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) ), 0, 200 ) : '';
+	if ( $ua ) {
+		update_user_meta( $customer_id, 'pm_as_ua', $ua );
+	}
+}, 10, 1 );
+add_filter( 'manage_users_columns', function ( $cols ) {
+	$cols['pm_as'] = 'Antispam';
+	return $cols;
+} );
+add_filter( 'manage_users_custom_column', function ( $out, $col, $user_id ) {
+	if ( 'pm_as' !== $col ) {
+		return $out;
+	}
+	$ip = get_user_meta( $user_id, 'pm_as_ip', true );
+	$sc = get_user_meta( $user_id, 'pm_as_score', true );
+	if ( ! $ip && '' === $sc ) {
+		return '<span style="color:#999">—</span>';
+	}
+	return esc_html( $ip ) . ( '' !== $sc ? ' · ' . esc_html( $sc ) : '' );
+}, 10, 3 );
 
 /* ---------- Registro nativo de WordPress siempre cerrado ---------- */
 add_filter( 'option_users_can_register', '__return_zero', 99 );

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Pastymas – Traducciones y ajustes de tienda
  * Description: Traducciones, estilos de carrito/checkout/producto/móvil, buscador instantáneo y protección antispam del registro de clientes.
- * Version:     1.8.0
+ * Version:     1.9.0
  * Author:      Pastymas
  *
  * INSTALACIÓN (elige UNA opción):
