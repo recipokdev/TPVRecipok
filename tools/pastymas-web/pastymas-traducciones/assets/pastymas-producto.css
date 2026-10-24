@@ -1,0 +1,95 @@
+/* =====================================================================
+   PASTYMAS.ES – Ficha de producto (plantilla Elementor Pro 25263): tamaños contenidos y aspecto sobrio
+   ===================================================================== */
+
+/* Columnas (solo escritorio y tablet): galería 44 % / resumen 56 %, con separación */
+@media (min-width: 768px) {
+  .single-product .elementor-location-single .elementor-element-c87ebe0 { --width: 44% !important; }
+  .single-product .elementor-location-single .elementor-element-a8bdc18 { --width: 56% !important; padding-left: 32px !important; }
+}
+@media (max-width: 767px) {
+  .single-product .elementor-location-single .elementor-element-c87ebe0,
+  .single-product .elementor-location-single .elementor-element-a8bdc18 { --width: 100% !important; width: 100% !important; padding-left: 0 !important; }
+}
+
+/* Galería: imagen principal contenida y miniaturas pequeñas */
+.single-product .elementor-widget-woocommerce-product-images .woocommerce-product-gallery { max-width: 560px !important; margin: 0 auto !important; }
+.single-product .woocommerce-product-gallery .woocommerce-product-gallery__image img { border-radius: 8px !important; }
+.single-product .woocommerce-product-gallery .flex-control-thumbs { margin-top: 10px !important; display: flex !important; flex-wrap: wrap !important; gap: 8px !important; }
+.single-product .woocommerce-product-gallery .flex-control-thumbs li { width: calc(20% - 7px) !important; margin: 0 !important; float: none !important; }
+.single-product .woocommerce-product-gallery .flex-control-thumbs li img { border-radius: 6px !important; border: 1px solid #C8D5DC !important; opacity: .7; }
+.single-product .woocommerce-product-gallery .flex-control-thumbs li img.flex-active { opacity: 1; border-color: #D64290 !important; }
+
+/* Título, precio y descripción corta */
+.single-product .elementor-widget-woocommerce-product-title .elementor-heading-title { font-size: clamp(22px, 2vw, 30px) !important; line-height: 1.25 !important; margin: 0 0 8px !important; text-transform: none !important; }
+.single-product .elementor-widget-woocommerce-product-price .price { font-size: 22px !important; font-weight: 600 !important; line-height: 1.3 !important; }
+.single-product .elementor-widget-woocommerce-product-price .price .woocommerce-price-suffix { font-size: 13px !important; font-weight: 500 !important; }
+.single-product .elementor-widget-woocommerce-product-price small { font-size: 13px !important; color: #6b6257 !important; }
+.single-product .elementor-widget-woocommerce-product-short-description h3 { font-size: 16px !important; font-weight: 600 !important; margin: 14px 0 6px !important; text-transform: none !important; }
+.single-product .elementor-widget-woocommerce-product-short-description h3:last-child { color: #2e8b57 !important; }
+.single-product .elementor-widget-woocommerce-product-short-description ul { margin: 0 0 0 18px !important; padding: 0 !important; }
+.single-product .elementor-widget-woocommerce-product-short-description li,
+.single-product .elementor-widget-woocommerce-product-short-description p { font-size: 14px !important; line-height: 1.5 !important; }
+
+/* Opciones extra (TM EPO): imágenes pequeñas en fila, etiquetas discretas */
+.single-product .tm-extra-product-options .tc-epo-label { font-size: 15px !important; font-weight: 600 !important; margin: 16px 0 8px !important; text-transform: none !important; }
+.single-product .tm-extra-product-options ul.tc-images-container { display: flex !important; flex-wrap: wrap !important; gap: 12px !important; margin: 0 !important; padding: 0 !important; }
+.single-product .tm-extra-product-options ul.tc-images-container > li.tmcp-field-wrap { width: calc(33.333% - 8px) !important; max-width: 180px !important; float: none !important; margin: 0 !important; padding: 0 !important; }
+.single-product .tm-extra-product-options ul.tc-images-container .tm-epo-field-label { display: block !important; border: 1px solid #C8D5DC !important; border-radius: 8px !important; padding: 8px !important; text-align: center !important; background: #fff !important; cursor: pointer; }
+.single-product .tm-extra-product-options ul.tc-images-container .tmcp-field:checked ~ .tc-image,
+.single-product .tm-extra-product-options ul.tc-images-container .tm-epo-field-label:has(.tmcp-field:checked) { border-color: #D64290 !important; box-shadow: 0 0 0 2px rgba(214,66,144,.15) !important; }
+.single-product .tm-extra-product-options ul.tc-images-container .tc-image.radio-image { max-width: 120px !important; width: 100% !important; height: auto !important; margin: 0 auto 6px !important; border-radius: 6px !important; display: block !important; }
+.single-product .tm-extra-product-options ul.tc-images-container .tc-label-text { font-size: 12.5px !important; line-height: 1.3 !important; font-weight: 500 !important; }
+.single-product .tm-extra-product-options ul.tc-images-container .tc-price-wrap,
+.single-product .tm-extra-product-options ul.tc-images-container .tc-price { font-size: 13px !important; }
+.single-product .tm-extra-product-options .tm-tooltip { font-size: 12px !important; }
+.single-product .tm-extra-product-options hr.hr_divider { margin: 14px 0 !important; border-color: #C8D5DC !important; }
+.single-product .tm-epo-totals, .single-product .tc-epo-totals { font-size: 14px !important; margin: 10px 0 !important; }
+.single-product .tc-epo-totals .tm-final-totals .amount, .single-product .tc-epo-totals .tm-final-totals .price { font-size: 20px !important; font-weight: 600 !important; }
+.single-product .tc-epo-totals .tm-custom-price-totals th, .single-product .tc-epo-totals td { padding: 4px 8px !important; }
+
+/* Cantidad y botón */
+.single-product form.cart .quantity .qty { height: 42px !important; width: 70px !important; font-size: 14px !important; border: 1px solid #C8D5DC !important; border-radius: 6px !important; text-align: center !important; }
+.single-product form.cart .single_add_to_cart_button { height: 42px !important; padding: 0 28px !important; font-size: 15px !important; font-weight: 600 !important; border-radius: 999px !important; background: #D64290 !important; color: #fff !important; border: 1px solid #D64290 !important; text-transform: none !important; letter-spacing: 0 !important; }
+.single-product form.cart .single_add_to_cart_button:hover { background: #b8306f !important; border-color: #b8306f !important; }
+
+/* Descripción larga: ancho de lectura y tamaños normales */
+.single-product .elementor-widget-woocommerce-product-content { max-width: 960px !important; margin: 0 auto !important; }
+.single-product .elementor-widget-woocommerce-product-content h2 { font-size: 22px !important; margin: 28px 0 10px !important; text-transform: none !important; }
+.single-product .elementor-widget-woocommerce-product-content h3 { font-size: 17px !important; margin: 18px 0 6px !important; text-transform: none !important; }
+.single-product .elementor-widget-woocommerce-product-content p,
+.single-product .elementor-widget-woocommerce-product-content li { font-size: 15px !important; line-height: 1.6 !important; }
+.single-product .elementor-widget-woocommerce-product-content img { max-width: 100% !important; height: auto !important; border-radius: 8px !important; }
+
+/* Productos recomendados: sección compacta, título normal, cuadrícula ordenada */
+.single-product .elementor-location-single .elementor-element-1e5a170b { --padding-top: 48px !important; --padding-bottom: 24px !important; padding-top: 48px !important; padding-bottom: 24px !important; }
+.single-product .elementor-location-single .elementor-element-1e5a170b .elementor-heading-title { font-size: clamp(22px, 2vw, 28px) !important; margin-bottom: 8px !important; }
+.single-product .elementor-widget-woocommerce-product-related ul.products { grid-row-gap: 32px !important; grid-column-gap: 24px !important; }
+.single-product .elementor-widget-woocommerce-product-related ul.products li.product .attachment-woocommerce_thumbnail,
+.single-product .elementor-widget-woocommerce-product-related ul.products li.product img { margin-bottom: 10px !important; border-radius: 8px !important; }
+.single-product .elementor-widget-woocommerce-product-related ul.products li.product .woocommerce-loop-product__title { font-size: 15px !important; line-height: 1.35 !important; font-weight: 600 !important; text-transform: none !important; }
+.single-product .elementor-widget-woocommerce-product-related ul.products li.product .price { font-size: 15px !important; letter-spacing: 0 !important; }
+.single-product .elementor-widget-woocommerce-product-related ul.products li.product .button { font-size: 13px !important; text-transform: none !important; }
+.single-product .elementor-widget-woocommerce-product-related ul.products li.product .onsale { font-size: 11px !important; padding: 3px 8px !important; border-radius: 4px !important; }
+
+/* Sección FAQ de la plantilla (contenido de relleno): oculta hasta que tenga preguntas reales */
+.single-product .elementor-location-single .elementor-element-7d0affd0 { display: none !important; }
+
+/* Aviso "se ha añadido a tu carrito": más discreto */
+body.e-wc-message-notice .woocommerce-message { padding: 12px 24px !important; font-size: 14px !important; }
+
+/* Móvil */
+@media (max-width: 767px) {
+  .single-product .tm-extra-product-options ul.tc-images-container > li.tmcp-field-wrap { width: calc(50% - 6px) !important; max-width: none !important; }
+  .single-product .elementor-location-single .elementor-element-1e5a170b { padding-top: 32px !important; padding-bottom: 16px !important; --padding-top: 32px !important; --padding-bottom: 16px !important; }
+}
+
+/* Botón "×" de deseleccionar opción (no aplica en opciones obligatorias): oculto */
+.single-product .tm-extra-product-options .tm-epo-reset-radio { display: none !important; }
+
+/* Descripción larga: si una columna del maquetador viene vacía, la otra ocupa todo el ancho */
+.single-product .elementor-widget-woocommerce-product-content .pm-dv-col:empty { display: none !important; }
+.single-product .elementor-widget-woocommerce-product-content .pm-dv-row:has(.pm-dv-col:empty) .pm-dv-col { width: 100% !important; max-width: 100% !important; flex: 0 0 100% !important; grid-column: 1 / -1 !important; }
+.single-product .elementor-widget-woocommerce-product-content .pm-dv-row.pm-dv-grid { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 24px !important; }
+.single-product .elementor-widget-woocommerce-product-content .pm-dv-col-4_4 { grid-column: 1 / -1 !important; }
+@media (max-width: 767px) { .single-product .elementor-widget-woocommerce-product-content .pm-dv-row.pm-dv-grid { grid-template-columns: 1fr !important; } }

@@ -1,0 +1,108 @@
+/* =====================================================================
+   PASTYMAS.ES – Ajustes de la versión móvil. TODO va dentro de @media (max-width: 767px):
+   no afecta a tablet ni escritorio.
+   ===================================================================== */
+@media (max-width: 767px) {
+
+  /* ---- Global: evita que la página se ensanche más que la pantalla (ocurría al cargar los carruseles) ---- */
+  html, body { overflow-x: hidden !important; overflow-x: clip !important; }
+  .elementor-widget-slides .swiper, .elementor-widget-slides .swiper-container,
+  .e-n-carousel .swiper, .e-n-carousel .swiper-container,
+  .elementor-swiper .swiper, .elementor-swiper .swiper-container { overflow: hidden !important; }
+  .woocommerce-product-gallery .zoomImg { display: none !important; }
+
+  /* ---- Tipografía general en móvil: títulos contenidos, sin "Cada Palabra En Mayúscula" ---- */
+  .elementor-widget-heading .elementor-heading-title { font-size: clamp(22px, 7vw, 28px) !important; line-height: 1.2 !important; }
+  .elementor-widget-text-editor, .elementor-widget-text-editor p { font-size: 15px !important; line-height: 1.55 !important; }
+  .elementor-widget-button .elementor-button { font-size: 14px !important; padding: 12px 22px !important; text-transform: none !important; }
+
+  /* ---- HOME: hero ("Suministros y packaging...") ---- */
+  .elementor-25274 .elementor-element.elementor-element-31d6823 {
+    --min-height: 0 !important; min-height: 0 !important;
+    --padding-top: 28px !important; --padding-bottom: 170px !important; --padding-left: 24px !important; --padding-right: 24px !important;
+    padding: 28px 24px 170px !important;
+    background-size: 100% auto !important; background-position: center bottom !important;
+  }
+  .elementor-25274 .elementor-element.elementor-element-b825ccf,
+  .elementor-25274 .elementor-element.elementor-element-297315d,
+  .elementor-25274 .elementor-element.elementor-element-c9e6f9a,
+  .elementor-25274 .elementor-element.elementor-element-12e297c,
+  .elementor-25274 .elementor-element.elementor-element-f30981e {
+    width: 100% !important; max-width: 100% !important; --container-widget-width: 100% !important;
+    margin: 0 0 10px !important; padding: 0 !important;
+  }
+  .elementor-25274 .elementor-element.elementor-element-b825ccf .elementor-heading-title { font-size: 30px !important; line-height: 1.15 !important; }
+  .elementor-25274 .elementor-element.elementor-element-297315d .elementor-heading-title { font-size: 30px !important; line-height: 1.15 !important; }
+  .elementor-25274 .elementor-element.elementor-element-c9e6f9a { margin: 8px 0 18px !important; }
+  .elementor-25274 .elementor-element.elementor-element-6262922,
+  .elementor-25274 .elementor-element.elementor-element-69a49ff { padding: 0 !important; margin: 0 !important; }
+  .elementor-25274 .elementor-element.elementor-element-12e297c .elementor-button,
+  .elementor-25274 .elementor-element.elementor-element-f30981e .elementor-button { width: 100% !important; text-align: center !important; }
+
+  /* HOME: bloque "Refuerza tu marca" */
+  .elementor-25274 .elementor-element.elementor-element-35d60903 { --padding-top: 40px !important; --padding-bottom: 32px !important; padding-top: 40px !important; padding-bottom: 32px !important; }
+
+  /* HOME: carrusel de logos/imágenes (tenía una altura fija de 611 px con imágenes de 116 px) */
+  .elementor-25274 .elementor-element.elementor-element-78be422 .e-con,
+  .elementor-25274 .elementor-element.elementor-element-78be422 .swiper-slide { min-height: 0 !important; --min-height: 0 !important; height: auto !important; }
+  .elementor-25274 .elementor-element.elementor-element-78be422 { margin-bottom: 8px !important; }
+  .elementor-25274 .elementor-element.elementor-element-841804d { --padding-bottom: 8px !important; padding-bottom: 8px !important; }
+
+  /* HOME: "¿No sabes qué quieres exactamente?" (collage de imágenes pensado para escritorio) */
+  .elementor-25274 .elementor-element.elementor-element-6ffce22d { --padding-top: 36px !important; --padding-bottom: 36px !important; padding-top: 36px !important; padding-bottom: 36px !important; }
+  .elementor-25274 .elementor-element.elementor-element-341f6106,
+  .elementor-25274 .elementor-element.elementor-element-4a7ae452,
+  .elementor-25274 .elementor-element.elementor-element-ffcf3cc,
+  .elementor-25274 .elementor-element.elementor-element-1f95ee2b { display: none !important; }
+  .elementor-25274 .elementor-element.elementor-element-2f363fc { --padding-top: 0 !important; padding: 0 !important; margin: 0 !important; }
+  .elementor-25274 .elementor-element.elementor-element-32b0e7e { margin: 0 !important; }
+  .elementor-25274 .elementor-element.elementor-element-32b0e7e img { width: 100% !important; height: auto !important; max-height: 260px !important; object-fit: cover !important; border-radius: 10px !important; }
+  .elementor-25274 .elementor-element.elementor-element-5379e82d { --margin-bottom: 20px !important; margin-bottom: 20px !important; }
+  .elementor-25274 .elementor-element.elementor-element-30ce8a67 .elementor-cta__content { padding: 0 !important; }
+
+  /* HOME: "Somos un equipo profesional" (4 bloques de icono) */
+  .elementor-25274 .elementor-element.elementor-element-66c51e56 { --padding-top: 40px !important; --padding-bottom: 40px !important; padding-top: 40px !important; padding-bottom: 40px !important; --gap: 20px 20px !important; --row-gap: 20px !important; }
+  .elementor-25274 .elementor-element.elementor-element-539c068c { margin-bottom: 8px !important; }
+  .elementor-25274 .elementor-element.elementor-element-133d22c7 { --flex-direction: column !important; --gap: 20px 20px !important; --row-gap: 20px !important; --column-gap: 20px !important; }
+  .elementor-25274 .elementor-element.elementor-element-133d22c7 > .elementor-widget-icon-box { width: 100% !important; max-width: 100% !important; margin: 0 !important; }
+  .elementor-25274 .elementor-element.elementor-element-133d22c7 .elementor-icon-box-wrapper { display: flex !important; flex-direction: row !important; align-items: flex-start !important; gap: 14px !important; text-align: left !important; }
+  .elementor-25274 .elementor-element.elementor-element-133d22c7 .elementor-icon-box-icon { margin: 0 !important; flex: 0 0 auto !important; }
+  .elementor-25274 .elementor-element.elementor-element-133d22c7 .elementor-icon { width: 56px !important; height: 56px !important; font-size: 26px !important; display: flex !important; align-items: center !important; justify-content: center !important; }
+  .elementor-25274 .elementor-element.elementor-element-133d22c7 .elementor-icon svg { width: 26px !important; height: 26px !important; }
+  .elementor-25274 .elementor-element.elementor-element-133d22c7 .elementor-icon-box-content { flex: 1 1 auto !important; min-width: 0 !important; }
+  .elementor-25274 .elementor-element.elementor-element-32b0e7e img { opacity: 1 !important; visibility: visible !important; }
+  .elementor-25274 .elementor-element.elementor-element-133d22c7 .elementor-icon-box-title { font-size: 17px !important; margin: 0 0 4px !important; }
+  .elementor-25274 .elementor-element.elementor-element-133d22c7 .elementor-icon-box-description { font-size: 14px !important; line-height: 1.5 !important; }
+
+  /* ---- TIENDA (listado): cabecera centrada y productos en 2 columnas ---- */
+  .elementor-25261 .elementor-element.elementor-element-6d878ff1 { margin: 0 !important; width: 100% !important; --width: 100% !important; }
+  .elementor-25261 .elementor-element.elementor-element-630f5502 { --padding-left: 16px !important; --padding-right: 16px !important; --min-height: 0 !important; }
+  .elementor-25261 .elementor-element.elementor-element-73e56007 { width: 100% !important; max-width: 100% !important; margin: 0 !important; }
+  .elementor-25261 .elementor-element.elementor-element-73e56007 .elementor-heading-title { font-size: 24px !important; text-align: center !important; }
+  .elementor-25261 .elementor-widget-aws, .elementor-25261 .aws-container { width: 100% !important; max-width: 100% !important; margin: 0 !important; }
+  .elementor-25261 .elementor-element.elementor-element-39539485 { --padding-top: 16px !important; --padding-bottom: 40px !important; --padding-left: 16px !important; --padding-right: 16px !important; }
+  .elementor-25261 .elementor-wc-products ul.products { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)) !important; grid-column-gap: 14px !important; grid-row-gap: 24px !important; }
+  .elementor-25261 .elementor-wc-products ul.products li.product { width: auto !important; margin: 0 !important; padding: 0 !important; text-align: left !important; }
+  .elementor-25261 .elementor-wc-products ul.products li.product img { margin-bottom: 8px !important; border-radius: 8px !important; }
+  .elementor-25261 .elementor-wc-products ul.products li.product .woocommerce-loop-product__title,
+  .elementor-25261 .elementor-wc-products ul.products li.product .woocommerce-loop-category__title { font-size: 14px !important; line-height: 1.3 !important; text-transform: none !important; margin: 0 0 4px !important; }
+  .elementor-25261 .elementor-wc-products ul.products li.product .price { font-size: 14px !important; margin-bottom: 6px !important; }
+  .elementor-25261 .elementor-wc-products ul.products li.product .button { font-size: 13px !important; text-transform: none !important; padding: 8px 12px !important; }
+  .elementor-25261 .elementor-wc-products ul.products li.product .onsale { font-size: 11px !important; padding: 3px 8px !important; }
+  .elementor-25261 .elementor-wc-products nav.woocommerce-pagination { margin-top: 24px !important; }
+  /* Carrusel superior de la tienda: altura contenida */
+  .elementor-25261 .elementor-element.elementor-element-7acc8f0 img { max-height: 220px !important; width: 100% !important; object-fit: cover !important; }
+
+  /* ---- Pie de página: títulos y espacios contenidos ---- */
+  .elementor-location-footer .elementor-element.elementor-element-7ef79da2 { --padding-top: 36px !important; --padding-bottom: 36px !important; padding-top: 36px !important; padding-bottom: 36px !important; }
+  .elementor-location-footer .elementor-widget-heading .elementor-heading-title { font-size: 17px !important; text-transform: none !important; }
+  .elementor-location-footer .elementor-icon-list-item, .elementor-location-footer .elementor-icon-list-text { font-size: 14px !important; }
+  .elementor-location-footer .elementor-widget-text-editor, .elementor-location-footer .elementor-widget-text-editor p { font-size: 14px !important; }
+
+  /* ---- Carrito: etiqueta "Producto:" en su propia línea ---- */
+  .elementor-widget-woocommerce-cart .e-shop-table .cart td.product-name:before { display: block !important; width: 100% !important; margin-bottom: 4px !important; }
+  .elementor-widget-woocommerce-cart .e-shop-table .cart td.product-name { display: block !important; text-align: left !important; }
+
+  /* ---- Ficha de producto: miniaturas de galería en una fila ---- */
+  .single-product .woocommerce-product-gallery .flex-control-thumbs li { width: calc(20% - 7px) !important; }
+}

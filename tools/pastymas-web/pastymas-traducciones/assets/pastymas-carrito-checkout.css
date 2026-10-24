@@ -1,0 +1,323 @@
+/* =====================================================================
+   PASTYMAS.ES – Ajustes de Carrito y Finalizar compra (Elementor Pro + WooCommerce)
+   Dónde pegarlo: Elementor > Ajustes del sitio > CSS personalizado
+   (o Apariencia > Personalizar > CSS adicional). Después: Elementor > Herramientas > Regenerar CSS.
+   Paleta del sitio: primario/texto #403625, acento #D64290 (fucsia), fondo suave #F9FAFD, borde #C8D5DC
+   ===================================================================== */
+
+:root {
+  --pm-text: #403625;
+  --pm-muted: #6b6257;
+  --pm-accent: #D64290;
+  --pm-accent-dark: #b8306f;
+  --pm-panel-bg: #F9FAFD;
+  --pm-panel-border: #C8D5DC;
+  --pm-field-border: #C8D5DC;
+  --pm-radius: 8px;
+  --pm-field-radius: 6px;
+}
+
+/* ---------- 1. Paneles: de fucsia a neutro sobrio (carrito: tabla y cupón; checkout: "Tu pedido") ---------- */
+.elementor-widget-woocommerce-cart .e-shop-table,
+.elementor-widget-woocommerce-cart .coupon,
+.elementor-widget-woocommerce-checkout-page .e-checkout__order_review {
+  --sections-background-color: var(--pm-panel-bg) !important;
+  --sections-border-type: solid !important;
+  --sections-border-color: var(--pm-panel-border) !important;
+  --sections-border-width: 1px !important;
+  --sections-border-radius: var(--pm-radius) !important;
+  --sections-padding: 24px !important;
+  --sections-margin: 0 !important;
+  background-color: var(--pm-panel-bg) !important;
+  border: 1px solid var(--pm-panel-border) !important;
+  border-radius: var(--pm-radius) !important;
+  padding: 24px !important;
+  margin: 0 !important;
+}
+.elementor-widget-woocommerce-cart .coupon { margin-top: 16px !important; }
+.elementor-widget-woocommerce-checkout-page .e-checkout__order_review { margin-top: 0 !important; }
+
+/* Texto legible dentro de los paneles (antes: enlaces fucsia sobre fondo fucsia) */
+.elementor-widget-woocommerce-cart .e-shop-table,
+.elementor-widget-woocommerce-cart .e-shop-table th,
+.elementor-widget-woocommerce-cart .e-shop-table td,
+.elementor-widget-woocommerce-cart .e-shop-table td:before,
+.elementor-widget-woocommerce-cart .e-shop-table .product-name a,
+.elementor-widget-woocommerce-cart .e-shop-table .variation,
+.elementor-widget-woocommerce-checkout-page .e-checkout__order_review,
+.elementor-widget-woocommerce-checkout-page .e-checkout__order_review th,
+.elementor-widget-woocommerce-checkout-page .e-checkout__order_review td,
+.elementor-widget-woocommerce-checkout-page .e-checkout__order_review h3,
+.elementor-widget-woocommerce-checkout-page .e-checkout__order_review .variation {
+  --links-normal-color: var(--pm-text) !important;
+  --product-link-normal-color: var(--pm-text) !important;
+  --order-summary-color: var(--pm-text) !important;
+  --order-summary-items-color: var(--pm-text) !important;
+  --order-summary-totals-color: var(--pm-text) !important;
+  --order-summary-variations-color: var(--pm-muted) !important;
+  color: var(--pm-text) !important;
+}
+.elementor-widget-woocommerce-cart .e-shop-table .product-name > a:first-child { font-weight: 500 !important; }
+.elementor-widget-woocommerce-cart .e-shop-table .tm-cart-edit-options,
+.elementor-widget-woocommerce-checkout-page .e-checkout__order_review .tm-cart-edit-options {
+  color: var(--pm-accent) !important; font-size: 13px !important;
+}
+.elementor-widget-woocommerce-cart .e-shop-table .product-name a:hover { color: var(--pm-accent) !important; }
+.elementor-widget-woocommerce-cart .e-shop-table .variation,
+.elementor-widget-woocommerce-checkout-page .e-checkout__order_review .variation {
+  font-size: 13px !important; line-height: 1.4 !important; text-transform: none !important; margin: 4px 0 0 !important;
+}
+
+/* Separadores dentro de los paneles */
+.elementor-widget-woocommerce-cart .e-shop-table .cart th,
+.elementor-widget-woocommerce-cart .e-shop-table .cart td,
+.elementor-widget-woocommerce-checkout-page .e-checkout__order_review th,
+.elementor-widget-woocommerce-checkout-page .e-checkout__order_review td {
+  --order-summary-items-divider-color: var(--pm-panel-border) !important;
+  --order-summary-totals-divider-color: var(--pm-panel-border) !important;
+  border-color: var(--pm-panel-border) !important;
+}
+
+/* ---------- Variante alternativa (si prefieres MANTENER el fucsia): descomenta este bloque y
+   comenta el bloque 1. Pone el fondo fucsia con todo el texto en blanco. ----------
+.elementor-widget-woocommerce-cart .e-shop-table,
+.elementor-widget-woocommerce-cart .coupon,
+.elementor-widget-woocommerce-checkout-page .e-checkout__order_review {
+  --sections-background-color: #D64290 !important; background-color: #D64290 !important;
+  --links-normal-color: #fff !important; --product-link-normal-color: #fff !important;
+  --order-summary-color: #fff !important; --order-summary-items-color: #fff !important;
+  --order-summary-totals-color: #fff !important; --order-summary-variations-color: #fff !important;
+  --order-summary-items-divider-color: rgba(255,255,255,.4) !important;
+  --order-summary-totals-divider-color: rgba(255,255,255,.4) !important;
+  --forms-fields-normal-color: #fff !important; --forms-fields-border-color: #fff !important;
+  --forms-fields-placeholder-color: rgba(255,255,255,.75) !important;
+  --forms-buttons-normal-text-color: #D64290 !important; --forms-buttons-normal-background-color: #fff !important;
+  --order-summary-remove-icon-normal-color: #fff !important;
+  color: #fff !important; border: 0 !important; border-radius: 8px !important; padding: 24px !important;
+}
+.elementor-widget-woocommerce-cart .e-shop-table *:not(input):not(button),
+.elementor-widget-woocommerce-cart .coupon *:not(input):not(button),
+.elementor-widget-woocommerce-checkout-page .e-checkout__order_review *:not(input):not(button) { color: #fff !important; }
+.elementor-widget-woocommerce-cart .e-shop-table .cart th, .elementor-widget-woocommerce-cart .e-shop-table .cart td,
+.elementor-widget-woocommerce-checkout-page .e-checkout__order_review th, .elementor-widget-woocommerce-checkout-page .e-checkout__order_review td { border-color: rgba(255,255,255,.4) !important; }
+.elementor-widget-woocommerce-cart .e-shop-table .button, .elementor-widget-woocommerce-cart .coupon .button { background: #fff !important; color: #D64290 !important; border-color: #fff !important; }
+-------------------------------------------------------------------------------------------------------------- */
+
+/* ---------- 2. Tipografía sobria: sin "Título En Mayúsculas" ni letras espaciadas ---------- */
+.elementor-widget-woocommerce-cart,
+.elementor-widget-woocommerce-cart .button,
+.elementor-widget-woocommerce-cart .checkout-button,
+.elementor-widget-woocommerce-cart .cart th,
+.elementor-widget-woocommerce-cart .cart td:before,
+.elementor-widget-woocommerce-cart .cart_totals .shop_table td:before,
+.elementor-widget-woocommerce-cart .cart_totals .shop_table td .woocommerce-Price-amount,
+.elementor-widget-woocommerce-cart .cart_totals th,
+.elementor-widget-woocommerce-cart .cart_totals td,
+.elementor-widget-woocommerce-checkout-page,
+.elementor-widget-woocommerce-checkout-page label,
+.elementor-widget-woocommerce-checkout-page .e-description,
+.elementor-widget-woocommerce-checkout-page .e-checkout-secondary-title,
+.elementor-widget-woocommerce-checkout-page .woocommerce-form__label-for-checkbox span,
+.elementor-widget-woocommerce-checkout-page .woocommerce-privacy-policy-text,
+.elementor-widget-woocommerce-checkout-page .woocommerce-terms-and-conditions-wrapper,
+.elementor-widget-woocommerce-checkout-page .woocommerce-button,
+.elementor-widget-woocommerce-checkout-page #place_order,
+.elementor-widget-woocommerce-checkout-page .e-apply-coupon,
+.elementor-widget-woocommerce-checkout-page .woocommerce-checkout-review-order-table th,
+.elementor-widget-woocommerce-checkout-page .woocommerce-checkout-review-order-table td {
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+.elementor-widget-woocommerce-cart .cart_totals .shop_table td .woocommerce-Price-amount,
+.elementor-widget-woocommerce-cart .cart_totals .shop_table td:before {
+  font-weight: 500 !important; font-size: 15px !important;
+}
+.elementor-widget-woocommerce-cart .cart_totals th,
+.elementor-widget-woocommerce-cart .cart_totals td { font-size: 15px !important; }
+.elementor-widget-woocommerce-cart .cart_totals .order-total th,
+.elementor-widget-woocommerce-cart .cart_totals .order-total td .woocommerce-Price-amount,
+.elementor-widget-woocommerce-checkout-page .order-total th,
+.elementor-widget-woocommerce-checkout-page .order-total td { font-size: 17px !important; font-weight: 600 !important; }
+.elementor-widget-woocommerce-cart .cart_totals h2,
+.elementor-widget-woocommerce-checkout-page h3#order_review_heading,
+.elementor-widget-woocommerce-checkout-page .woocommerce-billing-fields h3,
+.elementor-widget-woocommerce-checkout-page .woocommerce-shipping-fields h3,
+.elementor-widget-woocommerce-checkout-page .woocommerce-additional-fields h3 {
+  font-size: 20px !important; font-weight: 600 !important; text-transform: none !important; letter-spacing: 0 !important; margin: 0 0 14px !important;
+}
+.elementor-widget-woocommerce-cart { --totals-rows-gap-top: 8px !important; --totals-rows-gap-bottom: 8px !important; --order-summary-title-spacing: 12px !important; }
+.elementor-widget-woocommerce-cart .cart_totals th,
+.elementor-widget-woocommerce-cart .cart_totals td { padding-top: 8px !important; padding-bottom: 8px !important; }
+
+/* ---------- 3. Formularios más compactos (carrito + checkout) ---------- */
+.elementor-widget-woocommerce-cart,
+.elementor-widget-woocommerce-checkout-page {
+  --forms-fields-padding: 8px 12px !important;
+  --forms-fields-border-radius: var(--pm-field-radius) !important;
+  --forms-fields-border-color: var(--pm-field-border) !important;
+  --forms-rows-gap: 10px !important;
+  --forms-columns-gap-padding: 6px !important;
+  --forms-columns-gap-margin: -6px !important;
+  --forms-labels-color: var(--pm-text) !important;
+  --forms-fields-normal-color: var(--pm-text) !important;
+}
+.elementor-widget-woocommerce-cart .input-text,
+.elementor-widget-woocommerce-cart .coupon .input-text,
+.elementor-widget-woocommerce-cart .qty,
+.elementor-widget-woocommerce-cart select,
+.elementor-widget-woocommerce-checkout-page .input-text,
+.elementor-widget-woocommerce-checkout-page #customer_details .input-text,
+.elementor-widget-woocommerce-checkout-page select,
+.elementor-widget-woocommerce-checkout-page .select2-container--default .select2-selection--single {
+  font-size: 14px !important;
+  line-height: 1.4 !important;
+  min-height: 40px !important;
+  height: 40px !important;
+  padding: 8px 12px !important;
+  border: 1px solid var(--pm-field-border) !important;
+  border-radius: var(--pm-field-radius) !important;
+  background: #fff !important;
+  color: var(--pm-text) !important;
+  box-shadow: none !important;
+}
+.elementor-widget-woocommerce-checkout-page textarea.input-text { height: auto !important; min-height: 80px !important; }
+.elementor-widget-woocommerce-cart .qty { width: 64px !important; text-align: center !important; }
+.elementor-widget-woocommerce-cart .input-text:focus,
+.elementor-widget-woocommerce-checkout-page .input-text:focus,
+.elementor-widget-woocommerce-checkout-page select:focus { border-color: var(--pm-accent) !important; outline: none !important; box-shadow: 0 0 0 2px rgba(214,66,144,.15) !important; }
+.elementor-widget-woocommerce-checkout-page .select2-container--default .select2-selection--single .select2-selection__rendered { line-height: 24px !important; padding-left: 0 !important; color: var(--pm-text) !important; }
+.elementor-widget-woocommerce-checkout-page .select2-container--default .select2-selection--single .select2-selection__arrow { height: 38px !important; right: 6px !important; }
+.elementor-widget-woocommerce-checkout-page .form-row { margin: 0 0 10px !important; padding: 0 !important; }
+.elementor-widget-woocommerce-checkout-page .form-row-wide { width: 100% !important; }
+.elementor-widget-woocommerce-checkout-page .woocommerce-billing-fields__field-wrapper,
+.elementor-widget-woocommerce-checkout-page .woocommerce-shipping-fields__field-wrapper { margin: 0 !important; }
+.elementor-widget-woocommerce-checkout-page .form-row label {
+  font-size: 13px !important; font-weight: 500 !important; margin-bottom: 4px !important; line-height: 1.3 !important; display: block !important;
+}
+.elementor-widget-woocommerce-checkout-page .form-row label .optional { color: var(--pm-muted) !important; font-weight: 400 !important; }
+.elementor-widget-woocommerce-checkout-page ::placeholder { color: #9a938b !important; opacity: 1 !important; }
+/* Campo NIF/CIF a ancho completo (viene sin clase de anchura) */
+.elementor-widget-woocommerce-checkout-page #billing_nif_field,
+.elementor-widget-woocommerce-checkout-page #shipping_nif_field,
+.elementor-widget-woocommerce-checkout-page #shipping_email_field,
+.elementor-widget-woocommerce-checkout-page #shipping_phone_field { width: 100% !important; float: none !important; clear: both !important; }
+/* Nombre / Apellidos en dos columnas del mismo ancho */
+@media (min-width: 768px) {
+  .elementor-widget-woocommerce-checkout-page .form-row-first,
+  .elementor-widget-woocommerce-checkout-page .form-row-last { width: calc(50% - 6px) !important; }
+  .elementor-widget-woocommerce-checkout-page .form-row-last { float: right !important; }
+}
+/* Casillas (boletín, crear cuenta, dirección diferente) más pegadas */
+.elementor-widget-woocommerce-checkout-page .woocommerce-form__label-for-checkbox { font-size: 14px !important; margin: 6px 0 !important; display: flex !important; align-items: center !important; gap: 8px !important; }
+.elementor-widget-woocommerce-checkout-page .woocommerce-form__label-for-checkbox input { margin: 0 !important; width: 16px !important; height: 16px !important; }
+.elementor-widget-woocommerce-checkout-page .woocommerce-account-fields,
+.elementor-widget-woocommerce-checkout-page .mailchimp-newsletter { margin-top: 6px !important; }
+.elementor-widget-woocommerce-checkout-page .woocommerce-additional-fields { --sections-margin: 20px 0 0 !important; margin-top: 20px !important; }
+
+/* ---------- 4. Botones: acento sólo en la acción principal; secundarios en contorno ---------- */
+.elementor-widget-woocommerce-cart .shop_table .button,
+.elementor-widget-woocommerce-cart .coupon .button,
+.elementor-widget-woocommerce-cart .woocommerce-shipping-calculator .button,
+.elementor-widget-woocommerce-checkout-page .woocommerce-button,
+.elementor-widget-woocommerce-checkout-page .e-apply-coupon {
+  background: #fff !important;
+  color: var(--pm-accent) !important;
+  border: 1px solid var(--pm-accent) !important;
+  border-radius: 999px !important;
+  padding: 9px 20px !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  line-height: 1.3 !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+  opacity: 1 !important;
+  box-shadow: none !important;
+}
+.elementor-widget-woocommerce-cart .shop_table .button:hover,
+.elementor-widget-woocommerce-cart .coupon .button:hover,
+.elementor-widget-woocommerce-checkout-page .woocommerce-button:hover,
+.elementor-widget-woocommerce-checkout-page .e-apply-coupon:hover { background: var(--pm-accent) !important; color: #fff !important; }
+.elementor-widget-woocommerce-cart .shop_table .button:disabled { opacity: .45 !important; }
+.elementor-widget-woocommerce-cart .checkout-button,
+.elementor-widget-woocommerce-checkout-page #payment #place_order {
+  background: var(--pm-accent) !important;
+  color: #fff !important;
+  border: 1px solid var(--pm-accent) !important;
+  border-radius: 999px !important;
+  padding: 13px 32px !important;
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+  width: 100% !important;
+  text-align: center !important;
+  --checkout-button-width: 100% !important;
+  --purchase-button-width: 100% !important;
+}
+.elementor-widget-woocommerce-cart .checkout-button:hover,
+.elementor-widget-woocommerce-checkout-page #payment #place_order:hover { background: var(--pm-accent-dark) !important; border-color: var(--pm-accent-dark) !important; color: #fff !important; }
+.elementor-widget-woocommerce-cart .wc-proceed-to-checkout { margin-top: 16px !important; }
+
+/* Cupón del carrito: campo y botón en una línea, alineados */
+.elementor-widget-woocommerce-cart .coupon .form-row { display: flex !important; gap: 10px !important; align-items: center !important; margin: 0 !important; }
+.elementor-widget-woocommerce-cart .coupon .coupon-col-start { flex: 1 1 auto !important; }
+.elementor-widget-woocommerce-cart .coupon .coupon-col-end { flex: 0 0 auto !important; }
+.elementor-widget-woocommerce-cart .coupon .input-text { width: 100% !important; }
+
+/* Tabla del carrito: cabeceras discretas, celdas más compactas, icono de eliminar visible */
+.elementor-widget-woocommerce-cart .e-shop-table .cart th { font-size: 13px !important; font-weight: 600 !important; color: var(--pm-muted) !important; padding: 0 8px 10px !important; }
+.elementor-widget-woocommerce-cart .e-shop-table .cart td { padding: 12px 8px !important; vertical-align: middle !important; font-size: 14px !important; }
+.elementor-widget-woocommerce-cart .e-shop-table .cart td.product-remove .remove { color: var(--pm-muted) !important; font-size: 18px !important; }
+.elementor-widget-woocommerce-cart .e-shop-table .cart td.product-remove .remove:hover { color: var(--pm-accent) !important; background: transparent !important; }
+.elementor-widget-woocommerce-cart .e-shop-table .cart td.actions { padding: 14px 0 0 !important; border-top: 1px solid var(--pm-panel-border) !important; text-align: right !important; }
+.elementor-widget-woocommerce-cart .e-shop-table .cart td.product-thumbnail img { max-width: 64px !important; border-radius: 6px !important; }
+
+/* ---------- 5. Columnas y espaciado general ---------- */
+.elementor-widget-woocommerce-cart .e-cart__container,
+.elementor-widget-woocommerce-checkout-page .e-checkout__container { gap: 32px !important; align-items: flex-start !important; }
+.elementor-widget-woocommerce-cart .e-cart__column-start,
+.elementor-widget-woocommerce-checkout-page .e-checkout__column-start { flex: 1 1 58% !important; min-width: 0 !important; }
+.elementor-widget-woocommerce-cart .e-cart__column-end,
+.elementor-widget-woocommerce-checkout-page .e-checkout__column-end { flex: 0 1 40% !important; min-width: 0 !important; }
+.elementor-widget-woocommerce-cart .e-cart-totals { --sections-margin: 0 !important; margin: 0 !important; }
+.elementor-widget-woocommerce-checkout-page .col2-set .col-1,
+.elementor-widget-woocommerce-checkout-page .col2-set .col-2 { --sections-margin: 0 !important; margin: 0 !important; width: 100% !important; float: none !important; }
+.elementor-widget-woocommerce-checkout-page .col2-set .col-2 { margin-top: 20px !important; }
+.elementor-widget-woocommerce-checkout-page .e-coupon-box { --sections-margin: 16px 0 !important; margin: 16px 0 !important; }
+.elementor-widget-woocommerce-checkout-page .e-woocommerce-login-section { margin-bottom: 18px !important; }
+.elementor-widget-woocommerce-checkout-page .e-checkout-secondary-title,
+.elementor-widget-woocommerce-checkout-page .e-coupon-anchor { font-size: 14px !important; font-weight: 400 !important; }
+.elementor-widget-woocommerce-checkout-page .e-description,
+.elementor-widget-woocommerce-checkout-page .woocommerce-privacy-policy-text,
+.elementor-widget-woocommerce-checkout-page .woocommerce-privacy-policy-text p { font-size: 13px !important; line-height: 1.5 !important; font-style: normal !important; text-transform: none !important; letter-spacing: 0 !important; color: var(--pm-muted) !important; }
+.elementor-widget-woocommerce-checkout-page .woocommerce-privacy-policy-text a,
+.elementor-widget-woocommerce-checkout-page .woocommerce-terms-and-conditions-wrapper a { color: var(--pm-accent) !important; }
+.elementor-widget-woocommerce-checkout-page .woocommerce-terms-and-conditions-wrapper { margin: 14px 0 !important; }
+.elementor-widget-woocommerce-checkout-page .woocommerce-terms-and-conditions-wrapper .woocommerce-form__label-for-checkbox { font-size: 13px !important; align-items: flex-start !important; }
+.elementor-widget-woocommerce-checkout-page .woocommerce-terms-and-conditions-wrapper .woocommerce-form__label-for-checkbox input { margin-top: 3px !important; }
+.elementor-widget-woocommerce-checkout-page .woocommerce-terms-and-conditions-wrapper .woocommerce-form__label-for-checkbox input { margin-right: 8px !important; flex: 0 0 auto !important; }
+.elementor-widget-woocommerce-checkout-page #payment { background: transparent !important; }
+.elementor-widget-woocommerce-checkout-page #payment .wc_payment_method label { font-size: 14px !important; font-weight: 500 !important; }
+/* Título de página "Check Out" / "Cart" (widget de encabezado): tamaño contenido */
+.woocommerce-checkout .elementor-widget-heading .elementor-heading-title,
+.woocommerce-cart .elementor-widget-heading .elementor-heading-title { font-size: clamp(26px, 3vw, 34px) !important; margin-bottom: 18px !important; }
+
+/* Móvil */
+@media (max-width: 767px) {
+  .elementor-widget-woocommerce-cart .e-shop-table,
+  .elementor-widget-woocommerce-cart .coupon,
+  .elementor-widget-woocommerce-checkout-page .e-checkout__order_review { padding: 16px !important; --sections-padding: 16px !important; }
+  .elementor-widget-woocommerce-cart .e-cart-totals { margin-top: 20px !important; }
+  .elementor-widget-woocommerce-cart .e-shop-table .cart td { padding: 8px 0 !important; }
+  .elementor-widget-woocommerce-cart .e-shop-table .cart td:before { font-size: 13px !important; color: var(--pm-muted) !important; font-weight: 500 !important; }
+  .elementor-widget-woocommerce-cart .e-shop-table .cart td.product-name { text-align: left !important; }
+  .elementor-widget-woocommerce-cart .e-shop-table .cart td.product-name:before { display: block !important; margin-bottom: 4px !important; }
+  .elementor-widget-woocommerce-cart .e-shop-table .cart td.product-name .variation { display: block !important; text-align: left !important; }
+  .elementor-widget-woocommerce-cart .e-shop-table .cart td.actions { text-align: center !important; }
+  .elementor-widget-woocommerce-cart .coupon .form-row { flex-direction: column !important; align-items: stretch !important; }
+  .elementor-widget-woocommerce-checkout-page .form-row-first,
+  .elementor-widget-woocommerce-checkout-page .form-row-last { width: 100% !important; float: none !important; }
+  /* El botón flotante de la mini-cesta tapa los totales en carrito/checkout */
+  body.woocommerce-cart #woofc-count,
+  body.woocommerce-checkout #woofc-count { display: none !important; }
+}
