@@ -37490,17 +37490,286 @@ async function getInvoiceEmailStatus(force = false) {
   return null;
 }
 
+// ===== Modal "Configurar correo de facturas" (2026-10-26) =====
+// 16 de 27 clientes no tenian el correo configurado en su FacturaScripts (Administrador -> Email) y el
+// envio de facturas fallaba. Este modal (solo administradores) escribe esa misma configuracion en el
+// FacturaScripts del cliente por su API (PUT settings/email) y despues pide al servidor una comprobacion
+// de conexion SIN enviar nada. La contrasena solo viaja TPV -> FacturaScripts del cliente: no pasa por
+// el servidor de Recipok, no se guarda en el TPV y no se anota en ningun registro.
+const EMAIL_PROVIDER_PRESETS = {
+  gmail: {
+    host: "smtp.gmail.com",
+    port: "465",
+    enc: "ssl",
+    hint: "Gmail: hay que usar una «contraseña de aplicación» (Cuenta de Google → Seguridad → Contraseñas de aplicaciones), no la contraseña normal de la cuenta.",
+  },
+  outlook: {
+    host: "smtp-mail.outlook.com",
+    port: "587",
+    enc: "tls",
+    hint: "Outlook / Hotmail: si tienes la verificación en dos pasos, usa una contraseña de aplicación.",
+  },
+  ionos: {
+    host: "smtp.ionos.es",
+    port: "587",
+    enc: "tls",
+    hint: "IONOS: la contraseña es la de la propia cuenta de correo.",
+  },
+};
+
+function isPlaceholderEmail(email) {
+  const e = String(email || "").trim().toLowerCase();
+  if (!e || !e.includes("@")) return true;
+  return (
+    e.startsWith("testemail@") ||
+    e.startsWith("test@") ||
+    e.endsWith("@example.com") ||
+    e.endsWith("@ejemplo.com")
+  );
+}
+
+function guessEmailProviderFromHost(host) {
+  const h = String(host || "").toLowerCase();
+  if (h.includes("gmail")) return "gmail";
+  if (h.includes("outlook") || h.includes("office365") || h.includes("hotmail")) return "outlook";
+  if (h.includes("ionos")) return "ionos";
+  return "";
+}
+
+function guessEmailProviderFromEmail(email) {
+  const d = String(email || "").toLowerCase().split("@")[1] || "";
+  if (d === "gmail.com" || d === "googlemail.com") return "gmail";
+  if (d === "outlook.com" || d === "outlook.es" || d === "hotmail.com" || d === "hotmail.es" || d === "live.com") return "outlook";
+  return "";
+}
+
+async function fsEmailSettingsRequest(method, formParams) {
+  const cfg = window.RECIPOK_API || {};
+  const base = String(cfg.baseUrl || "").replace(/\/+$/, "");
+  if (!base || !cfg.apiKey) throw new Error("Falta la configuración de la API de FacturaScripts.");
+  const headers = { Accept: "application/json", Token: cfg.apiKey };
+  const opts = { method, headers, cache: "no-store" };
+  if (formParams) {
+    headers["Content-Type"] = "application/x-www-form-urlencoded";
+    opts.body = formParams.toString();
+  }
+  const res = await fetchWithTimeout(`${base}/settings/email`, opts, 15000);
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(`FacturaScripts respondió HTTP ${res.status}.`);
+  return data;
+}
+
+async function checkEmailSettingsOnServer() {
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const res = await fetchWithTimeout(
+    `${TPV_SYNC_API_URL}?action=check-email-settings`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-TPV-API-KEY": getTpvSyncApiKey(),
+      },
+      body: JSON.stringify({ slug }),
+    },
+    25000,
+  );
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok) throw new Error(data?.error || `HTTP ${res.status} al comprobar el correo.`);
+  return { valid: !!data.valid, reason: String(data.reason || "") };
+}
+
+// Resuelve true si el correo ha quedado guardado Y comprobado; false si se cancela.
+function openEmailConfigModal() {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById("emailConfigOverlay");
+    const $ = (id) => document.getElementById(id);
+    const providerSel = $("emailCfgProvider");
+    const emailIn = $("emailCfgEmail");
+    const userIn = $("emailCfgUser");
+    const passIn = $("emailCfgPass");
+    const hostIn = $("emailCfgHost");
+    const portIn = $("emailCfgPort");
+    const encSel = $("emailCfgEnc");
+    const hintEl = $("emailCfgHint");
+    const statusEl = $("emailCfgStatus");
+    const saveBtn = $("emailCfgSaveBtn");
+    const cancelBtn = $("emailCfgCancelBtn");
+    const toggleBtn = $("emailCfgPassToggle");
+    if (!overlay || !providerSel || !emailIn || !userIn || !passIn || !hostIn || !portIn || !encSel || !saveBtn || !cancelBtn) {
+      resolve(false);
+      return;
+    }
+
+    let userEdited = false;
+    const setStatus = (text, kind) => {
+      statusEl.textContent = text || "";
+      statusEl.className = "email-config-status" + (kind ? ` is-${kind}` : "");
+    };
+    const applyProvider = (key) => {
+      const p = EMAIL_PROVIDER_PRESETS[key];
+      hintEl.textContent = p ? p.hint : "Pide a tu proveedor de correo el servidor SMTP, el puerto y el cifrado.";
+      if (!p) return;
+      hostIn.value = p.host;
+      portIn.value = p.port;
+      encSel.value = p.enc;
+    };
+
+    const onProvider = () => applyProvider(providerSel.value);
+    const onEmailInput = () => {
+      if (!userEdited) userIn.value = emailIn.value;
+    };
+    const onEmailChange = () => {
+      if (providerSel.value) return;
+      const guess = guessEmailProviderFromEmail(emailIn.value);
+      if (guess) {
+        providerSel.value = guess;
+        applyProvider(guess);
+      }
+    };
+    const onUserInput = () => {
+      userEdited = true;
+    };
+    const onToggle = () => {
+      passIn.type = passIn.type === "password" ? "text" : "password";
+    };
+    const kb = (el, kind) => () => window.TPV_QWERTY?.openForInput?.(el, kind);
+    const kbEmail = kb(emailIn, "email");
+    const kbUser = kb(userIn, "text");
+    const kbPass = kb(passIn, "text");
+    const kbHost = kb(hostIn, "text");
+    const kbPort = kb(portIn, "text");
+
+    let busy = false;
+    const close = (result) => {
+      overlay.classList.add("hidden");
+      providerSel.removeEventListener("change", onProvider);
+      emailIn.removeEventListener("input", onEmailInput);
+      emailIn.removeEventListener("change", onEmailChange);
+      userIn.removeEventListener("input", onUserInput);
+      toggleBtn?.removeEventListener("click", onToggle);
+      emailIn.removeEventListener("click", kbEmail);
+      userIn.removeEventListener("click", kbUser);
+      passIn.removeEventListener("click", kbPass);
+      hostIn.removeEventListener("click", kbHost);
+      portIn.removeEventListener("click", kbPort);
+      saveBtn.removeEventListener("click", onSave);
+      cancelBtn.removeEventListener("click", onCancel);
+      passIn.value = "";
+      passIn.type = "password";
+      resolve(result);
+    };
+    const onCancel = () => {
+      if (!busy) close(false);
+    };
+
+    const onSave = async () => {
+      if (busy) return;
+      const email = emailIn.value.trim();
+      const user = userIn.value.trim() || email;
+      const password = passIn.value;
+      const host = hostIn.value.trim();
+      const port = Number(String(portIn.value).trim());
+      const enc = encSel.value;
+      if (!email.includes("@") || email.includes(" ")) return setStatus("Escribe un email válido.", "err");
+      if (!password) return setStatus("Escribe la contraseña del correo.", "err");
+      if (!host) return setStatus("Escribe el servidor SMTP.", "err");
+      if (!Number.isInteger(port) || port < 1 || port > 65535) return setStatus("El puerto no es válido.", "err");
+
+      busy = true;
+      saveBtn.disabled = true;
+      cancelBtn.disabled = true;
+      try {
+        setStatus("Guardando en FacturaScripts…", "");
+        const params = new URLSearchParams();
+        params.set("email", email);
+        params.set("user", user);
+        params.set("password", password);
+        params.set("host", host);
+        params.set("port", String(port));
+        params.set("enc", enc);
+        params.set("mailer", "smtp");
+        await fsEmailSettingsRequest("PUT", params);
+        setStatus("Comprobando la conexión con el correo…", "");
+        const check = await checkEmailSettingsOnServer();
+        if (check.valid) {
+          __invoiceEmailStatus = { configured: true, at: Date.now() };
+          applyInvoiceEmailStatusToButtons();
+          toast("Correo configurado y comprobado ✅", "ok", "Enviar factura");
+          close(true);
+          return;
+        }
+        setStatus(check.reason || "No se pudo comprobar el correo.", "err");
+      } catch (e) {
+        setStatus("No se pudo guardar: " + (e?.message || e), "err");
+      } finally {
+        busy = false;
+        saveBtn.disabled = false;
+        cancelBtn.disabled = false;
+      }
+    };
+
+    providerSel.addEventListener("change", onProvider);
+    emailIn.addEventListener("input", onEmailInput);
+    emailIn.addEventListener("change", onEmailChange);
+    userIn.addEventListener("input", onUserInput);
+    toggleBtn?.addEventListener("click", onToggle);
+    emailIn.addEventListener("click", kbEmail);
+    userIn.addEventListener("click", kbUser);
+    passIn.addEventListener("click", kbPass);
+    hostIn.addEventListener("click", kbHost);
+    portIn.addEventListener("click", kbPort);
+    saveBtn.addEventListener("click", onSave);
+    cancelBtn.addEventListener("click", onCancel);
+
+    // Valores actuales de FacturaScripts (los de fabrica si nadie lo ha configurado).
+    passIn.value = "";
+    setStatus("", "");
+    overlay.classList.remove("hidden");
+    (async () => {
+      let props = {};
+      try {
+        const data = await fsEmailSettingsRequest("GET");
+        props = JSON.parse(String(data?.properties || "{}")) || {};
+      } catch {}
+      const savedEmail = String(props.email || "").trim();
+      const companyEmail = String(companyInfo?.email || "").trim();
+      emailIn.value = !isPlaceholderEmail(savedEmail) ? savedEmail : !isPlaceholderEmail(companyEmail) ? companyEmail : "";
+      const savedUser = String(props.user || "").trim();
+      userIn.value = savedUser || emailIn.value;
+      userEdited = !!savedUser && savedUser !== emailIn.value;
+      hostIn.value = String(props.host || "");
+      portIn.value = String(props.port || "");
+      encSel.value = String(props.enc || "").toLowerCase() === "tls" ? "tls" : "ssl";
+      const guess = guessEmailProviderFromHost(hostIn.value) || guessEmailProviderFromEmail(emailIn.value);
+      providerSel.value = guess;
+      hintEl.textContent = EMAIL_PROVIDER_PRESETS[guess]?.hint || "Pide a tu proveedor de correo el servidor SMTP, el puerto y el cifrado.";
+      if (guess && !hostIn.value) applyProvider(guess);
+    })();
+  });
+}
+
 // Punto de entrada desde el boton "Enviar factura" en el modal de Tickets:
 // pide email/mensaje, genera el PDF (via IPC, nunca toca el disco desde el
 // renderer) y lo manda.
 async function sendInvoiceEmailForTicket(ticket) {
   if ((await getInvoiceEmailStatus()) === false) {
-    showMessageModal(
+    if (!isAdminUser()) {
+      showMessageModal(
+        "Enviar factura",
+        "El correo de esta empresa no está configurado, así que no se pueden enviar facturas por email." +
+          "\n\nPide a un administrador que lo configure desde este mismo botón.",
+      );
+      return;
+    }
+    const configure = await confirmModal(
       "Enviar factura",
-      "El correo de esta empresa no está configurado en FacturaScripts, así que no se pueden enviar facturas por email." +
-        "\n\nUn administrador debe configurarlo en FacturaScripts (Administración → Correo: servidor, usuario y contraseña).",
+      "El correo de esta empresa no está configurado, así que no se pueden enviar facturas por email." +
+        "\n\n¿Quieres configurarlo ahora? Solo hace falta el email y su contraseña.",
+      { okButtonText: "Configurar ahora" },
     );
-    return;
+    if (!configure) return;
+    if (!(await openEmailConfigModal())) return;
   }
   const prefill = await getInvoiceCustomerBillingInfo(ticket).catch(() => null);
   const overlayResult = await openSendInvoiceEmailModal({

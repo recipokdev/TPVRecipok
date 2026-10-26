@@ -10974,6 +10974,26 @@ if (
   fail("Falta registrar el motivo de los cobros rechazados (renderer.js sendOrQueueFactura)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-26 modal Configurar correo de facturas\n");
+{
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  if (
+    html.includes('id="emailConfigOverlay"') &&
+    html.includes('id="emailCfgSaveBtn"') &&
+    renderer.includes("function openEmailConfigModal() {") &&
+    renderer.includes('await fsEmailSettingsRequest("PUT", params);') &&
+    renderer.includes("const check = await checkEmailSettingsOnServer();") &&
+    renderer.includes("function isPlaceholderEmail(email) {") &&
+    renderer.includes('const configure = await confirmModal(') &&
+    renderer.includes("if (!(await openEmailConfigModal())) return;") &&
+    styles.includes(".email-config-dialog {")
+  ) {
+    ok("Modal 'Configurar correo de facturas' (solo administradores, desde Enviar factura cuando no hay correo): escribe email/usuario/contrasena/servidor/puerto/cifrado en el FacturaScripts del cliente (PUT settings/email), con atajos Gmail/Outlook/IONOS, ignora emails de plantilla (testemail@...) y comprueba la conexion SMTP en el servidor sin enviar nada; la contrasena no pasa por el servidor de Recipok");
+  } else {
+    fail("Falta el modal Configurar correo de facturas (renderer.js openEmailConfigModal / index.html emailConfigOverlay / styles.css)");
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

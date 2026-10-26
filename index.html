@@ -1287,6 +1287,55 @@
       </div>
     </div>
 
+    <div id="emailConfigOverlay" class="simple-overlay hidden">
+      <div class="simple-dialog email-config-dialog">
+        <h2>Configurar correo de facturas</h2>
+        <p class="email-config-help">
+          Las facturas se enviarán desde esta cuenta de correo, con el nombre de
+          la empresa. Se guarda en FacturaScripts (Administrador → Email).
+        </p>
+        <label class="email-config-label" for="emailCfgProvider">Proveedor</label>
+        <select id="emailCfgProvider">
+          <option value="">Otro / lo escribo yo</option>
+          <option value="gmail">Gmail</option>
+          <option value="outlook">Outlook / Hotmail</option>
+          <option value="ionos">IONOS</option>
+        </select>
+        <label class="email-config-label" for="emailCfgEmail">Email (remitente)</label>
+        <input type="email" id="emailCfgEmail" placeholder="correo@tuempresa.com" autocomplete="off" />
+        <label class="email-config-label" for="emailCfgUser">Usuario</label>
+        <input type="text" id="emailCfgUser" placeholder="Normalmente el mismo email" autocomplete="off" />
+        <label class="email-config-label" for="emailCfgPass">Contraseña</label>
+        <div class="email-config-passrow">
+          <input type="password" id="emailCfgPass" autocomplete="new-password" />
+          <button type="button" id="emailCfgPassToggle" title="Mostrar u ocultar">👁</button>
+        </div>
+        <div class="email-config-row">
+          <div>
+            <label class="email-config-label" for="emailCfgHost">Servidor</label>
+            <input type="text" id="emailCfgHost" placeholder="smtp.ejemplo.com" autocomplete="off" />
+          </div>
+          <div class="email-config-port">
+            <label class="email-config-label" for="emailCfgPort">Puerto</label>
+            <input type="text" id="emailCfgPort" inputmode="numeric" placeholder="587" autocomplete="off" />
+          </div>
+          <div class="email-config-enc">
+            <label class="email-config-label" for="emailCfgEnc">Cifrado</label>
+            <select id="emailCfgEnc">
+              <option value="ssl">SSL</option>
+              <option value="tls">TLS</option>
+            </select>
+          </div>
+        </div>
+        <p id="emailCfgHint" class="email-config-hint"></p>
+        <p id="emailCfgStatus" class="email-config-status" role="status"></p>
+        <div class="dialog-actions">
+          <button id="emailCfgCancelBtn">Cancelar</button>
+          <button id="emailCfgSaveBtn">Guardar y comprobar</button>
+        </div>
+      </div>
+    </div>
+
     <div id="invoiceEmailOverlay" class="simple-overlay hidden">
       <div class="simple-dialog invoice-email-dialog">
         <h2>Enviar factura</h2>

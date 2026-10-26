@@ -10722,3 +10722,86 @@ body.theme-dark .opt-pv.is-action {
 .ticket-send-invoice.is-unconfigured {
   opacity: 0.45;
 }
+
+/* Modal "Configurar correo de facturas" (2026-10-26). */
+.email-config-dialog {
+  max-width: 520px;
+  width: 92vw;
+  max-height: 94vh;
+  overflow-y: auto;
+}
+.email-config-dialog input,
+.email-config-dialog select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  font-size: 14px;
+}
+.email-config-help {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: #475569;
+}
+.email-config-label {
+  display: block;
+  margin: 8px 0 3px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}
+.email-config-passrow {
+  display: flex;
+  gap: 6px;
+}
+.email-config-passrow button {
+  padding: 0 12px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  cursor: pointer;
+}
+.email-config-row {
+  display: flex;
+  gap: 8px;
+}
+.email-config-row > div {
+  flex: 1;
+  min-width: 0;
+}
+.email-config-row .email-config-port {
+  flex: 0 0 90px;
+}
+.email-config-row .email-config-enc {
+  flex: 0 0 90px;
+}
+.email-config-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #475569;
+  min-height: 14px;
+}
+.email-config-status {
+  margin: 8px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  min-height: 16px;
+}
+.email-config-status.is-ok {
+  color: #15803d;
+}
+.email-config-status.is-err {
+  color: #b91c1c;
+}
+body.theme-dark .email-config-dialog input,
+body.theme-dark .email-config-dialog select {
+  background: #1f2937;
+  color: #e5e7eb;
+  border-color: #374151;
+}
+body.theme-dark .email-config-help,
+body.theme-dark .email-config-hint,
+body.theme-dark .email-config-label {
+  color: #cbd5e1;
+}
