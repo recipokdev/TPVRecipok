@@ -10994,6 +10994,23 @@ console.log("\n[SMOKE] Checking 2026-10-26 modal Configurar correo de facturas\n
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-26 boton Configurar correo en Opciones\n");
+{
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  if (
+    html.includes('id="optionsEmailConfigBtn"') &&
+    html.includes('id="optionsEmailStatus"') &&
+    renderer.includes('OPT_PV.X("Correo de facturas", "optionsEmailConfigBtn"') &&
+    renderer.includes("async function refreshOptionsEmailStatus(force = false) {") &&
+    renderer.includes('document.getElementById("optionsEmailConfigBtn")?.addEventListener("click", async () => {') &&
+    styles.includes("#emailConfigOverlay {")
+  ) {
+    ok("Opciones > Impresora tiene la fila 'Correo de facturas' (estado configurado / sin configurar y boton Configurar, solo administradores) que abre el mismo modal de configuracion; el modal queda por encima de Opciones y el resumen del apartado muestra el estado");
+  } else {
+    fail("Falta el boton Configurar correo en Opciones (index.html optionsEmailConfigBtn / renderer.js refreshOptionsEmailStatus / styles.css)");
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

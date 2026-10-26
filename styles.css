@@ -10805,3 +10805,7 @@ body.theme-dark .email-config-hint,
 body.theme-dark .email-config-label {
   color: #cbd5e1;
 }
+
+#emailConfigOverlay {
+  z-index: 1000001;
+}

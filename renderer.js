@@ -32550,6 +32550,12 @@ const OPT_PREVIEW_DEFS = {
     OPT_PV.T("Imprimir al cobrar", "autoPrintToggle"),
     OPT_PV.A("Cambiar / probar impresora de tickets", "optionsChangePrinterBtn"),
     OPT_PV.A("Cambiar / probar impresora de comandas", "optionsChangeComandaPrinterBtn"),
+    OPT_PV.X("Correo de facturas", "optionsEmailConfigBtn", () => {
+      const ok = __invoiceEmailStatus.configured;
+      if (ok === true) return { text: "Correo de facturas configurado", state: "on" };
+      if (ok === false) return { text: "Correo de facturas sin configurar", state: "warn" };
+      return { text: "Configurar correo de facturas", state: "action" };
+    }),
   ],
   bascula: [
     OPT_PV.X("Báscula", "scaleEnabledToggle", (el) => {
@@ -33029,6 +33035,7 @@ function bindAutostartToggleOnce() {
 
 async function openOptions() {
   resetOptionsSearch();
+  refreshOptionsEmailStatus().catch(() => {});
   const cashOpen = !!cashSession?.open;
 
   const setOptionsReadOnlyMode = (readonly) => {
@@ -37748,6 +37755,27 @@ function openEmailConfigModal() {
     })();
   });
 }
+
+// Fila "Correo de facturas" de Opciones > Impresora: estado actual y boton para configurarlo.
+async function refreshOptionsEmailStatus(force = false) {
+  const el = document.getElementById("optionsEmailStatus");
+  if (el) el.textContent = "comprobando…";
+  const ok = await getInvoiceEmailStatus(force);
+  if (el) {
+    el.textContent = ok === true ? "configurado" : ok === false ? "sin configurar" : "sin comprobar";
+    el.style.color = ok === true ? "#15803d" : ok === false ? "#b45309" : "";
+  }
+  renderOptionsPreviews?.();
+}
+
+document.getElementById("optionsEmailConfigBtn")?.addEventListener("click", async () => {
+  if (!isAdminUser()) {
+    toast?.("Solo administradores.", "warn", "Opciones");
+    return;
+  }
+  await openEmailConfigModal();
+  await refreshOptionsEmailStatus(true);
+});
 
 // Punto de entrada desde el boton "Enviar factura" en el modal de Tickets:
 // pide email/mensaje, genera el PDF (via IPC, nunca toca el disco desde el
