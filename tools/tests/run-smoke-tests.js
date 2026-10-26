@@ -10964,6 +10964,16 @@ if (
   fail("Falta el aviso de correo no configurado en Enviar factura (renderer.js getInvoiceEmailStatus / sendInvoiceEmailForTicket, styles.css)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-26 motivo de cobros rechazados registrado en el servidor\n");
+if (
+  renderer.includes('step: isNetwork ? "crear-factura-en-cola" : "crear-factura-fallo",') &&
+  renderer.includes("message: `${msg} | lineas=${Array.isArray(payload?.lineas) ? payload.lineas.length : 0} total=${payload?._expectedTotal ?? ''}`,".replace("''", '""'))
+) {
+  ok("Cuando crear la factura falla (error de FacturaScripts o sin red) el motivo, el numero de lineas y el total se anotan en el audit del servidor (cobro-followup-incompleto, paso crear-factura-fallo / crear-factura-en-cola) para poder diagnosticar sin el registro local del TPV; nunca bloquea ni avisa al cajero");
+} else {
+  fail("Falta registrar el motivo de los cobros rechazados (renderer.js sendOrQueueFactura)");
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

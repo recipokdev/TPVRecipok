@@ -6,6 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
+        "MEJORA (diagnóstico, invisible para el cliente): cuando un cobro es rechazado por FacturaScripts o queda en cola por falta de conexión, el motivo se anota en el servidor para poder revisarlo después sin depender del registro local de ese TPV.",
         "MEJORA: «Enviar factura» por email avisa antes de empezar si la empresa no tiene el correo configurado en FacturaScripts (antes había que rellenar el formulario y esperar a que se generase el PDF para ver el error). Explica dónde configurarlo (Administración → Correo: servidor, usuario y contraseña) y el botón sale atenuado mientras no esté configurado."
       ]
     },

@@ -60202,6 +60202,16 @@ async function sendOrQueueFactura(payload) {
     const msg = e?.message || String(e);
     const isNetwork = isProbablyNetworkError(e);
 
+    // Observacional (2026-10-26): hasta ahora el motivo de un cobro rechazado (p.ej. un 422 de
+    // FacturaScripts) solo quedaba en el registro local de ese TPV y no se podia saber que paso. Se anota
+    // en el servidor (audit cobro-followup-incompleto, paso crear-factura-fallo/en-cola); nunca bloquea.
+    apiLogCobroFollowupIssue({
+      idfactura: 0,
+      codigo: "",
+      step: isNetwork ? "crear-factura-en-cola" : "crear-factura-fallo",
+      message: `${msg} | lineas=${Array.isArray(payload?.lineas) ? payload.lineas.length : 0} total=${payload?._expectedTotal ?? ""}`,
+    }).catch(() => {});
+
     if (!isNetwork) {
       return { ok: false, queued: false, error: msg };
     }
