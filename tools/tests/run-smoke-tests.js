@@ -11011,6 +11011,28 @@ console.log("\n[SMOKE] Checking 2026-10-26 boton Configurar correo en Opciones\n
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-26 correo: modal conserva la contrasena actual y el envio respeta copias/respuesta\n");
+{
+  const mailPhp = fs.existsSync(path.join(root, "paraPlesk/tpv/api/lib/mail.php"))
+    ? fs.readFileSync(path.join(root, "paraPlesk/tpv/api/lib/mail.php"), "utf8")
+    : "";
+  const modalOk =
+    renderer.includes("const keepPassword = !password && hadPassword;") &&
+    renderer.includes("if (!keepPassword) params.set(" + String.fromCharCode(34) + "password" + String.fromCharCode(34) + ", password);") &&
+    renderer.includes("hadPassword = !!String(props.password || " + String.fromCharCode(34, 34) + ");");
+  // El espejo del servidor (paraPlesk) esta excluido de git: si no esta en esta copia, solo se valida el modal.
+  const mailOk = !mailPhp || (
+    mailPhp.includes("function applyClientEmailRecipientsAndReply(") &&
+    mailPhp.includes("'cc' => parseClientEmailList((string)($properties['emailcc'] ?? ''))") &&
+    mailPhp.includes("$mail->addReplyTo($companyEmail, $displayName);")
+  );
+  if (modalOk && mailOk) {
+    ok("El modal de correo no vuelve a pedir la contrasena si FacturaScripts ya la tiene (en blanco = conservar, nunca se muestra) y el envio de facturas aplica copias, copias ocultas y 'Respuesta de emails' (0/-1 = al email de la empresa) del ajuste de correo de FacturaScripts, ignorando emails mal escritos");
+  } else {
+    fail("Falta conservar la contrasena en el modal de correo o aplicar copias/respuesta en el envio (renderer.js openEmailConfigModal / servidor lib/mail.php)");
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

@@ -37609,6 +37609,9 @@ function openEmailConfigModal() {
     }
 
     let userEdited = false;
+    // Si FacturaScripts ya tiene contraseña guardada, dejarla en blanco la conserva (no se vuelve a pedir
+    // para cambiar solo el servidor, el puerto, etc.). La contraseña actual nunca se muestra.
+    let hadPassword = false;
     const setStatus = (text, kind) => {
       statusEl.textContent = text || "";
       statusEl.className = "email-config-status" + (kind ? ` is-${kind}` : "");
@@ -37675,11 +37678,12 @@ function openEmailConfigModal() {
       const email = emailIn.value.trim();
       const user = userIn.value.trim() || email;
       const password = passIn.value;
+      const keepPassword = !password && hadPassword;
       const host = hostIn.value.trim();
       const port = Number(String(portIn.value).trim());
       const enc = encSel.value;
       if (!email.includes("@") || email.includes(" ")) return setStatus("Escribe un email válido.", "err");
-      if (!password) return setStatus("Escribe la contraseña del correo.", "err");
+      if (!password && !keepPassword) return setStatus("Escribe la contraseña del correo.", "err");
       if (!host) return setStatus("Escribe el servidor SMTP.", "err");
       if (!Number.isInteger(port) || port < 1 || port > 65535) return setStatus("El puerto no es válido.", "err");
 
@@ -37691,7 +37695,7 @@ function openEmailConfigModal() {
         const params = new URLSearchParams();
         params.set("email", email);
         params.set("user", user);
-        params.set("password", password);
+        if (!keepPassword) params.set("password", password);
         params.set("host", host);
         params.set("port", String(port));
         params.set("enc", enc);
@@ -37739,6 +37743,8 @@ function openEmailConfigModal() {
         const data = await fsEmailSettingsRequest("GET");
         props = JSON.parse(String(data?.properties || "{}")) || {};
       } catch {}
+      hadPassword = !!String(props.password || "");
+      passIn.placeholder = hadPassword ? "Dejar en blanco para mantener la actual" : "";
       const savedEmail = String(props.email || "").trim();
       const companyEmail = String(companyInfo?.email || "").trim();
       emailIn.value = !isPlaceholderEmail(savedEmail) ? savedEmail : !isPlaceholderEmail(companyEmail) ? companyEmail : "";
