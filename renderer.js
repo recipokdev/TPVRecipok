@@ -37601,6 +37601,7 @@ function openEmailConfigModal() {
     const hintEl = $("emailCfgHint");
     const statusEl = $("emailCfgStatus");
     const saveBtn = $("emailCfgSaveBtn");
+    const checkBtn = $("emailCfgCheckBtn");
     const cancelBtn = $("emailCfgCancelBtn");
     const toggleBtn = $("emailCfgPassToggle");
     if (!overlay || !providerSel || !emailIn || !userIn || !passIn || !hostIn || !portIn || !encSel || !saveBtn || !cancelBtn) {
@@ -37612,6 +37613,19 @@ function openEmailConfigModal() {
     // Si FacturaScripts ya tiene contraseña guardada, dejarla en blanco la conserva (no se vuelve a pedir
     // para cambiar solo el servidor, el puerto, etc.). La contraseña actual nunca se muestra.
     let hadPassword = false;
+    let initialFields = null; // para saber si hay cambios sin guardar
+    const readFields = () => ({
+      email: emailIn.value.trim(),
+      user: userIn.value.trim(),
+      host: hostIn.value.trim(),
+      port: portIn.value.trim(),
+      enc: encSel.value,
+    });
+    const hasUnsavedChanges = () => {
+      if (!initialFields) return false;
+      const cur = readFields();
+      return passIn.value !== "" || Object.keys(cur).some((k) => cur[k] !== initialFields[k]);
+    };
     const setStatus = (text, kind) => {
       statusEl.textContent = text || "";
       statusEl.className = "email-config-status" + (kind ? ` is-${kind}` : "");
@@ -37664,6 +37678,7 @@ function openEmailConfigModal() {
       hostIn.removeEventListener("click", kbHost);
       portIn.removeEventListener("click", kbPort);
       saveBtn.removeEventListener("click", onSave);
+      checkBtn?.removeEventListener("click", onCheck);
       cancelBtn.removeEventListener("click", onCancel);
       passIn.value = "";
       passIn.type = "password";
@@ -37671,6 +37686,38 @@ function openEmailConfigModal() {
     };
     const onCancel = () => {
       if (!busy) close(false);
+    };
+
+    // Prueba el correo YA guardado en FacturaScripts (sin cambiar nada): sirve para saber si la contraseña
+    // guardada sigue siendo correcta sin tener que verla.
+    const onCheck = async () => {
+      if (busy) return;
+      if (hasUnsavedChanges()) {
+        setStatus("Hay cambios sin guardar: usa «Guardar y comprobar».", "err");
+        return;
+      }
+      busy = true;
+      saveBtn.disabled = true;
+      checkBtn.disabled = true;
+      cancelBtn.disabled = true;
+      try {
+        setStatus("Comprobando la conexión con el correo…", "");
+        const check = await checkEmailSettingsOnServer();
+        if (check.valid) {
+          __invoiceEmailStatus = { configured: true, at: Date.now() };
+          applyInvoiceEmailStatusToButtons();
+          setStatus("Conexión correcta ✅ La contraseña guardada funciona.", "ok");
+        } else {
+          setStatus(check.reason || "No se pudo comprobar el correo.", "err");
+        }
+      } catch (e) {
+        setStatus("No se pudo comprobar: " + (e?.message || e), "err");
+      } finally {
+        busy = false;
+        saveBtn.disabled = false;
+        checkBtn.disabled = false;
+        cancelBtn.disabled = false;
+      }
     };
 
     const onSave = async () => {
@@ -37689,6 +37736,7 @@ function openEmailConfigModal() {
 
       busy = true;
       saveBtn.disabled = true;
+      checkBtn.disabled = true;
       cancelBtn.disabled = true;
       try {
         setStatus("Guardando en FacturaScripts…", "");
@@ -37716,6 +37764,7 @@ function openEmailConfigModal() {
       } finally {
         busy = false;
         saveBtn.disabled = false;
+        checkBtn.disabled = false;
         cancelBtn.disabled = false;
       }
     };
@@ -37731,6 +37780,7 @@ function openEmailConfigModal() {
     hostIn.addEventListener("click", kbHost);
     portIn.addEventListener("click", kbPort);
     saveBtn.addEventListener("click", onSave);
+    checkBtn?.addEventListener("click", onCheck);
     cancelBtn.addEventListener("click", onCancel);
 
     // Valores actuales de FacturaScripts (los de fabrica si nadie lo ha configurado).
@@ -37743,10 +37793,15 @@ function openEmailConfigModal() {
         const data = await fsEmailSettingsRequest("GET");
         props = JSON.parse(String(data?.properties || "{}")) || {};
       } catch {}
-      // Igual que la pantalla Administrador > Email de FacturaScripts: la contraseña guardada aparece
-      // oculta con puntos (el ojo la muestra). Solo administradores ven este modal.
-      hadPassword = !!String(props.password || "");
-      passIn.value = String(props.password || "");
+      // La contraseña guardada NO se muestra ni se copia al formulario (es la clave del buzón de la
+      // empresa y el modal lo ven los administradores del TPV, que no siempre son los dueños): solo se
+      // enseña cuantos caracteres tiene. En blanco = se conserva; «Comprobar conexión» prueba la guardada.
+      const storedPassLen = String(props.password || "").length;
+      hadPassword = storedPassLen > 0;
+      passIn.value = "";
+      passIn.placeholder = hadPassword
+        ? `Guardada (${storedPassLen} caracteres). Escribe otra solo para cambiarla`
+        : "";
       const savedEmail = String(props.email || "").trim();
       const companyEmail = String(companyInfo?.email || "").trim();
       emailIn.value = !isPlaceholderEmail(savedEmail) ? savedEmail : !isPlaceholderEmail(companyEmail) ? companyEmail : "";
@@ -37760,6 +37815,7 @@ function openEmailConfigModal() {
       providerSel.value = guess;
       hintEl.textContent = EMAIL_PROVIDER_PRESETS[guess]?.hint || "Pide a tu proveedor de correo el servidor SMTP, el puerto y el cifrado.";
       if (guess && !hostIn.value) applyProvider(guess);
+      initialFields = readFields();
     })();
   });
 }

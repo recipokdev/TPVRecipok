@@ -11016,10 +11016,14 @@ console.log("\n[SMOKE] Checking 2026-10-26 correo: modal conserva la contrasena 
   const mailPhp = fs.existsSync(path.join(root, "paraPlesk/tpv/api/lib/mail.php"))
     ? fs.readFileSync(path.join(root, "paraPlesk/tpv/api/lib/mail.php"), "utf8")
     : "";
+  const html2 = fs.readFileSync(path.join(root, "index.html"), "utf8");
   const modalOk =
     renderer.includes("const keepPassword = !password && hadPassword;") &&
     renderer.includes("if (!keepPassword) params.set(" + String.fromCharCode(34) + "password" + String.fromCharCode(34) + ", password);") &&
-    renderer.includes("passIn.value = String(props.password || " + String.fromCharCode(34, 34) + ");");
+    renderer.includes("const storedPassLen = String(props.password || " + String.fromCharCode(34, 34) + ").length;") &&
+    renderer.includes("const onCheck = async () => {") &&
+    html2.includes('id="emailCfgCheckBtn"') &&
+    !renderer.includes("passIn.value = String(props.password");
   // El espejo del servidor (paraPlesk) esta excluido de git: si no esta en esta copia, solo se valida el modal.
   const mailOk = !mailPhp || (
     mailPhp.includes("function applyClientEmailRecipientsAndReply(") &&
