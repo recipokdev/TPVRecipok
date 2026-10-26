@@ -11019,7 +11019,7 @@ console.log("\n[SMOKE] Checking 2026-10-26 correo: modal conserva la contrasena 
   const modalOk =
     renderer.includes("const keepPassword = !password && hadPassword;") &&
     renderer.includes("if (!keepPassword) params.set(" + String.fromCharCode(34) + "password" + String.fromCharCode(34) + ", password);") &&
-    renderer.includes("hadPassword = !!String(props.password || " + String.fromCharCode(34, 34) + ");");
+    renderer.includes("passIn.value = String(props.password || " + String.fromCharCode(34, 34) + ");");
   // El espejo del servidor (paraPlesk) esta excluido de git: si no esta en esta copia, solo se valida el modal.
   const mailOk = !mailPhp || (
     mailPhp.includes("function applyClientEmailRecipientsAndReply(") &&

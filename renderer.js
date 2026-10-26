@@ -37743,8 +37743,10 @@ function openEmailConfigModal() {
         const data = await fsEmailSettingsRequest("GET");
         props = JSON.parse(String(data?.properties || "{}")) || {};
       } catch {}
+      // Igual que la pantalla Administrador > Email de FacturaScripts: la contraseña guardada aparece
+      // oculta con puntos (el ojo la muestra). Solo administradores ven este modal.
       hadPassword = !!String(props.password || "");
-      passIn.placeholder = hadPassword ? "Dejar en blanco para mantener la actual" : "";
+      passIn.value = String(props.password || "");
       const savedEmail = String(props.email || "").trim();
       const companyEmail = String(companyInfo?.email || "").trim();
       emailIn.value = !isPlaceholderEmail(savedEmail) ? savedEmail : !isPlaceholderEmail(companyEmail) ? companyEmail : "";
