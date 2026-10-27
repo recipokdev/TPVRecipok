@@ -37659,19 +37659,30 @@ const EMAIL_PROVIDER_PRESETS = {
     host: "smtp.gmail.com",
     port: "465",
     enc: "ssl",
-    hint: "Gmail: hay que usar una «contraseña de aplicación» (Cuenta de Google → Seguridad → Contraseñas de aplicaciones), no la contraseña normal de la cuenta.",
+    hint: "Servidor de Gmail rellenado automáticamente. El usuario es tu email completo.",
+    appPassword: true,
+    passHint:
+      "IMPORTANTE: aquí va una «contraseña de aplicación» (16 letras que genera Google), NO la contraseña de tu correo. " +
+      "Cómo crearla: Cuenta de Google → Seguridad → Verificación en dos pasos (tiene que estar activada) → Contraseñas de aplicaciones " +
+      "(myaccount.google.com/apppasswords). Puedes pegarla con o sin espacios.",
   },
   outlook: {
     host: "smtp-mail.outlook.com",
     port: "587",
     enc: "tls",
-    hint: "Outlook / Hotmail: si tienes la verificación en dos pasos, usa una contraseña de aplicación.",
+    hint: "Servidor de Outlook rellenado automáticamente. El usuario es tu email completo.",
+    appPassword: true,
+    passHint:
+      "IMPORTANTE: con la verificación en dos pasos hay que usar una «contraseña de aplicación», NO la contraseña de tu cuenta. " +
+      "Cómo crearla: Cuenta Microsoft → Seguridad → Opciones de seguridad avanzadas → Contraseña de aplicación.",
   },
   ionos: {
     host: "smtp.ionos.es",
     port: "587",
     enc: "tls",
-    hint: "IONOS: la contraseña es la de la propia cuenta de correo.",
+    hint: "Servidor de IONOS rellenado automáticamente. El usuario es tu email completo.",
+    appPassword: false,
+    passHint: "",
   },
 };
 
@@ -37764,6 +37775,7 @@ function openEmailConfigModal() {
     // Si FacturaScripts ya tiene contraseña guardada, dejarla en blanco la conserva (no se vuelve a pedir
     // para cambiar solo el servidor, el puerto, etc.). La contraseña actual nunca se muestra.
     let hadPassword = false;
+    let storedPassLen = 0;
     let initialFields = null; // para saber si hay cambios sin guardar
     const readFields = () => ({
       email: emailIn.value.trim(),
@@ -37781,14 +37793,37 @@ function openEmailConfigModal() {
       statusEl.textContent = text || "";
       statusEl.className = "email-config-status" + (kind ? ` is-${kind}` : "");
     };
-    const applyProvider = (key) => {
+    const userBox = $("emailCfgUserBox");
+    const passLabel = $("emailCfgPassLabel");
+    const passHintEl = $("emailCfgPassHint");
+    // Con Gmail / Outlook / IONOS el usuario SIEMPRE es el email completo (se oculta el campo); con "otro" se escribe.
+    const isKnownProvider = () => !!EMAIL_PROVIDER_PRESETS[providerSel.value];
+    const refreshProviderUI = (key) => {
       const p = EMAIL_PROVIDER_PRESETS[key];
       hintEl.textContent = p ? p.hint : "Pide a tu proveedor de correo el servidor SMTP, el puerto y el cifrado.";
+      if (userBox) userBox.classList.toggle("hidden", !!p);
+      const appPass = !!p?.appPassword;
+      if (passLabel) passLabel.textContent = appPass ? "Contraseña de aplicación" : "Contraseña";
+      if (passHintEl) {
+        passHintEl.textContent = p?.passHint || "";
+        passHintEl.classList.toggle("hidden", !p?.passHint);
+      }
+      passIn.placeholder = hadPassword
+        ? `Guardada (${storedPassLen} caracteres). Escribe otra solo para cambiarla`
+        : appPass
+          ? "Contraseña de aplicación, no la de tu cuenta"
+          : "";
+    };
+    const applyProvider = (key) => {
+      const p = EMAIL_PROVIDER_PRESETS[key];
+      refreshProviderUI(key);
       if (!p) return;
       hostIn.value = p.host;
       portIn.value = p.port;
       encSel.value = p.enc;
     };
+    const onPassFocus = () => passHintEl?.classList.add("is-focus");
+    const onPassBlur = () => passHintEl?.classList.remove("is-focus");
 
     const onProvider = () => applyProvider(providerSel.value);
     const onEmailInput = () => {
@@ -37826,6 +37861,8 @@ function openEmailConfigModal() {
       emailIn.removeEventListener("click", kbEmail);
       userIn.removeEventListener("click", kbUser);
       passIn.removeEventListener("click", kbPass);
+      passIn.removeEventListener("focus", onPassFocus);
+      passIn.removeEventListener("blur", onPassBlur);
       hostIn.removeEventListener("click", kbHost);
       portIn.removeEventListener("click", kbPort);
       saveBtn.removeEventListener("click", onSave);
@@ -37876,8 +37913,10 @@ function openEmailConfigModal() {
     const onSave = async () => {
       if (busy) return;
       const email = emailIn.value.trim();
-      const user = userIn.value.trim() || email;
-      const password = passIn.value;
+      const user = isKnownProvider() ? email : userIn.value.trim() || email;
+      // Google muestra la contraseña de aplicación en grupos con espacios: se quitan al pegarla.
+      const password =
+        providerSel.value === "gmail" || providerSel.value === "outlook" ? passIn.value.split(" ").join("") : passIn.value;
       const keepPassword = !password && hadPassword;
       const host = hostIn.value.trim();
       const port = Number(String(portIn.value).trim());
@@ -37932,6 +37971,8 @@ function openEmailConfigModal() {
     emailIn.addEventListener("click", kbEmail);
     userIn.addEventListener("click", kbUser);
     passIn.addEventListener("click", kbPass);
+    passIn.addEventListener("focus", onPassFocus);
+    passIn.addEventListener("blur", onPassBlur);
     hostIn.addEventListener("click", kbHost);
     portIn.addEventListener("click", kbPort);
     saveBtn.addEventListener("click", onSave);
@@ -37951,12 +37992,9 @@ function openEmailConfigModal() {
       // La contraseña guardada NO se muestra ni se copia al formulario (es la clave del buzón de la
       // empresa y el modal lo ven los administradores del TPV, que no siempre son los dueños): solo se
       // enseña cuantos caracteres tiene. En blanco = se conserva; «Comprobar conexión» prueba la guardada.
-      const storedPassLen = String(props.password || "").length;
+      storedPassLen = String(props.password || "").length;
       hadPassword = storedPassLen > 0;
       passIn.value = "";
-      passIn.placeholder = hadPassword
-        ? `Guardada (${storedPassLen} caracteres). Escribe otra solo para cambiarla`
-        : "";
       const savedEmail = String(props.email || "").trim();
       const companyEmail = String(companyInfo?.email || "").trim();
       emailIn.value = !isPlaceholderEmail(savedEmail) ? savedEmail : !isPlaceholderEmail(companyEmail) ? companyEmail : "";
@@ -37968,7 +38006,7 @@ function openEmailConfigModal() {
       encSel.value = String(props.enc || "").toLowerCase() === "tls" ? "tls" : "ssl";
       const guess = guessEmailProviderFromHost(hostIn.value) || guessEmailProviderFromEmail(emailIn.value);
       providerSel.value = guess;
-      hintEl.textContent = EMAIL_PROVIDER_PRESETS[guess]?.hint || "Pide a tu proveedor de correo el servidor SMTP, el puerto y el cifrado.";
+      refreshProviderUI(guess);
       if (guess && !hostIn.value) applyProvider(guess);
       initialFields = readFields();
     })();

@@ -1303,13 +1303,16 @@
         </select>
         <label class="email-config-label" for="emailCfgEmail">Email (remitente)</label>
         <input type="email" id="emailCfgEmail" placeholder="correo@tuempresa.com" autocomplete="off" />
-        <label class="email-config-label" for="emailCfgUser">Usuario</label>
-        <input type="text" id="emailCfgUser" placeholder="Normalmente el mismo email" autocomplete="off" />
-        <label class="email-config-label" for="emailCfgPass">Contraseña</label>
+        <div id="emailCfgUserBox">
+          <label class="email-config-label" for="emailCfgUser">Usuario</label>
+          <input type="text" id="emailCfgUser" placeholder="Normalmente el mismo email" autocomplete="off" />
+        </div>
+        <label class="email-config-label" for="emailCfgPass" id="emailCfgPassLabel">Contraseña</label>
         <div class="email-config-passrow">
           <input type="password" id="emailCfgPass" autocomplete="new-password" />
           <button type="button" id="emailCfgPassToggle" title="Mostrar u ocultar">👁</button>
         </div>
+        <p id="emailCfgPassHint" class="email-config-passhint hidden"></p>
         <div class="email-config-row">
           <div>
             <label class="email-config-label" for="emailCfgHost">Servidor</label>
@@ -2184,7 +2187,7 @@
               autocomplete="off"
               spellcheck="false"
             />
-            <button type="button" id="optionsSearchClear" class="small-btn hidden" title="Borrar la búsqueda" aria-label="Borrar la búsqueda">✕</button>
+            <button type="button" id="optionsSearchClear" class="opt-search-clear hidden" title="Borrar la búsqueda" aria-label="Borrar la búsqueda">✕</button>
           </div>
           <div id="optionsSearchEmpty" class="opt-search-empty hidden">Ninguna opción coincide con la búsqueda.</div>
 

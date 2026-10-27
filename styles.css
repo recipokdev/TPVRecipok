@@ -10713,9 +10713,12 @@ body.theme-dark .opt-pv.is-action {
 }
 
 /* Contador de aparcados con pedidos de dias anteriores sin cobrar (2026-10-23). */
+/* Mismo aspecto que el contador normal (pastilla blanca) pero con borde y numero en rojo: antes iba en naranja
+   sobre el boton naranja y no se distinguia (se veia solo el numero). */
 #parkedCountBadge.has-stale {
-  background: #f59e0b !important;
-  color: #111827 !important;
+  background: #ffffff !important;
+  color: #b91c1c !important;
+  box-shadow: 0 0 0 2px #dc2626;
 }
 
 /* "Enviar factura" cuando el correo de la empresa no esta configurado en FacturaScripts (2026-10-23). */
@@ -10808,4 +10811,59 @@ body.theme-dark .email-config-label {
 
 #emailConfigOverlay {
   z-index: 1000001;
+}
+
+/* Buscador de Opciones: X pequena dentro del campo (2026-10-27). */
+.opt-search {
+  position: sticky;
+}
+.opt-search .opt-input {
+  padding-right: 34px;
+}
+.opt-search-clear {
+  position: absolute;
+  right: 10px;
+  top: calc(2px + (100% - 8px) / 2);
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: #e5e7eb;
+  color: #374151;
+  font-size: 12px;
+  line-height: 22px;
+  text-align: center;
+  cursor: pointer;
+}
+.opt-search-clear:hover {
+  background: #d1d5db;
+}
+body.theme-dark .opt-search-clear {
+  background: #374151;
+  color: #e5e7eb;
+}
+
+/* Modal de correo: aviso de contrasena de aplicacion (Gmail / Outlook). */
+.email-config-passhint {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #f59e0b;
+  background: #fffbeb;
+  color: #78350f;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.email-config-passhint.is-focus {
+  border-width: 2px;
+  background: #fef3c7;
+  color: #7c2d12;
+  font-weight: 700;
+}
+body.theme-dark .email-config-passhint {
+  background: #422006;
+  color: #fde68a;
+  border-color: #b45309;
 }

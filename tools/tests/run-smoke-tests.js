@@ -11029,7 +11029,7 @@ console.log("\n[SMOKE] Checking 2026-10-26 correo: modal conserva la contrasena 
   const modalOk =
     renderer.includes("const keepPassword = !password && hadPassword;") &&
     renderer.includes("if (!keepPassword) params.set(" + String.fromCharCode(34) + "password" + String.fromCharCode(34) + ", password);") &&
-    renderer.includes("const storedPassLen = String(props.password || " + String.fromCharCode(34, 34) + ").length;") &&
+    renderer.includes("storedPassLen = String(props.password || " + String.fromCharCode(34, 34) + ").length;") &&
     renderer.includes("const onCheck = async () => {") &&
     html2.includes('id="emailCfgCheckBtn"') &&
     !renderer.includes("passIn.value = String(props.password");
@@ -11043,6 +11043,26 @@ console.log("\n[SMOKE] Checking 2026-10-26 correo: modal conserva la contrasena 
     ok("El modal de correo no vuelve a pedir la contrasena si FacturaScripts ya la tiene (en blanco = conservar, nunca se muestra) y el envio de facturas aplica copias, copias ocultas y 'Respuesta de emails' (0/-1 = al email de la empresa) del ajuste de correo de FacturaScripts, ignorando emails mal escritos");
   } else {
     fail("Falta conservar la contrasena en el modal de correo o aplicar copias/respuesta en el envio (renderer.js openEmailConfigModal / servidor lib/mail.php)");
+  }
+}
+
+console.log("\n[SMOKE] Checking 2026-10-27 retoques de interfaz: contador de pedidos, X del buscador, modal de correo\n");
+{
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  if (
+    styles.includes("color: #b91c1c !important;") &&
+    html.includes('class="opt-search-clear hidden"') &&
+    styles.includes(".opt-search-clear {") &&
+    html.includes('id="emailCfgUserBox"') &&
+    html.includes('id="emailCfgPassHint"') &&
+    renderer.includes("const refreshProviderUI = (key) => {") &&
+    renderer.includes('"Contraseña de aplicación, no la de tu cuenta"') &&
+    renderer.includes("const user = isKnownProvider() ? email : userIn.value.trim() || email;") &&
+    renderer.includes('passIn.value.split(" ").join("")')
+  ) {
+    ok("El contador de pedidos de dias anteriores es una pastilla blanca con borde rojo (visible sobre el boton naranja); el buscador de Opciones tiene una X pequena dentro del campo; el modal de correo oculta el usuario con Gmail/Outlook/IONOS (siempre el email), pide 'Contraseña de aplicacion' con un aviso destacado al enfocar y quita los espacios al pegarla");
+  } else {
+    fail("Faltan los retoques de interfaz (contador de pedidos / X del buscador / modal de correo)");
   }
 }
 
