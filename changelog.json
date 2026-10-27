@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.54",
+      "date": "2026-10-27",
+      "title": "Release 0.2.54",
       "changes": [
         "MEJORA: al aparcar un pedido nuevo para un cliente que ya tiene otro pedido sin cobrar, el TPV avisa («Ya hay un pedido pendiente…») y deja elegir entre crear uno nuevo, ver los pedidos aparcados o cancelar. Si el cliente quiere cambiar su pedido, lo correcto es abrirlo y editarlo: así no se duplica ni se descuenta el stock dos veces.",
         "ARREGLO: al abrir un pedido aparcado para cambiarlo, si quitabas todos sus productos y añadías otros, el TPV soltaba el pedido sin avisar: al aparcar se creaba un pedido NUEVO y el viejo se quedaba pendiente con sus productos y su stock reservado (pedido duplicado y stock descontado dos veces; caso real de Asador el Gallo). Ahora, si dejas vacío el pedido que tienes abierto, lo que añadas después se guarda en ESE mismo pedido.",
