@@ -19799,16 +19799,15 @@ async function maybePromptStaleParkedTickets() {
     .map((t) => String(t?.mesaTableName || t?.name || t?.clientName || "pedido").trim())
     .filter(Boolean)
     .join(", ");
-  const ok = await confirmModal(
-    "Pedidos de días anteriores",
-    `Hay ${stale.length} pedido(s) sin cobrar de días anteriores${names ? ` (${names}${stale.length > 4 ? "..." : ""})` : ""}.\n\nSi ya están cobrados o no hacen falta, revísalos para liberar las mesas.`,
-    { okButtonText: "Revisar ahora" },
+  // Aviso que NO bloquea (toast): antes era un cuadro de confirmacion que salia solo a los 8 s de abrir caja y
+  // tapaba la pantalla en pleno servicio (y dejaba colgada la prueba E2E de Mesas). El contador de pedidos ya queda
+  // marcado en rojo hasta que se revisen.
+  toast(
+    `Hay ${stale.length} pedido(s) sin cobrar de días anteriores${names ? ` (${names}${stale.length > 4 ? "..." : ""})` : ""}. ` +
+      "Revísalos en «Pedidos», pestaña «Días anteriores», para cobrarlos o liberar las mesas.",
+    "warn",
+    "Pedidos antiguos",
   );
-  if (!ok) return;
-  parkedViewState.filter = "pending";
-  parkedViewState.pendingScope = "older";
-  openParkedModal();
-  syncParkedToolbarUI?.();
 }
 
 function updateParkedCountBadge() {
