@@ -568,10 +568,140 @@ function logFeatureInfo(feature, action, details = {}) {
   console.info(`[TPV][${feature}] ${prefix}${action}`, details);
 }
 
+// ===== Registro de eventos de cliente en el servidor (2026-10-27) =====
+// Los fallos y situaciones raras se mandan al servidor (audit "client-<categoria>") con una CATEGORIA y un
+// CODIGO fijos, para diagnosticar sin depender del registro local de cada TPV. Es solo observacional: nunca
+// bloquea ni muestra nada al cajero, no se manda sin red ni en modo formacion, el mismo evento no se repite
+// antes de 5 min (se acumula "count") y hay un tope de 40 eventos cada 10 min.
+const __clientEventSeen = new Map(); // categoria|codigo|mensaje -> { sentAt, pending }
+let __clientEventWindow = { start: 0, n: 0 };
+
+function sanitizeClientEventDetail(detail) {
+  const out = {};
+  if (!detail || typeof detail !== "object") return out;
+  for (const k of Object.keys(detail).slice(0, 8)) {
+    const v = detail[k];
+    if (typeof v === "number" || typeof v === "boolean") out[k] = v;
+    else if (typeof v === "string") out[k] = v.slice(0, 120);
+  }
+  return out;
+}
+
+function reportClientEvent(category, code, message, detail, severity) {
+  try {
+    if (TPV_STATE?.offline) return;
+    if (typeof isSafeTrainingModeEnabled === "function" && isSafeTrainingModeEnabled()) return;
+    const slug = String(getCurrentSlugForReservations() || "").trim();
+    const apiKey = getTpvSyncApiKey();
+    if (!slug || !apiKey) return;
+    const cat = String(category || "other").toLowerCase();
+    const cod = String(code || "unknown").slice(0, 80);
+    const msg = String(message || "").slice(0, 300);
+    const k = `${cat}|${cod}|${msg.slice(0, 80)}`;
+    const now = Date.now();
+    const seen = __clientEventSeen.get(k) || { sentAt: 0, pending: 0 };
+    if (now - seen.sentAt < 5 * 60 * 1000) {
+      seen.pending += 1;
+      __clientEventSeen.set(k, seen);
+      return;
+    }
+    if (now - __clientEventWindow.start > 10 * 60 * 1000) __clientEventWindow = { start: now, n: 0 };
+    if (__clientEventWindow.n >= 40) return;
+    __clientEventWindow.n += 1;
+    __clientEventSeen.set(k, { sentAt: now, pending: 0 });
+    if (__clientEventSeen.size > 300) __clientEventSeen.delete(__clientEventSeen.keys().next().value);
+    const appVersion = String(document.getElementById("appVersion")?.textContent || "")
+      .trim()
+      .replace(/^v/i, "");
+    fetchWithTimeout(
+      `${TPV_SYNC_API_URL}?action=log-client-event`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-TPV-API-KEY": apiKey,
+        },
+        body: JSON.stringify({
+          slug,
+          category: cat,
+          code: cod,
+          severity: severity === "error" ? "error" : "warn",
+          message: msg,
+          detail: sanitizeClientEventDetail(detail),
+          appVersion,
+          terminalId: String(currentTerminal?.id || "").slice(0, 60),
+          count: 1 + seen.pending,
+        }),
+      },
+      4000,
+    ).catch(() => {});
+  } catch {
+    /* es solo diagnostico: nunca debe romper nada */
+  }
+}
+
+// Para lo que llega desde logFeatureWarn/logFeatureError (detalles de forma libre, a veces con nombres): solo se
+// reenvian numeros, booleanos y textos de unas pocas claves tecnicas; nunca texto libre que pueda llevar datos personales.
+function safeLogDetailForReport(details) {
+  const out = {};
+  if (!details || typeof details !== "object") return out;
+  const textKeys = ["reason", "step", "mode", "status", "code", "kind", "type", "detail"];
+  for (const k of Object.keys(details).slice(0, 12)) {
+    const v = details[k];
+    if (typeof v === "number" || typeof v === "boolean") out[k] = v;
+    else if (typeof v === "string" && textKeys.includes(k)) out[k] = v.slice(0, 120);
+  }
+  return out;
+}
+
+function clientEventCodeFromText(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+}
+
+// Recorta un recurso de la API a algo seguro y agrupable: sin parametros ni ids ("tpvcajas/201" -> "tpvcajas/{id}").
+function normalizeApiResourceForReport(resource) {
+  return String(resource || "")
+    .split("?")[0]
+    .split("/")
+    .map((s) => (/^[0-9]+$/.test(s) ? "{id}" : s))
+    .join("/")
+    .slice(0, 80);
+}
+
+window.addEventListener("error", (e) => {
+  const msg = String(e?.message || "error");
+  if (msg.includes("ResizeObserver")) return;
+  reportClientEvent(
+    "js",
+    "uncaught-error",
+    msg,
+    { file: String(e?.filename || "").split("/").pop(), line: Number(e?.lineno) || 0, col: Number(e?.colno) || 0 },
+    "error",
+  );
+});
+
+window.addEventListener("unhandledrejection", (e) => {
+  const r = e?.reason;
+  const msg = String(r?.message || r || "rechazo sin motivo");
+  reportClientEvent(
+    "js",
+    "unhandled-rejection",
+    msg,
+    { stack: String(r?.stack || "").split("\n")[1]?.trim() || "" },
+    "error",
+  );
+});
+
 function logFeatureWarn(feature, action, details = {}) {
   const requestId = String(details?.requestId || "").trim();
   const prefix = requestId ? `[${requestId}] ` : "";
   console.warn(`[TPV][${feature}] ${prefix}${action}`, details);
+  reportClientEvent(String(feature || "other"), clientEventCodeFromText(action), String(action || ""), safeLogDetailForReport(details), "warn");
 }
 
 function logFeatureError(feature, action, error, details = {}) {
@@ -582,6 +712,7 @@ function logFeatureError(feature, action, error, details = {}) {
     ...details,
     message: msg,
   });
+  reportClientEvent(String(feature || "other"), clientEventCodeFromText(action), msg || String(action || ""), safeLogDetailForReport(details), "error");
 }
 
 function createRequestId(prefix = "REQ") {
@@ -21358,6 +21489,9 @@ function notifyWorkerSyncIssue(key, message, opts = {}) {
   const text = String(message || "Problema de sincronizacion").trim();
   if (!text) return;
 
+  // Este aviso SI lo ve el cajero (toast de error): se anota cual fue y por que.
+  reportClientEvent("sync", clientEventCodeFromText(key) || "sync-issue", text, { key: String(key), modal: !!opts?.modal }, "error");
+
   toast(text, "err", title);
   setStatusText("Atencion: revisar sincronizacion y avisar a soporte.");
 
@@ -29754,6 +29888,13 @@ async function apiWrite(resource, method = "POST", fields = {}, opts = {}) {
       signal: controller.signal,
     });
   } catch (err) {
+    reportClientEvent(
+      "api",
+      err?.name === "AbortError" ? "write-timeout" : "write-network",
+      `${method} ${normalizeApiResourceForReport(resource)}`,
+      { method, resource: normalizeApiResourceForReport(resource), timeoutMs },
+      "warn",
+    );
     if (err?.name === "AbortError") {
       throw new Error(`Timeout al escribir en ${resource}`);
     }
@@ -29779,6 +29920,16 @@ async function apiWrite(resource, method = "POST", fields = {}, opts = {}) {
       "Respuesta:",
       text,
     );
+    // 404/409/412 son respuestas "normales" de varios flujos; el resto interesa saberlo.
+    if (res.status >= 500 || [400, 401, 403, 422, 429].includes(res.status)) {
+      reportClientEvent(
+        "api",
+        `write-http-${res.status}`,
+        `${method} ${normalizeApiResourceForReport(resource)}: ${String(data?.message || text || "").slice(0, 160)}`,
+        { method, resource: normalizeApiResourceForReport(resource), status: res.status },
+        "error",
+      );
+    }
     const apiErr = new Error(data?.message || `HTTP ${res.status} en ${resource}`);
     // Texto bruto de la respuesta (FacturaScripts devuelve el motivo real en
     // "error", no en "message"): lo necesita quien quiera distinguir, p.ej.,
@@ -48649,6 +48800,13 @@ async function printComandaWithContext({
   });
 
   if (!printResult?.ok) {
+    reportClientEvent(
+      "print",
+      "comanda-print-failed",
+      String(printResult?.error || "error desconocido"),
+      { isReturn: !!isReturn, isReprint: !!isReprint, lineas: Array.isArray(lines) ? lines.length : 0 },
+      "error",
+    );
     return {
       ok: false,
       error: `${errorPrefix} ${printResult?.error || "error desconocido"}`,
@@ -60566,12 +60724,17 @@ async function sendOrQueueFactura(payload) {
     // Observacional (2026-10-26): hasta ahora el motivo de un cobro rechazado (p.ej. un 422 de
     // FacturaScripts) solo quedaba en el registro local de ese TPV y no se podia saber que paso. Se anota
     // en el servidor (audit cobro-followup-incompleto, paso crear-factura-fallo/en-cola); nunca bloquea.
-    apiLogCobroFollowupIssue({
-      idfactura: 0,
-      codigo: "",
-      step: isNetwork ? "crear-factura-en-cola" : "crear-factura-fallo",
-      message: `${msg} | lineas=${Array.isArray(payload?.lineas) ? payload.lineas.length : 0} total=${payload?._expectedTotal ?? ""}`,
-    }).catch(() => {});
+    reportClientEvent(
+      "cobro",
+      isNetwork ? "create-invoice-queued" : "create-invoice-failed",
+      msg,
+      {
+        lineas: Array.isArray(payload?.lineas) ? payload.lineas.length : 0,
+        total: Number(payload?._expectedTotal) || 0,
+        firstAttemptAgoSec: payload?._firstAttemptAt ? Math.round((Date.now() - Number(payload._firstAttemptAt)) / 1000) : 0,
+      },
+      "error",
+    );
 
     if (!isNetwork) {
       return { ok: false, queued: false, error: msg };
@@ -62450,6 +62613,15 @@ async function apiRead(resource) {
   }
 
   if (!res.ok || (data && data.status === "error")) {
+    if (res.status >= 500 || res.status === 401 || res.status === 403) {
+      reportClientEvent(
+        "api",
+        `read-http-${res.status}`,
+        `GET ${normalizeApiResourceForReport(resource)}`,
+        { resource: normalizeApiResourceForReport(resource), status: res.status },
+        "error",
+      );
+    }
     throw new Error(data?.message || `HTTP ${res.status} en ${resource}`);
   }
 

@@ -10964,14 +10964,21 @@ if (
   fail("Falta el aviso de correo no configurado en Enviar factura (renderer.js getInvoiceEmailStatus / sendInvoiceEmailForTicket, styles.css)");
 }
 
-console.log("\n[SMOKE] Checking 2026-10-26 motivo de cobros rechazados registrado en el servidor\n");
+console.log("\n[SMOKE] Checking 2026-10-27 registro de eventos de cliente en el servidor\n");
 if (
-  renderer.includes('step: isNetwork ? "crear-factura-en-cola" : "crear-factura-fallo",') &&
-  renderer.includes("message: `${msg} | lineas=${Array.isArray(payload?.lineas) ? payload.lineas.length : 0} total=${payload?._expectedTotal ?? ''}`,".replace("''", '""'))
+  renderer.includes("function reportClientEvent(category, code, message, detail, severity) {") &&
+  renderer.includes("`${TPV_SYNC_API_URL}?action=log-client-event`") &&
+  renderer.includes("if (__clientEventWindow.n >= 40) return;") &&
+  renderer.includes('window.addEventListener("unhandledrejection", (e) => {') &&
+  renderer.includes('clientEventCodeFromText(action), String(action || ""), safeLogDetailForReport(details), "warn");') &&
+  renderer.includes('`write-http-${res.status}`') &&
+  renderer.includes('isNetwork ? "create-invoice-queued" : "create-invoice-failed",') &&
+  renderer.includes('reportClientEvent("sync", clientEventCodeFromText(key) || "sync-issue"') &&
+  renderer.includes('"comanda-print-failed",')
 ) {
-  ok("Cuando crear la factura falla (error de FacturaScripts o sin red) el motivo, el numero de lineas y el total se anotan en el audit del servidor (cobro-followup-incompleto, paso crear-factura-fallo / crear-factura-en-cola) para poder diagnosticar sin el registro local del TPV; nunca bloquea ni avisa al cajero");
+  ok("Los fallos del TPV se anotan en el servidor con categoria y codigo fijos (audit client-<categoria>): errores de JavaScript no capturados, fallos de la API (red, tiempo agotado, 4xx/5xx relevantes), cobros rechazados o en cola con su motivo, avisos de sincronizacion que ve el cajero, impresion de comandas y todo logFeatureWarn/logFeatureError; sin duplicados en 5 min, con tope de 40 cada 10 min, sin red/modo formacion no se manda, y nunca bloquea ni muestra nada");
 } else {
-  fail("Falta registrar el motivo de los cobros rechazados (renderer.js sendOrQueueFactura)");
+  fail("Falta el registro de eventos de cliente en el servidor (renderer.js reportClientEvent y sus enganches)");
 }
 
 console.log("\n[SMOKE] Checking 2026-10-26 modal Configurar correo de facturas\n");
