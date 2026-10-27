@@ -13674,8 +13674,8 @@ async function runBootFlow() {
     await loadSafeTrainingModeToggle?.();
     await loadDiscountQuickPercentsSetting?.();
 
-    // 3) Datos
-    await loadDataFromApi();
+    // 3) Datos (si ya se cargaron mientras salia el login, se reutilizan)
+    await loadDataFromApi({ reuseIfFresh: true });
 
     let restoredCartAtBoot = false;
 
@@ -30656,7 +30656,57 @@ function fireSessionReady() {
 }
 
 // ===== [07] API: carga principal de datos Recipok =====
-async function loadDataFromApi(opts = {}) {
+// La carga completa (familias, productos, variantes, stock, empresas, terminales, imagenes) es pesada. En un
+// equipo recien activado se hacia DOS veces seguidas: el monitor de conexion la lanzaba mientras salia el login
+// y el arranque la repetia al entrar el usuario, sin mirar que ya estaba hecha (medido 2026-10-27: 2 cargas
+// completas + la validacion del acceso). Ahora:
+//  - si ya hay una carga en curso de la MISMA empresa, la peticion se une a ella (no se lanza otra);
+//  - el arranque (reuseIfFresh) se salta la carga si hubo una correcta hace menos de 2 min con datos cargados.
+// Una recarga pedida a proposito (refresh) siempre se hace.
+let __dataLoadInFlight = null;
+let __dataLoadInFlightKey = "";
+let __dataLoadedAt = 0;
+let __dataLoadedKey = "";
+
+function currentDataLoadKey() {
+  const cfg = window.RECIPOK_API || {};
+  return `${cfg.baseUrl || ""}|${cfg.apiKey || ""}`;
+}
+
+function loadDataFromApi(opts = {}) {
+  const key = currentDataLoadKey();
+  if (__dataLoadInFlight && __dataLoadInFlightKey === key && !opts?.refresh) {
+    return __dataLoadInFlight;
+  }
+  if (
+    opts?.reuseIfFresh &&
+    !opts?.refresh &&
+    key === __dataLoadedKey &&
+    Date.now() - __dataLoadedAt < 120000 &&
+    Array.isArray(products) &&
+    products.length > 0 &&
+    Array.isArray(categories) &&
+    categories.length > 0 &&
+    !TPV_STATE?.offline
+  ) {
+    return Promise.resolve();
+  }
+  const p = loadDataFromApiImpl(opts)
+    .then(() => {
+      if (!TPV_STATE?.offline && Array.isArray(products) && products.length > 0) {
+        __dataLoadedAt = Date.now();
+        __dataLoadedKey = key;
+      }
+    })
+    .finally(() => {
+      if (__dataLoadInFlight === p) __dataLoadInFlight = null;
+    });
+  __dataLoadInFlight = p;
+  __dataLoadInFlightKey = key;
+  return p;
+}
+
+async function loadDataFromApiImpl(opts = {}) {
   console.log("loadDataFromApi() ejecutándose con:", window.RECIPOK_API);
 
   try {

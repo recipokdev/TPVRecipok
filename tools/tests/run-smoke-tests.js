@@ -11089,6 +11089,19 @@ console.log("\n[SMOKE] Checking 2026-10-27 ayuda con pasos y QR para la contrase
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-27 carga de datos sin duplicar al entrar\n");
+if (
+  renderer.includes("function loadDataFromApi(opts = {}) {") &&
+  renderer.includes("async function loadDataFromApiImpl(opts = {}) {") &&
+  renderer.includes("if (__dataLoadInFlight && __dataLoadInFlightKey === key && !opts?.refresh) {") &&
+  renderer.includes("opts?.reuseIfFresh &&") &&
+  renderer.includes("await loadDataFromApi({ reuseIfFresh: true });")
+) {
+  ok("La carga completa de productos/familias/stock ya no se duplica al arrancar: una peticion mientras hay otra en curso de la misma empresa se une a ella, y el arranque tras el login reutiliza la carga hecha hace menos de 2 min (antes se descargaba todo dos veces en un equipo recien activado); un refresh pedido a proposito siempre recarga");
+} else {
+  fail("Falta evitar la doble carga de datos al arrancar (renderer.js loadDataFromApi / runBootFlow)");
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "MEJORA: el arranque es más rápido y gasta menos datos. Al activar un TPV nuevo, el catálogo (productos, familias, stock...) se descargaba entero mientras salía el login y volvía a descargarse entero al elegir usuario. Ahora se reutiliza lo ya cargado y los productos se quedan puestos al entrar."
+      ]
     },
     {
       "version": "0.2.53",
