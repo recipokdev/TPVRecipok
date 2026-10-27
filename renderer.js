@@ -52243,6 +52243,61 @@ parkQuickFlagsList?.addEventListener("click", (ev) => {
   renderParkQuickFlags();
 });
 
+// ---- Aviso de pedido repetido al aparcar (Asador el Gallo, 2026-10-27) ----
+// Un cliente que cambia su pedido y se "rehace" desde cero deja el viejo pendiente con su stock reservado:
+// dos pedidos del mismo cliente, stock descontado dos veces. Antes de crear un pedido NUEVO en TPV normal se
+// avisa si ese cliente (por cliente elegido o por el nombre del ticket) ya tiene uno sin cobrar.
+function parkNameKey(s) {
+  return String(normalizeSearchText(String(s || "")))
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .sort()
+    .join("");
+}
+
+function isGenericParkNameKey(key) {
+  if (!key || /^\d*ticket\d*$/.test(key)) return true;
+  return ["Ventas tickets", "Venta tickets", "Contado", "Cliente", "Cliente contado"]
+    .map(parkNameKey)
+    .includes(key);
+}
+
+function findPendingTicketsForSameCustomer(ticketName) {
+  const key = parkNameKey(ticketName);
+  const cod = String(
+    window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() ||
+      window.CUSTOMER_SELECTOR?.getSelectedCustomer?.()?.codcliente ||
+      "",
+  ).trim();
+  const defCod = String(currentTerminal?.codcliente || "1").trim() || "1";
+  const useCod = !!cod && cod !== defCod && cod !== "1";
+  const useName = !isGenericParkNameKey(key);
+  if (!useCod && !useName) return [];
+  return (Array.isArray(parkedTickets) ? parkedTickets : [])
+    .filter((t) => {
+      if (!t || t.paid || t.closingInProgress) return false;
+      if (isParkedTicketTombstoned(t) || isMesasModeTicket(t)) return false;
+      if (!isTicketInCurrentParkingMode(t)) return false;
+      if (useCod && String(t.codcliente || t.clientCodcliente || "").trim() === cod) return true;
+      return useName && (parkNameKey(t.name) === key || parkNameKey(t.clientName) === key);
+    })
+    .sort((a, b2) => {
+      const ta = new Date(a.createdAt || a.updatedAt || Number(a.id) || 0).getTime() || 0;
+      const tb = new Date(b2.createdAt || b2.updatedAt || Number(b2.id) || 0).getTime() || 0;
+      return ta - tb;
+    });
+}
+
+function describePendingTicketForWarning(t) {
+  const when = new Date(t.createdAt || t.updatedAt || Number(t.id) || Date.now());
+  const hh = Number.isNaN(when.getTime())
+    ? "?"
+    : when.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
+  const lines = Array.isArray(t.items) ? t.items : [];
+  const units = lines.reduce((s, l) => s + (Number(l?.qty ?? l?.cantidad ?? 0) || 0), 0);
+  return `• ${String(t.name || "Ticket").trim()} · ${hh} · ${units} producto${units === 1 ? "" : "s"} · ${eur(Number(t.total) || 0)}`;
+}
+
 parkObsOkBtn?.addEventListener("click", async () => {
   const loadedTicketForUpdate = getCurrentLoadedParkedTicket();
   const targetParkingMode = isMesasTransaccionesMode()
@@ -52267,6 +52322,45 @@ parkObsOkBtn?.addEventListener("click", async () => {
   if (!isMesasTransaccionesMode() && !cashSession?.open) {
     toast("Para aparcar tickets debes abrir la caja.", "warn", "Aparcados");
     return;
+  }
+
+  // Pedido NUEVO (no es editar uno abierto) en TPV normal: avisar si el cliente ya tiene uno pendiente.
+  if (targetParkingMode === PARKED_MODE_TPV && !loadedTicketForUpdate && !parkObsMetaEditMode) {
+    let dups = [];
+    try {
+      dups = findPendingTicketsForSameCustomer(ticketName);
+    } catch {}
+    if (dups.length) {
+      const shown = dups.slice(0, 3).map(describePendingTicketForWarning).join("\n");
+      const choice = await confirmModal(
+        "Ya hay un pedido pendiente",
+        `Este cliente ya tiene ${dups.length === 1 ? "un pedido sin cobrar" : dups.length + " pedidos sin cobrar"}:\n\n${shown}\n\n` +
+          `Si el cliente quiere CAMBIAR ese pedido, ábrelo desde Aparcados y edítalo (quita y añade productos): así no se duplica ni se descuenta el stock dos veces.\n\n` +
+          `¿Crear un pedido nuevo de todas formas?`,
+        {
+          dialogClassName: "wide-dialog",
+          okButtonText: "Crear uno nuevo igualmente",
+          middleButtonText: "Ver Aparcados",
+          middleButtonResult: "view",
+        },
+      );
+      try {
+        const oldest = new Date(dups[0].createdAt || dups[0].updatedAt || Number(dups[0].id) || Date.now()).getTime();
+        reportClientEvent(
+          "aparcados",
+          "duplicate-customer-" + (choice === true ? "create-anyway" : choice === "view" ? "view" : "cancel"),
+          "Pedido nuevo para un cliente que ya tenia uno pendiente",
+          { pendientes: dups.length, minutosDelMasViejo: Math.round((Date.now() - oldest) / 60000) },
+          "info",
+        );
+      } catch {}
+      if (choice === "view") {
+        closeParkObsModal();
+        openParkedModal();
+        return;
+      }
+      if (!choice) return;
+    }
   }
 
   closeParkObsModal();

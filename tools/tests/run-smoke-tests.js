@@ -10764,6 +10764,21 @@ console.log("\n[SMOKE] Checking 2026-10-27 leyenda del mapa de Mesas sin estados
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-27 aviso de pedido repetido al aparcar para un cliente que ya tiene uno pendiente\n");
+if (
+  renderer.includes("function findPendingTicketsForSameCustomer(ticketName) {") &&
+  renderer.includes("function parkNameKey(s) {") &&
+  renderer.includes('"Ya hay un pedido pendiente",') &&
+  renderer.includes('okButtonText: "Crear uno nuevo igualmente",') &&
+  renderer.includes('middleButtonText: "Ver Aparcados",') &&
+  renderer.includes('"duplicate-customer-"') &&
+  renderer.includes("targetParkingMode === PARKED_MODE_TPV && !loadedTicketForUpdate && !parkObsMetaEditMode")
+) {
+  ok("Al aparcar un pedido NUEVO en TPV normal, si el cliente (elegido o por el nombre del ticket) ya tiene uno sin cobrar, el TPV avisa (crear igualmente / ver Aparcados / cancelar) y manda un evento de cliente 'aparcados' sin datos personales; no avisa con nombres genericos ni al editar un pedido abierto ni en Modo Mesas");
+} else {
+  fail("Falta el aviso de pedido repetido al aparcar (renderer.js findPendingTicketsForSameCustomer / parkObsOkBtn)");
+}
+
 console.log("\n[SMOKE] Checking 2026-10-27 dejar vacio un aparcado abierto no lo suelta (Asador el Gallo: pedido duplicado y stock doble)\n");
 if (
   renderer.includes("let PARKED_LINK_KEPT_EMPTY_ID = 0;") &&
