@@ -10764,6 +10764,21 @@ console.log("\n[SMOKE] Checking 2026-10-27 leyenda del mapa de Mesas sin estados
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-27 dejar vacio un aparcado abierto no lo suelta (Asador el Gallo: pedido duplicado y stock doble)\n");
+if (
+  renderer.includes("let PARKED_LINK_KEPT_EMPTY_ID = 0;") &&
+  renderer.includes("function armKeepParkedLinkIfCartEmptied() {") &&
+  (renderer.match(/armKeepParkedLinkIfCartEmptied\(\);/g) || []).length >= 2 &&
+  renderer.includes("if (uiLines.length) PARKED_LINK_KEPT_EMPTY_ID = 0;") &&
+  renderer.includes("if (shouldClearCurrentParkedIndex && PARKED_LINK_KEPT_EMPTY_ID) {") &&
+  renderer.includes("(Number(keptTicket.id || keptTicket.ticketId || 0) || 0) === PARKED_LINK_KEPT_EMPTY_ID") &&
+  renderer.includes("PARKED_LINK_KEPT_EMPTY_ID !== ACTIVE_PARKED_TICKET_ID")
+) {
+  ok("Si el cajero deja vacio (quitando lineas) el aparcado que tiene abierto, el TPV ya no lo suelta: lo que añada despues actualiza ESE pedido en vez de crear uno nuevo y dejar el viejo vivo con su stock reservado (antes se duplicaba el pedido y el stock se descontaba dos veces); cobrar o 'Salir' siguen soltandolo");
+} else {
+  fail("Falta mantener el vinculo con el aparcado abierto cuando el cajero lo deja vacio quitando lineas (renderer.js renderCart / armKeepParkedLinkIfCartEmptied / PARKED_LINK_KEPT_EMPTY_ID)");
+}
+
 console.log("\n[SMOKE] Checking 2026-10-27 dos cajeros en el mismo aparcado: fusion en 3 vias y lineas quitadas\n");
 if (
   renderer.includes("function handleLoadedTicketPaidElsewhere(paidTicket, baseTicket = null) {") &&

@@ -348,6 +348,10 @@ let parkedClearPaidInFlight = false;
 let parkedClearPendingInFlight = false;
 // Índice del ticket aparcado actualmente cargado en el carrito
 let currentParkedTicketIndex = null;
+// Id del aparcado cuyo carrito ha dejado vacio EL CAJERO quitando lineas (no un cobro ni "Salir"): se
+// mantiene el vinculo con ese pedido aunque el carrito este vacio, para que lo que se añada despues
+// ACTUALICE ese mismo pedido en vez de crear uno nuevo y dejar el viejo vivo (Asador el Gallo, 2026-10-27).
+let PARKED_LINK_KEPT_EMPTY_ID = 0;
 // Feedback de cliente real (stress test 2026-08-26): currentParkedTicketIndex
 // es solo una POSICION. Si la lista de aparcados cambia de orden despues de
 // abrir un ticket concreto pero ANTES de cobrarlo (llega uno nuevo, un sync
@@ -375,6 +379,22 @@ function setCurrentParkedTicketIndex(index) {
     ? String(getParkedTicketSyncKey(t) || "").trim()
     : "";
   ACTIVE_PARKED_TICKET_ID = t ? Number(t?.id || 0) || 0 : 0;
+  if (PARKED_LINK_KEPT_EMPTY_ID && PARKED_LINK_KEPT_EMPTY_ID !== ACTIVE_PARKED_TICKET_ID) {
+    PARKED_LINK_KEPT_EMPTY_ID = 0;
+  }
+}
+
+// Llamar justo despues de quitar lineas del carrito y ANTES de renderCart(): si el cajero acaba de dejar
+// vacio el pedido que tenia abierto, se recuerda para que renderCart no lo suelte. Quitar todas las
+// lineas para "cambiar el pedido" y volver a añadir otras era lo que dejaba el pedido viejo intacto y
+// creaba uno nuevo (con el stock reservado dos veces).
+function armKeepParkedLinkIfCartEmptied() {
+  try {
+    if (currentParkedTicketIndex == null || hasVisibleCartLines()) return;
+    const t = Array.isArray(parkedTickets) ? parkedTickets[currentParkedTicketIndex] : null;
+    if (!t || t.paid || isPayingNow) return;
+    PARKED_LINK_KEPT_EMPTY_ID = Number(t.id || t.ticketId || 0) || 0;
+  } catch {}
 }
 
 // Cliente real: al cobrar un aparcado desde la cola de fondo (Phase 2, que
@@ -15387,6 +15407,7 @@ function updateCartItemQuantity(lineId, newQty, opts = {}) {
     item.qty = q;
   }
 
+  armKeepParkedLinkIfCartEmptied();
   renderCart();
 }
 
@@ -16570,6 +16591,8 @@ function renderCart() {
   pushCustomerState();
   refreshAgentGuardUI?.();
 
+  if (uiLines.length) PARKED_LINK_KEPT_EMPTY_ID = 0;
+
   if (!uiLines.length && currentParkedTicketIndex !== null) {
     let shouldClearCurrentParkedIndex = true;
 
@@ -16586,6 +16609,20 @@ function renderCart() {
       if (
         linkedTicketId &&
         String(currentTicket?.id || "") === String(linkedTicketId)
+      ) {
+        shouldClearCurrentParkedIndex = false;
+      }
+    }
+
+    if (shouldClearCurrentParkedIndex && PARKED_LINK_KEPT_EMPTY_ID) {
+      const keptTicket = Array.isArray(parkedTickets)
+        ? parkedTickets[currentParkedTicketIndex]
+        : null;
+      if (
+        keptTicket &&
+        !keptTicket.paid &&
+        !isPayingNow &&
+        (Number(keptTicket.id || keptTicket.ticketId || 0) || 0) === PARKED_LINK_KEPT_EMPTY_ID
       ) {
         shouldClearCurrentParkedIndex = false;
       }
@@ -19660,6 +19697,7 @@ if (cartLinesContainer) {
 
       if (isPackParentLine(item)) {
         removePackCascade(item._lineId);
+        armKeepParkedLinkIfCartEmptied();
         renderCart();
         return;
       }
