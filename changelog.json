@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.53",
+      "date": "2026-10-27",
+      "title": "Release 0.2.53",
       "changes": [
         "CORRECCIÓN: el aviso diario de pedidos de días anteriores sin cobrar (versión 0.2.52) abría un cuadro de confirmación que tapaba la pantalla a los pocos segundos de abrir la caja. Ahora es un aviso que no bloquea nada; el contador de «Pedidos» sigue marcado en rojo hasta que se revisen.",
         "MEJORA: en «Configurar correo», con Gmail u Outlook hay ahora un desplegable «¿Cómo creo la contraseña de aplicación?» con los pasos numerados, la dirección escrita (con botón «Copiar dirección») y un código QR que se escanea con el móvil para abrir esa página allí, sin necesidad de abrir ningún navegador en el TPV.",
