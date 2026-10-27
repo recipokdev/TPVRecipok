@@ -6,6 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
+        "ARREGLO: en Opciones, la descripción de «Añadidos de producto» decía que eran gratuitos; ahora aclara que cada añadido puede ser gratuito o llevar un precio extra (como ya funcionaba desde hace semanas).",
         "ARREGLO: la leyenda de colores del mapa de Mesas ya no muestra «Pide cuenta» ni «Recoger», estados que se eliminaron hace días y que solo confundían. Quedan los tres que existen: Libre, Ocupada y Reservada.",
         "MEJORA: el arranque es más rápido y gasta menos datos. Al activar un TPV nuevo, el catálogo (productos, familias, stock...) se descargaba entero mientras salía el login y volvía a descargarse entero al elegir usuario. Ahora se reutiliza lo ya cargado y los productos se quedan puestos al entrar."
       ]

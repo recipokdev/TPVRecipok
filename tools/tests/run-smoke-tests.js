@@ -10764,6 +10764,19 @@ console.log("\n[SMOKE] Checking 2026-10-27 leyenda del mapa de Mesas sin estados
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-27 texto de Opciones sobre los anadidos con precio\n");
+{
+  const indexHtmlAddons = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  if (
+    indexHtmlAddons.includes("Cada añadido puede ser gratuito o llevar un") &&
+    !indexHtmlAddons.includes("Gratuitos por ahora")
+  ) {
+    ok("El texto de Opciones sobre los añadidos de producto ya no dice que son gratuitos (desde el 28-sep pueden llevar precio)");
+  } else {
+    fail("El texto de Opciones sobre los añadidos sigue diciendo 'Gratuitos por ahora' aunque ya pueden llevar precio (index.html)");
+  }
+}
+
 console.log("\n[SMOKE] Checking 2026-10-21 Liberar mesa, botones en resumen de Opciones y familias de ancho fijo \n");
 {
   const mesasJs = fs.readFileSync(path.join(root, "mesas", "mesas.js"), "utf8");
