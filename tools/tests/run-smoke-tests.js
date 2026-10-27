@@ -10748,6 +10748,22 @@ console.log("\n[SMOKE] Checking 2026-10-21 Mesas sin etapas Pide cuenta / Cuenta
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-27 leyenda del mapa de Mesas sin estados que ya no existen\n");
+{
+  const mesasHtml = fs.readFileSync(path.join(root, "mesas", "mesas.html"), "utf8");
+  if (
+    mesasHtml.includes('<i class="dot libre"></i> Libre') &&
+    mesasHtml.includes('<i class="dot ocupada"></i> Ocupada') &&
+    mesasHtml.includes('<i class="dot reservada"></i> Reservada') &&
+    !mesasHtml.includes("Pide cuenta") &&
+    !mesasHtml.includes("> Recoger<")
+  ) {
+    ok("La leyenda del mapa de Mesas solo muestra los estados que existen (Libre, Ocupada, Reservada): ya no aparecen Pide cuenta ni Recoger, que se eliminaron el 2026-10-21 pero seguian en la leyenda");
+  } else {
+    fail("La leyenda del mapa de Mesas (mesas/mesas.html) muestra estados que ya no existen (Pide cuenta / Recoger)");
+  }
+}
+
 console.log("\n[SMOKE] Checking 2026-10-21 Liberar mesa, botones en resumen de Opciones y familias de ancho fijo \n");
 {
   const mesasJs = fs.readFileSync(path.join(root, "mesas", "mesas.js"), "utf8");
