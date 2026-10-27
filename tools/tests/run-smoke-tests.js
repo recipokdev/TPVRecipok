@@ -10358,8 +10358,8 @@ console.log("\n[SMOKE] Checking 2026-10-16 cobro seguro entre dispositivos (cand
     renderer.includes("sessionId: ensureTerminalPresenceSessionId(),") &&
     renderer.includes("lockedErr.parkedLockedByOther = true;") &&
     renderer.includes("if (res.status === 423) {") &&
-    renderer.includes("function handleLoadedTicketPaidElsewhere(paidTicket) {") &&
-    renderer.includes("handleLoadedTicketPaidElsewhere(parkedTickets[nextIdx]);") &&
+    renderer.includes("function handleLoadedTicketPaidElsewhere(paidTicket, baseTicket = null) {") &&
+    renderer.includes("handleLoadedTicketPaidElsewhere(parkedTickets[nextIdx], prevLoadedTicket);") &&
     renderer.includes("parkedOpsIsEnabled(qSlug, isMesasModeTicket(localTicket)")
   ) {
     ok(
@@ -10762,6 +10762,23 @@ console.log("\n[SMOKE] Checking 2026-10-27 leyenda del mapa de Mesas sin estados
   } else {
     fail("La leyenda del mapa de Mesas (mesas/mesas.html) muestra estados que ya no existen (Pide cuenta / Recoger)");
   }
+}
+
+console.log("\n[SMOKE] Checking 2026-10-27 dos cajeros en el mismo aparcado: fusion en 3 vias y lineas quitadas\n");
+if (
+  renderer.includes("function handleLoadedTicketPaidElsewhere(paidTicket, baseTicket = null) {") &&
+  renderer.includes("handleLoadedTicketPaidElsewhere(parkedTickets[nextIdx], prevLoadedTicket);") &&
+  renderer.includes("if (baseQty !== undefined) return; // estaba en el pedido y el otro cajero la quito: no se conserva") &&
+  renderer.includes("window.TPV_PARKED_OPS.reconcileItems(base3, ticket.items, cart)") &&
+  renderer.includes("let __parkedLastRemoteItems = new Map();") &&
+  renderer.includes("__parkedLastRemoteItems = nextLastRemoteItems;") &&
+  renderer.includes("(live || ticket).__remoteWinsNextSync = Date.now();") &&
+  renderer.includes("const forceRemoteMerge =") &&
+  renderer.includes("mergeRemoteChangesIntoLoadedParkedTicketIfAny?.();")
+) {
+  ok("Dos cajeros en el mismo aparcado: lo que un cajero quita no vuelve a aparecer al fusionar (3 vias con la ultima version del servidor como base), un rechazo por pedido desactualizado (412) fuerza la fusion en vez de dejar los dos TPV con pedidos distintos, y al cobrarse el pedido en otro TPV no queda como 'pedido nuevo' lo que ese cajero quito (solo lo que se añadio despues)");
+} else {
+  fail("Falta la fusion en 3 vias / marca de fusion tras 412 / lineas quitadas al cobrarse en otro TPV (renderer.js mergeMissingRemoteLinesIntoCart, handleStaleParkedWriteConflict, handleLoadedTicketPaidElsewhere)");
 }
 
 console.log("\n[SMOKE] Checking 2026-10-27 cuadro de borrar aparcados: devolver stock es lo normal, 'fantasma' solo la excepcion\n");

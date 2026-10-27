@@ -6,7 +6,8 @@
 // COBRA DE VERDAD en el demo (crea una factura de prueba). Perfiles persistentes de run-two-tpv.js,
 // sesion ya iniciada (nunca PIN). Fuerza el guardado entero antiguo (el que usa Asador, sin el
 // "guardado por operaciones" del piloto) con tpv_parkedOpsDisabled=1 en los dos perfiles y lo quita al acabar.
-// Uso: node tools/tests/run-two-tpv-edit-and-pay.js [GAP_ms=150] [AOPEN=0|1] [LEGACY=1|0] [CONFLICT=0|1]
+// Uso: node tools/tests/run-two-tpv-edit-and-pay.js [GAP_ms=150] [AOPEN=0|1] [LEGACY=1|0] [CONFLICT=0|1] [PAY=1|0]
+//   PAY=0: nadie cobra; se comprueba que los dos TPV convergen al mismo pedido sin resucitar lineas quitadas.
 //   CONFLICT=1 (requiere AOPEN=1): A, que tiene el pedido abierto, añade un producto A LA VEZ que B quita otro
 //   (dos cajeros tocando el mismo pedido) antes de que B cobre.
 process.env.TPV_RUN_BACKGROUND = "1";
@@ -17,6 +18,7 @@ const GAP = Number(process.argv[2] ?? 150);
 const AOPEN = String(process.argv[3] ?? "0") === "1";
 const LEGACY = String(process.argv[4] ?? "1") !== "0";
 const CONFLICT = String(process.argv[5] ?? "0") === "1";
+const PAY = String(process.argv[6] ?? "1") !== "0";
 const NAME = "ZZ editpay " + Date.now();
 const kills = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -62,7 +64,7 @@ async function drivePay(X) {
 
 (async () => {
   const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kills.forEach((f) => f()); process.exit(1); }, 290000);
-  const out = { GAP, AOPEN, LEGACY, CONFLICT, NAME };
+  const out = { GAP, AOPEN, LEGACY, CONFLICT, PAY, NAME };
   let A, B;
   try {
     A = await launch("tpvrecipok-2tpv-real-1", "A");
@@ -109,6 +111,9 @@ async function drivePay(X) {
     // 3) B quita un producto, añade otro (clics reales sobre las lineas y las fichas) y cobra GAP ms despues
     const t0 = Date.now();
     if (CONFLICT) {
+      A.win.evaluate(() => { window.__trace = []; const t0 = Date.now(); window.__traceTimer = setInterval(() => { window.__trace.push(((Date.now() - t0) / 1000).toFixed(1) + "s " + cart.map((c) => String(c.name).slice(0, 6)).join(",") + " | " + (document.getElementById("toastContainer")?.innerText || "").replace(/\s+/g, " ").slice(0, 90)); }, 400); });
+    }
+    if (CONFLICT) {
       // A (con el pedido abierto) añade un producto justo cuando B va a quitar otro
       A.win.evaluate(async () => { const sl = (ms) => new Promise((r) => setTimeout(r, ms)); await sl(60); Array.from(document.querySelectorAll("#productsGrid > *")).find((e) => e.textContent.includes("Berlinas con crema"))?.click(); }).catch(() => {});
     }
@@ -121,8 +126,12 @@ async function drivePay(X) {
       await sl(GAP);
       return { antes, despues: cart.map((c) => c.name) };
     }, { GAP });
-    out.B_pago = await drivePay(B);
-    out.B_msPagoTotal = Date.now() - t0;
+    if (PAY) {
+      out.B_pago = await drivePay(B);
+      out.B_msPagoTotal = Date.now() - t0;
+    } else {
+      out.B_pago = "(sin cobrar)";
+    }
     await sleep(14000);
 
     // 4) estado final: los dos TPV y el servidor
@@ -132,8 +141,12 @@ async function drivePay(X) {
       const loc = parkedTickets.filter((t) => String(t.name || "") === NAME).map((t) => ({ id: t.id, paid: !!t.paid, code: t.paidTicketCode || null, lineas: (t.items || []).map((l) => String(l.name).slice(0, 10) + ":" + l.qty) }));
       let srv = [];
       try { const list = await apiListParkedReservations(); srv = list.filter((t) => String(t.ticketName || t.name || "") === NAME).map((t) => ({ id: t.ticketId || t.id, paid: !!t.paid, code: t.paidTicketCode || null, lineas: (t.items || []).map((l) => String(l.name).slice(0, 10) + ":" + (l.qty ?? l.cantidad)) })); } catch (e) { srv = "ERR " + e.message; }
-      return { local: loc, servidor: srv, cart: cart.map((c) => c.name), pendientesMismoNombre: parkedTickets.filter((t) => !t.paid && String(t.name || "") === NAME).length, log: (window.__log || []).slice(-14) };
+      return { local: loc, servidor: srv, cart: cart.map((c) => c.name), pendientesMismoNombre: parkedTickets.filter((t) => !t.paid && String(t.name || "") === NAME).length, conflictos: (typeof loadParkedSyncConflicts === "function" ? loadParkedSyncConflicts().length : null), cola: (typeof loadParkedSyncQueue === "function" ? loadParkedSyncQueue().length : null), log: (window.__log || []).slice(-14) };
     }, NAME);
+    if (CONFLICT) out.A_trace = await A.win.evaluate(() => { clearInterval(window.__traceTimer); return window.__trace.filter((x, i, arr) => i === 0 || x !== arr[i - 1]).slice(0, 40); });
+    if (!PAY) {
+      out.carritos = [await A.win.evaluate(() => cart.map((c) => c.name)), await B.win.evaluate(() => cart.map((c) => c.name))];
+    }
     out.A_final = await estado(A);
     out.B_final = await estado(B);
   } catch (e) {

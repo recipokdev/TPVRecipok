@@ -11301,6 +11301,33 @@ function mergeMissingRemoteLinesIntoCart(ticket) {
     return changed;
   }
 
+  // Real (2 TPV, 2026-10-27): la fusion aditiva de mas abajo nunca QUITA lo que el cajero de ESTE
+  // terminal acaba de borrar: si otro terminal guardo primero, la linea que yo habia quitado volvia
+  // sola ("quito Crema, y al guardar Crema reaparece"). Cuando se sabe lo que este terminal conocia
+  // del ticket antes de aceptar el remoto (__prevItemsBeforeRemoteMerge = base) y todas las lineas
+  // llevan _lineId, se usa la misma integracion en 3 vias (base / mi carrito / remoto) del guardado
+  // por operaciones: lo que quite yo sigue quitado, lo que quite el otro tambien, las cantidades
+  // se suman y las lineas nuevas de cada lado se conservan. Sin base o sin ids: fusion aditiva de siempre.
+  if (window.TPV_PARKED_OPS?.reconcileItems) {
+    const hasIds = (arr) =>
+      Array.isArray(arr) && arr.length > 0 && arr.every((l) => String(l?._lineId || "").trim());
+    const base3 = ticket.__prevItemsBeforeRemoteMerge;
+    if (hasIds(base3) && hasIds(ticket.items) && hasIds(cart)) {
+      const reconciled3 = window.TPV_PARKED_OPS.reconcileItems(base3, ticket.items, cart);
+      const cartIds3 = new Set(cart.map((l) => String(l?._lineId || "")));
+      const next3 = reconciled3.map((l) =>
+        cartIds3.has(String(l?._lineId || "")) ? l : hydrateParkedItemForCart(l),
+      );
+      const changed3 =
+        JSON.stringify(normalizeTicketLinesForCompare(next3)) !==
+        JSON.stringify(normalizeTicketLinesForCompare(cart));
+      if (changed3) cart = next3;
+      delete ticket.__remoteChangedWhileLoaded;
+      delete ticket.__prevItemsBeforeRemoteMerge;
+      return changed3;
+    }
+  }
+
   // Real (app de camareros, 2026-10-02): la clave de comparacion incluia el
   // precio EXACTO de la linea (pensado para no fusionar una linea con un
   // precio manual distinto con la "normal" del mismo producto). Pero una
@@ -41848,7 +41875,14 @@ async function processParkedSyncQueue() {
   }
 }
 
+// Lineas de cada pedido tal como las devolvio el servidor en la ULTIMA sincronizacion (id -> lineas).
+// Sirve de BASE para fusionar en 3 vias cuando otro TPV toca el mismo pedido a la vez: la copia local
+// del aparcado ya lleva mis cambios sin confirmar (se mutan antes de guardar), asi que no vale de base;
+// lo que el servidor tenia la ultima vez que lo vi si (2 cajeros, 2026-10-27).
+let __parkedLastRemoteItems = new Map();
+
 function syncParkedTicketsFromRemote(list) {
+  const nextLastRemoteItems = new Map();
   const previousTickets = Array.isArray(parkedTickets) ? parkedTickets : [];
   const prevLoadedTicket =
     currentParkedTicketIndex != null
@@ -41941,10 +41975,15 @@ function syncParkedTicketsFromRemote(list) {
 
       // Evita parpadeos por refrescos remotos retrasados que pisan precios/items locales.
       // Si la copia local es igual o más reciente, conservamos líneas y total locales.
+      const forceRemoteMerge =
+        Number(prev?.__remoteWinsNextSync || 0) > 0 &&
+        Date.now() - Number(prev.__remoteWinsNextSync) <= 60000;
       const shouldPreferLocalSnapshot =
+        !forceRemoteMerge &&
         prev &&
         prevItems.length &&
         (prevTs >= remoteTs || (localRevIsRecent && remoteTs <= 0));
+      delete merged.__remoteWinsNextSync;
 
       if (shouldPreferLocalSnapshot) {
         merged.items = prevItems.map((it) => ({ ...it }));
@@ -41996,6 +42035,14 @@ function syncParkedTicketsFromRemote(list) {
             // para distinguir "esto lo borraron de verdad" de "esto lo acabo
             // de añadir yo y aun no se ha guardado" (ver mas abajo).
             merged.__prevItemsBeforeRemoteMerge = prevItems;
+            // Mejor base que la copia local (que ya lleva mis cambios sin confirmar): lo que el
+            // servidor tenia la ultima vez que lo vi (ver __parkedLastRemoteItems).
+            const lastRemoteKnown = __parkedLastRemoteItems.get(
+              String(ticket?.id || ticket?.ticketId || ""),
+            );
+            if (Array.isArray(lastRemoteKnown) && lastRemoteKnown.length) {
+              merged.__prevItemsBeforeRemoteMerge = lastRemoteKnown;
+            }
           }
         }
       }
@@ -42072,9 +42119,17 @@ function syncParkedTicketsFromRemote(list) {
       // es un borrado remoto real (otro TPV) y no hay que conservarlo.
       merged.__remoteSeen = true;
 
+      try {
+        const lrId = String(ticket?.id || ticket?.ticketId || "");
+        if (lrId && Array.isArray(ticket?.items)) {
+          nextLastRemoteItems.set(lrId, JSON.parse(JSON.stringify(ticket.items)));
+        }
+      } catch {}
+
       return merged;
     })
     .filter((t) => isTicketInCurrentParkingMode(t));
+  __parkedLastRemoteItems = nextLastRemoteItems;
 
   // Compatibilidad entre TPVs mixtos: los cobrados remotos deben entrar
   // explícitamente en local para que no queden invisibles en la pestaña "Cobrados".
@@ -42339,7 +42394,7 @@ function syncParkedTicketsFromRemote(list) {
       return variants.some((k) => prevLoadedVariants.has(k));
     });
     if (nextIdx >= 0 && parkedTickets[nextIdx]?.paid && !isPayingNow) {
-      handleLoadedTicketPaidElsewhere(parkedTickets[nextIdx]);
+      handleLoadedTicketPaidElsewhere(parkedTickets[nextIdx], prevLoadedTicket);
     } else if (nextIdx >= 0) {
       setCurrentParkedTicketIndex(nextIdx);
     } else if (isPayingNow) {
@@ -42400,22 +42455,40 @@ function syncParkedTicketsFromRemote(list) {
 // (y cobrarlas de nuevo habria sido un doble cobro). Se quitan las lineas ya cobradas; lo que el
 // cajero habia añadido DESPUES (lineas nuevas o unidades de mas) se deja como un pedido nuevo
 // sin guardar (2026-10-16, probado con 2 TPV reales).
-function handleLoadedTicketPaidElsewhere(paidTicket) {
+function handleLoadedTicketPaidElsewhere(paidTicket, baseTicket = null) {
   const paidQtyById = new Map();
   (Array.isArray(paidTicket?.items) ? paidTicket.items : []).forEach((l) => {
     const id = String(l?._lineId || "").trim();
     if (id) paidQtyById.set(id, (Number(l?.qty ?? l?.cantidad ?? 0) || 0));
   });
 
+  // Que sabia ESTE terminal del pedido antes de que lo cobrara el otro (copia local del aparcado,
+  // sin lo editado despues en el carrito). Sirve para separar dos casos que antes se mezclaban:
+  //  - una linea que estaba en el pedido y NO esta en lo cobrado: la QUITO el otro cajero (cambio de
+  //    producto); no es "algo que añadi yo despues", asi que no debe quedar como pedido nuevo (2026-10-27);
+  //  - una linea (o unidades) que no estaba en el pedido: la añadi yo despues y si se conserva.
+  // Sin base (o sin _lineId) se mantiene el comportamiento de siempre.
+  const baseQtyById = new Map();
+  (Array.isArray(baseTicket?.items) ? baseTicket.items : []).forEach((l) => {
+    const id = String(l?._lineId || "").trim();
+    if (id) baseQtyById.set(id, (Number(l?.qty ?? l?.cantidad ?? 0) || 0));
+  });
+
   const leftovers = [];
   (Array.isArray(cart) ? cart : []).forEach((line) => {
     const id = String(line?._lineId || "").trim();
     const paidQty = id ? paidQtyById.get(id) : undefined;
+    const baseQty = id ? baseQtyById.get(id) : undefined;
     if (paidQty === undefined) {
-      leftovers.push(line); // linea que no estaba en lo cobrado
+      if (baseQty !== undefined) return; // estaba en el pedido y el otro cajero la quito: no se conserva
+      leftovers.push(line); // linea que no estaba en lo cobrado ni en el pedido: la añadi yo despues
       return;
     }
-    const extra = round3Safe((Number(line?.qty) || 0) - paidQty);
+    let extra = round3Safe((Number(line?.qty) || 0) - paidQty);
+    if (baseQty !== undefined) {
+      // solo cuenta lo que YO subi respecto a lo que el pedido ya tenia
+      extra = Math.min(extra, round3Safe((Number(line?.qty) || 0) - baseQty));
+    }
     if (extra > 0.0001) {
       leftovers.push({ ...line, _lineId: makeLineId(), qty: extra, cantidad: extra });
     }
@@ -42778,6 +42851,17 @@ async function buildStaleParkedWriteError(res) {
 // mismo expectedUpdatedAt ya caducado y volveria a chocar para siempre.
 function handleStaleParkedWriteConflict(ticket, err) {
   try {
+    // Un 412 PRUEBA que el servidor tiene algo mas nuevo que lo que este TPV conocia, aunque el reloj
+    // local diga lo contrario (updatedAt local = hora del PC al guardar; remoto = hora del servidor).
+    // Sin esta marca, syncParkedTicketsFromRemote podia dar por buena la copia local ("es igual o mas
+    // reciente"), no fusionar nunca y dejar los dos TPV con pedidos distintos para siempre
+    // (2 cajeros tocando el mismo pedido, 2026-10-27). Marca de un solo uso y con caducidad.
+    const keysOfTicket = new Set(getParkedTicketSyncKeyVariants(ticket));
+    const live = (Array.isArray(parkedTickets) ? parkedTickets : []).find((t) =>
+      getParkedTicketSyncKeyVariants(t).some((k) => keysOfTicket.has(k)),
+    );
+    (live || ticket).__remoteWinsNextSync = Date.now();
+
     const key = getParkedTicketSyncKey(ticket);
     registerParkedSyncConflict(
       { key, ticket },
@@ -42811,7 +42895,18 @@ function handleStaleParkedWriteConflict(ticket, err) {
 
   // Trae el estado real del servidor -- el ticket cargado localmente puede
   // llevar datos que ya no coinciden con lo que hay guardado de verdad.
-  refreshRemoteParkedReservationsOnly?.().catch(() => {});
+  // Y, si es el pedido que este cajero tiene abierto, lo fusiona YA con sus cambios sin guardar
+  // (en 3 vias) y renderCart vuelve a programar el autoguardado con la version nueva: antes se
+  // quedaba esperando a que el cajero tocara algo y los dos TPV seguian con pedidos distintos.
+  Promise.resolve(refreshRemoteParkedReservationsOnly?.())
+    .then(() => {
+      try {
+        mergeRemoteChangesIntoLoadedParkedTicketIfAny?.();
+      } catch (e) {
+        console.warn("No se pudo fusionar tras el conflicto de guardado:", e?.message || e);
+      }
+    })
+    .catch(() => {});
 }
 
 // ===== Guardado por OPERACIONES (diseno: docs/guardado-por-partes-diseno.md) ===============
