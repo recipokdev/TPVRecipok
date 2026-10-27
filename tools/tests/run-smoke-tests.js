@@ -10764,6 +10764,22 @@ console.log("\n[SMOKE] Checking 2026-10-27 leyenda del mapa de Mesas sin estados
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-27 cuadro de borrar aparcados: devolver stock es lo normal, 'fantasma' solo la excepcion\n");
+if (
+  renderer.includes('okButtonText: "Eliminar y devolver el stock (lo normal)"') &&
+  renderer.includes('middleButtonText: "Es un fantasma: no tocar stock"') &&
+  renderer.includes('okButtonText: "Borrar y devolver el stock (lo normal)"') &&
+  renderer.includes('middleButtonText: "Son fantasmas: no tocar stock"') &&
+  renderer.includes("aunque esté repetido, lo hayas metido dos veces o el cliente ya no lo quiera") &&
+  !renderer.includes('middleButtonText: "Borrar sin tocar stock (duplicado)"') &&
+  !renderer.includes('middleButtonText: "Borrar sin tocar stock (duplicados)"') &&
+  renderer.includes('middleButtonResult: "no-stock"')
+) {
+  ok("El cuadro de eliminar aparcados (uno y todos) deja claro que lo normal es devolver el stock, aunque el pedido este repetido, y que 'no tocar stock' es solo para fantasmas de sincronizacion (antes 'Borrar sin tocar stock (duplicado)' se leia como 'pedido repetido' y dejaba stock retenido: Asador el Gallo 2026-10-27)");
+} else {
+  fail("Falta el texto aclarado del cuadro de eliminar aparcados (devolver stock = lo normal; no tocar stock solo para fantasmas) en renderer.js");
+}
+
 console.log("\n[SMOKE] Checking 2026-10-27 texto de Opciones sobre los anadidos con precio\n");
 {
   const indexHtmlAddons = fs.readFileSync(path.join(root, "index.html"), "utf8");

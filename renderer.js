@@ -22458,14 +22458,17 @@ function ensureParkedToolbar() {
         "Borrar TODOS los pendientes",
         `Vas a borrar ${pendingCount} ${labels.item}(s) SIN COBRAR de forma permanente. ` +
           `No se puede deshacer (a diferencia de "Limpiar cobrados", estos nunca se facturaron en FacturaScripts).\n\n` +
-          `¿Son pedidos reales que quieres cancelar (se devuelve su stock reservado), ` +
-          `o son duplicados/fantasma por un fallo de sincronizacion entre TPV (no se toca el stock)?\n\n` +
+          `LO NORMAL: borrarlos y DEVOLVER el stock que tenían reservado. Elige esa opción siempre que los pedidos ` +
+          `existan de verdad, aunque estén repetidos o el cliente ya no los quiera.\n\n` +
+          `Elige "no tocar stock" SOLO si son FANTASMAS: un fallo de sincronización entre TPV los sigue mostrando, ` +
+          `pero esos pedidos ya no existen (por ejemplo, ya se cobraron en otro ordenador). Si no estás seguro, ` +
+          `devuelve el stock.\n\n` +
           `(Si no quieres que se te pregunte esto cada vez, desactívalo en Opciones → Productos → ` +
-          `"Preguntar por el stock al 'Borrar pendientes'". Se asumira que son pedidos reales y se devolvera el stock.)`,
+          `"Preguntar por el stock al 'Borrar pendientes'". Se asumirá que son pedidos reales y se devolverá el stock.)`,
         {
           dialogClassName: "wide-dialog",
-          okButtonText: "Sí, son pedidos reales (devolver stock)",
-          middleButtonText: "Borrar sin tocar stock (duplicados)",
+          okButtonText: "Borrar y devolver el stock (lo normal)",
+          middleButtonText: "Son fantasmas: no tocar stock",
           middleButtonResult: "no-stock",
         },
       );
@@ -23028,15 +23031,18 @@ async function deleteParkedTicketByIndex(
     if (askAboutStock && askStockOnBulkDeletePendingEnabled) {
       const choice = await confirmModal(
         `Eliminar ${labels.item}`,
-        `Vas a eliminar Ticket${displaySuffix} SIN COBRAR de forma permanente. Esta acción no se puede deshacer.\n\n` +
-          `¿Es un pedido real que quieres cancelar (se devuelve su stock reservado), ` +
-          `o es un duplicado/fantasma por un fallo de sincronizacion entre TPV (no se toca el stock)?\n\n` +
+        `Vas a eliminar Ticket${displaySuffix}, que está SIN COBRAR. Esta acción no se puede deshacer.\n\n` +
+          `LO NORMAL: eliminarlo y DEVOLVER el stock que tenía reservado. Elige esa opción siempre que el pedido ` +
+          `exista de verdad, aunque esté repetido, lo hayas metido dos veces o el cliente ya no lo quiera.\n\n` +
+          `Elige "no tocar stock" SOLO si este ticket es un FANTASMA: un fallo de sincronización entre TPV lo sigue ` +
+          `mostrando, pero ese pedido ya no existe (por ejemplo, ya se cobró en otro ordenador). Si no estás seguro, ` +
+          `devuelve el stock.\n\n` +
           `(Si no quieres que se te pregunte esto cada vez, desactívalo en Opciones → Productos → ` +
-          `"Preguntar por el stock al 'Borrar pendientes'". Se asumira que es un pedido real y se devolvera el stock.)`,
+          `"Preguntar por el stock al 'Borrar pendientes'". Se asumirá que es un pedido real y se devolverá el stock.)`,
         {
           dialogClassName: "wide-dialog",
-          okButtonText: "Sí, es un pedido real (devolver stock)",
-          middleButtonText: "Borrar sin tocar stock (duplicado)",
+          okButtonText: "Eliminar y devolver el stock (lo normal)",
+          middleButtonText: "Es un fantasma: no tocar stock",
           middleButtonResult: "no-stock",
         },
       );
