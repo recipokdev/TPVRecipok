@@ -41920,6 +41920,7 @@ async function processParkedSyncQueue() {
 let __parkedLastRemoteItems = new Map();
 
 function syncParkedTicketsFromRemote(list) {
+  const prevLastRemoteItems = __parkedLastRemoteItems; // lo que el servidor tenia en la sincronizacion ANTERIOR
   const nextLastRemoteItems = new Map();
   const previousTickets = Array.isArray(parkedTickets) ? parkedTickets : [];
   const prevLoadedTicket =
@@ -42432,7 +42433,10 @@ function syncParkedTicketsFromRemote(list) {
       return variants.some((k) => prevLoadedVariants.has(k));
     });
     if (nextIdx >= 0 && parkedTickets[nextIdx]?.paid && !isPayingNow) {
-      handleLoadedTicketPaidElsewhere(parkedTickets[nextIdx], prevLoadedTicket);
+      handleLoadedTicketPaidElsewhere(
+        parkedTickets[nextIdx],
+        prevLastRemoteItems.get(String(parkedTickets[nextIdx]?.id || parkedTickets[nextIdx]?.ticketId || "")) || null,
+      );
     } else if (nextIdx >= 0) {
       setCurrentParkedTicketIndex(nextIdx);
     } else if (isPayingNow) {
@@ -42493,21 +42497,23 @@ function syncParkedTicketsFromRemote(list) {
 // (y cobrarlas de nuevo habria sido un doble cobro). Se quitan las lineas ya cobradas; lo que el
 // cajero habia añadido DESPUES (lineas nuevas o unidades de mas) se deja como un pedido nuevo
 // sin guardar (2026-10-16, probado con 2 TPV reales).
-function handleLoadedTicketPaidElsewhere(paidTicket, baseTicket = null) {
+function handleLoadedTicketPaidElsewhere(paidTicket, baseItems = null) {
   const paidQtyById = new Map();
   (Array.isArray(paidTicket?.items) ? paidTicket.items : []).forEach((l) => {
     const id = String(l?._lineId || "").trim();
     if (id) paidQtyById.set(id, (Number(l?.qty ?? l?.cantidad ?? 0) || 0));
   });
 
-  // Que sabia ESTE terminal del pedido antes de que lo cobrara el otro (copia local del aparcado,
-  // sin lo editado despues en el carrito). Sirve para separar dos casos que antes se mezclaban:
-  //  - una linea que estaba en el pedido y NO esta en lo cobrado: la QUITO el otro cajero (cambio de
-  //    producto); no es "algo que añadi yo despues", asi que no debe quedar como pedido nuevo (2026-10-27);
-  //  - una linea (o unidades) que no estaba en el pedido: la añadi yo despues y si se conserva.
-  // Sin base (o sin _lineId) se mantiene el comportamiento de siempre.
+  // Que tenia el pedido en el SERVIDOR la ultima vez que este terminal lo sincronizo (no la copia local,
+  // que ya puede llevar lo que yo acabo de añadir y guardar). Sirve para separar dos casos que antes se
+  // mezclaban:
+  //  - una linea que ya estaba confirmada en el pedido y NO esta en lo cobrado: la QUITO el otro cajero
+  //    (cambio de producto); no debe quedar como pedido nuevo (2026-10-27);
+  //  - una linea (o unidades) que no estaba confirmada: la añadi yo despues y SE CONSERVA (nunca se pierde
+  //    en silencio lo que el cajero de este terminal acaba de pedir).
+  // Sin base (o sin _lineId) se mantiene el comportamiento de siempre (se conserva todo lo que no se cobro).
   const baseQtyById = new Map();
-  (Array.isArray(baseTicket?.items) ? baseTicket.items : []).forEach((l) => {
+  (Array.isArray(baseItems) ? baseItems : []).forEach((l) => {
     const id = String(l?._lineId || "").trim();
     if (id) baseQtyById.set(id, (Number(l?.qty ?? l?.cantidad ?? 0) || 0));
   });
@@ -42518,8 +42524,14 @@ function handleLoadedTicketPaidElsewhere(paidTicket, baseTicket = null) {
     const paidQty = id ? paidQtyById.get(id) : undefined;
     const baseQty = id ? baseQtyById.get(id) : undefined;
     if (paidQty === undefined) {
-      if (baseQty !== undefined) return; // estaba en el pedido y el otro cajero la quito: no se conserva
-      leftovers.push(line); // linea que no estaba en lo cobrado ni en el pedido: la añadi yo despues
+      if (baseQty !== undefined) {
+        // estaba confirmada en el pedido y el otro cajero la quito: no se conserva, salvo las unidades
+        // que YO subi por encima de lo que habia
+        const mine = round3Safe((Number(line?.qty) || 0) - baseQty);
+        if (mine > 0.0001) leftovers.push({ ...line, _lineId: makeLineId(), qty: mine, cantidad: mine });
+        return;
+      }
+      leftovers.push(line); // linea que no estaba en lo cobrado ni confirmada: la añadi yo despues
       return;
     }
     let extra = round3Safe((Number(line?.qty) || 0) - paidQty);
@@ -52264,13 +52276,12 @@ function isGenericParkNameKey(key) {
 
 function findPendingTicketsForSameCustomer(ticketName) {
   const key = parkNameKey(ticketName);
-  const cod = String(
-    window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() ||
-      window.CUSTOMER_SELECTOR?.getSelectedCustomer?.()?.codcliente ||
-      "",
-  ).trim();
+  // El cliente por defecto del terminal (Ventas tickets / contado) NO cuenta como "mismo cliente": solo un
+  // cliente concreto elegido a proposito. getSelectedCustomer().isDefault sale del propio selector.
+  const sel = window.CUSTOMER_SELECTOR?.getSelectedCustomer?.();
+  const cod = String(sel?.codcliente || "").trim();
   const defCod = String(currentTerminal?.codcliente || "1").trim() || "1";
-  const useCod = !!cod && cod !== defCod && cod !== "1";
+  const useCod = !!sel && sel.isDefault === false && !!cod && cod !== defCod && cod !== "1";
   const useName = !isGenericParkNameKey(key);
   if (!useCod && !useName) return [];
   return (Array.isArray(parkedTickets) ? parkedTickets : [])

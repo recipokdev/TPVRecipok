@@ -10358,8 +10358,9 @@ console.log("\n[SMOKE] Checking 2026-10-16 cobro seguro entre dispositivos (cand
     renderer.includes("sessionId: ensureTerminalPresenceSessionId(),") &&
     renderer.includes("lockedErr.parkedLockedByOther = true;") &&
     renderer.includes("if (res.status === 423) {") &&
-    renderer.includes("function handleLoadedTicketPaidElsewhere(paidTicket, baseTicket = null) {") &&
-    renderer.includes("handleLoadedTicketPaidElsewhere(parkedTickets[nextIdx], prevLoadedTicket);") &&
+    renderer.includes("function handleLoadedTicketPaidElsewhere(paidTicket, baseItems = null) {") &&
+    renderer.includes("handleLoadedTicketPaidElsewhere(") &&
+    renderer.includes("prevLastRemoteItems.get(") &&
     renderer.includes("parkedOpsIsEnabled(qSlug, isMesasModeTicket(localTicket)")
   ) {
     ok(
@@ -10767,6 +10768,7 @@ console.log("\n[SMOKE] Checking 2026-10-27 leyenda del mapa de Mesas sin estados
 console.log("\n[SMOKE] Checking 2026-10-27 aviso de pedido repetido al aparcar para un cliente que ya tiene uno pendiente\n");
 if (
   renderer.includes("function findPendingTicketsForSameCustomer(ticketName) {") &&
+  renderer.includes("sel.isDefault === false") &&
   renderer.includes("function parkNameKey(s) {") &&
   renderer.includes('"Ya hay un pedido pendiente",') &&
   renderer.includes('okButtonText: "Crear uno nuevo igualmente",') &&
@@ -10796,9 +10798,10 @@ if (
 
 console.log("\n[SMOKE] Checking 2026-10-27 dos cajeros en el mismo aparcado: fusion en 3 vias y lineas quitadas\n");
 if (
-  renderer.includes("function handleLoadedTicketPaidElsewhere(paidTicket, baseTicket = null) {") &&
-  renderer.includes("handleLoadedTicketPaidElsewhere(parkedTickets[nextIdx], prevLoadedTicket);") &&
-  renderer.includes("if (baseQty !== undefined) return; // estaba en el pedido y el otro cajero la quito: no se conserva") &&
+  renderer.includes("function handleLoadedTicketPaidElsewhere(paidTicket, baseItems = null) {") &&
+  renderer.includes("const prevLastRemoteItems = __parkedLastRemoteItems;") &&
+  renderer.includes("prevLastRemoteItems.get(") &&
+  renderer.includes("estaba confirmada en el pedido y el otro cajero la quito: no se conserva, salvo las unidades") &&
   renderer.includes("window.TPV_PARKED_OPS.reconcileItems(base3, ticket.items, cart)") &&
   renderer.includes("let __parkedLastRemoteItems = new Map();") &&
   renderer.includes("__parkedLastRemoteItems = nextLastRemoteItems;") &&
