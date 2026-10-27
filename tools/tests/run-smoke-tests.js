@@ -10974,7 +10974,9 @@ if (
   renderer.includes('`write-http-${res.status}`') &&
   renderer.includes('isNetwork ? "create-invoice-queued" : "create-invoice-failed",') &&
   renderer.includes('reportClientEvent("sync", clientEventCodeFromText(key) || "sync-issue"') &&
-  renderer.includes('"comanda-print-failed",')
+  renderer.includes('"comanda-print-failed",') &&
+  renderer.includes('reportClientEvent("email", "send-invoice-failed", e?.message || e, {}, "error");') &&
+  renderer.includes('reportClientEvent("email", "config-save-failed", e?.message || e, { host, port, enc }, "error");')
 ) {
   ok("Los fallos del TPV se anotan en el servidor con categoria y codigo fijos (audit client-<categoria>): errores de JavaScript no capturados, fallos de la API (red, tiempo agotado, 4xx/5xx relevantes), cobros rechazados o en cola con su motivo, avisos de sincronizacion que ve el cajero, impresion de comandas y todo logFeatureWarn/logFeatureError; sin duplicados en 5 min, con tope de 40 cada 10 min, sin red/modo formacion no se manda, y nunca bloquea ni muestra nada");
 } else {

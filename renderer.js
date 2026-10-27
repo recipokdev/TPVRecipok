@@ -37860,9 +37860,11 @@ function openEmailConfigModal() {
           setStatus("Conexión correcta ✅ La contraseña guardada funciona.", "ok");
         } else {
           setStatus(check.reason || "No se pudo comprobar el correo.", "err");
+          reportClientEvent("email", "connection-check-failed", check.reason || "no se pudo comprobar", {}, "warn");
         }
       } catch (e) {
         setStatus("No se pudo comprobar: " + (e?.message || e), "err");
+        reportClientEvent("email", "connection-check-error", e?.message || e, {}, "error");
       } finally {
         busy = false;
         saveBtn.disabled = false;
@@ -37910,8 +37912,10 @@ function openEmailConfigModal() {
           return;
         }
         setStatus(check.reason || "No se pudo comprobar el correo.", "err");
+        reportClientEvent("email", "config-check-failed", check.reason || "no se pudo comprobar", { host, port, enc }, "warn");
       } catch (e) {
         setStatus("No se pudo guardar: " + (e?.message || e), "err");
+        reportClientEvent("email", "config-save-failed", e?.message || e, { host, port, enc }, "error");
       } finally {
         busy = false;
         saveBtn.disabled = false;
@@ -38030,6 +38034,7 @@ async function sendInvoiceEmailForTicket(ticket) {
   try {
     html = await buildFacturaEmailHtml(ticket);
   } catch (e) {
+    reportClientEvent("email", "invoice-html-failed", e?.message || e, {}, "error");
     toast(
       "No se pudo generar la factura: " + (e?.message || e),
       "err",
@@ -38040,6 +38045,7 @@ async function sendInvoiceEmailForTicket(ticket) {
 
   const pdfResult = await window.TPV_PRINT?.renderInvoicePdf?.({ html });
   if (!pdfResult?.ok) {
+    reportClientEvent("email", "invoice-pdf-failed", pdfResult?.error || "error", {}, "error");
     toast(
       "No se pudo generar el PDF: " + (pdfResult?.error || "error"),
       "err",
@@ -38059,6 +38065,7 @@ async function sendInvoiceEmailForTicket(ticket) {
     });
     toast("Factura enviada ✅", "ok", "Enviar factura");
   } catch (e) {
+    reportClientEvent("email", "send-invoice-failed", e?.message || e, {}, "error");
     toast(
       "No se pudo enviar la factura: " + (e?.message || e),
       "err",
