@@ -1313,6 +1313,21 @@
           <button type="button" id="emailCfgPassToggle" title="Mostrar u ocultar">👁</button>
         </div>
         <p id="emailCfgPassHint" class="email-config-passhint hidden"></p>
+        <details id="emailCfgHelp" class="email-config-helpbox hidden">
+          <summary>¿Cómo creo la contraseña de aplicación?</summary>
+          <ol id="emailCfgSteps" class="email-config-steps"></ol>
+          <div class="email-config-qrrow">
+            <div id="emailCfgQr" class="email-config-qr" aria-label="Código QR de la página"></div>
+            <div class="email-config-qrtext">
+              <div>
+                <strong>Escanea el código con tu móvil</strong> (ahí tu cuenta suele estar ya abierta) o abre esta
+                dirección en un navegador:
+              </div>
+              <code id="emailCfgUrl"></code>
+              <button type="button" id="emailCfgCopyUrl" class="small-btn">Copiar dirección</button>
+            </div>
+          </div>
+        </details>
         <div class="email-config-row">
           <div>
             <label class="email-config-label" for="emailCfgHost">Servidor</label>
@@ -4649,6 +4664,7 @@
     <script src="mesas/mesas-bridge.js"></script>
 
     <script src="js/tpv/parked-ops.js"></script>
+    <script src="js/vendor/qrcode-generator.js"></script>
     <script src="renderer.js"></script>
     <script src="tutoriales/tutoriales.js"></script>
     <script src="./js/tpv/scale/scale-ui.js"></script>

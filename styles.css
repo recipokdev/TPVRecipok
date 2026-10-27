@@ -10867,3 +10867,70 @@ body.theme-dark .email-config-passhint {
   color: #fde68a;
   border-color: #b45309;
 }
+
+/* Modal de correo: ayuda para crear la contrasena de aplicacion (pasos + QR). */
+.email-config-helpbox {
+  margin-top: 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: #f8fafc;
+  font-size: 12px;
+}
+.email-config-helpbox summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: #1d4ed8;
+}
+.email-config-steps {
+  margin: 8px 0 6px 18px;
+  padding: 0;
+  line-height: 1.4;
+}
+.email-config-steps li {
+  margin-bottom: 3px;
+}
+.email-config-qrrow {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 6px;
+}
+.email-config-qr {
+  flex: 0 0 150px;
+  width: 150px;
+  height: 150px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+.email-config-qr svg {
+  width: 150px;
+  height: 150px;
+  display: block;
+}
+.email-config-qrtext {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.email-config-qrtext code {
+  display: block;
+  word-break: break-all;
+  background: #e2e8f0;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 11px;
+}
+body.theme-dark .email-config-helpbox {
+  background: #1f2937;
+  border-color: #374151;
+}
+body.theme-dark .email-config-helpbox summary {
+  color: #93c5fd;
+}
+body.theme-dark .email-config-qrtext code {
+  background: #374151;
+  color: #e5e7eb;
+}

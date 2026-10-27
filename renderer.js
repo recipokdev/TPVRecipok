@@ -37663,8 +37663,15 @@ const EMAIL_PROVIDER_PRESETS = {
     appPassword: true,
     passHint:
       "IMPORTANTE: aquí va una «contraseña de aplicación» (16 letras que genera Google), NO la contraseña de tu correo. " +
-      "Cómo crearla: Cuenta de Google → Seguridad → Verificación en dos pasos (tiene que estar activada) → Contraseñas de aplicaciones " +
-      "(myaccount.google.com/apppasswords). Puedes pegarla con o sin espacios.",
+      "Se crea en tu cuenta de Google (más abajo tienes los pasos y un código QR). Puedes pegarla con o sin espacios.",
+    helpUrl: "https://myaccount.google.com/apppasswords",
+    steps: [
+      "Entra en tu cuenta de Google (la del correo que has escrito arriba).",
+      "Activa la «Verificación en dos pasos» si aún no la tienes (Seguridad → Verificación en dos pasos).",
+      "Abre «Contraseñas de aplicaciones» con la dirección de abajo, o búscala en el buscador de tu cuenta.",
+      "Ponle un nombre, por ejemplo «TPV», y pulsa «Crear».",
+      "Copia las 16 letras que te muestra Google y pégalas arriba, en «Contraseña de aplicación».",
+    ],
   },
   outlook: {
     host: "smtp-mail.outlook.com",
@@ -37674,7 +37681,14 @@ const EMAIL_PROVIDER_PRESETS = {
     appPassword: true,
     passHint:
       "IMPORTANTE: con la verificación en dos pasos hay que usar una «contraseña de aplicación», NO la contraseña de tu cuenta. " +
-      "Cómo crearla: Cuenta Microsoft → Seguridad → Opciones de seguridad avanzadas → Contraseña de aplicación.",
+      "Se crea en tu cuenta de Microsoft (más abajo tienes los pasos y un código QR).",
+    helpUrl: "https://account.live.com/proofs/AppPassword",
+    steps: [
+      "Entra en tu cuenta de Microsoft (la del correo que has escrito arriba).",
+      "Activa la verificación en dos pasos si aún no la tienes (Seguridad → Opciones de seguridad avanzadas).",
+      "En la página de la dirección de abajo elige «Crear una nueva contraseña de aplicación».",
+      "Copia la contraseña que te muestra Microsoft y pégala arriba, en «Contraseña de aplicación».",
+    ],
   },
   ionos: {
     host: "smtp.ionos.es",
@@ -37748,6 +37762,42 @@ async function checkEmailSettingsOnServer() {
   return { valid: !!data.valid, reason: String(data.reason || "") };
 }
 
+// Dibuja el codigo QR de una direccion (libreria MIT incluida en js/vendor): se escanea con el movil del
+// administrador, asi no hace falta abrir ningun navegador en el TPV.
+function renderEmailHelpQr(container, url) {
+  if (!container) return;
+  container.innerHTML = "";
+  try {
+    const qr = qrcode(0, "M");
+    qr.addData(String(url || ""));
+    qr.make();
+    container.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+  } catch (e) {
+    console.warn("[EMAIL] no se pudo dibujar el QR:", e?.message || e);
+  }
+}
+
+async function copyTextToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(String(text || ""));
+    return true;
+  } catch {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = String(text || "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return !!ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
 // Resuelve true si el correo ha quedado guardado Y comprobado; false si se cancela.
 function openEmailConfigModal() {
   return new Promise((resolve) => {
@@ -37813,6 +37863,25 @@ function openEmailConfigModal() {
         : appPass
           ? "Contraseña de aplicación, no la de tu cuenta"
           : "";
+      // Ayuda para crear la contraseña de aplicación: pasos + QR (para abrirla en el móvil sin salir del TPV).
+      const helpBox = $("emailCfgHelp");
+      if (helpBox) {
+        helpBox.classList.toggle("hidden", !p?.steps);
+        if (p?.steps) {
+          const ol = $("emailCfgSteps");
+          if (ol) {
+            ol.innerHTML = "";
+            p.steps.forEach((t) => {
+              const li = document.createElement("li");
+              li.textContent = t;
+              ol.appendChild(li);
+            });
+          }
+          const urlEl = $("emailCfgUrl");
+          if (urlEl) urlEl.textContent = p.helpUrl;
+          renderEmailHelpQr($("emailCfgQr"), p.helpUrl);
+        }
+      }
     };
     const applyProvider = (key) => {
       const p = EMAIL_PROVIDER_PRESETS[key];
@@ -37821,6 +37890,10 @@ function openEmailConfigModal() {
       hostIn.value = p.host;
       portIn.value = p.port;
       encSel.value = p.enc;
+    };
+    const onCopyUrl = async () => {
+      const ok = await copyTextToClipboard($("emailCfgUrl")?.textContent || "");
+      toast(ok ? "Dirección copiada" : "No se pudo copiar la dirección", ok ? "ok" : "warn", "Configurar correo");
     };
     const onPassFocus = () => passHintEl?.classList.add("is-focus");
     const onPassBlur = () => passHintEl?.classList.remove("is-focus");
@@ -37863,6 +37936,7 @@ function openEmailConfigModal() {
       passIn.removeEventListener("click", kbPass);
       passIn.removeEventListener("focus", onPassFocus);
       passIn.removeEventListener("blur", onPassBlur);
+      $("emailCfgCopyUrl")?.removeEventListener("click", onCopyUrl);
       hostIn.removeEventListener("click", kbHost);
       portIn.removeEventListener("click", kbPort);
       saveBtn.removeEventListener("click", onSave);
@@ -37973,6 +38047,7 @@ function openEmailConfigModal() {
     passIn.addEventListener("click", kbPass);
     passIn.addEventListener("focus", onPassFocus);
     passIn.addEventListener("blur", onPassBlur);
+    $("emailCfgCopyUrl")?.addEventListener("click", onCopyUrl);
     hostIn.addEventListener("click", kbHost);
     portIn.addEventListener("click", kbPort);
     saveBtn.addEventListener("click", onSave);

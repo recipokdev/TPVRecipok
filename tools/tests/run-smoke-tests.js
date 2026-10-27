@@ -11066,6 +11066,28 @@ console.log("\n[SMOKE] Checking 2026-10-27 retoques de interfaz: contador de ped
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-10-27 ayuda con pasos y QR para la contrasena de aplicacion\n");
+{
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const lib = fs.existsSync(path.join(root, "js/vendor/qrcode-generator.js"));
+  if (
+    lib &&
+    html.includes('<script src="js/vendor/qrcode-generator.js"></script>') &&
+    html.indexOf("js/vendor/qrcode-generator.js") < html.indexOf('<script src="renderer.js">') &&
+    html.includes('id="emailCfgHelp"') &&
+    html.includes('id="emailCfgCopyUrl"') &&
+    renderer.includes("function renderEmailHelpQr(container, url) {") &&
+    renderer.includes('helpUrl: "https://myaccount.google.com/apppasswords",') &&
+    renderer.includes('helpUrl: "https://account.live.com/proofs/AppPassword",') &&
+    renderer.includes("const onCopyUrl = async () => {") &&
+    styles.includes(".email-config-qr {")
+  ) {
+    ok("El modal de correo, con Gmail u Outlook, trae un desplegable '¿Como creo la contrasena de aplicacion?' con los pasos, la direccion escrita con boton Copiar y un codigo QR (libreria MIT incluida en js/vendor, cargada antes de renderer.js) para abrir la pagina en el movil del administrador sin salir del TPV");
+  } else {
+    fail("Falta la ayuda con pasos y QR de la contrasena de aplicacion (index.html / renderer.js renderEmailHelpQr / js/vendor/qrcode-generator.js)");
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
