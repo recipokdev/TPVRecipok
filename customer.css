@@ -337,6 +337,13 @@ body.theme-light .row {
   overflow: hidden; /* ✅ si algo no cabe, recorta, pero no genera scroll vertical */
 }
 
+/* Producto sin imagen: logo/icono de relleno, entero y con margen (no recortado) */
+.thumb.placeholder {
+  object-fit: contain;
+  padding: 8px;
+  background: rgba(127, 127, 127, 0.16);
+}
+
 /* Thumb fijo siempre (con o sin imagen) */
 .thumb {
   width: var(--thumb);

@@ -9198,6 +9198,15 @@ function pushCustomerState() {
       total: totalToShow,
       subLine,
       lastSale: customerLastSale || null,
+      // Relleno para productos sin imagen en la pantalla del cliente (ver customer.js).
+      // companyLogoUrl se declara mas abajo: leerlo nunca debe impedir enviar el estado.
+      logoUrl: (() => {
+        try {
+          return companyLogoUrl || "";
+        } catch {
+          return "";
+        }
+      })(),
       ts: Date.now(),
     });
   } catch (_) {}
@@ -39642,6 +39651,11 @@ let isParkingNow = false;
 // bloquea la edicion del carrito (a diferencia de isParkingNow), solo evita
 // que se solape con otro guardado. Ver parkCurrentCart.
 let isParkingNowSilent = false;
+// "Salir"/vaciar un aparcado cargado vuelca primero el autoguardado pendiente
+// (red) y solo DESPUES vacia el carrito; Cobrar no debe cruzarse con eso ni al
+// reves (Lumi 2026-10-27: Cobrar encontro el carrito vacio -> "El carrito esta
+// vacio" en fase 1).
+let isClearingCartNow = false;
 
 function buildCashTicketMeta({ pagos, total, cambio }) {
   const pagosArr = Array.isArray(pagos) ? pagos : [];
@@ -44859,7 +44873,7 @@ async function onPayButtonClick() {
   let optimisticMesaState = null;
 
   try {
-    if (isPayingNow || isParkingNow) return;
+    if (isPayingNow || isParkingNow || isClearingCartNow) return;
     isPayingNow = true;
     refreshAgentGuardUI?.();
 
@@ -46654,7 +46668,7 @@ async function apiUpdateCajaAfterPaymentMethodChange({ cashDelta }) {
 const clearBtn = document.getElementById("clearCartBtn");
 if (clearBtn) {
   clearBtn.onclick = async () => {
-    if (isParkingNow) return;
+    if (isParkingNow || isPayingNow || isClearingCartNow) return;
     if (!cashSession?.open) return;
 
     if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
@@ -46723,19 +46737,24 @@ if (clearBtn) {
     // "Salir" de un aparcado cargado: volcar antes cualquier cambio pendiente
     // (cliente, cantidades...) que el autoguardado con retardo aun no hubiera
     // llegado a persistir, para no perderlo al vaciar el carrito.
-    await flushPendingParkedAutoSaveBeforeModeSwitch().catch(() => {});
+    isClearingCartNow = true;
+    try {
+      await flushPendingParkedAutoSaveBeforeModeSwitch().catch(() => {});
 
-    pushCartHistoryStep("clear-cart");
-    cart = [];
-    renderCart();
-    setCurrentParkedTicketIndex(null);
-    restorePreParkedCustomerSelection();
-    if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
-      clearCurrentMesaDraft();
-      renderMesasTransContextBar();
+      pushCartHistoryStep("clear-cart");
+      cart = [];
+      renderCart();
+      setCurrentParkedTicketIndex(null);
+      restorePreParkedCustomerSelection();
+      if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") {
+        clearCurrentMesaDraft();
+        renderMesasTransContextBar();
+      }
+      refreshParkButtonUI();
+      refreshParkedEditingBanner();
+    } finally {
+      isClearingCartNow = false;
     }
-    refreshParkButtonUI();
-    refreshParkedEditingBanner();
   };
 }
 
@@ -46744,7 +46763,7 @@ const payBtn = document.getElementById("payBtn");
 const cartActionGridEl = document.getElementById("cartActionGrid");
 if (payBtn) {
   payBtn.onclick = () => {
-    if (isParkingNow) return;
+    if (isParkingNow || isClearingCartNow) return;
     if (payButtonNeedsAgentAssignment()) {
       requireAssignedAgentOrBlock({ showModal: true });
       return;

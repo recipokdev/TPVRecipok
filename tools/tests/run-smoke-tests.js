@@ -10796,6 +10796,37 @@ if (
   fail("Falta mantener el vinculo con el aparcado abierto cuando el cajero lo deja vacio quitando lineas (renderer.js renderCart / armKeepParkedLinkIfCartEmptied / PARKED_LINK_KEPT_EMPTY_ID)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-28 pantalla del cliente: relleno para productos sin imagen\n");
+{
+  const customerJs = fs.readFileSync(path.join(__dirname, "..", "..", "customer.js"), "utf8");
+  if (
+    customerJs.includes("const THUMB_PLACEHOLDER_SVG =") &&
+    customerJs.includes("function setThumbSource(img, imageUrl) {") &&
+    customerJs.includes("img.onerror = usePlaceholder;") &&
+    customerJs.includes("customerLogoUrl = state.logoUrl;") &&
+    !customerJs.includes('img.style.visibility = "hidden"') &&
+    renderer.includes("logoUrl: (() => {")
+  ) {
+    ok("En la pantalla del cliente, un producto sin imagen (o con imagen que no carga) muestra el logo de la empresa o un icono neutro en vez de un hueco vacio; el TPV envia el logo en el estado y leerlo nunca impide enviar el estado");
+  } else {
+    fail("Falta el relleno de miniatura en la pantalla del cliente (customer.js setThumbSource / renderer.js logoUrl)");
+  }
+}
+
+console.log("\n[SMOKE] Checking 2026-10-27 Cobrar y Vaciar/Salir no se cruzan (Lumi: 'El carrito esta vacio' en fase 1)\n");
+if (
+  renderer.includes("let isClearingCartNow = false;") &&
+  renderer.includes("if (isParkingNow || isPayingNow || isClearingCartNow) return;") &&
+  renderer.includes("if (isPayingNow || isParkingNow || isClearingCartNow) return;") &&
+  renderer.includes("if (isParkingNow || isClearingCartNow) return;") &&
+  renderer.includes("isClearingCartNow = true;") &&
+  renderer.includes("isClearingCartNow = false;")
+) {
+  ok("El boton Vaciar/Salir no actua durante un cobro y Cobrar no arranca mientras Salir vuelca el autoguardado: antes, al cruzarse, el cobro se encontraba el carrito vacio ('El carrito esta vacio' en fase 1, sin cobrar nada)");
+} else {
+  fail("Falta la guarda entre Cobrar y Vaciar/Salir (renderer.js isClearingCartNow / clearCartBtn / onPayButtonClick)");
+}
+
 console.log("\n[SMOKE] Checking 2026-10-27 dos cajeros en el mismo aparcado: fusion en 3 vias y lineas quitadas\n");
 if (
   renderer.includes("function handleLoadedTicketPaidElsewhere(paidTicket, baseItems = null) {") &&
