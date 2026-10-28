@@ -10809,6 +10809,21 @@ if (
   fail("Falta el titulo dinamico del teclado numerico o el ajuste de 'Quitar' del descuento general (renderer.js openNumPad / refreshCartDiscountUi)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-28 diagnostico de la accion de caja atascada y del TPV cargando demasiado (Sabor 100x100)\n");
+if (
+  renderer.includes("function startCashHeaderStuckWatch() {") &&
+  renderer.includes('"accion-de-caja-atascada"') &&
+  renderer.includes("__cashHeaderPhaseWaitsPerson") &&
+  renderer.includes('setCashHeaderPhase("aviso-aparcados", true);') &&
+  renderer.includes('setCashHeaderPhase("login", true);') &&
+  renderer.includes('"tpv-cargando-demasiado"') &&
+  renderer.includes("stopCashHeaderStuckWatch();\n    if (cashHeaderBtn) cashHeaderBtn.disabled = !!TPV_LOADING;".replace(/\n/g, renderer.includes("\r\n") ? "\r\n" : "\n"))
+) {
+  ok("Si la accion del boton de caja lleva >40 s en curso (sin esperar a una persona), o el TPV lleva >60 s cargando, se registra un evento de cliente con la fase en la que esta atascado (solo diagnostico: no cambia el comportamiento)");
+} else {
+  fail("Falta el diagnostico de la accion de caja atascada / TPV cargando (renderer.js startCashHeaderStuckWatch / setTpvLoadingState)");
+}
+
 console.log("\n[SMOKE] Checking 2026-10-28 el vigilante de Cobrar no cuenta el tiempo de las personas (LaMarevella: 'Cobrar se ha desbloqueado solo' falso)\n");
 if (
   renderer.includes("const armPayWatchdog = () => {") &&

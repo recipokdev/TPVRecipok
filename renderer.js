@@ -13534,8 +13534,30 @@ function syncHeaderIdentityLoadingState() {
   });
 }
 
+// Diagnostico (mismo caso Sabor): si el TPV sigue "cargando" >60 s, el boton de caja y el resto de
+// botones se quedan grises. Solo registra, una vez por carga.
+let __tpvLoadingWatch = null;
 function setTpvLoadingState(isLoading) {
   TPV_LOADING = !!isLoading;
+  if (__tpvLoadingWatch) {
+    clearTimeout(__tpvLoadingWatch);
+    __tpvLoadingWatch = null;
+  }
+  if (TPV_LOADING) {
+    __tpvLoadingWatch = setTimeout(() => {
+      __tpvLoadingWatch = null;
+      try {
+        if (!TPV_LOADING) return;
+        reportClientEvent(
+          "carga",
+          "tpv-cargando-demasiado",
+          "El TPV lleva mas de 60 s cargando",
+          { segundos: 60, offline: !!TPV_STATE?.offline, cajaAbierta: !!cashSession?.open },
+          "error",
+        );
+      } catch {}
+    }, 60000);
+  }
   if (!TPV_LOADING && __pendingMesasEntry) {
     // Alguien pulso el boton de Mesas durante la carga: se atiende ya.
     setTimeout(() => {
@@ -30469,6 +30491,52 @@ async function ensureTerminalAgentDefaults({ refresh = false } = {}) {
 
 let __cashHeaderActionInFlight = false;
 
+// Diagnostico (Sabor 100x100, 2026-10-28): el boton "Cerrar caja" se quedo gris (la accion de caja
+// en curso nunca terminaba) y solo se arreglo reiniciando, sin ninguna pista de DONDE esperaba.
+// Solo REGISTRA (no cambia nada): si lleva >40 s en curso y NO esta esperando a una persona, envia
+// un evento de cliente con la fase en la que se quedo.
+let __cashHeaderPhase = "inicio";
+let __cashHeaderPhaseWaitsPerson = false;
+let __cashHeaderStartedAt = 0;
+let __cashHeaderStuckTimer = null;
+let __cashHeaderStuckReported = false;
+function setCashHeaderPhase(name, waitsPerson = false) {
+  __cashHeaderPhase = name;
+  __cashHeaderPhaseWaitsPerson = !!waitsPerson;
+}
+function stopCashHeaderStuckWatch() {
+  if (__cashHeaderStuckTimer) clearInterval(__cashHeaderStuckTimer);
+  __cashHeaderStuckTimer = null;
+}
+function startCashHeaderStuckWatch() {
+  stopCashHeaderStuckWatch();
+  __cashHeaderStartedAt = Date.now();
+  __cashHeaderStuckReported = false;
+  setCashHeaderPhase("inicio");
+  __cashHeaderStuckTimer = setInterval(() => {
+    try {
+      if (!__cashHeaderActionInFlight) return stopCashHeaderStuckWatch();
+      const sec = Math.round((Date.now() - __cashHeaderStartedAt) / 1000);
+      if (sec < 40 || __cashHeaderStuckReported || __cashHeaderPhaseWaitsPerson) return;
+      __cashHeaderStuckReported = true;
+      reportClientEvent(
+        "caja",
+        "accion-de-caja-atascada",
+        "El boton de caja lleva mucho rato en curso sin terminar",
+        {
+          fase: __cashHeaderPhase,
+          segundos: sec,
+          offline: !!TPV_STATE?.offline,
+          cargando: !!TPV_LOADING,
+          cajaAbierta: !!cashSession?.open,
+          cobrando: !!isPayingNow,
+        },
+        "error",
+      );
+    } catch {}
+  }, 5000);
+}
+
 async function handleCashHeaderAction(opts = {}) {
   const { auto = false } = opts;
 
@@ -30481,6 +30549,7 @@ async function handleCashHeaderAction(opts = {}) {
 
   __cashHeaderActionInFlight = true;
   if (cashHeaderBtn) cashHeaderBtn.disabled = true;
+  startCashHeaderStuckWatch();
 
   try {
     // 0) Bloqueado
@@ -30494,6 +30563,7 @@ async function handleCashHeaderAction(opts = {}) {
 
     // 1) Si NO hay empresa resuelta
     if (!hasCompanyResolved()) {
+      setCashHeaderPhase("reconectar-empresa");
       await forceReconnectFlow();
       if (!hasCompanyResolved()) return false;
     }
@@ -30501,6 +30571,7 @@ async function handleCashHeaderAction(opts = {}) {
     // 1.5) Si seguimos offline
     if (TPV_STATE.offline) {
       try {
+        setCashHeaderPhase("recargar-datos-offline");
         await loadDataFromApi({ refresh: true });
       } catch {}
 
@@ -30517,10 +30588,12 @@ async function handleCashHeaderAction(opts = {}) {
     }
 
     // 2) Datos base
+    setCashHeaderPhase("datos-base");
     await ensureDataLoaded();
 
     // 3) Login
     if (!getLoginUser?.() && !localStorage.getItem("tpv_login_user")) {
+      setCashHeaderPhase("login", true);
       const ok = await ensureLoginAutoOrPrompt();
       if (!ok) return false;
     }
@@ -30534,9 +30607,11 @@ async function handleCashHeaderAction(opts = {}) {
       const parkedCount = getPendingParkedTicketsGlobal(parkedTickets).length;
 
       // Releer valor efectivo por si el toggle cambió en opciones recientemente.
+      setCashHeaderPhase("leer-opcion-aparcados");
       await loadAllowCloseWithParkedToggle();
 
       if (parkedCount > 0) {
+        setCashHeaderPhase("aviso-aparcados", true);
         if (!allowCloseWithParkedTickets) {
           await confirmModal(
             "Tickets aparcados",
@@ -30568,11 +30643,13 @@ async function handleCashHeaderAction(opts = {}) {
         closeWithParkedPreConfirmed = true;
       }
 
+      setCashHeaderPhase("abrir-cierre");
       openCashOpenDialog("close");
       return true;
     }
 
     // 5) Refrescar terminales/agentes
+    setCashHeaderPhase("refrescar-terminales");
     await refreshTerminalsAndAgents();
 
     if (!Array.isArray(terminals) || terminals.length === 0) {
@@ -30588,6 +30665,7 @@ async function handleCashHeaderAction(opts = {}) {
       return true;
     }
 
+    setCashHeaderPhase("agente-por-defecto");
     await ensureTerminalAgentDefaults();
 
     if (!currentTerminal) {
@@ -30632,10 +30710,12 @@ async function handleCashHeaderAction(opts = {}) {
     }
 
     cashOpenDialogShown = false;
+    setCashHeaderPhase("abrir-caja");
     await maybeOpenCashOrRecover();
     return true;
   } finally {
     __cashHeaderActionInFlight = false;
+    stopCashHeaderStuckWatch();
     if (cashHeaderBtn) cashHeaderBtn.disabled = !!TPV_LOADING;
   }
 }
