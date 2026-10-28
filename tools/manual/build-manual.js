@@ -153,7 +153,7 @@ function page(title, body) {
 
 function chapterHtml(ch, n) {
   const kicker = n ? `Capítulo ${n}` : "Módulo opcional";
-  return `<section class="chapter"><div class="chapter-kicker">${kicker}</div><h1>${inline(ch.h1)}</h1>${ch.html}</section>`;
+  return `<section class="chapter" id="${ch.id}"><div class="chapter-kicker">${kicker}</div><h1>${inline(ch.h1)}</h1>${ch.html}</section>`;
 }
 
 (async () => {
@@ -183,13 +183,13 @@ function chapterHtml(ch, n) {
   if (!filter) {
     jobs.push({
       name: "Manual-TPV-Recipok.pdf",
-      html: page("Manual del TPV", cover("Guía de uso") + toc + chapters.map((c) => `<div id="${c.id}"></div>` + chapterHtml(c, c.n)).join("")),
+      html: page("Manual del TPV", cover("Guía de uso") + toc + chapters.map((c) => chapterHtml(c, c.n)).join("")),
     });
   }
   if (mesas && (!filter || mesas.file.startsWith(filter))) {
     jobs.push({
       name: "Manual-TPV-Recipok-Modo-Mesas.pdf",
-      html: page("Manual del Modo Mesas", cover("Modo Mesas (módulo opcional)") + tocOf([mesas], false) + `<div id="${mesas.id}"></div>` + chapterHtml(mesas, 0)),
+      html: page("Manual del Modo Mesas", cover("Modo Mesas (módulo opcional)") + tocOf([mesas], false) + chapterHtml(mesas, 0)),
     });
   }
   for (const c of chapters) {

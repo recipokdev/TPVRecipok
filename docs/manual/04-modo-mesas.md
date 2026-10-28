@@ -9,15 +9,20 @@ El Modo Mesas está pensado para bares y restaurantes: cada mesa tiene su propio
 
 El panel tiene tres pestañas: **Transacciones** (atender la mesa), **Mapa de Salas** (ver todas las mesas) y **Diseñar Salas** (cambiar la distribución).
 
+> **Dos zonas separadas.** El Modo Mesas y el TPV normal **no comparten sus pedidos aparcados**: cada uno tiene los suyos. Los pedidos de las mesas solo se ven (en el botón **Pedidos**) dentro del Modo Mesas, y los aparcados del TPV normal solo se ven fuera de él. Los productos y el stock sí son los mismos para los dos.
+
+> Cada modo **recuerda su carrito**: al pasar de uno a otro, o si se reinicia el programa, el TPV vuelve a dejarte lo que tenías abierto en ese modo y los pedidos aparcados tal como estaban.
+
 ## 2. El mapa de salas
 
-@fig img/mesas-mapa.png | crop=0,0,800,540 | marks=1:166,62;2:680,58;3:262,352;4:552,360;5:16,107 | Mapa de la sala con una mesa ocupada.
+@fig img/mesas-mapa-estados.png | crop=0,0,800,540 | marks=1:300,58;2:790,41;3:360,362;4:352,224;5:538,224;6:140,92 | Mapa de la sala con mesas libres, reservadas y ocupadas.
 
 1. **Pestañas.** Cambias entre *Transacciones*, *Mapa de Salas* y *Diseñar Salas*.
 2. **Accesos rápidos a mesas.** Cada mesa tiene un botón con su color; si tiene un pedido abierto, aparece un número que es su **turno**: el 1 es la mesa que lleva más tiempo abierta en esa sala, así ves cuál atender primero. Un toque te lleva directamente a ella.
-3. **Mesa ocupada.** Se muestra en naranja con el importe, la hora a la que se abrió y, si hay algo pendiente de enviar a cocina, el aviso **Sin enviar**. El círculo de color que la rodea indica qué camarero la está atendiendo.
+3. **Mesa ocupada.** Se muestra en naranja con el importe, la hora a la que se abrió, su **número de turno** (el circulito blanco de debajo) y, si hay algo pendiente de enviar a cocina, el aviso **Sin enviar**. El círculo de color que la rodea indica qué camarero la está atendiendo.
 4. **Mesa libre.** Se muestra en verde.
-5. **Sala.** Si tu local tiene varias salas, cámbialas aquí.
+5. **Mesa reservada.** Se muestra en violeta, con el nombre y la hora de la reserva.
+6. **Sala.** Si tu local tiene varias salas, cámbialas aquí.
 
 Los colores de las mesas son: **verde** = libre, **naranja** = ocupada, **violeta** = reservada.
 
@@ -37,7 +42,11 @@ Un toque corto sobre una mesa la abre. Si en cambio **mantienes pulsada** una me
 
 ### Señales en el plano
 
-- **Número de turno** bajo cada mesa ocupada: el 1 es la que lleva más tiempo abierta.
+- **Número de turno** bajo cada mesa ocupada. Ordena las mesas ocupadas **de esa sala** por antigüedad: la que lleva más tiempo abierta es la **1**, la siguiente la **2**, y así. No es un contador que siga subiendo: se recalcula solo. Si se cobra o se libera la mesa 1, la que era la 2 pasa a ser la 1, como en una cola de espera.
+
+@fig img/mesas-mapa-estados.png | crop=230,335,360,135 | width=42 | Dos mesas ocupadas: la M3 es la que lleva más tiempo (1) y la M4 la siguiente (2).
+
+@fig img/mesas-mapa-renumerado.png | crop=230,335,360,135 | width=42 | Al liberar la M3, la M4 pasa a ser la 1.
 - **Fase de servicio:** la mesa ocupada se anima de forma distinta según la fase (*Sin pedir* llama más la atención; *Pedido* es suave; *Entregado* no se anima).
 - **🖨 Sin enviar:** hay productos sin enviar a cocina. Se pone en **rojo** cuando lleva unos 10 minutos sin enviarse.
 - **⚠ Comanda:** la impresión automática de la comanda ha fallado en este TPV. Comprueba la impresora de comandas (capítulo «Impresión y cajón»).
@@ -136,12 +145,19 @@ Pulsa **Dividir** en la cabecera del pedido.
 @fig img/mesas-dividir.png | crop=510,198,900,621 | marks=1:1192,331;2:516,369;3:1234,392;4:700,466;5:1268,762 | Ventana «Dividir ticket».
 
 1. **Partes.** En cuántas cuentas quieres dividir.
-2. **Modo.** *Por artículos (asignación manual)* o *Igualitario*.
+2. **Modo.** Cómo se reparte el pedido (se explica justo debajo): *Por artículos (asignación manual)* o *Igualitario*.
 3. **Columnas P1, P2…** (una por parte). En el modo por artículos, escribe o usa **+** y **−** para indicar cuántas unidades de cada producto van en cada cuenta.
 4. **Restante.** Debajo de cada producto, lo que aún no has asignado a ninguna cuenta.
 5. **Generar división.** Crea las cuentas separadas, que puedes cobrar una a una.
 
-Una vez dividido, la cabecera permite moverte entre las partes («Parte n/m») con las flechas. Si te equivocas, vuelve a abrir **Dividir** y usa **Revertir división**: junta todas las partes en un único ticket.
+### Qué diferencia hay entre los dos modos
+
+- **Por artículos (asignación manual).** Tú decides **qué consume cada cuenta**: para cada producto indicas cuántas unidades van en la P1, en la P2, etc. Es el modo para cuando cada comensal paga lo suyo («yo la cerveza y el bocadillo; tú el café»). Hay que asignar artículos al menos a **dos** partes, y debajo de cada producto ves lo que **aún no has asignado**.
+- **Igualitario.** Divide el pedido **a partes iguales**: cada cuenta lleva **la misma fracción de cada línea** (con 3 partes, un tercio de cada producto, con la cantidad en decimales) y el total sale repartido por igual. Es el modo para cuando se comparte todo y se paga a medias.
+
+Se puede dividir en **2 a 12 partes**. Cada parte pasa a ser un pedido de esa misma mesa, con el nombre del original y el número de la parte, por ejemplo «Ticket #12 (2/3)», que se **cobra por separado**.
+
+Una vez dividido, la cabecera permite moverte entre las partes («Parte n/m») con las flechas. Si te equivocas, vuelve a abrir **Dividir** y usa **Revertir división** (equivale a poner *Partes = 1*): junta todas las partes en un único ticket.
 
 ## 6. Cambiar o juntar mesas
 
@@ -168,13 +184,14 @@ Si la mesa de destino **ya tiene un pedido**, el TPV te pregunta si quieres **ju
 
 La pestaña **Diseñar Salas** permite montar el plano de tu local. Solo la ven los **administradores**.
 
-@fig img/mesas-disenar.png | crop=0,80,1900,520 | marks=1:44,234;2:44,430;3:1300,112;4:1790,112;5:150,596 | Pestaña Diseñar Salas.
+@fig img/mesas-disenar.png | crop=0,80,1900,640 | marks=1:44,234;2:44,437;3:1332,111;4:1790,111;5:60,616;6:1655,111 | Pestaña Diseñar Salas.
 
 1. **Mesas.** Elige la herramienta (mesa redonda, cuadrada o rectangular) y haz **clic en el plano** donde la quieras; vuelve a pulsar la herramienta para dejar de colocar. Para moverla después, arrástrala. Al seleccionar una mesa aparece el panel «Seleccionado» (nombre, comensales, capacidad…).
 2. **Estructura.** *Barra*, *Entrada* y *Muro/Pared* para completar el local.
 3. **Sala.** Cambia de sala, añade una (**+ Sala**), cámbiala de nombre (**Renombrar**) o bórrala.
 4. **Deshacer / Rehacer.** Para corregir errores.
 5. **Guardar sala.** Conserva los cambios. **Limpiar sala** la deja vacía.
+6. **Modo libre.** Alterna entre mover las piezas **ajustándolas a la cuadrícula** y moverlas **libremente**.
 
 ## 10. Consejos
 
