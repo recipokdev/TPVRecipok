@@ -6,6 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
+        "MEJORA: el título del teclado numérico ahora dice lo que estás cambiando («Precio», «Descuento»…) en vez de «Cantidad» siempre; y el botón «Quitar» del descuento general ya no aparece activo cuando solo hay descuentos de línea (no hacía nada).",
         "ARREGLO: al cobrar, si la ventana de pago estaba abierta más de 45 segundos (por ejemplo, contando el cambio con calma) salía el aviso «Cobrar se ha desbloqueado solo» aunque nada estuviera colgado, y mientras tanto se podía volver a pulsar «Cobrar» (riesgo de cobrar dos veces). Ahora el vigilante solo cuenta el tiempo que tarda el programa, no el que tarda la persona en la ventana de pago, el selector de agente o el aviso de stock (caso real de LaMarevella: 3 avisos falsos en una mañana).",
         "MEJORA: en la pantalla del cliente, los productos que no tienen imagen ya no dejan un hueco vacío: se muestra el logo de la empresa (si lo tiene configurado) o un icono neutro. Lo mismo si la imagen del producto no carga.",
         "ARREGLO: si se pulsaba «Cobrar» y «Vaciar/Salir» casi a la vez, el cobro podía fallar con «El carrito está vacío» (no se cobraba nada y el pedido quedaba aparcado). Ahora «Vaciar/Salir» no actúa mientras se está cobrando y «Cobrar» no arranca mientras se está saliendo del pedido."

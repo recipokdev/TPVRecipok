@@ -10796,6 +10796,19 @@ if (
   fail("Falta mantener el vinculo con el aparcado abierto cuando el cajero lo deja vacio quitando lineas (renderer.js renderCart / armKeepParkedLinkIfCartEmptied / PARKED_LINK_KEPT_EMPTY_ID)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-28 titulo del teclado numerico segun lo que se edita y boton Quitar del descuento general\n");
+if (
+  renderer.includes('const numPadTitleWord = document.getElementById("numPadTitleWord");') &&
+  renderer.includes('? "Precio"') &&
+  renderer.includes('"Descuento"') &&
+  renderer.includes('.replace(/^Descuento general carrito/i, "Todo el carrito")') &&
+  renderer.includes("if (clearBtn) clearBtn.disabled = pct <= 0 && !hasFrozenGlobalLines;")
+) {
+  ok("El titulo del teclado numerico dice 'Precio' o 'Descuento' segun lo que se edite (antes siempre 'Cantidad'), y 'Quitar' del descuento general solo esta activo si hay descuento general que quitar (antes se activaba con solo descuentos de linea y no hacia nada)");
+} else {
+  fail("Falta el titulo dinamico del teclado numerico o el ajuste de 'Quitar' del descuento general (renderer.js openNumPad / refreshCartDiscountUi)");
+}
+
 console.log("\n[SMOKE] Checking 2026-10-28 el vigilante de Cobrar no cuenta el tiempo de las personas (LaMarevella: 'Cobrar se ha desbloqueado solo' falso)\n");
 if (
   renderer.includes("const armPayWatchdog = () => {") &&

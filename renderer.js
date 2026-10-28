@@ -3513,7 +3513,15 @@ function refreshCartDiscountUi() {
         : " · Sin lineas con descuento";
     summary.textContent = `${globalText}${lineText}`;
   }
-  if (clearBtn) clearBtn.disabled = pct <= 0 && lineCount <= 0;
+  // "Quitar" solo quita el descuento GENERAL (y el heredado de un aparcado): con unicamente
+  // descuentos de linea no hacia nada y aun asi aparecia activo.
+  const hasFrozenGlobalLines = cart.some(
+    (line) =>
+      line &&
+      typeof line === "object" &&
+      Object.prototype.hasOwnProperty.call(line, "cartGlobalDiscountPctApplied"),
+  );
+  if (clearBtn) clearBtn.disabled = pct <= 0 && !hasFrozenGlobalLines;
 }
 
 function bindCartGlobalDiscountButtonsOnce() {
@@ -17678,6 +17686,7 @@ const numPadOverlay = document.getElementById("numPadOverlay");
 const numPadEl = numPadOverlay?.querySelector(".num-pad");
 const numPadDisplay = document.getElementById("numPadDisplay");
 const numPadProductName = document.getElementById("numPadProductName");
+const numPadTitleWord = document.getElementById("numPadTitleWord");
 const numPadQuickPercentsEl = document.getElementById("numPadQuickPercents");
 // Peticion de cliente: accesos rapidos (10/20/50/100%, fijos en el HTML) en
 // el teclado de descuentos, para no tener que teclear a mano los porcentajes
@@ -18566,7 +18575,22 @@ function openNumPad(
   numPadInitialValue = evaluateNumPadCurrentValue({ silent: true }) ?? 0;
 
   if (numPadProductName) {
-    numPadProductName.textContent = productName ? ` - ${productName}` : "";
+    // En los descuentos la palabra "descuento" ya va en el titulo: se quita del nombre para
+    // no leer "Descuento - Descuento general carrito".
+    const shownName = String(productName || "")
+      .replace(/^Descuento general carrito/i, "Todo el carrito")
+      .replace(/\s*-\s*descuento linea/i, "");
+    numPadProductName.textContent = shownName ? ` - ${shownName}` : "";
+  }
+  // El titulo decia siempre "Cantidad", tambien al cambiar un precio o un descuento
+  // (el modo "price" lo usan los dos): ahora dice lo que se esta editando.
+  if (numPadTitleWord) {
+    const what = String(productName || "");
+    numPadTitleWord.textContent = /descuento/i.test(what)
+      ? "Descuento"
+      : mode === "price"
+        ? "Precio"
+        : "Cantidad";
   }
 
   // ✅ si es precio, muestra botón “Restaurar”
