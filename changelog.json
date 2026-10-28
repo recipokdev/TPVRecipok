@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.55",
+      "date": "2026-10-28",
+      "title": "Release 0.2.55",
       "changes": [
         "MEJORA: el título del teclado numérico ahora dice lo que estás cambiando («Precio», «Descuento»…) en vez de «Cantidad» siempre; y el botón «Quitar» del descuento general ya no aparece activo cuando solo hay descuentos de línea (no hacía nada).",
         "ARREGLO: al cobrar, si la ventana de pago estaba abierta más de 45 segundos (por ejemplo, contando el cambio con calma) salía el aviso «Cobrar se ha desbloqueado solo» aunque nada estuviera colgado, y mientras tanto se podía volver a pulsar «Cobrar» (riesgo de cobrar dos veces). Ahora el vigilante solo cuenta el tiempo que tarda el programa, no el que tarda la persona en la ventana de pago, el selector de agente o el aviso de stock (caso real de LaMarevella: 3 avisos falsos en una mañana).",
