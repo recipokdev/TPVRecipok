@@ -1918,7 +1918,7 @@ mustContain(
 
 {
   const fnStart = renderer.indexOf("async function onPayButtonClick()");
-  const fnBody = fnStart >= 0 ? renderer.slice(fnStart, fnStart + 5500) : "";
+  const fnBody = fnStart >= 0 ? renderer.slice(fnStart, fnStart + 7500) : "";
 
   if (fnStart < 0) {
     fail("onPayButtonClick not found");
@@ -5305,7 +5305,7 @@ mustContain(
 
 {
   const idx = renderer.indexOf("} finally {\n    if (isPayingNowWatchdogTimer)");
-  const idxLoose = idx >= 0 ? idx : renderer.indexOf("if (isPayingNowWatchdogTimer) {");
+  const idxLoose = idx >= 0 ? idx : renderer.lastIndexOf("if (isPayingNowWatchdogTimer) {");
   const scoped = idxLoose >= 0 ? renderer.slice(idxLoose, idxLoose + 400) : "";
   if (scoped.includes("clearTimeout(isPayingNowWatchdogTimer)") && scoped.includes("isPayingNow = false;")) {
     ok(
@@ -10794,6 +10794,20 @@ if (
   ok("Si el cajero deja vacio (quitando lineas) el aparcado que tiene abierto, el TPV ya no lo suelta: lo que añada despues actualiza ESE pedido en vez de crear uno nuevo y dejar el viejo vivo con su stock reservado (antes se duplicaba el pedido y el stock se descontaba dos veces); cobrar o 'Salir' siguen soltandolo");
 } else {
   fail("Falta mantener el vinculo con el aparcado abierto cuando el cajero lo deja vacio quitando lineas (renderer.js renderCart / armKeepParkedLinkIfCartEmptied / PARKED_LINK_KEPT_EMPTY_ID)");
+}
+
+console.log("\n[SMOKE] Checking 2026-10-28 el vigilante de Cobrar no cuenta el tiempo de las personas (LaMarevella: 'Cobrar se ha desbloqueado solo' falso)\n");
+if (
+  renderer.includes("const armPayWatchdog = () => {") &&
+  renderer.includes("const waitForPerson = async (fn) => {") &&
+  renderer.includes("const payResult = await waitForPerson(() => openPayModal(totalCart));") &&
+  renderer.includes("const proceedAnyway = await waitForPerson(() =>") &&
+  (renderer.match(/await waitForPerson\(\(\) =>\s*requireAssignedAgentOrBlock/g) || []).length >= 2 &&
+  !renderer.includes("const payResult = await openPayModal(totalCart);")
+) {
+  ok("El vigilante de 'Cobrar' (45 s) se pausa mientras una persona decide (agente, aviso de stock, ventana de pago) y se rearma entero despues: antes saltaba el aviso falso 'Cobrar se ha desbloqueado solo' si la ventana de pago estaba abierta mas de 45 s, y dejaba pulsar Cobrar otra vez a mitad de un cobro");
+} else {
+  fail("Falta pausar el vigilante de Cobrar mientras una persona decide (renderer.js armPayWatchdog / waitForPerson)");
 }
 
 console.log("\n[SMOKE] Checking 2026-10-28 pantalla del cliente: relleno para productos sin imagen\n");

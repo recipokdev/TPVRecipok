@@ -44881,24 +44881,44 @@ async function onPayButtonClick() {
     // (ni en exito ni en error) en un tiempo razonable, algo esta colgado de
     // verdad -- se libera el bloqueo solo en vez de dejar el TPV inutil el
     // resto del turno.
-    if (isPayingNowWatchdogTimer) clearTimeout(isPayingNowWatchdogTimer);
-    isPayingNowWatchdogTimer = setTimeout(() => {
-      isPayingNowWatchdogTimer = null;
-      if (!isPayingNow) return;
-      isPayingNow = false;
-      refreshAgentGuardUI?.();
-      logFeatureError(
-        "COBRO",
-        "watchdog-isPayingNow-liberado",
-        new Error("onPayButtonClick no termino a tiempo"),
-        { requestId },
-      );
-      showMessageModal(
-        "Cobrar se ha desbloqueado solo",
-        "El botón «Cobrar» llevaba demasiado tiempo sin responder (probable problema de red) y se ha liberado automáticamente para que puedas seguir vendiendo.\n\n" +
-          "IMPORTANTE: antes de volver a cobrar este mismo ticket, comprueba en «Tickets» o en FacturaScripts si esa venta ya se llegó a registrar -- para no cobrarla dos veces.",
-      );
-    }, 45000);
+    // Lo que cuenta aqui es el tiempo que TARDA EL PROGRAMA, no el que tarda una persona en
+    // decidir: la ventana de pago (importes, cambio...), el aviso de stock o el selector de
+    // agente pueden estar abiertos mas de 45 s sin que nada este colgado. Real (LaMarevella,
+    // 2026-10-28): 3 avisos "Cobrar se ha desbloqueado solo" con cobros que si terminaron --
+    // el cajero tardaba en la ventana de pago. Por eso el vigilante se pausa mientras una
+    // persona decide (ver waitForPerson) y se rearma entero al seguir el proceso.
+    const armPayWatchdog = () => {
+      if (isPayingNowWatchdogTimer) clearTimeout(isPayingNowWatchdogTimer);
+      isPayingNowWatchdogTimer = setTimeout(() => {
+        isPayingNowWatchdogTimer = null;
+        if (!isPayingNow) return;
+        isPayingNow = false;
+        refreshAgentGuardUI?.();
+        logFeatureError(
+          "COBRO",
+          "watchdog-isPayingNow-liberado",
+          new Error("onPayButtonClick no termino a tiempo"),
+          { requestId },
+        );
+        showMessageModal(
+          "Cobrar se ha desbloqueado solo",
+          "El botón «Cobrar» llevaba demasiado tiempo sin responder (probable problema de red) y se ha liberado automáticamente para que puedas seguir vendiendo.\n\n" +
+            "IMPORTANTE: antes de volver a cobrar este mismo ticket, comprueba en «Tickets» o en FacturaScripts si esa venta ya se llegó a registrar -- para no cobrarla dos veces.",
+        );
+      }, 45000);
+    };
+    const waitForPerson = async (fn) => {
+      if (isPayingNowWatchdogTimer) {
+        clearTimeout(isPayingNowWatchdogTimer);
+        isPayingNowWatchdogTimer = null;
+      }
+      try {
+        return await fn();
+      } finally {
+        if (isPayingNow) armPayWatchdog();
+      }
+    };
+    armPayWatchdog();
 
     window.__POSTPAY_PENDING__ = null;
 
@@ -44952,7 +44972,9 @@ async function onPayButtonClick() {
     });
 
     // ✅ FAILSAFE: agente obligatorio (antes de abrir el modal)
-    const okAgent = await requireAssignedAgentOrBlock({ showModal: true });
+    const okAgent = await waitForPerson(() =>
+      requireAssignedAgentOrBlock({ showModal: true }),
+    );
     if (!okAgent) return;
 
     const stockProblems = await checkCartStockProblems(cart);
@@ -44984,12 +45006,14 @@ async function onPayButtonClick() {
         `</div>`,
       ].join("\n");
 
-      const proceedAnyway = await confirmModal("Sin stock suficiente", html, {
-        isHtml: true,
-        textClassName: "stock-warning-content",
-        dialogClassName: "stock-warning-dialog",
-        okButtonText: "Cobrar sin stock",
-      });
+      const proceedAnyway = await waitForPerson(() =>
+        confirmModal("Sin stock suficiente", html, {
+          isHtml: true,
+          textClassName: "stock-warning-content",
+          dialogClassName: "stock-warning-dialog",
+          okButtonText: "Cobrar sin stock",
+        }),
+      );
 
       if (!proceedAnyway) {
         setStatusText("Cobro cancelado (sin stock)");
@@ -45038,7 +45062,7 @@ async function onPayButtonClick() {
     }
 
     // 1) Modal cobro
-    const payResult = await openPayModal(totalCart);
+    const payResult = await waitForPerson(() => openPayModal(totalCart));
     if (!payResult) {
       logFeatureInfo("COBRO", "cancelado-usuario", {
         requestId,
@@ -45075,7 +45099,9 @@ async function onPayButtonClick() {
     }
 
     // ✅ FAILSAFE: revalidar (por si cambió algo mientras el modal estaba abierto)
-    const okAgent2 = await requireAssignedAgentOrBlock({ showModal: true });
+    const okAgent2 = await waitForPerson(() =>
+      requireAssignedAgentOrBlock({ showModal: true }),
+    );
     if (!okAgent2) return;
 
     // ---- Normalizar pagos ----
