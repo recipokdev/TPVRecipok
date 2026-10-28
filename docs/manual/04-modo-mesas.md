@@ -18,7 +18,7 @@ El panel tiene tres pestañas: **Transacciones** (atender la mesa), **Mapa de Sa
 @fig img/mesas-mapa-estados.png | crop=0,0,800,540 | marks=1:300,58;2:790,41;3:360,362;4:352,224;5:538,224;6:140,92 | Mapa de la sala con mesas libres, reservadas y ocupadas.
 
 1. **Pestañas.** Cambias entre *Transacciones*, *Mapa de Salas* y *Diseñar Salas*.
-2. **Accesos rápidos a mesas.** Cada mesa tiene un botón con su color; si tiene un pedido abierto, aparece un número que es su **turno**: el 1 es la mesa que lleva más tiempo abierta en esa sala, así ves cuál atender primero. Un toque te lleva directamente a ella.
+2. **Accesos rápidos a mesas.** Cada mesa tiene un botón con su color; si tiene un pedido abierto, aparece un número que es su **turno**: el 1 es la mesa que lleva más tiempo abierta en esa sala, así ves cuál atender primero. Dentro de *Transacciones*, un toque en uno de estos botones **cambia a esa mesa**; estando en el *Mapa de Salas*, solo la deja resaltada (para abrirla, toca la mesa en el plano).
 3. **Mesa ocupada.** Se muestra en naranja con el importe, la hora a la que se abrió, su **número de turno** (el circulito blanco de debajo) y, si hay algo pendiente de enviar a cocina, el aviso **Sin enviar**. El círculo de color que la rodea indica qué camarero la está atendiendo.
 4. **Mesa libre.** Se muestra en verde.
 5. **Mesa reservada.** Se muestra en violeta, con el nombre y la hora de la reserva.
