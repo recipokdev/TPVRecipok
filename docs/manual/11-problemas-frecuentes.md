@@ -17,7 +17,7 @@ Cancelaste la activación o no se completó. Pulsa **Escribir email** e inténta
 Comprueba que has elegido tu usuario antes de escribir el PIN y que no hay mayúsculas ni letras: el PIN son solo cifras (hasta 4). Si sigue sin funcionar, pide a un administrador que lo revise.
 
 ### Me he equivocado de empresa al activar
-En la ventana de inicio de sesión pulsa **Cambiar de empresa**, o un administrador puede hacerlo en **Opciones → Terminales → Cambiar de empresa**.
+Un administrador puede cambiarlo en **Opciones → Terminales → Cambiar de empresa**. (El botón de la ventana de inicio de sesión solo aparece en equipos de pruebas, no en los de una empresa real.)
 
 ## Ventas y caja
 

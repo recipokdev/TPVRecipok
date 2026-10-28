@@ -10,6 +10,10 @@ Una misma empresa puede tener varios TPV (por ejemplo, uno en barra y otro en sa
 - **Cada terminal tiene su caja.** Cada uno abre y cierra la suya.
 - **Cada terminal puede ver familias distintas.** Se configura en **Opciones → Terminales**.
 
+### Dos equipos con el mismo terminal
+
+Si dos ordenadores están configurados como el **mismo terminal**, **comparten una sola caja**. Si la caja se abre o se cierra en uno, el otro lo avisa («la caja se cerró en otro TPV»), y puede aparecer el aviso informativo **«Hay N TPV activos en esta terminal»**. Es solo un aviso: no impide trabajar.
+
 ### Si dos terminales tocan el mismo pedido
 Si alguien modifica una mesa o un pedido en otro terminal mientras tú lo tienes abierto, el TPV te avisa con un mensaje del tipo **«Esta mesa se actualizó desde otro terminal mientras estaba abierta»** y muestra la versión más reciente. No se pierde nada: revisa que el pedido es el que esperabas.
 
@@ -28,7 +32,9 @@ Los camareros pueden tomar las comandas desde una tablet con la **app de camarer
 
 > **Importante:** el código caduca a los **10 minutos** si no se usa. Si caduca, genera uno nuevo.
 
-En **Tablets emparejadas** ves los dispositivos con acceso a tu negocio. Si una tablet se pierde, se vende o ya no debe tener acceso, **revócala**: necesitará un código nuevo para volver a emparejarse.
+En **Tablets emparejadas** ves los dispositivos con acceso a tu negocio y, de cada uno, el **agente vinculado**. Si una tablet se pierde, se vende o ya no debe tener acceso, **revócala**: necesitará un código nuevo para volver a emparejarse. El botón **Desvincular agente** quita a mano el agente asociado a una tablet (por ejemplo, un móvil perdido o reseteado).
+
+Las tablets revocadas pasan a una **🗑 Papelera** plegada, donde puedes **Olvidar para siempre** las que ya no quieras ver.
 
 ## 3. Estado de la conexión
 
@@ -48,6 +54,8 @@ Con el botón **🔄 Actualizar datos** (junto al buscador de productos) puedes 
 
 > **Importante:** no cierres el programa mientras haya ventas en cola. Espera a que se recupere la conexión y se envíen.
 
+Si una venta de la cola **no se puede sincronizar de verdad**, el TPV lo avisa claramente para que la cobres a mano. Antes de repetir un cobro, **comprueba siempre en Tickets** si la venta ya llegó a registrarse, para no cobrarla dos veces. En la barra de estado puede verse también un tercer estado ámbar, **«Conexión inestable…»**, además del verde (conectado) y el rojo (sin conexión).
+
 ## 4. Actualizaciones del programa
 
 El TPV comprueba por sí solo si hay una versión nueva y la descarga en segundo plano. En **Opciones → Actualización automática**:
@@ -63,8 +71,7 @@ Es mejor actualizar **fuera del horario de servicio**, con la caja cerrada.
 
 Si un TPV se ha activado con la empresa equivocada, o va a pasar a otra empresa:
 
-- Desde la ventana de inicio de sesión, **Cambiar de empresa**; o
-- **Opciones → Terminales → Cambiar de empresa** (administradores).
+- **Opciones → Terminales → Cambiar de empresa** (solo administradores). En la ventana de inicio de sesión también existe un botón con el mismo nombre, pero solo se muestra en equipos activados con una empresa de pruebas (demo).
 
 Esto quita la empresa, el usuario, el terminal y la caja guardados en **ese** equipo y vuelve a pedir el email de la empresa.
 

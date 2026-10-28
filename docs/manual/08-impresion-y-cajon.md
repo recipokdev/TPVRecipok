@@ -8,7 +8,7 @@ Entra en **Opciones → Impresora**.
 
 - **Impresora de tickets.** Muestra la impresora actual y permite **cambiarla y probarla**. Se guarda para las próximas impresiones.
 - **Imprimir automáticamente al cobrar.** Si está activado, el ticket sale nada más confirmar el cobro. Si lo desactivas, no se imprime solo.
-- **Impresora de comandas.** Impresora que se usa **solo** para las comandas de cocina. Si todavía no has elegido una, el TPV te abre directamente el selector al enviar la primera comanda.
+- **Impresora de comandas** (solo si tu empresa tiene Modo Mesas). Impresora que se usa **solo** para las comandas de cocina. Si todavía no has elegido una, el TPV te abre directamente el selector al enviar la primera comanda.
 - **Correo de facturas.** Para enviar facturas por email (ver el capítulo «Tickets, devoluciones y facturas»).
 
 Si intentas imprimir un ticket y todavía no hay impresora elegida, el TPV abre esta ventana:
@@ -37,7 +37,7 @@ El ticket se puede volver a imprimir en cualquier momento desde **Tickets** (bot
 
 ## 3. La comanda de cocina
 
-La comanda es el papel que se imprime en la cocina o en la barra con lo que hay que preparar. Se usa en el **Modo Mesas** (capítulo «Modo Mesas»).
+La comanda es el papel que se imprime en la cocina o en la barra con lo que hay que preparar. Se usa en el **Modo Mesas** (ver el manual aparte del Modo Mesas).
 
 @fig img/impresion-comanda.png | crop=0,0,380,290 | width=48 | marks=1:330,45;2:330,97;3:330,190;4:330,262 | Ejemplo de comanda. Los datos son de ejemplo.
 
@@ -53,7 +53,7 @@ En **Opciones → Modo Mesas** (administradores):
 - **Familias para comandas.** Solo las familias seleccionadas se imprimen en la comanda (por ejemplo, la cocina no necesita ver las bebidas).
 - **Comanda agrupada por familias.** Cada familia aparece una sola vez con sus productos debajo.
 - **Comanda compacta.** Ahorra papel: mesa, agente, fecha y hora en una sola línea, sin cabecera de columnas y sin el apartado de observaciones cuando está vacío.
-- **Enviar comanda automáticamente al guardar** y **Espera antes de enviar la comanda.** Ver el capítulo «Modo Mesas».
+- **Enviar comanda automáticamente al guardar** y **Espera antes de enviar la comanda.** Ver el manual aparte del Modo Mesas.
 
 ### Imprimir el ticket al aparcar
 Si activas **Imprimir ticket automáticamente al guardar/aparcar** (**Opciones → Carrito**), al aparcar un pedido (en Mesas o en el TPV normal) se imprime el ticket al instante. No sustituye a la comanda de cocina.
@@ -78,3 +78,6 @@ Si vendes productos por peso, puedes conectar una báscula. Se configura en **Op
 ## 7. Pantalla del cliente
 
 Si el equipo tiene una segunda pantalla, el TPV puede mostrar al cliente su pedido mientras se vende. Se activa en **Opciones → Pantalla → Pantalla cliente (2.ª pantalla)** y en **Pantalla a usar** eliges cuál. Con el botón **P2** de la ventana de Opciones cambias esa pantalla entre modo día y modo noche.
+
+- **Identificar** y **Actualizar** (junto a *Pantalla a usar*): *Identificar* enseña un número grande en cada monitor para saber cuál es cuál; *Actualizar* vuelve a buscar las pantallas conectadas.
+- Con **una sola pantalla** conectada no se puede activar la pantalla cliente (taparía el TPV) y el programa avisa.

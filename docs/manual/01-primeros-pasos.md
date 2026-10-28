@@ -2,6 +2,8 @@
 
 Este capítulo explica lo que hay que hacer la primera vez que se enciende el TPV (activarlo con el email de tu empresa) y cada día al empezar (iniciar sesión y abrir la caja).
 
+> **Modo Mesas.** Si tu empresa tiene contratado el módulo de mesas (salas, comandas a cocina, app de camareros), se explica en un **manual aparte**. Aquí se cuenta todo lo demás, que es común a todos los TPV.
+
 ## 1. Activar el TPV con el email de la empresa
 
 La primera vez que abres el programa en un equipo, te pide que lo actives.
@@ -20,7 +22,7 @@ El TPV busca tu empresa con ese email y, si la encuentra, carga sus datos (produ
 
 1. **Texto escrito.** Se ve lo que llevas escrito; la **x** lo borra.
 2. **Atajos.** Teclas para escribir más rápido: **.**, **_**, **-**, **@**, **.com** y **gmail.com**.
-3. **Mayus.** Para escribir letras en mayúscula.
+3. **Mayus.** Para escribir letras en mayúscula. Funciona como en un móvil: **un toque** pone en mayúscula solo la **siguiente** letra (y vuelve a minúsculas sola); **dos toques seguidos, rápidos**, dejan la mayúscula **fijada** para todas las letras; **otro toque** la quita. El botón cambia de aspecto para que veas en qué estado está.
 4. **Pegar**, **Borrar todo**, **Espacio** y **←** (borrar una letra).
 5. **OK** confirma lo escrito; **Cancelar** cierra el teclado sin cambiar nada.
 
@@ -43,7 +45,7 @@ Cada vez que se enciende el TPV, o cuando alguien cierra sesión, aparece la ven
 2. **Personal TPV.** Usuarios de venta, con permisos más limitados.
 3. **PIN.** El número secreto de cada usuario (hasta 4 cifras). Se escribe con el teclado numérico de la ventana.
 4. **Teclado numérico.** **C** borra todo y **⌫** borra la última cifra.
-5. **Cambiar de empresa.** Quita la empresa activada en este equipo y vuelve a pedir el email (sirve si el equipo se ha activado con la empresa equivocada).
+5. **Cambiar de empresa.** Solo aparece cuando el equipo está activado con una empresa de **pruebas (demo)**, como en esta captura; en un equipo de una empresa real no se ve. Quita la empresa activada y vuelve a pedir el email. Si el equipo se activó con la empresa equivocada, un administrador puede hacerlo desde **Opciones → Terminales → Cambiar de empresa**.
 6. **Entrar.** Se activa cuando has elegido un usuario y escrito su PIN. **Salir** cierra el programa.
 
 Elige tu usuario, escribe tu PIN y pulsa **Entrar**.
@@ -62,6 +64,10 @@ En la esquina inferior derecha de la pantalla de venta verás tres botones:
 
 Un administrador puede ocultar alguno de estos botones en **Opciones → Barra de información**.
 
+### La barra de agentes
+
+Si el terminal tiene **dos o más agentes**, sobre los productos aparece una fila con un botón por agente (con flechas ‹ › cuando no caben todos) para cambiar de agente con un solo toque. Si ese agente exige el PIN de administrador, se abre la ventana de cambio de agente para pedirlo. Con un solo agente (o ninguno) la barra no se muestra.
+
 ## 4. Abrir la caja
 
 Para vender, la caja tiene que estar abierta. Si está cerrada, sobre los productos verás un aviso con el botón para abrirla (o pulsa **Abrir caja** en la cabecera del carrito). Cuenta el dinero que dejas en la caja y confirma. Todo el proceso está explicado en el capítulo «Caja».
@@ -69,5 +75,6 @@ Para vender, la caja tiene que estar abierta. Si está cerrada, sobre los produc
 ## 5. Cerrar sesión y salir
 
 - **Cerrar sesión:** pulsa el botón de usuario de la barra inferior. Otra persona podrá entrar con su PIN.
-- **Salir del programa:** *Opciones → Salir del Programa*. Antes conviene cerrar la caja si has terminado la jornada.
+- **Salir del programa:** *Opciones → Salir del Programa*. Con la **caja abierta** el programa no te deja salir y avisa «Terminal abierta»: cierra primero la caja. Con pedidos aparcados sin cobrar también avisa, salvo que un administrador haya activado «Permitir cerrar con aparcados».
+- **Si el programa no responde** y no puedes cerrar la caja, el aviso de «Terminal abierta» ofrece **Salir sin cerrar caja (incidencia)**. Te deja elegir entre **Reiniciar el programa** o **Cerrar sin reiniciar**, y pide confirmación. La caja y los pedidos aparcados no se pierden. Úsalo solo si el programa está bloqueado.
 - **Actualizaciones:** el TPV avisa cuando hay una versión nueva y la descarga en segundo plano. Consulta el capítulo «Opciones».

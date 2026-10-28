@@ -27,11 +27,23 @@ Pulsa **Aparcados** (en el botón verás cuántos hay pendientes) para abrir la 
 3. **Reiniciar.** Borra la copia local de aparcados de este TPV y la vuelve a descargar. Úsalo solo si ves pedidos «fantasma» o que no coinciden con los de otro terminal.
 4. **Filtros.** *Todos*, *Sin cobrar* o *Cobrados*. Entre paréntesis ves cuántos hay de cada tipo.
 5. **Hoy / Días anteriores.** Separa los pedidos de hoy de los que se quedaron sin cobrar otros días.
-6. **Resumen** muestra un resumen de los aparcados. **Borrar pendientes** elimina todos los pedidos sin cobrar de golpe: es irreversible y solo está disponible para administradores.
+6. **Resumen** muestra un resumen de los aparcados. **Borrar pendientes** (solo aparece con el filtro *Sin cobrar*) elimina todos los pedidos sin cobrar de golpe: es irreversible y solo está disponible para administradores.
 7. **Estado de la sincronización.** En verde indica «Sync al día»; muestra además cuántas operaciones esperan en cola, si hay incidencias y cuándo fue la última sincronización.
 8. **El pedido.** Nombre, observaciones, fecha, cliente, productos e importe. La etiqueta **PENDIENTE** indica que aún no está cobrado.
 9. **Imprimir** el ticket del pedido.
 10. **Eliminar** el pedido aparcado.
+
+### Pedidos cobrados y avisos de sincronización
+
+Los pedidos ya cobrados se quedan en la lista durante el turno, con la etiqueta **COBRADO** y el número de factura. Para vaciarlos hay un botón propio:
+
+@fig img/aparcados-cobrados.png | crop=470,285,980,215 | marks=1:1425,343;2:500,397;3:615,397 | Lista de aparcados con el filtro «Cobrados».
+
+1. **Cobrados.** Muestra solo los pedidos ya cobrados.
+2. **Resumen.**
+3. **Limpiar cobrados.** Pide confirmación y borra del historial todos los pedidos cobrados. Se quitan también en los demás TPV en unos segundos.
+
+Si la sincronización detecta algún problema, aparece además un botón **Incidencias sync (N)** que abre una tabla con el motivo, el ticket y lo que había en este TPV y en el servidor. Cuando hay un conflicto manda siempre la versión del servidor. **Limpiar incidencias** vacía la tabla. Es un registro de diagnóstico: normalmente no hay que hacer nada.
 
 ## 3. Recuperar un pedido y cobrarlo
 
@@ -42,8 +54,15 @@ Pulsa sobre el **nombre** del pedido en la lista. Se carga en el carrito y la ve
 1. **Cabecera del pedido.** Muestra el nombre, el cliente, la fecha y las observaciones del ticket que estás atendiendo.
 2. **Editar.** Cambia el nombre o las observaciones (la ventana pasa a llamarse «Editar ticket aparcado» y el botón es **Actualizar**).
 3. **Borrar.** Elimina el pedido aparcado.
+4. **↶ Deshacer.** Deshace el último cambio del pedido (líneas, cantidades y descuentos). Una vez usado aparece **↷ Rehacer** para volver a aplicarlo. Cada botón solo se ve cuando hay algo que deshacer o rehacer, y no aparecen en pedidos ya cobrados.
 
-Ahora puedes añadir o quitar productos como en cualquier venta y pulsar **Cobrar**. Abajo a la izquierda, el botón **Vaciar** pasa a llamarse **Salir**: sirve para dejar el pedido tal como está y volver a una venta nueva, sin borrarlo.
+Ahora puedes añadir o quitar productos como en cualquier venta y pulsar **Cobrar**. **Los cambios se guardan solos** medio segundo después de hacerlos, así que no hace falta volver a aparcar: por eso el botón *Aparcar* se sustituye por **PreImpr**.
+
+@fig img/aparcados-abierto.png | crop=1405,880,505,135 | marks=1:1491,912;2:1660,912;3:1829,944 | Botones con un pedido abierto.
+
+1. **Salir.** (Antes *Vaciar*.) Deja el pedido tal como está y vuelve a una venta nueva, **sin borrarlo**: el pedido sigue pendiente en Aparcados.
+2. **PreImpr** (preimpresión). Imprime la **cuenta provisional** («Pendiente de pago») sin cobrar nada, para dársela al cliente antes de cobrar. Solo está activo con un pedido abierto que tenga productos. En Modo Mesas, la mesa sigue ocupada.
+3. **Cobrar.**
 
 ## 4. Eliminar un pedido aparcado
 

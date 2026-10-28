@@ -49,8 +49,16 @@ Cuando termines la jornada, pulsa **Cerrar caja**. Se abre la ventana de cierre.
 7. **Imprimir informe.** Imprime el resumen **sin cerrar la caja**: útil para hacer un control a mitad de jornada. Queda anotado en el registro de la caja.
 8. **Cerrar caja.** Cierra la jornada. **Cancelar** vuelve a la venta.
 
+### Avisos antes de cerrar
+
+- El botón **Cerrar caja** se ve en gris con «Cargando…» mientras llegan los totales; no deja cerrar hasta que terminan de cargarse.
+- Si queda algún **ticket terminándose de procesar** (normalmente por falta de conexión), el TPV lo avisa: espera unos segundos y vuelve a intentarlo.
+- **«Tickets incompletos en esta caja»:** hay facturas a las que aún no se ha podido asignar el agente. Es una incidencia técnica, no una persona: espera y reintenta.
+- **Tickets mixtos (N).** Si en la jornada hubo ventas pagadas con **varias formas de pago**, el cierre muestra un bloque con el total de cada ticket y el importe de cada forma de pago.
+- El TPV pide **dos confirmaciones** («¿Seguro que quieres cerrar la caja?» y «Confirmar cierre de caja») para evitar cierres por error.
+
 ### Si hay pedidos aparcados
-Si al cerrar la caja quedan pedidos aparcados, el TPV te lo avisa:
+Si al cerrar la caja quedan pedidos aparcados, el TPV te lo avisa (con un botón **Revisar aparcados**):
 - Normalmente tienes que recuperarlos o eliminarlos antes de cerrar.
 - Si tu administrador ha activado **Permitir cerrar con aparcados** (**Opciones → Cierre de Caja**, solo administradores), puedes cerrar igualmente: los pedidos se conservan y podrás recuperarlos después.
 

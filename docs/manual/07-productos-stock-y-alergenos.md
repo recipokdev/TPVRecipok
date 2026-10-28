@@ -16,6 +16,12 @@ Si tu catálogo es grande, activa **Familias primero** (**Opciones → Productos
 1. **Todos los productos.** Permite ver el catálogo completo sin elegir familia.
 2. **Familias.** Un toque abre esa familia.
 
+### Subfamilias y disposición de las familias
+
+- **Subfamilias.** Una familia con subfamilias abre una segunda fila con ellas y un botón **Volver**. En *Familias primero*, el botón es **← Volver a las familias** y sube un solo nivel (subfamilia → familia → todas). Volver a pulsar la subfamilia activa la deselecciona.
+- **Familias en columna lateral.** El botón redondo junto a Actualizar y Cajón alterna entre las familias **arriba**, en una barra, y en una **columna a la izquierda** con botones cuadrados. Se recuerda en cada TPV y también funciona en Modo Mesas.
+- **Etiquetas en las tarjetas.** Una insignia **−X %** indica un descuento por tarifa y un **⚠** avisa de alérgenos; el color del stock indica su nivel.
+
 ### Qué familias se ven
 En **Opciones → Terminales** puedes elegir qué familias se ven en cada terminal (y su color e icono). Con **Mostrar todos los productos** un terminal enseña todo aunque haya familias desmarcadas.
 
@@ -34,7 +40,14 @@ En **Texto en la tarjeta de producto** eliges si se muestra la descripción del 
 
 ## 2. Precios
 
-Con **Modo edición de precio y prioridad** activado aparece un icono ✎ en cada producto. Pulsándolo se abre la ventana **Editar precio**, que muestra el precio actual (IVA incluido) y permite escribir uno nuevo; también puedes cambiar la prioridad del producto (su posición en la pantalla). Si tu empresa trabaja con precios distintos por almacén, la propia ventana te lo indica.
+Con **Modo edición de precio y prioridad** activado aparece un icono ✎ en cada producto. Pulsándolo se abre la ventana **Editar precio**, que muestra el precio actual (IVA incluido) y permite escribir uno nuevo; también puedes cambiar la prioridad del producto (su posición en la pantalla). 
+
+Hay dos formas de guardar el nuevo precio:
+
+- **Guardar.** Cambia el precio en FacturaScripts **para todos** los terminales y almacenes.
+- **Guardar solo en este almacén.** Solo aparece si el terminal tiene almacén. Fija el precio **únicamente en esa tienda**, sin tocar el producto en FacturaScripts. Si ya existe un precio especial, la ventana muestra «Precio especial en este almacén: X» y el botón **Quitar precio especial** para volver al precio general.
+
+El cambio manual de precio que haga el cajero al cobrar (ver «Vender y cobrar») sigue teniendo prioridad sobre cualquiera de ellos.
 
 > **Consejo:** activa este modo solo cuando vayas a cambiar precios, para no tocarlos sin querer durante el servicio.
 

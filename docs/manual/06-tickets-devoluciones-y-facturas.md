@@ -19,6 +19,14 @@ Pulsa **Tickets** (abajo a la izquierda del carrito) para ver las ventas cobrada
 9. **Devolver.**
 10. **Cambiar pago.**
 
+### La ficha de un ticket
+
+Si tocas **en cualquier parte de la fila** de un ticket (no solo en los botones), se abre su ficha de información, de solo lectura:
+
+@fig img/tickets-informacion.png | crop=510,324,900,370 | width=70 | Información de un ticket.
+
+Muestra el número, el cliente, el total y cada línea con su cantidad, IVA y precio. En las ofertas, los productos incluidos aparecen como «↳ … incluido». Las devoluciones salen anidadas bajo el ticket original (con «Dev: n»). El botón **↩ Devolver** desaparece cuando el ticket ya está devuelto del todo, y **💳 Cambiar pago** no aparece en tickets de 0 €.
+
 ## 2. Devolver un ticket
 
 Pulsa **↩ Devolver** en el ticket. El TPV avisa de que la devolución se comunicará a gerencia; pulsa **Aceptar** para continuar.

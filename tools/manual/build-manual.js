@@ -1,6 +1,7 @@
 // Genera el manual del TPV en PDF a partir de docs/manual/*.md
-//   node tools/manual/build-manual.js            -> manual completo + un PDF por capitulo
-//   node tools/manual/build-manual.js 02-vender  -> solo los capitulos cuyo nombre empiece asi
+//   node tools/manual/build-manual.js            -> manual general + manual de Modo Mesas + un PDF por capitulo general
+//   node tools/manual/build-manual.js 02-vender  -> solo los PDF cuyo capitulo empiece asi (04-modo-mesas = el manual de Mesas)
+// El Modo Mesas es un modulo que no tienen todos los clientes: va en su propio manual, fuera del general.
 // Salida: docs/manual/pdf/ (excluida de git). Los capitulos son ficheros NN-nombre.md con un markdown sencillo:
 //   # Titulo (capitulo) / ## seccion / ### subseccion / parrafos / "- " listas / "1. " numeradas / **negrita** / *cursiva*
 //   > nota          (cuadro destacado)
@@ -14,6 +15,7 @@ const ROOT = path.resolve(__dirname, "..", "..");
 const SRC = path.join(ROOT, "docs", "manual");
 const OUT = path.join(SRC, "pdf");
 const filter = process.argv[2] || "";
+const MESAS_ID = "04-modo-mesas"; // modulo opcional: manual aparte
 
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const inline = (s) =>
@@ -150,38 +152,50 @@ function page(title, body) {
 }
 
 function chapterHtml(ch, n) {
-  return `<section class="chapter"><div class="chapter-kicker">Capítulo ${n}</div><h1>${inline(ch.h1)}</h1>${ch.html}</section>`;
+  const kicker = n ? `Capítulo ${n}` : "Módulo opcional";
+  return `<section class="chapter"><div class="chapter-kicker">${kicker}</div><h1>${inline(ch.h1)}</h1>${ch.html}</section>`;
 }
 
 (async () => {
   fs.mkdirSync(OUT, { recursive: true });
   const files = fs.readdirSync(SRC).filter((f) => /^\d\d-.+\.md$/.test(f)).sort();
-  const chapters = files.map((f) => {
+  const all = files.map((f) => {
     const id = f.replace(/\.md$/, "");
-    const n = parseInt(f.slice(0, 2), 10);
-    return { file: f, id, n, ...mdToHtml(fs.readFileSync(path.join(SRC, f), "utf8"), id) };
+    return { file: f, id, n: 0, ...mdToHtml(fs.readFileSync(path.join(SRC, f), "utf8"), id) };
   });
+  // Manual general: todos los capitulos menos Mesas, numerados seguidos (1, 2, 3...).
+  const chapters = all.filter((c) => c.id !== MESAS_ID).map((c, i) => ({ ...c, n: i + 1 }));
+  const mesas = all.find((c) => c.id === MESAS_ID) || null;
   const version = require(path.join(ROOT, "package.json")).version;
   const stamp = new Date().toLocaleDateString("es-ES", { year: "numeric", month: "long" });
   const cover = (sub) =>
     `<section class="cover"><div class="cover-brand">Recipok</div><h1>Manual del TPV</h1><div class="cover-sub">${esc(sub)}</div><div class="cover-meta">Versión del programa ${esc(version)} · ${esc(stamp)}</div></section>`;
-  const toc = `<section class="toc"><h1>Índice</h1>${chapters
-    .map(
-      (c) =>
-        `<div class="toc-ch"><a href="#${c.id}">Capítulo ${c.n}. ${inline(c.h1)}</a><ul>${c.sections.map((s) => `<li><a href="#${s.id}">${inline(s.title)}</a></li>`).join("")}</ul></div>`,
-    )
-    .join("")}</section>`;
+  const tocOf = (list, numbered) =>
+    `<section class="toc"><h1>Índice</h1>${list
+      .map(
+        (c) =>
+          `<div class="toc-ch"><a href="#${c.id}">${numbered ? `Capítulo ${c.n}. ` : ""}${inline(c.h1)}</a><ul>${c.sections.map((s) => `<li><a href="#${s.id}">${inline(s.title)}</a></li>`).join("")}</ul></div>`,
+      )
+      .join("")}</section>`;
+  const toc = tocOf(chapters, true);
 
   const jobs = [];
   if (!filter) {
     jobs.push({
-      name: "Manual-TPV-Recipok-completo.pdf",
-      html: page("Manual del TPV", cover("Guía completa de uso") + toc + chapters.map((c) => `<div id="${c.id}"></div>` + chapterHtml(c, c.n)).join("")),
+      name: "Manual-TPV-Recipok.pdf",
+      html: page("Manual del TPV", cover("Guía de uso") + toc + chapters.map((c) => `<div id="${c.id}"></div>` + chapterHtml(c, c.n)).join("")),
+    });
+  }
+  if (mesas && (!filter || mesas.file.startsWith(filter))) {
+    jobs.push({
+      name: "Manual-TPV-Recipok-Modo-Mesas.pdf",
+      html: page("Manual del Modo Mesas", cover("Modo Mesas (módulo opcional)") + tocOf([mesas], false) + `<div id="${mesas.id}"></div>` + chapterHtml(mesas, 0)),
     });
   }
   for (const c of chapters) {
     if (filter && !c.file.startsWith(filter)) continue;
-    jobs.push({ name: `Manual-TPV-Recipok-${c.id}.pdf`, html: page(c.h1, chapterHtml(c, c.n)) });
+    const rest = c.id.replace(/^\d+-/, "");
+    jobs.push({ name: `Manual-TPV-Recipok-${String(c.n).padStart(2, "0")}-${rest}.pdf`, html: page(c.h1, chapterHtml(c, c.n)) });
   }
 
   const app = await electron.launch({ args: [path.join(__dirname, "pdf-main.js")] });

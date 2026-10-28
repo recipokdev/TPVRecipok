@@ -15,6 +15,10 @@ Desde **Opciones** (el engranaje ⚙ de la cabecera del carrito) se adapta el TP
 7. **Actualizar Programa** y **Salir del Programa**, abajo.
 8. **Cerrar Opciones.**
 
+Los botones de resumen también pueden mostrar otros estados: **gris** (desactivado), **azul** (el valor actual de un ajuste) y **ámbar con ⚠** (algo requiere atención, por ejemplo «Sin impresora de tickets»). Al pulsar uno, la sección se abre y se resalta el ajuste. El buscador tiene una **✕** para borrarlo.
+
+Con la sesión iniciada puedes ver y cambiar las Opciones **aunque la caja esté cerrada** (por ejemplo, para salir del modo pantalla completa).
+
 > **Importante:** muchas opciones se guardan solo en **este** terminal. Si tienes varios TPV, configura cada uno.
 
 ## 2. Venta
@@ -49,9 +53,12 @@ Desde **Opciones** (el engranaje ⚙ de la cabecera del carrito) se adapta el TP
 - **Tarifa activa en TPV.** Selecciona la tarifa para editarla o asignarla.
 - **Crear nueva tarifa**, **Editar tarifa seleccionada** y **Guardar cambios.** Para crear y modificar tarifas (por ejemplo, un porcentaje de descuento) y marcar qué clientes la usan.
 - **Restricciones de tarifa** (por ejemplo, *No vender bajo coste* o *No vender sobre PVP*).
+- **Cómo se calcula.** Una tarifa es un **Descuento** (sobre el PVP) o un **Aumento** (sobre el coste), con un valor en **%** o en **€ fijos**. **Revertir cambios** deshace lo editado antes de guardar. **Borrar tarifa** pide confirmación, la quita de todos sus clientes y la borra de FacturaScripts. En **Clientes con esta tarifa** hay un buscador y los botones **Marcar visibles** y **Desmarcar visibles**; **Guardar cambios** guarda la tarifa y sus clientes en un solo paso.
 - **Clientes con esta tarifa.** Marca los clientes que deben usarla.
 
 ### Modo Mesas (solo administradores)
+
+> Esta sección, y la fila «Impresora de comandas» de la sección Impresora, **solo aparecen si tu empresa tiene contratado el módulo Modo Mesas** (se explica en su manual aparte).
 - **Enviar comanda automáticamente al guardar.** Al guardar el pedido de una mesa, la comanda se envía sola a cocina.
 - **Espera antes de enviar la comanda.** Con la comanda automática, los segundos que pasan desde el último cambio hasta que se envía.
 - **Comanda agrupada por familias.** En el papel de cocina, cada familia aparece una sola vez con sus productos debajo.
@@ -91,7 +98,7 @@ Para productos que se venden por peso.
 ## 4. Equipo y pantalla
 
 ### Pantalla (solo administradores)
-- **Modo TPV (kiosk).** El programa ocupa toda la pantalla. Si lo desactivas, puedes minimizarlo y usar el equipo como un ordenador normal.
+- **Modo TPV (kiosk).** El programa ocupa toda la pantalla. Si lo desactivas, puedes minimizarlo y usar el equipo como un ordenador normal. En una instalación **nueva** arranca **apagado**.
 - **Escala de la interfaz.** «Automático» ajusta letra, iconos y botones según la resolución para que quepa todo, incluso en pantallas pequeñas. Cámbialo solo si en ese equipo el automático no acierta.
 - **Teclado en pantalla.** Desactívalo si el TPV tiene teclado físico: al tocar un campo de texto no se abrirá el teclado táctil.
 - **Pantalla cliente (2.ª pantalla).** Actívala solo si el equipo tiene una pantalla secundaria; en **Pantalla a usar** eliges cuál.
@@ -118,4 +125,19 @@ Controla qué se ve en la barra inferior: **Mostrar barra completa**, **terminal
 
 ### Para pruebas
 - **Entorno de pruebas.** Simula cobros, aparcados e impresión sin enviar datos reales. Al salir, se restaura el estado anterior. Úsalo para practicar sin riesgo.
-- **Preview de ticket (solo pruebas).** Al cobrar o reimprimir, muestra el ticket en una ventana en lugar de imprimirlo.
+
+
+## 6. Valores de fábrica
+
+Así vienen las opciones principales en un TPV nuevo. Lo que tu administrador cambie después sustituye a estos valores.
+
+- **Iniciar TPV al encender el PC:** activado.
+- **Modo TPV (kiosk):** apagado en instalaciones nuevas.
+- **Teclado en pantalla:** activado. **Pantalla cliente:** apagada.
+- **Orden de los productos:** *Manual (prioridad)*. Los demás: *Por defecto (FacturaScripts)*, *Referencia*, *Descripción* e *ID de producto*.
+- **Desagrupar líneas:** activado (cada toque crea una línea nueva).
+- **Accesos rápidos de descuento:** 10, 20, 50 y 100 %.
+- **Aviso de stock al aparcar:** activado. **Preguntar por el stock al Borrar pendientes:** activado.
+- **Actualización automática:** avisos activados; se comprueba **cada hora** (otras opciones: 30 minutos, 2 horas, 4 horas).
+- **Cliente al salir de un aparcado:** vuelve al cliente anterior (la alternativa es el cliente por defecto).
+- **Comanda agrupada por familias:** activada. **Comanda compacta:** apagada. En Modo Mesas, la **espera antes de enviar la comanda** es de 60 segundos (de 0 a 3600; con 0 se envía al instante).
