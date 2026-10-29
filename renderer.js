@@ -36138,6 +36138,7 @@ async function createTicketInFacturaScripts(ticketPayload) {
     const timeoutMs = Math.min(120000, Math.max(20000, 12000 + 4000 * lineCount));
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const postStartedAt = Date.now();
 
     let res;
     try {
@@ -36167,6 +36168,8 @@ async function createTicketInFacturaScripts(ticketPayload) {
     } catch {
       data = null;
     }
+
+    if (res.ok) reportSlowInvoiceCreation(base, cfg.apiKey, Date.now() - postStartedAt, lineCount);
 
     return { res, data, rawText };
   };
@@ -36350,6 +36353,39 @@ async function createTicketInFacturaScripts(ticketPayload) {
 
   noteCreatedFacturaId(data);
   return data;
+}
+
+// Diagnostico (2026-10-29): crear una factura tarda entre 1 y 10 s segun el cliente y no sabiamos si es
+// el servidor de FacturaScripts (plugins) o la red del local. Si el POST de crearFacturaCliente tarda
+// >= 4 s, justo DESPUES (sin retrasar la venta) se mide una consulta minima al mismo FacturaScripts y se
+// manda un evento de cliente con ambos tiempos: consulta rapida + POST lento = plugins/servidor; las dos
+// lentas = red. Solo registra: nunca bloquea ni cambia el cobro.
+function reportSlowInvoiceCreation(base, apiKey, postMs, lineCount) {
+  try {
+    if (postMs < 4000) return;
+    const probeStartedAt = Date.now();
+    fetchWithTimeout(
+      `${base}/formapagos?limit=1`,
+      { method: "GET", headers: { Accept: "application/json", Token: apiKey } },
+      8000,
+    )
+      .then(() => Date.now() - probeStartedAt)
+      .catch(() => -1)
+      .then((probeMs) => {
+        reportClientEvent(
+          "rendimiento",
+          "crear-factura-lenta",
+          "Crear la factura en FacturaScripts tardo mucho",
+          {
+            postMs: Math.round(postMs),
+            lineas: lineCount,
+            consultaMinimaMs: probeMs,
+            offline: !!TPV_STATE?.offline,
+          },
+          "warn",
+        );
+      });
+  } catch {}
 }
 
 function buildTicketPrintData(apiResponse, ticketPayload, cartSnapshot) {

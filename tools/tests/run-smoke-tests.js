@@ -10824,6 +10824,19 @@ if (
   fail("Falta el diagnostico de la accion de caja atascada / TPV cargando (renderer.js startCashHeaderStuckWatch / setTpvLoadingState)");
 }
 
+console.log("\n[SMOKE] Checking 2026-10-29 diagnostico de creacion de factura lenta (POST crearFacturaCliente >= 4 s + consulta minima)\n");
+if (
+  renderer.includes("function reportSlowInvoiceCreation(base, apiKey, postMs, lineCount) {") &&
+  renderer.includes('"crear-factura-lenta"') &&
+  renderer.includes("if (postMs < 4000) return;") &&
+  renderer.includes("consultaMinimaMs: probeMs") &&
+  renderer.includes("if (res.ok) reportSlowInvoiceCreation(base, cfg.apiKey, Date.now() - postStartedAt, lineCount);")
+) {
+  ok("Si crear la factura tarda >= 4 s, despues de la venta se mide una consulta minima al mismo FacturaScripts y se registra un evento de cliente con ambos tiempos (separa servidor/plugins de red; solo diagnostico, no retrasa ni cambia el cobro)");
+} else {
+  fail("Falta el diagnostico de creacion de factura lenta (renderer.js reportSlowInvoiceCreation / doPost de crearFacturaCliente)");
+}
+
 console.log("\n[SMOKE] Checking 2026-10-28 el vigilante de Cobrar no cuenta el tiempo de las personas (LaMarevella: 'Cobrar se ha desbloqueado solo' falso)\n");
 if (
   renderer.includes("const armPayWatchdog = () => {") &&
