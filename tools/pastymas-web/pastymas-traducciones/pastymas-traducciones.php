@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Pastymas – Traducciones y ajustes de tienda
- * Description: Traducciones, estilos de carrito/checkout/producto/móvil, buscador instantáneo y protección antispam del registro de clientes.
- * Version:     1.9.0
+ * Description: Traducciones, estilos de carrito/checkout/producto/móvil, buscador instantáneo, protección antispam del registro y observaciones "Pedido web" en Reciplus.
+ * Version:     1.10.0
  * Author:      Pastymas
  *
  * INSTALACIÓN (elige UNA opción):
@@ -21,6 +21,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // Protección antispam del registro de clientes
 require_once plugin_dir_path( __FILE__ ) . 'pastymas-antispam.php';
+// Observaciones "Pedido web" en los documentos creados por el conector Woo Reciplus
+require_once plugin_dir_path( __FILE__ ) . 'pastymas-reciplus.php';
 
 /**
  * 1) Textos de los widgets Carrito y Finalizar compra de Elementor Pro (dominio 'elementor-pro').
