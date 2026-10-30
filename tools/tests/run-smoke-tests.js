@@ -11283,6 +11283,57 @@ if (
   fail("Falta evitar la doble carga de datos al arrancar (renderer.js loadDataFromApi / runBootFlow)");
 }
 
+// Moneda (2026-10-30, Pan Artesano / Colombia): los importes salen de fmtMoney() segun la moneda elegida en
+// Opciones. En euros el texto tiene que ser el de siempre; en pesos, sin decimales y con punto de miles; y
+// "18.000" escrito a mano en pesos es dieciocho mil, no dieciocho.
+{
+  const a = renderer.indexOf("// ===== Moneda (2026-10-30) =====");
+  const b = renderer.indexOf("// ===== [01] Datos de ejemplo");
+  if (a < 0 || b < a) {
+    fail("Falta el modulo de moneda (fmtMoney) en renderer.js");
+  } else {
+    const vm = require("vm");
+    const code = renderer.slice(a, b).replace(/^const /gm, "var ").replace(/^let /gm, "var ");
+    const ctx = { window: {}, document: { getElementById: () => null, querySelectorAll: () => [] }, toast() {}, console };
+    vm.createContext(ctx);
+    vm.runInContext(
+      code + "\nthis.__m={fmtMoney,normalizeMoneyText,cop(){CURRENCY=CURRENCY_PRESETS.COP},eur(){CURRENCY=CURRENCY_PRESETS.EUR}};",
+      ctx,
+    );
+    const m = ctx.__m;
+    const oldEur = (n) => (Number(n) || 0).toFixed(2).replace(".", ",") + " €";
+    const samples = [0, 1, 5.5, 18000, 123456.789, -5.5, -0.001, 1e6];
+    const eurSame = samples.every(
+      (v) =>
+        m.fmtMoney(v) === oldEur(v) &&
+        m.fmtMoney(v, { symbol: false }) === oldEur(v).replace(" €", "") &&
+        m.fmtMoney(v, { dot: true }) === Number(v).toFixed(2) + " €",
+    );
+    m.cop();
+    const copOk =
+      m.fmtMoney(18000) === "$ 18.000" &&
+      m.fmtMoney(1234567) === "$ 1.234.567" &&
+      m.fmtMoney(-5000) === "-$ 5.000" &&
+      m.fmtMoney(18000, { symbol: false, thousands: false }) === "18000" &&
+      m.normalizeMoneyText("18.000") === "18000" &&
+      m.normalizeMoneyText("$ 18.000") === "18000" &&
+      m.normalizeMoneyText("18000.00") === "18000.00";
+    m.eur();
+    const eurTextSame = ["18.000", "2,5", "1.234"].every((t) => m.normalizeMoneyText(t) === t);
+    if (eurSame && copOk && eurTextSame) {
+      ok("Moneda: en euros los importes salen igual que siempre; en pesos colombianos sin decimales y con punto de miles ($ 18.000), y un importe escrito como 18.000 se lee como dieciocho mil");
+    } else {
+      fail("fmtMoney/normalizeMoneyText no cumplen: euros iguales=" + eurSame + ", pesos=" + copOk + ", texto en euros intacto=" + eurTextSame);
+    }
+    const hardcoded = renderer.match(/\.toFixed\(2\)\.replace\("\.", ","\) \+ " €"/g) || [];
+    if (hardcoded.length === 0 && /id="currencySelect"/.test(fs.readFileSync(path.join(__dirname, "..", "..", "index.html"), "utf8"))) {
+      ok("Moneda: ya no queda ningun importe con el simbolo € escrito a mano en renderer.js y existe el selector de Moneda en Opciones");
+    } else {
+      fail("Quedan " + hardcoded.length + " importes con el simbolo € escrito a mano (usar fmtMoney) o falta el selector #currencySelect");
+    }
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

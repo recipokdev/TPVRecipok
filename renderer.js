@@ -23,6 +23,144 @@
 // Z09.2 Modales y teclados
 // Z09.3 Edicion avanzada (precio, devoluciones)
 
+// ===== Moneda (2026-10-30) =====
+// Antes todo el TPV escribia "€" a mano. Pan Artesano (Colombia) factura en pesos, asi que el simbolo, los
+// decimales y los separadores salen de la moneda elegida en Opciones -> Productos -> Moneda. Euro es el valor
+// por defecto y produce EXACTAMENTE los mismos textos que antes. La moneda se lee al arrancar: cambiarla
+// pide reiniciar el TPV.
+const OPTIONS_CURRENCY_KEY = "ui.currencyCode";
+const CURRENCY_PRESETS = {
+  EUR: {
+    code: "EUR",
+    symbol: "€",
+    symbolBefore: false,
+    decimals: 2,
+    decSep: ",",
+    thousandsSep: "",
+    coins: null,
+    bills: null,
+  },
+  COP: {
+    code: "COP",
+    symbol: "$",
+    symbolBefore: true,
+    decimals: 0,
+    decSep: ",",
+    thousandsSep: ".",
+    coins: [50, 100, 200, 500, 1000],
+    bills: [2000, 5000, 10000, 20000, 50000, 100000],
+  },
+};
+let CURRENCY = CURRENCY_PRESETS.EUR;
+
+function normalizeCurrencyCode(value) {
+  const c = String(value || "").trim().toUpperCase();
+  return CURRENCY_PRESETS[c] ? c : "EUR";
+}
+
+// opts.symbol=false -> solo el numero; opts.tight -> "5,00€" sin espacio; opts.thousands=false -> sin miles
+// (valor de un <input>); opts.dot -> punto decimal (solo en euros: asi se pintaban algunos precios de la parrilla).
+function fmtMoney(n, opts) {
+  const o = opts || {};
+  const cur = CURRENCY;
+  let txt = (Number(n) || 0).toFixed(cur.decimals);
+  const neg = txt.startsWith("-");
+  if (neg) txt = txt.slice(1);
+  let [intPart, fracPart] = txt.split(".");
+  if (cur.thousandsSep && o.thousands !== false) {
+    intPart = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, cur.thousandsSep);
+  }
+  const decSep = o.dot && cur.code === "EUR" ? "." : cur.decSep;
+  const num = fracPart !== undefined ? intPart + decSep + fracPart : intPart;
+  const sign = neg ? "-" : "";
+  if (o.symbol === false) return sign + num;
+  if (cur.symbolBefore) return `${sign}${cur.symbol} ${num}`;
+  return `${sign}${num}${o.tight ? "" : " "}${cur.symbol}`;
+}
+
+// En una moneda sin decimales, "18.000" o "18,000" es dieciocho mil, no dieciocho: se quitan los separadores de
+// miles ANTES de interpretar el texto. Con euros no cambia nada.
+function normalizeMoneyText(value) {
+  const s = String(value ?? "").trim();
+  if (CURRENCY.decimals !== 0) return s;
+  const compact = s.replace(/[\s€$]/g, "");
+  return /^-?\d{1,3}([.,]\d{3})+$/.test(compact) ? compact.replace(/[.,]/g, "") : s;
+}
+
+// Los billetes/monedas del recuento de caja y los simbolos fijos del HTML se adaptan a la moneda. Con euros no
+// se toca el DOM.
+function applyCurrencyToStaticUi() {
+  const cur = CURRENCY;
+  if (cur.code === "EUR") return;
+  [
+    "totalAmount", "sumOpening", "sumCashIncome", "sumMovements", "sumExpectedCash", "sumCountedCash",
+    "sumDifference", "cashOpenTotal", "payTotalBig", "payChangeBig", "tkSumTotal", "refundAmount",
+    "splitTicketTargetTotal", "postPayTotal", "postPayChange", "mesasTransSelectedTotal",
+  ].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = fmtMoney(0);
+  });
+  document.querySelectorAll(".cash-move-euro, .opt-input-affix-suffix").forEach((el) => {
+    if (el.textContent.trim() === "€") el.textContent = cur.symbol;
+  });
+  const cells = [...document.querySelectorAll(".cash-grid-page .cash-cell-page:not(.cash-cell-empty)")];
+  if (cells.length === 15 && cur.coins && cur.bills) {
+    // La parrilla de euros tiene 8 monedas (celdas 0-7) y 7 billetes (8-14).
+    const assign = (cell, denom) => {
+      cell.style.display = "";
+      const inp = cell.querySelector("input[data-denom]");
+      const lbl = cell.querySelector("label");
+      if (inp) inp.dataset.denom = String(denom);
+      if (lbl) lbl.textContent = fmtMoney(denom);
+    };
+    const hide = (cell) => {
+      cell.style.display = "none";
+      const inp = cell.querySelector("input[data-denom]");
+      if (inp) inp.dataset.denom = "";
+    };
+    cells.forEach((cell, i) => {
+      if (i < 8) {
+        if (i < cur.coins.length) assign(cell, cur.coins[i]);
+        else hide(cell);
+      } else {
+        const j = i - 8;
+        if (j < cur.bills.length) assign(cell, cur.bills[j]);
+        else hide(cell);
+      }
+    });
+  }
+}
+
+async function loadCurrencySetting() {
+  let code = "EUR";
+  try {
+    code = normalizeCurrencyCode(await window.TPV_CFG?.get?.(OPTIONS_CURRENCY_KEY));
+  } catch {
+    code = "EUR";
+  }
+  CURRENCY = CURRENCY_PRESETS[code];
+  const sel = document.getElementById("currencySelect");
+  if (sel) sel.value = code;
+  applyCurrencyToStaticUi();
+}
+
+let currencySettingBound = false;
+function bindCurrencySettingOnce() {
+  if (currencySettingBound) return;
+  currencySettingBound = true;
+  const sel = document.getElementById("currencySelect");
+  if (!sel) return;
+  sel.addEventListener("change", async () => {
+    const code = normalizeCurrencyCode(sel.value);
+    try {
+      await window.TPV_CFG?.set?.(OPTIONS_CURRENCY_KEY, code);
+      toast("Moneda guardada. Reinicia el TPV para aplicarla en todas las pantallas.", "info", "Moneda");
+    } catch (e) {
+      console.warn("No se pudo guardar la moneda:", e);
+    }
+  });
+}
+
 // ===== [01] Datos de ejemplo (fallback offline) =====
 const demoCategories = [
   { id: "bebidas", name: "Bebidas", color: "#007bff" },
@@ -952,7 +1090,7 @@ function cleanCajaLogValue(value) {
 
 function formatParkedAuditAmount(value) {
   const n = Number(value);
-  return (Number.isFinite(n) ? n : 0).toFixed(2).replace(".", ",") + " €";
+  return fmtMoney(Number.isFinite(n) ? n : 0);
 }
 
 function getCajaLogCtx() {
@@ -1747,7 +1885,7 @@ function exitApiRetryMode() {
 // ===== [08] Flujo de caja: input directo apertura/cierre =====
 
 function parseCashDirectAmount(value) {
-  const raw = String(value || "")
+  const raw = String(normalizeMoneyText(value) || "")
     .trim()
     .replace(/\s+/g, "")
     .replace(",", ".");
@@ -1813,7 +1951,7 @@ function applyCashDirectTotal(rawValue) {
 
   // 4) Refrescar total principal
   if (cashOpenTotalEl) {
-    cashOpenTotalEl.textContent = total.toFixed(2).replace(".", ",") + " €";
+    cashOpenTotalEl.textContent = fmtMoney(total);
   }
 
   // 5) Si estamos cerrando caja, recalcular resumen
@@ -9145,6 +9283,7 @@ function pushCustomerState() {
     if (!cashOpen) {
       customerMode = "CLOSED";
       window.TPV_CUSTOMER?.setState?.({
+        currency: CURRENCY,
         cashOpen: false,
         mode: "CLOSED",
         items: [],
@@ -9200,6 +9339,7 @@ function pushCustomerState() {
       .join(" | ");
 
     window.TPV_CUSTOMER?.setState?.({
+        currency: CURRENCY,
       cashOpen: true,
       mode: customerMode || "CART",
       items: itemsToShow,
@@ -13755,6 +13895,7 @@ async function runBootFlow() {
     await loadPrintCajaAutoLogToggle?.();
     await loadPrintCajaDrawerOpenLogsToggle?.();
     await loadVirtualKeyboardToggle?.();
+    await loadCurrencySetting?.();
     await loadParkedCustomerResetModeSetting?.();
     await loadProductDisplayFieldModeSetting?.();
     await loadSafeTrainingModeToggle?.();
@@ -14653,8 +14794,8 @@ function renderProducts() {
       (Number(effectiveNetPrice) || 0) * (1 + (Number(taxRate) || 0) / 100);
     const priceHtml =
       discountPct > 0
-        ? `<div class="product-price"><span class="product-price-old">${priceGrossBase.toFixed(2)} €</span><span class="product-price-current">${priceGross.toFixed(2)} €</span></div>`
-        : `<div class="product-price">${priceGross.toFixed(2)} €</div>`;
+        ? `<div class="product-price"><span class="product-price-old">${fmtMoney(priceGrossBase, { dot: true })}</span><span class="product-price-current">${fmtMoney(priceGross, { dot: true })}</span></div>`
+        : `<div class="product-price">${fmtMoney(priceGross, { dot: true })}</div>`;
 
     const stockValue = getVisibleStockForProduct(p);
     const stockText = formatProductStock(stockValue);
@@ -14934,11 +15075,7 @@ function normalizeSearchText(str) {
 }
 
 function eur2(n) {
-  return (
-    Number(n || 0)
-      .toFixed(2)
-      .replace(".", ",") + "€"
-  );
+  return fmtMoney(n, { tight: true });
 }
 
 // Boton "X" generico para vaciar un input/textarea sin abrir el teclado.
@@ -15611,13 +15748,13 @@ function setUnitGrossOverrideSmart(item, newUnitGross) {
 }
 
 function eur(n) {
-  return (Number(n) || 0).toFixed(2).replace(".", ",") + " €";
+  return fmtMoney(n);
 }
 
 // Igual que eur() pero sin el símbolo € -- para el valor de un <input>
 // editable (p.ej. el precio de un añadido de producto).
 function eurInputValue(n) {
-  return (Number(n) || 0).toFixed(2).replace(".", ",");
+  return fmtMoney(n, { symbol: false, thousands: false });
 }
 
 function getUnitGross(item) {
@@ -18322,7 +18459,7 @@ function evaluateNumericExpression(rawValue, { cashLenient = false } = {}) {
 }
 
 function formatPrice2(v) {
-  const n = Number(String(v).replace(",", "."));
+  const n = Number(String(normalizeMoneyText(v)).replace(",", "."));
   if (!isFinite(n)) return "0.00";
   return (Math.round(n * 100) / 100).toFixed(2);
 }
@@ -19729,7 +19866,7 @@ if (cartLinesContainer) {
             return;
           }
 
-          const v = Number(String(newUnitGross).replace(",", "."));
+          const v = Number(String(normalizeMoneyText(newUnitGross)).replace(",", "."));
           if (!isFinite(v) || v < 0) return;
 
           const rounded = Math.round(v * 100) / 100;
@@ -23567,7 +23704,7 @@ function renderParkedTicketsModal() {
     const finalTotalNum =
       t.total != null ? Number(t.total) : Number(discSummary.finalTotal || 0);
     const finalTotalTxt = Number.isFinite(finalTotalNum)
-      ? finalTotalNum.toFixed(2) + " €"
+      ? fmtMoney(finalTotalNum, { dot: true })
       : "—";
     const showTicketDiscount =
       !!discSummary.hasDiscount &&
@@ -23575,13 +23712,13 @@ function renderParkedTicketsModal() {
 
     const totalHtml = showTicketDiscount
       ? `<div class="pt-total">
-           <span class="pt-total-old" style="text-decoration:line-through;opacity:.55;font-weight:500;font-size:12px;display:block;line-height:1.1;">${Number(discSummary.baseTotal || 0).toFixed(2)} €</span>
+           <span class="pt-total-old" style="text-decoration:line-through;opacity:.55;font-weight:500;font-size:12px;display:block;line-height:1.1;">${fmtMoney(Number(discSummary.baseTotal || 0), { dot: true })}</span>
            <span>${finalTotalTxt}</span>
          </div>`
       : `<div class="pt-total">${finalTotalTxt}</div>`;
 
     const discountInfoHtml = showTicketDiscount
-      ? `<div class="pt-discount-info" style="font-size:12px;color:#7c3aed;margin-top:2px;">Descuento: -${Number(discSummary.savings || 0).toFixed(2)} €${discSummary.labelsText ? ` · ${escapeHtml(discSummary.labelsText)}` : ""}</div>`
+      ? `<div class="pt-discount-info" style="font-size:12px;color:#7c3aed;margin-top:2px;">Descuento: -${fmtMoney(Number(discSummary.savings || 0), { dot: true })}${discSummary.labelsText ? ` · ${escapeHtml(discSummary.labelsText)}` : ""}</div>`
       : "";
 
     const items = Array.isArray(t.items) ? t.items : [];
@@ -25626,9 +25763,8 @@ function updateCloseSummary(countedTotal) {
     sumCountedCashEl.textContent = eur(Number(countedTotal) || 0);
 
   if (sumDifferenceEl) {
-    const sign = diff < 0 ? "-" : "";
     sumDifferenceEl.textContent =
-      sign + eur(Math.abs(diff)).replace("€", "").trim() + " €";
+      fmtMoney(diff);
   }
 
   // Línea 3: Total ventas grande
@@ -25670,18 +25806,18 @@ function applyRemoteCajaToSession(remoteCaja) {
 
   // Actualizamos las etiquetas inferiores (sin contar todavía el conteo de caja)
   if (sumOpeningEl)
-    sumOpeningEl.textContent = opening.toFixed(2).replace(".", ",") + " €";
+    sumOpeningEl.textContent = fmtMoney(opening);
   if (sumCashIncomeEl)
     sumCashIncomeEl.textContent =
-      cashIncome.toFixed(2).replace(".", ",") + " €";
+      fmtMoney(cashIncome);
   if (sumMovementsEl)
-    sumMovementsEl.textContent = movements.toFixed(2).replace(".", ",") + " €";
+    sumMovementsEl.textContent = fmtMoney(movements);
   if (sumExpectedCashEl)
     sumExpectedCashEl.textContent =
-      expectedCash.toFixed(2).replace(".", ",") + " €";
+      fmtMoney(expectedCash);
   if (sumTotalSalesEl)
     sumTotalSalesEl.textContent =
-      totalSales.toFixed(2).replace(".", ",") + " €";
+      fmtMoney(totalSales);
 }
 
 // ===== [08] Caja: observaciones y log robusto =====
@@ -26772,7 +26908,7 @@ function cashResetUIForOpening() {
 
   idsToZero.forEach((id) => {
     const el = document.getElementById(id);
-    if (el) el.textContent = "0,00 €";
+    if (el) el.textContent = fmtMoney(0);
   });
 
   cashSession.paymentsByMethod = {};
@@ -28805,7 +28941,7 @@ if (cashOpenOverlay && !cashOpenOverlay.dataset.cashBound) {
         String(current),
         (newQty) =>
           setCashQtyByDenom(denom, Math.max(0, parseInt(newQty, 10) || 0)),
-        `Cantidad de ${denom} €`,
+        `Cantidad de ${fmtMoney(Number(denom))}`,
         "qty",
       );
       return;
@@ -28860,7 +28996,7 @@ function updateCashOpenTotal() {
   }
 
   // Total mostrado en el diálogo
-  cashOpenTotalEl.textContent = total.toFixed(2).replace(".", ",") + " €";
+  cashOpenTotalEl.textContent = fmtMoney(total);
 
   // ✅ sincroniza el input directo
   if (cashDirectTotalEl) {
@@ -32052,8 +32188,7 @@ let __postPayTimer = null;
 let __postPayCountdownTimer = null;
 
 function euro2esUI(n) {
-  const v = Number(n) || 0;
-  return v.toFixed(2).replace(".", ",") + " €";
+  return fmtMoney(n);
 }
 
 // Por ahora fijo a 20s. Luego lo hacemos configurable (0 = no cerrar).
@@ -32988,6 +33123,7 @@ const OPT_PREVIEW_DEFS = {
   ],
   productos: [
     OPT_PV.V("Texto en la tarjeta", "productDisplayFieldModeSelect"),
+    OPT_PV.V("Moneda", "currencySelect"),
     OPT_PV.T("Modo edición de precio", "priceEditModeToggle"),
     OPT_PV.T("Mostrar stock", "productStockToggle"),
     OPT_PV.T("Solo con stock", "productsStockOnlyToggle"),
@@ -33502,6 +33638,7 @@ async function openOptions() {
   bindVirtualKeyboardToggleOnce();
   bindParkedCustomerResetModeOnce();
   bindProductDisplayFieldModeOnce();
+  bindCurrencySettingOnce();
   bindDiscountQuickPctsSaveOnce();
   bindCustomerDisplayToggleOnce();
   bindCustomerDisplayPickerOnce();
@@ -37379,8 +37516,7 @@ function computeLineNetFirst(unitGross, qty, taxRate) {
 }
 
 function eurTicket(n) {
-  const v = Number(n) || 0;
-  return v.toFixed(2).replace(".", ",");
+  return fmtMoney(n, { symbol: false });
 }
 
 // Render de pagos: Total + filas por método
@@ -37643,8 +37779,8 @@ function renderInvoiceLineRowsHtml(doc, lineas) {
         <td>${ref}</td>
         <td>${desc}</td>
         <td class="num">${qty}</td>
-        <td class="num">${eurTicket(unitGross)} €</td>
-        <td class="num">${eurTicket(base)} €</td>
+        <td class="num">${fmtMoney(unitGross)}</td>
+        <td class="num">${fmtMoney(base)}</td>
         <td class="num">${rate}%</td>
       </tr>`;
     })
@@ -37668,9 +37804,9 @@ function renderInvoiceTaxSummaryHtml(doc, taxMap) {
       const t = taxMap[rate] || {};
       return `<tr>
         <td>IVA ${rate}%</td>
-        <td class="num">${eurTicket(t.base)} €</td>
+        <td class="num">${fmtMoney(t.base)}</td>
         <td class="num">${Number(rate).toFixed(2)}%</td>
-        <td class="num">${eurTicket(t.iva)} €</td>
+        <td class="num">${fmtMoney(t.iva)}</td>
       </tr>`;
     })
     .join("");
@@ -37711,7 +37847,7 @@ function renderInvoiceRecibosHtml(doc, recibos, payMethodMap) {
       return `<tr>
         <td>${i + 1}</td>
         <td>${label}</td>
-        <td class="num">${eurTicket(importe)} €</td>
+        <td class="num">${fmtMoney(importe)}</td>
         <td class="num">${vencimientoText}</td>
       </tr>`;
     })
@@ -37815,7 +37951,7 @@ async function buildFacturaEmailHtml(ticket) {
   const fecha = String(ticket?.fecha || "").trim();
   const hora = String(ticket?.hora || "").trim();
   setText(doc, "invoiceDate", fecha || "—");
-  setText(doc, "invoiceBarTotal", `${eurTicket(totalToShow)} €`);
+  setText(doc, "invoiceBarTotal", `${fmtMoney(totalToShow)}`);
 
   setText(doc, "clientName", billing.clientName);
   const clientFiscalRow = doc.getElementById("clientFiscalRow");
@@ -37832,7 +37968,7 @@ async function buildFacturaEmailHtml(ticket) {
   renderInvoiceLineRowsHtml(doc, lineas);
   renderInvoiceTaxSummaryHtml(doc, taxMap);
   renderInvoiceRecibosHtml(doc, recibos, payMethodMap);
-  setText(doc, "grandTotal", `${eurTicket(totalToShow)} €`);
+  setText(doc, "grandTotal", `${fmtMoney(totalToShow)}`);
   setText(doc, "legalFooter", plantillaProps.endtext || "");
 
   return "<!doctype html>\n" + doc.documentElement.outerHTML;
@@ -39429,10 +39565,7 @@ async function printCashCloseReport(report) {
 
     const doc = new DOMParser().parseFromString(templateHtml, "text/html");
 
-    const eur2 = (n) =>
-      Number(n || 0)
-        .toFixed(2)
-        .replace(".", ",") + " €";
+    const eur2 = (n) => fmtMoney(n);
 
     const _setText = (id, v) => {
       const el = doc.getElementById(id);
@@ -43968,7 +44101,7 @@ function renderMesaInUseNotice(others) {
         .map((l) => `${fmtQty(Number(l?.qty) || 0)}× ${String(l?.name || "").trim()}`)
         .join(", ");
       const more = lines.length > 6 ? ` y ${lines.length - 6} más` : "";
-      const total = Number(o.draft.total) > 0 ? ` (${Number(o.draft.total).toFixed(2).replace(".", ",")} €)` : "";
+      const total = Number(o.draft.total) > 0 ? ` (${fmtMoney(Number(o.draft.total))})` : "";
       return `${agent} está preparando: ${items}${more}${total}`;
     });
   if (!list.length && !draftParts.length) {
@@ -46611,10 +46744,10 @@ function calcExpectedCash(opening, ingresos, totalmovi) {
 function moneyToNumber(v) {
   // Acepta: 2.5, "2.5", "2,50", "2,50 €", "", null...
   if (typeof v === "number") return isNaN(v) ? 0 : v;
-  const s = String(v ?? "")
+  const s = String(normalizeMoneyText(v) ?? "")
     .trim()
     .replace(/\s/g, "")
-    .replace("€", "")
+    .replace(/[€$]/g, "")
     .replace(/\./g, "") // por si viene "1.234,56"
     .replace(",", "."); // coma decimal a punto
   const n = Number(s);
@@ -50784,10 +50917,10 @@ function fromCents(c) {
   return (Number(c) || 0) / 100;
 }
 function euroStrToCents(input) {
-  let s = String(input ?? "")
+  let s = String(normalizeMoneyText(input) ?? "")
     .trim()
     .replace(/\s/g, "")
-    .replace("€", "");
+    .replace(/[€$]/g, "");
 
   if (!s) return 0;
 
@@ -50832,7 +50965,7 @@ function centsToEuro2(c) {
   return fromCents(c).toFixed(2);
 }
 function centsToEuro2es(c) {
-  return centsToEuro2(c).replace(".", ",") + " €";
+  return fmtMoney(fromCents(c));
 }
 
 function normalizePaySeriesRows(rawList) {
@@ -59149,7 +59282,7 @@ let refundState = {
 };
 
 function eurES(n) {
-  return (Number(n) || 0).toFixed(2).replace(".", ",") + " €";
+  return fmtMoney(n);
 }
 
 function formatRefundOriginalPayments(recibos) {
@@ -59217,7 +59350,7 @@ function setRefundOverlayMode(mode, opts = {}) {
     if (normalized === "info") {
       amountRow.innerHTML = `Total ticket: <strong id="refundAmount">${eurES(opts.total || 0)}</strong>`;
     } else {
-      amountRow.innerHTML = `Importe a devolver: <strong id="refundAmount">0,00 €</strong>`;
+      amountRow.innerHTML = `Importe a devolver: <strong id="refundAmount">${fmtMoney(0)}</strong>`;
     }
   }
 }
@@ -60138,7 +60271,7 @@ async function createRefundInFacturaScriptsPackAware(
       String(facturaRow?.codigo || facturaRow?._raw?.codigo || "").trim() ||
       `#${originalId}`;
 
-    const devueltoTxt = totalRectAbs.toFixed(2).replace(".", ",") + "€";
+    const devueltoTxt = fmtMoney(totalRectAbs, { tight: true });
 
     const productos = [];
     for (const l of uiLines || []) {
@@ -60161,10 +60294,8 @@ async function createRefundInFacturaScriptsPackAware(
 
     const breakdownTxt = refundBreakdown
       .map((x) => {
-        const imp = Math.abs(Number(x.importe || 0))
-          .toFixed(2)
-          .replace(".", ",");
-        return `${x.codpago}:${imp}€`;
+        const imp = fmtMoney(Math.abs(Number(x.importe || 0)), { symbol: false });
+        return `${x.codpago}:${imp}${CURRENCY.symbol}`;
       })
       .join(" | ");
 
@@ -60402,6 +60533,8 @@ async function bootstrapE2EMode() {
   try {
     localStorage.clear();
   } catch {}
+
+  await loadCurrencySetting?.();
 
   const e2eBaseUrl =
     String(window.TPV_ENV?.e2eApiBaseUrl || "").trim() ||
@@ -63005,7 +63138,7 @@ async function saveCashMovement() {
 
     const prefix = type === "out" ? "-" : "+";
     toast(
-      `Movimiento de caja registrado: ${prefix}${amount.toFixed(2)} €`,
+      `Movimiento de caja registrado: ${prefix}${fmtMoney(amount, { dot: true })}`,
       "ok",
       "Caja",
     );
@@ -63531,7 +63664,7 @@ function openPriceEditForProduct(p) {
   const currentOrderPriority = getProductManualOrderPriority(p);
 
   const updateDerived = () => {
-    const baseRaw = String(inp?.value ?? "")
+    const baseRaw = String(normalizeMoneyText(inp?.value ?? ""))
       .trim()
       .replace(",", ".");
     const baseGross = round2(Number(baseRaw));
@@ -63676,7 +63809,7 @@ async function confirmAndSaveProductPrice() {
   const orderPriorityInp = document.getElementById(
     "priceEditOrderPriorityInput",
   );
-  const raw = String(inp?.value ?? "")
+  const raw = String(normalizeMoneyText(inp?.value ?? ""))
     .trim()
     .replace(",", ".");
   const baseGross = round2(Number(raw));
@@ -63722,9 +63855,9 @@ async function confirmAndSaveProductPrice() {
   const ok = await confirmModal(
     "Actualizar precio base",
     `Vas a cambiar el precio de "${p.name}"\n\n` +
-      `Base: ${grossNow.toFixed(2)} € -> ${baseGross.toFixed(2)} €\n` +
+      `Base: ${fmtMoney(grossNow, { dot: true })} -> ${fmtMoney(baseGross, { dot: true })}\n` +
       `Prioridad: ${currentOrderPriority} -> ${orderPriority}\n` +
-      `Final: ${finalGross.toFixed(2)} € (IVA incl.)\n\n` +
+      `Final: ${fmtMoney(finalGross, { dot: true })} (IVA incl.)\n\n` +
       `El precio base se guardará en FacturaScripts permanentemente.\n` +
       `La prioridad es un ajuste local del TPV.\n\n` +
       `¿Quieres continuar?`,
@@ -63789,7 +63922,7 @@ async function confirmAndSaveAlmacenPriceOverride() {
   }
 
   const inp = document.getElementById("priceEditInput");
-  const raw = String(inp?.value ?? "")
+  const raw = String(normalizeMoneyText(inp?.value ?? ""))
     .trim()
     .replace(",", ".");
   const baseGross = round2(Number(raw));
@@ -63805,7 +63938,7 @@ async function confirmAndSaveAlmacenPriceOverride() {
   const ok = await confirmModal(
     "Precio especial de este almacén",
     `Vas a fijar un precio especial de "${p.name}" SOLO para este almacén (${codalmacen}):\n\n` +
-      `${baseGross.toFixed(2)} € (IVA incl.)\n\n` +
+      `${fmtMoney(baseGross, { dot: true })} (IVA incl.)\n\n` +
       `Esto NO cambia el precio en FacturaScripts ni en el resto de almacenes/tiendas.\n\n` +
       `¿Continuar?`,
   );
@@ -63892,7 +64025,7 @@ async function logPermanentPriceChange({ product, oldGross, newGross }) {
     const line = buildCajaLogLineWith(
       ctx,
       "Cambio de precio",
-      `${String(product?.name || "Producto")} | ${from.toFixed(2)}€ → ${to.toFixed(2)}€ (IVA incl.)`,
+      `${String(product?.name || "Producto")} | ${fmtMoney(from, { dot: true, tight: true })} → ${fmtMoney(to, { dot: true, tight: true })} (IVA incl.)`,
     );
 
     await appendCajaAutoLogLineForId(idcaja, line);

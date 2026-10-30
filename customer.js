@@ -1,9 +1,17 @@
+// Moneda de la tienda: la manda el TPV en cada estado (ver CURRENCY en renderer.js). Sin ella, euros como siempre.
+let customerCurrency = null;
+
 function eur(n) {
-  return (
-    Number(n || 0)
-      .toFixed(2)
-      .replace(".", ",") + " €"
-  );
+  const c = customerCurrency;
+  let txt = (Number(n) || 0).toFixed(c ? c.decimals : 2);
+  const neg = txt.startsWith("-");
+  if (neg) txt = txt.slice(1);
+  let [intPart, fracPart] = txt.split(".");
+  if (c && c.thousandsSep) intPart = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, c.thousandsSep);
+  const num = fracPart !== undefined ? intPart + (c ? c.decSep : ",") + fracPart : intPart;
+  const sign = neg ? "-" : "";
+  if (c && c.symbolBefore) return `${sign}${c.symbol} ${num}`;
+  return `${sign}${num} ${c ? c.symbol : "€"}`;
 }
 
 /* Relleno de la miniatura cuando el producto no tiene imagen (o no carga): el logo de la
@@ -508,6 +516,9 @@ window.TPV_CUSTOMER_IPC?.onState?.((state) => {
   try {
     if (state && typeof state.logoUrl === "string") {
       customerLogoUrl = state.logoUrl;
+    }
+    if (state && state.currency && typeof state.currency.symbol === "string") {
+      customerCurrency = state.currency;
     }
     render(state);
   } catch (e) {
