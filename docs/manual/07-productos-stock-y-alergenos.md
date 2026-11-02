@@ -25,7 +25,7 @@ Si tu catálogo es grande, activa **Familias primero** (**Opciones → Productos
 ### Qué familias se ven
 En **Opciones → Terminales** puedes elegir qué familias se ven en cada terminal (y su color e icono). Con **Mostrar todos los productos** un terminal enseña todo aunque haya familias desmarcadas.
 
-@fig img/productos-familias-visibilidad.png | crop=470,131,980,755 | width=70 | marks=1:1148,229;2:1391,309;3:912,457;4:817,457;5:1390,845 | Ventana «Familias: visibilidad, color e icono».
+@fig img/productos-familias-visibilidad.png | crop=470,131,980,755 | width=70 | marks=1:1148,229;2:1338,309;3:912,431;4:838,431;5:1441,845 | Ventana «Familias: visibilidad, color e icono».
 
 1. **Terminal / tablet.** Elige qué terminal o qué tablet de camarero configuras.
 2. **Mostrar todos los productos.** Ese terminal enseña todo, aunque haya familias desmarcadas.
@@ -111,7 +111,7 @@ Al pulsar un alérgeno se abre la lista de productos:
 
 Cuando eliges un cliente con tarifa, el carrito lo señala y aplica el precio sin que tengas que hacer nada:
 
-@fig img/vender-tarifa-carrito.png | crop=1410,60,500,260 | marks=1:1752,84;2:1836,139;3:1530,166 | Cliente con una tarifa del −15 %.
+@fig img/vender-tarifa-carrito.png | crop=1410,60,500,260 | marks=1:1700,84;2:1834,121;3:1562,166 | Cliente con una tarifa del −15 %.
 
 1. **Etiqueta de la tarifa** junto al nombre del cliente («Tarifa: −15%»).
 2. **Precio normal tachado** y, debajo, el precio ya con la tarifa.

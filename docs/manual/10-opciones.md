@@ -50,7 +50,7 @@ Con la sesión iniciada puedes ver y cambiar las Opciones **aunque la caja esté
 - **Modo redimensionar productos.** Muestra asas sobre cada tarjeta para cambiar su tamaño y el tamaño de letra del nombre («Aa»). Afecta a todos los productos. **Restablecer tamaño de productos** y **Restablecer tamaño de letra** devuelven los valores recomendados.
 - **Alérgenos.** Marca qué productos llevan cada uno de los 14 alérgenos oficiales de la UE (o alguno propio). Se destaca en la tarjeta, en el carrito y en la comanda impresa.
 
-@fig img/opciones-moneda.png | crop=600,234,720,549 | width=66 | marks=1:1160,526 | La opción «Moneda» (con el buscador de Opciones).
+@fig img/opciones-moneda.png | crop=600,234,720,549 | width=66 | marks=1:1030,526 | La opción «Moneda» (con el buscador de Opciones).
 
 1. **Moneda.** Automática (la de FacturaScripts), Euro o Peso colombiano.
 

@@ -70,7 +70,7 @@ Un administrador puede ocultar alguno de estos botones en **Opciones → Barra d
 
 Si el terminal tiene **dos o más agentes**, sobre los productos aparece una fila con un botón por agente (con flechas ‹ › cuando no caben todos) para cambiar de agente con un solo toque. Si ese agente exige el PIN de administrador, se abre la ventana de cambio de agente para pedirlo. Con un solo agente (o ninguno) la barra no se muestra.
 
-@fig img/inicio-barra-agentes.png | crop=0,0,430,62 | width=50 | marks=1:36,32;2:200,32 | Barra de agentes.
+@fig img/inicio-barra-agentes.png | crop=0,0,430,72 | width=50 | marks=1:77,58;2:200,58 | Barra de agentes.
 
 1. **Agente activo.** El que está en azul: a su nombre irán las ventas.
 2. **Otros agentes.** Un toque y pasas a ese agente.
