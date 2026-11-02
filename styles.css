@@ -10239,6 +10239,50 @@ body.theme-dark .send-comanda-bar .scb-aux {
   content: "👤 ";
 }
 
+/* Borrador sin guardar de otro dispositivo (app de camareros): lineas grises de solo lectura bajo el carrito. */
+.cart-draft-ghosts {
+  margin: 8px 0 4px;
+  padding: 6px 10px 8px;
+  border: 2px dashed rgba(100, 116, 139, 0.55);
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.12);
+  color: #475569;
+}
+.cart-draft-ghosts.hidden {
+  display: none;
+}
+.cart-draft-ghost-head {
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin: 2px 0 4px;
+}
+.cart-draft-ghost-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 0.9rem;
+  font-style: italic;
+  opacity: 0.8;
+}
+.cart-draft-ghost-total {
+  margin-top: 4px;
+  text-align: right;
+  font-size: 0.8rem;
+  font-weight: 600;
+  opacity: 0.85;
+}
+.cart-draft-ghost-note {
+  margin-top: 4px;
+  font-size: 0.72rem;
+  opacity: 0.7;
+}
+body.theme-dark .cart-draft-ghosts {
+  border-color: rgba(148, 163, 184, 0.5);
+  background: rgba(148, 163, 184, 0.1);
+  color: #cbd5e1;
+}
+
 /* Controles del envio automatico de la comanda dentro de la ventana "Comanda cocina". */
 .comanda-auto-section {
   margin-top: 12px;

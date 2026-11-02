@@ -44304,7 +44304,46 @@ async function mesaViewerPost(action, uid) {
   return Array.isArray(body.others) ? body.others : [];
 }
 
+// Borrador del carrito de otro dispositivo (app de camareros): lo que esta componiendo y aun NO ha guardado en la
+// mesa. Se pinta debajo de las lineas del carrito, en gris y solo lectura, como vista previa. No es parte del
+// pedido (no esta en `cart`): no toca stock, comanda, totales ni cobro.
+function renderMesaDraftGhosts(others) {
+  const box = document.getElementById("cartDraftGhosts");
+  if (!box) return;
+  const drafts = (Array.isArray(others) ? others : []).filter(
+    (o) => o?.draft && Array.isArray(o.draft.lines) && o.draft.lines.length,
+  );
+  if (!drafts.length) {
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    return;
+  }
+  box.innerHTML = drafts
+    .map((o) => {
+      const agent = escapeHtml(String(o?.agentName || "").trim() || "Otro dispositivo");
+      const lines = o.draft.lines
+        .slice(0, 12)
+        .map(
+          (l) =>
+            `<div class="cart-draft-ghost-line"><span>${escapeHtml(String(l?.name || "").trim())}</span><span>× ${escapeHtml(fmtQty(Number(l?.qty) || 0))}</span></div>`,
+        )
+        .join("");
+      const more =
+        o.draft.lines.length > 12
+          ? `<div class="cart-draft-ghost-line"><span>… y ${o.draft.lines.length - 12} más</span><span></span></div>`
+          : "";
+      const total =
+        Number(o.draft.total) > 0
+          ? `<div class="cart-draft-ghost-total">Total del borrador: ${escapeHtml(fmtMoney(Number(o.draft.total)))}</div>`
+          : "";
+      return `<div class="cart-draft-ghost-head">✎ ${agent} está preparando · sin enviar</div>${lines}${more}${total}<div class="cart-draft-ghost-note">Solo lectura: no es parte del pedido hasta que lo envíe.</div>`;
+    })
+    .join("");
+  box.classList.remove("hidden");
+}
+
 function renderMesaInUseNotice(others) {
+  renderMesaDraftGhosts(others);
   const el = document.getElementById("mesaInUseNotice");
   if (!el) return;
   // El mismo agente (la misma persona) en otro dispositivo no es un aviso util: solo se avisa de
@@ -44313,29 +44352,9 @@ function renderMesaInUseNotice(others) {
   const list = (Array.isArray(others) ? others : []).filter(
     (o) => !myAgent || String(o?.agentName || "").trim().toLowerCase() !== myAgent,
   );
-  // Borrador del carrito de otro dispositivo (app de camareros): lo que esta preparando SIN enviar,
-  // en solo lectura. No es parte del pedido: no toca stock, comanda ni cobro.
-  const draftParts = (Array.isArray(others) ? others : [])
-    .filter((o) => o?.draft && Array.isArray(o.draft.lines) && o.draft.lines.length)
-    .map((o) => {
-      const agent = String(o?.agentName || "").trim() || "Otro dispositivo";
-      const lines = o.draft.lines;
-      const items = lines
-        .slice(0, 6)
-        .map((l) => `${fmtQty(Number(l?.qty) || 0)}× ${String(l?.name || "").trim()}`)
-        .join(", ");
-      const more = lines.length > 6 ? ` y ${lines.length - 6} más` : "";
-      const total = Number(o.draft.total) > 0 ? ` (${fmtMoney(Number(o.draft.total))})` : "";
-      return `${agent} está preparando: ${items}${more}${total}`;
-    });
-  if (!list.length && !draftParts.length) {
+  if (!list.length) {
     el.classList.add("hidden");
     el.textContent = "";
-    return;
-  }
-  if (!list.length) {
-    el.textContent = draftParts.join(" · ");
-    el.classList.remove("hidden");
     return;
   }
   const names = list.map((o) => {
@@ -44349,7 +44368,7 @@ function renderMesaInUseNotice(others) {
       : `${names.slice(0, -1).join(", ")} y ${names[names.length - 1]} tienen`;
   const oldest = Math.max(...list.map((o) => Number(o?.openSec) || 0));
   const since = oldest >= 60 ? ` desde hace ${Math.floor(oldest / 60)} min` : "";
-  el.textContent = [`${who} esta mesa abierta${since}`, ...draftParts].join(" · ");
+  el.textContent = `${who} esta mesa abierta${since}`;
   el.classList.remove("hidden");
 }
 

@@ -62,11 +62,13 @@ Al abrir una mesa que otra persona tiene abierta en otro dispositivo (otro TPV o
 
 Ojo: lo que esa persona **ya ha guardado en la mesa** (el pedido) lo ves tú directamente en el carrito, y se actualiza en cuestión de segundos cuando ella lo cambia (y ella ve lo tuyo igual). La franja solo es el aviso de que está ahí.
 
-Si esa persona usa la **app de camareros** y tu empresa tiene activada esta función, la franja añade además **lo que está componiendo y aún no ha guardado** en la mesa. Eso todavía no es un pedido, por eso se ve solo como texto y el carrito sigue vacío (en esta captura la mesa M3 estaba libre, sin pedido guardado):
+Si esa persona usa la **app de camareros** y tu empresa tiene activada esta función, debajo de las líneas del carrito verás además **lo que está componiendo y aún no ha guardado** en la mesa, en un cuadro gris:
 
-@fig img/mesas-preparando.png | crop=1410,60,500,130 | width=70 | marks=1:1700,138 | La tablet tiene un borrador sin enviar.
+@fig img/mesas-preparando.png | crop=1410,60,500,250 | width=70 | marks=1:1880,120;2:1862,182;3:1722,254 | La tablet tiene un borrador sin enviar.
 
-1. **«Cintia está preparando: 2× Bocata Pollo, 1× Chips Salados (8,70 €)».** Lo que ha puesto en su carrito de la tablet sin guardar ni enviar, en **solo lectura**. No forma parte del pedido: no reserva stock, no sale en la comanda y no se puede cobrar hasta que el camarero pulse **Enviar**. Si cierra la app, desaparece solo.
+1. **El aviso de siempre:** «Cintia (Tablet barra) tiene esta mesa abierta».
+2. **«Cintia está preparando · sin enviar».** Sus líneas, en gris y cursiva, como **vista previa de solo lectura**. No son un pedido: no reservan stock, no salen en la comanda y no se pueden cobrar hasta que el camarero pulse **Enviar**. Por eso el carrito de arriba, el pedido real, sigue vacío en esta captura (la mesa M3 estaba libre). Si cierra la app, el cuadro desaparece solo.
+3. **Total del borrador.**
 
 ## 3. Atender una mesa
 

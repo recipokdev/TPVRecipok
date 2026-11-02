@@ -11125,7 +11125,7 @@ if (
   renderer.includes("function mesaDraftIsEnabled(slug) {") &&
   renderer.includes('__mesaDraftEnabledBySlug.set(String(slug || ""), !!features.mesaDraft);') &&
   renderer.includes('(parkedOpsIsEnabled(slug, "mesas") || mesaDraftIsEnabled(slug));') &&
-  renderer.includes("está preparando: ${items}${more}${total}") &&
+  renderer.includes("está preparando · sin enviar") &&
   renderer.includes('} else if (topic === "mesa-viewer") {')
 ) {
   ok("El TPV muestra en solo lectura lo que un camarero (app) esta preparando SIN enviar en la mesa abierta ('Cintia esta preparando: 2x Cafe...'): viaja en el latido de mesa-viewer (draft), no es parte del pedido (sin stock ni comanda), se refresca al instante por el tema de tiempo real 'mesa-viewer' y se activa por cliente (features.mesaDraft)");
@@ -11444,6 +11444,42 @@ if (
   const htmlOk = /id="splitMesaTotalsRow"/.test(fs.readFileSync(path.join(__dirname, "..", "..", "index.html"), "utf8")) && /function refreshSplitMesaTotals/.test(renderer) && /getSplitLineView\(item\)/.test(renderer);
   if (okVista && okSin && htmlOk) ok("Dividir igualitario: cada parte muestra cada producto con su cantidad de siempre y el precio dividido (x ÷ N), y el carrito enseña el total de la mesa y lo que falta por cobrar");
   else fail("Vista de una parte dividida: vista=" + okVista + ", sin cambios=" + okSin + ", html/render=" + htmlOk);
+}
+
+// Borrador de la tablet como lineas grises bajo el carrito (2026-11-02): solo lectura, fuera del pedido real.
+// Debe pintar las lineas y el total del borrador, escapar el nombre, y quedar oculto sin borrador.
+{
+  const vm = require("vm");
+  const extractFn = (name) => {
+    const i = renderer.indexOf("function " + name + "(");
+    if (i < 0) return "";
+    let depth = 0;
+    let started = false;
+    for (let j = renderer.indexOf("{", i); j < renderer.length; j += 1) {
+      const ch = renderer[j];
+      if (ch === "{") { depth += 1; started = true; }
+      if (ch === "}") depth -= 1;
+      if (started && depth === 0) return renderer.slice(i, j + 1);
+    }
+    return "";
+  };
+  const box = { innerHTML: "", _hidden: true, classList: { add() { box._hidden = true; }, remove() { box._hidden = false; } } };
+  const ctx = {
+    document: { getElementById: (id) => (id === "cartDraftGhosts" ? box : null) },
+    escapeHtml: (x) => String(x).replace(/</g, "&lt;"),
+    fmtQty: (n) => String(n),
+    fmtMoney: (n) => n.toFixed(2) + " €",
+  };
+  vm.createContext(ctx);
+  vm.runInContext(extractFn("renderMesaDraftGhosts"), ctx);
+  ctx.renderMesaDraftGhosts([{ agentName: "Cintia", draft: { lines: [{ name: "Bocata <b>", qty: 2 }, { name: "Chips", qty: 1 }], total: 8.7 } }]);
+  const conBorrador = !box._hidden && /Cintia está preparando/.test(box.innerHTML) && /× 2/.test(box.innerHTML) && /Total del borrador: 8.70/.test(box.innerHTML) && /&lt;b>/.test(box.innerHTML);
+  ctx.renderMesaDraftGhosts([{ agentName: "Ana" }]);
+  const sinBorrador = box._hidden && box.innerHTML === "";
+  const html = fs.readFileSync(path.join(__dirname, "..", "..", "index.html"), "utf8");
+  const enHtml = /id="cartDraftGhosts"/.test(html) && /renderMesaDraftGhosts\(others\)/.test(renderer);
+  if (conBorrador && sinBorrador && enHtml) ok("Mesa en uso: el borrador de la tablet se ve como lineas grises de solo lectura bajo el carrito (y desaparece sin borrador)");
+  else fail("Borrador gris del carrito: con borrador=" + conBorrador + ", sin borrador=" + sinBorrador + ", html/render=" + enHtml);
 }
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
