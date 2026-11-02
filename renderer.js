@@ -37285,6 +37285,14 @@ function attachPrintableAddonsHintsFromSnapshot(fsMappedLines, snapshotLines) {
       row.__addonsHint = best.line.addons;
     }
 
+    // Linea de una division igualitaria: FacturaScripts solo conoce la fraccion (0,6667); el ticket de cada parte
+    // enseña la cantidad original y el precio dividido, igual que el carrito (ver getSplitLineView).
+    const splitOrig = Number(best.line?.meta?.splitOrigQty);
+    const splitParts = Number(best.line?.meta?.splitParts);
+    if (isFinite(splitOrig) && isFinite(splitParts) && splitParts >= 2) {
+      row.__splitHint = { orig: splitOrig, parts: splitParts };
+    }
+
     best.used = true;
   });
 
@@ -37500,7 +37508,19 @@ function renderItemsHtml(doc, lineas) {
             .join(", ")
         : "";
 
-      const leftQtyHtml = isChild ? "" : safe(qty);
+      // Parte de una division igualitaria: cantidad original y precio dividido ("2 x 1,60 ÷ 3"), no 0,6667.
+      const splitView = isChild
+        ? null
+        : getSplitLineView({
+            qty,
+            meta: l?.meta?.splitOrigQty != null
+              ? l.meta
+              : l?.__splitHint
+                ? { splitOrigQty: l.__splitHint.orig, splitParts: l.__splitHint.parts }
+                : null,
+          });
+
+      const leftQtyHtml = isChild ? "" : safe(splitView ? splitView.qtyText : qty);
 
       // ✅ hijos: xN o x-N
       const qtyInline =
@@ -37525,6 +37545,11 @@ function renderItemsHtml(doc, lineas) {
               : ""
           }
           ${desc ? `<div class="item-sub small muted">${safe(desc)}</div>` : ""}
+          ${
+            splitView
+              ? `<div class="item-sub small muted">${safe(splitView.qtyText)} x ${safe(eurTicket(effectiveUnitGross))} ÷ ${safe(splitView.parts)}</div>`
+              : ""
+          }
           ${addonsTxt ? `<div class="item-sub small muted"><strong>${safe(addonsTxt)}</strong></div>` : ""}
         </div>
       `;
@@ -39628,6 +39653,20 @@ async function printTicket(ticket) {
     setText(doc, "agentName", agenteTexto);
 
     renderItemsHtml(doc, lineas);
+    {
+      // Parte de una cuenta dividida en partes iguales: una linea que explica los "÷ N" de las lineas.
+      const splitParts = Math.max(
+        0,
+        ...lineas.map((l) =>
+          Number(l?.meta?.splitParts ?? l?.__splitHint?.parts ?? 0) || 0,
+        ),
+      );
+      const splitRow = doc.getElementById("splitInfoRow");
+      if (splitRow && splitParts >= 2) {
+        setText(doc, "splitInfo", `Cuenta dividida en ${splitParts} partes iguales`);
+        splitRow.style.display = "block";
+      }
+    }
     renderTaxSummaryHtml(doc, taxMap);
 
     setText(doc, "grandTotal", eurTicket(totalToShow));

@@ -217,6 +217,14 @@ Una vez dividido, la cabecera permite moverte entre las partes («Parte n de m»
 
 Por dentro, el programa guarda en cada parte la fracción exacta de cada producto (por ejemplo 0,6667 de los 2 cafés), para que el stock y las facturas cuenten bien; en pantalla no tienes que verla. Las partes suman siempre el total exacto de la mesa.
 
+### El ticket impreso de cada parte
+
+Al cobrar una parte, el **ticket** sale con la misma presentación que el carrito: cada producto con su cantidad de siempre y, debajo, «2 x 1,60 ÷ 3», y una línea en la cabecera que dice «Cuenta dividida en 3 partes iguales».
+
+@fig img/impresion-ticket-dividido.png | width=42 | Ticket de una parte de una cuenta dividida en 3.
+
+Si más adelante **reimprimes** ese ticket desde **Tickets**, el programa ya no tiene a mano la información de cómo se dividió y las cantidades salen como decimales (por ejemplo 0,67), con los importes iguales.
+
 ### Un ejemplo completo
 
 Esta mesa de **18,00 €** (2 cafés, 1 croissant, 1 zumo y 3 milhojas), dividida en **3 partes iguales**, queda así:

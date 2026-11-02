@@ -11530,6 +11530,21 @@ if (
   })().catch((e) => fail("Aviso de borrador al cobrar: " + e.message));
 }
 
+// Ticket impreso de una parte de una division igualitaria (2026-11-02): cantidad original y precio dividido
+// ("2 x 1,60 ÷ 3") en vez de 0,6667, tambien por el camino de la factura de FS (pista del carrito local), y una
+// linea "Cuenta dividida en N partes iguales" en la cabecera. Sin division no cambia nada.
+{
+  const tpl = fs.readFileSync(path.join(__dirname, "..", "..", "ticket_print.html"), "utf8");
+  const okRender =
+    renderer.includes("row.__splitHint = { orig: splitOrig, parts: splitParts };") &&
+    renderer.includes("splitView.qtyText)} x ${safe(eurTicket(effectiveUnitGross))} ÷ ${safe(splitView.parts)}") &&
+    renderer.includes("getSplitLineView({") &&
+    renderer.includes("`Cuenta dividida en ${splitParts} partes iguales`");
+  const okTpl = /id="splitInfoRow"[^>]*display: none/.test(tpl) && /id="splitInfo"/.test(tpl);
+  if (okRender && okTpl) ok("Ticket impreso de una parte dividida: cantidad original y precio dividido (2 x 1,60 ÷ 3) y 'Cuenta dividida en N partes iguales'; oculto fuera de una division");
+  else fail("Ticket impreso de una parte dividida: render=" + okRender + ", plantilla=" + okTpl);
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
