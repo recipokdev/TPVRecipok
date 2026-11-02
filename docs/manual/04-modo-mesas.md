@@ -64,11 +64,21 @@ Ojo: lo que esa persona **ya ha guardado en la mesa** (el pedido) lo ves tú dir
 
 Si esa persona usa la **app de camareros** y tu empresa tiene activada esta función, debajo de las líneas del carrito verás además **lo que está componiendo y aún no ha guardado** en la mesa, en un cuadro gris:
 
-@fig img/mesas-preparando.png | crop=1410,60,500,250 | width=70 | marks=1:1880,120;2:1862,182;3:1722,254 | La tablet tiene un borrador sin enviar.
+@fig img/mesas-preparando.png | crop=1410,95,500,590 | width=70 | marks=1:1880,121;2:1620,421;3:1862,566;4:1722,638 | La mesa ya tiene un pedido guardado y la tablet tiene un borrador sin enviar.
 
 1. **El aviso de siempre:** «Cintia (Tablet barra) tiene esta mesa abierta».
-2. **«Cintia está preparando · sin enviar».** Sus líneas, en gris y cursiva, como **vista previa de solo lectura**. No son un pedido: no reservan stock, no salen en la comanda y no se pueden cobrar hasta que el camarero pulse **Enviar**. Por eso el carrito de arriba, el pedido real, sigue vacío en esta captura (la mesa M3 estaba libre). Si cierra la app, el cuadro desaparece solo.
-3. **Total del borrador.**
+2. **El pedido real** de la mesa (las líneas de arriba): ya está guardado, es el que se cobra y su total (8,60 €) es el del carrito.
+3. **«Cintia está preparando · sin enviar».** Sus líneas, en gris y cursiva, como **vista previa de solo lectura**. No son un pedido: no reservan stock, no salen en la comanda y no se pueden cobrar hasta que el camarero pulse **Enviar**. Si la mesa aún no tiene pedido, el carrito de arriba queda vacío y solo se ve este cuadro.
+4. **Total del borrador.** No se suma al total del carrito.
+
+Cosas que conviene saber:
+
+- Si **dos camareros** tienen un borrador a la vez, salen dos bloques, uno debajo de otro, separados por una línea punteada.
+- Un borrador muy largo se corta a las 12 primeras líneas («… y 3 más»).
+- Cuando el camarero vacía o envía su borrador, el cuadro desaparece. Si su tablet **pierde la conexión**, desaparece sola en menos de un minuto.
+- Al **cambiar de mesa**, el aviso y el borrador desaparecen; vuelven si regresas a una mesa que alguien tiene abierta.
+
+@fig img/mesas-dos-borradores.png | crop=1410,95,500,720 | width=70 | Dos tablets con un borrador cada una.
 
 ## 3. Atender una mesa
 

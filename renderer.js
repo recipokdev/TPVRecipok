@@ -44336,9 +44336,10 @@ function renderMesaDraftGhosts(others) {
         Number(o.draft.total) > 0
           ? `<div class="cart-draft-ghost-total">Total del borrador: ${escapeHtml(fmtMoney(Number(o.draft.total)))}</div>`
           : "";
-      return `<div class="cart-draft-ghost-head">✎ ${agent} está preparando · sin enviar</div>${lines}${more}${total}<div class="cart-draft-ghost-note">Solo lectura: no es parte del pedido hasta que lo envíe.</div>`;
+      return `<div class="cart-draft-ghost-block"><div class="cart-draft-ghost-head">✎ ${agent} está preparando · sin enviar</div>${lines}${more}${total}</div>`;
     })
-    .join("");
+    .join("") +
+    `<div class="cart-draft-ghost-note">Solo lectura: no es parte del pedido hasta que se envíe.</div>`;
   box.classList.remove("hidden");
 }
 

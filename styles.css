@@ -10232,6 +10232,11 @@ body.theme-dark .send-comanda-bar .scb-aux {
   color: #92400e;
   border: 1px solid rgba(245, 158, 11, 0.45);
 }
+body.theme-dark .mesa-in-use-notice {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fde68a;
+  border-color: rgba(245, 158, 11, 0.55);
+}
 .mesa-in-use-notice.hidden {
   display: none;
 }
@@ -10250,6 +10255,11 @@ body.theme-dark .send-comanda-bar .scb-aux {
 }
 .cart-draft-ghosts.hidden {
   display: none;
+}
+.cart-draft-ghost-block + .cart-draft-ghost-block {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dotted rgba(100, 116, 139, 0.55);
 }
 .cart-draft-ghost-head {
   font-size: 0.78rem;
