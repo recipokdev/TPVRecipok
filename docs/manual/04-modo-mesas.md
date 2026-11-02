@@ -177,6 +177,14 @@ Una vez dividido, la cabecera permite moverte entre las partes («Parte n de m»
 
 Por dentro, el programa guarda en cada parte la fracción exacta de cada producto (por ejemplo 0,6667 de los 2 cafés), para que el stock y las facturas cuenten bien; en pantalla no tienes que verla. Las partes suman siempre el total exacto de la mesa.
 
+### Un ejemplo completo
+
+Esta mesa de **18,00 €** (2 cafés, 1 croissant, 1 zumo y 3 milhojas), dividida en **3 partes iguales**, queda así:
+
+@fig img/mesas-dividir-comparacion.png | width=100 | La misma mesa antes de dividir y las tres partes.
+
+Cada cuenta paga **6,00 €**, y si sumas lo que paga cada parte por cada producto sale lo de la mesa original: café 1,07 + 1,07 + 1,06 = 3,20 €; croissant 0,50 × 3 = 1,50 €; zumo 0,93 + 0,93 + 0,94 = 2,80 €; milhojas 3,50 × 3 = 10,50 €. Cuando un importe no se puede repartir por igual al céntimo, alguna parte paga un céntimo más y otra uno menos, de forma que **el total de la mesa no cambia**. Fíjate también en que «Mesa completa» y «Por cobrar» son los mismos en las tres partes mientras no se cobra ninguna.
+
 Si te equivocas, vuelve a abrir **Dividir** y usa **Revertir división** (equivale a poner *Partes = 1*): junta todas las partes en un único ticket, con las cantidades exactamente como estaban en el pedido original.
 
 ## 6. Cambiar o juntar mesas
