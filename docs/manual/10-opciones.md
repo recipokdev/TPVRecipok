@@ -34,6 +34,7 @@ Con la sesión iniciada puedes ver y cambiar las Opciones **aunque la caja esté
 
 ### Productos (solo administradores)
 - **Texto en la tarjeta de producto.** Qué se muestra en cada producto: la descripción, la referencia, o ambas.
+- **Moneda.** En qué moneda se muestran los importes y se cuenta el dinero de la caja. Por defecto está en **Automática**: el TPV usa la divisa por defecto de tu FacturaScripts, con su símbolo, sus decimales y sus separadores, así que no tienes que tocar nada. También puedes forzar **Euro** o **Peso colombiano**. La moneda se lee al arrancar: al cambiarla, o si el TPV detecta que la divisa de FacturaScripts ha cambiado, sale un aviso con el botón **Reiniciar ahora** (la caja y los aparcados se quedan como están). Si hay una venta en curso o una ventana abierta, el TPV no te interrumpe: te recuerda reiniciar cuando termines.
 - **Modo edición de precio y prioridad.** Muestra el icono ✎ en los productos para cambiar su precio (con IVA) y su prioridad.
 - **Añadidos de producto.** Activa los añadidos (por ejemplo «+leche» o «+azúcar») en cada producto, tanto en Modo Mesas como en el TPV normal.
 - **Familias primero.** En vez de ver todos los productos de golpe, la pantalla muestra solo botones grandes de familia; al elegir una se ven sus productos, con un botón para volver. Pensado para catálogos grandes. Apagado por defecto.
@@ -48,6 +49,10 @@ Con la sesión iniciada puedes ver y cambiar las Opciones **aunque la caja esté
 - **Restablecer prioridades.** Elimina las prioridades manuales y vuelve al orden base.
 - **Modo redimensionar productos.** Muestra asas sobre cada tarjeta para cambiar su tamaño y el tamaño de letra del nombre («Aa»). Afecta a todos los productos. **Restablecer tamaño de productos** y **Restablecer tamaño de letra** devuelven los valores recomendados.
 - **Alérgenos.** Marca qué productos llevan cada uno de los 14 alérgenos oficiales de la UE (o alguno propio). Se destaca en la tarjeta, en el carrito y en la comanda impresa.
+
+@fig img/opciones-moneda.png | crop=600,234,720,549 | width=66 | marks=1:1030,526 | La opción «Moneda» (con el buscador de Opciones).
+
+1. **Moneda.** Automática (la de FacturaScripts), Euro o Peso colombiano.
 
 ### Tarifas
 - **Tarifa activa en TPV.** Selecciona la tarifa para editarla o asignarla.
@@ -135,6 +140,7 @@ Así vienen las opciones principales en un TPV nuevo. Lo que tu administrador ca
 - **Modo TPV (kiosk):** apagado en instalaciones nuevas.
 - **Teclado en pantalla:** activado. **Pantalla cliente:** apagada.
 - **Orden de los productos:** *Manual (prioridad)*. Los demás: *Por defecto (FacturaScripts)*, *Referencia*, *Descripción* e *ID de producto*.
+- **Moneda:** *Automática* (la divisa por defecto de FacturaScripts; si es el euro, todo sale como siempre).
 - **Desagrupar líneas:** activado (cada toque crea una línea nueva).
 - **Accesos rápidos de descuento:** 10, 20, 50 y 100 %.
 - **Aviso de stock al aparcar:** activado. **Preguntar por el stock al Borrar pendientes:** activado.

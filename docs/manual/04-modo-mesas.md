@@ -52,6 +52,46 @@ Un toque corto sobre una mesa la abre. Si en cambio **mantienes pulsada** una me
 - **⚠ Comanda:** la impresión automática de la comanda ha fallado en este TPV. Comprueba la impresora de comandas (capítulo «Impresión y cajón»).
 - **Aviso discreto «Ana (Barra) tiene esta mesa abierta»:** otra persona tiene la misma mesa abierta en otro dispositivo. Solo informa, no bloquea. Si usa la app de camareros y tu empresa lo tiene activado, también verás lo que **está preparando** (sin enviar) en solo lectura: no reserva stock ni sale en la comanda hasta que lo envíe.
 
+### Cuando otra persona tiene la misma mesa abierta
+
+Al abrir una mesa que otra persona tiene abierta en otro dispositivo (otro TPV o la tablet de un camarero), aparece una franja justo sobre las líneas del carrito:
+
+@fig img/mesas-en-uso.png | crop=1410,60,500,100 | width=70 | marks=1:1870,120 | Aviso de mesa en uso.
+
+1. **«Cintia (Tablet barra) tiene esta mesa abierta».** Quién la tiene abierta y desde qué dispositivo. Solo **informa**: no bloquea nada y puedes seguir trabajando. Si es la misma persona (el mismo agente) en otro dispositivo, no se avisa. Se actualiza sola, sin que tengas que hacer nada.
+
+Ojo: lo que esa persona **ya ha guardado en la mesa** (el pedido) lo ves tú directamente en el carrito, y se actualiza en cuestión de segundos cuando ella lo cambia (y ella ve lo tuyo igual). La franja solo es el aviso de que está ahí.
+
+Si esa persona usa la **app de camareros** y tu empresa tiene activada esta función, debajo de las líneas del carrito verás además **lo que está componiendo y aún no ha guardado** en la mesa, en un cuadro gris:
+
+@fig img/mesas-preparando.png | crop=1410,95,500,590 | width=70 | marks=1:1880,121;2:1620,421;3:1862,566;4:1722,638 | La mesa ya tiene un pedido guardado y la tablet tiene un borrador sin enviar.
+
+1. **El aviso de siempre:** «Cintia (Tablet barra) tiene esta mesa abierta».
+2. **El pedido real** de la mesa (las líneas de arriba): ya está guardado, es el que se cobra y su total (8,60 €) es el del carrito.
+3. **«Cintia está preparando · sin enviar».** Sus líneas, en gris y cursiva, como **vista previa de solo lectura**. No son un pedido: no reservan stock, no salen en la comanda y no se pueden cobrar hasta que el camarero pulse **Enviar**. Si la mesa aún no tiene pedido, el carrito de arriba queda vacío y solo se ve este cuadro.
+4. **Total del borrador.** No se suma al total del carrito.
+
+Cosas que conviene saber:
+
+- Si **dos camareros** tienen un borrador a la vez, salen dos bloques, uno debajo de otro, separados por una línea punteada.
+- Un borrador muy largo se corta a las 12 primeras líneas («… y 3 más»).
+- Cuando el camarero vacía o envía su borrador, el cuadro desaparece. Si su tablet **pierde la conexión**, desaparece sola en menos de un minuto.
+- Al **cambiar de mesa**, el aviso y el borrador desaparecen; vuelven si regresas a una mesa que alguien tiene abierta.
+
+@fig img/mesas-dos-borradores.png | crop=1410,95,500,720 | width=70 | Dos tablets con un borrador cada una.
+
+### Si intentas cobrar o borrar la mesa mientras hay un borrador
+
+Si pulsas **Cobrar** (o **Borrar mesa**) y otro dispositivo tiene en esa mesa un borrador sin enviar, el TPV te avisa antes, porque lo que está componiendo **no entraría en la cuenta**:
+
+@fig img/mesas-aviso-cobrar.png | crop=780,382,360,262 | width=55 | marks=1:960,520;2:967,628;3:1083,628 | Aviso al cobrar con un borrador sin enviar.
+
+1. **Qué está preparando y quién.** Si lo cobras ahora, eso no se incluirá en la cuenta.
+2. **Cobrar igualmente.** Sigue con el cobro. Es para cuando el borrador se quedó olvidado en la tablet.
+3. **Esperar** (el botón destacado; también **Enter** o **Esc**). No pasa nada: puedes esperar a que el camarero envíe y cobrar entonces.
+
+Con **Borrar mesa** el aviso es el mismo y el botón dice **Borrar igualmente**. Si no hay ningún borrador, no pregunta nada. Se basa en lo último que sabe el TPV de esa mesa, que se actualiza solo en unos segundos.
+
 ## 3. Atender una mesa
 
 1. Entra en **Mapa de Salas** y toca la mesa. Se abre la pestaña **Transacciones** con esa mesa seleccionada. También puedes elegir **Sala** y **Mesa** en los desplegables de la parte superior.
@@ -153,11 +193,47 @@ Pulsa **Dividir** en la cabecera del pedido.
 ### Qué diferencia hay entre los dos modos
 
 - **Por artículos (asignación manual).** Tú decides **qué consume cada cuenta**: para cada producto indicas cuántas unidades van en la P1, en la P2, etc. Es el modo para cuando cada comensal paga lo suyo («yo la cerveza y el bocadillo; tú el café»). Hay que asignar artículos al menos a **dos** partes, y debajo de cada producto ves lo que **aún no has asignado**.
-- **Igualitario.** Divide el pedido **a partes iguales**: cada cuenta lleva **la misma fracción de cada línea** (con 3 partes, un tercio de cada producto, con la cantidad en decimales) y el total sale repartido por igual. Es el modo para cuando se comparte todo y se paga a medias.
+- **Igualitario.** Divide el pedido **a partes iguales**: cada cuenta lleva **la misma fracción de cada línea** (con 3 partes, un tercio de cada producto y de su precio) y el total sale repartido por igual. Las partes **suman siempre el total exacto del ticket**: si no se puede repartir a partes iguales al céntimo, alguna cuenta sale un céntimo más cara que otra (el cuadro lo muestra como «5,86 – 5,87»). Es el modo para cuando se comparte todo y se paga a medias.
+
+@fig img/mesas-dividir-igualitario.png | crop=510,198,900,621 | marks=1:1192,331;2:516,369 | Modo igualitario con 3 partes.
+
+1. **Partes.** Aquí, 3: cada cuenta lleva un tercio.
+2. **Modo: Igualitario.** No hay columnas por parte: las líneas se reparten solas, sin que tengas que asignar nada.
 
 Se puede dividir en **2 a 12 partes**. Cada parte pasa a ser un pedido de esa misma mesa, con el nombre del original y el número de la parte, por ejemplo «Ticket #12 (2/3)», que se **cobra por separado**.
 
-Una vez dividido, la cabecera permite moverte entre las partes («Parte n/m») con las flechas. Si te equivocas, vuelve a abrir **Dividir** y usa **Revertir división** (equivale a poner *Partes = 1*): junta todas las partes en un único ticket.
+Una vez dividido, la cabecera permite moverte entre las partes («Parte n de m») con las flechas.
+
+@fig img/mesas-dividido-partes.png | crop=1410,100,500,720 | width=70 | marks=1:1445,226;2:1515,226;3:1596,226;4:1664,226;5:1546,314;6:1837,322;7:1590,771;8:1650,801 | Pedido ya dividido: la parte 1 de 3.
+
+1. **←** pasa a la parte anterior.
+2. **«Ticket: Parte 1 de 3».** La parte que tienes abierta y cuántas hay: «1 de 3» quiere decir que eres la primera de las tres cuentas, no «un tercio».
+3. **→** pasa a la parte siguiente.
+4. **Dividir** vuelve a abrir la ventana, por ejemplo para **Revertir división**.
+5. **Cantidad de siempre y precio dividido.** Cada producto conserva su cantidad (los 2 cafés) y debajo se lee «2 x 1,60 € ÷ 3»: lo que cuesta, repartido entre las 3 partes.
+6. **Lo que pagas por esa línea** en esta cuenta (1,07 €).
+7. **Tu parte: 1 de 3.** El total grande es lo que paga **esta cuenta**.
+8. **Mesa completa / Por cobrar.** Debajo, el total de **toda la mesa** (todas las partes) y lo que queda **por cobrar**, que baja al cobrar cada parte.
+
+Por dentro, el programa guarda en cada parte la fracción exacta de cada producto (por ejemplo 0,6667 de los 2 cafés), para que el stock y las facturas cuenten bien; en pantalla no tienes que verla. Las partes suman siempre el total exacto de la mesa.
+
+### El ticket impreso de cada parte
+
+Al cobrar una parte, el **ticket** sale con la misma presentación que el carrito: cada producto con su cantidad de siempre y, debajo, «2 x 1,60 ÷ 3», y una línea en la cabecera que dice «Cuenta dividida en 3 partes iguales».
+
+@fig img/impresion-ticket-dividido.png | width=42 | Ticket de una parte de una cuenta dividida en 3.
+
+Si más adelante **reimprimes** ese ticket desde **Tickets**, el programa ya no tiene a mano la información de cómo se dividió y las cantidades salen como decimales (por ejemplo 0,67), con los importes iguales.
+
+### Un ejemplo completo
+
+Esta mesa de **18,00 €** (2 cafés, 1 croissant, 1 zumo y 3 milhojas), dividida en **3 partes iguales**, queda así:
+
+@fig img/mesas-dividir-comparacion.png | width=100 | La misma mesa antes de dividir y las tres partes.
+
+Cada cuenta paga **6,00 €**, y si sumas lo que paga cada parte por cada producto sale lo de la mesa original: café 1,07 + 1,07 + 1,06 = 3,20 €; croissant 0,50 × 3 = 1,50 €; zumo 0,93 + 0,93 + 0,94 = 2,80 €; milhojas 3,50 × 3 = 10,50 €. Cuando un importe no se puede repartir por igual al céntimo, alguna parte paga un céntimo más y otra uno menos, de forma que **el total de la mesa no cambia**. Fíjate también en que «Mesa completa» y «Por cobrar» son los mismos en las tres partes mientras no se cobra ninguna.
+
+Si te equivocas, vuelve a abrir **Dividir** y usa **Revertir división** (equivale a poner *Partes = 1*): junta todas las partes en un único ticket, con las cantidades exactamente como estaban en el pedido original.
 
 ## 6. Cambiar o juntar mesas
 

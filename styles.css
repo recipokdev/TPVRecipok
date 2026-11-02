@@ -3055,6 +3055,23 @@ body.theme-dark .cart-line-kitchen-note {
   font-weight: 600;
 }
 
+/* Pedido dividido en partes: total de la mesa y lo que falta por cobrar (debajo del total de la parte) */
+.cart-split-totals-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+}
+
+body.theme-dark .cart-split-totals-row {
+  color: #cbd5e1;
+}
+
 /* --- 2.5 Botones carrito --- */
 
 .cart-btn {
@@ -10215,11 +10232,65 @@ body.theme-dark .send-comanda-bar .scb-aux {
   color: #92400e;
   border: 1px solid rgba(245, 158, 11, 0.45);
 }
+body.theme-dark .mesa-in-use-notice {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fde68a;
+  border-color: rgba(245, 158, 11, 0.55);
+}
 .mesa-in-use-notice.hidden {
   display: none;
 }
 .mesa-in-use-notice::before {
   content: "👤 ";
+}
+
+/* Borrador sin guardar de otro dispositivo (app de camareros): lineas grises de solo lectura bajo el carrito. */
+.cart-draft-ghosts {
+  margin: 8px 0 4px;
+  padding: 6px 10px 8px;
+  border: 2px dashed rgba(100, 116, 139, 0.55);
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.12);
+  color: #475569;
+}
+.cart-draft-ghosts.hidden {
+  display: none;
+}
+.cart-draft-ghost-block + .cart-draft-ghost-block {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dotted rgba(100, 116, 139, 0.55);
+}
+.cart-draft-ghost-head {
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin: 2px 0 4px;
+}
+.cart-draft-ghost-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 0.9rem;
+  font-style: italic;
+  opacity: 0.8;
+}
+.cart-draft-ghost-total {
+  margin-top: 4px;
+  text-align: right;
+  font-size: 0.8rem;
+  font-weight: 600;
+  opacity: 0.85;
+}
+.cart-draft-ghost-note {
+  margin-top: 4px;
+  font-size: 0.72rem;
+  opacity: 0.7;
+}
+body.theme-dark .cart-draft-ghosts {
+  border-color: rgba(148, 163, 184, 0.5);
+  background: rgba(148, 163, 184, 0.1);
+  color: #cbd5e1;
 }
 
 /* Controles del envio automatico de la comanda dentro de la ventana "Comanda cocina". */

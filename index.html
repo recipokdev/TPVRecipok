@@ -485,12 +485,19 @@
       </div>
       <div class="cart-lines-wrapper">
         <div id="cartLines"></div>
+        <!-- Borrador sin guardar de otro dispositivo (app de camareros): vista previa gris, solo lectura -->
+        <div id="cartDraftGhosts" class="cart-draft-ghosts hidden" aria-live="polite"></div>
       </div>
 
       <!-- TOTAL -->
       <div class="cart-total-row">
-        <span>Total</span>
+        <span id="cartTotalLabel">Total</span>
         <span id="totalAmount">0,00 €</span>
+      </div>
+      <!-- Solo con un pedido dividido en partes: total de la mesa y lo que falta por cobrar -->
+      <div id="splitMesaTotalsRow" class="cart-split-totals-row hidden">
+        <span id="splitMesaTotalsAll"></span>
+        <span id="splitMesaTotalsPending"></span>
       </div>
 
       <div id="cartGlobalDiscountRow" class="cart-global-discount-row hidden">
@@ -2476,6 +2483,24 @@
                     <option value="both">Ambas (como ahora)</option>
                     <option value="descripcion">Solo descripción</option>
                     <option value="referencia">Solo referencia</option>
+                  </select>
+                </div>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Moneda</div>
+                  <div class="opt-row-sub">
+                    Símbolo, decimales y separadores con los que se muestran
+                    los importes y se cuenta el dinero de la caja (billetes y
+                    monedas). Por defecto se usa la divisa de FacturaScripts.
+                    Cambiarla requiere reiniciar el TPV.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <select id="currencySelect" class="opt-select">
+                    <option value="">Automática (la de FacturaScripts)</option>
+                    <option value="EUR">Euro (€)</option>
+                    <option value="COP">Peso colombiano ($)</option>
                   </select>
                 </div>
               </div>

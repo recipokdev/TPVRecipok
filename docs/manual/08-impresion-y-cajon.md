@@ -33,6 +33,8 @@ El ticket es el comprobante de la venta que se entrega al cliente.
 5. **Total y formas de pago.** Si se paga en efectivo, también se muestran la cantidad entregada y el cambio.
 6. **Terminal y agente** que hicieron la venta.
 
+En euros los importes salen sin símbolo, como siempre. En cualquier otra moneda cada importe lleva su símbolo y su formato (por ejemplo, `$ 9.000` en pesos colombianos).
+
 El ticket se puede volver a imprimir en cualquier momento desde **Tickets** (botón 🖨).
 
 ## 3. La comanda de cocina
@@ -81,3 +83,4 @@ Si el equipo tiene una segunda pantalla, el TPV puede mostrar al cliente su pedi
 
 - **Identificar** y **Actualizar** (junto a *Pantalla a usar*): *Identificar* enseña un número grande en cada monitor para saber cuál es cuál; *Actualizar* vuelve a buscar las pantallas conectadas.
 - Con **una sola pantalla** conectada no se puede activar la pantalla cliente (taparía el TPV) y el programa avisa.
+- Los productos que no tienen imagen no dejan un hueco vacío: se muestra el logo de tu empresa (si lo tiene configurado) o un icono neutro. Los importes salen en la moneda del TPV.

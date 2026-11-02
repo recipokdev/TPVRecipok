@@ -4101,7 +4101,7 @@ mustContain(
   "'Cobrar' gets a visually distinct color (not the normal green, not the normal disabled gray) in the needs-agent state",
 );
 {
-  const idx = renderer.indexOf("payBtn.onclick = () => {");
+  const idx = renderer.indexOf("payBtn.onclick = async () => {");
   const scoped = idx >= 0 ? renderer.slice(idx, idx + 300) : "";
   if (
     scoped.includes("if (payButtonNeedsAgentAssignment()) {") &&
@@ -10873,7 +10873,7 @@ if (
   renderer.includes("let isClearingCartNow = false;") &&
   renderer.includes("if (isParkingNow || isPayingNow || isClearingCartNow) return;") &&
   renderer.includes("if (isPayingNow || isParkingNow || isClearingCartNow) return;") &&
-  renderer.includes("if (isParkingNow || isClearingCartNow) return;") &&
+  renderer.includes("if (isParkingNow || isClearingCartNow || isPayingNow) return;") &&
   renderer.includes("isClearingCartNow = true;") &&
   renderer.includes("isClearingCartNow = false;")
 ) {
@@ -11125,7 +11125,7 @@ if (
   renderer.includes("function mesaDraftIsEnabled(slug) {") &&
   renderer.includes('__mesaDraftEnabledBySlug.set(String(slug || ""), !!features.mesaDraft);') &&
   renderer.includes('(parkedOpsIsEnabled(slug, "mesas") || mesaDraftIsEnabled(slug));') &&
-  renderer.includes("está preparando: ${items}${more}${total}") &&
+  renderer.includes("está preparando · sin enviar") &&
   renderer.includes('} else if (topic === "mesa-viewer") {')
 ) {
   ok("El TPV muestra en solo lectura lo que un camarero (app) esta preparando SIN enviar en la mesa abierta ('Cintia esta preparando: 2x Cafe...'): viaja en el latido de mesa-viewer (draft), no es parte del pedido (sin stock ni comanda), se refresca al instante por el tema de tiempo real 'mesa-viewer' y se activa por cliente (features.mesaDraft)");
@@ -11281,6 +11281,268 @@ if (
   ok("La carga completa de productos/familias/stock ya no se duplica al arrancar: una peticion mientras hay otra en curso de la misma empresa se une a ella, y el arranque tras el login reutiliza la carga hecha hace menos de 2 min (antes se descargaba todo dos veces en un equipo recien activado); un refresh pedido a proposito siempre recarga");
 } else {
   fail("Falta evitar la doble carga de datos al arrancar (renderer.js loadDataFromApi / runBootFlow)");
+}
+
+// Moneda (2026-10-30, Pan Artesano / Colombia): los importes salen de fmtMoney() segun la moneda elegida en
+// Opciones. En euros el texto tiene que ser el de siempre; en pesos, sin decimales y con punto de miles; y
+// "18.000" escrito a mano en pesos es dieciocho mil, no dieciocho.
+{
+  const a = renderer.indexOf("// ===== Moneda (2026-10-30) =====");
+  const b = renderer.indexOf("// ===== [01] Datos de ejemplo");
+  if (a < 0 || b < a) {
+    fail("Falta el modulo de moneda (fmtMoney) en renderer.js");
+  } else {
+    const vm = require("vm");
+    const code = renderer.slice(a, b).replace(/^const /gm, "var ").replace(/^let /gm, "var ");
+    const ctx = { window: {}, document: { getElementById: () => null, querySelectorAll: () => [] }, toast() {}, console };
+    vm.createContext(ctx);
+    vm.runInContext(
+      code + "\nthis.__m={fmtMoney,normalizeMoneyText,cop(){CURRENCY=CURRENCY_PRESETS.COP},eur(){CURRENCY=CURRENCY_PRESETS.EUR}};",
+      ctx,
+    );
+    const m = ctx.__m;
+    const oldEur = (n) => (Number(n) || 0).toFixed(2).replace(".", ",") + " €";
+    const samples = [0, 1, 5.5, 18000, 123456.789, -5.5, -0.001, 1e6];
+    const eurSame = samples.every(
+      (v) =>
+        m.fmtMoney(v) === oldEur(v) &&
+        m.fmtMoney(v, { symbol: false }) === oldEur(v).replace(" €", "") &&
+        m.fmtMoney(v, { dot: true }) === Number(v).toFixed(2) + " €",
+    );
+    m.cop();
+    const copOk =
+      m.fmtMoney(18000) === "$ 18.000" &&
+      m.fmtMoney(1234567) === "$ 1.234.567" &&
+      m.fmtMoney(-5000) === "-$ 5.000" &&
+      m.fmtMoney(18000, { symbol: false, thousands: false }) === "18000" &&
+      m.normalizeMoneyText("18.000") === "18000" &&
+      m.normalizeMoneyText("$ 18.000") === "18000" &&
+      m.normalizeMoneyText("18000.00") === "18000.00";
+    m.eur();
+    const eurTextSame = ["18.000", "2,5", "1.234"].every((t) => m.normalizeMoneyText(t) === t);
+    if (eurSame && copOk && eurTextSame) {
+      ok("Moneda: en euros los importes salen igual que siempre; en pesos colombianos sin decimales y con punto de miles ($ 18.000), y un importe escrito como 18.000 se lee como dieciocho mil");
+    } else {
+      fail("fmtMoney/normalizeMoneyText no cumplen: euros iguales=" + eurSame + ", pesos=" + copOk + ", texto en euros intacto=" + eurTextSame);
+    }
+    const hardcoded = renderer.match(/\.toFixed\(2\)\.replace\("\.", ","\) \+ " €"/g) || [];
+    if (hardcoded.length === 0 && /id="currencySelect"/.test(fs.readFileSync(path.join(__dirname, "..", "..", "index.html"), "utf8"))) {
+      ok("Moneda: ya no queda ningun importe con el simbolo € escrito a mano en renderer.js y existe el selector de Moneda en Opciones");
+      if (/settings\/default/.test(renderer) && /fetchFsCurrencySpec/.test(renderer) && /OPTIONS_CURRENCY_SPEC_KEY/.test(renderer) && /divisas\/\$\{code\}/.test(renderer)) {
+        ok("Moneda: en modo automatico se lee la divisa por defecto de FacturaScripts (settings/default + divisas/<codigo>)");
+      } else {
+        fail("Moneda automatica: falta la lectura de settings/default y divisas (fetchFsCurrencySpec)");
+      }
+      {
+        // Cualquier divisa de FacturaScripts se monta con sus datos (simbolo, decimales, separadores).
+        const vm2 = require("vm");
+        const a2 = renderer.indexOf("// ===== Moneda (2026-10-30) =====");
+        const b2 = renderer.indexOf("// ===== [01] Datos de ejemplo");
+        const code2 = renderer.slice(a2, b2).replace(/^const /gm, "var ").replace(/^let /gm, "var ");
+        const ctx2 = { window: {}, document: { getElementById: () => null, querySelectorAll: () => [] }, toast() {}, console };
+        vm2.createContext(ctx2);
+        vm2.runInContext(code2 + "\nthis.__g={fmtMoney,normalizeMoneyText,resolveCurrencySpec,set(c){CURRENCY=c},eur:CURRENCY_PRESETS.EUR};", ctx2);
+        const g = ctx2.__g;
+        const usd = g.resolveCurrencySpec({ code: "USD", symbol: "$", symbolBefore: true, decimals: "2", decSep: ".", thousandsSep: ",", rate: 1.129 });
+        const clp = g.resolveCurrencySpec({ code: "CLP", symbol: "CLP$", symbolBefore: true, decimals: "0", decSep: ",", thousandsSep: ".", rate: 704 });
+        const sek = g.resolveCurrencySpec({ code: "SEK", symbol: "kr", symbolBefore: false, decimals: 2, decSep: ",", thousandsSep: " ", rate: 11 });
+        g.set(usd);
+        const usdOk = g.fmtMoney(1234.5) === "$ 1,234.50" && g.normalizeMoneyText("$ 1,234.50") === "1234,50" && g.normalizeMoneyText("2.5") === "2,5" && g.normalizeMoneyText("2,5") === "2,5";
+        g.set(clp);
+        const clpOk = g.fmtMoney(18000) === "CLP$ 18.000" && g.normalizeMoneyText("CLP$ 18.000") === "18000";
+        g.set(sek);
+        const sekOk = g.fmtMoney(1234.5) === "1 234,50 kr" && g.normalizeMoneyText("1 234,50 kr") === "1234,50";
+        g.set(g.eur);
+        const denOk = JSON.stringify(usd.coins) === "[0.01,0.02,0.05,0.1,0.2,0.5,1,2]" && usd.bills.length === 7 && clp.coins[0] === 10 && g.resolveCurrencySpec({ code: "xx" }) === null && g.resolveCurrencySpec({ code: "eur" }) === g.eur;
+        if (usdOk && clpOk && sekOk && denOk) {
+          ok("Moneda: una divisa cualquiera de FacturaScripts (USD, CLP, SEK...) se monta con sus datos: formato, importes escritos y billetes/monedas del recuento");
+        } else {
+          fail("Moneda generica de FacturaScripts: usd=" + usdOk + ", clp=" + clpOk + ", sek=" + sekOk + ", denominaciones=" + denOk);
+        }
+      }
+    } else {
+      fail("Quedan " + hardcoded.length + " importes con el simbolo € escrito a mano (usar fmtMoney) o falta el selector #currencySelect");
+    }
+  }
+}
+
+// Dividir la cuenta en modo igualitario (2026-11-02): repartir cada linea en N fracciones redondeadas a 4
+// decimales perdia centimos (3 partes de 17,60 sumaban 17,58). Las partes tienen que sumar EXACTAMENTE el total
+// de cada linea, para cualquier numero de partes y con IVA 4/10/21.
+{
+  const vm = require("vm");
+  const extractFn = (name) => {
+    const i = renderer.indexOf("function " + name + "(");
+    if (i < 0) return "";
+    let depth = 0;
+    let started = false;
+    for (let j = renderer.indexOf("{", i); j < renderer.length; j += 1) {
+      const ch = renderer[j];
+      if (ch === "{") { depth += 1; started = true; }
+      if (ch === "}") depth -= 1;
+      if (started && depth === 0) return renderer.slice(i, j + 1);
+    }
+    return "";
+  };
+  const src = extractFn("computeLineNetFirst") + "\n" + extractFn("buildEqualSplitShares");
+  if (!/function buildEqualSplitShares/.test(src) || !/function computeLineNetFirst/.test(src)) {
+    fail("Falta buildEqualSplitShares o computeLineNetFirst en renderer.js (dividir igualitario)");
+  } else {
+    const ctx = {
+      round2: (n) => Math.round((Number(n) || 0) * 100) / 100,
+      makeLineId: () => "id",
+      getCartLinePricing: (l) => ({ lineTotal: ctx.computeLineNetFirst(l.unit, l.qty, l.rate).total }),
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    const lines = [
+      { unit: 1.6, qty: 1, rate: 10 }, { unit: 1.5, qty: 2, rate: 10 }, { unit: 2.8, qty: 1, rate: 10 },
+      { unit: 3.5, qty: 1, rate: 10 }, { unit: 1.1, qty: 3, rate: 4 }, { unit: 4.2, qty: 0.35, rate: 21 },
+      { unit: 12.9, qty: 1, rate: 21 }, { unit: 0.95, qty: 7, rate: 10 },
+    ];
+    let bad = 0;
+    for (let parts = 2; parts <= 12; parts += 1) {
+      const shares = ctx.buildEqualSplitShares(lines, parts);
+      lines.forEach((l, li) => {
+        const orig = Math.round(ctx.computeLineNetFirst(l.unit, l.qty, l.rate).total * 100);
+        const sum = shares.reduce((acc, part) => acc + Math.round(ctx.computeLineNetFirst(l.unit, part[li].qty, l.rate).total * 100), 0);
+        if (sum !== orig) bad += 1;
+      });
+    }
+    if (bad === 0) ok("Dividir igualitario: las partes suman exactamente el total de cada linea (2 a 12 partes, IVA 4/10/21 y cantidades con decimales)");
+    else fail("Dividir igualitario: " + bad + " combinaciones de linea/partes no suman el total de la linea");
+  }
+}
+
+// Carrito de una parte de una division igualitaria (2026-11-02): cada producto con SU cantidad de siempre y el
+// precio ya dividido ("2 x 1,60 € ÷ 3"), no la fraccion que se guarda por debajo (0,6667); y el total de la mesa
+// (todas las partes) y lo que falta por cobrar se ven junto al total de la parte.
+{
+  const vm = require("vm");
+  const extractFn = (name) => {
+    const i = renderer.indexOf("function " + name + "(");
+    if (i < 0) return "";
+    let depth = 0;
+    let started = false;
+    for (let j = renderer.indexOf("{", i); j < renderer.length; j += 1) {
+      const ch = renderer[j];
+      if (ch === "{") { depth += 1; started = true; }
+      if (ch === "}") depth -= 1;
+      if (started && depth === 0) return renderer.slice(i, j + 1);
+    }
+    return "";
+  };
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext(extractFn("fmtQty") + "\n" + extractFn("getSplitLineView"), ctx);
+  const v = (q, orig, parts) => ctx.getSplitLineView({ qty: q, meta: orig == null ? undefined : { splitOrigQty: orig, splitParts: parts } });
+  const a1 = v(0.6667, 2, 3);
+  const a2 = v(1.0001, 3, 3);
+  const a3 = v(0.1167, 0.35, 3);
+  const okVista = a1 && a1.qtyText === "2" && a1.parts === 3 && a2 && a2.qtyText === "3" && a3 && a3.qtyText === "0,35";
+  const okSin = v(0.5) === null && v(0.3333) === null && v(2, 2, 3) === null; // sin meta o editada a mano: cantidad real
+  const htmlOk = /id="splitMesaTotalsRow"/.test(fs.readFileSync(path.join(__dirname, "..", "..", "index.html"), "utf8")) && /function refreshSplitMesaTotals/.test(renderer) && /getSplitLineView\(item\)/.test(renderer);
+  if (okVista && okSin && htmlOk) ok("Dividir igualitario: cada parte muestra cada producto con su cantidad de siempre y el precio dividido (x ÷ N), y el carrito enseña el total de la mesa y lo que falta por cobrar");
+  else fail("Vista de una parte dividida: vista=" + okVista + ", sin cambios=" + okSin + ", html/render=" + htmlOk);
+}
+
+// Borrador de la tablet como lineas grises bajo el carrito (2026-11-02): solo lectura, fuera del pedido real.
+// Debe pintar las lineas y el total del borrador, escapar el nombre, y quedar oculto sin borrador.
+{
+  const vm = require("vm");
+  const extractFn = (name) => {
+    const i = renderer.indexOf("function " + name + "(");
+    if (i < 0) return "";
+    let depth = 0;
+    let started = false;
+    for (let j = renderer.indexOf("{", i); j < renderer.length; j += 1) {
+      const ch = renderer[j];
+      if (ch === "{") { depth += 1; started = true; }
+      if (ch === "}") depth -= 1;
+      if (started && depth === 0) return renderer.slice(i, j + 1);
+    }
+    return "";
+  };
+  const box = { innerHTML: "", _hidden: true, classList: { add() { box._hidden = true; }, remove() { box._hidden = false; } } };
+  const ctx = {
+    document: { getElementById: (id) => (id === "cartDraftGhosts" ? box : null) },
+    escapeHtml: (x) => String(x).replace(/</g, "&lt;"),
+    fmtQty: (n) => String(n),
+    fmtMoney: (n) => n.toFixed(2) + " €",
+  };
+  vm.createContext(ctx);
+  vm.runInContext(extractFn("renderMesaDraftGhosts"), ctx);
+  ctx.renderMesaDraftGhosts([{ agentName: "Cintia", draft: { lines: [{ name: "Bocata <b>", qty: 2 }, { name: "Chips", qty: 1 }], total: 8.7 } }]);
+  const conBorrador = !box._hidden && /Cintia está preparando/.test(box.innerHTML) && /× 2/.test(box.innerHTML) && /Total del borrador: 8.70/.test(box.innerHTML) && /&lt;b>/.test(box.innerHTML);
+  ctx.renderMesaDraftGhosts([{ agentName: "Ana" }]);
+  const sinBorrador = box._hidden && box.innerHTML === "";
+  const html = fs.readFileSync(path.join(__dirname, "..", "..", "index.html"), "utf8");
+  const enHtml = /id="cartDraftGhosts"/.test(html) && /renderMesaDraftGhosts\(others\)/.test(renderer);
+  if (conBorrador && sinBorrador && enHtml) ok("Mesa en uso: el borrador de la tablet se ve como lineas grises de solo lectura bajo el carrito (y desaparece sin borrador)");
+  else fail("Borrador gris del carrito: con borrador=" + conBorrador + ", sin borrador=" + sinBorrador + ", html/render=" + enHtml);
+}
+
+// Cobrar / Borrar mesa con un borrador sin enviar de otro dispositivo (2026-11-02): avisa (no bloquea). Sin
+// borrador no pregunta; "Esperar" (o Escape) cancela; solo "Cobrar igualmente" / "Borrar igualmente" sigue.
+{
+  const vm = require("vm");
+  const extractFn = (name) => {
+    const i = renderer.indexOf("function " + name + "(");
+    if (i < 0) return "";
+    let depth = 0;
+    let started = false;
+    for (let j = renderer.indexOf("{", i); j < renderer.length; j += 1) {
+      const ch = renderer[j];
+      if (ch === "{") { depth += 1; started = true; }
+      if (ch === "}") depth -= 1;
+      if (started && depth === 0) return renderer.slice(i, j + 1);
+    }
+    return "";
+  };
+  let respuesta = false;
+  let llamadas = [];
+  const ctx = {
+    __mesaDraftsActive: [],
+    fmtQty: (n) => String(n),
+    fmtMoney: (n) => n.toFixed(2) + " €",
+    confirmModal: async (titulo, texto, opts) => { llamadas.push({ titulo, texto, opts }); return respuesta; },
+  };
+  vm.createContext(ctx);
+  vm.runInContext("async " + extractFn("confirmDespiteOtherDeviceDraft"), ctx);
+  (async () => {
+    const draft = [{ agentName: "Cintia", draft: { lines: [{ name: "Bocata Pollo", qty: 2 }], total: 6.2 } }];
+    const sin = (await ctx.confirmDespiteOtherDeviceDraft("cobrar")) === true && llamadas.length === 0;
+    ctx.__mesaDraftsActive = draft;
+    respuesta = true; // "Esperar"
+    const esperar = (await ctx.confirmDespiteOtherDeviceDraft("cobrar")) === false;
+    respuesta = false; // Escape
+    const escape = (await ctx.confirmDespiteOtherDeviceDraft("cobrar")) === false;
+    respuesta = "igualmente";
+    const igualmente = (await ctx.confirmDespiteOtherDeviceDraft("cobrar")) === true;
+    const u = llamadas[0];
+    const texto = !!u && /Cintia está preparando: 2× Bocata Pollo \(6\.20 €\)/.test(u.texto) && /no se incluirá en la cuenta/.test(u.texto) && u.opts.middleButtonText === "Cobrar igualmente" && u.opts.okButtonText === "Esperar" && u.opts.hideCancel === true;
+    llamadas = [];
+    await ctx.confirmDespiteOtherDeviceDraft("borrar");
+    const borrar = /Borrar igualmente/.test(JSON.stringify(llamadas[0]?.opts || {}));
+    const cableado = /if \(!\(await confirmDespiteOtherDeviceDraft\("cobrar"\)\)\) return;/.test(renderer) && /if \(!\(await confirmDespiteOtherDeviceDraft\("borrar"\)\)\) return;/.test(renderer);
+    if (sin && esperar && escape && igualmente && texto && borrar && cableado) ok("Cobrar/Borrar mesa con un borrador sin enviar de otro dispositivo: avisa con Esperar / Cobrar igualmente; sin borrador no pregunta");
+    else fail("Aviso de borrador al cobrar: sin=" + sin + ", esperar=" + esperar + ", escape=" + escape + ", igualmente=" + igualmente + ", texto=" + texto + ", borrar=" + borrar + ", cableado=" + cableado);
+  })().catch((e) => fail("Aviso de borrador al cobrar: " + e.message));
+}
+
+// Ticket impreso de una parte de una division igualitaria (2026-11-02): cantidad original y precio dividido
+// ("2 x 1,60 ÷ 3") en vez de 0,6667, tambien por el camino de la factura de FS (pista del carrito local), y una
+// linea "Cuenta dividida en N partes iguales" en la cabecera. Sin division no cambia nada.
+{
+  const tpl = fs.readFileSync(path.join(__dirname, "..", "..", "ticket_print.html"), "utf8");
+  const okRender =
+    renderer.includes("row.__splitHint = { orig: splitOrig, parts: splitParts };") &&
+    renderer.includes("splitView.qtyText)} x ${safe(eurTicket(effectiveUnitGross))} ÷ ${safe(splitView.parts)}") &&
+    renderer.includes("getSplitLineView({") &&
+    renderer.includes("`Cuenta dividida en ${splitParts} partes iguales`");
+  const okTpl = /id="splitInfoRow"[^>]*display: none/.test(tpl) && /id="splitInfo"/.test(tpl);
+  if (okRender && okTpl) ok("Ticket impreso de una parte dividida: cantidad original y precio dividido (2 x 1,60 ÷ 3) y 'Cuenta dividida en N partes iguales'; oculto fuera de una division");
+  else fail("Ticket impreso de una parte dividida: render=" + okRender + ", plantilla=" + okTpl);
 }
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");

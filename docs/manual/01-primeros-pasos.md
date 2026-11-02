@@ -4,6 +4,8 @@ Este capítulo explica lo que hay que hacer la primera vez que se enciende el TP
 
 > **Modo Mesas.** Si tu empresa tiene contratado el módulo de mesas (salas, comandas a cocina, app de camareros), se explica en un **manual aparte**. Aquí se cuenta todo lo demás, que es común a todos los TPV.
 
+> **Moneda.** Las capturas de este manual están hechas en euros. Si tu negocio trabaja en otra moneda (pesos colombianos, dólares…), el TPV muestra los importes en ella: es la divisa que tiene configurada tu FacturaScripts. Ver «Moneda» en el capítulo «Opciones».
+
 ## 1. Activar el TPV con el email de la empresa
 
 La primera vez que abres el programa en un equipo, te pide que lo actives.
@@ -67,6 +69,11 @@ Un administrador puede ocultar alguno de estos botones en **Opciones → Barra d
 ### La barra de agentes
 
 Si el terminal tiene **dos o más agentes**, sobre los productos aparece una fila con un botón por agente (con flechas ‹ › cuando no caben todos) para cambiar de agente con un solo toque. Si ese agente exige el PIN de administrador, se abre la ventana de cambio de agente para pedirlo. Con un solo agente (o ninguno) la barra no se muestra.
+
+@fig img/inicio-barra-agentes.png | crop=0,0,430,72 | width=50 | marks=1:77,58;2:200,58 | Barra de agentes.
+
+1. **Agente activo.** El que está en azul: a su nombre irán las ventas.
+2. **Otros agentes.** Un toque y pasas a ese agente.
 
 ## 4. Abrir la caja
 
