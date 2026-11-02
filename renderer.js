@@ -29,7 +29,8 @@
 // por defecto y produce EXACTAMENTE los mismos textos que antes. La moneda se lee al arrancar: cambiarla
 // pide reiniciar el TPV.
 const OPTIONS_CURRENCY_KEY = "ui.currencyCode"; // eleccion manual; vacio = automatica
-const OPTIONS_CURRENCY_AUTO_KEY = "ui.currencyAutoCode"; // ultima divisa de FacturaScripts conocida
+const OPTIONS_CURRENCY_AUTO_KEY = "ui.currencyAutoCode"; // codigo de la ultima divisa de FacturaScripts conocida
+const OPTIONS_CURRENCY_SPEC_KEY = "ui.currencyAutoSpec"; // sus datos completos (JSON): simbolo, decimales, separadores
 const CURRENCY_PRESETS = {
   EUR: {
     code: "EUR",
@@ -83,9 +84,20 @@ function fmtMoney(n, opts) {
 // miles ANTES de interpretar el texto. Con euros no cambia nada.
 function normalizeMoneyText(value) {
   const s = String(value ?? "").trim();
-  if (CURRENCY.decimals !== 0) return s;
-  const compact = s.replace(/[\s€$]/g, "");
-  return /^-?\d{1,3}([.,]\d{3})+$/.test(compact) ? compact.replace(/[.,]/g, "") : s;
+  if (CURRENCY.decimals === 0) {
+    const compact = s.split(CURRENCY.symbol).join("").replace(/[\s€$]/g, "");
+    return /^-?\d{1,3}([.,]\d{3})+$/.test(compact) ? compact.replace(/[.,]/g, "") : s;
+  }
+  if (CURRENCY.generic) {
+    // Moneda tomada de FacturaScripts (dolar, libra...): el resto del programa interpreta "1234,50" (coma decimal,
+    // sin miles), asi que el texto escrito o leido con el formato de la moneda se pasa a esa forma.
+    let t = s.split(CURRENCY.symbol).join("").replace(/\s/g, "");
+    const ts = CURRENCY.thousandsSep;
+    if (ts && ts.trim() && ts !== "." && ts !== ",") t = t.split(ts).join("");
+    if (CURRENCY.decSep === "." && /^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) t = t.replace(/,/g, "");
+    return CURRENCY.decSep === "." ? t.replace(".", ",") : t;
+  }
+  return s;
 }
 
 // Los billetes/monedas del recuento de caja y los simbolos fijos del HTML se adaptan a la moneda. Con euros no
@@ -132,18 +144,81 @@ function applyCurrencyToStaticUi() {
   }
 }
 
-// Divisa por defecto de la instalacion de FacturaScripts (settings/default -> coddivisa). Solo se devuelve si el
-// TPV conoce esa moneda; en cualquier otro caso (sin red, divisa sin preset) devuelve "".
-async function fetchFsDefaultCurrencyCode() {
+// Billetes y monedas del recuento de caja para una moneda sin lista propia: la serie del euro (1-2-5) escalada a
+// una potencia de 10 segun lo que vale la moneda frente al euro (tasaconv de FacturaScripts: unidades por euro).
+// No es exacta para cada pais, pero permite contar; las monedas que se usen de verdad se pueden afinar aparte.
+function buildGenericDenominations(decimals, ratePerEur) {
+  const r = Number(ratePerEur) > 0 ? Number(ratePerEur) : 1;
+  const scale = Math.pow(10, Math.max(0, Math.round(Math.log10(r))));
+  const min = decimals > 0 ? Math.pow(10, -decimals) : 1;
+  const sc = (v) => Number((v * scale).toFixed(2));
+  return {
+    coins: [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2].map(sc).filter((v) => v >= min - 1e-9),
+    bills: [5, 10, 20, 50, 100, 200, 500].map(sc),
+  };
+}
+
+// Convierte los datos de una divisa (los de FacturaScripts o los guardados) en el objeto de moneda del TPV. El
+// euro y el peso colombiano usan su ajuste propio; cualquier otra se monta con los datos recibidos. Devuelve null
+// si no hay un codigo de divisa utilizable.
+function resolveCurrencySpec(spec) {
+  const code = String(spec?.code || "").trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(code)) return null;
+  if (CURRENCY_PRESETS[code]) return CURRENCY_PRESETS[code];
+  const decimals = Math.min(2, Math.max(0, parseInt(spec.decimals, 10) || 0));
+  const decSep = spec.decSep === "." ? "." : ",";
+  let thousandsSep = typeof spec.thousandsSep === "string" ? spec.thousandsSep.slice(0, 1) : "";
+  if (thousandsSep === decSep) thousandsSep = "";
+  const symbol = String(spec.symbol || "").trim().slice(0, 4) || code;
+  const den = buildGenericDenominations(decimals, spec.rate);
+  return {
+    code,
+    symbol,
+    symbolBefore: spec.symbolBefore !== false,
+    decimals,
+    decSep,
+    thousandsSep,
+    coins: den.coins,
+    bills: den.bills,
+    generic: true,
+    rate: Number(spec.rate) > 0 ? Number(spec.rate) : 1,
+  };
+}
+
+function currencySignature(cur) {
+  return cur ? JSON.stringify([cur.code, cur.symbol, cur.symbolBefore, cur.decimals, cur.decSep, cur.thousandsSep]) : "";
+}
+
+// Datos de la divisa por defecto de la instalacion de FacturaScripts: codigo, posicion del simbolo, decimales y
+// separadores (settings/default) y simbolo y valor frente al euro (divisas/<codigo>). Devuelve null sin red o sin
+// datos; si solo falla la consulta del simbolo se usa el propio codigo (USD, CLP...).
+async function fetchFsCurrencySpec() {
   try {
     const cfg = window.RECIPOK_API;
-    if (!cfg || !cfg.baseUrl || !cfg.apiKey) return "";
+    if (!cfg || !cfg.baseUrl || !cfg.apiKey) return null;
     const row = await fetchApiResource("settings/default", { timeoutMs: 4000 });
     const props = JSON.parse(row?.properties || "{}") || {};
-    const c = String(props.coddivisa || "").trim().toUpperCase();
-    return CURRENCY_PRESETS[c] ? c : "";
+    const code = String(props.coddivisa || "").trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(code)) return null;
+    if (CURRENCY_PRESETS[code]) return { code };
+    let symbol = "";
+    let rate = 1;
+    try {
+      const d = await fetchApiResource(`divisas/${code}`, { timeoutMs: 4000 });
+      symbol = String(d?.simbolo || "").trim();
+      rate = Number(d?.tasaconv) > 0 ? Number(d.tasaconv) : 1;
+    } catch {}
+    return {
+      code,
+      symbol: symbol || code,
+      symbolBefore: String(props.currency_position || "left").toLowerCase() !== "right",
+      decimals: props.decimals,
+      decSep: props.decimal_separator,
+      thousandsSep: props.thousands_separator,
+      rate,
+    };
   } catch {
-    return "";
+    return null;
   }
 }
 
@@ -179,38 +254,48 @@ async function promptRestartForCurrency(reason, opts) {
 
 async function loadCurrencySetting() {
   let manual = "";
-  let cached = "";
+  let cachedSpec = null;
   try {
     const raw = String((await window.TPV_CFG?.get?.(OPTIONS_CURRENCY_KEY)) || "").trim().toUpperCase();
     manual = CURRENCY_PRESETS[raw] ? raw : "";
-    const rawAuto = String((await window.TPV_CFG?.get?.(OPTIONS_CURRENCY_AUTO_KEY)) || "").trim().toUpperCase();
-    cached = CURRENCY_PRESETS[rawAuto] ? rawAuto : "";
-  } catch {}
-  let code = manual || cached || "EUR";
+    const rawSpec = await window.TPV_CFG?.get?.(OPTIONS_CURRENCY_SPEC_KEY);
+    if (rawSpec) cachedSpec = typeof rawSpec === "string" ? JSON.parse(rawSpec) : rawSpec;
+    // Versiones anteriores solo guardaban el codigo (euro/peso).
+    if (!cachedSpec) {
+      const rawAuto = await window.TPV_CFG?.get?.(OPTIONS_CURRENCY_AUTO_KEY);
+      if (rawAuto) cachedSpec = { code: rawAuto };
+    }
+  } catch {
+    cachedSpec = null;
+  }
+  const cached = resolveCurrencySpec(cachedSpec);
+  let cur = CURRENCY_PRESETS[manual] || cached || CURRENCY_PRESETS.EUR;
   if (!manual) {
     // Automatica: la primera vez (sin dato guardado) se espera a FacturaScripts un momento para arrancar ya con
     // la moneda buena; despues se usa lo guardado y se vuelve a comprobar en segundo plano.
     const refresh = async () => {
-      const fs = await fetchFsDefaultCurrencyCode();
-      if (fs && fs !== cached) {
+      const spec = await fetchFsCurrencySpec();
+      const fsCur = resolveCurrencySpec(spec);
+      if (fsCur && currencySignature(fsCur) !== currencySignature(cached)) {
         try {
-          await window.TPV_CFG?.set?.(OPTIONS_CURRENCY_AUTO_KEY, fs);
+          await window.TPV_CFG?.set?.(OPTIONS_CURRENCY_SPEC_KEY, JSON.stringify(spec));
+          await window.TPV_CFG?.set?.(OPTIONS_CURRENCY_AUTO_KEY, fsCur.code);
         } catch {}
       }
-      return fs;
+      return fsCur;
     };
     if (!cached) {
-      const fs = await refresh();
-      if (fs) code = fs;
+      const fsCur = await refresh();
+      if (fsCur) cur = fsCur;
     } else {
-      refresh().then((fs) => {
-        if (fs && fs !== CURRENCY.code) {
-          promptRestartForCurrency(`La divisa de FacturaScripts ahora es ${fs}.`, { waitIdle: true });
+      refresh().then((fsCur) => {
+        if (fsCur && currencySignature(fsCur) !== currencySignature(CURRENCY)) {
+          promptRestartForCurrency(`La divisa de FacturaScripts ahora es ${fsCur.code} (${fsCur.symbol}).`, { waitIdle: true });
         }
       });
     }
   }
-  CURRENCY = CURRENCY_PRESETS[code];
+  CURRENCY = cur;
   const sel = document.getElementById("currencySelect");
   if (sel) sel.value = manual;
   applyCurrencyToStaticUi();

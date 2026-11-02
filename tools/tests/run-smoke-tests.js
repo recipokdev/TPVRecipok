@@ -11328,10 +11328,37 @@ if (
     const hardcoded = renderer.match(/\.toFixed\(2\)\.replace\("\.", ","\) \+ " €"/g) || [];
     if (hardcoded.length === 0 && /id="currencySelect"/.test(fs.readFileSync(path.join(__dirname, "..", "..", "index.html"), "utf8"))) {
       ok("Moneda: ya no queda ningun importe con el simbolo € escrito a mano en renderer.js y existe el selector de Moneda en Opciones");
-      if (/settings\/default/.test(renderer) && /fetchFsDefaultCurrencyCode/.test(renderer) && /OPTIONS_CURRENCY_AUTO_KEY/.test(renderer)) {
-        ok("Moneda: en modo automatico se lee la divisa por defecto de FacturaScripts (settings/default)");
+      if (/settings\/default/.test(renderer) && /fetchFsCurrencySpec/.test(renderer) && /OPTIONS_CURRENCY_SPEC_KEY/.test(renderer) && /divisas\/\$\{code\}/.test(renderer)) {
+        ok("Moneda: en modo automatico se lee la divisa por defecto de FacturaScripts (settings/default + divisas/<codigo>)");
       } else {
-        fail("Moneda automatica: falta la lectura de settings/default (fetchFsDefaultCurrencyCode)");
+        fail("Moneda automatica: falta la lectura de settings/default y divisas (fetchFsCurrencySpec)");
+      }
+      {
+        // Cualquier divisa de FacturaScripts se monta con sus datos (simbolo, decimales, separadores).
+        const vm2 = require("vm");
+        const a2 = renderer.indexOf("// ===== Moneda (2026-10-30) =====");
+        const b2 = renderer.indexOf("// ===== [01] Datos de ejemplo");
+        const code2 = renderer.slice(a2, b2).replace(/^const /gm, "var ").replace(/^let /gm, "var ");
+        const ctx2 = { window: {}, document: { getElementById: () => null, querySelectorAll: () => [] }, toast() {}, console };
+        vm2.createContext(ctx2);
+        vm2.runInContext(code2 + "\nthis.__g={fmtMoney,normalizeMoneyText,resolveCurrencySpec,set(c){CURRENCY=c},eur:CURRENCY_PRESETS.EUR};", ctx2);
+        const g = ctx2.__g;
+        const usd = g.resolveCurrencySpec({ code: "USD", symbol: "$", symbolBefore: true, decimals: "2", decSep: ".", thousandsSep: ",", rate: 1.129 });
+        const clp = g.resolveCurrencySpec({ code: "CLP", symbol: "CLP$", symbolBefore: true, decimals: "0", decSep: ",", thousandsSep: ".", rate: 704 });
+        const sek = g.resolveCurrencySpec({ code: "SEK", symbol: "kr", symbolBefore: false, decimals: 2, decSep: ",", thousandsSep: " ", rate: 11 });
+        g.set(usd);
+        const usdOk = g.fmtMoney(1234.5) === "$ 1,234.50" && g.normalizeMoneyText("$ 1,234.50") === "1234,50" && g.normalizeMoneyText("2.5") === "2,5" && g.normalizeMoneyText("2,5") === "2,5";
+        g.set(clp);
+        const clpOk = g.fmtMoney(18000) === "CLP$ 18.000" && g.normalizeMoneyText("CLP$ 18.000") === "18000";
+        g.set(sek);
+        const sekOk = g.fmtMoney(1234.5) === "1 234,50 kr" && g.normalizeMoneyText("1 234,50 kr") === "1234,50";
+        g.set(g.eur);
+        const denOk = JSON.stringify(usd.coins) === "[0.01,0.02,0.05,0.1,0.2,0.5,1,2]" && usd.bills.length === 7 && clp.coins[0] === 10 && g.resolveCurrencySpec({ code: "xx" }) === null && g.resolveCurrencySpec({ code: "eur" }) === g.eur;
+        if (usdOk && clpOk && sekOk && denOk) {
+          ok("Moneda: una divisa cualquiera de FacturaScripts (USD, CLP, SEK...) se monta con sus datos: formato, importes escritos y billetes/monedas del recuento");
+        } else {
+          fail("Moneda generica de FacturaScripts: usd=" + usdOk + ", clp=" + clpOk + ", sek=" + sekOk + ", denominaciones=" + denOk);
+        }
       }
     } else {
       fail("Quedan " + hardcoded.length + " importes con el simbolo € escrito a mano (usar fmtMoney) o falta el selector #currencySelect");
