@@ -4,6 +4,8 @@ Fecha: 2026-10-29 (actualizado el mismo día con las pantallas y, por la noche, 
 
 **Decisiones del jefe (29-oct, 19:02):** (1) el IVA no se tiene en cuenta en el anticipo: no genera factura hasta que se liquida el total; (2) el módulo se puede **activar o desactivar**, **desactivado por defecto**, con un **aviso especial (popup) de la novedad**, y hay que enviar un correo a los usuarios con TPV para que lo sepan; (3) se llamará **«Encargos»**; (4) el encargo **debe poder editarse desde la primera versión**.
 
+**Decisiones del jefe (2-nov):** (5) **anticipo que nunca se recoge ni se devuelve:** se contabiliza como **una venta con descuento por el restante**, para que cuadre en la facturación (apartado 3e); (6) debe existir la opción de **anular el encargo y reversar o devolver el dinero**; (7) **editar a la baja:** lo pagado a cuenta **no se toca**, salvo que el cobro aún no se haya realizado; no se puede devolver dinero si la modificación ocurre tiempo después (apartado 3d); (8) los primeros clientes son **a_reciplus y/o la demo**; (9) **OK para añadir tablas y acciones nuevas en el servidor compartido** (solo añadidos, con copia de seguridad antes, pruebas solo en la demo y nunca con datos de clientes reales; el esquema se enseña antes de crear nada, ver el apéndice «Esquema propuesto»).
+
 **Nombre en pantalla:** **«Encargos»** (confirmado por el jefe) y no «Pedidos»: en Modo Mesas el botón de aparcados ya se llama «Pedidos», y un restaurante con Modo Mesas tendría dos cosas con el mismo nombre. En este documento, «pedido» y «encargo» son lo mismo.
 
 ## 1. Qué se quiere (resumen de la especificación)
@@ -94,12 +96,21 @@ Detalles que se han decidido sobre la marcha (a confirmar):
 
 **Qué pasa con el dinero al editar:**
 - Total nuevo **mayor** que lo cobrado: simplemente «falta por cobrar» sube. Se puede cobrar otro anticipo.
-- Total nuevo **menor** que lo ya cobrado (por ejemplo, anticipo de 50 € y el encargo baja a 40 €): el programa lo avisa y obliga a **registrar la devolución de la diferencia** (10 €, con su forma de pago) antes de guardar. Sale en el cierre como «anticipos devueltos», igual que una cancelación.
+- Total nuevo **menor** que lo ya cobrado (por ejemplo, anticipo de 50 € y el encargo baja a 40 €): **decisión del jefe (2-nov): lo pagado a cuenta no se toca** y no se devuelve dinero al editar, porque la edición puede ocurrir días después. Por eso **un encargo con anticipo cobrado no puede bajar de lo ya cobrado**: el programa lo impide con el mensaje «No se puede bajar de lo ya cobrado (50 €). Si el cliente quiere menos, cancela el encargo (con devolución) y crea otro». Si **todavía no se ha cobrado ningún anticipo** (anticipo 0), el encargo se edita libremente, sin esa restricción. *(Esta es mi lectura de la respuesta del jefe; queda pendiente de confirmar.)*
 - Se anota quién lo editó y cuándo. El resguardo se **reimprime marcado como «MODIFICADO»**, y el anterior deja de valer.
 
 **Dos terminales a la vez:** cada encargo lleva un número de versión. Si alguien lo edita o lo recoge mientras otro lo está editando, el que guarda después recibe «este encargo ha cambiado, revísalo» y ve la versión nueva (el mismo mecanismo que ya usan los aparcados). Mientras se recoge, queda bloqueado para editar.
 
 **Coste:** añade aproximadamente 1-2 días a la fase de crear el encargo (apartado 10).
+
+## 3e. Si el cliente no recoge y no pide la devolución (decisión del jefe, 2-nov)
+
+**Dos salidas desde el detalle del encargo** (solo «Falta recoger»):
+
+1. **Cancelar el encargo (devolver o reversar el dinero).** Pide, para cada anticipo cobrado, devolverlo con su forma de pago (efectivo: se devuelve al cliente; tarjeta o transferencia: se **reversa** la operación). Cada devolución queda registrada con su forma de pago y sale en el cierre de la caja del día de la devolución como «anticipos devueltos». El pedido de FacturaScripts se cancela y libera la reserva.
+2. **Cerrar sin recoger (facturar lo anticipado).** Si el cliente no vuelve y no se le devuelve nada, el encargo se contabiliza como **una venta con descuento por el restante**: se emite **una factura con las líneas del encargo y un descuento general tal que el total sea exactamente lo anticipado** (ejemplo: encargo de 150 €, anticipo de 50 € → factura de 50 €, con un descuento del 66,67 % sobre las líneas). Así lo cobrado queda en facturación y la caja cuadra. Se hace con una acción **manual** del cajero o administrador (nunca automática por el paso de los días), con confirmación. El encargo pasa a «Cerrado sin recoger» y se anota quién y cuándo.
+
+**Se asume, salvo que digáis lo contrario:** la factura de «Cerrar sin recoger» se emite como una venta normal, y por tanto **descuenta stock** al crearse; el anticipo ya cobrado figura como su pago (marcado «anticipo, ya cobrado el día X»), igual que al recoger.
 
 ## 4. Qué guarda cada sitio
 
@@ -119,7 +130,7 @@ Detalles que se han decidido sobre la marcha (a confirmar):
   - Al «Total esperado en caja» solo entra el **efectivo** de los encargos (anticipos y restos en efectivo, menos devoluciones). Tarjeta y transferencia aparecen en el bloque, pero no suman al efectivo del cajón. En el resumen superior hay una celda nueva, «Cobros efectivo encargos», junto a la de ventas.
   - **Para cuadrar con las facturas del día:** el bloque dice cuántos encargos se recogieron hoy, su importe facturado y cuánto de eso ya se cobró en días anteriores (los anticipos previos, marcados en sus recibos). Y cuántos encargos siguen pendientes, con cuánto dinero ya cobrado en anticipos.
   - **Total cobrado hoy** = ventas + encargos (en el ejemplo, 133,12 € + 218,20 € = 351,32 €). Puede no coincidir con lo facturado del día, porque los anticipos de encargos aún sin recoger se cobran pero no se facturan.
-- Cancelación: según la opción de cada empresa, se devuelve el anticipo (queda como devolución en la caja del día de la devolución) o se retiene (ver preguntas abiertas).
+- Cancelación (decisión del jefe, 2-nov): al cancelar se devuelve o reversa cada anticipo con su forma de pago (queda como devolución en la caja del día de la devolución). Si el cliente no vuelve y no se le devuelve nada, se usa «Cerrar sin recoger» (apartado 3e): una venta con descuento por el restante, para que cuadre en facturación.
 
 ## 6. Alternativas valoradas y por qué no
 
@@ -156,11 +167,15 @@ La opción B es la ruta de mejora si la gestoría exige factura del anticipo. Lo
 
 **Respondidas:** IVA/factura del anticipo (no se tiene en cuenta), disponibilidad (activable, apagada por defecto, con popup), nombre («Encargos») y edición (sí, desde la primera versión) el 29-oct; ubicación del botón (opción 2 con Vaciar y Encargos intercambiados) el 30-oct.
 
+**Respondidas el 2-nov** (ver el resumen al principio y los apartados 3d y 3e):
+1. Anticipo que no se devuelve: **venta con descuento por el restante** (opción «Cerrar sin recoger») y opción de anular y reversar/devolver.
+2. Editar a la baja: **lo pagado a cuenta no se toca**; no se devuelve dinero al editar. Se implementa como «no se puede bajar de lo ya cobrado».
+3. Primeros clientes: **a_reciplus y/o la demo.**
+4. **OK para las tablas y acciones nuevas del servidor** (solo añadidos).
+
 **Siguen abiertas:**
-1. **Anticipo que no se devuelve (encargo cancelado):** ¿cómo se contabiliza? Opciones: (a) queda como ingreso de la caja del día de la cancelación, con su justificante; (b) se emite una factura por ese concepto. Depende de la gestoría. (Mientras no se decida, la primera versión solo permite devolver el anticipo al cancelar.)
-2. Si al editar el encargo el total baja por debajo de lo cobrado, ¿vale obligar a registrar la devolución de la diferencia (apartado 3d)?
-3. ¿Qué clientes lo activan primero en real? Los Argentinos parecen el caso natural.
-4. **Popup de la novedad:** el texto lo preparamos nosotros para que lo reviséis; conviene que el correo a los usuarios diga lo mismo.
+1. **Popup de la novedad:** el texto lo preparamos nosotros para que lo reviséis; conviene que el correo a los usuarios diga lo mismo.
+2. **Confirmar mis lecturas** de las respuestas del 2-nov: (a) «reversar» = devolver una operación de tarjeta o transferencia, y «devolver» = dar el dinero (en la práctica, el mismo registro de devolución con su forma de pago); (b) editar a la baja se **impide** por debajo de lo cobrado; (c) «Cerrar sin recoger» es una acción manual y la factura descuenta stock.
 
 **Se asume, salvo que digáis lo contrario:** se puede crear un encargo **sin anticipo**; el **cliente de la factura** es por defecto el del carrito («Ventas tickets») y se puede cambiar; «cierre» = **cierre de caja**; la recogida es **todo o nada**; la primera versión **necesita conexión**.
 
@@ -193,3 +208,63 @@ Tamaños aproximados: S ≈ medio día, M ≈ 1-2 días, L ≈ 2-3 días de trab
 - Botones nuevos: «Encargos» va en la botonera inferior (`#cartActionGrid` de `index.html`, con sus reglas en `styles.css`; hoy la rejilla es Vaciar/Tickets, Aparcar/Aparcados y Cobrar a dos filas). Con la opción activada, la rejilla pasa a la distribución elegida (Encargos arriba a la izquierda, Vaciar pequeño junto a Tickets), con una clase en `#cartActionGrid` para que apagada no cambie nada (ojo: en Modo Mesas «Aparcados» se llama «Pedidos» y hay un botón `#preprintTicketBtn` que a veces se oculta, hay que probar las dos combinaciones). «Pasar a encargo» va en la cabecera del carrito; los dos visibles solo con la opción activada. La ventana de la lista sigue el patrón de las demás (`simple-overlay` > `parked-modal`); el asistente de dos páginas (datos y anticipo) y el detalle de recoger son modales aparte. La lista y el contador se refrescan con el tema de tiempo real `customer-orders`.
 - Crear + anticipo, una sola acción de servidor (atómica y repetible con un código único): `create-customer-order` con el anticipo dentro. Mismo patrón de acciones con `SELECT … FOR UPDATE` que el guardado de aparcados.
 - Un hallazgo menor: `createReciboCliente` lee `fechaPago` (con P mayúscula) mientras que los llamadores pasan `fechapago`, así que la fecha de pago nunca llega a FacturaScripts. Para los anticipos (recibo con la fecha del día 11) hay que corregirlo.
+
+---
+
+## Esquema propuesto para el servidor (PROPUESTA, sin aplicar)
+
+Fecha: 2026-11-02. Solo **añadidos**: dos tablas nuevas y acciones nuevas. No se cambia ninguna tabla ni acción existente. Las tablas se crean solas al primer uso (`CREATE TABLE IF NOT EXISTS`), como `parked_mesa_viewers` o `parked_ops_applied`, en la misma base de datos que ya usan los aparcados (`getParkedDbConnection`).
+
+### Tabla `customer_orders` (un encargo)
+
+| Campo | Para qué |
+|---|---|
+| `id` (clave) | Número interno |
+| `slug`, `codalmacen` | Empresa y tienda (aislamiento por tienda, como las mesas) |
+| `order_code` | Código único y repetible (va también en `numero2` del pedido de FacturaScripts); con `slug` es único, así un reintento nunca duplica |
+| `status` | `pendiente` (falta recoger), `recogido`, `cancelado`, `cerrado_sin_recoger` |
+| `version` | Número de versión para el control de conflictos entre terminales |
+| `customer_name`, `customer_phone`, `notes`, `pickup_at` | Nombre, teléfono (opcional), dedicatoria/observación y día y hora de recogida |
+| `codcliente` | Cliente de la factura |
+| `total` | Total del encargo |
+| `fs_idpedido`, `fs_codigo` | Pedido vigente en FacturaScripts (al editar cambia: se crea uno nuevo y se cancela el anterior) |
+| `fs_idfactura`, `fs_factura_codigo` | Factura generada al recoger o al cerrar sin recoger |
+| `lines_json` | Copia de las líneas (para imprimir y para reconstruir si FacturaScripts fallara) |
+| `created_by`, `created_caja`, `created_at_ms`, `updated_by`, `updated_at_ms` | Quién y cuándo (se anota cada edición) |
+| `lock_session`, `lock_until_ms` | Candado mientras se recoge (nadie lo edita ni lo recoge a la vez) |
+| `closed_by`, `closed_at_ms`, `close_note` | Quién y cuándo se cerró, cancelado o recogido, y la nota |
+
+### Tabla `customer_order_moves` (el dinero de cada encargo)
+
+| Campo | Para qué |
+|---|---|
+| `id` (clave), `order_id`, `slug` | Qué encargo |
+| `kind` | `anticipo` (entra dinero), `resto` (entra al recoger), `devolucion` (sale dinero; incluye reversar una operación de tarjeta o transferencia) |
+| `op_code` | Código único y repetible de la operación (con `slug` es único: un reintento no duplica el cobro) |
+| `amount`, `codpago` | Importe (siempre positivo) y forma de pago |
+| `caja_id`, `idtpv`, `agent_name`, `created_at_ms` | En qué caja, terminal, quién y cuándo (el dinero cuenta en la caja del día en que se mueve) |
+| `applied_idfactura` | Factura a la que se ha aplicado ese anticipo (al recoger o cerrar sin recoger); sirve para marcarlo «anticipo, ya cobrado el día X» y no contarlo dos veces en el cierre |
+| `note` | Nota libre |
+
+Índices: `(slug, order_code)` único; `(slug, codalmacen, status, pickup_at)` para la lista; `(slug, order_id)` y `(slug, caja_id, kind)` para el cierre de caja.
+
+### Acciones nuevas (todas con control de empresa, de tienda y repetibles sin duplicar)
+
+| Acción | Qué hace |
+|---|---|
+| `list-customer-orders`, `get-customer-order` | Lista (por estado, día, buscador) y detalle |
+| `create-customer-order` | Crea el pedido en FacturaScripts, guarda el encargo y registra el anticipo, **en una sola operación** |
+| `update-customer-order` | Edita (versión esperada): crea el pedido nuevo y cancela el anterior; **impide bajar de lo ya cobrado** |
+| `add-customer-order-advance` | Otro anticipo |
+| `cancel-customer-order` | Cancela y registra las devoluciones/reversos por forma de pago; cancela el pedido en FacturaScripts |
+| `lock-customer-order-pickup` / `unlock-…` | Candado de recogida |
+| `complete-customer-order-pickup` | Registra el resto, aplica los anticipos a la factura y marca «recogido» |
+| `close-customer-order-unclaimed` | «Cerrar sin recoger»: factura por lo anticipado (venta con descuento por el restante) y marca `cerrado_sin_recoger` |
+| `customer-orders-cash-summary` | Para el cierre de caja: anticipos, restos y devoluciones por forma de pago |
+
+### Seguridad del despliegue
+
+- **Solo pilotos:** una lista `customer_orders_pilot_slugs` en `config.php` con **`demo` y `a_reciplus`** (los primeros según el jefe). Para cualquier otra empresa las acciones responden «desactivado» sin tocar nada, aunque un TPV más nuevo las llamara. Es el mismo patrón que `mesa_draft_pilot_slugs` o `realtime_pilot_slugs`.
+- **Antes de tocar nada:** copia de `index.php` y `config.php` (`.bak-encargos-<fecha>`), `php -l` de cada fichero, y las tablas nuevas se crean vacías (no hay datos que respaldar).
+- **Pruebas solo en la demo**, con dos terminales reales, y todo lo creado se borra después con comprobación. Nunca datos de clientes reales. Activar en `a_reciplus` es un paso aparte, con aviso previo.
+- **El TPV:** la opción «Encargos» sigue apagada por defecto; con ella apagada no cambia nada en pantalla.
