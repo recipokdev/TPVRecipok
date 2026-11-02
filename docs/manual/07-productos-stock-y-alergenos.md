@@ -25,6 +25,14 @@ Si tu catálogo es grande, activa **Familias primero** (**Opciones → Productos
 ### Qué familias se ven
 En **Opciones → Terminales** puedes elegir qué familias se ven en cada terminal (y su color e icono). Con **Mostrar todos los productos** un terminal enseña todo aunque haya familias desmarcadas.
 
+@fig img/productos-familias-visibilidad.png | crop=470,131,980,755 | width=70 | marks=1:1148,229;2:1391,309;3:912,457;4:817,457;5:1390,845 | Ventana «Familias: visibilidad, color e icono».
+
+1. **Terminal / tablet.** Elige qué terminal o qué tablet de camarero configuras.
+2. **Mostrar todos los productos.** Ese terminal enseña todo, aunque haya familias desmarcadas.
+3. **Interruptor de cada familia.** Verde = se ve en ese terminal; apagado = se oculta.
+4. **Icono y color** de la familia (los dos recuadros junto al interruptor).
+5. **Guardar** aplica los cambios.
+
 ### Tamaño de los botones
 - **Modo redimensionar productos** muestra dos asas sobre cada tarjeta: una (abajo a la derecha) cambia el tamaño de la tarjeta y otra («Aa», abajo a la izquierda) cambia el tamaño de letra del nombre. El cambio se ve al momento y afecta a todos los productos.
 - **Restablecer tamaño de productos** y **Restablecer tamaño de letra** devuelven los valores recomendados.
@@ -100,3 +108,13 @@ Al pulsar un alérgeno se abre la lista de productos:
 
 - **Descuentos manuales en carrito** (**Opciones → Carrito**) permite aplicar un descuento a una línea o a todo el carrito. En **Accesos rápidos de descuento (%)** defines hasta 5 porcentajes de un solo toque.
 - **Tarifas** (**Opciones → Tarifas**) permiten tener precios o descuentos distintos según el cliente: creas la tarifa, eliges los clientes que la usan y puedes impedir vender por debajo del coste o por encima del PVP.
+
+Cuando eliges un cliente con tarifa, el carrito lo señala y aplica el precio sin que tengas que hacer nada:
+
+@fig img/vender-tarifa-carrito.png | crop=1410,60,500,260 | marks=1:1752,84;2:1836,139;3:1530,166 | Cliente con una tarifa del −15 %.
+
+1. **Etiqueta de la tarifa** junto al nombre del cliente («Tarifa: −15%»).
+2. **Precio normal tachado** y, debajo, el precio ya con la tarifa.
+3. **Etiqueta con el porcentaje** aplicado en esa línea.
+
+El total del carrito ya lleva la tarifa. Si cambias de cliente, el carrito recalcula los precios con la tarifa del nuevo cliente.

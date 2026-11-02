@@ -65,7 +65,21 @@ Un administrador debe activar **Opciones → Carrito → Descuentos manuales en 
 
 ### Ofertas y packs
 
-Las **ofertas** (por ejemplo «3x1» o un menú) se ven distintas de un producto normal. Al tocarlas se abre una ventana con sus componentes, donde puedes marcar cuáles lleva el cliente y cuántas unidades (**−**, **+** y **↺** para volver al valor inicial), con **Marcar todo** y **Desmarcar todo**. En el carrito la oferta aparece como una línea principal con su lápiz **✎** («Editar oferta») y sus componentes debajo, sin precio. En la información de un ticket los componentes se ven como «↳ … incluido».
+Las **ofertas** (por ejemplo «3x2» o un menú) se ven distintas de un producto normal: su tarjeta es **naranja**. Al tocarla se abre una ventana con sus componentes.
+
+@fig img/vender-oferta-ventana.png | crop=600,290,720,437 | width=66 | marks=1:640,446;2:1210,446;3:1107,446;4:1091,380;5:1256,696 | Ventana de una oferta.
+
+1. **Casilla.** Marca si el cliente se lleva ese componente.
+2. **− / +** y el número: las unidades de ese componente.
+3. **↺** devuelve las unidades al valor inicial de la oferta.
+4. **Marcar todo** y **Desmarcar todo** (a su izquierda).
+5. **Confirmar** añade la oferta al carrito; **Cancelar** sale sin añadir nada.
+
+En el carrito la oferta aparece como **una sola línea** con su nombre y su lápiz **✎** («Editar oferta»), y debajo una frase «Incluye: …» con los componentes y sus unidades. El precio es el de la oferta.
+
+@fig img/vender-oferta-carrito.png | crop=1410,100,500,110 | marks=1:1528,134;2:1450,160 | Una oferta en el carrito.
+
+En la información de un ticket los componentes se ven como «↳ … incluido».
 
 ### Lector de códigos de barras
 
