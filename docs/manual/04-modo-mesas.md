@@ -164,15 +164,17 @@ Se puede dividir en **2 a 12 partes**. Cada parte pasa a ser un pedido de esa mi
 
 Una vez dividido, la cabecera permite moverte entre las partes («Parte n/m») con las flechas.
 
-@fig img/mesas-dividido-partes.png | crop=1410,100,500,160 | marks=1:1445,226;2:1515,226;3:1581,226;4:1664,226 | Cabecera del pedido ya dividido.
+@fig img/mesas-dividido-partes.png | crop=1410,100,500,720 | width=70 | marks=1:1445,226;2:1515,226;3:1581,226;4:1698,226;5:1747,322;6:1560,771;7:1650,801 | Pedido ya dividido: la parte 1 de 3.
 
 1. **←** pasa a la parte anterior.
 2. **«Ticket: Parte 1/3».** La parte que tienes abierta y cuántas hay.
 3. **→** pasa a la parte siguiente.
 4. **Dividir** vuelve a abrir la ventana, por ejemplo para **Revertir división**.
+5. **Cantidad en fracción.** En el modo igualitario, cada cuenta lleva una fracción de cada línea: «2/3» de los dos cafés, «1/3» del croissant… Es solo la forma de mostrarlo: por debajo la cantidad es exacta y cuenta bien para el stock y la factura. Una línea de 3 unidades dividida entre 3 queda en «1».
+6. **Tu parte (1/3).** El total grande es lo que paga **esta cuenta**.
+7. **Mesa completa / Por cobrar.** Debajo, el total de **toda la mesa** (todas las partes) y lo que queda **por cobrar**, que baja al cobrar cada parte.
 
-En el modo igualitario las cantidades de cada línea salen en decimales (aprox. 0,3333 de cada producto con 3 partes) y el total del carrito es el de esa parte. Si reviertes la división, las cantidades vuelven a ser exactamente las del pedido original.
- Si te equivocas, vuelve a abrir **Dividir** y usa **Revertir división** (equivale a poner *Partes = 1*): junta todas las partes en un único ticket.
+Si te equivocas, vuelve a abrir **Dividir** y usa **Revertir división** (equivale a poner *Partes = 1*): junta todas las partes en un único ticket, con las cantidades exactamente como estaban en el pedido original.
 
 ## 6. Cambiar o juntar mesas
 

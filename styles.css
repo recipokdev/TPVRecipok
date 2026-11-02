@@ -3055,6 +3055,23 @@ body.theme-dark .cart-line-kitchen-note {
   font-weight: 600;
 }
 
+/* Pedido dividido en partes: total de la mesa y lo que falta por cobrar (debajo del total de la parte) */
+.cart-split-totals-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+}
+
+body.theme-dark .cart-split-totals-row {
+  color: #cbd5e1;
+}
+
 /* --- 2.5 Botones carrito --- */
 
 .cart-btn {

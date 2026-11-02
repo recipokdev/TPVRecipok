@@ -11414,6 +11414,35 @@ if (
   }
 }
 
+// Cantidades de una division igualitaria como fracciones (2026-11-02): "2/3" y "1/3" en vez de 0,6667 / 0,3333,
+// solo en lineas con meta.splitOrigQty entera; el resto (p. ej. 0,5 kg de bascula) sigue igual. Y el total de la
+// mesa (todas las partes) y lo que falta por cobrar se ven junto al total de la parte.
+{
+  const vm = require("vm");
+  const extractFn = (name) => {
+    const i = renderer.indexOf("function " + name + "(");
+    if (i < 0) return "";
+    let depth = 0;
+    let started = false;
+    for (let j = renderer.indexOf("{", i); j < renderer.length; j += 1) {
+      const ch = renderer[j];
+      if (ch === "{") { depth += 1; started = true; }
+      if (ch === "}") depth -= 1;
+      if (started && depth === 0) return renderer.slice(i, j + 1);
+    }
+    return "";
+  };
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext(extractFn("fmtQty") + "\n" + extractFn("fmtQtyLine"), ctx);
+  const t = (q, orig) => ctx.fmtQtyLine({ qty: q, meta: orig == null ? undefined : { splitOrigQty: orig } });
+  const okFrac = t(0.3333, 1) === "1/3" && t(0.6667, 2) === "2/3" && t(1.0001, 3) === "1" && t(0.5, 1) === "1/2" && t(0.3349, 1) === "1/3";
+  const okPlano = t(0.5) === "0,5" && t(0.3333) === "0,3333" && t(0.1167, 0.35) === "0,1167";
+  const htmlOk = /id="splitMesaTotalsRow"/.test(fs.readFileSync(path.join(__dirname, "..", "..", "index.html"), "utf8")) && /function refreshSplitMesaTotals/.test(renderer) && /fmtQtyLine\(item\)/.test(renderer);
+  if (okFrac && okPlano && htmlOk) ok("Dividir igualitario: las cantidades salen como fraccion (1/3, 2/3) solo en lineas divididas, y el carrito muestra el total de la mesa y lo que falta por cobrar");
+  else fail("Fracciones/total de mesa al dividir: fracciones=" + okFrac + ", resto sin cambios=" + okPlano + ", html/render=" + htmlOk);
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

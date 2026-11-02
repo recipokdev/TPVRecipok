@@ -15929,6 +15929,70 @@ function fmtQty(q) {
   return n.toLocaleString("es-ES", { maximumFractionDigits: 6 });
 }
 
+// Pedido dividido en partes: el total del carrito es el de TU parte; debajo se ve el total de la mesa (todas las
+// partes) y lo que falta por cobrar. Fuera de una division la fila no se muestra y el rotulo vuelve a "Total".
+function refreshSplitMesaTotals(cartItems) {
+  const label = document.getElementById("cartTotalLabel");
+  const row = document.getElementById("splitMesaTotalsRow");
+  const allEl = document.getElementById("splitMesaTotalsAll");
+  const pendEl = document.getElementById("splitMesaTotalsPending");
+  if (!label || !row || !allEl || !pendEl) return;
+
+  const hide = () => {
+    label.textContent = "Total";
+    row.classList.add("hidden");
+  };
+
+  try {
+    const loaded =
+      typeof getCurrentLoadedParkedTicket === "function"
+        ? getCurrentLoadedParkedTicket()
+        : null;
+    const meta = loaded ? getTicketSplitMeta(loaded) : null;
+    if (!meta) return hide();
+
+    const group = (Array.isArray(parkedTickets) ? parkedTickets : []).filter(
+      (t) => getTicketSplitMeta(t)?.groupId === meta.groupId,
+    );
+    if (group.length < 2) return hide();
+
+    const currentTotal = getCartTotal(cartItems);
+    let all = 0;
+    let pending = 0;
+    group.forEach((t) => {
+      const isCurrent = String(t?.id || "") === String(loaded?.id || "");
+      const total = isCurrent ? currentTotal : Number(t?.total || 0) || 0;
+      all += total;
+      if (!t?.paid) pending += total;
+    });
+
+    label.textContent = `Tu parte (${meta.part}/${meta.total})`;
+    allEl.textContent = `Mesa completa: ${eur(round2(all))}`;
+    pendEl.textContent = `Por cobrar: ${eur(round2(pending))}`;
+    row.classList.remove("hidden");
+  } catch {
+    hide();
+  }
+}
+
+// Cantidad de una linea que viene de dividir la cuenta en partes iguales (lleva meta.splitOrigQty): se pinta como
+// fraccion (1/3, 2/3) o como entero en vez de 0,3333 / 1,0001. Solo es presentacion: la cantidad real (la que
+// cuenta para stock y factura) no cambia, y el resto de lineas (p. ej. 0,5 kg de bascula) se muestran igual.
+function fmtQtyLine(item) {
+  const q = Number(item?.qty);
+  const orig = Number(item?.meta?.splitOrigQty);
+  // solo si el pedido original llevaba unidades enteras (con 0,35 kg dividido en 3 una fraccion confundiria)
+  if (isFinite(q) && q > 0 && isFinite(orig) && Math.abs(orig - Math.round(orig)) < 1e-9) {
+    const entero = Math.round(q);
+    if (entero > 0 && Math.abs(q - entero) <= 0.006) return String(entero);
+    for (let den = 2; den <= 12; den += 1) {
+      const num = Math.round(q * den);
+      if (num > 0 && Math.abs(q - num / den) <= 0.006) return `${num}/${den}`;
+    }
+  }
+  return fmtQty(item?.qty);
+}
+
 function buildPackIncludesTextFromChildren(cartArr, parentLineId) {
   const children = (Array.isArray(cartArr) ? cartArr : []).filter(
     (x) =>
@@ -16860,13 +16924,13 @@ function renderCart() {
 
         ${buildCartLineMiniLegend(pricing)}
 
-        <div class="cart-line-unit">${fmtQty(item.qty)} x ${unitTxt}</div>
+        <div class="cart-line-unit">${fmtQtyLine(item)} x ${unitTxt}</div>
       </div>
 
       <div class="qty-controls">
         <button class="qty-btn" data-action="minus" data-lineid="${item._lineId}">-</button>
         <button type="button" class="qty-display qty-display-btn qty-btn" data-action="edit" data-lineid="${item._lineId}">
-          ${fmtQty(item.qty)}
+          ${fmtQtyLine(item)}
         </button>
         <button class="qty-btn" data-action="plus" data-lineid="${item._lineId}">+</button>
       </div>
@@ -16889,6 +16953,7 @@ function renderCart() {
 
   const totalEl = document.getElementById("totalAmount");
   if (totalEl) totalEl.textContent = eur(getCartTotal(cartItems));
+  refreshSplitMesaTotals(cartItems);
   refreshCartDiscountUi();
   refreshSendComandaBar?.();
 

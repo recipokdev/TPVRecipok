@@ -489,8 +489,13 @@
 
       <!-- TOTAL -->
       <div class="cart-total-row">
-        <span>Total</span>
+        <span id="cartTotalLabel">Total</span>
         <span id="totalAmount">0,00 €</span>
+      </div>
+      <!-- Solo con un pedido dividido en partes: total de la mesa y lo que falta por cobrar -->
+      <div id="splitMesaTotalsRow" class="cart-split-totals-row hidden">
+        <span id="splitMesaTotalsAll"></span>
+        <span id="splitMesaTotalsPending"></span>
       </div>
 
       <div id="cartGlobalDiscountRow" class="cart-global-discount-row hidden">
