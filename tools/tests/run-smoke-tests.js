@@ -4101,7 +4101,7 @@ mustContain(
   "'Cobrar' gets a visually distinct color (not the normal green, not the normal disabled gray) in the needs-agent state",
 );
 {
-  const idx = renderer.indexOf("payBtn.onclick = () => {");
+  const idx = renderer.indexOf("payBtn.onclick = async () => {");
   const scoped = idx >= 0 ? renderer.slice(idx, idx + 300) : "";
   if (
     scoped.includes("if (payButtonNeedsAgentAssignment()) {") &&
@@ -10873,7 +10873,7 @@ if (
   renderer.includes("let isClearingCartNow = false;") &&
   renderer.includes("if (isParkingNow || isPayingNow || isClearingCartNow) return;") &&
   renderer.includes("if (isPayingNow || isParkingNow || isClearingCartNow) return;") &&
-  renderer.includes("if (isParkingNow || isClearingCartNow) return;") &&
+  renderer.includes("if (isParkingNow || isClearingCartNow || isPayingNow) return;") &&
   renderer.includes("isClearingCartNow = true;") &&
   renderer.includes("isClearingCartNow = false;")
 ) {
@@ -11480,6 +11480,54 @@ if (
   const enHtml = /id="cartDraftGhosts"/.test(html) && /renderMesaDraftGhosts\(others\)/.test(renderer);
   if (conBorrador && sinBorrador && enHtml) ok("Mesa en uso: el borrador de la tablet se ve como lineas grises de solo lectura bajo el carrito (y desaparece sin borrador)");
   else fail("Borrador gris del carrito: con borrador=" + conBorrador + ", sin borrador=" + sinBorrador + ", html/render=" + enHtml);
+}
+
+// Cobrar / Borrar mesa con un borrador sin enviar de otro dispositivo (2026-11-02): avisa (no bloquea). Sin
+// borrador no pregunta; "Esperar" (o Escape) cancela; solo "Cobrar igualmente" / "Borrar igualmente" sigue.
+{
+  const vm = require("vm");
+  const extractFn = (name) => {
+    const i = renderer.indexOf("function " + name + "(");
+    if (i < 0) return "";
+    let depth = 0;
+    let started = false;
+    for (let j = renderer.indexOf("{", i); j < renderer.length; j += 1) {
+      const ch = renderer[j];
+      if (ch === "{") { depth += 1; started = true; }
+      if (ch === "}") depth -= 1;
+      if (started && depth === 0) return renderer.slice(i, j + 1);
+    }
+    return "";
+  };
+  let respuesta = false;
+  let llamadas = [];
+  const ctx = {
+    __mesaDraftsActive: [],
+    fmtQty: (n) => String(n),
+    fmtMoney: (n) => n.toFixed(2) + " €",
+    confirmModal: async (titulo, texto, opts) => { llamadas.push({ titulo, texto, opts }); return respuesta; },
+  };
+  vm.createContext(ctx);
+  vm.runInContext("async " + extractFn("confirmDespiteOtherDeviceDraft"), ctx);
+  (async () => {
+    const draft = [{ agentName: "Cintia", draft: { lines: [{ name: "Bocata Pollo", qty: 2 }], total: 6.2 } }];
+    const sin = (await ctx.confirmDespiteOtherDeviceDraft("cobrar")) === true && llamadas.length === 0;
+    ctx.__mesaDraftsActive = draft;
+    respuesta = true; // "Esperar"
+    const esperar = (await ctx.confirmDespiteOtherDeviceDraft("cobrar")) === false;
+    respuesta = false; // Escape
+    const escape = (await ctx.confirmDespiteOtherDeviceDraft("cobrar")) === false;
+    respuesta = "igualmente";
+    const igualmente = (await ctx.confirmDespiteOtherDeviceDraft("cobrar")) === true;
+    const u = llamadas[0];
+    const texto = !!u && /Cintia está preparando: 2× Bocata Pollo \(6\.20 €\)/.test(u.texto) && /no se incluirá en la cuenta/.test(u.texto) && u.opts.middleButtonText === "Cobrar igualmente" && u.opts.okButtonText === "Esperar" && u.opts.hideCancel === true;
+    llamadas = [];
+    await ctx.confirmDespiteOtherDeviceDraft("borrar");
+    const borrar = /Borrar igualmente/.test(JSON.stringify(llamadas[0]?.opts || {}));
+    const cableado = /if \(!\(await confirmDespiteOtherDeviceDraft\("cobrar"\)\)\) return;/.test(renderer) && /if \(!\(await confirmDespiteOtherDeviceDraft\("borrar"\)\)\) return;/.test(renderer);
+    if (sin && esperar && escape && igualmente && texto && borrar && cableado) ok("Cobrar/Borrar mesa con un borrador sin enviar de otro dispositivo: avisa con Esperar / Cobrar igualmente; sin borrador no pregunta");
+    else fail("Aviso de borrador al cobrar: sin=" + sin + ", esperar=" + esperar + ", escape=" + escape + ", igualmente=" + igualmente + ", texto=" + texto + ", borrar=" + borrar + ", cableado=" + cableado);
+  })().catch((e) => fail("Aviso de borrador al cobrar: " + e.message));
 }
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");

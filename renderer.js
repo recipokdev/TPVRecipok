@@ -17890,9 +17890,12 @@ function confirmModal(title, text, options = {}) {
     middleButtonText = "",
     middleButtonResult = "middle",
     okButtonText = "",
+    hideCancel = false,
   } = options || {};
 
   okBtn.textContent = String(okButtonText || "").trim() || "Aceptar";
+  // Cuadros en los que "Aceptar" ya es la opcion segura y Cancelar sobra (se vuelve a mostrar en el siguiente).
+  if (hideCancel) cancelBtn.classList.add("hidden");
 
   const addedDialogClasses = [];
   if (dialogEl) {
@@ -44307,12 +44310,15 @@ async function mesaViewerPost(action, uid) {
 // Borrador del carrito de otro dispositivo (app de camareros): lo que esta componiendo y aun NO ha guardado en la
 // mesa. Se pinta debajo de las lineas del carrito, en gris y solo lectura, como vista previa. No es parte del
 // pedido (no esta en `cart`): no toca stock, comanda, totales ni cobro.
+let __mesaDraftsActive = [];
+
 function renderMesaDraftGhosts(others) {
   const box = document.getElementById("cartDraftGhosts");
-  if (!box) return;
   const drafts = (Array.isArray(others) ? others : []).filter(
     (o) => o?.draft && Array.isArray(o.draft.lines) && o.draft.lines.length,
   );
+  __mesaDraftsActive = drafts;
+  if (!box) return;
   if (!drafts.length) {
     box.classList.add("hidden");
     box.innerHTML = "";
@@ -44341,6 +44347,41 @@ function renderMesaDraftGhosts(others) {
     .join("") +
     `<div class="cart-draft-ghost-note">Solo lectura: no es parte del pedido hasta que se envíe.</div>`;
   box.classList.remove("hidden");
+}
+
+// Antes de cobrar (o borrar) una mesa en la que otro dispositivo (app de camareros) tiene un borrador SIN enviar,
+// se avisa: lo que esta componiendo no entra en la cuenta. No bloquea: "Esperar" es lo seguro (tambien con
+// Enter/Escape) y "Cobrar igualmente" cubre el borrador olvidado. Usa lo ultimo que se sabe de la mesa (aviso en
+// tiempo real o latido de 15 s); sin borrador o fuera de Modo Mesas no pregunta nada.
+async function confirmDespiteOtherDeviceDraft(accion) {
+  const drafts = Array.isArray(__mesaDraftsActive) ? __mesaDraftsActive : [];
+  if (!drafts.length) return true;
+  const lineas = drafts.map((o) => {
+    const agent = String(o?.agentName || "").trim() || "Otro dispositivo";
+    const items = o.draft.lines
+      .slice(0, 6)
+      .map((l) => `${fmtQty(Number(l?.qty) || 0)}× ${String(l?.name || "").trim()}`)
+      .join(", ");
+    const mas = o.draft.lines.length > 6 ? ` y ${o.draft.lines.length - 6} más` : "";
+    const total = Number(o.draft.total) > 0 ? ` (${fmtMoney(Number(o.draft.total))})` : "";
+    return `${agent} está preparando: ${items}${mas}${total}`;
+  });
+  const cobrar = accion !== "borrar";
+  const res = await confirmModal(
+    "Hay un pedido sin enviar en esta mesa",
+    `${lineas.join("\n")}\n\n${
+      cobrar
+        ? "Si cobras ahora, eso no se incluirá en la cuenta."
+        : "Si borras la mesa ahora, eso quedará sin cobrar y podría llegar después a una mesa vacía."
+    }`,
+    {
+      okButtonText: "Esperar",
+      middleButtonText: cobrar ? "Cobrar igualmente" : "Borrar igualmente",
+      middleButtonResult: "igualmente",
+      hideCancel: true,
+    },
+  );
+  return res === "igualmente";
 }
 
 function renderMesaInUseNotice(others) {
@@ -47305,12 +47346,13 @@ if (clearBtn) {
 const payBtn = document.getElementById("payBtn");
 const cartActionGridEl = document.getElementById("cartActionGrid");
 if (payBtn) {
-  payBtn.onclick = () => {
-    if (isParkingNow || isClearingCartNow) return;
+  payBtn.onclick = async () => {
+    if (isParkingNow || isClearingCartNow || isPayingNow) return;
     if (payButtonNeedsAgentAssignment()) {
       requireAssignedAgentOrBlock({ showModal: true });
       return;
     }
+    if (!(await confirmDespiteOtherDeviceDraft("cobrar"))) return;
     onPayButtonClick();
   };
 }
@@ -53150,6 +53192,8 @@ parkedDeleteBtn?.addEventListener("click", async () => {
     );
     return;
   }
+
+  if (!(await confirmDespiteOtherDeviceDraft("borrar"))) return;
 
   await deleteParkedTicketByIndex(idx, {
     confirm: true,

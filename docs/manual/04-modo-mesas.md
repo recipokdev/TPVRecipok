@@ -80,6 +80,18 @@ Cosas que conviene saber:
 
 @fig img/mesas-dos-borradores.png | crop=1410,95,500,720 | width=70 | Dos tablets con un borrador cada una.
 
+### Si intentas cobrar o borrar la mesa mientras hay un borrador
+
+Si pulsas **Cobrar** (o **Borrar mesa**) y otro dispositivo tiene en esa mesa un borrador sin enviar, el TPV te avisa antes, porque lo que está componiendo **no entraría en la cuenta**:
+
+@fig img/mesas-aviso-cobrar.png | crop=780,382,360,262 | width=55 | marks=1:960,520;2:967,628;3:1083,628 | Aviso al cobrar con un borrador sin enviar.
+
+1. **Qué está preparando y quién.** Si lo cobras ahora, eso no se incluirá en la cuenta.
+2. **Cobrar igualmente.** Sigue con el cobro. Es para cuando el borrador se quedó olvidado en la tablet.
+3. **Esperar** (el botón destacado; también **Enter** o **Esc**). No pasa nada: puedes esperar a que el camarero envíe y cobrar entonces.
+
+Con **Borrar mesa** el aviso es el mismo y el botón dice **Borrar igualmente**. Si no hay ningún borrador, no pregunta nada. Se basa en lo último que sabe el TPV de esa mesa, que se actualiza solo en unos segundos.
+
 ## 3. Atender una mesa
 
 1. Entra en **Mapa de Salas** y toca la mesa. Se abre la pestaña **Transacciones** con esa mesa seleccionada. También puedes elegir **Sala** y **Mesa** en los desplegables de la parte superior.
