@@ -37672,8 +37672,10 @@ function computeLineNetFirst(unitGross, qty, taxRate) {
   return { base, iva, total, netUnit };
 }
 
+// El ticket en euros siempre ha salido sin simbolo (solo el numero); en cualquier otra moneda lleva su simbolo
+// ($ 9.000), que es lo que espera quien lo lee.
 function eurTicket(n) {
-  return fmtMoney(n, { symbol: false });
+  return fmtMoney(n, { symbol: CURRENCY.code !== "EUR" });
 }
 
 // Render de pagos: Total + filas por método
