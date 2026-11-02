@@ -11366,6 +11366,54 @@ if (
   }
 }
 
+// Dividir la cuenta en modo igualitario (2026-11-02): repartir cada linea en N fracciones redondeadas a 4
+// decimales perdia centimos (3 partes de 17,60 sumaban 17,58). Las partes tienen que sumar EXACTAMENTE el total
+// de cada linea, para cualquier numero de partes y con IVA 4/10/21.
+{
+  const vm = require("vm");
+  const extractFn = (name) => {
+    const i = renderer.indexOf("function " + name + "(");
+    if (i < 0) return "";
+    let depth = 0;
+    let started = false;
+    for (let j = renderer.indexOf("{", i); j < renderer.length; j += 1) {
+      const ch = renderer[j];
+      if (ch === "{") { depth += 1; started = true; }
+      if (ch === "}") depth -= 1;
+      if (started && depth === 0) return renderer.slice(i, j + 1);
+    }
+    return "";
+  };
+  const src = extractFn("computeLineNetFirst") + "\n" + extractFn("buildEqualSplitShares");
+  if (!/function buildEqualSplitShares/.test(src) || !/function computeLineNetFirst/.test(src)) {
+    fail("Falta buildEqualSplitShares o computeLineNetFirst en renderer.js (dividir igualitario)");
+  } else {
+    const ctx = {
+      round2: (n) => Math.round((Number(n) || 0) * 100) / 100,
+      makeLineId: () => "id",
+      getCartLinePricing: (l) => ({ lineTotal: ctx.computeLineNetFirst(l.unit, l.qty, l.rate).total }),
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    const lines = [
+      { unit: 1.6, qty: 1, rate: 10 }, { unit: 1.5, qty: 2, rate: 10 }, { unit: 2.8, qty: 1, rate: 10 },
+      { unit: 3.5, qty: 1, rate: 10 }, { unit: 1.1, qty: 3, rate: 4 }, { unit: 4.2, qty: 0.35, rate: 21 },
+      { unit: 12.9, qty: 1, rate: 21 }, { unit: 0.95, qty: 7, rate: 10 },
+    ];
+    let bad = 0;
+    for (let parts = 2; parts <= 12; parts += 1) {
+      const shares = ctx.buildEqualSplitShares(lines, parts);
+      lines.forEach((l, li) => {
+        const orig = Math.round(ctx.computeLineNetFirst(l.unit, l.qty, l.rate).total * 100);
+        const sum = shares.reduce((acc, part) => acc + Math.round(ctx.computeLineNetFirst(l.unit, part[li].qty, l.rate).total * 100), 0);
+        if (sum !== orig) bad += 1;
+      });
+    }
+    if (bad === 0) ok("Dividir igualitario: las partes suman exactamente el total de cada linea (2 a 12 partes, IVA 4/10/21 y cantidades con decimales)");
+    else fail("Dividir igualitario: " + bad + " combinaciones de linea/partes no suman el total de la linea");
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

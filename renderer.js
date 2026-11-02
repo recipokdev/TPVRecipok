@@ -48344,6 +48344,117 @@ function renderSplitTicketLines() {
   });
 }
 
+// Reparto IGUALITARIO de las lineas en `parts` partes. Dividir cada cantidad entre N y redondearla a 4 decimales
+// (1/3 -> 0,3333) hacia que las partes sumaran 1-2 centimos menos que el ticket (con 3 partes, 17,58 en vez de
+// 17,60), y mas cuantas mas partes. Ahora el total de cada linea se reparte EN CENTIMOS entre las partes (el
+// resto va a las primeras, como un reparto por mayor resto) y para cada parte se busca, cerca de qty/N, la
+// cantidad cuyo total de linea da justo esos centimos: las partes suman exactamente el total de la linea. Si el
+// precio es tan bajo que un centimo exige mover la cantidad mas de 0,06, se elige la mas cercana. Devuelve un
+// array (una entrada por parte) con las lineas de cada una.
+function buildEqualSplitShares(sourceLines, parts) {
+  const roundQty = (n) => Math.round((Number(n) || 0) * 10000) / 10000;
+  const lineTotalFor = (line, qty) =>
+    Number(getCartLinePricing({ ...line, qty })?.lineTotal || 0);
+  const shares = Array.from({ length: parts }, () => []);
+  // centimos que lleva ya cada parte, para repartir los restos de cada linea por igual entre todas
+  const acumulado = Array(parts).fill(0);
+
+  (Array.isArray(sourceLines) ? sourceLines : []).forEach((line) => {
+    const qty = Number(line?.qty || 0) || 0;
+    const qIdeal = roundQty(qty / parts);
+    const totalCents = Math.round(lineTotalFor(line, qty) * 100);
+    const baseCents = Math.floor(totalCents / parts);
+    const extraParts = totalCents - baseCents * parts;
+
+    // cantidad de una parte para un objetivo en centimos (se reutiliza entre partes con el mismo objetivo)
+    const qtyForCents = new Map();
+    const findQty = (cents) => {
+      if (qtyForCents.has(cents)) return qtyForCents.get(cents);
+      let best = qIdeal;
+      let bestDiff = Math.abs(Math.round(lineTotalFor(line, qIdeal) * 100) - cents);
+      for (let k = 1; k <= 600 && bestDiff > 0; k += 1) {
+        for (const cand of [qIdeal + k / 10000, qIdeal - k / 10000]) {
+          if (cand <= 0) continue;
+          const q = roundQty(cand);
+          const diff = Math.abs(Math.round(lineTotalFor(line, q) * 100) - cents);
+          if (diff < bestDiff) {
+            best = q;
+            bestDiff = diff;
+            if (bestDiff === 0) break;
+          }
+        }
+      }
+      qtyForCents.set(cents, best);
+      return best;
+    };
+
+    // el centimo sobrante de esta linea va a las partes que menos llevan hasta ahora
+    const conExtra = new Set(
+      acumulado
+        .map((_, p) => p)
+        .sort((a, b) => acumulado[a] - acumulado[b] || a - b)
+        .slice(0, extraParts),
+    );
+    const qs = [];
+    const got = [];
+    for (let p = 0; p < parts; p += 1) {
+      const q = findQty(baseCents + (conExtra.has(p) ? 1 : 0));
+      qs.push(q);
+      got.push(Math.round(lineTotalFor(line, q) * 100));
+    }
+
+    // Con IVA el total de una linea a veces salta de 2 en 2 centimos (base e IVA se redondean por separado) y
+    // algun objetivo no se puede alcanzar con ninguna cantidad: el resto se reparte entre las partes con los
+    // totales que si se pueden alcanzar, de la ultima a la primera, hasta que sumen el total de la linea.
+    let resto = totalCents - got.reduce((a, b) => a + b, 0);
+    if (resto !== 0) {
+      const reach = new Map();
+      for (let k = 0; k <= 400; k += 1) {
+        for (const cand of k === 0 ? [qIdeal] : [qIdeal + k / 10000, qIdeal - k / 10000]) {
+          if (cand <= 0) continue;
+          const q = roundQty(cand);
+          const c = Math.round(lineTotalFor(line, q) * 100);
+          if (!reach.has(c)) reach.set(c, q);
+        }
+      }
+      for (let pass = 0; pass < 2 && resto !== 0; pass += 1) {
+        for (let p = parts - 1; p >= 0 && resto !== 0; p -= 1) {
+          let bestC = got[p];
+          let bestAbs = Math.abs(resto);
+          for (const c of reach.keys()) {
+            const abs = Math.abs(resto - (c - got[p]));
+            if (abs < bestAbs) { bestAbs = abs; bestC = c; }
+          }
+          if (bestC !== got[p]) {
+            resto -= bestC - got[p];
+            got[p] = bestC;
+            qs[p] = reach.get(bestC);
+          }
+        }
+      }
+    }
+
+    // La cantidad y el id de la linea original viajan en `meta` (se guarda en el servidor): al revertir la
+    // division se restaura la cantidad exacta en vez de la suma de fracciones ajustadas (0,9981...).
+    const origId = String(line?._lineId || "");
+    for (let p = 0; p < parts; p += 1) {
+      shares[p].push({
+        ...line,
+        _lineId: makeLineId(),
+        qty: qs[p],
+        meta: {
+          ...(line?.meta && typeof line.meta === "object" ? line.meta : {}),
+          splitOrigId: origId,
+          splitOrigQty: qty,
+        },
+      });
+      acumulado[p] += got[p];
+    }
+  });
+
+  return shares;
+}
+
 function refreshSplitTicketTotals() {
   const parts = resolveSplitPartsCount();
   const sourceTotal = computeLinesTotal(cart);
@@ -48374,7 +48485,22 @@ function refreshSplitTicketTotals() {
             : "División pendiente";
       }
     } else {
-      splitTicketTargetTotal.textContent = eurTicket(perPartTotal);
+      // Lo que valdra de verdad cada parte (pueden diferir en centimos para que sumen el total).
+      let min = perPartTotal;
+      let max = perPartTotal;
+      try {
+        const shares = buildEqualSplitShares(
+          Array.isArray(cart) ? cart : [],
+          Math.max(2, parts),
+        );
+        const totals = shares.map((ls) => getCartTotal(ls));
+        min = Math.min(...totals);
+        max = Math.max(...totals);
+      } catch {}
+      splitTicketTargetTotal.textContent =
+        Math.abs(max - min) < 0.005
+          ? eurTicket(min)
+          : `${eurTicket(min)} – ${eurTicket(max)}`;
     }
   }
   if (splitTicketRemainingTotal) {
@@ -48517,6 +48643,7 @@ async function confirmSplitTicket() {
   const mergeSplitLines = (tickets) => {
     const roundQty = (n) => Math.round((Number(n) || 0) * 10000) / 10000;
     const merged = new Map();
+    const origins = new Map(); // key -> { all, byId }: cantidad original de cada linea de origen
 
     (Array.isArray(tickets) ? tickets : []).forEach((tk) => {
       (Array.isArray(tk?.items) ? tk.items : []).forEach((line) => {
@@ -48533,18 +48660,43 @@ async function confirmSplitTicket() {
         });
 
         const qty = Number(line?.qty || 0) || 0;
+        const originId = String(line?.meta?.splitOrigId || "");
+        const originQty = Number(line?.meta?.splitOrigQty);
+        const hasOrigin = !!originId && Number.isFinite(originQty);
         if (!merged.has(key)) {
           merged.set(key, {
             ...line,
             _lineId: makeLineId(),
             qty: roundQty(qty),
           });
-          return;
+          origins.set(key, { all: hasOrigin, byId: new Map() });
+        } else {
+          const prev = merged.get(key);
+          prev.qty = roundQty((Number(prev?.qty || 0) || 0) + qty);
         }
-
-        const prev = merged.get(key);
-        prev.qty = roundQty((Number(prev?.qty || 0) || 0) + qty);
+        const o = origins.get(key);
+        if (hasOrigin) o.byId.set(originId, originQty);
+        else o.all = false;
       });
+    });
+
+    // Division igualitaria: si las partes no se han tocado, vuelve la cantidad ORIGINAL de cada linea (las
+    // fracciones se ajustan al centimo y su suma puede quedar a 0,00x). Si alguien edito la linea en alguna
+    // parte (la suma se aleja de la original) se respeta la suma.
+    merged.forEach((line, key) => {
+      const o = origins.get(key);
+      if (o?.all && o.byId.size) {
+        const origSum = roundQty(
+          Array.from(o.byId.values()).reduce((a, b) => a + b, 0),
+        );
+        if (Math.abs(origSum - (Number(line.qty) || 0)) <= 0.02) {
+          line.qty = origSum;
+        }
+      }
+      if (line.meta && typeof line.meta === "object") {
+        const { splitOrigId, splitOrigQty, ...rest } = line.meta;
+        line.meta = Object.keys(rest).length ? rest : null;
+      }
     });
 
     return Array.from(merged.values()).filter(
@@ -48691,16 +48843,11 @@ async function confirmSplitTicket() {
     return;
   }
 
-  const roundQty = (n) => Math.round((Number(n) || 0) * 10000) / 10000;
-  const buildShareLines = () =>
-    sourceLines.map((line) => {
-      const qty = Number(line?.qty || 0) || 0;
-      return {
-        ...line,
-        _lineId: makeLineId(),
-        qty: roundQty(qty / parts),
-      };
-    });
+  // Modo igualitario: cada parte lleva una fraccion de cada linea y la ultima el resto, para que las
+  // partes sumen exactamente el total del ticket (ver buildEqualSplitShares).
+  const equalShares = isSplitItemsMode()
+    ? null
+    : buildEqualSplitShares(sourceLines, parts);
 
   let linesByPart = [];
   let activePartsData = [];
@@ -48748,7 +48895,7 @@ async function confirmSplitTicket() {
       ? Array.isArray(activePartsData[i - 1]?.lines)
         ? activePartsData[i - 1].lines
         : []
-      : buildShareLines();
+      : equalShares[i - 1];
     const splitTicket = {
       id: nextId,
       // Igual que un aparcado normal: sin slug/cajaId su clave local no casa con la del servidor y,
@@ -48791,7 +48938,7 @@ async function confirmSplitTicket() {
     ? Array.isArray(activePartsData[0]?.lines)
       ? activePartsData[0].lines
       : []
-    : buildShareLines();
+    : equalShares[0];
   loaded.items = loadedShareLines;
   loaded.total = getCartTotal(loadedShareLines);
   loaded.name = `${sourceName} (1/${targetSplitParts})`;

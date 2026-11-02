@@ -5,14 +5,18 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "MEJORA: la opción «Moneda» en «Automática» ahora funciona con cualquier divisa de FacturaScripts (dólar, peso mexicano, peso chileno, libra, corona…), no solo euro y peso colombiano: el TPV toma de FacturaScripts el símbolo, los decimales, los separadores y la posición del símbolo, y el recuento de caja usa una serie de billetes y monedas adaptada al valor de la moneda. Los importes escritos a mano se interpretan con el formato de la moneda.",
+        "MEJORA: en las monedas distintas del euro, el ticket impreso lleva el símbolo en todos los importes (por ejemplo «$ 9.000»). El ticket en euros no cambia.",
+        "CORRECCIÓN: dividir la cuenta en modo «Igualitario» perdía céntimos: con 3 partes, un ticket de 17,60 € se repartía en tres partes de 5,86 € (17,58 € en total), y el cuadro de dividir enseñaba 5,87 €. Ahora las partes suman exactamente el total del ticket (algunas pueden diferir en un céntimo, y el cuadro lo muestra: «5,86 – 5,87»), y al revertir la división vuelven las cantidades originales de cada línea. El modo «Por artículos» no estaba afectado."
+      ]
     },
     {
       "version": "0.2.56",
       "date": "2026-11-02",
       "title": "Release 0.2.56",
       "changes": [
-        "MEJORA: nueva opción «Moneda» (Opciones → Productos → Tarjeta y venta) para los clientes que no trabajan en euros. Con «Peso colombiano» los importes salen como $ 18.000 (sin decimales y con punto de miles) en la parrilla, el carrito, el cobro, los tickets, el cierre de caja y la pantalla del cliente, el recuento de caja usa los billetes y monedas colombianos, y un importe escrito como 18.000 se entiende como dieciocho mil. Por defecto es «Automática»: el TPV usa la divisa que tenga FacturaScripts, con su símbolo, decimales y separadores (si es euro, nada cambia; funciona con cualquier otra: peso colombiano, dólar, peso mexicano, libra…, y el recuento de caja usa una serie de billetes y monedas adaptada a su valor). En las monedas distintas del euro el ticket impreso lleva el símbolo en los importes ($ 9.000) y se puede forzar a mano; al cambiarla (o si el TPV detecta otra divisa en FacturaScripts) sale un aviso con el botón «Reiniciar ahora»; el reinicio es rápido y la caja y los aparcados se quedan como están."
+        "MEJORA: nueva opción «Moneda» (Opciones → Productos → Tarjeta y venta) para los clientes que no trabajan en euros. Con «Peso colombiano» los importes salen como $ 18.000 (sin decimales y con punto de miles) en la parrilla, el carrito, el cobro, los tickets, el cierre de caja y la pantalla del cliente, el recuento de caja usa los billetes y monedas colombianos, y un importe escrito como 18.000 se entiende como dieciocho mil. Por defecto es «Automática»: el TPV usa la divisa que tenga FacturaScripts (si es euro, nada cambia; si es peso colombiano, se activa solo) y se puede forzar a mano; al cambiarla (o si el TPV detecta otra divisa en FacturaScripts) sale un aviso con el botón «Reiniciar ahora»; el reinicio es rápido y la caja y los aparcados se quedan como están."
       ]
     },
     {

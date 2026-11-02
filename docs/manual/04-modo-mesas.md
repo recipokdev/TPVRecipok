@@ -153,7 +153,7 @@ Pulsa **Dividir** en la cabecera del pedido.
 ### Qué diferencia hay entre los dos modos
 
 - **Por artículos (asignación manual).** Tú decides **qué consume cada cuenta**: para cada producto indicas cuántas unidades van en la P1, en la P2, etc. Es el modo para cuando cada comensal paga lo suyo («yo la cerveza y el bocadillo; tú el café»). Hay que asignar artículos al menos a **dos** partes, y debajo de cada producto ves lo que **aún no has asignado**.
-- **Igualitario.** Divide el pedido **a partes iguales**: cada cuenta lleva **la misma fracción de cada línea** (con 3 partes, un tercio de cada producto, con la cantidad en decimales) y el total sale repartido por igual. Es el modo para cuando se comparte todo y se paga a medias.
+- **Igualitario.** Divide el pedido **a partes iguales**: cada cuenta lleva **la misma fracción de cada línea** (con 3 partes, un tercio de cada producto, con la cantidad en decimales) y el total sale repartido por igual. Las partes **suman siempre el total exacto del ticket**: si no se puede repartir a partes iguales al céntimo, alguna cuenta sale un céntimo más cara que otra (el cuadro lo muestra como «5,86 – 5,87»). Es el modo para cuando se comparte todo y se paga a medias.
 
 @fig img/mesas-dividir-igualitario.png | crop=510,198,900,621 | marks=1:1192,331;2:516,369 | Modo igualitario con 3 partes.
 
@@ -171,7 +171,7 @@ Una vez dividido, la cabecera permite moverte entre las partes («Parte n/m») c
 3. **→** pasa a la parte siguiente.
 4. **Dividir** vuelve a abrir la ventana, por ejemplo para **Revertir división**.
 
-En el modo igualitario las cantidades de cada línea salen en decimales (0,3333 de cada producto con 3 partes) y el total del carrito es el de esa parte.
+En el modo igualitario las cantidades de cada línea salen en decimales (aprox. 0,3333 de cada producto con 3 partes) y el total del carrito es el de esa parte. Si reviertes la división, las cantidades vuelven a ser exactamente las del pedido original.
  Si te equivocas, vuelve a abrir **Dividir** y usa **Revertir división** (equivale a poner *Partes = 1*): junta todas las partes en un único ticket.
 
 ## 6. Cambiar o juntar mesas
