@@ -52,6 +52,20 @@ Un toque corto sobre una mesa la abre. Si en cambio **mantienes pulsada** una me
 - **⚠ Comanda:** la impresión automática de la comanda ha fallado en este TPV. Comprueba la impresora de comandas (capítulo «Impresión y cajón»).
 - **Aviso discreto «Ana (Barra) tiene esta mesa abierta»:** otra persona tiene la misma mesa abierta en otro dispositivo. Solo informa, no bloquea. Si usa la app de camareros y tu empresa lo tiene activado, también verás lo que **está preparando** (sin enviar) en solo lectura: no reserva stock ni sale en la comanda hasta que lo envíe.
 
+### Cuando otra persona tiene la misma mesa abierta
+
+Al abrir una mesa que otra persona tiene abierta en otro dispositivo (otro TPV o la tablet de un camarero), aparece una franja justo sobre las líneas del carrito:
+
+@fig img/mesas-en-uso.png | crop=1410,60,500,100 | width=70 | marks=1:1870,120 | Aviso de mesa en uso.
+
+1. **«Cintia (Tablet barra) tiene esta mesa abierta».** Quién la tiene abierta y desde qué dispositivo. Solo **informa**: no bloquea nada y puedes seguir trabajando. Si es la misma persona (el mismo agente) en otro dispositivo, no se avisa. Se actualiza sola, sin que tengas que hacer nada.
+
+Si esa persona usa la **app de camareros** y tu empresa tiene activada esta función, la franja añade **lo que está preparando**, sin enviar todavía:
+
+@fig img/mesas-preparando.png | crop=1410,60,500,130 | width=70 | marks=1:1700,138 | La tablet tiene un borrador sin enviar.
+
+1. **«Cintia está preparando: 2× Bocata Pollo, 1× Chips Salados (8,70 €)».** Lo que ha puesto en su carrito sin enviar, en **solo lectura**. No forma parte del pedido: no reserva stock, no sale en la comanda y no se puede cobrar hasta que el camarero pulse **Enviar**. Si cierra la app, desaparece solo.
+
 ## 3. Atender una mesa
 
 1. Entra en **Mapa de Salas** y toca la mesa. Se abre la pestaña **Transacciones** con esa mesa seleccionada. También puedes elegir **Sala** y **Mesa** en los desplegables de la parte superior.
