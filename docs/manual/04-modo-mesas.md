@@ -60,11 +60,13 @@ Al abrir una mesa que otra persona tiene abierta en otro dispositivo (otro TPV o
 
 1. **«Cintia (Tablet barra) tiene esta mesa abierta».** Quién la tiene abierta y desde qué dispositivo. Solo **informa**: no bloquea nada y puedes seguir trabajando. Si es la misma persona (el mismo agente) en otro dispositivo, no se avisa. Se actualiza sola, sin que tengas que hacer nada.
 
-Si esa persona usa la **app de camareros** y tu empresa tiene activada esta función, la franja añade **lo que está preparando**, sin enviar todavía:
+Ojo: lo que esa persona **ya ha guardado en la mesa** (el pedido) lo ves tú directamente en el carrito, y se actualiza en cuestión de segundos cuando ella lo cambia (y ella ve lo tuyo igual). La franja solo es el aviso de que está ahí.
+
+Si esa persona usa la **app de camareros** y tu empresa tiene activada esta función, la franja añade además **lo que está componiendo y aún no ha guardado** en la mesa. Eso todavía no es un pedido, por eso se ve solo como texto y el carrito sigue vacío (en esta captura la mesa M3 estaba libre, sin pedido guardado):
 
 @fig img/mesas-preparando.png | crop=1410,60,500,130 | width=70 | marks=1:1700,138 | La tablet tiene un borrador sin enviar.
 
-1. **«Cintia está preparando: 2× Bocata Pollo, 1× Chips Salados (8,70 €)».** Lo que ha puesto en su carrito sin enviar, en **solo lectura**. No forma parte del pedido: no reserva stock, no sale en la comanda y no se puede cobrar hasta que el camarero pulse **Enviar**. Si cierra la app, desaparece solo.
+1. **«Cintia está preparando: 2× Bocata Pollo, 1× Chips Salados (8,70 €)».** Lo que ha puesto en su carrito de la tablet sin guardar ni enviar, en **solo lectura**. No forma parte del pedido: no reserva stock, no sale en la comanda y no se puede cobrar hasta que el camarero pulse **Enviar**. Si cierra la app, desaparece solo.
 
 ## 3. Atender una mesa
 
