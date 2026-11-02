@@ -4,6 +4,8 @@ Este capítulo explica lo que hay que hacer la primera vez que se enciende el TP
 
 > **Modo Mesas.** Si tu empresa tiene contratado el módulo de mesas (salas, comandas a cocina, app de camareros), se explica en un **manual aparte**. Aquí se cuenta todo lo demás, que es común a todos los TPV.
 
+> **Moneda.** Las capturas de este manual están hechas en euros. Si tu negocio trabaja en otra moneda (pesos colombianos, dólares…), el TPV muestra los importes en ella: es la divisa que tiene configurada tu FacturaScripts. Ver «Moneda» en el capítulo «Opciones».
+
 ## 1. Activar el TPV con el email de la empresa
 
 La primera vez que abres el programa en un equipo, te pide que lo actives.

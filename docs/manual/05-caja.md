@@ -23,13 +23,15 @@ Pulsa **Abrir caja**. Se abre la ventana de apertura.
 
 > **Importante:** la caja se abre para el terminal que aparece en la parte superior de la ventana («Terminal: …»).
 
+> **Otras monedas.** Los billetes y monedas de esta ventana son los de la moneda de tu negocio: los del euro, los del peso colombiano o, en cualquier otra moneda, una serie general (1, 2, 5, 10, 20, 50… según el valor de la moneda) que sirve para contar el dinero aunque no coincida exactamente con las piezas de tu país. Para contar de otra forma, usa el **Importe directo**. Ver «Moneda» en el capítulo «Opciones».
+
 ## 3. Registrar entradas y salidas de dinero
 
 Si metes o sacas dinero de la caja sin que sea una venta (por ejemplo, para dejar cambio, ingresar en el banco o pagar a un proveedor), regístralo con **Mov.**: así el cierre de caja cuadra.
 
 @fig img/caja-movimiento.png | crop=720,335,480,347 | width=66 | marks=1:723,404;2:723,472;3:723,526;4:1101,640 | Ventana «Nuevo movimiento de caja».
 
-1. **Cantidad.** Importe en euros.
+1. **Cantidad.** Importe, en la moneda de tu negocio.
 2. **Tipo.** *Entrada de dinero* (el dinero entra en la caja) o *Salida de dinero* (sale de la caja).
 3. **Motivo.** Explica para qué es, por ejemplo «cambio inicial», «ingreso en banco» o «pago proveedor». Así luego se sabe qué pasó.
 4. **Guardar.** Registra el movimiento.

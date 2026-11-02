@@ -33,6 +33,12 @@ La caja tiene que estar abierta. Pulsa **Abrir caja** (en el aviso o en la cabec
 ### El precio o un producto nuevo no se actualiza
 Pulsa **🔄 Actualizar datos** (junto al buscador de productos) para recargar el catálogo.
 
+### Los importes salen en una moneda que no es la mía
+Ve a **Opciones → Productos → Moneda** (administradores). En **Automática** el TPV usa la divisa por defecto de tu FacturaScripts: si es la equivocada, corrígela allí. También puedes forzar **Euro** o **Peso colombiano**. Tras cambiarla pulsa **Reiniciar ahora** en el aviso (o reinicia el TPV) para que se aplique en todas las pantallas.
+
+### Sale un aviso «La divisa de FacturaScripts ahora es…»
+Alguien ha cambiado la divisa por defecto en FacturaScripts. El TPV no cambia de moneda a mitad de una venta: pulsa **Reiniciar ahora** cuando no estés cobrando (la caja y los aparcados se quedan como están) y el TPV pasará a la moneda nueva.
+
 ### Me equivoqué al cobrar (forma de pago o producto)
 Ve a **Tickets**: con **Cambiar pago** corriges la forma de pago y con **Devolver** devuelves total o parcialmente la venta. Ver el capítulo «Tickets, devoluciones y facturas».
 

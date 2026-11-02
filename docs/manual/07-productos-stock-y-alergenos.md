@@ -38,6 +38,9 @@ En **Opciones → Terminales** puedes elegir qué familias se ven en cada termin
 ### Qué texto muestra cada tarjeta
 En **Texto en la tarjeta de producto** eliges si se muestra la descripción del producto, la referencia, o ambas.
 
+### Productos con variantes
+Si un producto tiene **varias variantes** (por ejemplo, distintos tamaños o sabores), cada variante sale como una **tarjeta propia**: arriba el nombre de la variante (su referencia) y debajo el del producto. Cada una se vende con su propio precio, y en el ticket, la factura y la comanda sale el nombre de la variante que se vendió. El stock que se muestra es el del producto. Un producto con una sola variante se comporta como cualquier otro.
+
 ## 2. Precios
 
 Con **Modo edición de precio y prioridad** activado aparece un icono ✎ en cada producto. Pulsándolo se abre la ventana **Editar precio**, que muestra el precio actual (IVA incluido) y permite escribir uno nuevo; también puedes cambiar la prioridad del producto (su posición en la pantalla). 
