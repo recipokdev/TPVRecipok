@@ -60390,7 +60390,7 @@ async function createRefundInFacturaScriptsPackAware(
         docRect?.coddivisa ||
         facturaRow?._raw?.coddivisa ||
         facturaRow?.coddivisa ||
-        "EUR",
+        CURRENCY.code,
       codigofactura: docRect?.codigo || docRect?.codigofactura || `#${rectId}`,
       fecha: refundDate,
       fallbackCodpago: codpagoOrig || facturaRow?.codpago || "CONT",
