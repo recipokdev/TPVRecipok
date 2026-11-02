@@ -2485,11 +2485,13 @@
                   <div class="opt-row-sub">
                     Símbolo, decimales y separadores con los que se muestran
                     los importes y se cuenta el dinero de la caja (billetes y
-                    monedas). Cambiarla requiere reiniciar el TPV.
+                    monedas). Por defecto se usa la divisa de FacturaScripts
+                    (si el TPV la conoce). Cambiarla requiere reiniciar el TPV.
                   </div>
                 </div>
                 <div class="opt-row-actions">
                   <select id="currencySelect" class="opt-select">
+                    <option value="">Automática (la de FacturaScripts)</option>
                     <option value="EUR">Euro (€)</option>
                     <option value="COP">Peso colombiano ($)</option>
                   </select>

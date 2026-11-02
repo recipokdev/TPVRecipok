@@ -28,7 +28,8 @@
 // decimales y los separadores salen de la moneda elegida en Opciones -> Productos -> Moneda. Euro es el valor
 // por defecto y produce EXACTAMENTE los mismos textos que antes. La moneda se lee al arrancar: cambiarla
 // pide reiniciar el TPV.
-const OPTIONS_CURRENCY_KEY = "ui.currencyCode";
+const OPTIONS_CURRENCY_KEY = "ui.currencyCode"; // eleccion manual; vacio = automatica
+const OPTIONS_CURRENCY_AUTO_KEY = "ui.currencyAutoCode"; // ultima divisa de FacturaScripts conocida
 const CURRENCY_PRESETS = {
   EUR: {
     code: "EUR",
@@ -131,16 +132,57 @@ function applyCurrencyToStaticUi() {
   }
 }
 
-async function loadCurrencySetting() {
-  let code = "EUR";
+// Divisa por defecto de la instalacion de FacturaScripts (settings/default -> coddivisa). Solo se devuelve si el
+// TPV conoce esa moneda; en cualquier otro caso (sin red, divisa sin preset) devuelve "".
+async function fetchFsDefaultCurrencyCode() {
   try {
-    code = normalizeCurrencyCode(await window.TPV_CFG?.get?.(OPTIONS_CURRENCY_KEY));
+    const cfg = window.RECIPOK_API;
+    if (!cfg || !cfg.baseUrl || !cfg.apiKey) return "";
+    const row = await fetchApiResource("settings/default", { timeoutMs: 4000 });
+    const props = JSON.parse(row?.properties || "{}") || {};
+    const c = String(props.coddivisa || "").trim().toUpperCase();
+    return CURRENCY_PRESETS[c] ? c : "";
   } catch {
-    code = "EUR";
+    return "";
+  }
+}
+
+async function loadCurrencySetting() {
+  let manual = "";
+  let cached = "";
+  try {
+    const raw = String((await window.TPV_CFG?.get?.(OPTIONS_CURRENCY_KEY)) || "").trim().toUpperCase();
+    manual = CURRENCY_PRESETS[raw] ? raw : "";
+    const rawAuto = String((await window.TPV_CFG?.get?.(OPTIONS_CURRENCY_AUTO_KEY)) || "").trim().toUpperCase();
+    cached = CURRENCY_PRESETS[rawAuto] ? rawAuto : "";
+  } catch {}
+  let code = manual || cached || "EUR";
+  if (!manual) {
+    // Automatica: la primera vez (sin dato guardado) se espera a FacturaScripts un momento para arrancar ya con
+    // la moneda buena; despues se usa lo guardado y se vuelve a comprobar en segundo plano.
+    const refresh = async () => {
+      const fs = await fetchFsDefaultCurrencyCode();
+      if (fs && fs !== cached) {
+        try {
+          await window.TPV_CFG?.set?.(OPTIONS_CURRENCY_AUTO_KEY, fs);
+        } catch {}
+      }
+      return fs;
+    };
+    if (!cached) {
+      const fs = await refresh();
+      if (fs) code = fs;
+    } else {
+      refresh().then((fs) => {
+        if (fs && fs !== CURRENCY.code) {
+          toast(`La divisa de FacturaScripts es ${fs}. Reinicia el TPV para usarla.`, "info", "Moneda");
+        }
+      });
+    }
   }
   CURRENCY = CURRENCY_PRESETS[code];
   const sel = document.getElementById("currencySelect");
-  if (sel) sel.value = code;
+  if (sel) sel.value = manual;
   applyCurrencyToStaticUi();
 }
 
@@ -151,7 +193,7 @@ function bindCurrencySettingOnce() {
   const sel = document.getElementById("currencySelect");
   if (!sel) return;
   sel.addEventListener("change", async () => {
-    const code = normalizeCurrencyCode(sel.value);
+    const code = sel.value ? normalizeCurrencyCode(sel.value) : "";
     try {
       await window.TPV_CFG?.set?.(OPTIONS_CURRENCY_KEY, code);
       toast("Moneda guardada. Reinicia el TPV para aplicarla en todas las pantallas.", "info", "Moneda");

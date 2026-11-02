@@ -6,7 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
-        "MEJORA: nueva opción «Moneda» (Opciones → Productos → Tarjeta y venta) para los clientes que no trabajan en euros. Con «Peso colombiano» los importes salen como $ 18.000 (sin decimales y con punto de miles) en la parrilla, el carrito, el cobro, los tickets, el cierre de caja y la pantalla del cliente, el recuento de caja usa los billetes y monedas colombianos, y un importe escrito como 18.000 se entiende como dieciocho mil. Por defecto sigue en euros y no cambia nada para quien no la toque; al cambiarla hay que reiniciar el TPV."
+        "MEJORA: nueva opción «Moneda» (Opciones → Productos → Tarjeta y venta) para los clientes que no trabajan en euros. Con «Peso colombiano» los importes salen como $ 18.000 (sin decimales y con punto de miles) en la parrilla, el carrito, el cobro, los tickets, el cierre de caja y la pantalla del cliente, el recuento de caja usa los billetes y monedas colombianos, y un importe escrito como 18.000 se entiende como dieciocho mil. Por defecto es «Automática»: el TPV usa la divisa que tenga FacturaScripts (si es euro, nada cambia; si es peso colombiano, se activa solo) y se puede forzar a mano; al cambiarla hay que reiniciar el TPV."
       ]
     },
     {

@@ -11328,6 +11328,11 @@ if (
     const hardcoded = renderer.match(/\.toFixed\(2\)\.replace\("\.", ","\) \+ " €"/g) || [];
     if (hardcoded.length === 0 && /id="currencySelect"/.test(fs.readFileSync(path.join(__dirname, "..", "..", "index.html"), "utf8"))) {
       ok("Moneda: ya no queda ningun importe con el simbolo € escrito a mano en renderer.js y existe el selector de Moneda en Opciones");
+      if (/settings\/default/.test(renderer) && /fetchFsDefaultCurrencyCode/.test(renderer) && /OPTIONS_CURRENCY_AUTO_KEY/.test(renderer)) {
+        ok("Moneda: en modo automatico se lee la divisa por defecto de FacturaScripts (settings/default)");
+      } else {
+        fail("Moneda automatica: falta la lectura de settings/default (fetchFsDefaultCurrencyCode)");
+      }
     } else {
       fail("Quedan " + hardcoded.length + " importes con el simbolo € escrito a mano (usar fmtMoney) o falta el selector #currencySelect");
     }
