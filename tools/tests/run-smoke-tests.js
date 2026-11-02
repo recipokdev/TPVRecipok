@@ -11414,9 +11414,9 @@ if (
   }
 }
 
-// Cantidades de una division igualitaria como fracciones (2026-11-02): "2/3" y "1/3" en vez de 0,6667 / 0,3333,
-// solo en lineas con meta.splitOrigQty entera; el resto (p. ej. 0,5 kg de bascula) sigue igual. Y el total de la
-// mesa (todas las partes) y lo que falta por cobrar se ven junto al total de la parte.
+// Carrito de una parte de una division igualitaria (2026-11-02): cada producto con SU cantidad de siempre y el
+// precio ya dividido ("2 x 1,60 € ÷ 3"), no la fraccion que se guarda por debajo (0,6667); y el total de la mesa
+// (todas las partes) y lo que falta por cobrar se ven junto al total de la parte.
 {
   const vm = require("vm");
   const extractFn = (name) => {
@@ -11434,13 +11434,16 @@ if (
   };
   const ctx = {};
   vm.createContext(ctx);
-  vm.runInContext(extractFn("fmtQty") + "\n" + extractFn("fmtQtyLine"), ctx);
-  const t = (q, orig) => ctx.fmtQtyLine({ qty: q, meta: orig == null ? undefined : { splitOrigQty: orig } });
-  const okFrac = t(0.3333, 1) === "1/3" && t(0.6667, 2) === "2/3" && t(1.0001, 3) === "1" && t(0.5, 1) === "1/2" && t(0.3349, 1) === "1/3";
-  const okPlano = t(0.5) === "0,5" && t(0.3333) === "0,3333" && t(0.1167, 0.35) === "0,1167";
-  const htmlOk = /id="splitMesaTotalsRow"/.test(fs.readFileSync(path.join(__dirname, "..", "..", "index.html"), "utf8")) && /function refreshSplitMesaTotals/.test(renderer) && /fmtQtyLine\(item\)/.test(renderer);
-  if (okFrac && okPlano && htmlOk) ok("Dividir igualitario: las cantidades salen como fraccion (1/3, 2/3) solo en lineas divididas, y el carrito muestra el total de la mesa y lo que falta por cobrar");
-  else fail("Fracciones/total de mesa al dividir: fracciones=" + okFrac + ", resto sin cambios=" + okPlano + ", html/render=" + htmlOk);
+  vm.runInContext(extractFn("fmtQty") + "\n" + extractFn("getSplitLineView"), ctx);
+  const v = (q, orig, parts) => ctx.getSplitLineView({ qty: q, meta: orig == null ? undefined : { splitOrigQty: orig, splitParts: parts } });
+  const a1 = v(0.6667, 2, 3);
+  const a2 = v(1.0001, 3, 3);
+  const a3 = v(0.1167, 0.35, 3);
+  const okVista = a1 && a1.qtyText === "2" && a1.parts === 3 && a2 && a2.qtyText === "3" && a3 && a3.qtyText === "0,35";
+  const okSin = v(0.5) === null && v(0.3333) === null && v(2, 2, 3) === null; // sin meta o editada a mano: cantidad real
+  const htmlOk = /id="splitMesaTotalsRow"/.test(fs.readFileSync(path.join(__dirname, "..", "..", "index.html"), "utf8")) && /function refreshSplitMesaTotals/.test(renderer) && /getSplitLineView\(item\)/.test(renderer);
+  if (okVista && okSin && htmlOk) ok("Dividir igualitario: cada parte muestra cada producto con su cantidad de siempre y el precio dividido (x ÷ N), y el carrito enseña el total de la mesa y lo que falta por cobrar");
+  else fail("Vista de una parte dividida: vista=" + okVista + ", sin cambios=" + okSin + ", html/render=" + htmlOk);
 }
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");

@@ -15966,7 +15966,7 @@ function refreshSplitMesaTotals(cartItems) {
       if (!t?.paid) pending += total;
     });
 
-    label.textContent = `Tu parte (${meta.part}/${meta.total})`;
+    label.textContent = `Tu parte: ${meta.part} de ${meta.total}`;
     allEl.textContent = `Mesa completa: ${eur(round2(all))}`;
     pendEl.textContent = `Por cobrar: ${eur(round2(pending))}`;
     row.classList.remove("hidden");
@@ -15975,22 +15975,20 @@ function refreshSplitMesaTotals(cartItems) {
   }
 }
 
-// Cantidad de una linea que viene de dividir la cuenta en partes iguales (lleva meta.splitOrigQty): se pinta como
-// fraccion (1/3, 2/3) o como entero en vez de 0,3333 / 1,0001. Solo es presentacion: la cantidad real (la que
-// cuenta para stock y factura) no cambia, y el resto de lineas (p. ej. 0,5 kg de bascula) se muestran igual.
-function fmtQtyLine(item) {
-  const q = Number(item?.qty);
+// Linea que viene de dividir la cuenta en partes iguales (lleva meta.splitOrigQty y meta.splitParts): el carrito de
+// cada parte muestra el producto con SU cantidad de siempre y el precio ya dividido ("2 x 1,60 € ÷ 3"), no la
+// fraccion que se guarda por debajo (0,6667), que es la que cuenta para el stock y la factura. Si alguien cambia
+// la cantidad de la linea a mano (deja de ser original / partes), se muestra la real.
+function getSplitLineView(item) {
   const orig = Number(item?.meta?.splitOrigQty);
-  // solo si el pedido original llevaba unidades enteras (con 0,35 kg dividido en 3 una fraccion confundiria)
-  if (isFinite(q) && q > 0 && isFinite(orig) && Math.abs(orig - Math.round(orig)) < 1e-9) {
-    const entero = Math.round(q);
-    if (entero > 0 && Math.abs(q - entero) <= 0.006) return String(entero);
-    for (let den = 2; den <= 12; den += 1) {
-      const num = Math.round(q * den);
-      if (num > 0 && Math.abs(q - num / den) <= 0.006) return `${num}/${den}`;
-    }
+  const parts = Number(item?.meta?.splitParts);
+  const q = Number(item?.qty);
+  if (!isFinite(orig) || !isFinite(parts) || !isFinite(q) || orig <= 0 || parts < 2) {
+    return null;
   }
-  return fmtQty(item?.qty);
+  const share = orig / parts;
+  if (Math.abs(q - share) > Math.max(0.07, share * 0.05)) return null;
+  return { qtyText: fmtQty(orig), parts };
 }
 
 function buildPackIncludesTextFromChildren(cartArr, parentLineId) {
@@ -16829,6 +16827,8 @@ function renderCart() {
     const unitTxt = pricing.anyPricingAdjustment
       ? `<span class="cart-price-old">${eur(pricing.baseUnitGross)}</span><span class="cart-price-new">${eur(unitPrice)}</span>${pricingBadges.join("")}${modifiedMark}`
       : eur(unitPrice) + modifiedMark;
+    // Linea de una division igualitaria: cantidad original y precio dividido entre las partes (ver getSplitLineView)
+    const splitView = getSplitLineView(item);
 
     const lineTxt = pricing.anyPricingAdjustment
       ? `<span class="cart-price-old">${eur(pricing.baseLineTotal)}</span><span class="cart-price-new">${eur(lineTotal)}</span>`
@@ -16924,13 +16924,13 @@ function renderCart() {
 
         ${buildCartLineMiniLegend(pricing)}
 
-        <div class="cart-line-unit">${fmtQtyLine(item)} x ${unitTxt}</div>
+        <div class="cart-line-unit">${splitView ? splitView.qtyText : fmtQty(item.qty)} x ${unitTxt}${splitView ? ` ÷ ${splitView.parts}` : ""}</div>
       </div>
 
       <div class="qty-controls">
         <button class="qty-btn" data-action="minus" data-lineid="${item._lineId}">-</button>
         <button type="button" class="qty-display qty-display-btn qty-btn" data-action="edit" data-lineid="${item._lineId}">
-          ${fmtQtyLine(item)}
+          ${splitView ? splitView.qtyText : fmtQty(item.qty)}
         </button>
         <button class="qty-btn" data-action="plus" data-lineid="${item._lineId}">+</button>
       </div>
@@ -23199,10 +23199,10 @@ function refreshParkedEditingBanner() {
   const splitSuffix = navState.enabled
     ? hasPartAlreadyInName
       ? ""
-      : ` · Parte ${navState.part}/${navState.total}`
+      : ` · Parte ${navState.part} de ${navState.total}`
     : "";
   title.textContent = navState.enabled
-    ? `${docTypeTexts.shortLabel}: Parte ${navState.part}/${navState.total}`
+    ? `${docTypeTexts.shortLabel}: Parte ${navState.part} de ${navState.total}`
     : `${docTypeTexts.shortLabel}: ${bannerTicketName}${splitSuffix}`;
   if (titleWrap) {
     titleWrap.classList.remove("hidden");
@@ -24605,7 +24605,7 @@ async function markParkedTicketAsPaidByIndex(
     const totalParts = Number(splitMeta.total || 0) || 0;
 
     toast(
-      `Parte ${Number(splitMeta.part || 0)}/${totalParts} cobrada.`,
+      `Parte ${Number(splitMeta.part || 0)} de ${totalParts} cobrada.`,
       "ok",
       "Dividir",
     );
@@ -48511,6 +48511,7 @@ function buildEqualSplitShares(sourceLines, parts) {
           ...(line?.meta && typeof line.meta === "object" ? line.meta : {}),
           splitOrigId: origId,
           splitOrigQty: qty,
+          splitParts: parts,
         },
       });
       acumulado[p] += got[p];
@@ -48759,7 +48760,7 @@ async function confirmSplitTicket() {
         }
       }
       if (line.meta && typeof line.meta === "object") {
-        const { splitOrigId, splitOrigQty, ...rest } = line.meta;
+        const { splitOrigId, splitOrigQty, splitParts, ...rest } = line.meta;
         line.meta = Object.keys(rest).length ? rest : null;
       }
     });

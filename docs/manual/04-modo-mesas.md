@@ -153,7 +153,7 @@ Pulsa **Dividir** en la cabecera del pedido.
 ### Qué diferencia hay entre los dos modos
 
 - **Por artículos (asignación manual).** Tú decides **qué consume cada cuenta**: para cada producto indicas cuántas unidades van en la P1, en la P2, etc. Es el modo para cuando cada comensal paga lo suyo («yo la cerveza y el bocadillo; tú el café»). Hay que asignar artículos al menos a **dos** partes, y debajo de cada producto ves lo que **aún no has asignado**.
-- **Igualitario.** Divide el pedido **a partes iguales**: cada cuenta lleva **la misma fracción de cada línea** (con 3 partes, un tercio de cada producto, con la cantidad en decimales) y el total sale repartido por igual. Las partes **suman siempre el total exacto del ticket**: si no se puede repartir a partes iguales al céntimo, alguna cuenta sale un céntimo más cara que otra (el cuadro lo muestra como «5,86 – 5,87»). Es el modo para cuando se comparte todo y se paga a medias.
+- **Igualitario.** Divide el pedido **a partes iguales**: cada cuenta lleva **la misma fracción de cada línea** (con 3 partes, un tercio de cada producto y de su precio) y el total sale repartido por igual. Las partes **suman siempre el total exacto del ticket**: si no se puede repartir a partes iguales al céntimo, alguna cuenta sale un céntimo más cara que otra (el cuadro lo muestra como «5,86 – 5,87»). Es el modo para cuando se comparte todo y se paga a medias.
 
 @fig img/mesas-dividir-igualitario.png | crop=510,198,900,621 | marks=1:1192,331;2:516,369 | Modo igualitario con 3 partes.
 
@@ -162,17 +162,20 @@ Pulsa **Dividir** en la cabecera del pedido.
 
 Se puede dividir en **2 a 12 partes**. Cada parte pasa a ser un pedido de esa misma mesa, con el nombre del original y el número de la parte, por ejemplo «Ticket #12 (2/3)», que se **cobra por separado**.
 
-Una vez dividido, la cabecera permite moverte entre las partes («Parte n/m») con las flechas.
+Una vez dividido, la cabecera permite moverte entre las partes («Parte n de m») con las flechas.
 
-@fig img/mesas-dividido-partes.png | crop=1410,100,500,720 | width=70 | marks=1:1445,226;2:1515,226;3:1581,226;4:1698,226;5:1747,322;6:1560,771;7:1650,801 | Pedido ya dividido: la parte 1 de 3.
+@fig img/mesas-dividido-partes.png | crop=1410,100,500,720 | width=70 | marks=1:1445,226;2:1515,226;3:1596,226;4:1664,226;5:1546,314;6:1837,322;7:1590,771;8:1650,801 | Pedido ya dividido: la parte 1 de 3.
 
 1. **←** pasa a la parte anterior.
-2. **«Ticket: Parte 1/3».** La parte que tienes abierta y cuántas hay.
+2. **«Ticket: Parte 1 de 3».** La parte que tienes abierta y cuántas hay: «1 de 3» quiere decir que eres la primera de las tres cuentas, no «un tercio».
 3. **→** pasa a la parte siguiente.
 4. **Dividir** vuelve a abrir la ventana, por ejemplo para **Revertir división**.
-5. **Cantidad en fracción.** En el modo igualitario, cada cuenta lleva una fracción de cada línea: «2/3» de los dos cafés, «1/3» del croissant… Es solo la forma de mostrarlo: por debajo la cantidad es exacta y cuenta bien para el stock y la factura. Una línea de 3 unidades dividida entre 3 queda en «1».
-6. **Tu parte (1/3).** El total grande es lo que paga **esta cuenta**.
-7. **Mesa completa / Por cobrar.** Debajo, el total de **toda la mesa** (todas las partes) y lo que queda **por cobrar**, que baja al cobrar cada parte.
+5. **Cantidad de siempre y precio dividido.** Cada producto conserva su cantidad (los 2 cafés) y debajo se lee «2 x 1,60 € ÷ 3»: lo que cuesta, repartido entre las 3 partes.
+6. **Lo que pagas por esa línea** en esta cuenta (1,07 €).
+7. **Tu parte: 1 de 3.** El total grande es lo que paga **esta cuenta**.
+8. **Mesa completa / Por cobrar.** Debajo, el total de **toda la mesa** (todas las partes) y lo que queda **por cobrar**, que baja al cobrar cada parte.
+
+Por dentro, el programa guarda en cada parte la fracción exacta de cada producto (por ejemplo 0,6667 de los 2 cafés), para que el stock y las facturas cuenten bien; en pantalla no tienes que verla. Las partes suman siempre el total exacto de la mesa.
 
 Si te equivocas, vuelve a abrir **Dividir** y usa **Revertir división** (equivale a poner *Partes = 1*): junta todas las partes en un único ticket, con las cantidades exactamente como estaban en el pedido original.
 
