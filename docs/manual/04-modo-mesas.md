@@ -155,9 +155,24 @@ Pulsa **Dividir** en la cabecera del pedido.
 - **Por artículos (asignación manual).** Tú decides **qué consume cada cuenta**: para cada producto indicas cuántas unidades van en la P1, en la P2, etc. Es el modo para cuando cada comensal paga lo suyo («yo la cerveza y el bocadillo; tú el café»). Hay que asignar artículos al menos a **dos** partes, y debajo de cada producto ves lo que **aún no has asignado**.
 - **Igualitario.** Divide el pedido **a partes iguales**: cada cuenta lleva **la misma fracción de cada línea** (con 3 partes, un tercio de cada producto, con la cantidad en decimales) y el total sale repartido por igual. Es el modo para cuando se comparte todo y se paga a medias.
 
+@fig img/mesas-dividir-igualitario.png | crop=510,198,900,621 | marks=1:1192,331;2:516,369 | Modo igualitario con 3 partes.
+
+1. **Partes.** Aquí, 3: cada cuenta lleva un tercio.
+2. **Modo: Igualitario.** No hay columnas por parte: las líneas se reparten solas, sin que tengas que asignar nada.
+
 Se puede dividir en **2 a 12 partes**. Cada parte pasa a ser un pedido de esa misma mesa, con el nombre del original y el número de la parte, por ejemplo «Ticket #12 (2/3)», que se **cobra por separado**.
 
-Una vez dividido, la cabecera permite moverte entre las partes («Parte n/m») con las flechas. Si te equivocas, vuelve a abrir **Dividir** y usa **Revertir división** (equivale a poner *Partes = 1*): junta todas las partes en un único ticket.
+Una vez dividido, la cabecera permite moverte entre las partes («Parte n/m») con las flechas.
+
+@fig img/mesas-dividido-partes.png | crop=1410,100,500,160 | marks=1:1445,226;2:1515,226;3:1581,226;4:1664,226 | Cabecera del pedido ya dividido.
+
+1. **←** pasa a la parte anterior.
+2. **«Ticket: Parte 1/3».** La parte que tienes abierta y cuántas hay.
+3. **→** pasa a la parte siguiente.
+4. **Dividir** vuelve a abrir la ventana, por ejemplo para **Revertir división**.
+
+En el modo igualitario las cantidades de cada línea salen en decimales (0,3333 de cada producto con 3 partes) y el total del carrito es el de esa parte.
+ Si te equivocas, vuelve a abrir **Dividir** y usa **Revertir división** (equivale a poner *Partes = 1*): junta todas las partes en un único ticket.
 
 ## 6. Cambiar o juntar mesas
 
