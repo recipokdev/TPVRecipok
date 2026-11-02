@@ -147,6 +147,36 @@ async function fetchFsDefaultCurrencyCode() {
   }
 }
 
+function isAnyTpvDialogOpen(ignoreId) {
+  return [
+    ...document.querySelectorAll(
+      ".simple-overlay:not(.hidden), .num-pad-overlay:not(.hidden), .qwerty-overlay:not(.hidden), .email-overlay:not(.hidden)",
+    ),
+  ].some((el) => el.id !== ignoreId);
+}
+
+// La moneda se lee al arrancar, asi que aplicarla es reiniciar el programa. Se ofrece un boton para hacerlo ahora
+// (mismo reinicio que la salida de emergencia: la caja y los aparcados viven en el servidor y no se tocan). Si hay
+// una venta en el carrito o hay otra ventana abierta no se interrumpe: con waitIdle se espera hasta ~1 minuto a que
+// el TPV este libre y, si no lo esta, queda solo el aviso de siempre.
+async function promptRestartForCurrency(reason, opts) {
+  const o = opts || {};
+  const busy = () => (Array.isArray(cart) && cart.length > 0) || isAnyTpvDialogOpen(o.ignoreOverlayId);
+  if (busy() && o.waitIdle) {
+    for (let i = 0; i < 12 && busy(); i++) await new Promise((r) => setTimeout(r, 5000));
+  }
+  if (busy()) {
+    toast(`${reason} Reinicia el TPV cuando termines la venta.`, "info", "Moneda");
+    return;
+  }
+  const ok = await confirmModal(
+    "Reiniciar para cambiar de moneda",
+    `${reason}\n\nEl reinicio es rápido: la caja y los aparcados se quedan como están.`,
+    { okButtonText: "Reiniciar ahora" },
+  );
+  if (ok) await window.TPV_APP?.emergencyRestart?.();
+}
+
 async function loadCurrencySetting() {
   let manual = "";
   let cached = "";
@@ -175,7 +205,7 @@ async function loadCurrencySetting() {
     } else {
       refresh().then((fs) => {
         if (fs && fs !== CURRENCY.code) {
-          toast(`La divisa de FacturaScripts es ${fs}. Reinicia el TPV para usarla.`, "info", "Moneda");
+          promptRestartForCurrency(`La divisa de FacturaScripts ahora es ${fs}.`, { waitIdle: true });
         }
       });
     }
@@ -196,7 +226,7 @@ function bindCurrencySettingOnce() {
     const code = sel.value ? normalizeCurrencyCode(sel.value) : "";
     try {
       await window.TPV_CFG?.set?.(OPTIONS_CURRENCY_KEY, code);
-      toast("Moneda guardada. Reinicia el TPV para aplicarla en todas las pantallas.", "info", "Moneda");
+      promptRestartForCurrency("Moneda guardada. Para aplicarla en todas las pantallas hay que reiniciar el TPV.", { ignoreOverlayId: "optionsOverlay" });
     } catch (e) {
       console.warn("No se pudo guardar la moneda:", e);
     }
