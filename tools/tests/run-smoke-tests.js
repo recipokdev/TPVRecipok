@@ -11647,6 +11647,13 @@ if (
     /syncFsObservaciones\(order\)\s*\.then\(\(\) => cancelFsPedidoQuietly\(order\.fsIdpedido\)\)/.test(encargosJs) &&
     // lista del dia impresa
     encargosJs.includes("ENCARGOS PARA HOY (");
+  // Encontrado con la prueba de dos TPV (2026-11-03): el error del servidor al cobrar un anticipo se borraba al instante
+  // porque renderPage2 redibujaba la caja de errores; ahora se conserva hasta que el usuario toque algo.
+  const okWizErr =
+    encargosJs.includes('showWizError(err || wiz.serverError || "");') &&
+    encargosJs.includes("wiz.serverError = String(e?.message || e);") &&
+    encargosJs.includes("function keypadPress(key) {\r\n    wiz.serverError = \"\";");
+  if (!okWizErr) fail("Encargos: el error del servidor en el cuadro de anticipo debe conservarse (wiz.serverError)");
   if (okHtml && okCss && okRenderer && okJs) ok("Encargos 2c: lista por pestañas/dias con vencidos, detalle, otro anticipo, cancelar con devolucion (observaciones antes de cancelar el pedido) y lista del dia impresa; aviso en tiempo real");
   else fail("Encargos 2c: html=" + okHtml + ", css=" + okCss + ", renderer=" + okRenderer + ", js=" + okJs);
 }

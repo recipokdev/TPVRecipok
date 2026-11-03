@@ -561,6 +561,7 @@
     $("encSumDetail").classList.add("hidden");
     showWizError("");
 
+    wiz.serverError = "";
     wiz.open = true;
     $("encargoWizardOverlay").classList.remove("hidden");
     lockAppUI();
@@ -680,8 +681,10 @@
         : cents > 0
           ? `Guardar y cobrar ${fmtMoney(cents / 100)}`
           : "Guardar encargo";
+    // El error del servidor (p. ej. «se está atendiendo en otro dispositivo») se conserva hasta que el usuario toque
+    // algo; antes este redibujado lo borraba al instante y el cajero no veía nada.
     const err = page2Error();
-    showWizError(err);
+    showWizError(err || wiz.serverError || "");
     btn.disabled = !!err || wiz.saving;
   }
 
@@ -700,6 +703,7 @@
 
   // Teclado numérico propio del cuadro: escribe en el campo activo (importe o entrega del cliente).
   function keypadPress(key) {
+    wiz.serverError = "";
     const field = wiz.activeField === "cash" ? "cashText" : "amountText";
     let t = String(wiz[field] || "");
     const decimals = Number(CURRENCY?.decimals ?? 2);
@@ -719,6 +723,7 @@
   }
 
   function setAmountFromCents(c) {
+    wiz.serverError = "";
     const n = Math.max(0, Math.round(c));
     const decimals = Number(CURRENCY?.decimals ?? 2);
     wiz.amountText = n === 0 ? "" : decimals > 0 ? (n / 100).toFixed(decimals).replace(".", ",") : String(Math.round(n / 100));
@@ -759,6 +764,7 @@
       const err2 = page2Error();
       if (err2) return showWizError(err2);
     }
+    wiz.serverError = "";
     wiz.saving = true;
     setWizBusy(true);
     showWizError("");
@@ -829,7 +835,8 @@
       );
     } catch (e) {
       console.warn("[ENCARGOS] guardar encargo:", e?.message || e);
-      showWizError(String(e?.message || e));
+      wiz.serverError = String(e?.message || e);
+      showWizError(wiz.serverError);
     } finally {
       wiz.saving = false;
       setWizBusy(false);
@@ -1104,6 +1111,7 @@
       const b = e.target.closest("button[data-codpago]");
       if (!b) return;
       wiz.codpago = b.dataset.codpago;
+      wiz.serverError = "";
       wiz.cashTouched = false;
       renderPage2();
     });
@@ -1160,6 +1168,7 @@
     wiz.cashTouched = false;
     wiz.activeField = "amount";
     showWizError("");
+    wiz.serverError = "";
     wiz.open = true;
     $("encargoWizardOverlay").classList.remove("hidden");
     lockAppUI();
@@ -1170,6 +1179,7 @@
     if (wiz.saving) return;
     const err = page2Error();
     if (err) return showWizError(err);
+    wiz.serverError = "";
     wiz.saving = true;
     setWizBusy(true);
     showWizError("");
@@ -1213,7 +1223,8 @@
       if (list.open) loadList().catch(() => {});
       if (detail.open) openDetail(order.id).catch(() => {});
     } catch (e) {
-      showWizError(String(e?.message || e));
+      wiz.serverError = String(e?.message || e);
+      showWizError(wiz.serverError);
     } finally {
       wiz.saving = false;
       setWizBusy(false);
