@@ -47950,6 +47950,9 @@ function refreshPayAndPreprintLayout() {
 // antes de guardar de verdad.
 function getMesasAutoSaveIntent() {
   if (!isMesasTransaccionesMode()) return null;
+  // Encargos: el carrito de una edicion de encargo NO es un pedido de la mesa (js/tpv/encargos.js). Sin esto, editar
+  // un encargo con el Modo Mesas abierto guardaba sus lineas como un aparcado nuevo de la mesa seleccionada.
+  if (window.TPV_ENCARGOS?.isEditing?.()) return null;
 
   const loaded = getCurrentLoadedParkedTicket();
   if (loaded?.paid) return null;
@@ -48032,6 +48035,7 @@ function scheduleMesasAutoSave() {
 
 async function runTpvAutoSaveIfNeeded() {
   if (MESAS_INLINE_ACTIVE) return;
+  if (window.TPV_ENCARGOS?.isEditing?.()) return; // el carrito de una edicion de encargo no se guarda como aparcado
 
   const loaded = getCurrentLoadedParkedTicket();
   if (!loaded || loaded?.paid) return;

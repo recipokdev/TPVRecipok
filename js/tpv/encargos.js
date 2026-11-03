@@ -2651,6 +2651,13 @@
     return !!edit.active;
   }
 
+  // En la vista de Mesas el carrito es el del pedido de la mesa (se recarga solo al llegar cambios de otros terminales y
+  // se guarda como aparcado de la mesa): no sirve para editar un encargo. Se edita en el TPV normal.
+  function inMesasView() {
+    return typeof MESAS_INLINE_ACTIVE !== "undefined" && !!MESAS_INLINE_ACTIVE;
+  }
+  const MESAS_EDIT_MSG = "Sal del Modo Mesas (✕ arriba a la derecha) y vuelve a pulsar «Editar encargo»: los encargos se editan en el TPV normal.";
+
   function buildCartFromOrder(order) {
     const out = [];
     for (const l of Array.isArray(order.lines) ? order.lines : []) {
@@ -2710,6 +2717,7 @@
     if (typeof TPV_STATE !== "undefined" && TPV_STATE?.offline) return toast("Encargos necesita conexión con el servidor.", "warn", "Encargos");
     if (!cashSession?.open) return toast("Abre la caja para poder editar un encargo.", "warn", "Encargos");
     if (edit.active) return toast("Ya estás editando un encargo: guarda o descarta los cambios.", "info", "Encargos");
+    if (inMesasView()) return showMessageModal("Editar encargo", MESAS_EDIT_MSG);
     if (hasVisibleCartLines()) {
       return showMessageModal(
         "Hay productos en el carrito",
@@ -2815,6 +2823,7 @@
   async function openEditWizard() {
     if (!edit.active) return;
     if (typeof TPV_STATE !== "undefined" && TPV_STATE?.offline) return toast("Encargos necesita conexión con el servidor.", "warn", "Encargos");
+    if (inMesasView()) return showMessageModal("Guardar cambios del encargo", "Estás en el Modo Mesas: aquí el carrito es el de la mesa, no el del encargo. Vuelve al TPV normal (✕ arriba a la derecha) para guardar o descartar los cambios.");
     if (!hasVisibleCartLines()) return showMessageModal("Sin productos", "El encargo no puede quedar sin productos. Añade alguno o descarta los cambios.");
     if (currentParkedTicketIndex != null) return toast("Suelta antes el pedido aparcado que tienes cargado.", "warn", "Encargos");
     if (typeof activeCustomerTariffReadyPromise !== "undefined") await activeCustomerTariffReadyPromise;

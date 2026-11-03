@@ -11831,6 +11831,12 @@ if (
   else fail("Encargos aviso caja: html=" + okHtml + ", js=" + okJs);
 }
 
+// Encargos 2d: el carrito de una edicion nunca se guarda solo como aparcado (Modo Mesas / TPV normal)
+mustContain(renderer, "  if (window.TPV_ENCARGOS?.isEditing?.()) return null;", "El autoguardado de Mesas no guarda el carrito de una edicion de encargo como aparcado");
+mustContain(renderer, "  if (window.TPV_ENCARGOS?.isEditing?.()) return; // el carrito de una edicion de encargo no se guarda como aparcado", "El autoguardado del TPV normal no guarda el carrito de una edicion de encargo como aparcado");
+mustContain(fs.readFileSync(path.join(__dirname, "..", "..", "js", "tpv", "encargos.js"), "utf8"), "if (inMesasView()) return showMessageModal(\"Editar encargo\", MESAS_EDIT_MSG);", "Editar un encargo no se permite con el Modo Mesas abierto (el carrito es el de la mesa)");
+mustContain(fs.readFileSync(path.join(__dirname, "..", "..", "js", "tpv", "encargos.js"), "utf8"), "Estás en el Modo Mesas: aquí el carrito es el de la mesa, no el del encargo.", "No se puede guardar una edicion de encargo estando en el Modo Mesas");
+
 // Encargos fase 5: resguardo por email (reutiliza el cuadro, el PDF y el envio de «Enviar factura») y manual propio
 {
   const encargosJs = fs.readFileSync(path.join(__dirname, "..", "..", "js", "tpv", "encargos.js"), "utf8");

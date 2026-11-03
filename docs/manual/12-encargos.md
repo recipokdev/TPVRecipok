@@ -59,7 +59,7 @@ Si alguien más está recogiendo ese mismo encargo en otro terminal, el TPV avis
 
 ## 6. Editar un encargo
 
-1. Abre el encargo y pulsa **Editar encargo**. Los productos pasan al **carrito**, con una franja violeta **«Editando el encargo de…»** y los botones **Guardar cambios** y **Descartar**. Mientras editas, **Cobrar y Aparcar están bloqueados**. Para editar, el carrito debe estar vacío.
+1. Abre el encargo y pulsa **Editar encargo**. Los productos pasan al **carrito**, con una franja violeta **«Editando el encargo de…»** y los botones **Guardar cambios** y **Descartar**. Mientras editas, **Cobrar y Aparcar están bloqueados**. Para editar, el carrito debe estar vacío y hay que estar en el **TPV normal** (no en la vista del Modo Mesas, donde el carrito es el de la mesa).
 2. Cambia lo que haga falta: añade o quita productos, cambia cantidades…
 3. Pulsa **Guardar cambios**. Revisa el día, la hora, el nombre, el teléfono y la nota, y pulsa **Guardar cambios** otra vez.
 4. El TPV imprime un **nuevo resguardo marcado «MODIFICADO»**, que anula el anterior.
