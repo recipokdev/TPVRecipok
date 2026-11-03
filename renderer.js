@@ -25969,6 +25969,12 @@ function hideTerminalOverlay() {
   terminalOverlay.classList.add("hidden");
 }
 
+// Efectivo neto de los encargos de esta caja (anticipos + restos cobrados - devoluciones), desde nuestro servidor
+// (js/tpv/encargos.js). Entra en el total esperado en caja; las facturas de encargos no cuentan como ventas.
+function getEncargosCashNet() {
+  return roundMoney2(Number(cashSession?.encargos?.cashNet) || 0);
+}
+
 function updateCloseSummary(countedTotal) {
   if (!cashCloseSummary) return;
 
@@ -25979,7 +25985,7 @@ function updateCloseSummary(countedTotal) {
   const expectedCash =
     cashSession.expectedCashFS != null
       ? Number(cashSession.expectedCashFS)
-      : opening + cashIncome + movements;
+      : opening + cashIncome + movements + getEncargosCashNet();
 
   const totalSales = Number(cashSession.totalSales || 0);
   const diff = (Number(countedTotal) || 0) - (Number(expectedCash) || 0);
@@ -26025,7 +26031,7 @@ function applyRemoteCajaToSession(remoteCaja) {
   const opening = Number(remoteCaja.dineroini || 0);
   const cashIncome = Number(cashSession.cashSalesTotal || 0);
   const movements = Number(cashSession.cashMovementsTotal || 0);
-  const expectedCash = opening + cashIncome + movements;
+  const expectedCash = opening + cashIncome + movements + getEncargosCashNet();
   const totalSales = Number(cashSession.totalSales || 0);
 
   // Guardamos en sesión para que updateCloseSummary use estos valores
@@ -28145,6 +28151,7 @@ function resetCashRuntimeForNewCaja() {
   cashSession.cashMovementsTotal = 0;
 
   cashSession.expectedCashFS = null;
+  cashSession.encargos = null;
   cashSession.closingTotal = 0;
 }
 
@@ -28394,6 +28401,7 @@ function applyCashCloseCacheEntry(entry) {
   renderPayMethodsSummary();
   renderMixedTicketsSummary();
   renderAgentSalesSummary();
+  window.TPV_ENCARGOS?.renderCloseBlock?.();
   updateCloseSummary(Number(cashSession.closingTotal || 0));
   if (cashDirectTotalEl) {
     cashDirectTotalEl.value = formatCashDirectAmount(
@@ -28452,17 +28460,26 @@ async function runCashCloseSummaryComputation({ applyToUI = true } = {}) {
     : [];
   const recibosByFactura = buildRecibosByFacturaMap(recibosCaja);
 
-  cashSession.closeFacturasSnapshot = facturasCajaList;
+  // Encargos (js/tpv/encargos.js): su dinero se cuenta aparte, desde el servidor; sus facturas (con recibos de anticipos
+  // de otros días) no entran en las ventas. Si el servidor no responde, todo queda como antes (sin sacar nada).
+  const encSummary = await (window.TPV_ENCARGOS?.getCashSummaryForClose?.(cajaId) ?? Promise.resolve(null)).catch(() => null);
+  cashSession.encargos = encSummary || null;
+  const encInvoiceIds = encSummary ? new Set(encSummary.invoiceIds || []) : null;
+  const salesFacturasList = encSummary
+    ? facturasCajaList.filter((f) => !window.TPV_ENCARGOS.isEncargoInvoice(f, encInvoiceIds))
+    : facturasCajaList;
+
+  cashSession.closeFacturasSnapshot = salesFacturasList;
   cashSession.closeRecibosByFacturaSnapshot = recibosByFactura;
 
   const [, , agentSalesSummary, movimientosCajaRaw] = await Promise.all([
-    hydrateCloseTicketStatsForCaja(cajaId, facturasCajaList),
+    hydrateCloseTicketStatsForCaja(cajaId, salesFacturasList),
     hydratePaymentsByMethodForClose(
       cajaId,
-      facturasCajaList,
+      salesFacturasList,
       recibosByFactura,
     ),
-    buildAgentSalesSummaryForCaja(cajaId, facturasCajaList, recibosByFactura),
+    buildAgentSalesSummaryForCaja(cajaId, salesFacturasList, recibosByFactura),
     fetchApiResourceWithParams("tpvmovimientos", {
       "filter[idcaja]": cajaId,
       limit: 0,
@@ -28519,7 +28536,8 @@ async function runCashCloseSummaryComputation({ applyToUI = true } = {}) {
   cashSession.expectedCashFS = roundMoney2(
     Number(cashSession.openingTotal || 0) +
       cashSession.cashSalesTotal +
-      cashSession.cashMovementsTotal,
+      cashSession.cashMovementsTotal +
+      getEncargosCashNet(),
   );
 
   // Aprovecha este recalculo real (autoritativo, desde FacturaScripts) para
@@ -28533,6 +28551,7 @@ async function runCashCloseSummaryComputation({ applyToUI = true } = {}) {
     renderPayMethodsSummary();
     renderMixedTicketsSummary();
     renderAgentSalesSummary();
+    window.TPV_ENCARGOS?.renderCloseBlock?.();
 
     updateCloseSummary(Number(cashSession.closingTotal || 0));
     if (cashDirectTotalEl) {
@@ -28547,8 +28566,10 @@ async function runCashCloseSummaryComputation({ applyToUI = true } = {}) {
     computedAt: Date.now(),
     remoteCaja,
     session: {
-      closeFacturasSnapshot: facturasCajaList,
+      closeFacturasSnapshot: salesFacturasList,
       closeRecibosByFacturaSnapshot: recibosByFactura,
+      encargos: cashSession.encargos || null,
+      expectedCashFS: cashSession.expectedCashFS,
       paymentsByMethod: cashSession.paymentsByMethod,
       totalPaymentUses: cashSession.totalPaymentUses,
       numtickets: cashSession.numtickets,
@@ -28980,6 +29001,7 @@ function buildCashClosePrintData(remoteCaja) {
       : [],
     userObs: obs,
     autoLogText,
+    encargos: cashSession.encargos || null,
   };
 }
 
@@ -30690,7 +30712,8 @@ async function apiCloseCashInFS() {
   const opening = Number(cashSession.openingTotal || 0);
   const cashIncome = Number(cashSession.cashSalesTotal || 0);
   const movements = Number(cashSession.cashMovementsTotal || 0);
-  const expectedCash = opening + cashIncome + movements;
+  const encargosCash = getEncargosCashNet();
+  const expectedCash = opening + cashIncome + encargosCash + movements;
   const counted = Number(cashSession.closingTotal || 0);
   const diff = counted - expectedCash;
 
@@ -30698,7 +30721,7 @@ async function apiCloseCashInFS() {
     idcaja: String(remoteId),
     fechafin: nowFs(),
     dinerofin: counted,
-    ingresos: cashIncome,
+    ingresos: cashIncome + encargosCash,
     nick: String(getLoginUser() || "").trim(),
     totalmovi: movements,
     totalcaja: expectedCash,
@@ -39987,6 +40010,23 @@ async function printCashCloseReport(report) {
         agentsBox.innerHTML = "";
         if (agentsTotalWrap) agentsTotalWrap.style.display = "none";
       }
+    }
+
+    // encargos (solo si hay dinero de encargos en esta caja)
+    try {
+      const encHtml = window.TPV_ENCARGOS?.buildCloseReportHtml?.(report.encargos, report.totalVendido) || "";
+      const encWrap = doc.getElementById("ccEncargosWrap");
+      if (encWrap && encHtml) {
+        encWrap.style.display = "block";
+        encWrap.innerHTML = encHtml;
+      }
+      const encRow = doc.getElementById("ccEncargosCashRow");
+      if (encRow && report.encargos?.hasMoney) {
+        encRow.style.display = "flex";
+        _setText("ccEncargosCash", eur2(report.encargos.cashNet || 0));
+      }
+    } catch (e) {
+      console.warn("[printCashCloseReport] bloque de encargos:", e?.message || e);
     }
 
     // observaciones

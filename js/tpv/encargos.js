@@ -2192,6 +2192,180 @@
     }
   }
 
+  // ------------------------------------------------------------------ cierre de caja
+
+  // El cierre de caja se calcula con las facturas y recibos REALES de la caja (renderer.js, runCashCloseSummaryComputation).
+  // Las facturas de un encargo llevan recibos de anticipos cobrados otros días (o hoy, ya contados aparte): si entraran en
+  // «Ventas» se contaría dos veces el dinero. Por eso el cierre saca esas facturas de las ventas y suma el dinero de los
+  // encargos desde nuestro servidor: anticipos, restos cobrados al recoger y devoluciones, de ESTA caja.
+  //
+  // El dinero NUNCA se oculta: si hay movimientos de encargos en la caja se muestran aunque la opción esté apagada en
+  // este terminal (otro terminal puede haber cobrado un anticipo).
+
+  const cashKinds = ["anticipo", "resto", "devolucion"];
+
+  function isEncargoInvoice(f, invoiceIds) {
+    const id = String(f?.idfactura ?? "").trim();
+    if (id && invoiceIds && invoiceIds.has(id)) return true;
+    // Respaldo si el servidor aún no ha anotado el cierre (se cortó a medias): el número2 lleva el código del encargo.
+    return /^ENC-/.test(String(f?.numero2 || "").trim());
+  }
+
+  async function getCashSummaryForClose(cajaId) {
+    if (!cajaId || state.serverAvailable === false) return null;
+    let r;
+    try {
+      r = await call("customer-orders-cash-summary", { query: { cajaId: String(cajaId) }, timeoutMs: 12000 });
+    } catch {
+      return null;
+    }
+    if (!r.ok || !r.json?.data) return null;
+    const s = r.json.data;
+    const out = {
+      cajaId: String(cajaId),
+      invoiceIds: (s.invoiceIds || []).map((x) => String(x)),
+      byKind: {},
+      methodsNet: {},
+      completed: s.completed || {},
+      pending: s.pending || { count: 0, collected: 0 },
+      cashNet: 0,
+      totalNet: 0,
+      hasMoney: false,
+    };
+    cashKinds.forEach((k) => (out.byKind[k] = { count: 0, total: 0, cash: 0, methods: {} }));
+    (s.moves || []).forEach((m) => {
+      const kind = String(m.kind);
+      if (!out.byKind[kind]) return;
+      const code = normalizePayCode(m.codpago);
+      const amount = Number(m.amount) || 0;
+      const sign = kind === "devolucion" ? -1 : 1;
+      const row = out.byKind[kind];
+      row.count += Number(m.count) || 0;
+      row.total = round2(row.total + sign * amount);
+      row.methods[code] = round2((row.methods[code] || 0) + sign * amount);
+      out.methodsNet[code] = round2((out.methodsNet[code] || 0) + sign * amount);
+      out.totalNet = round2(out.totalNet + sign * amount);
+      if (isCashPago({ codpago: m.codpago })) {
+        row.cash = round2(row.cash + sign * amount);
+        out.cashNet = round2(out.cashNet + sign * amount);
+      }
+      out.hasMoney = true;
+    });
+    const c = out.completed;
+    out.completedCount = (Number(c.recogido?.count) || 0) + (Number(c.cerrado_sin_recoger?.count) || 0);
+    return out;
+  }
+
+  function closeBlockVisible(enc) {
+    if (!enc) return false;
+    return enc.hasMoney || enc.completedCount > 0 || (isEnabled() && Number(enc.pending?.count) > 0);
+  }
+
+  // Filas del bloque (las usan la pantalla de cierre y el informe impreso)
+  function closeBlockRows(enc) {
+    const labels = window.__PAYMETHOD_LABELS__ || {};
+    const lbl = (c) => labels[c] || c;
+    const rows = [];
+    const k = enc.byKind;
+    const nonCash = (kind) => round2(k[kind].total - k[kind].cash);
+    rows.push({ label: `Anticipos cobrados hoy (${k.anticipo.count})`, cash: k.anticipo.cash, other: nonCash("anticipo"), total: k.anticipo.total, methods: k.anticipo.methods });
+    rows.push({
+      label: `Resto cobrado al recoger (${(Number(enc.completed.recogido?.count) || 0)} ${Number(enc.completed.recogido?.count) === 1 ? "encargo recogido" : "encargos recogidos"})`,
+      cash: k.resto.cash,
+      other: nonCash("resto"),
+      total: k.resto.total,
+      methods: k.resto.methods,
+    });
+    if (k.devolucion.count > 0) rows.push({ label: `Anticipos devueltos (${k.devolucion.count})`, cash: k.devolucion.cash, other: nonCash("devolucion"), total: k.devolucion.total, methods: k.devolucion.methods });
+    return { rows, lbl };
+  }
+
+  function renderCloseBlock() {
+    const box = $("encargosCloseBlock");
+    const cell = $("sumEncargosItem");
+    const enc = typeof cashSession !== "undefined" ? cashSession.encargos : null;
+    if (!box) return;
+    const visible = closeBlockVisible(enc);
+    if (cell) {
+      cell.style.display = visible && enc.hasMoney ? "" : "none";
+      const v = $("sumEncargosCash");
+      if (v && enc) v.textContent = fmtMoney(enc.cashNet);
+    }
+    if (!visible) {
+      box.style.display = "none";
+      box.innerHTML = "";
+      return;
+    }
+    const esc = escapeHtml;
+    const money = (n) => fmtMoney(n);
+    const { rows, lbl } = closeBlockRows(enc);
+    const rec = enc.completed.recogido || {};
+    const cer = enc.completed.cerrado_sin_recoger || {};
+    const sales = Number(cashSession.totalSales || 0);
+    const body = rows
+      .map(
+        (r) =>
+          `<tr><td>${esc(r.label)}</td><td class="n">${esc(money(r.cash))}</td><td class="n">${esc(money(r.other))}</td><td class="n">${esc(money(r.total))}</td></tr>`,
+      )
+      .join("");
+    const other = Object.entries(enc.methodsNet)
+      .filter(([code]) => !isCashPago({ codpago: code }))
+      .filter(([, v]) => Math.abs(v) > 0.004)
+      .map(([code, v]) => `${esc(lbl(code))} ${esc(money(v))}`)
+      .join(" · ");
+    box.style.display = "block";
+    box.innerHTML =
+      `<div class="enc-close-title">Encargos</div>` +
+      `<table class="enc-close-table"><thead><tr><th>Concepto</th><th class="n">Efectivo</th><th class="n">Otras formas</th><th class="n">Total</th></tr></thead><tbody>${body}` +
+      `<tr class="tot"><td>Cobrado por encargos hoy</td><td class="n">${esc(money(enc.cashNet))}</td><td class="n">${esc(money(round2(enc.totalNet - enc.cashNet)))}</td><td class="n">${esc(money(enc.totalNet))}</td></tr></tbody></table>` +
+      (other ? `<div class="enc-close-note">Otras formas de pago: ${other}</div>` : "") +
+      `<div class="enc-close-sub">Para cuadrar con las facturas del día:</div>` +
+      `<ul class="enc-close-list">` +
+      `<li>Encargos recogidos hoy (facturados hoy): ${Number(rec.count) || 0}, por ${esc(money(Number(rec.invoiced) || 0))}.` +
+      (Number(rec.collectedInOtherCajas) > 0 ? ` De ellos, ya cobrado en otros días o cajas (anticipos previos): ${esc(money(Number(rec.collectedInOtherCajas)))}.` : "") +
+      `</li>` +
+      (Number(cer.count) > 0 ? `<li>Cerrados sin recoger (facturados hoy): ${Number(cer.count)}, por ${esc(money(Number(cer.invoiced) || 0))}.</li>` : "") +
+      `</ul>` +
+      (Number(enc.pending.count) > 0
+        ? `<div class="enc-close-sub">Dinero de encargos aún sin recoger:</div><ul class="enc-close-list"><li>${Number(enc.pending.count)} ${Number(enc.pending.count) === 1 ? "encargo pendiente" : "encargos pendientes"}, con ${esc(money(Number(enc.pending.collected) || 0))} ya cobrados en anticipos.</li></ul>`
+        : "") +
+      `<div class="enc-close-foot">Solo el efectivo de los encargos (${esc(money(enc.cashNet))}) suma al total esperado en caja.</div>` +
+      `<div class="enc-close-grand"><span>TOTAL COBRADO HOY (ventas + encargos)</span><strong>${esc(money(round2(sales + enc.totalNet)))}</strong></div>`;
+  }
+
+  // Texto del bloque para el informe impreso (80 mm).
+  function buildCloseReportHtml(enc, salesTotal) {
+    if (!closeBlockVisible(enc)) return "";
+    const esc = escapeHtml;
+    const money = (n) => fmtMoney(n);
+    const { rows, lbl } = closeBlockRows(enc);
+    const rec = enc.completed.recogido || {};
+    const cer = enc.completed.cerrado_sin_recoger || {};
+    const row = (label, val, cls = "") => `<div class="row small ${cls}"><div class="col-left">${esc(label)}</div><div class="col-right">${esc(val)}</div></div>`;
+    let h = `<div class="sep"></div><div class="section-title center">ENCARGOS</div>`;
+    rows.forEach((r) => {
+      h += row(r.label, money(r.total), "bold");
+      Object.entries(r.methods)
+        .filter(([, v]) => Math.abs(v) > 0.004)
+        .forEach(([code, v]) => (h += row(`   ${lbl(code)}`, money(v))));
+    });
+    h += `<div class="sep"></div>` + row("COBRADO POR ENCARGOS", money(enc.totalNet), "bold");
+    Object.entries(enc.methodsNet)
+      .filter(([, v]) => Math.abs(v) > 0.004)
+      .forEach(([code, v]) => (h += row(`   ${lbl(code)}`, money(v))));
+    h += `<div class="small bold" style="margin-top:6px">Para cuadrar con las facturas:</div>`;
+    h += row(`Encargos recogidos hoy (${Number(rec.count) || 0})`, money(Number(rec.invoiced) || 0));
+    if (Number(rec.collectedInOtherCajas) > 0) h += row("  ya cobrado otros días", money(Number(rec.collectedInOtherCajas)));
+    if (Number(cer.count) > 0) h += row(`Cerrados sin recoger (${Number(cer.count)})`, money(Number(cer.invoiced) || 0));
+    if (Number(enc.pending.count) > 0) {
+      h += `<div class="small bold" style="margin-top:6px">Pendientes de recoger:</div>`;
+      h += row(`${Number(enc.pending.count)} encargos, anticipos cobrados`, money(Number(enc.pending.collected) || 0));
+    }
+    h += `<div class="sep"></div>` + row("TOTAL COBRADO HOY", money(round2(Number(salesTotal || 0) + enc.totalNet)), "bold");
+    h += `<div class="small">(ventas + encargos)</div>`;
+    return h;
+  }
+
   // ------------------------------------------------------------------ arranque
 
   function init() {
@@ -2220,6 +2394,10 @@
     openList,
     openDetail,
     openAdvanceDialog,
+    getCashSummaryForClose,
+    isEncargoInvoice,
+    renderCloseBlock,
+    buildCloseReportHtml,
     pickupFlow,
     closeUnclaimedFlow,
     solveDiscounts,

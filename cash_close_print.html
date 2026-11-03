@@ -167,6 +167,11 @@
         <div class="col-right" id="ccCashIncome">0,00 €</div>
       </div>
 
+      <div class="row small" id="ccEncargosCashRow" style="display: none">
+        <div class="col-left">Cobros Efectivo Encargos</div>
+        <div class="col-right" id="ccEncargosCash">0,00 €</div>
+      </div>
+
       <div class="row small">
         <div class="col-left">Total Movimientos</div>
         <div class="col-right" id="ccMovements">0,00 €</div>
@@ -230,6 +235,9 @@
           </div>
         </div>
       </div>
+
+      <!-- Encargos (solo si hay dinero de encargos en la caja) -->
+      <div id="ccEncargosWrap" style="display: none"></div>
 
       <!-- Observaciones -->
       <div id="ccObsWrap" style="display: none">

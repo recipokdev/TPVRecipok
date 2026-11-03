@@ -1105,6 +1105,12 @@
             <div class="cash-summary-value" id="sumCashIncome">0,00 €</div>
           </div>
 
+          <!-- Encargos: solo si hay dinero de encargos en esta caja -->
+          <div class="cash-summary-item" id="sumEncargosItem" style="display: none">
+            <div class="cash-summary-label">Cobros Efectivo Encargos</div>
+            <div class="cash-summary-value" id="sumEncargosCash">0,00 €</div>
+          </div>
+
           <div class="cash-summary-item">
             <div class="cash-summary-label">Total Movimientos</div>
             <div class="cash-summary-value" id="sumMovements">0,00 €</div>
@@ -1156,6 +1162,9 @@
 
           <!-- ✅ Ventas por agente (después) -->
           <div id="agentSalesSummary"></div>
+
+          <!-- ✅ Encargos (bloque aparte de las ventas) -->
+          <div id="encargosCloseBlock" class="enc-close-block" style="display: none"></div>
         </div>
         </div>
 

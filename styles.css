@@ -3697,6 +3697,91 @@ body.pay-encargo-mode #payOverlay .pay-extra {
   display: none;
 }
 
+/* ---- Encargos: bloque del cierre de caja ---- */
+.enc-close-block {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 2px solid #7e4fc1;
+  border-radius: 10px;
+  background: #f5f0fc;
+  color: #1f2937;
+}
+.enc-close-title {
+  font-weight: 800;
+  font-size: 18px;
+  color: #6b3fb0;
+  margin-bottom: 6px;
+}
+.enc-close-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.enc-close-table th {
+  text-align: left;
+  font-size: 12px;
+  color: #6b7280;
+  font-weight: 700;
+  padding: 2px 4px;
+  border-bottom: 1px solid #d8c9f0;
+}
+.enc-close-table td {
+  padding: 5px 4px;
+}
+.enc-close-table .n {
+  text-align: right;
+  white-space: nowrap;
+}
+.enc-close-table th.n {
+  text-align: right;
+}
+.enc-close-table tr.tot td {
+  font-weight: 800;
+  border-top: 1px solid #b79ae0;
+}
+.enc-close-note {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 4px;
+}
+.enc-close-sub {
+  margin-top: 10px;
+  font-weight: 700;
+  color: #6b3fb0;
+  font-size: 13px;
+}
+.enc-close-list {
+  margin: 3px 0 0 18px;
+  padding: 0;
+  font-size: 13px;
+}
+.enc-close-foot {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #6b7280;
+}
+.enc-close-grand {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #1f2937;
+  color: #fff;
+  font-weight: 700;
+}
+.enc-close-grand strong {
+  font-size: 22px;
+}
+body.theme-dark .enc-close-block {
+  background: #2a2140;
+  color: #e5e7eb;
+}
+body.theme-dark .enc-close-table th {
+  color: #cbd5e1;
+}
+
 /* ---- Encargos: lista y detalle ---- */
 .enc-list-modal {
   width: min(1040px, 96vw);

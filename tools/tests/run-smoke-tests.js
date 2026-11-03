@@ -1560,7 +1560,7 @@ console.log(
 
 mustContain(
   renderer,
-  "hydrateCloseTicketStatsForCaja(cajaId, facturasCajaList),",
+  "hydrateCloseTicketStatsForCaja(cajaId, salesFacturasList),",
   "Cash-close flow passes the already-fetched invoice list into hydrateCloseTicketStatsForCaja instead of triggering a second full fetch",
 );
 
@@ -3998,9 +3998,9 @@ mustContain(
   if (idx >= 0) {
     const scoped = renderer.slice(idx, idx + 700);
     if (
-      scoped.includes("hydrateCloseTicketStatsForCaja(cajaId, facturasCajaList),") &&
+      scoped.includes("hydrateCloseTicketStatsForCaja(cajaId, salesFacturasList),") &&
       scoped.includes("hydratePaymentsByMethodForClose(") &&
-      scoped.includes("buildAgentSalesSummaryForCaja(cajaId, facturasCajaList, recibosByFactura),") &&
+      scoped.includes("buildAgentSalesSummaryForCaja(cajaId, salesFacturasList, recibosByFactura),") &&
       scoped.includes('fetchApiResourceWithParams("tpvmovimientos", {')
     ) {
       ok(
@@ -6144,7 +6144,7 @@ console.log(
   if (
     scoped.includes("const cashIncome = Number(cashSession.cashSalesTotal || 0);") &&
     scoped.includes("const movements = Number(cashSession.cashMovementsTotal || 0);") &&
-    scoped.includes("const expectedCash = opening + cashIncome + movements;") &&
+    scoped.includes("const expectedCash = opening + cashIncome + movements + getEncargosCashNet();") &&
     !scoped.includes("Number(remoteCaja.ingresos || 0)") &&
     !scoped.includes("Number(remoteCaja.totalmovi || 0)") &&
     !scoped.includes("remoteCaja.totalcaja != null")
@@ -8392,7 +8392,7 @@ console.log(
 
 mustContain(
   renderer,
-  "cashSession.expectedCashFS = roundMoney2(\r\n    Number(cashSession.openingTotal || 0) +\r\n      cashSession.cashSalesTotal +\r\n      cashSession.cashMovementsTotal,\r\n  );",
+  "cashSession.expectedCashFS = roundMoney2(\r\n    Number(cashSession.openingTotal || 0) +\r\n      cashSession.cashSalesTotal +\r\n      cashSession.cashMovementsTotal +\r\n      getEncargosCashNet(),\r\n  );",
   "runCashCloseSummaryComputation now also recomputes expectedCashFS after fixing up cashSalesTotal/cashMovementsTotal -- applyRemoteCajaToSession (earlier in the same function) had already computed and cached expectedCashFS using the PRE-fix values, and updateCloseSummary prefers that cached value over recomputing it, so 'Total Esperado Caja' kept showing just the opening amount even though 'Cobros Efectivo' right next to it already showed the correct number",
 );
 
@@ -11711,6 +11711,44 @@ if (
   }
   if (okHtml && okJs && solverOk) ok("Encargos 3: recoger y cobrar el resto (candado, cobro, stock, pedido->factura, datos del TPV, recibos con fecha del anticipo, retomable) y cerrar sin recoger (descuento exacto al céntimo); " + solverInfo);
   else fail("Encargos 3: html=" + okHtml + ", js=" + okJs + ", solver=" + solverOk + " (" + solverInfo + ")");
+}
+
+// Encargos, fase 4 (2026-11-03): cierre de caja. Las facturas de encargos salen de «Ventas» (llevan recibos de anticipos
+// de otros dias) y su dinero se cuenta aparte desde el servidor; el efectivo de los encargos entra en el total esperado.
+{
+  const encargosJs = fs.readFileSync(path.join(__dirname, "..", "..", "js", "tpv", "encargos.js"), "utf8");
+  const closePrint = fs.readFileSync(path.join(__dirname, "..", "..", "cash_close_print.html"), "utf8");
+  const okHtml =
+    index.includes('id="sumEncargosItem"') && index.includes('id="encargosCloseBlock"') &&
+    closePrint.includes('id="ccEncargosCashRow"') && closePrint.includes('id="ccEncargosWrap"') &&
+    styles.includes(".enc-close-block {") && styles.includes(".enc-close-grand {");
+  const okRenderer =
+    // el efectivo de los encargos entra en TODOS los sitios donde se calcula el total esperado
+    renderer.includes("function getEncargosCashNet()") &&
+    renderer.includes(": opening + cashIncome + movements + getEncargosCashNet();") &&
+    renderer.includes("const expectedCash = opening + cashIncome + movements + getEncargosCashNet();") &&
+    renderer.includes("      cashSession.cashMovementsTotal +\r\n      getEncargosCashNet(),") &&
+    renderer.includes("const expectedCash = opening + cashIncome + encargosCash + movements;") &&
+    renderer.includes("ingresos: cashIncome + encargosCash,") &&
+    // las facturas de encargos se sacan de las ventas SOLO si el servidor respondio (si no, todo como antes)
+    renderer.includes("window.TPV_ENCARGOS?.getCashSummaryForClose?.(cajaId)") &&
+    renderer.includes("window.TPV_ENCARGOS.isEncargoInvoice(f, encInvoiceIds)") &&
+    renderer.includes("hydratePaymentsByMethodForClose(\r\n      cajaId,\r\n      salesFacturasList,") &&
+    renderer.includes("closeFacturasSnapshot: salesFacturasList,") &&
+    renderer.includes("cashSession.encargos = null;") &&
+    // pantalla de cierre e informe impreso
+    renderer.includes("window.TPV_ENCARGOS?.renderCloseBlock?.();") &&
+    renderer.includes("encargos: cashSession.encargos || null,") &&
+    renderer.includes("window.TPV_ENCARGOS?.buildCloseReportHtml?.(report.encargos, report.totalVendido)");
+  const okJs =
+    encargosJs.includes('call("customer-orders-cash-summary"') &&
+    encargosJs.includes("return /^ENC-/.test(String(f?.numero2 || \"\").trim());") &&
+    // el dinero nunca se oculta aunque la opcion este apagada en este terminal
+    encargosJs.includes("return enc.hasMoney || enc.completedCount > 0 || (isEnabled() && Number(enc.pending?.count) > 0);") &&
+    encargosJs.includes("sign = kind === \"devolucion\" ? -1 : 1") &&
+    encargosJs.includes("TOTAL COBRADO HOY (ventas + encargos)");
+  if (okHtml && okRenderer && okJs) ok("Encargos 4: cierre de caja con bloque «Encargos» aparte, facturas de encargos fuera de las ventas, efectivo de encargos en el total esperado (pantalla, informe impreso y cierre en FacturaScripts)");
+  else fail("Encargos 4: html=" + okHtml + ", renderer=" + okRenderer + ", js=" + okJs);
 }
 
 console.log("\n[SMOKE] Checking manual checklist presence\n");
