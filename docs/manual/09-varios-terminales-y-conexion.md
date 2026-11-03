@@ -9,6 +9,7 @@ Una misma empresa puede tener varios TPV (por ejemplo, uno en barra y otro en sa
 - **Pedidos aparcados y mesas compartidos.** Lo que hace un terminal (aparcar un pedido, abrir una mesa, añadir productos) lo ven los demás casi al instante, sin tener que hacer nada.
 - **Cada terminal tiene su caja.** Cada uno abre y cierra la suya.
 - **Cada terminal puede ver familias distintas.** Se configura en **Opciones → Terminales**.
+- **Solo un administrador elige el terminal.** Cada equipo recuerda su terminal. Un trabajador no puede cambiarlo: no ve el selector de terminal (solo elige entre los agentes de su terminal) y, si intenta cambiarlo, el TPV le avisa de que lo hace un administrador. El administrador (usuario administrador, con su PIN) sí ve el selector y puede cambiar el terminal de ese equipo. Un equipo recién instalado, sin terminal elegido, también deja elegirlo.
 
 ### Dos equipos con el mismo terminal
 
