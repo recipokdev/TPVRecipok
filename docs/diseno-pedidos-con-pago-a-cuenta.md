@@ -116,6 +116,8 @@ Detalles que se han decidido sobre la marcha (a confirmar):
 
 ## 3f. Stock y encargos: reserva virtual el día de la recogida (decisión del jefe, 3-nov)
 
+**Implementado (3-nov, rama `encargos`, probado en la demo):** al refrescar el contador de encargos (inicio, aviso en tiempo real, cada cambio y al cambiar de fecha) el TPV pide los pendientes con recogida ≤ hoy en versión ligera (`withLines=slim`: solo producto y cantidad) y resta esas cantidades en `getVisibleStockForProduct`. La tarjeta (si «Mostrar stock» está activo) enseña el stock disponible y «N reservados»; al cobrar, el aviso «Sin stock suficiente / Cobrar sin stock» indica lo reservado. Al recoger un encargo se compara con el stock físico. Packs derivados: sin reserva por ahora.
+
 - Un encargo **no descuenta stock** al crearse ni durante los días previos. El stock real baja **al facturar** (recoger o cerrar sin recoger), como en cualquier venta.
 - **Reserva virtual:** el stock disponible que ve el TPV es `stock físico − lo de los encargos pendientes con fecha de recogida de hoy o anterior`. Empieza a las 00:00 del día de la recogida (solo comparar fechas, sin proceso automático) y se libera sola cuando el encargo deja de estar pendiente. Un encargo vencido sigue reservando hasta que se recoge, cancela o cierra sin recoger. Los de días futuros no reservan todavía.
 - **Por qué no se descuenta el stock real a primera hora:** sería un ajuste inventado que luego la factura volvería a descontar (doble descuento), habría que deshacerlo al cancelar o cerrar sin recoger, y en los clientes con WooCommerce cada cambio de stock dispara avisos a su web.

@@ -258,16 +258,54 @@
   // ------------------------------------------------------------------ contador del boton
 
   // Encargos de hoy y vencidos que faltan por recoger; en rojo si hay alguno vencido.
+  // Reserva virtual de stock (decisión del jefe, 3-nov): lo de los encargos pendientes con recogida de hoy o anterior
+  // se resta del stock que ve el TPV (tarjeta y aviso al vender) sin tocar el stock real de FacturaScripts. Empieza a
+  // las 00:00 del día de la recogida y se libera sola cuando el encargo deja de estar pendiente. Productos simples y
+  // variantes por ahora (los packs, después).
+  const reserved = { map: new Map(), day: "" };
+
+  function getReservedQty(idproducto) {
+    if (!isEnabled()) return 0;
+    return Number(reserved.map.get(Number(idproducto)) || 0);
+  }
+
+  function setReservations(rows, today) {
+    const next = new Map();
+    for (const o of rows) {
+      for (const l of Array.isArray(o.lines) ? o.lines : []) {
+        const id = Number(l.idproducto) || 0;
+        const q = Number(l.qty) || 0;
+        if (id > 0 && q > 0) next.set(id, (next.get(id) || 0) + q);
+      }
+    }
+    reserved.map = next;
+    reserved.day = today;
+    try {
+      updateRenderedProductStocks();
+    } catch {}
+  }
+
   async function refreshCount() {
+    if (!isEnabled()) {
+      if (reserved.map.size) setReservations([], "");
+      return;
+    }
     // "offline" vive en el TPV_STATE de renderer.js (let global); "isAdmin" en window.TPV_STATE.
-    if (!isEnabled() || (typeof TPV_STATE !== "undefined" && TPV_STATE?.offline)) return;
+    if (typeof TPV_STATE !== "undefined" && TPV_STATE?.offline) return;
     const today = dateKey(new Date());
-    const r = await call("list-customer-orders", { query: { status: "pendiente", to: today, limit: "500" } });
+    // withLines=slim: solo producto y cantidad de cada línea (para la reserva), no la copia entera del carrito
+    const r = await call("list-customer-orders", { query: { status: "pendiente", to: today, limit: "500", withLines: "slim" } });
     if (!r.ok) return;
     const rows = Array.isArray(r.json?.data) ? r.json.data : [];
     const overdue = rows.filter((o) => String(o.pickupAt || "").slice(0, 10) < today).length;
     setBadge(rows.length, overdue > 0);
+    setReservations(rows, today);
   }
+
+  // A las 00:00 empiezan a reservar los encargos de ese día: se vuelve a calcular al cambiar de fecha.
+  setInterval(() => {
+    if (isEnabled() && reserved.day && reserved.day !== dateKey(new Date())) refreshCount().catch(() => {});
+  }, 60000);
 
   // ------------------------------------------------------------------ aviso de la novedad (una vez)
 
@@ -1787,7 +1825,8 @@
       .filter((l) => Number(l.idproducto) > 0)
       .map((l) => ({ baseProductId: Number(l.idproducto), id: Number(l.idproducto), qty: Number(l.qty) || 0, name: l.name }));
     if (!items.length) return null;
-    return checkCartStockProblems(items);
+    // Al recoger se compara con el stock físico: la reserva de este y otros encargos no debe bloquear su propia entrega.
+    return checkCartStockProblems(items, { ignoreEncargos: true });
   }
 
   async function pickupFlow() {
@@ -2817,6 +2856,7 @@
     openList,
     openDetail,
     openAdvanceDialog,
+    getReservedQty,
     startEdit,
     isEditing,
     openEditWizard,

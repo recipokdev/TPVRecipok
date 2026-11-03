@@ -14699,6 +14699,14 @@ function updateRenderedProductStocks() {
     badge.classList.remove("is-unknown", "is-zero", "is-low", "is-ok");
     badge.classList.add(stockClass);
   });
+
+  grid.querySelectorAll(".product-stock-reserved[data-reserved-product-id]").forEach((chip) => {
+    const baseId = Number(chip.dataset.reservedProductId || 0);
+    const n = baseId ? getEncargosReservedQty(baseId) : 0;
+    chip.classList.toggle("hidden", !(n > 0));
+    const txt = n > 0 ? `${fmtQty(n)} reservados` : "";
+    if (chip.textContent !== txt) chip.textContent = txt;
+  });
 }
 
 async function saveManualOrderFromBaseIdSequence(baseIds) {
@@ -14997,6 +15005,11 @@ function renderProducts() {
   >
     ${stockText}
   </div>
+  <div
+    class="product-stock-reserved${getEncargosReservedQty(prodId) > 0 ? "" : " hidden"}"
+    data-reserved-product-id="${prodId}"
+    title="Reservado para encargos de hoy (ya descontado del stock)"
+  >${getEncargosReservedQty(prodId) > 0 ? escapeHtml(fmtQty(getEncargosReservedQty(prodId))) + " reservados" : ""}</div>
   ${
     canShowStockEdit
       ? `<button
@@ -43230,7 +43243,18 @@ function isProductWithoutStockControl(product) {
   return effectiveManaged === null;
 }
 
-function getVisibleStockForProduct(productOrId, _depth = 0) {
+// Encargos (3f): reserva virtual de los encargos pendientes con recogida de hoy o anterior (js/tpv/encargos.js).
+// No toca el stock real de FacturaScripts: solo se resta en lo que ve el TPV y en el aviso al vender.
+function getEncargosReservedQty(productOrId) {
+  const idProd =
+    typeof productOrId === "number"
+      ? Number(productOrId || 0)
+      : getProductBaseId(productOrId);
+  if (!idProd) return 0;
+  return Number(window.TPV_ENCARGOS?.getReservedQty?.(idProd) || 0);
+}
+
+function getVisibleStockForProduct(productOrId, _depth = 0, opts = null) {
   const product =
     typeof productOrId === "object"
       ? productOrId
@@ -43248,13 +43272,15 @@ function getVisibleStockForProduct(productOrId, _depth = 0) {
 
   // Si ya sincronizamos reservas contra FacturaScripts, stockfis ya viene descontado.
   // Evita doble descuento visual en TPV.
+  const encargosReserved = opts?.ignoreEncargos ? 0 : getEncargosReservedQty(product);
+
   if (isReservedStockSyncedToFsEnabled()) {
-    return realStock;
+    return realStock - encargosReserved;
   }
 
   const reserved = getReservedQtyForProduct(product);
 
-  return realStock - reserved;
+  return realStock - reserved - encargosReserved;
 }
 
 // Activa/desactiva temporalmente "venta sin stock" en FacturaScripts para un
@@ -43284,7 +43310,7 @@ async function setProductVentasInStock(idProducto, enabled) {
 // FacturaScripts NO tiene permitido vender sin stock. Devuelve null si todo
 // bien, o la lista de productos problematicos (para poder ofrecer el
 // override "cobrar sin stock" y saber a que productos aplicarlo).
-async function checkCartStockProblems(cart) {
+async function checkCartStockProblems(cart, opts = null) {
   // Feedback de cliente real: pulsar "Cobrar" tardaba en abrir el modal de
   // pago porque, antes de dejarlo aparecer, se forzaba SIEMPRE una peticion
   // nueva a FacturaScripts para refrescar el stock -- aunque el ciclo de
@@ -43324,11 +43350,12 @@ async function checkCartStockProblems(cart) {
     if (!product.stockManaged) continue;
     if (product.allowSellWithoutStock) continue;
 
-    const visibleStock = getVisibleStockForProduct(product);
+    const visibleStock = getVisibleStockForProduct(product, 0, opts);
     if (visibleStock === null) continue;
     if (row.qty <= visibleStock) continue;
 
     blocked.push({
+      encargosReserved: opts?.ignoreEncargos ? 0 : getEncargosReservedQty(product),
       baseProductId: idProd,
       productName: String(
         product.referencia || product.name || row.name,
@@ -45660,6 +45687,9 @@ async function onPayButtonClick() {
             `  <div class="stock-warning-name">${idx + 1}. ${title}</div>`,
             `  <div class="stock-warning-row">Cantidad a cobrar: <strong>${qty}</strong></div>`,
             `  <div class="stock-warning-row">Stock actual: <strong>${stock}</strong></div>`,
+            w.encargosReserved > 0
+              ? `  <div class="stock-warning-row">Reservado para encargos de hoy: <strong>${escapeHtmlForModal(fmtQty(w.encargosReserved))}</strong> (ya descontado del stock actual)</div>`
+              : "",
             `</div>`,
           ].join("\n");
         })

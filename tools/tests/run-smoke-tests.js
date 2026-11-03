@@ -1598,7 +1598,7 @@ mustContain(
 );
 
 {
-  const fnStart = renderer.indexOf("async function checkCartStockProblems(cart)");
+  const fnStart = renderer.indexOf("async function checkCartStockProblems(cart");
   const fnBody = fnStart >= 0 ? renderer.slice(fnStart, fnStart + 1700) : "";
 
   if (fnStart < 0) {
@@ -1606,7 +1606,7 @@ mustContain(
   } else if (
     fnBody.includes("if (!product.stockManaged) continue;") &&
     fnBody.includes("if (product.allowSellWithoutStock) continue;") &&
-    fnBody.includes("getVisibleStockForProduct(product)")
+    fnBody.includes("getVisibleStockForProduct(product, 0, opts)")
   ) {
     ok(
       "checkCartStockProblems checks against stockManaged/allowSellWithoutStock/visible stock",
@@ -1630,7 +1630,7 @@ console.log(
 // cacheado en local, sin esperar a ninguna peticion de red antes de abrir
 // el modal.
 {
-  const fnStart = renderer.indexOf("async function checkCartStockProblems(cart)");
+  const fnStart = renderer.indexOf("async function checkCartStockProblems(cart");
   const fnBody = fnStart >= 0 ? renderer.slice(fnStart, fnStart + 400) : "";
   if (fnStart >= 0 && !fnBody.includes("refreshProductsStockOnly")) {
     ok(
@@ -8021,7 +8021,7 @@ mustContain(
 );
 mustContain(
   renderer,
-  "function getVisibleStockForProduct(productOrId, _depth = 0) {",
+  "function getVisibleStockForProduct(productOrId, _depth = 0, opts = null) {",
   "Recursion-depth guard added for the parent lookup (a fraction product's parent should never itself be another fraction product, but this caps it defensively instead of trusting that assumption blindly)",
 );
 
@@ -11671,7 +11671,7 @@ if (
     // el resto se cobra con la ventana de cobro de siempre (sin numero/serie/observaciones)
     encargosJs.includes("return await openPayModal(amount);") &&
     // aviso de stock como al cobrar, con el permiso de venta sin stock solo mientras dura la operacion
-    encargosJs.includes("checkCartStockProblems(items)") && encargosJs.includes("setProductVentasInStock(id, true)") &&
+    encargosJs.includes("checkCartStockProblems(items, { ignoreEncargos: true })") && encargosJs.includes("setProductVentasInStock(id, true)") &&
     encargosJs.includes("setProductVentasInStock(id, false)") &&
     // pedido -> factura con el estado «Facturar» y reconocida por numero2 (reintento sin duplicar)
     encargosJs.includes('getFsPedidoStateId("facturar")') && encargosJs.includes("findFsFacturaByNumero2(order.orderCode)") &&
@@ -11788,6 +11788,32 @@ if (
     encargosJs.includes('const EDIT_CFG_KEY = "ui.encargosEditing";') && encargosJs.includes("return loadEditState();");
   if (okHtml && okRenderer && okJs) ok("Encargos 2d: editar un encargo (pedido nuevo + cancelar el anterior, versión, no bajar de lo cobrado, Cobrar/Aparcar bloqueados, sobrevive a reinicio, factura por numero2 vigente)");
   else fail("Encargos 2d: html=" + okHtml + ", renderer=" + okRenderer + ", js=" + okJs);
+}
+
+// Encargos 3f: reserva virtual de stock (no toca el stock real; avisa sin bloquear)
+{
+  const encargosJs = fs.readFileSync(path.join(__dirname, "..", "..", "js", "tpv", "encargos.js"), "utf8");
+  const okRenderer =
+    renderer.includes("function getEncargosReservedQty(productOrId) {") &&
+    renderer.includes("const encargosReserved = opts?.ignoreEncargos ? 0 : getEncargosReservedQty(product);") &&
+    renderer.includes("return realStock - encargosReserved;") &&
+    renderer.includes("return realStock - reserved - encargosReserved;") &&
+    renderer.includes("async function checkCartStockProblems(cart, opts = null) {") &&
+    renderer.includes("Reservado para encargos de hoy:") &&
+    renderer.includes('class="product-stock-reserved${getEncargosReservedQty(prodId) > 0 ? "" : " hidden"}"') &&
+    renderer.includes('.product-stock-reserved[data-reserved-product-id]');
+  const okJs =
+    encargosJs.includes("const reserved = { map: new Map(), day: \"\" };") &&
+    encargosJs.includes('withLines: "slim"') &&
+    // solo cuenta lo pendiente con recogida de hoy o anterior y se libera sola
+    encargosJs.includes('query: { status: "pendiente", to: today, limit: "500", withLines: "slim" }') &&
+    encargosJs.includes("reserved.day !== dateKey(new Date())") &&
+    // al recoger se compara con el stock fisico, no con la reserva
+    encargosJs.includes("checkCartStockProblems(items, { ignoreEncargos: true })") &&
+    encargosJs.includes("getReservedQty,");
+  const okStyles = styles.includes(".product-stock-reserved {");
+  if (okRenderer && okJs && okStyles) ok("Encargos 3f: reserva virtual de stock (recogida de hoy o anterior; tarjeta «N reservados», aviso al vender sin bloquear, al recoger se compara con el físico)");
+  else fail("Encargos 3f: renderer=" + okRenderer + ", js=" + okJs + ", styles=" + okStyles);
 }
 
 // Solo un administrador elige el terminal (2026-11-04, segunda sucursal de un cliente): un trabajador no puede pasar a

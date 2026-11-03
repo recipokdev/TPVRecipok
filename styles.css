@@ -2312,6 +2312,22 @@ body.theme-dark .open-caja-prompt-text {
   text-align: center;
 }
 
+.product-stock-reserved {
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: #f5f0fc;
+  color: #5b2d9e;
+  border: 1px solid #7e4fc1;
+}
+
+.product-stock-reserved.hidden {
+  display: none;
+}
+
 .product-stock-wrap {
   display: inline-flex;
   align-items: center;
