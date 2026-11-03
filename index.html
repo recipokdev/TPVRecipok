@@ -1336,6 +1336,162 @@
       </div>
     </div>
 
+    <!-- Encargos: asistente «Nuevo encargo» (2 páginas, un solo guardado) -->
+    <div id="encargoWizardOverlay" class="simple-overlay hidden">
+      <div class="enc-modal" role="dialog" aria-modal="true" aria-labelledby="encWizTitle">
+        <div class="enc-head">
+          <h2 id="encWizTitle">Nuevo encargo · Datos</h2>
+          <span id="encWizStep" class="enc-step">Paso 1 de 2</span>
+          <button type="button" id="encWizCloseBtn" class="enc-close" aria-label="Cerrar">✕</button>
+        </div>
+
+        <div class="enc-body">
+          <!-- Página 1: datos -->
+          <section id="encPage1">
+            <h3 class="enc-sec-title">¿Quién lo encarga?</h3>
+            <div class="enc-row">
+              <label class="enc-field enc-grow">
+                <span>Nombre *</span>
+                <input id="encName" type="text" autocomplete="off" maxlength="160" />
+              </label>
+              <label class="enc-field enc-grow">
+                <span>Teléfono (opcional)</span>
+                <input id="encPhone" type="text" inputmode="tel" autocomplete="off" maxlength="40" />
+              </label>
+            </div>
+
+            <h3 class="enc-sec-title">¿Cuándo lo recoge?</h3>
+            <div class="enc-row enc-row-wrap">
+              <div class="enc-field enc-grow">
+                <span>Día * <em id="encDayLabel" class="enc-day-label"></em></span>
+                <div class="enc-chips" id="encDayChips">
+                  <button type="button" class="enc-chip" data-day="today">Hoy</button>
+                  <button type="button" class="enc-chip" data-day="tomorrow">Mañana</button>
+                  <button type="button" class="enc-chip" data-day="custom" id="encDayCustomBtn">Otro día…</button>
+                </div>
+                <input id="encDayInput" type="date" class="enc-day-input hidden" />
+              </div>
+              <div class="enc-field">
+                <span>Hora *</span>
+                <div class="enc-time">
+                  <button type="button" id="encTimeMinus" class="enc-step-btn" aria-label="15 minutos antes">−</button>
+                  <input id="encTime" type="time" step="300" />
+                  <button type="button" id="encTimePlus" class="enc-step-btn" aria-label="15 minutos después">+</button>
+                </div>
+              </div>
+            </div>
+
+            <label class="enc-field">
+              <span>Dedicatoria o nota para cocina (opcional)</span>
+              <textarea id="encNotes" rows="3" maxlength="2000"></textarea>
+            </label>
+
+            <div class="enc-field">
+              <span>Cliente de la factura</span>
+              <div class="enc-readonly" id="encCustomer">—</div>
+              <small>Se usará al facturar, cuando se recoja. Para cambiarlo, elige otro cliente en el carrito antes de pasar a encargo.</small>
+            </div>
+
+            <div class="enc-summary">
+              <div class="enc-sum-left">
+                <strong id="encSumCount">0 productos</strong>
+                <small>Todavía NO es una venta: no descuenta stock.</small>
+              </div>
+              <button type="button" id="encSumDetailBtn" class="enc-btn enc-btn-soft">Ver detalle (lista)</button>
+              <div class="enc-sum-total">Total <strong id="encSumTotal">0,00 €</strong></div>
+            </div>
+            <div id="encSumDetail" class="enc-sum-detail hidden"></div>
+          </section>
+
+          <!-- Página 2: anticipo -->
+          <section id="encPage2" class="hidden">
+            <div class="enc-summary enc-summary-top">
+              <div class="enc-sum-left">
+                <strong id="encP2Name">—</strong>
+                <small id="encP2When"></small>
+              </div>
+              <div class="enc-sum-total"><strong id="encP2Total">0,00 €</strong></div>
+            </div>
+
+            <div class="enc-p2-grid">
+              <div class="enc-p2-left">
+                <div class="enc-label">Importe a cobrar ahora</div>
+                <button type="button" id="encAmountDisplay" class="enc-amount">0,00 €</button>
+                <div class="enc-chips">
+                  <button type="button" class="enc-chip" id="encAllBtn">Todo</button>
+                  <button type="button" class="enc-chip" id="encHalfBtn">50 %</button>
+                  <button type="button" class="enc-chip" id="encQuarterBtn">25 %</button>
+                  <button type="button" class="enc-chip" id="encNoneBtn">Sin anticipo</button>
+                </div>
+
+                <div class="enc-label">Forma de pago</div>
+                <div class="enc-chips" id="encMethods"></div>
+
+                <div id="encCashBox" class="enc-cash hidden">
+                  <span>Entrega del cliente:</span>
+                  <button type="button" id="encCashDisplay" class="enc-cash-amount">0,00 €</button>
+                  <span>Cambio: <strong id="encChange">0,00 €</strong></span>
+                  <small>(solo en efectivo; se puede dejar como está)</small>
+                </div>
+
+                <div class="enc-pending">
+                  <span>Por cobrar al recoger</span>
+                  <strong id="encPending">0,00 €</strong>
+                </div>
+                <small class="enc-note">Esta cantidad queda anotada como anticipo en la caja de hoy.<br />Al recoger se descontará de la factura. No es una factura.</small>
+              </div>
+
+              <div class="enc-p2-right">
+                <div class="enc-label">Teclado numérico</div>
+                <div class="enc-keypad" id="encKeypad">
+                  <button type="button" data-key="7">7</button>
+                  <button type="button" data-key="8">8</button>
+                  <button type="button" data-key="9">9</button>
+                  <button type="button" data-key="4">4</button>
+                  <button type="button" data-key="5">5</button>
+                  <button type="button" data-key="6">6</button>
+                  <button type="button" data-key="1">1</button>
+                  <button type="button" data-key="2">2</button>
+                  <button type="button" data-key="3">3</button>
+                  <button type="button" data-key=",">,</button>
+                  <button type="button" data-key="0">0</button>
+                  <button type="button" data-key="back" aria-label="Borrar">⌫</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <div id="encWizError" class="enc-error hidden" role="alert"></div>
+        </div>
+
+        <div class="enc-foot">
+          <div id="encFootP1" class="enc-foot-row">
+            <button type="button" id="encCancelBtn" class="enc-btn enc-btn-grey">Cancelar</button>
+            <button type="button" id="encSaveNoAdvBtn" class="enc-btn enc-btn-outline">Guardar sin anticipo</button>
+            <button type="button" id="encNextBtn" class="enc-btn enc-btn-blue enc-grow">Siguiente: anticipo →</button>
+          </div>
+          <div id="encFootP2" class="enc-foot-row hidden">
+            <button type="button" id="encBackBtn" class="enc-btn enc-btn-grey">← Atrás</button>
+            <button type="button" id="encSaveBtn" class="enc-btn enc-btn-green enc-grow">Guardar encargo</button>
+          </div>
+          <small class="enc-foot-note">Los campos con * son obligatorios. Hasta el último paso no se guarda nada.</small>
+        </div>
+      </div>
+    </div>
+
+    <!-- Encargos: resultado tras guardar (reimprimir resguardo / justificante) -->
+    <div id="encargoResultOverlay" class="simple-overlay hidden">
+      <div class="simple-dialog enc-result-dialog">
+        <h2 id="encResTitle">Encargo guardado ✓</h2>
+        <p id="encResText"></p>
+        <div class="dialog-actions">
+          <button type="button" id="encResReceiptBtn">Imprimir resguardo</button>
+          <button type="button" id="encResVoucherBtn">Imprimir justificante</button>
+          <button type="button" id="encResCloseBtn">Cerrar</button>
+        </div>
+      </div>
+    </div>
+
     <div id="emailConfigOverlay" class="simple-overlay hidden">
       <div class="simple-dialog email-config-dialog">
         <h2>Configurar correo de facturas</h2>

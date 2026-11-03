@@ -17064,6 +17064,7 @@ function renderCart() {
   refreshParkedEditingBanner();
   refreshMesasTransSidebar();
   refreshCartUndoRedoUi();
+  window.TPV_ENCARGOS?.refreshPassButton?.();
 }
 
 const LOGIN_TOKEN_KEY = "tpv_login_token";

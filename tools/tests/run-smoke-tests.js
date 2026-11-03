@@ -11577,6 +11577,47 @@ if (
   else fail("Encargos 2a: html=" + okHtml + ", css=" + okCss + ", renderer=" + okRenderer + ", js=" + okJs);
 }
 
+// Encargos, parte 2b (2026-11-03): asistente «Nuevo encargo» de dos paginas con un solo guardado. El pedido de
+// FacturaScripts lo crea el TPV (sin duplicar por numero2), el servidor guarda encargo + anticipo juntos, el dinero se
+// escribe tambien en las observaciones del pedido, y un pedido que no llegue a guardarse no queda huerfano.
+{
+  const encargosJs = fs.readFileSync(path.join(__dirname, "..", "..", "js", "tpv", "encargos.js"), "utf8");
+  const okHtml = [
+    'id="encargoWizardOverlay"', 'id="encPage1"', 'id="encPage2"', 'id="encName"', 'id="encPhone"', 'id="encNotes"',
+    'id="encDayChips"', 'id="encTime"', 'id="encSumDetail"', 'id="encKeypad"', 'id="encMethods"', 'id="encPending"',
+    'id="encSaveNoAdvBtn"', 'id="encNextBtn"', 'id="encBackBtn"', 'id="encSaveBtn"', 'id="encargoResultOverlay"',
+  ].every((s) => index.includes(s)) && /Todavía NO es una venta/.test(index) && /No es una factura|no es una factura/i.test(index);
+  const okCss = styles.includes(".enc-modal {") && styles.includes(".enc-keypad {") && styles.includes("body.theme-dark .enc-modal");
+  const okRenderer = renderer.includes("window.TPV_ENCARGOS?.refreshPassButton?.();");
+  const okJs =
+    // FacturaScripts: pedido con el codigo en numero2, comprobando antes si ya existe (reintento sin duplicar)
+    encargosJs.includes('apiWrite("crearPedidoCliente", "POST"') &&
+    encargosJs.includes("findFsPedidoByNumero2(numero2)") &&
+    // los estados de un pedido se buscan por nombre en el recurso real "estadodocumentos"
+    encargosJs.includes('apiRead("estadodocumentos?limit=100&filter[tipodoc]=PedidoCliente")') &&
+    // un pedido creado cuyo encargo no llega a guardarse se cancela (no deja stock reservado)
+    encargosJs.includes("if (!keepOrphanCheck && wiz.fsDoc && !wiz.savedOk) cancelFsPedidoQuietly(wiz.fsDoc.idpedido);") &&
+    // encargo + anticipo en una sola llamada, con codigos repetibles
+    encargosJs.includes('postWithRetry("create-customer-order", body)') &&
+    encargosJs.includes("opCode: `${wiz.orderCode}-A1`") &&
+    // el dinero tambien en las observaciones del pedido de FacturaScripts, generado desde el servidor
+    encargosJs.includes("async function buildFsObservaciones(order)") &&
+    encargosJs.includes("Anticipo ${money(m.amount)}") &&
+    encargosJs.includes("syncFsObservaciones(order).catch(() => {});") &&
+    // validaciones: sin pasado, anticipo <= total, caja abierta para cobrar
+    encargosJs.includes("El día y la hora de recogida ya han pasado.") &&
+    encargosJs.includes("El anticipo no puede ser mayor que el total del encargo.") &&
+    encargosJs.includes("Abre la caja para poder cobrar un anticipo.") &&
+    // no se puede pasar a encargo un carrito que pertenece a un aparcado
+    encargosJs.includes("if (currentParkedTicketIndex != null)") &&
+    // tras guardar se vacia el carrito, se abre el cajon solo si hay efectivo y se imprimen resguardo y justificante
+    encargosJs.includes("isOpenDrawerAlwaysEnabled() || ctx.cash") &&
+    encargosJs.includes("RESGUARDO DE ENCARGO") && encargosJs.includes("JUSTIFICANTE DE ANTICIPO") &&
+    encargosJs.includes("Este documento no es una factura.");
+  if (okHtml && okCss && okRenderer && okJs) ok("Encargos 2b: asistente de 2 paginas, pedido en FacturaScripts sin duplicar, encargo+anticipo en una llamada, dinero en las observaciones, pedido huerfano cancelado, resguardo y justificante");
+  else fail("Encargos 2b: html=" + okHtml + ", css=" + okCss + ", renderer=" + okRenderer + ", js=" + okJs);
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
