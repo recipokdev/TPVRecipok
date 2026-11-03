@@ -5,7 +5,14 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.57",
+      "date": "2026-11-03",
+      "title": "Release 0.2.57",
       "changes": [
+        "MEJORA: solo un administrador puede elegir el terminal de un equipo. Con varios terminales en la empresa (por ejemplo, al abrir una segunda sucursal), antes cualquier trabajador podía cambiar a otro terminal desde el nombre del terminal, al pulsar el nombre del agente o al abrir la caja, y acabar usando la caja y los agentes de otro. Ahora un trabajador sigue siempre con el terminal de su equipo (solo elige entre los agentes de ese terminal) y, si intenta cambiarlo, el TPV le avisa de que lo hace un administrador. El administrador sigue viendo el selector como siempre. Cuenta como administrador lo mismo que en el resto de opciones: usuario administrador con su PIN y, si el cliente tiene activado «PIN de administrador por agente», también un agente administrador. Un equipo sin terminal válido (primera instalación, o su terminal ya no existe) puede elegir uno para poder arrancar.",
         "MEJORA: la opción «Moneda» en «Automática» ahora funciona con cualquier divisa de FacturaScripts (dólar, peso mexicano, peso chileno, libra, corona…), no solo euro y peso colombiano: el TPV toma de FacturaScripts el símbolo, los decimales, los separadores y la posición del símbolo, y el recuento de caja usa una serie de billetes y monedas adaptada al valor de la moneda. Los importes escritos a mano se interpretan con el formato de la moneda.",
         "MEJORA: en las monedas distintas del euro, el ticket impreso lleva el símbolo en todos los importes (por ejemplo «$ 9.000»). El ticket en euros no cambia.",
         "CORRECCIÓN: dividir la cuenta en modo «Igualitario» perdía céntimos: con 3 partes, un ticket de 17,60 € se repartía en tres partes de 5,86 € (17,58 € en total), y el cuadro de dividir enseñaba 5,87 €. Ahora las partes suman exactamente el total del ticket (algunas pueden diferir en un céntimo, y el cuadro lo muestra: «5,86 – 5,87»), y al revertir la división vuelven las cantidades originales de cada línea. El modo «Por artículos» no estaba afectado.",

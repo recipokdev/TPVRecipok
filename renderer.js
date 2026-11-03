@@ -25696,6 +25696,19 @@ function isTerminalOverlayCurrentlyOpen() {
   return !!terminalOverlay && !terminalOverlay.classList.contains("hidden");
 }
 
+// Quien puede ELEGIR el terminal de este equipo (2026-11-04, pedido del jefe al abrir una segunda sucursal de un
+// cliente): solo un administrador. Un trabajador no debe poder pasar a otro terminal (otra caja, otros agentes) ni por
+// descuido ni a proposito. Cuenta como administrador lo mismo que en el resto del programa (window.TPV_STATE.isAdmin):
+// usuario administrador con su PIN y, si el cliente activo "PIN de administrador por agente", tambien un agente
+// administrador. Excepcion: un equipo sin terminal valido (primera configuracion, o su terminal ya no existe) debe poder
+// elegir uno, o no podria arrancar.
+function canChooseTerminal() {
+  if (window.TPV_STATE?.isAdmin) return true;
+  const cur = currentTerminal;
+  if (!cur || cur.id == null || String(cur.id) === "demo") return true;
+  return !(Array.isArray(terminals) && terminals.some((t) => String(t.id) === String(cur.id)));
+}
+
 function showTerminalOverlay(mode = "session") {
   if (LOGIN_ACTIVE) return;
   if (!terminalOverlay) return;
@@ -25715,7 +25728,10 @@ function showTerminalOverlay(mode = "session") {
 
   // Rellenamos select de TPVs
   fillTerminalSelect();
-  const multipleTpvs = terminals.length > 1;
+  // Con varios terminales, solo un administrador ve el selector (canChooseTerminal); el resto sigue con el terminal
+  // de este equipo y solo elige entre los agentes de ese terminal.
+  const canPickTerminal = canChooseTerminal();
+  const multipleTpvs = terminals.length > 1 && canPickTerminal;
 
   // helper: copy según UI visible
   function updateTerminalOverlayCopy({ showTerminal, showAgent }) {
@@ -25748,7 +25764,12 @@ function showTerminalOverlay(mode = "session") {
 
   // ----- MODO CAMBIO RÁPIDO SOLO TERMINAL -----
   if (mode === "terminalSwitch") {
-    if (!multipleTpvs) return;
+    if (!multipleTpvs) {
+      if (terminals.length > 1 && !canPickTerminal) {
+        toast("Solo un administrador puede cambiar el terminal.", "info", "Terminal");
+      }
+      return;
+    }
 
     if (terminalSelectWrapper) terminalSelectWrapper.style.display = "block";
     if (agentSelectWrapper) agentSelectWrapper.style.display = "none";

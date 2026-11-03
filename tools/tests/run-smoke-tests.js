@@ -11751,6 +11751,50 @@ if (
   else fail("Encargos 4: html=" + okHtml + ", renderer=" + okRenderer + ", js=" + okJs);
 }
 
+// Solo un administrador elige el terminal (2026-11-04, segunda sucursal de un cliente): un trabajador no puede pasar a
+// otro terminal por el nombre del terminal, el del agente ni al abrir la caja.
+{
+  const okFn =
+    renderer.includes("function canChooseTerminal() {") &&
+    renderer.includes("if (window.TPV_STATE?.isAdmin) return true;") &&
+    // primera configuracion / terminal borrado: se puede elegir para poder arrancar
+    renderer.includes('if (!cur || cur.id == null || String(cur.id) === "demo") return true;') &&
+    // el selector (en los tres modos) solo existe si hay varios terminales Y se puede elegir
+    renderer.includes("const multipleTpvs = terminals.length > 1 && canPickTerminal;") &&
+    renderer.includes("Solo un administrador puede cambiar el terminal.");
+  // comportamiento: mismo codigo ejecutado con casos de ejemplo
+  let behaviour = false;
+  try {
+    const a = renderer.indexOf("function canChooseTerminal() {");
+    const b = renderer.indexOf("function showTerminalOverlay(");
+    const mk = (isAdmin, cur, list) =>
+      new Function("window", "currentTerminal", "terminals", renderer.slice(a, b) + "; return canChooseTerminal();")({ TPV_STATE: { isAdmin } }, cur, list);
+    const lista = [{ id: "1" }, { id: "2" }];
+    behaviour =
+      mk(false, { id: "1" }, lista) === false && // trabajador con terminal valido: NO
+      mk(true, { id: "1" }, lista) === true && // administrador: si
+      mk(false, null, lista) === true && // equipo sin terminal: si
+      mk(false, { id: "9" }, lista) === true && // su terminal ya no existe: si
+      mk(false, { id: "demo" }, lista) === true;
+  } catch {
+    behaviour = false;
+  }
+  const okDocs = changelogTextHasTerminalRule();
+  if (okFn && behaviour && okDocs) ok("Solo un administrador puede elegir el terminal: el trabajador no ve el selector ni puede cambiarlo; equipo sin terminal valido si puede elegir");
+  else fail("Terminal solo administrador: funcion=" + okFn + ", comportamiento=" + behaviour + ", changelog=" + okDocs);
+}
+function changelogTextHasTerminalRule() {
+  try {
+    const cl = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "changelog.json"), "utf8"));
+    // El release renombra la entrada "actual" a la version nueva ANTES de lanzar los tests: se mira en las ultimas.
+    return (cl.versions || [])
+      .slice(0, 4)
+      .some((v) => (v.changes || []).some((c) => /solo un administrador puede elegir el terminal/i.test(c)));
+  } catch {
+    return false;
+  }
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
