@@ -16,6 +16,7 @@ const SRC = path.join(ROOT, "docs", "manual");
 const OUT = path.join(SRC, "pdf");
 const filter = process.argv[2] || "";
 const MESAS_ID = "04-modo-mesas"; // modulo opcional: manual aparte
+const ENCARGOS_ID = "12-encargos"; // modulo opcional: manual aparte
 
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const inline = (s) =>
@@ -164,8 +165,9 @@ function chapterHtml(ch, n) {
     return { file: f, id, n: 0, ...mdToHtml(fs.readFileSync(path.join(SRC, f), "utf8"), id) };
   });
   // Manual general: todos los capitulos menos Mesas, numerados seguidos (1, 2, 3...).
-  const chapters = all.filter((c) => c.id !== MESAS_ID).map((c, i) => ({ ...c, n: i + 1 }));
+  const chapters = all.filter((c) => c.id !== MESAS_ID && c.id !== ENCARGOS_ID).map((c, i) => ({ ...c, n: i + 1 }));
   const mesas = all.find((c) => c.id === MESAS_ID) || null;
+  const encargos = all.find((c) => c.id === ENCARGOS_ID) || null;
   const version = require(path.join(ROOT, "package.json")).version;
   const stamp = new Date().toLocaleDateString("es-ES", { year: "numeric", month: "long" });
   const cover = (sub) =>
@@ -190,6 +192,12 @@ function chapterHtml(ch, n) {
     jobs.push({
       name: "Manual-TPV-Recipok-Modo-Mesas.pdf",
       html: page("Manual del Modo Mesas", cover("Modo Mesas (módulo opcional)") + tocOf([mesas], false) + chapterHtml(mesas, 0)),
+    });
+  }
+  if (encargos && (!filter || encargos.file.startsWith(filter))) {
+    jobs.push({
+      name: "Manual-TPV-Recipok-Encargos.pdf",
+      html: page("Manual de Encargos", cover("Encargos (módulo opcional)") + tocOf([encargos], false) + chapterHtml(encargos, 0)),
     });
   }
   for (const c of chapters) {

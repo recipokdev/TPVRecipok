@@ -1179,6 +1179,94 @@
     return printHtml(html);
   }
 
+  // ------------------------------------------------------------------ resguardo por email
+
+  // Mismo cuadro, mismo PDF por IPC y mismo envío por el servidor que «Enviar factura»; solo cambia el documento.
+  function buildReceiptEmailHtml(order) {
+    const esc = escapeHtml;
+    const emp = (typeof companyInfo !== "undefined" && companyInfo) || {};
+    const logo =
+      typeof companyLogoUrl !== "undefined" && companyLogoUrl
+        ? `<img src="${esc(companyLogoUrl)}" style="max-width:55mm;max-height:22mm;display:block;margin-bottom:6px" />`
+        : "";
+    const rows = (Array.isArray(order.lines) ? order.lines : [])
+      .map(
+        (l) =>
+          `<tr><td>${esc(fmtQty(l.qty))}</td><td>${esc(l.name)}</td><td class="n">${esc(fmtMoney(l.unit))}</td><td class="n">${esc(fmtMoney(l.total))}</td></tr>`,
+      )
+      .join("");
+    const addr = [emp.direccion, `${emp.codpostal ? emp.codpostal + ", " : ""}${emp.ciudad || ""}`.trim(), emp.cifnif ? "CIF: " + emp.cifnif : ""]
+      .filter(Boolean)
+      .map(esc)
+      .join(" · ");
+    return (
+      `<!doctype html><html><head><meta charset="utf-8"><style>` +
+      `@page{size:A4;margin:14mm}*{box-sizing:border-box}body{margin:0;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#1f2937}` +
+      `h1{font-size:20px;margin:0}.top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}` +
+      `.bar{background:#3D67AC;color:#fff;padding:10px 14px;margin:14px 0;border-radius:6px;display:flex;justify-content:space-between;font-size:15px;font-weight:700}` +
+      `.box{border:2px solid #1f2937;border-radius:8px;padding:10px 14px;margin:10px 0;text-align:center}.box .big{font-size:20px;font-weight:800}` +
+      `table{width:100%;border-collapse:collapse;margin-top:8px}th,td{padding:6px 8px;border-bottom:1px solid #d1d5db;text-align:left}th{background:#f3f4f6}.n{text-align:right;white-space:nowrap}` +
+      `.tot td{font-weight:700;border-bottom:none}.pend td{font-size:16px;font-weight:800}.foot{margin-top:18px;color:#6b7280;font-size:12px}` +
+      `</style></head><body>` +
+      `<div class="top"><div>${logo}<h1>${esc(emp.nombrecorto || emp.nombre || "")}</h1><div style="color:#6b7280;font-size:12px">${addr}</div></div>` +
+      `<div style="text-align:right"><strong>Código</strong><br>${esc(order.orderCode)}<br><span style="color:#6b7280;font-size:12px">${esc(formatDateTimeEs(order.createdAtMs))}</span></div></div>` +
+      `<div class="bar"><span>RESGUARDO DE ENCARGO</span><span>${esc(fmtMoney(order.total))}</span></div>` +
+      `<div class="box"><div style="font-size:12px;letter-spacing:1px">RECOGE</div><div class="big">${esc(pickupLabel(order.pickupAt).toUpperCase())}</div></div>` +
+      `<div><strong>Cliente:</strong> ${esc(order.customerName)}${order.customerPhone ? " · " + esc(order.customerPhone) : ""}</div>` +
+      (order.notes ? `<div style="margin-top:4px"><strong>Nota:</strong> ${esc(order.notes)}</div>` : "") +
+      `<table><thead><tr><th>Cant.</th><th>Descripción</th><th class="n">Precio</th><th class="n">Importe</th></tr></thead><tbody>${rows}` +
+      `<tr class="tot"><td colspan="3" class="n">Total</td><td class="n">${esc(fmtMoney(order.total))}</td></tr>` +
+      `<tr class="tot"><td colspan="3" class="n">Anticipo cobrado</td><td class="n">${esc(fmtMoney(order.collected))}</td></tr>` +
+      `<tr class="pend"><td colspan="3" class="n">Falta por cobrar</td><td class="n">${esc(fmtMoney(order.pending))}</td></tr></tbody></table>` +
+      `<div class="foot">Este documento no es una factura. Presente este resguardo al recoger el pedido; la factura se emite en ese momento.</div>` +
+      `</body></html>`
+    );
+  }
+
+  async function emailReceiptFlow(order) {
+    if (!order) return;
+    if (typeof TPV_STATE !== "undefined" && TPV_STATE?.offline) return toast("Enviar por email necesita conexión.", "warn", "Encargos");
+    if ((await getInvoiceEmailStatus()) === false) {
+      if (!isAdminUser()) {
+        return showMessageModal(
+          "Enviar resguardo",
+          "El correo de esta empresa no está configurado, así que no se pueden enviar emails.\n\nPide a un administrador que lo configure desde el botón «Enviar factura» de un ticket.",
+        );
+      }
+      const configure = await confirmModal(
+        "Enviar resguardo",
+        "El correo de esta empresa no está configurado, así que no se pueden enviar emails.\n\n¿Quieres configurarlo ahora? Solo hace falta el email y su contraseña.",
+        { okButtonText: "Configurar ahora" },
+      );
+      if (!configure) return;
+      if (!(await openEmailConfigModal())) return;
+    }
+    const code = String(order.orderCode || "");
+    const res = await openSendInvoiceEmailModal({
+      title: "Enviar resguardo por email",
+      prefillEmail: "",
+      prefillName: order.customerName || "",
+      defaultMessage: `Hola.\n\nLe enviamos el resguardo de su encargo (${code}), para recoger ${pickupLabel(order.pickupAt)}.\n\nGracias, un saludo.`,
+    });
+    if (!res) return;
+    toast("Generando resguardo…", "info", "Encargos");
+    const pdf = await window.TPV_PRINT?.renderInvoicePdf?.({ html: buildReceiptEmailHtml(order) });
+    if (!pdf?.ok) return toast("No se pudo generar el PDF: " + (pdf?.error || "error"), "err", "Encargos");
+    try {
+      await apiSendInvoiceEmail({
+        toEmail: res.toEmail,
+        subject: `Resguardo de su encargo ${code}`,
+        message: res.message,
+        pdfBase64: pdf.pdfBase64,
+        fileName: `Resguardo ${code}.pdf`,
+      });
+      toast("Resguardo enviado ✅", "ok", "Encargos");
+    } catch (e) {
+      reportClientEvent("email", "send-encargo-receipt-failed", e?.message || e, {}, "error");
+      toast("No se pudo enviar el resguardo: " + (e?.message || e), "err", "Encargos");
+    }
+  }
+
   // ------------------------------------------------------------------ enganche de los controles
 
   let wizardBound = false;
@@ -1584,6 +1672,7 @@
     $("encDetAdvanceBtn").classList.toggle("hidden", !(pend && o.pending > 0));
     $("encDetPickupBtn").classList.toggle("hidden", !pend);
     $("encDetEditBtn").classList.toggle("hidden", !pend);
+    $("encDetEmailBtn").classList.toggle("hidden", !pend);
     $("encDetCloseUnclaimedBtn").classList.toggle("hidden", !(pend && o.collected > 0));
     $("encDetPickupBtn").textContent = o.pending > 0 ? "Recoger y cobrar " + fmtMoney(o.pending) : "Entregar (ya pagado)";
     $("encDetCancelBtn").classList.toggle("hidden", !pend);
@@ -1772,6 +1861,8 @@
     $("encDetCloseUnclaimedBtn")?.addEventListener("click", () => closeUnclaimedFlow());
     $("encDetCancelBtn")?.addEventListener("click", () => cancelOrderFlow());
     $("encDetReceiptBtn")?.addEventListener("click", () => detail.order && printReceipt(detail.order));
+    $("encDetEmailBtn")?.addEventListener("click", () => emailReceiptFlow(detail.order));
+    $("encResEmailBtn")?.addEventListener("click", () => lastResult && emailReceiptFlow(lastResult.order));
     $("encDetVoucherBtn")?.addEventListener("click", () => detail.order && printAdvanceVoucher(detail.order, {}));
   }
 
@@ -2922,6 +3013,7 @@
     openDetail,
     openAdvanceDialog,
     getReservedQty,
+    buildReceiptEmailHtml,
     maybeShowTodayPrompt,
     startEdit,
     isEditing,

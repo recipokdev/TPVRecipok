@@ -1426,6 +1426,7 @@
             <button type="button" id="encDetEditBtn" class="enc-btn enc-btn-outline enc-btn-sm">Editar encargo</button>
             <button type="button" id="encDetAdvanceBtn" class="enc-btn enc-btn-blue enc-btn-sm">Cobrar otro anticipo</button>
             <button type="button" id="encDetReceiptBtn" class="enc-btn enc-btn-outline enc-btn-sm">Imprimir resguardo</button>
+            <button type="button" id="encDetEmailBtn" class="enc-btn enc-btn-outline enc-btn-sm">Enviar resguardo por email</button>
             <button type="button" id="encDetVoucherBtn" class="enc-btn enc-btn-outline enc-btn-sm">Imprimir justificante</button>
             <button type="button" id="encDetCloseUnclaimedBtn" class="enc-btn enc-btn-outline enc-btn-sm">Cerrar sin recoger</button>
             <button type="button" id="encDetCancelBtn" class="enc-btn enc-btn-danger enc-btn-sm">Cancelar encargo</button>
@@ -1585,6 +1586,7 @@
         <p id="encResText"></p>
         <div class="dialog-actions">
           <button type="button" id="encResReceiptBtn">Imprimir resguardo</button>
+          <button type="button" id="encResEmailBtn">Enviar por email</button>
           <button type="button" id="encResVoucherBtn">Imprimir justificante</button>
           <button type="button" id="encResCloseBtn">Cerrar</button>
         </div>
@@ -1663,7 +1665,7 @@
 
     <div id="invoiceEmailOverlay" class="simple-overlay hidden">
       <div class="simple-dialog invoice-email-dialog">
-        <h2>Enviar factura</h2>
+        <h2 id="invoiceEmailTitle">Enviar factura</h2>
         <p style="margin-bottom: 8px; font-size: 13px" id="invoiceEmailClientName"></p>
         <input
           type="email"

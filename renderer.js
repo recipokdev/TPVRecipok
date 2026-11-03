@@ -38962,6 +38962,8 @@ function openSendInvoiceEmailModal({
   ticket = null,
   prefillEmail = "",
   prefillName = "",
+  title = "",
+  defaultMessage = "",
 } = {}) {
   return new Promise((resolve) => {
     const overlay = document.getElementById("invoiceEmailOverlay");
@@ -39027,8 +39029,11 @@ function openSendInvoiceEmailModal({
 
     emailInput.value = prefillEmail || history[0] || "";
     if (messageInput) {
-      messageInput.value = buildDefaultInvoiceEmailMessage(ticket);
+      messageInput.value = defaultMessage || buildDefaultInvoiceEmailMessage(ticket);
     }
+    // Encargos reutiliza este cuadro para enviar el resguardo (js/tpv/encargos.js)
+    const titleEl = document.getElementById("invoiceEmailTitle");
+    if (titleEl) titleEl.textContent = title || "Enviar factura";
     if (nameEl) nameEl.textContent = prefillName || "";
     renderHistoryChips();
 

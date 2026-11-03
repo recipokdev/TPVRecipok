@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "NOVEDAD: Encargos (opcional, apagado por defecto: Opciones → Encargos, solo administradores). Sirve para apuntar un pedido para otro día, cobrar un anticipo y cobrar el resto cuando el cliente lo recoge. «Pasar a encargo» convierte el carrito en un encargo con nombre, teléfono, nota, día y hora de recogida y anticipo opcional (con cualquier forma de pago), e imprime un resguardo y un justificante del anticipo. El botón «Encargos» (con contador de los de hoy y vencidos) abre la lista: Falta recoger, Recogidos y Cancelados, con búsqueda e «Imprimir lista de hoy». Desde el detalle se puede recoger y cobrar el resto (se emite la factura con el anticipo ya pagado y se descuenta el stock), editar el encargo (con un resguardo «MODIFICADO»; no se puede bajar de lo ya cobrado), cobrar otro anticipo, reimprimir o enviar el resguardo por email en PDF, cancelar devolviendo el dinero, o cerrar sin recoger (una factura por lo anticipado con un descuento por el resto). Un encargo no es una venta: no emite factura ni descuenta stock hasta que se recoge, pero reserva el stock del día de la recogida (la tarjeta del producto muestra «N reservados» si «Mostrar stock» está activo, y al vender de más el TPV avisa sin bloquear). El cierre de caja tiene un bloque propio de Encargos y cuenta el efectivo de anticipos y devoluciones. Al abrir la caja, el TPV avisa de los encargos de hoy y vencidos. Se comparte entre todos los terminales y avisa en tiempo real. Manual nuevo: «Encargos»."
+      ]
     },
     {
       "version": "0.2.57",

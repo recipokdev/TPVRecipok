@@ -11831,6 +11831,31 @@ if (
   else fail("Encargos aviso caja: html=" + okHtml + ", js=" + okJs);
 }
 
+// Encargos fase 5: resguardo por email (reutiliza el cuadro, el PDF y el envio de «Enviar factura») y manual propio
+{
+  const encargosJs = fs.readFileSync(path.join(__dirname, "..", "..", "js", "tpv", "encargos.js"), "utf8");
+  const builder = fs.readFileSync(path.join(__dirname, "..", "manual", "build-manual.js"), "utf8");
+  const manual = fs.readFileSync(path.join(__dirname, "..", "..", "docs", "manual", "12-encargos.md"), "utf8");
+  const okHtml = index.includes('id="encDetEmailBtn"') && index.includes('id="encResEmailBtn"') && index.includes('id="invoiceEmailTitle"');
+  const okRenderer =
+    renderer.includes("defaultMessage = \"\",") &&
+    renderer.includes("messageInput.value = defaultMessage || buildDefaultInvoiceEmailMessage(ticket);") &&
+    renderer.includes('titleEl.textContent = title || "Enviar factura";');
+  const okJs =
+    encargosJs.includes("async function emailReceiptFlow(order) {") &&
+    encargosJs.includes("function buildReceiptEmailHtml(order) {") &&
+    encargosJs.includes("window.TPV_PRINT?.renderInvoicePdf?.({ html: buildReceiptEmailHtml(order) })") &&
+    encargosJs.includes("fileName: `Resguardo ${code}.pdf`,") &&
+    encargosJs.includes("if ((await getInvoiceEmailStatus()) === false) {");
+  const okManual =
+    builder.includes('const ENCARGOS_ID = "12-encargos";') &&
+    builder.includes("Manual-TPV-Recipok-Encargos.pdf") &&
+    manual.includes("## 8. Cancelar o cerrar sin recoger") &&
+    manual.includes("## 9. Stock y encargos");
+  if (okHtml && okRenderer && okJs && okManual) ok("Encargos: resguardo por email (mismo cuadro, PDF y envio que la factura) y manual propio «Encargos»");
+  else fail("Encargos email/manual: html=" + okHtml + ", renderer=" + okRenderer + ", js=" + okJs + ", manual=" + okManual);
+}
+
 // Solo un administrador elige el terminal (2026-11-04, segunda sucursal de un cliente): un trabajador no puede pasar a
 // otro terminal por el nombre del terminal, el del agente ni al abrir la caja.
 {

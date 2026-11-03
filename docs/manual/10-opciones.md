@@ -61,6 +61,10 @@ Con la sesión iniciada puedes ver y cambiar las Opciones **aunque la caja esté
 - **Cómo se calcula.** Una tarifa es un **Descuento** (sobre el PVP) o un **Aumento** (sobre el coste), con un valor en **%** o en **€ fijos**. **Revertir cambios** deshace lo editado antes de guardar. **Borrar tarifa** pide confirmación, la quita de todos sus clientes y la borra de FacturaScripts. En **Clientes con esta tarifa** hay un buscador y los botones **Marcar visibles** y **Desmarcar visibles**; **Guardar cambios** guarda la tarifa y sus clientes en un solo paso.
 - **Clientes con esta tarifa.** Marca los clientes que deben usarla.
 
+### Encargos (solo administradores)
+
+- **Activar Encargos.** Apagado por defecto; se activa en cada terminal. Añade los botones **Pasar a encargo** y **Encargos** al carrito (se explica en su manual aparte). Si tu empresa aún no lo tiene activado en el servidor, el TPV lo avisa al intentar encenderlo.
+
 ### Modo Mesas (solo administradores)
 
 > Esta sección, y la fila «Impresora de comandas» de la sección Impresora, **solo aparecen si tu empresa tiene contratado el módulo Modo Mesas** (se explica en su manual aparte).
