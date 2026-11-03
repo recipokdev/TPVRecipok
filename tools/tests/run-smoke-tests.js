@@ -11816,6 +11816,21 @@ if (
   else fail("Encargos 3f: renderer=" + okRenderer + ", js=" + okJs + ", styles=" + okStyles);
 }
 
+// Encargos: aviso al abrir la caja (una vez por caja y dia, solo si hay encargos de hoy o vencidos)
+{
+  const encargosJs = fs.readFileSync(path.join(__dirname, "..", "..", "js", "tpv", "encargos.js"), "utf8");
+  const okHtml = index.includes('id="encargosTodayOverlay"') && index.includes('id="encTodayOpenBtn"') && styles.includes(".enc-today-row.is-late {");
+  const okJs =
+    encargosJs.includes('const CFG_TODAY_PROMPT_KEY = "ui.encargosTodayPromptKey";') &&
+    encargosJs.includes("async function maybeShowTodayPrompt() {") &&
+    encargosJs.includes("if (wiz.open || edit.active || hasVisibleCartLines()) return;") &&
+    encargosJs.includes("const key = `${String(getCajaIdSafe() || \"\")}|${today}|${String(currentTerminal?.id || \"\")}`;") &&
+    encargosJs.includes("setInterval(() => maybeShowTodayPrompt().catch(() => {}), 5000);") &&
+    encargosJs.includes("if (!rows.length) return;");
+  if (okHtml && okJs) ok("Encargos: aviso al abrir la caja con los encargos de hoy y vencidos (una vez por caja y dia, sin molestar si hay otro cuadro abierto o una venta en curso)");
+  else fail("Encargos aviso caja: html=" + okHtml + ", js=" + okJs);
+}
+
 // Solo un administrador elige el terminal (2026-11-04, segunda sucursal de un cliente): un trabajador no puede pasar a
 // otro terminal por el nombre del terminal, el del agente ni al abrir la caja.
 {

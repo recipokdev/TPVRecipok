@@ -1355,6 +1355,19 @@
       </div>
     </div>
 
+    <!-- Encargos: aviso al abrir la caja (encargos de hoy y vencidos) -->
+    <div id="encargosTodayOverlay" class="simple-overlay hidden">
+      <div class="simple-dialog enc-today-dialog" role="dialog" aria-modal="true" aria-labelledby="encTodayTitle">
+        <h2 id="encTodayTitle">Encargos por recoger</h2>
+        <p id="encTodaySub" class="enc-today-sub"></p>
+        <div id="encTodayList" class="enc-today-list"></div>
+        <div class="dialog-actions">
+          <button type="button" id="encTodayCloseBtn">Entendido</button>
+          <button type="button" id="encTodayOpenBtn" class="primary">Ver encargos</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Encargos: lista -->
     <div id="encargosListOverlay" class="simple-overlay hidden">
       <div class="enc-modal enc-list-modal" role="dialog" aria-modal="true" aria-labelledby="encListTitle">

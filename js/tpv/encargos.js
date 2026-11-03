@@ -367,6 +367,70 @@
       };
   }
 
+  // ------------------------------------------------------------------ aviso al abrir la caja
+
+  // Una vez por caja y día, con la caja abierta: lista de los encargos de hoy y los vencidos que faltan por recoger,
+  // para que el equipo los tenga presentes desde el principio del turno. No molesta si no hay ninguno.
+  const CFG_TODAY_PROMPT_KEY = "ui.encargosTodayPromptKey";
+  let todayPromptBusy = false;
+
+  async function maybeShowTodayPrompt() {
+    if (todayPromptBusy || !isEnabled()) return;
+    if (typeof cashSession === "undefined" || !cashSession?.open) return;
+    if (typeof TPV_STATE !== "undefined" && TPV_STATE?.offline) return;
+    if (document.body.classList.contains("modal-locked")) return;
+    if (document.querySelector(".simple-overlay:not(.hidden), .critical-overlay:not(.hidden)")) return;
+    if (wiz.open || edit.active || hasVisibleCartLines()) return;
+    const today = dateKey(new Date());
+    const key = `${String(getCajaIdSafe() || "")}|${today}|${String(currentTerminal?.id || "")}`;
+    todayPromptBusy = true;
+    try {
+      if (String((await cfgGet(CFG_TODAY_PROMPT_KEY)) || "") === key) return;
+      const r = await call("list-customer-orders", { query: { status: "pendiente", to: today, limit: "100" } });
+      if (!r.ok) return;
+      // Se recomprueba: durante la espera pudo abrirse otro cuadro o el cajero empezar una venta.
+      if (document.querySelector(".simple-overlay:not(.hidden), .critical-overlay:not(.hidden)") || hasVisibleCartLines()) return;
+      await cfgSet(CFG_TODAY_PROMPT_KEY, key);
+      const rows = Array.isArray(r.json?.data) ? r.json.data : [];
+      if (!rows.length) return;
+      showTodayPrompt(rows, today);
+    } finally {
+      todayPromptBusy = false;
+    }
+  }
+
+  function showTodayPrompt(rows, today) {
+    const overlay = $("encargosTodayOverlay");
+    if (!overlay) return;
+    const late = rows.filter((o) => String(o.pickupAt || "").slice(0, 10) < today).length;
+    $("encTodaySub").textContent =
+      `${rows.length} ${rows.length === 1 ? "encargo" : "encargos"} de hoy o vencidos por recoger` + (late ? ` (${late} vencido${late === 1 ? "" : "s"}).` : ".");
+    $("encTodayList").innerHTML = rows
+      .map((o) => {
+        const isLate = String(o.pickupAt || "").slice(0, 10) < today;
+        const when = isLate ? `${String(o.pickupAt).slice(8, 10)}/${String(o.pickupAt).slice(5, 7)}` : String(o.pickupAt).slice(11, 16);
+        return (
+          `<div class="enc-today-row${isLate ? " is-late" : ""}">` +
+          `<span class="t">${escapeHtml(when)}</span>` +
+          `<span class="n">${escapeHtml(o.customerName)}${o.customerPhone ? " · " + escapeHtml(o.customerPhone) : ""}</span>` +
+          `<span class="m">${o.pending > 0 ? "Falta " + escapeHtml(fmtMoney(o.pending)) : "Pagado"}</span>` +
+          `</div>`
+        );
+      })
+      .join("");
+    overlay.classList.remove("hidden");
+    lockAppUI();
+    const close = () => {
+      overlay.classList.add("hidden");
+      unlockAppUI();
+    };
+    $("encTodayCloseBtn").onclick = close;
+    $("encTodayOpenBtn").onclick = () => {
+      close();
+      openList();
+    };
+  }
+
   // ------------------------------------------------------------------ pedido en FacturaScripts
 
   function fsCfg() {
@@ -2832,6 +2896,7 @@
     bindWizardOnce();
     bindListOnce();
     bindEditOnce();
+    setInterval(() => maybeShowTodayPrompt().catch(() => {}), 5000);
     bindToggleOnce();
     loadEnabled()
       .then(() => {
@@ -2857,6 +2922,7 @@
     openDetail,
     openAdvanceDialog,
     getReservedQty,
+    maybeShowTodayPrompt,
     startEdit,
     isEditing,
     openEditWizard,

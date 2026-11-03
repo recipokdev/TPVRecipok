@@ -3713,6 +3713,57 @@ body.pay-encargo-mode #payOverlay .pay-extra {
   display: none;
 }
 
+/* ---- Encargos: aviso al abrir la caja ---- */
+.simple-dialog.enc-today-dialog {
+  width: 520px;
+  max-width: calc(100vw - 32px);
+}
+.enc-today-sub {
+  margin: 0 0 8px;
+  color: #6b7280;
+}
+.enc-today-list {
+  max-height: 46vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.enc-today-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f3f4f6;
+}
+.enc-today-row.is-late {
+  background: #fdecec;
+}
+.enc-today-row .t {
+  font-weight: 800;
+  min-width: 54px;
+}
+.enc-today-row .n {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.enc-today-row .m {
+  font-weight: 700;
+  white-space: nowrap;
+}
+body.theme-dark .enc-today-row {
+  background: #1f2937;
+  color: #e5e7eb;
+}
+body.theme-dark .enc-today-row.is-late {
+  background: #4a2020;
+}
+
 /* ---- Encargos: edición de un encargo en el carrito ---- */
 .encargo-edit-banner {
   display: flex;
