@@ -112,6 +112,16 @@ Detalles que se han decidido sobre la marcha (a confirmar):
 
 **Se asume, salvo que digáis lo contrario:** la factura de «Cerrar sin recoger» se emite como una venta normal, y por tanto **descuenta stock** al crearse; el anticipo ya cobrado figura como su pago (marcado «anticipo, ya cobrado el día X»), igual que al recoger.
 
+## 3f. Stock y encargos: reserva virtual el día de la recogida (decisión del jefe, 3-nov)
+
+- Un encargo **no descuenta stock** al crearse ni durante los días previos. El stock real baja **al facturar** (recoger o cerrar sin recoger), como en cualquier venta.
+- **Reserva virtual:** el stock disponible que ve el TPV es `stock físico − lo de los encargos pendientes con fecha de recogida de hoy o anterior`. Empieza a las 00:00 del día de la recogida (solo comparar fechas, sin proceso automático) y se libera sola cuando el encargo deja de estar pendiente. Un encargo vencido sigue reservando hasta que se recoge, cancela o cierra sin recoger. Los de días futuros no reservan todavía.
+- **Por qué no se descuenta el stock real a primera hora:** sería un ajuste inventado que luego la factura volvería a descontar (doble descuento), habría que deshacerlo al cancelar o cerrar sin recoger, y en los clientes con WooCommerce cada cambio de stock dispara avisos a su web.
+- **Avisar, no bloquear:** al vender en mostrador un producto sin disponible por reservas, aviso con «Vender igualmente». Solo productos con stock controlado. La tarjeta del producto muestra «N reservados» solo si «Mostrar stock en productos» está activo.
+- **Sin stock físico al recoger:** FacturaScripts permite el stock negativo solo en los productos con «venta sin stock». Al recoger se reutiliza el aviso «Sin stock suficiente» con «Cobrar sin stock» que ya existe al cobrar, para que la factura no sea rechazada.
+- **Datos necesarios:** guardar en cada línea del encargo el producto (`idproducto`/referencia), no solo el nombre y el precio. Primera versión: productos simples y variantes; los packs, después.
+- **Orden de trabajo:** después de «Recoger y cobrar» y del cierre de caja (tamaño M, ~1 día con pruebas).
+
 ## 4. Qué guarda cada sitio
 
 | Dato | Dónde | Por qué |
