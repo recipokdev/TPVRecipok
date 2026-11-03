@@ -11545,6 +11545,38 @@ if (
   else fail("Ticket impreso de una parte dividida: render=" + okRender + ", plantilla=" + okTpl);
 }
 
+// Encargos, parte 2a (2026-11-03): opcion apagada por defecto + botones + aviso de la novedad. Con la opcion
+// apagada no cambia nada en pantalla (botones ocultos, botonera sin la clase) ni se llama al servidor.
+{
+  const encargosJs = fs.readFileSync(path.join(__dirname, "..", "..", "js", "tpv", "encargos.js"), "utf8");
+  const okHtml =
+    /class="cart-btn cart-btn-encargos hidden"/.test(index) &&
+    /class="cart-header-box hidden"[\s\S]{0,80}id="passToEncargoBtn"/.test(index) &&
+    index.includes('id="encargosEnabledToggle"') &&
+    /data-sec="encargos" data-admin-only/.test(index) &&
+    index.includes('id="encargosNoveltyOverlay"') &&
+    index.indexOf('src="renderer.js"') < index.indexOf('src="js/tpv/encargos.js"');
+  const okCss = styles.includes(".cart-action-grid.encargos-on") && styles.includes("grid-template-columns: repeat(6, 1fr);");
+  const okRenderer =
+    renderer.includes('encargos: [OPT_PV.T("Encargos", "encargosEnabledToggle")]') &&
+    renderer.includes("window.TPV_ENCARGOS?.init?.();") &&
+    renderer.includes("window.TPV_ENCARGOS?.loadEnabled?.(),") &&
+    renderer.includes("window.TPV_ENCARGOS?.bindToggleOnce?.();") &&
+    renderer.includes("window.TPV_ENCARGOS?.scheduleNovelty?.();");
+  const okJs =
+    encargosJs.includes('const CFG_ENABLED_KEY = "ui.encargosEnabled";') &&
+    /state = \{\s*enabled: false,/.test(encargosJs) &&
+    encargosJs.includes("if (!on) setBadge(0, false);") &&
+    // no se activa en una empresa que el servidor aun no tiene en el piloto
+    encargosJs.includes("customerOrdersDisabled") &&
+    // el aviso: solo a un administrador, una sola vez, y espera a que no haya otro cuadro abierto
+    encargosJs.includes("if (!window.TPV_STATE?.isAdmin) return false;") &&
+    encargosJs.includes('document.querySelector(".simple-overlay:not(.hidden), .critical-overlay:not(.hidden)")') &&
+    encargosJs.includes("cfgSet(CFG_NOVELTY_SEEN_KEY, true);");
+  if (okHtml && okCss && okRenderer && okJs) ok("Encargos 2a: opcion apagada por defecto (admin), botones ocultos hasta activarla, botonera en 6 columnas solo con encargos-on, aviso de novedad una vez y solo a un administrador");
+  else fail("Encargos 2a: html=" + okHtml + ", css=" + okCss + ", renderer=" + okRenderer + ", js=" + okJs);
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

@@ -289,6 +289,17 @@
           >
         </div>
         <div class="cart-header-right">
+          <!-- Encargos: solo visible con la opcion activada (Opciones → Encargos) -->
+          <button
+            type="button"
+            class="cart-header-box hidden"
+            id="passToEncargoBtn"
+            title="Convertir este carrito en un encargo"
+            disabled
+          >
+            📦 <span>Pasar a encargo</span>
+          </button>
+
           <button type="button" class="cart-header-box" id="cashHeaderBtn">
             💶 <span id="cashHeaderLabel">Abrir caja</span>
           </button>
@@ -544,6 +555,11 @@
       <!-- BOTONERA INFERIOR (nuevo layout) -->
       <div id="cartActionGrid" class="cart-action-grid">
         <!-- Izquierda -->
+        <!-- Encargos: solo con la opcion activada; con ella la botonera cambia (clase encargos-on) -->
+        <button id="encargosListBtn" class="cart-btn cart-btn-encargos hidden">
+          <span class="cart-btn-label">Encargos</span>
+          <span id="encargosCountBadge" class="cart-badge">0</span>
+        </button>
         <button id="clearCartBtn" class="cart-btn cart-btn-delete">
           Vaciar
         </button>
@@ -1290,6 +1306,32 @@
           <button id="msgCancelBtn">Cancelar</button>
           <button id="msgMidBtn" class="hidden">Revisar</button>
           <button id="msgOkBtn">Aceptar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Aviso de la novedad «Encargos» (sale una sola vez, a un administrador) -->
+    <div id="encargosNoveltyOverlay" class="simple-overlay hidden">
+      <div class="simple-dialog encargos-novelty-dialog">
+        <h2>Novedad: Encargos</h2>
+        <p>
+          Ahora puedes <strong>anotar encargos</strong> con día y hora de
+          recogida, <strong>cobrar un anticipo</strong> y cobrar el resto
+          cuando el cliente venga a recogerlo.
+        </p>
+        <p>
+          Un encargo <strong>no es una venta</strong>: no descuenta stock ni
+          genera factura hasta que se recoge.
+        </p>
+        <p class="encargos-novelty-note">
+          Está apagado por defecto. Puedes activarlo ahora o más tarde en
+          <strong>Opciones → Encargos</strong> (solo administradores).
+        </p>
+        <div class="dialog-actions">
+          <button type="button" id="encargosNoveltyLaterBtn">Ahora no</button>
+          <button type="button" id="encargosNoveltyEnableBtn">
+            Activar ahora
+          </button>
         </div>
       </div>
     </div>
@@ -2400,6 +2442,33 @@
                     Guardar
                   </button>
                 </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ENCARGOS (ADMIN ONLY) -->
+          <section class="opt-sec" data-sec="encargos" data-admin-only>
+            <button type="button" class="opt-sec-h">
+              <span>Encargos <span class="opt-admin-pill">ADMIN</span></span>
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-preview"></div>
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Activar Encargos</div>
+                  <div class="opt-row-sub">
+                    Anota pedidos con día y hora de recogida, cobra un anticipo
+                    y cobra el resto al recogerlos. Añade los botones
+                    «Encargos» y «Pasar a encargo». Un encargo no es una venta:
+                    no descuenta stock ni genera factura hasta que se recoge.
+                    Apagado por defecto; se activa en cada terminal.
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="encargosEnabledToggle" />
+                  <span class="slider"></span>
+                </label>
               </div>
             </div>
           </section>
@@ -4692,6 +4761,7 @@
     <script src="js/tpv/parked-ops.js"></script>
     <script src="js/vendor/qrcode-generator.js"></script>
     <script src="renderer.js"></script>
+    <script src="js/tpv/encargos.js"></script>
     <script src="tutoriales/tutoriales.js"></script>
     <script src="./js/tpv/scale/scale-ui.js"></script>
     <script src="./js/tpv/scale/scale-cart.js"></script>

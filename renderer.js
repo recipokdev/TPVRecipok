@@ -14057,6 +14057,8 @@ async function runBootFlow() {
     await loadProductDisplayFieldModeSetting?.();
     await loadSafeTrainingModeToggle?.();
     await loadDiscountQuickPercentsSetting?.();
+    // Encargos (js/tpv/encargos.js): opcion apagada por defecto; con ella apagada no hace nada.
+    window.TPV_ENCARGOS?.init?.();
 
     // 3) Datos (si ya se cargaron mientras salia el login, se reutilizan)
     await loadDataFromApi({ reuseIfFresh: true });
@@ -33329,6 +33331,7 @@ const OPT_PREVIEW_DEFS = {
         : { text: "Descuentos rápidos", state: "off" };
     }),
   ],
+  encargos: [OPT_PV.T("Encargos", "encargosEnabledToggle")],
   tarifas: [
     OPT_PV.V("Tarifa activa", "tariffSelect"),
     OPT_PV.T("No vender bajo coste", "tariffMinCosteToggle"),
@@ -33898,6 +33901,7 @@ async function openOptions() {
   bindCartWidthControlsToggleOnce();
   bindCartWidthDragHandleOnce();
   bindAutostartToggleOnce();
+  window.TPV_ENCARGOS?.bindToggleOnce?.();
   bindOptionsAccordionOnce();
 
   // No depende de ninguno de los ~30 ajustes de abajo (solo necesita
@@ -33945,6 +33949,7 @@ async function openOptions() {
     loadCartPanelWidthSetting(),
     loadCartWidthControlsToggle(),
     loadAutostartToggle(),
+    window.TPV_ENCARGOS?.loadEnabled?.(),
   ]);
 
   applyAdminOnlyUI?.();
@@ -61219,6 +61224,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   startBackgroundUpdateMonitor();
   checkStartupNoInternetFlag().catch(() => {});
   maybeShowChangelogAfterUpdate().catch(() => {});
+  // Aviso de la novedad «Encargos» (una sola vez, a un administrador, cuando no haya otro cuadro abierto).
+  window.TPV_ENCARGOS?.scheduleNovelty?.();
 });
 
 window.addEventListener("beforeunload", () => {

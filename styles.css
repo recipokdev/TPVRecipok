@@ -3133,6 +3133,14 @@ body.theme-dark .cart-split-totals-row {
   background: #2980b9;
   color: #fff;
 }
+.cart-btn-encargos {
+  background: #7e4fc1;
+  color: #fff;
+}
+.cart-badge.is-alert {
+  background: #e74c3c;
+  color: #fff;
+}
 
 .cart-badge {
   display: inline-flex;
@@ -3222,6 +3230,77 @@ body.theme-dark .cart-split-totals-row {
   justify-content: center;
   font-weight: 700;
   font-size: 24px;
+}
+
+/* Encargos activado (Opciones → Encargos): la botonera pasa a 6 columnas para que Tickets y Vaciar
+   compartan la fila de abajo a la izquierda y Encargos ocupe el hueco grande de arriba. Apagado, nada
+   de esto se aplica (no existe la clase) y la botonera queda como siempre. */
+.cart-action-grid.encargos-on {
+  grid-template-columns: repeat(6, 1fr);
+}
+.cart-action-grid.encargos-on #encargosListBtn {
+  grid-column: 1 / span 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+.cart-action-grid.encargos-on #encargosListBtn .cart-btn-label {
+  line-height: 1;
+}
+.cart-action-grid.encargos-on #ticketsListBtn {
+  grid-column: 1;
+  grid-row: 2;
+}
+.cart-action-grid.encargos-on #clearCartBtn {
+  grid-column: 2;
+  grid-row: 2;
+}
+.cart-action-grid.encargos-on #ticketsListBtn,
+.cart-action-grid.encargos-on #clearCartBtn {
+  font-size: 13px;
+  padding: 7px 2px;
+}
+.cart-action-grid.encargos-on #parkBtn {
+  grid-column: 3 / span 2;
+  grid-row: 1;
+}
+.cart-action-grid.encargos-on #parkedListBtn {
+  grid-column: 3 / span 2;
+  grid-row: 2;
+}
+.cart-action-grid.encargos-on #payBtn {
+  grid-column: 5 / span 2;
+  grid-row: 1 / span 2;
+}
+.cart-action-grid.encargos-on #preprintTicketBtn {
+  grid-column: 5 / span 2;
+  grid-row: 1;
+}
+.cart-action-grid.encargos-on.has-open-ticket #payBtn {
+  grid-row: 2;
+}
+.cart-action-grid.encargos-on.mesas-autosave-open-ticket #preprintTicketBtn {
+  grid-column: 3 / span 2;
+  grid-row: 1;
+}
+.cart-action-grid.encargos-on.mesas-autosave-open-ticket #payBtn {
+  grid-column: 5 / span 2;
+  grid-row: 1 / span 2;
+}
+
+.encargos-novelty-dialog {
+  max-width: 460px;
+}
+.encargos-novelty-dialog p {
+  margin: 8px 0;
+  line-height: 1.4;
+}
+.encargos-novelty-note {
+  font-size: 13px;
+  opacity: 0.85;
 }
 
 #parkedListBtn {
