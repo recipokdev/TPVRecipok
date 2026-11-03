@@ -11758,6 +11758,38 @@ if (
   else fail("Encargos 4: html=" + okHtml + ", renderer=" + okRenderer + ", js=" + okJs);
 }
 
+// Encargos 2d: editar un encargo = pedido NUEVO en FacturaScripts + cancelar el anterior, sin bajar de lo cobrado
+{
+  const encargosJs = fs.readFileSync(path.join(__dirname, "..", "..", "js", "tpv", "encargos.js"), "utf8");
+  const okHtml =
+    index.includes('id="encargoEditBanner"') && index.includes('id="encEditSaveBtn"') && index.includes('id="encEditDiscardBtn"') &&
+    index.includes('id="encDetEditBtn"') &&
+    styles.includes(".encargo-edit-banner {") && styles.includes("body.encargo-editing #payBtn,");
+  const okRenderer =
+    // mientras se edita, Cobrar y Aparcar no funcionan (el carrito es el del encargo)
+    renderer.includes("Estás editando un encargo: guarda o descarta los cambios antes de cobrar.") &&
+    renderer.includes("Estás editando un encargo: guarda o descarta los cambios antes de aparcar.");
+  const okJs =
+    // pedido nuevo con numero2 propio por intento (no duplica al reintentar) y servidor todo-o-nada con version
+    encargosJs.includes("wiz.editNumero2 = `${edit.orderCode}.E${Date.now().toString(36).toUpperCase()}`;") &&
+    encargosJs.includes('postWithRetry("update-customer-order", {') &&
+    encargosJs.includes("expectedVersion: edit.version,") &&
+    encargosJs.includes("if (r.status === 412) {") && encargosJs.includes("await discardNewPedido();") &&
+    // no se baja de lo ya cobrado
+    encargosJs.includes("if (wiz.total + 0.0001 < edit.collected) {") &&
+    // el pedido anterior se anota «SUSTITUIDO» y se cancela despues de guardar
+    encargosJs.includes("SUSTITUIDO: el encargo se editó y ahora es el pedido") &&
+    // las lineas guardan copia del carrito (y de los componentes de un pack) para recuperarlas tal cual
+    encargosJs.includes("cartLine: cleanCartLine(it),") && encargosJs.includes("cartChildren: all") &&
+    // la factura se reconoce por el numero2 del pedido vigente (tras editar ya no es el codigo del encargo)
+    encargosJs.includes("const n2 = await pedidoNumero2(order);") &&
+    encargosJs.includes("findFsFacturaByNumero2(await pedidoNumero2(order))") &&
+    // la edicion sobrevive a un reinicio
+    encargosJs.includes('const EDIT_CFG_KEY = "ui.encargosEditing";') && encargosJs.includes("return loadEditState();");
+  if (okHtml && okRenderer && okJs) ok("Encargos 2d: editar un encargo (pedido nuevo + cancelar el anterior, versión, no bajar de lo cobrado, Cobrar/Aparcar bloqueados, sobrevive a reinicio, factura por numero2 vigente)");
+  else fail("Encargos 2d: html=" + okHtml + ", renderer=" + okRenderer + ", js=" + okJs);
+}
+
 // Solo un administrador elige el terminal (2026-11-04, segunda sucursal de un cliente): un trabajador no puede pasar a
 // otro terminal por el nombre del terminal, el del agente ni al abrir la caja.
 {

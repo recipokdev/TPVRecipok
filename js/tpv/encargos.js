@@ -21,6 +21,34 @@
     serverAvailable: null,
   };
 
+  // Edición de un encargo (ver el bloque «editar un encargo»): el carrito se usa para cambiar sus productos.
+  const edit = {
+    active: false,
+    pendingRestore: null,
+    restoreAt: 0,
+    orderId: 0,
+    orderCode: "",
+    version: 0,
+    codcliente: "",
+    customerName: "",
+    customerPhone: "",
+    notes: "",
+    pickupAt: "",
+    fsIdpedido: "",
+    collected: 0,
+    total: 0,
+    label: "",
+  };
+
+  // Copia de una línea del carrito apta para guardar (JSON) y volver a cargar al editar.
+  function cleanCartLine(it) {
+    try {
+      return JSON.parse(JSON.stringify(it));
+    } catch {
+      return null;
+    }
+  }
+
   const $ = (id) => document.getElementById(id);
   const pad2 = (n) => String(n).padStart(2, "0");
 
@@ -75,6 +103,7 @@
   // "Pasar a encargo" solo se puede pulsar con productos en el carrito y sin un pedido aparcado cargado (el carrito
   // de un aparcado pertenece a ese pedido: hay que cobrarlo o soltarlo antes).
   function passButtonReason() {
+    if (edit.active) return "Estás editando un encargo: guarda o descarta los cambios antes de pasar otro carrito a encargo.";
     if (typeof cashSession === "undefined" || !cashSession?.open) return "Abre la caja para poder pasar a encargo.";
     if (!hasVisibleCartLines()) return "Añade productos al carrito para pasarlos a encargo.";
     if (currentParkedTicketIndex != null)
@@ -85,6 +114,7 @@
   }
 
   function refreshPassButton() {
+    maybeRestoreEdit();
     const btn = $("passToEncargoBtn");
     if (!btn || !isEnabled()) return;
     const reason = passButtonReason();
@@ -486,7 +516,8 @@
   }
 
   function wizLinesForSave() {
-    return visibleSnapshotLines().map((it) => {
+    const all = Array.isArray(wiz.snapshot) ? wiz.snapshot : [];
+    const out = visibleSnapshotLines().map((it) => {
       const pricing = getCartLinePricing(it);
       const addons = Array.isArray(it.addons) ? it.addons.map((a) => String(a?.nombre || "").trim()).filter(Boolean) : [];
       const name = String(it.name || it.descripcion || it.referencia || "Producto").trim();
@@ -497,8 +528,17 @@
         qty: Number(it.qty) || 0,
         unit: pricing.unitGross,
         total: pricing.lineTotal,
+        // copia de la línea del carrito y de sus componentes (packs), para recuperarla tal cual al editar
+        cartLine: cleanCartLine(it),
+        cartChildren: all
+          .filter((c) => c?.meta?.includedInPack && String(c?.meta?.parentPackLineId || "") === String(it._lineId || ""))
+          .map(cleanCartLine)
+          .filter(Boolean),
       };
     });
+    // Si el encargo es enorme, se guarda sin las copias (se podrá editar reconstruyendo las líneas desde el catálogo).
+    if (JSON.stringify(out).length > 200000) out.forEach((l) => { delete l.cartLine; delete l.cartChildren; });
+    return out;
   }
 
   async function openWizard() {
@@ -576,6 +616,7 @@
     // Si el pedido de FacturaScripts llegó a crearse pero el encargo no se guardó, no se deja huérfano reservando stock.
     if (!keepOrphanCheck && wiz.fsDoc && !wiz.savedOk) cancelFsPedidoQuietly(wiz.fsDoc.idpedido);
     wiz.fsDoc = null;
+    wiz.editNumero2 = "";
     wiz.orderCode = "";
     wiz.savedOk = false;
   }
@@ -609,8 +650,14 @@
     $("encBackBtn").textContent = wiz.mode === "advance" ? "Cancelar" : "← Atrás";
     $("encPage1").classList.toggle("hidden", !p1);
     $("encPage2").classList.toggle("hidden", p1);
-    $("encWizTitle").textContent = wiz.mode === "advance" ? "Cobrar otro anticipo" : p1 ? "Nuevo encargo · Datos" : "Nuevo encargo · Anticipo";
-    $("encWizStep").textContent = wiz.mode === "advance" ? "" : `Paso ${wiz.page} de 2`;
+    $("encWizTitle").textContent =
+      wiz.mode === "advance" ? "Cobrar otro anticipo" : wiz.mode === "edit" ? "Editar encargo · Datos" : p1 ? "Nuevo encargo · Datos" : "Nuevo encargo · Anticipo";
+    $("encWizStep").textContent = wiz.mode === "advance" || wiz.mode === "edit" ? "" : `Paso ${wiz.page} de 2`;
+    // Editar: una sola página, sin anticipo (los anticipos no se tocan aquí; «Cobrar otro anticipo» está en el detalle).
+    $("encNextBtn").classList.toggle("hidden", wiz.mode === "edit");
+    $("encSaveNoAdvBtn").textContent = wiz.mode === "edit" ? "Guardar cambios" : "Guardar sin anticipo";
+    $("encSaveNoAdvBtn").classList.toggle("enc-btn-blue", wiz.mode === "edit");
+    $("encSaveNoAdvBtn").classList.toggle("enc-btn-outline", wiz.mode !== "edit");
     $("encFootP1").classList.toggle("hidden", !p1);
     $("encFootP2").classList.toggle("hidden", p1);
 
@@ -738,7 +785,9 @@
     if (wiz.day === "custom" && !wiz.customDay) return "Elige el día de recogida.";
     if (!/^\d{2}:\d{2}$/.test(wiz.time)) return "Indica la hora de recogida.";
     const when = new Date(`${day}T${wiz.time}:00`);
-    if (when.getTime() < Date.now() - 5 * 60 * 1000) return "El día y la hora de recogida ya han pasado.";
+    // Al editar, un encargo vencido puede conservar su fecha: solo se exige futura si se ha cambiado.
+    const unchanged = wiz.mode === "edit" && `${day} ${wiz.time}` === edit.pickupAt;
+    if (!unchanged && when.getTime() < Date.now() - 5 * 60 * 1000) return "El día y la hora de recogida ya han pasado.";
     return "";
   }
 
@@ -752,6 +801,7 @@
 
   async function saveWizard(opts = {}) {
     if (wiz.mode === "advance") return saveAdvance();
+    if (wiz.mode === "edit") return saveEdit();
     if (wiz.saving) return;
     const err1 = validatePage1();
     if (err1) {
@@ -892,9 +942,9 @@
   // ------------------------------------------------------------------ resultado y datos de impresión
 
   let lastResult = null;
-  function showResult(order, ctx) {
+  function showResult(order, ctx, title) {
     lastResult = { order, ctx };
-    $("encResTitle").textContent = "Encargo guardado ✓";
+    $("encResTitle").textContent = title || "Encargo guardado ✓";
     $("encResText").innerHTML =
       `<strong>${escapeHtml(order.customerName)}</strong><br>` +
       `Recoge ${escapeHtml(pickupLabel(order.pickupAt))}<br>` +
@@ -1431,6 +1481,7 @@
     const pend = o.status === "pendiente";
     $("encDetAdvanceBtn").classList.toggle("hidden", !(pend && o.pending > 0));
     $("encDetPickupBtn").classList.toggle("hidden", !pend);
+    $("encDetEditBtn").classList.toggle("hidden", !pend);
     $("encDetCloseUnclaimedBtn").classList.toggle("hidden", !(pend && o.collected > 0));
     $("encDetPickupBtn").textContent = o.pending > 0 ? "Recoger y cobrar " + fmtMoney(o.pending) : "Entregar (ya pagado)";
     $("encDetCancelBtn").classList.toggle("hidden", !pend);
@@ -1638,20 +1689,34 @@
     return rowsArr[0] || null;
   }
 
+  // numero2 del pedido VIGENTE de FacturaScripts (tras editar un encargo, el pedido nuevo lleva otro numero2 que
+  // el código del encargo); la factura que sale de convertirlo lo copia.
+  async function pedidoNumero2(order) {
+    try {
+      if (order.fsIdpedido) {
+        const p = await apiRead(`pedidoclientes/${encodeURIComponent(order.fsIdpedido)}`);
+        const n = String((p?.data || p)?.numero2 || "").trim();
+        if (n) return n;
+      }
+    } catch {}
+    return order.orderCode;
+  }
+
   async function ensureFsFacturaFromPedido(order) {
-    let f = await findFsFacturaByNumero2(order.orderCode).catch(() => null);
+    const n2 = await pedidoNumero2(order);
+    let f = await findFsFacturaByNumero2(n2).catch(() => null);
     if (f) return f; // ya convertido (reintento)
     if (!order.fsIdpedido) throw new Error("El encargo no tiene pedido en FacturaScripts.");
     const idestado = await getFsPedidoStateId("facturar");
     try {
       await apiWrite(`pedidoclientes/${encodeURIComponent(order.fsIdpedido)}`, "PUT", { idestado }, { timeoutMs: 120000 });
     } catch (e) {
-      f = await findFsFacturaByNumero2(order.orderCode).catch(() => null);
+      f = await findFsFacturaByNumero2(n2).catch(() => null);
       if (f) return f;
       throw e;
     }
     for (let i = 0; i < 6; i++) {
-      f = await findFsFacturaByNumero2(order.orderCode).catch(() => null);
+      f = await findFsFacturaByNumero2(n2).catch(() => null);
       if (f) return f;
       await sleep(600);
     }
@@ -1768,7 +1833,7 @@
       // Si una recogida anterior se cortó a medias (la factura ya tiene los recibos de lo cobrado), se continúa con
       // ESOS cobros: no se vuelve a pedir el pago ni se puede cambiar la forma de pago por el camino.
       let resumed = null;
-      const existingFactura = await findFsFacturaByNumero2(order.orderCode).catch(() => null);
+      const existingFactura = await findFsFacturaByNumero2(await pedidoNumero2(order)).catch(() => null);
       if (existingFactura) {
         const rec = await fetchRecibosByFactura(existingFactura.idfactura).catch(() => []);
         // El texto de cada recibo del resto lleva el código de la operación («<código>-R1»); el código del encargo
@@ -2377,15 +2442,362 @@
     return h;
   }
 
+  // ------------------------------------------------------------------ editar un encargo
+
+  // FacturaScripts no recalcula el total de un pedido si se editan sus líneas por la API, así que EDITAR = crear un pedido
+  // NUEVO con las líneas nuevas y cancelar el anterior (cada intento lleva su propio numero2, para no duplicar al
+  // reintentar). Los anticipos cuelgan de nuestro encargo, no del pedido, y no se mueven. Reglas del jefe: lo ya cobrado
+  // a cuenta no se toca (el total nuevo no puede ser menor) y no se devuelve dinero al editar.
+  // El encargo se edita en el carrito de siempre, con una franja «Editando…»; hasta guardar no se cambia nada en el
+  // servidor, así que si se cierra el programa a mitad no se pierde ni se estropea nada.
+
+  const EDIT_CFG_KEY = "ui.encargosEditing";
+
+  function isEditing() {
+    return !!edit.active;
+  }
+
+  function buildCartFromOrder(order) {
+    const out = [];
+    for (const l of Array.isArray(order.lines) ? order.lines : []) {
+      if (l.cartLine && typeof l.cartLine === "object") {
+        const item = cleanCartLine(l.cartLine);
+        if (!item) throw new Error(`No se pudo recuperar la línea «${l.name}».`);
+        item._lineId = makeLineId();
+        out.push(item);
+        (Array.isArray(l.cartChildren) ? l.cartChildren : []).forEach((c) => {
+          const child = cleanCartLine(c);
+          if (!child) return;
+          child._lineId = makeLineId();
+          if (child.meta && child.meta.parentPackLineId) child.meta.parentPackLineId = item._lineId;
+          out.push(child);
+        });
+        continue;
+      }
+      // Encargo sin copia de la línea: se reconstruye desde el catálogo con el precio guardado.
+      const product = (Array.isArray(products) ? products : []).find((p) => getProductBaseId(p) === Number(l.idproducto));
+      if (!product) throw new Error(`No se encuentra el producto «${l.name}» en el catálogo.`);
+      const item = buildCartLine(product, Number(l.qty) || 1);
+      if (Math.abs((Number(l.unit) || 0) - item.grossPrice) > 0.005) item.grossPriceOverride = Number(l.unit);
+      out.push(item);
+    }
+    if (!out.length) throw new Error("El encargo no tiene líneas.");
+    return out;
+  }
+
+  async function persistEdit() {
+    await cfgSet(
+      EDIT_CFG_KEY,
+      edit.active
+        ? {
+            orderId: edit.orderId, orderCode: edit.orderCode, version: edit.version, codcliente: edit.codcliente,
+            customerName: edit.customerName, customerPhone: edit.customerPhone, notes: edit.notes, pickupAt: edit.pickupAt,
+            fsIdpedido: edit.fsIdpedido, collected: edit.collected, total: edit.total, label: edit.label,
+          }
+        : "",
+    );
+  }
+
+  function applyEditUI() {
+    const on = isEditing();
+    document.body.classList.toggle("encargo-editing", on);
+    const banner = $("encargoEditBanner");
+    if (banner) banner.classList.toggle("hidden", !on);
+    if (on) {
+      $("encEditBannerTitle").textContent = `Editando el encargo de ${edit.customerName}`;
+      $("encEditBannerSub").textContent = `${edit.orderCode} · antes ${fmtMoney(edit.total)} · ya cobrado ${fmtMoney(edit.collected)}`;
+    }
+    refreshPassButton();
+  }
+
+  async function startEdit() {
+    const o0 = detail.order;
+    if (!o0 || o0.status !== "pendiente") return;
+    if (typeof TPV_STATE !== "undefined" && TPV_STATE?.offline) return toast("Encargos necesita conexión con el servidor.", "warn", "Encargos");
+    if (!cashSession?.open) return toast("Abre la caja para poder editar un encargo.", "warn", "Encargos");
+    if (edit.active) return toast("Ya estás editando un encargo: guarda o descarta los cambios.", "info", "Encargos");
+    if (hasVisibleCartLines()) {
+      return showMessageModal(
+        "Hay productos en el carrito",
+        "Para editar un encargo se usa el carrito: termina, cobra o aparca antes la venta que tienes a medias y vuelve a pulsar «Editar encargo».",
+      );
+    }
+    if (currentParkedTicketIndex != null) return toast("Suelta antes el pedido aparcado que tienes cargado.", "warn", "Encargos");
+
+    let fresh;
+    try {
+      const r = await call("get-customer-order", { query: { orderId: String(o0.id) } });
+      if (!r.ok) throw new Error();
+      fresh = r.json.data;
+    } catch {
+      return toast("No se pudo cargar el encargo. Inténtalo de nuevo.", "warn", "Encargos");
+    }
+    detail.order = fresh;
+    if (fresh.status !== "pendiente") {
+      await renderDetail();
+      return toast("Este encargo ya no está pendiente.", "info", "Encargos");
+    }
+    if (fresh.lockSession && fresh.lockSession !== sessionId()) {
+      return showMessageModal("Se está atendiendo en otro dispositivo", "Este encargo se está recogiendo en otro terminal. Espera unos segundos y vuelve a intentarlo.");
+    }
+    let built;
+    try {
+      built = buildCartFromOrder(fresh);
+    } catch (e) {
+      return showMessageModal("No se puede editar este encargo", String(e?.message || e));
+    }
+
+    pushCartHistoryStep("encargo-edit-load");
+    cart = built;
+    setCurrentParkedTicketIndex(null);
+    renderCart();
+    Object.assign(edit, {
+      active: true,
+      pendingRestore: null,
+      orderId: fresh.id,
+      orderCode: fresh.orderCode,
+      version: fresh.version,
+      codcliente: fresh.codcliente,
+      customerName: fresh.customerName,
+      customerPhone: fresh.customerPhone,
+      notes: fresh.notes,
+      pickupAt: fresh.pickupAt,
+      fsIdpedido: fresh.fsIdpedido,
+      collected: fresh.collected,
+      total: fresh.total,
+      label: "",
+    });
+    await persistEdit();
+    closeDetail();
+    closeList();
+    applyEditUI();
+    toast("Cambia los productos en el carrito y pulsa «Guardar cambios». Hasta entonces no se cambia nada.", "info", "Editando encargo");
+  }
+
+  async function discardEdit() {
+    if (!edit.active) return;
+    const ok = await confirmModal("Descartar los cambios", "Se descartan los cambios del encargo y se vacía el carrito. El encargo queda como estaba.", { okButtonText: "Descartar" });
+    if (!ok) return;
+    await endEdit();
+  }
+
+  async function endEdit() {
+    edit.active = false;
+    edit.pendingRestore = null;
+    try {
+      pushCartHistoryStep("clear-cart");
+      cart = [];
+      setCurrentParkedTicketIndex(null);
+      renderCart();
+      window.CUSTOMER_SELECTOR?.resetToDefault?.();
+    } catch {}
+    await persistEdit();
+    applyEditUI();
+  }
+
+  // Tras reiniciar el programa en mitad de una edición, el carrito se recupera solo: se recupera también la franja.
+  function maybeRestoreEdit() {
+    const pr = edit.pendingRestore;
+    if (!pr || edit.active) return;
+    if (hasVisibleCartLines()) {
+      Object.assign(edit, pr, { active: true, pendingRestore: null });
+      applyEditUI();
+    } else if (Date.now() - Number(edit.restoreAt || 0) > 20000) {
+      edit.pendingRestore = null;
+      cfgSet(EDIT_CFG_KEY, "");
+    }
+  }
+
+  async function loadEditState() {
+    const v = await cfgGet(EDIT_CFG_KEY);
+    if (v && typeof v === "object" && v.orderId) {
+      edit.pendingRestore = v;
+      edit.restoreAt = Date.now();
+      maybeRestoreEdit();
+      setTimeout(maybeRestoreEdit, 21000);
+    }
+  }
+
+  async function openEditWizard() {
+    if (!edit.active) return;
+    if (typeof TPV_STATE !== "undefined" && TPV_STATE?.offline) return toast("Encargos necesita conexión con el servidor.", "warn", "Encargos");
+    if (!hasVisibleCartLines()) return showMessageModal("Sin productos", "El encargo no puede quedar sin productos. Añade alguno o descarta los cambios.");
+    if (currentParkedTicketIndex != null) return toast("Suelta antes el pedido aparcado que tienes cargado.", "warn", "Encargos");
+    if (typeof activeCustomerTariffReadyPromise !== "undefined") await activeCustomerTariffReadyPromise;
+    wiz.snapshot = (Array.isArray(cart) ? cart : []).map((l) => ({ ...l }));
+    wiz.total = round2(getCartTotal(wiz.snapshot));
+    if (!(wiz.total > 0)) return toast("El total del encargo debe ser mayor que cero.", "warn", "Encargos");
+    if (wiz.total + 0.0001 < edit.collected) {
+      return showMessageModal(
+        "No se puede bajar de lo ya cobrado",
+        `El nuevo total (${fmtMoney(wiz.total)}) es menor que lo ya cobrado a cuenta (${fmtMoney(edit.collected)}), y lo cobrado a cuenta no se toca. Si el cliente quiere menos, cancela el encargo (con devolución) y crea otro.`,
+      );
+    }
+    wiz.mode = "edit";
+    wiz.order = null;
+    wiz.collected = edit.collected;
+    wiz.codcliente = edit.codcliente;
+    wiz.customerName = "El mismo del encargo";
+    wiz.orderCode = "";
+    wiz.editNumero2 = "";
+    wiz.fsDoc = null;
+    wiz.saving = false;
+    wiz.savedOk = false;
+    wiz.serverError = "";
+    wiz.page = 1;
+    const [d, t] = String(edit.pickupAt || "").split(" ");
+    if (d === dateKey(new Date())) wiz.day = "today";
+    else if (d === dateKey(addDays(new Date(), 1))) wiz.day = "tomorrow";
+    else {
+      wiz.day = "custom";
+      wiz.customDay = d;
+    }
+    wiz.time = t || "12:00";
+    $("encName").value = edit.customerName;
+    $("encPhone").value = edit.customerPhone;
+    $("encNotes").value = edit.notes;
+    $("encDayInput").value = wiz.day === "custom" ? d : "";
+    $("encDayInput").classList.toggle("hidden", wiz.day !== "custom");
+    $("encSumDetail").classList.add("hidden");
+    showWizError("");
+    wiz.open = true;
+    $("encargoWizardOverlay").classList.remove("hidden");
+    lockAppUI();
+    renderWizard();
+  }
+
+  async function saveEdit() {
+    if (wiz.saving) return;
+    const err1 = validatePage1();
+    if (err1) return showWizError(err1);
+    if (wiz.total + 0.0001 < edit.collected) return showWizError(`No se puede bajar de lo ya cobrado (${fmtMoney(edit.collected)}).`);
+    wiz.serverError = "";
+    wiz.saving = true;
+    setWizBusy(true);
+    showWizError("");
+    const discardNewPedido = async () => {
+      if (wiz.fsDoc) await cancelFsPedidoQuietly(wiz.fsDoc.idpedido);
+      wiz.fsDoc = null;
+      wiz.editNumero2 = "";
+    };
+    try {
+      const name = $("encName").value.trim();
+      const phone = $("encPhone").value.trim();
+      const notes = $("encNotes").value.trim();
+      const pickupAt = `${wizDayKey()} ${wiz.time}`;
+      if (!wiz.editNumero2) wiz.editNumero2 = `${edit.orderCode}.E${Date.now().toString(36).toUpperCase()}`;
+
+      // 1) pedido NUEVO en FacturaScripts (una sola vez por intento aunque se reintente)
+      if (!wiz.fsDoc) {
+        wiz.fsDoc = await createFsPedido({
+          numero2: wiz.editNumero2,
+          codcliente: edit.codcliente,
+          codalmacen: String(currentTerminal?.codalmacen || "").trim(),
+          observaciones: `ENCARGO ${edit.orderCode} · ${name}${phone ? " · " + phone : ""}\nRecogida: ${pickupLabel(pickupAt)}${notes ? "\nNota: " + notes : ""}\n(encargo editado)`,
+          lineas: buildFsLinesFromCart(wiz.snapshot),
+          codagente: String(currentAgent?.codagente || "").trim(),
+          nick: String(currentAgent?.nick || getLoginUser?.() || "").trim(),
+        });
+      }
+      const fsTotal = Number.isFinite(wiz.fsDoc.total) ? round2(wiz.fsDoc.total) : wiz.total;
+
+      // 2) servidor: versión esperada + pedido nuevo (todo o nada)
+      let r;
+      try {
+        r = await postWithRetry("update-customer-order", {
+          orderId: edit.orderId,
+          expectedVersion: edit.version,
+          customerName: name,
+          customerPhone: phone,
+          notes,
+          pickupAt,
+          total: fsTotal,
+          lines: wizLinesForSave(),
+          fsIdpedido: wiz.fsDoc.idpedido,
+          fsCodigo: wiz.fsDoc.codigo,
+          userName: wizAgentName(),
+          terminalId: String(currentTerminal?.id || ""),
+          sessionId: sessionId(),
+        });
+      } catch {
+        throw new Error("No hay conexión con el servidor. Los cambios no se han guardado: pulsa Guardar cambios otra vez cuando vuelva la conexión (no se duplicará nada).");
+      }
+      if (r.status === 412) {
+        await discardNewPedido();
+        throw new Error("Mientras editabas, otro terminal modificó este encargo (cobró un anticipo, lo editó…). Tus cambios NO se han guardado: descarta la edición, revisa el encargo y vuelve a editarlo.");
+      }
+      if (r.status === 423) {
+        await discardNewPedido();
+        throw new Error("Este encargo se está atendiendo en otro dispositivo. Espera unos segundos y vuelve a pulsar Guardar cambios.");
+      }
+      if (!r.ok) {
+        await discardNewPedido();
+        throw new Error(r.json?.error || `El servidor no aceptó los cambios (HTTP ${r.status}).`);
+      }
+      const order = r.json.data;
+      wiz.savedOk = true;
+      onEdited(order, edit.fsIdpedido).catch((e) => console.warn("[ENCARGOS] tras editar:", e?.message || e));
+    } catch (e) {
+      wiz.serverError = String(e?.message || e);
+      showWizError(wiz.serverError);
+    } finally {
+      wiz.saving = false;
+      setWizBusy(false);
+    }
+  }
+
+  // Después de guardar: el pedido anterior se cancela (libera su reserva), el nuevo recibe el texto con el dinero, se
+  // reimprime el resguardo marcado «MODIFICADO» y se vacía el carrito.
+  async function onEdited(order, oldIdpedido) {
+    closeWizard({ keepOrphanCheck: true });
+    edit.active = false;
+    await persistEdit();
+    try {
+      pushCartHistoryStep("clear-cart");
+      cart = [];
+      setCurrentParkedTicketIndex(null);
+      renderCart();
+      window.CUSTOMER_SELECTOR?.resetToDefault?.();
+    } catch {}
+    applyEditUI();
+    refreshCount().catch(() => {});
+    if (list.open) loadList().catch(() => {});
+
+    // texto del pedido anterior (mientras aún se puede editar) y su cancelación
+    if (oldIdpedido && String(oldIdpedido) !== String(order.fsIdpedido)) {
+      apiWrite(`pedidoclientes/${encodeURIComponent(oldIdpedido)}`, "PUT", {
+        observaciones: `ENCARGO ${order.orderCode} · SUSTITUIDO: el encargo se editó y ahora es el pedido ${order.fsCodigo}.`,
+      })
+        .catch(() => {})
+        .then(() => cancelFsPedidoQuietly(oldIdpedido));
+    }
+    syncFsObservaciones(order).catch(() => {});
+
+    const ctx = { cents: 0, modified: true };
+    showResult(order, ctx, "Encargo modificado ✓");
+    if (isAutoPrintEnabled()) await printReceipt(order, ctx).catch(() => {});
+  }
+
+  let editBound = false;
+  function bindEditOnce() {
+    if (editBound) return;
+    editBound = true;
+    $("encDetEditBtn")?.addEventListener("click", () => startEdit());
+    $("encEditSaveBtn")?.addEventListener("click", () => openEditWizard());
+    $("encEditDiscardBtn")?.addEventListener("click", () => discardEdit());
+  }
+
   // ------------------------------------------------------------------ arranque
 
   function init() {
     bindWizardOnce();
     bindListOnce();
+    bindEditOnce();
     bindToggleOnce();
     loadEnabled()
       .then(() => {
         if (isEnabled()) refreshCount().catch(() => {});
+        return loadEditState();
       })
       .catch(() => {});
   }
@@ -2405,6 +2817,10 @@
     openList,
     openDetail,
     openAdvanceDialog,
+    startEdit,
+    isEditing,
+    openEditWizard,
+    buildCartFromOrder,
     getCashSummaryForClose,
     isEncargoInvoice,
     renderCloseBlock,

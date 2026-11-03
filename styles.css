@@ -3697,6 +3697,56 @@ body.pay-encargo-mode #payOverlay .pay-extra {
   display: none;
 }
 
+/* ---- Encargos: edición de un encargo en el carrito ---- */
+.encargo-edit-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #f5f0fc;
+  border: 2px solid #7e4fc1;
+  color: #1f2937;
+}
+.encargo-edit-banner .eeb-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.encargo-edit-banner .eeb-text small {
+  color: #6b7280;
+  font-size: 11px;
+}
+.eeb-btn {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+.eeb-save {
+  background: #2ecc71;
+  color: #fff;
+}
+.eeb-discard {
+  background: #e5e7eb;
+  color: #111827;
+}
+/* Mientras se edita, Cobrar y Aparcar no se pueden usar (el carrito es el del encargo) */
+body.encargo-editing #payBtn,
+body.encargo-editing #parkBtn,
+body.encargo-editing #preprintTicketBtn {
+  opacity: 0.35;
+  pointer-events: none;
+}
+body.theme-dark .encargo-edit-banner {
+  background: #2a2140;
+  color: #e5e7eb;
+}
+
 /* ---- Encargos: bloque del cierre de caja ---- */
 .enc-close-block {
   margin-top: 12px;

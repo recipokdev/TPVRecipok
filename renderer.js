@@ -47461,6 +47461,11 @@ if (payBtn) {
       requireAssignedAgentOrBlock({ showModal: true });
       return;
     }
+    // Encargos: el carrito es el de un encargo que se esta editando (js/tpv/encargos.js)
+    if (window.TPV_ENCARGOS?.isEditing?.()) {
+      toast("Estás editando un encargo: guarda o descarta los cambios antes de cobrar.", "warn", "Encargos");
+      return;
+    }
     if (!(await confirmDespiteOtherDeviceDraft("cobrar"))) return;
     onPayButtonClick();
   };
@@ -53036,6 +53041,10 @@ function closeParkObsModal() {
 }
 
 parkBtn?.addEventListener("click", async () => {
+  if (window.TPV_ENCARGOS?.isEditing?.()) {
+    toast("Estás editando un encargo: guarda o descarta los cambios antes de aparcar.", "warn", "Encargos");
+    return;
+  }
   const labels = getParkingLabels();
   const mesasMode = isMesasTransaccionesMode();
   if (mesasMode && !cashSession?.open) {

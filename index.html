@@ -414,6 +414,16 @@
       </div>
 
       <!-- LÍNEAS DEL CARRITO -->
+      <!-- Encargos: franja mientras se edita un encargo en el carrito -->
+      <div id="encargoEditBanner" class="encargo-edit-banner hidden" role="status">
+        <div class="eeb-text">
+          <strong id="encEditBannerTitle">Editando encargo</strong>
+          <small id="encEditBannerSub"></small>
+        </div>
+        <button type="button" id="encEditSaveBtn" class="eeb-btn eeb-save">Guardar cambios</button>
+        <button type="button" id="encEditDiscardBtn" class="eeb-btn eeb-discard">Descartar</button>
+      </div>
+
       <div id="mesaInUseNotice" class="mesa-in-use-notice hidden" role="status"></div>
 
       <div id="parkedEditingBanner" class="parked-editing-banner hidden">
@@ -1400,6 +1410,7 @@
         <div class="enc-foot">
           <div class="enc-foot-row enc-foot-wrap">
             <button type="button" id="encDetPickupBtn" class="enc-btn enc-btn-green enc-btn-sm">Recoger y cobrar</button>
+            <button type="button" id="encDetEditBtn" class="enc-btn enc-btn-outline enc-btn-sm">Editar encargo</button>
             <button type="button" id="encDetAdvanceBtn" class="enc-btn enc-btn-blue enc-btn-sm">Cobrar otro anticipo</button>
             <button type="button" id="encDetReceiptBtn" class="enc-btn enc-btn-outline enc-btn-sm">Imprimir resguardo</button>
             <button type="button" id="encDetVoucherBtn" class="enc-btn enc-btn-outline enc-btn-sm">Imprimir justificante</button>
