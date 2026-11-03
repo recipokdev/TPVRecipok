@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Si el TPV no arranca o da error</title>
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Segoe UI", Arial, Helvetica, sans-serif; color: #1f2937; font-size: 12.5px; line-height: 1.4; }
+  .page { width: 210mm; height: 297mm; padding: 14mm 15mm 12mm; position: relative; page-break-after: always; overflow: hidden; }
+  .page:last-child { page-break-after: auto; }
+  .head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 3px solid #3D67AC; padding-bottom: 6px; margin-bottom: 10px; }
+  .brand { font-size: 13px; font-weight: 800; letter-spacing: 1.5px; color: #3D67AC; text-transform: uppercase; }
+  .head .tag { font-size: 10.5px; color: #6b7280; }
+  h1 { font-size: 25px; line-height: 1.15; margin: 0 0 4px; color: #111827; }
+  .lead { font-size: 13.5px; margin: 0 0 10px; color: #374151; }
+  .calm { background: #ecfdf5; border: 2px solid #34d399; border-radius: 10px; padding: 8px 12px; margin: 0 0 10px; font-size: 13px; }
+  h2 { font-size: 15px; margin: 12px 0 5px; color: #3D67AC; }
+  table.see { width: 100%; border-collapse: collapse; margin: 4px 0 6px; }
+  table.see td { border: 1px solid #d1d5db; padding: 6px 9px; vertical-align: top; }
+  table.see td:first-child { width: 47%; background: #f3f4f6; font-style: italic; }
+  table.see tr.wait td:last-child { background: #fffbeb; }
+  .step { display: flex; gap: 11px; margin: 9px 0; page-break-inside: avoid; }
+  .num { flex: 0 0 34px; height: 34px; border-radius: 50%; background: #3D67AC; color: #fff; font-weight: 800; font-size: 18px; text-align: center; line-height: 34px; }
+  .step h3 { margin: 0 0 2px; font-size: 14.5px; }
+  .step p, .step ul { margin: 2px 0; }
+  .step ul { padding-left: 18px; }
+  .warn { background: #fef2f2; border: 2px solid #f87171; border-radius: 10px; padding: 7px 11px; margin: 7px 0; }
+  .tip { background: #eff6ff; border: 2px solid #93c5fd; border-radius: 10px; padding: 7px 11px; margin: 7px 0; }
+  .call { border: 3px solid #3D67AC; border-radius: 14px; padding: 10px 14px; margin: 8px 0 8px; }
+  .call h2 { margin: 0 0 6px; font-size: 17px; }
+  .phone { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+  .phone .o { flex: 0 0 30px; height: 30px; border-radius: 50%; background: #111827; color: #fff; font-weight: 800; text-align: center; line-height: 30px; }
+  .phone .n { font-size: 25px; font-weight: 800; letter-spacing: 1px; color: #111827; }
+  .phone .w { font-size: 12.5px; color: #4b5563; }
+  .ready { margin: 4px 0 0; padding-left: 18px; }
+  .foot { position: absolute; left: 15mm; right: 15mm; bottom: 8mm; font-size: 9.5px; color: #9ca3af; display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+
+<!-- ============================ PÁGINA 1 ============================ -->
+<div class="page">
+  <div class="head"><div class="brand">Recipok · TPV</div><div class="tag">Guía rápida para el equipo del negocio</div></div>
+  <h1>Si el TPV no arranca o da error</h1>
+  <p class="lead">Sigue estos pasos por orden. La mayoría de los problemas se arreglan en los primeros dos.</p>
+
+  <div class="calm"><strong>Tranquilidad:</strong> reiniciar el TPV <strong>no borra</strong> las ventas ya cobradas ni los pedidos aparcados. Lo que está guardado, sigue guardado.</div>
+
+  <h2>Paso 1 · Mira qué pone la pantalla al arrancar</h2>
+  <table class="see">
+    <tr class="wait"><td>«Buscando actualizaciones…», «Descargando actualización…», «Actualizando el programa, no lo cierres…», «Instalando actualización…»</td>
+        <td><strong>Espera y no toques nada.</strong> El TPV se está actualizando y, con internet lento, puede tardar <strong>hasta 10–15 minutos</strong>. Se abrirá solo al terminar. <strong>No lo cierres ni apagues el ordenador.</strong> Si pasan más de 15 minutos igual, ve al paso 3.</td></tr>
+    <tr><td>«Comprobando tu conexión a internet…», «Sin internet (DNS). Esperando conexión…», «Conectado a red, pero sin salida a internet. Reintentando…»</td>
+        <td>El equipo <strong>no tiene internet</strong>. Ve al <strong>paso 2</strong>.</td></tr>
+    <tr><td>«Servidor no disponible todavía. Esperando…»</td>
+        <td>Internet o nuestro servidor van mal en este momento. <strong>Espera 5 minutos</strong>; si sigue igual, ve al paso 2 y luego al 3.</td></tr>
+    <tr><td>El TPV ya está abierto pero se queda <strong>congelado</strong>, en blanco, o sale un <strong>mensaje de error</strong></td>
+        <td>Ve al <strong>paso 3</strong> (reiniciar el TPV). Antes, haz una <strong>foto con el móvil</strong> al error: nos ayudará mucho.</td></tr>
+  </table>
+
+  <div class="step"><div class="num">2</div><div>
+    <h3>Comprueba que hay internet</h3>
+    <ul>
+      <li>Con el <strong>móvil conectado al mismo wifi</strong> del negocio, abre cualquier página web. ¿Carga?</li>
+      <li>Mira el <strong>router</strong> (la cajita de internet): sus luces deben estar fijas, no apagadas ni en rojo.</li>
+      <li>Si no hay internet: <strong>desenchufa el router, espera 30 segundos y vuelve a enchufarlo</strong>. Tarda 2–3 minutos en volver. Si el TPV va por cable, comprueba que el cable está bien metido.</li>
+    </ul>
+    <p>Cuando vuelva internet, el TPV <strong>sigue solo</strong>: no hace falta hacer nada más.</p>
+  </div></div>
+
+  <div class="step"><div class="num">3</div><div>
+    <h3>Cierra el TPV y vuelve a abrirlo</h3>
+    <ul>
+      <li>Si el programa responde: botón de <strong>Opciones</strong> (la rueda) → <strong>Salir del Programa</strong>. Si dice <em>«Terminal abierta»</em>, cierra antes la caja; si el programa está bloqueado y no puedes, elige <strong>Salir sin cerrar caja (incidencia)</strong> y luego <strong>Reiniciar el programa</strong>. No se pierde nada.</li>
+      <li>Vuelve a abrir el TPV con su <strong>icono</strong> (en el escritorio o en la barra de tareas).</li>
+    </ul>
+    <div class="tip"><strong>Esto suele ser lo que lo arregla.</strong> Al arrancar, el TPV comprueba solo si hay una versión nueva y se actualiza. Si ves «Actualizando el programa, no lo cierres…», <strong>deja que termine</strong>: se abre solo.</div>
+  </div></div>
+
+  <div class="foot"><span>Recipok · Guía rápida: si el TPV no arranca o da error</span><span>1 / 2</span></div>
+</div>
+
+<!-- ============================ PÁGINA 2 ============================ -->
+<div class="page">
+  <div class="head"><div class="brand">Recipok · TPV</div><div class="tag">Guía rápida para el equipo del negocio</div></div>
+
+  <div class="step"><div class="num">4</div><div>
+    <h3>Reinicia el ordenador</h3>
+    <ul>
+      <li>Botón de <strong>Inicio</strong> de Windows → <strong>Apagar o reiniciar</strong> → <strong>Reiniciar</strong>. Cuando vuelva a encenderse, abre el TPV.</li>
+      <li>Si el ordenador está <strong>totalmente congelado</strong> y no responde a nada, mantén pulsado el <strong>botón de encendido unos 5 segundos</strong> hasta que se apague, espera un momento y vuelve a encenderlo. <strong>Hazlo solo como último recurso.</strong></li>
+    </ul>
+    <div class="warn"><strong>Importante:</strong> si el TPV tenía <strong>ventas en cola sin enviar</strong> (en Tickets aparecen con un código que empieza por <strong>OFF-</strong>), intenta que antes recupere internet y se envíen. No las repitas a mano sin comprobar en <strong>Tickets</strong> si ya se registraron: podrías cobrarlas dos veces.</div>
+  </div></div>
+
+  <div class="step"><div class="num">5</div><div>
+    <h3>Si sigue sin funcionar: llámanos</h3>
+    <p>No pierdas más tiempo con el equipo parado. <strong>Llama por orden</strong>, y pasa al siguiente número si no contestan:</p>
+  </div></div>
+
+  <div class="call">
+    <h2>Teléfonos de ayuda (por orden de prioridad)</h2>
+    <div class="phone"><div class="o">1</div><div><div class="n">622 48 56 24</div><div class="w">Carlos</div></div></div>
+    <div class="phone"><div class="o">2</div><div><div class="n">654 956 854</div><div class="w">Romina</div></div></div>
+    <div class="phone"><div class="o">3</div><div><div class="n">691 194 777</div><div class="w">Carlos (teléfono personal) · solo si no contestan los anteriores</div></div></div>
+  </div>
+
+  <h2>Antes de llamar, ten a mano:</h2>
+  <ul class="ready">
+    <li>El <strong>nombre del negocio</strong> y de qué <strong>equipo/terminal</strong> se trata.</li>
+    <li>Qué <strong>pone la pantalla</strong> (la <strong>foto</strong> que hiciste con el móvil).</li>
+    <li>Si <strong>hay internet</strong> en el negocio (la prueba del móvil del paso 2).</li>
+    <li>Qué has <strong>probado ya</strong> (reiniciar el TPV, reiniciar el ordenador…) y <strong>desde cuándo</strong> falla.</li>
+  </ul>
+
+  <h2>Mientras se soluciona</h2>
+  <div class="tip">Si hay clientes esperando, <strong>apunta las ventas en papel</strong> (producto, importe y forma de pago) y regístralas en el TPV cuando vuelva a funcionar. Si el TPV abre pero <strong>solo le falta internet</strong>, normalmente <strong>puedes seguir vendiendo</strong>: las ventas se guardan en el equipo y se envían solas cuando vuelve la conexión (lo verás en la esquina inferior izquierda: punto rojo = sin internet).</div>
+
+  <h2>Para evitar sustos</h2>
+  <ul class="ready">
+    <li>Cuando el TPV avise de que hay una <strong>versión nueva</strong>, actualízalo <strong>fuera del horario de servicio</strong>, con la caja cerrada.</li>
+    <li><strong>Reinicia el TPV al cerrar el negocio</strong> al menos una vez por semana: así se mantiene siempre al día y sin sorpresas.</li>
+  </ul>
+
+  <div class="foot"><span>Recipok · Guía rápida: si el TPV no arranca o da error</span><span>2 / 2</span></div>
+</div>
+
+</body>
+</html>

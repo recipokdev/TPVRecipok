@@ -1,5 +1,5 @@
 // main.js
-const { app, BrowserWindow, ipcMain, screen, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, screen, shell, dialog } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const { execFile, spawn } = require("child_process");
 const path = require("path");
@@ -195,7 +195,9 @@ if (!gotTheLock) {
   app.quit();
 } else {
   app.on("second-instance", async () => {
-    if (appIsInstallingUpdate) return;
+    // Durante una instalacion se ignora, pero no para siempre: si lleva mas de 90 s algo se atasco.
+    if (appIsInstallingUpdate && Date.now() - appInstallingSince < 90_000) return;
+    if (appIsInstallingUpdate) logUpdateEventRemote("second-instance-while-install-stuck");
 
     if (mainWin && !mainWin.isDestroyed()) {
       if (!IS_E2E_BACKGROUND) {
@@ -1274,6 +1276,10 @@ function postUpdateSplashMarkerPath() {
 // cierre, y que se queda mostrando "Instalando..." hasta que la nueva version
 // avise de que ya se ve (o hasta un tope de seguridad).
 function spawnPostUpdateSplash() {
+  // Se anota que se lanza una instalacion: en el siguiente arranque se comprueba si de verdad se aplico.
+  try {
+    writeCfg({ pendingInstall: { from: app.getVersion(), at: Date.now() } });
+  } catch {}
   if (process.platform !== "win32") return;
   try {
     try {
@@ -1294,6 +1300,24 @@ function spawnPostUpdateSplash() {
       `No se pudo lanzar la ventana de "instalando": ${e?.message || e}`,
     );
   }
+}
+
+// Primer arranque tras lanzar una instalacion (ver spawnPostUpdateSplash): si la version cambio, se aplico; si sigue
+// siendo la misma, la instalacion fallo en silencio (instalador SILENCIOSO, sin ningun aviso) y el cajero solo ve que
+// "el TPV desaparece y no vuelve". Solo observacional: deja constancia en el servidor, no cambia nada.
+function verifyPreviousInstallOutcome() {
+  try {
+    const pending = readCfg().pendingInstall;
+    if (!pending || typeof pending !== "object") return;
+    writeCfg({ pendingInstall: null });
+    const secs = Math.round((Date.now() - Number(pending.at || Date.now())) / 1000);
+    const from = String(pending.from || "");
+    if (from && from !== app.getVersion()) {
+      logUpdateEventRemote("update-install-ok", { fromVersion: from, secondsToReopen: secs });
+    } else {
+      logUpdateEventRemote("update-install-not-applied", { fromVersion: from, secondsSinceAttempt: secs });
+    }
+  } catch {}
 }
 
 // Llamar en cuanto la ventana principal de una nueva version ya se muestra
@@ -1411,8 +1435,22 @@ function runPostUpdateSplashProcess() {
 
     const markerPath = postUpdateSplashMarkerPath();
     const POLL_MS = 300;
-    const MAX_WAIT_MS = 30000;
+    // Una instalacion lenta (disco/antivirus) puede pasar de los 30 s: si la ventanita desaparecia antes, el cajero
+    // veia el escritorio vacio, creia que "el TPV no abre" y lo volvia a lanzar en mitad de la instalacion.
+    const SLOW_MS = 30000;
+    const MAX_WAIT_MS = 180000;
+    const FAIL_SHOW_MS = 25000;
     const startedAt = Date.now();
+    let slowShown = false;
+    let failUntil = 0;
+    const setSplashText = (title, hint) => {
+      try {
+        win.webContents.executeJavaScript(
+          `document.querySelector('.title').textContent = ${JSON.stringify(title)};` +
+            `document.querySelector('.hint').textContent = ${JSON.stringify(hint)};`,
+        );
+      } catch (_) {}
+    };
 
     const timer = setInterval(() => {
       let ready = false;
@@ -1420,7 +1458,24 @@ function runPostUpdateSplashProcess() {
         ready = fs.existsSync(markerPath);
       } catch (_) {}
 
-      if (!ready && Date.now() - startedAt < MAX_WAIT_MS) return;
+      const elapsed = Date.now() - startedAt;
+      if (!ready && !slowShown && elapsed >= SLOW_MS) {
+        slowShown = true;
+        setSplashText(
+          "Instalando TPV Recipok...",
+          "Está tardando más de lo normal. No abras el TPV otra vez: se abrirá solo cuando termine.",
+        );
+      }
+      if (!ready && elapsed < MAX_WAIT_MS) return;
+      if (!ready && !failUntil) {
+        failUntil = Date.now() + FAIL_SHOW_MS;
+        setSplashText(
+          "No se ha podido terminar la actualización",
+          "Abre el TPV con su icono. Si no se abre, reinicia el ordenador. Si sigue sin funcionar, llama a soporte.",
+        );
+        return;
+      }
+      if (!ready && Date.now() < failUntil) return;
 
       clearInterval(timer);
       try {
@@ -1961,6 +2016,7 @@ async function waitForInternetAndApiGate() {
 }
 
 let appIsInstallingUpdate = false;
+let appInstallingSince = 0;
 // Se puso true en este arranque porque no habia internet de verdad (ver
 // NO_INTERNET_BYPASS_MS): la app se abrio con la version actual sin poder
 // comprobar actualizaciones. La UI lo consulta una vez al arrancar para
@@ -2093,6 +2149,7 @@ async function runAutoUpdateGate() {
 
       autoUpdater.once("update-downloaded", () => {
         appIsInstallingUpdate = true;
+        appInstallingSince = Date.now();
         logUpdateEventRemote("update-gate-installing");
         splashSet("Instalando actualización…", 100);
         spawnPostUpdateSplash();
@@ -2690,9 +2747,24 @@ scaleManager.setOnStateChange((payload) => {
 
 app.whenReady().then(async () => {
   if (!gotTheLock) {
+    // Ya hay un TPV en marcha (o terminando de actualizarse): antes este segundo arranque se cerraba sin decir
+    // nada y el cajero creia que "el TPV no abre". Ahora se explica y se deja constancia en el servidor.
+    logUpdateEventRemote("launch-blocked-second-instance");
+    try {
+      await dialog.showMessageBox({
+        type: "info",
+        title: "TPV Recipok",
+        message: "El TPV ya está abierto o terminando de actualizarse.",
+        detail:
+          "Espera un minuto: si se está actualizando, se abrirá solo. Si no aparece, reinicia el ordenador.\n\nSi sigue sin funcionar, llama a soporte.",
+        buttons: ["Entendido"],
+      });
+    } catch {}
     app.quit();
     return;
   }
+
+  verifyPreviousInstallOutcome();
 
   bootstrapCurrentUserFromCfg();
   cleanOldAutoStartIfWrong();
@@ -3062,6 +3134,7 @@ ipcMain.handle("updater:relaunchForUpdate", async () => {
   try {
     forceRelaunchForUpdate = true;
     appIsInstallingUpdate = true;
+    appInstallingSince = Date.now();
 
     // Evitar que queden timers/reintentos vivos durante el reinicio.
     stopPreCashUpdateRetries();

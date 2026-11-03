@@ -29612,6 +29612,9 @@ async function confirmCashClosing() {
   try {
     if (cashOpenOkBtn) cashOpenOkBtn.disabled = false;
   } catch {}
+
+  // Fire-and-forget: no retrasa nada del cierre (ver offerUpdateAfterCashClose)
+  offerUpdateAfterCashClose().catch(() => {});
 }
 
 // ===== [07] API: llamadas Recipok/FacturaScripts =====
@@ -33327,6 +33330,7 @@ const optPvIsGatedOff = (el) => {
 const OPT_PREVIEW_DEFS = {
   actualizacion: [
     OPT_PV.T("Avisos de versión nueva", "updateNoticeEnabledToggle"),
+    OPT_PV.T("Ofrecer actualizar al cerrar la caja", "updateOfferOnCloseToggle"),
     OPT_PV.V("Comprobar", "updateNoticeIntervalSelect", (t) =>
       t.replace(/^Cada\s+/i, "cada "),
     ),
@@ -34672,6 +34676,7 @@ const CHANGELOG_SOURCE_FILE = "changelog.json";
 
 const BACKGROUND_UPDATE_DEFAULT_SETTINGS = {
   enabled: true,
+  offerOnCashClose: true,
   intervalMs: 60 * 60 * 1000,
   firstDelayMs: 5 * 60 * 1000,
 };
@@ -35240,6 +35245,7 @@ function normalizeBackgroundUpdateSettings(raw) {
   const intervalCandidate = Number(src.intervalMs || 0);
   return {
     enabled: src.enabled !== false,
+    offerOnCashClose: src.offerOnCashClose !== false,
     intervalMs: intervalAllowed.has(intervalCandidate)
       ? intervalCandidate
       : BACKGROUND_UPDATE_DEFAULT_SETTINGS.intervalMs,
@@ -35946,6 +35952,12 @@ function refreshBackgroundUpdateOptionsUI() {
     checkNowBtn.disabled = backgroundUpdateSettings?.enabled === false;
   }
 
+  const offerToggle = document.getElementById("updateOfferOnCloseToggle");
+  if (offerToggle) {
+    offerToggle.checked = backgroundUpdateSettings?.offerOnCashClose !== false;
+    offerToggle.disabled = backgroundUpdateSettings?.enabled === false;
+  }
+
   syncBackgroundUpdateCountdownUi();
   refreshBackgroundUpdateCurrentVersionUi().catch(() => {});
 }
@@ -35978,6 +35990,17 @@ function bindBackgroundUpdateOptionsOnce() {
     }
 
     refreshBackgroundUpdateOptionsUI();
+  });
+
+  document.getElementById("updateOfferOnCloseToggle")?.addEventListener("change", (e) => {
+    saveBackgroundUpdateSettings({ offerOnCashClose: !!e.target.checked });
+    toast(
+      e.target.checked
+        ? "Al cerrar la caja, el TPV ofrecerá actualizarse si hay una versión nueva."
+        : "Ya no se ofrecerá actualizar al cerrar la caja.",
+      "info",
+      "Opciones",
+    );
   });
 
   intervalSelect?.addEventListener("change", () => {
@@ -36091,7 +36114,7 @@ function stopBackgroundUpdateMonitor() {
   syncBackgroundUpdateCountdownUi();
 }
 
-function runUpdateRelaunchCountdown({ seconds = 5, targetVersion = "" } = {}) {
+function runUpdateRelaunchCountdown({ seconds = 5, targetVersion = "", intro = "" } = {}) {
   const overlay = document.getElementById("msgOverlay");
   const titleEl = document.getElementById("msgTitle");
   const textEl = document.getElementById("msgText");
@@ -36123,7 +36146,7 @@ function runUpdateRelaunchCountdown({ seconds = 5, targetVersion = "" } = {}) {
     let timer = null;
 
     const paint = () => {
-      const verLine = verTxt ? `Versión nueva: ${verTxt}\n` : "";
+      const verLine = (intro ? `${intro}\n` : "") + (verTxt ? `Versión nueva: ${verTxt}\n` : "");
       textEl.textContent =
         `${verLine}Cerrando el programa en ${left}s para actualizar.\n` +
         "Puedes cancelar si quieres seguir trabajando.";
@@ -36168,6 +36191,55 @@ function runUpdateRelaunchCountdown({ seconds = 5, targetVersion = "" } = {}) {
       paint();
     }, 1000);
   });
+}
+
+// Ofrecer actualizar justo despues de cerrar la caja (2026-11-03). Real: Los Argentinos tuvo un equipo dias con la
+// version 0.2.48 (cuatro versiones atras) porque el TPV solo se actualiza al reiniciarlo y el aviso de la esquina se
+// puede ignorar. El cierre de caja es el momento natural: ya no hay ventas en curso, y si el cajero no hace nada el
+// TPV se reinicia solo tras la cuenta atras (cancelable). Nunca se ofrece con ventas o aparcados sin enviar.
+async function offerUpdateAfterCashClose() {
+  try {
+    if (!backgroundUpdateSettings?.enabled || backgroundUpdateSettings?.offerOnCashClose === false) return;
+    if (TPV_STATE?.offline || manualUpdateActionInFlight || backgroundUpdateCheckInFlight) return;
+    const updaterApi = window.__TPV_UPDATER_TEST_OVERRIDE || window.TPV_UPDATER; // el override solo lo usan las pruebas
+    if (!updaterApi?.checkNow || !updaterApi?.relaunchForUpdate) return;
+
+    // Espera a que se asiente el cierre (informe impreso, pantalla de apertura de caja).
+    await sleep(2500);
+    if (cashSession?.open) return;
+    const pendingSales = Number(await window.TPV_QUEUE?.count?.().catch(() => 0)) || 0;
+    if (pendingSales > 0 || loadParkedSyncQueue().length > 0) return;
+    if (document.querySelector(".simple-overlay:not(.hidden), .critical-overlay:not(.hidden)")) return;
+
+    manualUpdateActionInFlight = true;
+    try {
+      const check = await updaterApi.checkNow();
+      if (!check?.ok || check?.devMode || !check?.updateAvailable) return;
+      const targetVersion = String(check?.targetVersion || "").trim();
+      reportClientEvent("update", "offer-after-cash-close", `Se ofrece actualizar a ${targetVersion || "?"} tras cerrar la caja`, {}, "info");
+
+      const proceed = await runUpdateRelaunchCountdown({
+        seconds: 45,
+        targetVersion,
+        intro: "La caja está cerrada y hay una versión nueva del TPV.",
+      });
+      if (!proceed) {
+        reportClientEvent("update", "offer-after-cash-close-declined", "Se pospone la actualización", {}, "info");
+        toast("Actualización pospuesta. Puedes hacerla desde Opciones → Actualizar programa.", "info", "Actualizar programa");
+        return;
+      }
+      persistRuntimeCartSnapshot({ force: true });
+      reportClientEvent("update", "offer-after-cash-close-accepted", `Reinicio para actualizar a ${targetVersion || "?"}`, {}, "info");
+      const relaunch = await updaterApi.relaunchForUpdate();
+      if (!relaunch?.ok) {
+        showMessageModal("Actualizar programa", String(relaunch?.message || "No se pudo reiniciar el programa."));
+      }
+    } finally {
+      manualUpdateActionInFlight = false;
+    }
+  } catch (e) {
+    console.warn("[UPDATE-OFFER] fallo (no critico):", e?.message || e);
+  }
 }
 
 async function startManualUpdateFlowFromOptions() {
