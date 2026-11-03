@@ -211,7 +211,17 @@ Tamaños aproximados: S ≈ medio día, M ≈ 1-2 días, L ≈ 2-3 días de trab
 
 ---
 
-## Esquema propuesto para el servidor (PROPUESTA, sin aplicar)
+## Esquema para el servidor (APLICADO el 2026-11-03, solo en la demo)
+
+**Estado (3-nov):** la fase 1 está desplegada en el servidor compartido, activa **solo para `demo`** (`customer_orders_pilot_slugs` en `config.php`; `a_reciplus` se añade más adelante, con aviso). Ficheros nuevos `lib/customer_orders_db.php` (tablas y reglas) y `lib/customer_orders.php` (acciones), enganchados en `index.php` con dos `require` y una llamada; copias de seguridad `index.php.bak-encargos-20261103-0820` y `config.php.bak-encargos-20261103-0820`. Probado con 67 comprobaciones contra la demo (crear, repetir, anticipos, editar con versiones y sin bajar de lo cobrado, candado, recoger con dos formas de pago, cancelar con devolución, cerrar sin recoger, aislamiento por tienda, resumen de caja); lo creado se borró después (tablas vacías). Empresas fuera del piloto reciben `409 customerOrdersDisabled`.
+
+**Dos correcciones respecto a la propuesta de abajo:**
+1. **El pedido y la factura de FacturaScripts los crea el TPV, no el servidor** (igual que las ventas, con la API del cliente). El servidor solo guarda el encargo y el dinero y anota los ids de FacturaScripts que le manda el TPV. «Atómico» significa que el encargo y su anticipo se guardan juntos en una sola transacción. Orden en el TPV: (1) crear el pedido en FacturaScripts con el código del encargo en `numero2` (comprobando antes si ya existe, como con las facturas); (2) llamar a `create-customer-order`. Si el programa se corta entre 1 y 2, queda un pedido de FacturaScripts sin encargo: la reserva de stock se ve en FacturaScripts y se puede cancelar a mano (más adelante, una comprobación de «pedidos sin encargo»). En editar, si el servidor devuelve conflicto de versión, el TPV cancela el pedido nuevo que acababa de crear.
+2. **Columna nueva `closed_caja`** en `customer_orders` (caja en la que se recogió, canceló o cerró), para que el cierre de caja sepa qué encargos se cerraron ese día.
+
+**Reglas que ya cumple el servidor:** importes en céntimos (sin errores de redondeo); un `op_code` repetido nunca cobra dos veces ni se puede usar en otro encargo; cancelar exige devolver **exactamente** lo cobrado a cuenta (si no se devuelve nada, es «Cerrar sin recoger»); recoger exige que lo cobrado a cuenta más lo cobrado ahora sea **exactamente** el total; «Cerrar sin recoger» exige una factura por **exactamente** lo cobrado y que haya algo cobrado; todo lo que cambia el encargo sube su `version`; el candado caduca solo a los 2 minutos. Los movimientos heredan la caja y el terminal de la petición.
+
+## Esquema propuesto para el servidor (texto original de la propuesta, 2026-11-02)
 
 Fecha: 2026-11-02. Solo **añadidos**: dos tablas nuevas y acciones nuevas. No se cambia ninguna tabla ni acción existente. Las tablas se crean solas al primer uso (`CREATE TABLE IF NOT EXISTS`), como `parked_mesa_viewers` o `parked_ops_applied`, en la misma base de datos que ya usan los aparcados (`getParkedDbConnection`).
 
