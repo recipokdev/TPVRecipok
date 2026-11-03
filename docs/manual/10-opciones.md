@@ -124,6 +124,7 @@ Controla qué se ve en la barra inferior: **Mostrar barra completa**, **terminal
 
 ### Actualización automática
 - **Mostrar avisos de actualización.** Comprueba en segundo plano si hay una versión nueva.
+- **Ofrecer actualizar al cerrar la caja.** Activado por defecto. Si hay una versión nueva, al cerrar la caja el TPV lo propone y se reinicia solo tras una cuenta atrás de 45 segundos (puedes cancelarla). No se ofrece si hay ventas o aparcados pendientes de enviar.
 - **Frecuencia de comprobación.** Cada cuánto se comprueba. **Comprobar ahora** lo hace en el momento.
 - **Changelog.** Consulta las novedades de cada versión.
 - **Actualizar Programa.** Instala la versión nueva cuando está disponible.

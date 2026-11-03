@@ -11604,6 +11604,24 @@ mustContain(
 mustContain(checklist, "Tickets Modal", "Tickets modal checklist documented");
 mustContain(checklist, "Parked Tickets", "Parked flow checklist documented");
 
+// 2026-11-03 (Los Argentinos): un equipo estuvo dias en la 0.2.48 y la actualizacion al reiniciar dejo al TPV sin abrir
+// sin ningun aviso. Ofrecer actualizar al cerrar la caja + instalacion que no desaparece en silencio.
+mustContain(renderer, "async function offerUpdateAfterCashClose() {", "Al cerrar la caja el TPV ofrece actualizarse si hay una version nueva");
+mustContain(renderer, "  offerUpdateAfterCashClose().catch(() => {});\r\n}\r\n\r\n// ===== [07] API: llamadas Recipok/FacturaScripts =====", "La oferta de actualizar se lanza al final del cierre de caja confirmado, sin retrasarlo");
+mustContain(renderer, "if (pendingSales > 0 || loadParkedSyncQueue().length > 0) return;", "No se ofrece actualizar con ventas o aparcados sin enviar");
+mustContain(renderer, "backgroundUpdateSettings?.offerOnCashClose === false", "La oferta de actualizar se puede apagar en Opciones");
+mustContain(renderer, "offerOnCashClose: src.offerOnCashClose !== false,", "La oferta de actualizar al cerrar la caja viene activada por defecto");
+mustContain(renderer, 'OPT_PV.T("Ofrecer actualizar al cerrar la caja", "updateOfferOnCloseToggle"),', "El resumen de Opciones lista el ajuste de ofrecer actualizar");
+mustContain(index, 'id="updateOfferOnCloseToggle"', "Opciones tiene el interruptor de ofrecer actualizar al cerrar la caja");
+mustContain(main, 'logUpdateEventRemote("launch-blocked-second-instance");', "Un segundo arranque bloqueado deja constancia en el servidor");
+mustContain(main, "El TPV ya está abierto o terminando de actualizarse.", "Un segundo arranque bloqueado explica por que no abre en vez de cerrarse en silencio");
+mustContain(main, "if (appIsInstallingUpdate && Date.now() - appInstallingSince < 90_000) return;", "Durante una instalacion atascada el icono deja de ignorarse pasados 90 s");
+mustContain(main, "function verifyPreviousInstallOutcome() {", "El siguiente arranque comprueba si la instalacion anterior se aplico");
+mustContain(main, 'logUpdateEventRemote("update-install-not-applied"', "Una instalacion que no se aplico queda registrada en el servidor");
+mustContain(main, "const MAX_WAIT_MS = 180000;", "La ventanita de instalando no desaparece a los 30 s dejando el escritorio vacio");
+mustContain(main, "No abras el TPV otra vez: se abrirá solo cuando termine.", "La ventanita de instalando avisa de que no hay que volver a abrir el TPV si tarda");
+mustContain(main, "No se ha podido terminar la actualización", "La ventanita de instalando explica que hacer si la instalacion no termina");
+
 if (process.exitCode) {
   console.error("\nSmoke tests failed.");
   process.exit(1);
