@@ -3692,6 +3692,11 @@ body.theme-dark .enc-foot {
   border-top-color: #374151;
 }
 
+/* Encargos: la ventana de cobro de siempre, usada para cobrar el resto, sin número, serie ni observaciones */
+body.pay-encargo-mode #payOverlay .pay-extra {
+  display: none;
+}
+
 /* ---- Encargos: lista y detalle ---- */
 .enc-list-modal {
   width: min(1040px, 96vw);

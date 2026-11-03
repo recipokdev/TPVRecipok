@@ -332,6 +332,7 @@
 
     const fields = {
       codcliente,
+      codserie: "S",
       numero2,
       observaciones,
       fecha: `${pad2(new Date().getDate())}-${pad2(new Date().getMonth() + 1)}-${new Date().getFullYear()}`,
@@ -491,6 +492,8 @@
       const name = String(it.name || it.descripcion || it.referencia || "Producto").trim();
       return {
         name: addons.length ? `${name} (+${addons.join(", +")})` : name,
+        idproducto: Number(it.baseProductId || it.idproducto || it.id || 0) || 0,
+        referencia: String(it.referencia || "").trim(),
         qty: Number(it.qty) || 0,
         unit: pricing.unitGross,
         total: pricing.lineTotal,
@@ -1416,6 +1419,9 @@
       (o.status === "pendiente" ? `<div class="enc-tot is-due"><span>Falta por cobrar</span><strong>${escapeHtml(fmtMoney(o.pending))}</strong></div>` : "");
     const pend = o.status === "pendiente";
     $("encDetAdvanceBtn").classList.toggle("hidden", !(pend && o.pending > 0));
+    $("encDetPickupBtn").classList.toggle("hidden", !pend);
+    $("encDetCloseUnclaimedBtn").classList.toggle("hidden", !(pend && o.collected > 0));
+    $("encDetPickupBtn").textContent = o.pending > 0 ? "Recoger y cobrar " + fmtMoney(o.pending) : "Entregar (ya pagado)";
     $("encDetCancelBtn").classList.toggle("hidden", !pend);
     $("encDetVoucherBtn").classList.toggle("hidden", !(o.collected > 0));
   }
@@ -1598,9 +1604,592 @@
     $("encDetCloseBtn")?.addEventListener("click", () => closeDetail());
     $("encDetCloseBtn2")?.addEventListener("click", () => closeDetail());
     $("encDetAdvanceBtn")?.addEventListener("click", () => detail.order && openAdvanceDialog(detail.order));
+    $("encDetPickupBtn")?.addEventListener("click", () => pickupFlow());
+    $("encDetCloseUnclaimedBtn")?.addEventListener("click", () => closeUnclaimedFlow());
     $("encDetCancelBtn")?.addEventListener("click", () => cancelOrderFlow());
     $("encDetReceiptBtn")?.addEventListener("click", () => detail.order && printReceipt(detail.order));
     $("encDetVoucherBtn")?.addEventListener("click", () => detail.order && printAdvanceVoucher(detail.order, {}));
+  }
+
+  // ------------------------------------------------------------------ recoger y cobrar el resto
+
+  // Pasos (cada uno se puede repetir sin duplicar nada, para poder continuar si algo se corta a medias):
+  //   1. candado de recogida en el servidor (nadie mas lo edita ni lo recoge a la vez);
+  //   2. si falta dinero, la ventana de cobro de siempre (varias formas de pago, cambio, cajon);
+  //   3. aviso de stock como al cobrar («Sin stock suficiente» / «Cobrar sin stock»);
+  //   4. FacturaScripts convierte el pedido en factura (estado «Facturar»), la reconocemos por numero2;
+  //   5. se completan los datos del TPV y se emite; recibos = cada anticipo (con su fecha) + lo cobrado ahora;
+  //   6. el servidor anota el resto, aplica los anticipos a la factura y marca el encargo como recogido.
+
+  async function findFsFacturaByNumero2(numero2) {
+    const rows = await apiRead(`facturaclientes?filter[numero2]=${encodeURIComponent(numero2)}&limit=1`);
+    const rowsArr = Array.isArray(rows) ? rows : Array.isArray(rows?.data) ? rows.data : [];
+    return rowsArr[0] || null;
+  }
+
+  async function ensureFsFacturaFromPedido(order) {
+    let f = await findFsFacturaByNumero2(order.orderCode).catch(() => null);
+    if (f) return f; // ya convertido (reintento)
+    if (!order.fsIdpedido) throw new Error("El encargo no tiene pedido en FacturaScripts.");
+    const idestado = await getFsPedidoStateId("facturar");
+    try {
+      await apiWrite(`pedidoclientes/${encodeURIComponent(order.fsIdpedido)}`, "PUT", { idestado }, { timeoutMs: 120000 });
+    } catch (e) {
+      f = await findFsFacturaByNumero2(order.orderCode).catch(() => null);
+      if (f) return f;
+      throw e;
+    }
+    for (let i = 0; i < 6; i++) {
+      f = await findFsFacturaByNumero2(order.orderCode).catch(() => null);
+      if (f) return f;
+      await sleep(600);
+    }
+    throw new Error("FacturaScripts no creó la factura del encargo.");
+  }
+
+  // Recibo pagado (anticipo o resto). El texto de las observaciones lo identifica (así un reintento no lo duplica).
+  async function createEncargoRecibo({ factura, codpago, importe, fechapago, note }) {
+    const fields = {
+      idfactura: factura.idfactura,
+      codcliente: factura.codcliente,
+      codpago,
+      importe: Number(Number(importe).toFixed(2)),
+      pagado: 1,
+      fecha: dateKey(new Date()),
+      vencimiento: dateKey(new Date()),
+      fechapago,
+      observaciones: note,
+    };
+    if (factura.idempresa != null) fields.idempresa = factura.idempresa;
+    if (factura.codigo) fields.codigofactura = factura.codigo;
+    if (factura.coddivisa) fields.coddivisa = factura.coddivisa;
+    return apiWrite("reciboclientes", "POST", fields, { timeoutMs: 30000 });
+  }
+
+  async function syncEncargoRecibos(factura, order, expected) {
+    const tag = `ENCARGO ${order.orderCode}`;
+    const existing = await fetchRecibosByFactura(factura.idfactura);
+    for (const e of expected) {
+      const note = `${tag} ${e.opCode} ${e.label}`;
+      if ((existing || []).some((r) => String(r.observaciones || "").includes(`${tag} ${e.opCode}`))) continue;
+      await createEncargoRecibo({ factura, codpago: e.codpago, importe: e.amount, fechapago: e.fechapago, note });
+    }
+    // El recibo automatico por el total (y cualquier otro que no sea de este encargo) se quita.
+    const after = await fetchRecibosByFactura(factura.idfactura);
+    for (const r of after || []) {
+      if (String(r.observaciones || "").includes(tag)) continue;
+      const id = r.idrecibo || r.id || r.idrecibocliente;
+      if (id) await deleteReciboCliente(id).catch((err) => console.warn("[ENCARGOS] recibo sobrante:", err?.message || err));
+    }
+  }
+
+  function hidePostPayQuietly() {
+    try {
+      if (typeof __postPayTimer !== "undefined" && __postPayTimer) clearTimeout(__postPayTimer);
+      if (typeof __postPayCountdownTimer !== "undefined" && __postPayCountdownTimer) clearInterval(__postPayCountdownTimer);
+    } catch {}
+    $("postPayOverlay")?.classList.add("hidden");
+    window.__POSTPAY_PENDING__ = null;
+  }
+
+  async function payRestWithModal(amount) {
+    const overlay = $("payOverlay");
+    const title = overlay?.querySelector(".pay-header h2");
+    document.body.classList.add("pay-encargo-mode");
+    if (title) title.textContent = "Cobrar el resto del encargo";
+    try {
+      return await openPayModal(amount);
+    } finally {
+      document.body.classList.remove("pay-encargo-mode");
+      if (title) title.textContent = "Cobrar";
+    }
+  }
+
+  // Productos del encargo con stock insuficiente (solo los que FacturaScripts no deja vender sin stock).
+  async function stockProblemsForOrder(order) {
+    const items = (Array.isArray(order.lines) ? order.lines : [])
+      .filter((l) => Number(l.idproducto) > 0)
+      .map((l) => ({ baseProductId: Number(l.idproducto), id: Number(l.idproducto), qty: Number(l.qty) || 0, name: l.name }));
+    if (!items.length) return null;
+    return checkCartStockProblems(items);
+  }
+
+  async function pickupFlow() {
+    const o0 = detail.order;
+    if (!o0 || o0.status !== "pendiente") return;
+    if (typeof TPV_STATE !== "undefined" && TPV_STATE?.offline) return toast("Encargos necesita conexión con el servidor.", "warn", "Encargos");
+    if (!cashSession?.open) return toast("Abre la caja para poder cobrar.", "warn", "Encargos");
+    if (!currentTerminal?.id) return toast("Selecciona un terminal para cobrar.", "warn", "Encargos");
+    if (!(await requireAssignedAgentOrBlock({ showModal: true }))) return;
+
+    // 1) candado
+    let lockR;
+    try {
+      lockR = await call("lock-customer-order-pickup", { method: "POST", body: { orderId: o0.id, sessionId: sessionId(), ttlMs: 600000 } });
+    } catch {
+      return toast("Sin conexión con el servidor.", "warn", "Encargos");
+    }
+    if (lockR.status === 423) {
+      return showMessageModal("Se está atendiendo en otro dispositivo", "Este encargo se está recogiendo o editando en otro terminal. Espera unos segundos y vuelve a intentarlo.");
+    }
+    if (!lockR.ok || !lockR.json?.data) return showMessageModal("No se pudo recoger", lockR.json?.error || `El servidor no aceptó la recogida (HTTP ${lockR.status}).`);
+
+    let released = false;
+    const unlock = async () => {
+      if (released) return;
+      released = true;
+      try {
+        await call("unlock-customer-order-pickup", { method: "POST", body: { orderId: o0.id, sessionId: sessionId() } });
+      } catch {}
+    };
+    let stockOverrideIds = [];
+    let payModalShown = false;
+    try {
+      const order = lockR.json.data;
+      if (order.status !== "pendiente") {
+        detail.order = order;
+        await renderDetail();
+        await unlock();
+        return toast("Este encargo ya no está pendiente.", "info", "Encargos");
+      }
+      const pending = round2(order.pending);
+
+      // Si una recogida anterior se cortó a medias (la factura ya tiene los recibos de lo cobrado), se continúa con
+      // ESOS cobros: no se vuelve a pedir el pago ni se puede cambiar la forma de pago por el camino.
+      let resumed = null;
+      const existingFactura = await findFsFacturaByNumero2(order.orderCode).catch(() => null);
+      if (existingFactura) {
+        const rec = await fetchRecibosByFactura(existingFactura.idfactura).catch(() => []);
+        // El texto de cada recibo del resto lleva el código de la operación («<código>-R1»); el código del encargo
+        // solo tiene letras, cifras, punto, guion y guion bajo.
+        const prefix = `${order.orderCode}-R`;
+        const opOf = (obs) => {
+          const i = String(obs || "").indexOf(prefix);
+          if (i < 0) return "";
+          let j = i + prefix.length;
+          while (j < obs.length && obs[j] >= "0" && obs[j] <= "9") j++;
+          return j > i + prefix.length ? obs.slice(i, j) : "";
+        };
+        const mine = (rec || [])
+          .map((r) => ({ r, op: opOf(r.observaciones) }))
+          .filter((x) => x.op)
+          .map((x) => ({ codpago: String(x.r.codpago || "").trim().toUpperCase(), importe: Number(x.r.importe) || 0, entregado: Number(x.r.importe) || 0, opCode: x.op }));
+        if (mine.length) resumed = mine;
+      }
+
+      // 2) cobro del resto (o confirmación si ya está pagado)
+      let payResult = null;
+      if (resumed) {
+        toast("Se continúa una recogida anterior que se quedó a medias.", "info", "Encargos");
+      } else if (pending > 0) {
+        payResult = await payRestWithModal(pending);
+        payModalShown = true;
+        if (!payResult) {
+          await unlock();
+          return;
+        }
+      } else {
+        const ok = await confirmModal(
+          "Entregar encargo",
+          `<div class="enc-cancel-text"><p>El encargo de <strong>${escapeHtml(order.customerName)}</strong> ya está <strong>pagado por completo</strong> (${escapeHtml(fmtMoney(order.total))}).</p><p>Se emitirá la factura y se descontará el stock.</p></div>`,
+          { isHtml: true, okButtonText: "Entregar" },
+        );
+        if (!ok) {
+          await unlock();
+          return;
+        }
+      }
+      const pagos = resumed || (payResult?.pagos || []).filter((p) => Number(p.importe) > 0);
+
+      // 3) stock (como al cobrar)
+      const problems = await stockProblemsForOrder(order);
+      if (problems) {
+        const rows = problems
+          .map((w, i) => `<div class="stock-warning-item"><div class="stock-warning-name">${i + 1}. ${escapeHtml(w.productName)}</div><div class="stock-warning-row">Cantidad: <strong>${escapeHtml(fmtQty(w.qtyToSell))}</strong> · Stock actual: <strong>${escapeHtml(formatProductStock(w.visibleStock))}</strong></div></div>`)
+          .join("");
+        const proceed = await confirmModal(
+          "Sin stock suficiente",
+          `<div class="stock-warning-wrap"><div class="stock-warning-intro">No hay stock suficiente de estos productos (no tienen permitida la venta sin stock en FacturaScripts):</div><div class="stock-warning-list">${rows}</div><div class="stock-warning-outro">¿Entregar el encargo igualmente? El stock quedará en negativo y habrá que dar entrada de mercancía.</div></div>`,
+          { isHtml: true, textClassName: "stock-warning-content", dialogClassName: "stock-warning-dialog", okButtonText: "Entregar sin stock" },
+        );
+        if (!proceed) {
+          hidePostPayQuietly();
+          await unlock();
+          return;
+        }
+        stockOverrideIds = problems.map((w) => w.baseProductId);
+        await Promise.all(stockOverrideIds.map((id) => setProductVentasInStock(id, true)));
+      }
+
+      // 4) factura desde el pedido
+      const factura = await ensureFsFacturaFromPedido(order);
+
+      // 5) datos del TPV + recibos + emitir
+      const today = dateKey(new Date());
+      const restoRows = pagos.map((p, i) => ({
+        codpago: String(p.codpago || "").trim().toUpperCase(),
+        amount: round2(p.importe),
+        opCode: p.opCode || `${order.orderCode}-R${i + 1}`,
+        label: "resto",
+        fechapago: today,
+        entregado: round2(p.entregado ?? p.importe),
+      }));
+      // Ajuste de céntimos: lo cobrado a cuenta + lo cobrado ahora tiene que ser el total de la factura.
+      const advanceRows = (order.moves || [])
+        .filter((m) => m.kind === "anticipo")
+        .map((m) => ({ codpago: m.codpago, amount: round2(m.amount), opCode: m.opCode, label: `anticipo cobrado el ${dateKey(new Date(m.createdAtMs))}`, fechapago: dateKey(new Date(m.createdAtMs)) }));
+      const sumRest = restoRows.reduce((s, r) => s + r.amount, 0);
+      const diff = round2(order.total - order.collected - sumRest);
+      if (restoRows.length && Math.abs(diff) >= 0.01) restoRows[restoRows.length - 1].amount = round2(restoRows[restoRows.length - 1].amount + diff);
+
+      const cashGiven = pagos.filter((p) => isCashCode(p.codpago)).reduce((s, p) => s + (Number(p.entregado) || 0), 0);
+      // En una recogida retomada el cambio ya está guardado en la propia factura.
+      const cambio = resumed ? Number(existingFactura?.tpv_cambio) || 0 : Number(payResult?.cambio || 0);
+      const primary = restoRows[0]?.codpago || advanceRows[0]?.codpago || String(factura.codpago || "");
+      if (Number(factura.idestado) !== 11) {
+        const upd = {
+          idestado: 11,
+          pagada: 1,
+          tpv_venta: 1,
+          tpv_efectivo: Number(cashGiven.toFixed(2)),
+          tpv_cambio: Number(cambio.toFixed(2)),
+          codpago: primary,
+          idtpv: Number(currentTerminal.id) || "",
+          idcaja: Number(getCajaIdSafe() || 0) || "",
+          nick: String(currentAgent?.nick || currentAgent?.nombre || getLoginUser?.() || "Ventas"),
+        };
+        if (currentAgent?.codagente) upd.codagente = String(currentAgent.codagente);
+        await apiWrite(`facturaclientes/${encodeURIComponent(factura.idfactura)}`, "PUT", upd, { timeoutMs: 60000 });
+      }
+      await syncEncargoRecibos(factura, order, [...advanceRows, ...restoRows]);
+
+      // 6) servidor: resto + anticipos aplicados + recogido
+      const fresh2 = await apiRead(`facturaclientes/${encodeURIComponent(factura.idfactura)}`).catch(() => null);
+      const fData = fresh2?.data || fresh2 || factura;
+      const body = {
+        orderId: order.id,
+        expectedVersion: order.version,
+        payments: restoRows.map((r) => ({ opCode: r.opCode, amount: r.amount, codpago: r.codpago, cajaId: String(getCajaIdSafe() || ""), idtpv: String(currentTerminal.id), agentName: wizAgentName() })),
+        fsIdfactura: String(factura.idfactura),
+        fsFacturaCodigo: String(fData.codigo || factura.codigo || ""),
+        cajaId: String(getCajaIdSafe() || ""),
+        userName: wizAgentName(),
+        terminalId: String(currentTerminal.id),
+        sessionId: sessionId(),
+      };
+      let r;
+      try {
+        r = await postWithRetry("complete-customer-order-pickup", body);
+      } catch {
+        throw new Error(`La factura ${fData.codigo || factura.codigo} ya está creada, pero no hay conexión para anotarla en el encargo.`);
+      }
+      if (r.status === 412) throw new Error("Mientras cobrabas, otro terminal modificó el encargo. Revisa el encargo y vuelve a pulsar «Recoger y cobrar».");
+      if (!r.ok) throw new Error(r.json?.error || `El servidor no aceptó la recogida (HTTP ${r.status}).`);
+      released = true; // el servidor ya liberó el candado al completar
+      const done = r.json.data;
+
+      // Ticket / ventana final (la misma de después de cobrar una venta)
+      const ticket = {
+        numero: String(fData.codigo || factura.codigo || ""),
+        paymentMethod: restoRows.length === 1 ? restoRows[0].codpago : "Mixto",
+        fecha: fData.fecha || "",
+        hora: fData.hora || "",
+        total: Number(fData.total ?? order.total),
+        terminalName: String(currentTerminal?.name || ""),
+        agentName: String(currentAgent?.name || ""),
+        codcliente: String(fData.codcliente || order.codcliente || "1"),
+        clientName: order.customerName,
+        clientFiscalId: "",
+        clientAddress: "",
+        isDefaultCustomer: false,
+        company: typeof companyInfo !== "undefined" && companyInfo ? { ...companyInfo } : null,
+        lineas: [],
+        codserie: fData.codserie || "",
+        numero2: fData.numero2 || order.orderCode,
+        idfactura: factura.idfactura,
+        pagos: [...advanceRows, ...restoRows].map((p) => ({ codpago: p.codpago, importe: p.amount, entregado: p.entregado ?? p.amount })),
+      };
+      try {
+        ticket.cashMeta = buildCashTicketMeta({ pagos: restoRows.map((p) => ({ codpago: p.codpago, importe: p.amount, entregado: p.entregado })), total: pending, cambio });
+      } catch {}
+      lastTicket = ticket;
+      window.__POSTPAY_PENDING__ = null;
+      try {
+        openPostPayModal({ docCode: ticket.numero, total: pending, cambio });
+        updatePostPayModal({ docCode: ticket.numero, total: pending, cambio, enablePrint: true });
+      } catch {}
+      if (isAutoPrintEnabled()) printTicket(ticket).catch(() => {});
+
+      detail.order = done;
+      await renderDetail();
+      toast(`Encargo entregado ✓ · Factura ${ticket.numero}`, "ok", "Encargos");
+      refreshCount().catch(() => {});
+      if (list.open) loadList().catch(() => {});
+    } catch (e) {
+      console.warn("[ENCARGOS] recoger:", e?.message || e);
+      if (payModalShown) hidePostPayQuietly();
+      showMessageModal(
+        "No se pudo completar la recogida",
+        `${String(e?.message || e)}\n\nPuedes volver a pulsar «Recoger y cobrar»: continúa donde se quedó, sin duplicar la factura ni los cobros.`,
+      );
+      await unlock();
+    } finally {
+      if (stockOverrideIds.length) await Promise.all(stockOverrideIds.map((id) => setProductVentasInStock(id, false)));
+    }
+  }
+
+  // ------------------------------------------------------------------ cerrar sin recoger
+
+  // Decisión del jefe: si el cliente no recoge y no pide la devolución, el encargo se factura como una venta con
+  // descuento por el restante: UNA factura con las líneas del encargo y un descuento tal que el total sea exactamente
+  // lo cobrado a cuenta (150 € con 50 € de anticipo -> factura de 50 €). Es una acción manual y descuenta stock.
+
+  // Total que calcularía FacturaScripts para unas líneas con un descuento (%) por línea: acumula neto e IVA SIN
+  // redondear cada línea y redondea al final el neto y el IVA por separado (ver computeLineNetFirst en renderer.js).
+  function fsTotalWithDiscounts(lines, pcts) {
+    let net = 0;
+    let iva = 0;
+    lines.forEach((l, i) => {
+      const n = l.pvp * l.qty * (1 - (pcts[i] || 0) / 100);
+      net += n;
+      iva += (n * l.rate) / 100;
+    });
+    return round2(round2(net) + round2(iva));
+  }
+
+  // Descuentos por línea para que el total sea EXACTAMENTE `target`. El total de FacturaScripts baja a saltos de 1 o 2
+  // céntimos al subir el descuento, así que se busca el TRAMO de descuento donde da justo `target` y se toma su punto
+  // medio (en los extremos, redondear el % a 8 decimales podría salirse del tramo). Primero un % común a todas las
+  // líneas; si ese tramo no existe, se afina el descuento de la línea de mayor importe.
+  function solveDiscounts(lines, target) {
+    const T = round2(target);
+    const total0 = fsTotalWithDiscounts(lines, lines.map(() => 0));
+    if (total0 === T) return lines.map(() => 0);
+    if (T > total0 || T < 0) return null;
+    const fix = (p) => Number(Number(p).toFixed(8));
+    const midOfTramo = (fn) => {
+      let lo = 0;
+      let hi = 100;
+      for (let k = 0; k < 90; k++) {
+        const m = (lo + hi) / 2;
+        if (fn(m) >= T) lo = m;
+        else hi = m;
+      }
+      const pHi = lo; // mayor descuento con total >= T
+      lo = 0;
+      hi = 100;
+      for (let k = 0; k < 90; k++) {
+        const m = (lo + hi) / 2;
+        if (fn(m) <= T) hi = m;
+        else lo = m;
+      }
+      const pLo = hi; // menor descuento con total <= T
+      return pLo <= pHi ? (pLo + pHi) / 2 : null;
+    };
+    // 1) % común
+    const common = midOfTramo((p) => fsTotalWithDiscounts(lines, lines.map(() => fix(p))));
+    if (common !== null) {
+      const out = lines.map(() => fix(common));
+      if (fsTotalWithDiscounts(lines, out) === T) return out;
+    }
+    // 2) % común aproximado + afinar la línea de mayor importe
+    let big = 0;
+    lines.forEach((l, i) => {
+      if (l.pvp * l.qty > lines[big].pvp * lines[big].qty) big = i;
+    });
+    let base = 0;
+    {
+      let lo = 0;
+      let hi = 100;
+      for (let k = 0; k < 90; k++) {
+        const m = (lo + hi) / 2;
+        if (fsTotalWithDiscounts(lines, lines.map(() => fix(m))) >= T) lo = m;
+        else hi = m;
+      }
+      base = lo;
+    }
+    const tuned = midOfTramo((p) => {
+      const test = lines.map(() => fix(base));
+      test[big] = fix(p);
+      return fsTotalWithDiscounts(lines, test);
+    });
+    if (tuned !== null) {
+      const out = lines.map(() => fix(base));
+      out[big] = fix(tuned);
+      if (fsTotalWithDiscounts(lines, out) === T) return out;
+    }
+    return null;
+  }
+
+  async function fetchPedidoLines(idpedido) {
+    const rows = await apiRead(`lineapedidoclientes?filter[idpedido]=${encodeURIComponent(idpedido)}&limit=500&sort[orden]=ASC`);
+    return Array.isArray(rows) ? rows : Array.isArray(rows?.data) ? rows.data : [];
+  }
+
+  async function createFsFacturaDiscounted({ order, fsLines, nick }) {
+    const cfg = window.RECIPOK_API || {};
+    const base = String(cfg.baseUrl || "").replace(/\/+$/, "");
+    const body = new URLSearchParams();
+    body.append("codcliente", String(order.codcliente || "1"));
+    body.append("lineas", JSON.stringify(fsLines));
+    body.append("idtpv", String(currentTerminal.id));
+    body.append("idcaja", String(getCajaIdSafe() || ""));
+    if (currentTerminal?.codalmacen) body.append("codalmacen", String(currentTerminal.codalmacen));
+    body.append("tpv_venta", "1");
+    if (currentAgent?.codagente) body.append("codagente", String(currentAgent.codagente));
+    body.append("nick", nick);
+    body.append("numero2", order.orderCode);
+    body.append("codserie", "S");
+    body.append("observaciones", `ENCARGO ${order.orderCode} · ${order.customerName}\nNo recogido: facturado lo anticipado (${fmtMoney(order.collected)} de ${fmtMoney(order.total)}).`);
+    const res = await fetch(`${base}/crearFacturaCliente`, {
+      method: "POST",
+      headers: { Accept: "application/json", Token: cfg.apiKey, "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || data?.status === "error") throw new Error(data?.message || `FacturaScripts no creó la factura (HTTP ${res.status}).`);
+    return data?.doc || data?.data || data;
+  }
+
+  async function closeUnclaimedFlow() {
+    const o0 = detail.order;
+    if (!o0 || o0.status !== "pendiente") return;
+    if (typeof TPV_STATE !== "undefined" && TPV_STATE?.offline) return toast("Encargos necesita conexión con el servidor.", "warn", "Encargos");
+    if (!cashSession?.open) return toast("Abre la caja para poder facturar.", "warn", "Encargos");
+    if (!currentTerminal?.id) return toast("Selecciona un terminal para facturar.", "warn", "Encargos");
+    if (!(await requireAssignedAgentOrBlock({ showModal: true }))) return;
+
+    let lockR;
+    try {
+      lockR = await call("lock-customer-order-pickup", { method: "POST", body: { orderId: o0.id, sessionId: sessionId(), ttlMs: 600000 } });
+    } catch {
+      return toast("Sin conexión con el servidor.", "warn", "Encargos");
+    }
+    if (lockR.status === 423) return showMessageModal("Se está atendiendo en otro dispositivo", "Este encargo se está recogiendo o editando en otro terminal. Espera unos segundos y vuelve a intentarlo.");
+    if (!lockR.ok || !lockR.json?.data) return showMessageModal("No se pudo cerrar", lockR.json?.error || `El servidor no aceptó la operación (HTTP ${lockR.status}).`);
+
+    let released = false;
+    const unlock = async () => {
+      if (released) return;
+      released = true;
+      try {
+        await call("unlock-customer-order-pickup", { method: "POST", body: { orderId: o0.id, sessionId: sessionId() } });
+      } catch {}
+    };
+    try {
+      const order = lockR.json.data;
+      if (order.status !== "pendiente") {
+        detail.order = order;
+        await renderDetail();
+        await unlock();
+        return toast("Este encargo ya no está pendiente.", "info", "Encargos");
+      }
+      if (!(order.collected > 0)) {
+        await unlock();
+        return showMessageModal("No hay nada que facturar", "Este encargo no tiene ningún anticipo cobrado. Si el cliente no va a recoger, cancélalo.");
+      }
+      const pct = order.total > 0 ? Math.round((1 - order.collected / order.total) * 10000) / 100 : 0;
+      const ok = await confirmModal(
+        "Cerrar sin recoger",
+        `<div class="enc-cancel-text"><p>El encargo de <strong>${escapeHtml(order.customerName)}</strong> no se va a recoger y no se devuelve nada.</p>` +
+          `<p>Se emitirá <strong>una factura por ${escapeHtml(fmtMoney(order.collected))}</strong> (lo cobrado a cuenta), con las líneas del encargo (${escapeHtml(fmtMoney(order.total))}) y un descuento de aproximadamente el <strong>${pct.toLocaleString("es-ES", { maximumFractionDigits: 1 })} %</strong> por el resto (repartido en las líneas para que el total salga exacto).</p>` +
+          `<p class="enc-small">Se descuenta el stock de los productos, igual que en una venta. El encargo pasa a «Cerrado sin recoger».</p></div>`,
+        { isHtml: true, okButtonText: "Cerrar sin recoger" },
+      );
+      if (!ok) {
+        await unlock();
+        return;
+      }
+
+      // Si un intento anterior se cortó a medias, la factura ya existe: se continúa con ella.
+      let factura = await findFsFacturaByNumero2(order.orderCode).catch(() => null);
+      let roundingDiff = 0;
+      const nick = String(currentAgent?.nick || currentAgent?.nombre || getLoginUser?.() || "Ventas");
+      if (!factura) {
+        const pedLines = await fetchPedidoLines(order.fsIdpedido);
+        if (!pedLines.length) throw new Error("No se encontraron las líneas del pedido en FacturaScripts.");
+        const calc = pedLines.map((l) => ({ pvp: Number(l.pvpunitario) || 0, qty: Number(l.cantidad) || 0, rate: Number(l.iva) || 0 }));
+        // Casi siempre se llega al céntimo exacto. Con alguna línea suelta FacturaScripts se salta justo ese importe
+        // (sube de 1 en 1 o de 2 en 2 céntimos): entonces se acepta el más cercano, a menos de 2 céntimos, y queda anotado.
+        let pcts = null;
+        for (const d of [0, 0.01, -0.01, 0.02, -0.02]) {
+          pcts = solveDiscounts(calc, round2(order.collected + d));
+          if (pcts) {
+            roundingDiff = d;
+            break;
+          }
+        }
+        if (!pcts) throw new Error("No se pudo calcular un descuento que deje la factura en lo anticipado.");
+        const fsLines = pedLines.map((l, i) => {
+          const out = {
+            descripcion: l.descripcion,
+            cantidad: Number(l.cantidad) || 0,
+            pvpunitario: Number(l.pvpunitario) || 0,
+            dtopor: pcts[i],
+          };
+          if (l.referencia) out.referencia = l.referencia;
+          if (l.idproducto) out.idproducto = Number(l.idproducto);
+          if (l.codimpuesto) out.codimpuesto = l.codimpuesto;
+          return out;
+        });
+        const created = await createFsFacturaDiscounted({ order, fsLines, nick });
+        factura = created?.idfactura ? created : await findFsFacturaByNumero2(order.orderCode);
+        if (!factura) throw new Error("FacturaScripts no devolvió la factura creada.");
+      }
+      const fsTotal = round2(Number(factura.total));
+      // (en una factura retomada la diferencia ya está en su total)
+      roundingDiff = round2(fsTotal - order.collected);
+      if (Math.abs(roundingDiff) > 0.021) {
+        throw new Error(`La factura ${factura.codigo || factura.idfactura} sale por ${fmtMoney(fsTotal)} y debería ser ${fmtMoney(order.collected)}. Revísala en FacturaScripts antes de seguir.`);
+      }
+
+      const advanceRows = (order.moves || [])
+        .filter((m) => m.kind === "anticipo")
+        .map((m) => ({ codpago: m.codpago, amount: round2(m.amount), opCode: m.opCode, label: `anticipo cobrado el ${dateKey(new Date(m.createdAtMs))}`, fechapago: dateKey(new Date(m.createdAtMs)) }));
+      // Con una diferencia de céntimos, el último recibo se ajusta para que la factura quede pagada exactamente.
+      if (advanceRows.length && Math.abs(roundingDiff) >= 0.005) {
+        advanceRows[advanceRows.length - 1].amount = round2(advanceRows[advanceRows.length - 1].amount + roundingDiff);
+        advanceRows[advanceRows.length - 1].label += ` (ajuste de redondeo ${roundingDiff > 0 ? "+" : ""}${roundingDiff.toFixed(2)})`;
+      }
+      if (Number(factura.idestado) !== 11) {
+        const upd = { idestado: 11, pagada: 1, tpv_venta: 1, tpv_efectivo: 0, tpv_cambio: 0, codpago: advanceRows[0]?.codpago || factura.codpago, idtpv: Number(currentTerminal.id), idcaja: Number(getCajaIdSafe() || 0) || "", nick };
+        if (currentAgent?.codagente) upd.codagente = String(currentAgent.codagente);
+        await apiWrite(`facturaclientes/${encodeURIComponent(factura.idfactura)}`, "PUT", upd, { timeoutMs: 60000 });
+      }
+      await syncEncargoRecibos(factura, order, advanceRows);
+
+      let r;
+      try {
+        r = await postWithRetry("close-customer-order-unclaimed", {
+          orderId: order.id,
+          expectedVersion: order.version,
+          invoiceTotal: fsTotal,
+          fsIdfactura: String(factura.idfactura),
+          fsFacturaCodigo: String(factura.codigo || ""),
+          cajaId: String(getCajaIdSafe() || ""),
+          userName: wizAgentName(),
+          terminalId: String(currentTerminal.id),
+          sessionId: sessionId(),
+        });
+      } catch {
+        throw new Error(`La factura ${factura.codigo} ya está creada, pero no hay conexión para anotarla en el encargo.`);
+      }
+      if (r.status === 412) throw new Error("Mientras tanto otro terminal modificó el encargo. Revísalo y vuelve a intentarlo.");
+      if (!r.ok) throw new Error(r.json?.error || `El servidor no aceptó el cierre (HTTP ${r.status}).`);
+      released = true;
+
+      // El pedido ya no hace falta: se cancela para liberar la reserva de stock (la factura ya descuenta lo vendido).
+      cancelFsPedidoQuietly(order.fsIdpedido);
+      detail.order = r.json.data;
+      await renderDetail();
+      toast(`Encargo cerrado sin recoger ✓ · Factura ${factura.codigo}`, "ok", "Encargos");
+      refreshCount().catch(() => {});
+      if (list.open) loadList().catch(() => {});
+    } catch (e) {
+      console.warn("[ENCARGOS] cerrar sin recoger:", e?.message || e);
+      showMessageModal("No se pudo cerrar el encargo", `${String(e?.message || e)}\n\nPuedes volver a pulsar «Cerrar sin recoger»: continúa donde se quedó, sin duplicar la factura.`);
+      await unlock();
+    }
   }
 
   // ------------------------------------------------------------------ arranque
@@ -1631,6 +2220,10 @@
     openList,
     openDetail,
     openAdvanceDialog,
+    pickupFlow,
+    closeUnclaimedFlow,
+    solveDiscounts,
+    fsTotalWithDiscounts,
     onRealtime,
     printTodayList,
     createFsPedido,

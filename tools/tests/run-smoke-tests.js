@@ -11651,6 +11651,68 @@ if (
   else fail("Encargos 2c: html=" + okHtml + ", css=" + okCss + ", renderer=" + okRenderer + ", js=" + okJs);
 }
 
+// Encargos, fase 3 (2026-11-03): recoger y cobrar el resto, y cerrar sin recoger. Cada paso se puede repetir sin
+// duplicar (la factura se reconoce por numero2 y cada recibo por su texto), con el candado de recogida del servidor.
+{
+  const encargosJs = fs.readFileSync(path.join(__dirname, "..", "..", "js", "tpv", "encargos.js"), "utf8");
+  const okHtml =
+    index.includes('id="encDetPickupBtn"') && index.includes('id="encDetCloseUnclaimedBtn"') &&
+    styles.includes("body.pay-encargo-mode #payOverlay .pay-extra");
+  const okJs =
+    // candado de recogida antes de tocar nada, y se suelta si algo falla o se cancela
+    encargosJs.includes('call("lock-customer-order-pickup"') && encargosJs.includes('call("unlock-customer-order-pickup"') &&
+    // el resto se cobra con la ventana de cobro de siempre (sin numero/serie/observaciones)
+    encargosJs.includes("return await openPayModal(amount);") &&
+    // aviso de stock como al cobrar, con el permiso de venta sin stock solo mientras dura la operacion
+    encargosJs.includes("checkCartStockProblems(items)") && encargosJs.includes("setProductVentasInStock(id, true)") &&
+    encargosJs.includes("setProductVentasInStock(id, false)") &&
+    // pedido -> factura con el estado «Facturar» y reconocida por numero2 (reintento sin duplicar)
+    encargosJs.includes('getFsPedidoStateId("facturar")') && encargosJs.includes("findFsFacturaByNumero2(order.orderCode)") &&
+    // datos del TPV y emision
+    encargosJs.includes("tpv_venta: 1") && encargosJs.includes("idestado: 11") && encargosJs.includes("idcaja: Number(getCajaIdSafe() || 0)") &&
+    // recibos: cada anticipo con SU fecha de pago y el resto de hoy; el recibo automatico por el total se quita
+    encargosJs.includes("anticipo cobrado el ${dateKey(new Date(m.createdAtMs))}") &&
+    encargosJs.includes("fechapago: e.fechapago") && encargosJs.includes("async function syncEncargoRecibos(") &&
+    // recogida retomada: se continua con los cobros ya registrados en los recibos, sin pedir el pago otra vez
+    encargosJs.includes("Se continúa una recogida anterior que se quedó a medias.") &&
+    encargosJs.includes('postWithRetry("complete-customer-order-pickup", body)') &&
+    // pedido con la serie de las ventas del TPV y con el producto de cada linea
+    encargosJs.includes('codserie: "S",') && encargosJs.includes("idproducto: Number(it.baseProductId || it.idproducto || it.id || 0) || 0,") &&
+    // cerrar sin recoger: una factura por exactamente lo anticipado (solver de descuentos) y el pedido se cancela
+    encargosJs.includes("function solveDiscounts(lines, target)") && encargosJs.includes("function fsTotalWithDiscounts(lines, pcts)") &&
+    encargosJs.includes('postWithRetry("close-customer-order-unclaimed"') && encargosJs.includes("invoiceTotal: fsTotal,") &&
+    encargosJs.includes("cancelFsPedidoQuietly(order.fsIdpedido);");
+  // el solver de descuentos: total EXACTO en miles de casos aleatorios (mismo codigo que usa el TPV)
+  let solverOk = false;
+  let solverInfo = "";
+  try {
+    const round2 = (n) => Math.round(((Number(n) || 0) + Number.EPSILON) * 100) / 100;
+    const a = encargosJs.indexOf("function fsTotalWithDiscounts");
+    const b = encargosJs.indexOf("async function fetchPedidoLines");
+    const api = new Function("round2", encargosJs.slice(a, b) + "; return { fsTotalWithDiscounts, solveDiscounts };")(round2);
+    let seed = 12345;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296);
+    let n = 0;
+    let bad = 0;
+    for (let t = 0; t < 4000; t++) {
+      const k = 2 + Math.floor(rnd() * 5);
+      const rates = [0, 4, 10, 21];
+      const lines = Array.from({ length: k }, () => ({ pvp: Math.round(rnd() * 30000) / 1000 + 0.01, qty: [1, 1, 2, 3, 0.5][Math.floor(rnd() * 5)], rate: rates[Math.floor(rnd() * 4)] }));
+      const total0 = api.fsTotalWithDiscounts(lines, lines.map(() => 0));
+      const target = round2(total0 * rnd());
+      const p = api.solveDiscounts(lines, target);
+      n++;
+      if (!p || api.fsTotalWithDiscounts(lines, p) !== target || p.some((x) => x < 0 || x > 100)) bad++;
+    }
+    solverOk = bad / n < 0.005;
+    solverInfo = `${bad}/${n} casos sin total exacto`;
+  } catch (e) {
+    solverInfo = e.message;
+  }
+  if (okHtml && okJs && solverOk) ok("Encargos 3: recoger y cobrar el resto (candado, cobro, stock, pedido->factura, datos del TPV, recibos con fecha del anticipo, retomable) y cerrar sin recoger (descuento exacto al céntimo); " + solverInfo);
+  else fail("Encargos 3: html=" + okHtml + ", js=" + okJs + ", solver=" + solverOk + " (" + solverInfo + ")");
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");
