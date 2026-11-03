@@ -11580,8 +11580,10 @@ if (
 function changelogTextHasTerminalRule() {
   try {
     const cl = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "changelog.json"), "utf8"));
-    const actual = (cl.versions || []).find((v) => v.version === "actual");
-    return !!actual && actual.changes.some((c) => /solo un administrador puede elegir el terminal/i.test(c));
+    // El release renombra la entrada "actual" a la version nueva ANTES de lanzar los tests: se mira en las ultimas.
+    return (cl.versions || [])
+      .slice(0, 4)
+      .some((v) => (v.changes || []).some((c) => /solo un administrador puede elegir el terminal/i.test(c)));
   } catch {
     return false;
   }
