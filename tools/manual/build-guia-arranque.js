@@ -1,6 +1,6 @@
 // Genera el PDF de la guia rapida «Si el TPV no arranca o da error» (para darsela a los clientes).
 //   node tools/manual/build-guia-arranque.js
-// Origen: docs/guias/si-el-tpv-no-arranca.html  ->  docs/guias/pdf/Guia-TPV-si-no-arranca.pdf (la carpeta pdf/ no se versiona)
+// Origen: docs/guias/si-el-tpv-no-arranca.html  ->  docs/guias/pdf/Guia-TPV-si-no-se-abre.pdf (la carpeta pdf/ no se versiona)
 const fs = require("fs");
 const path = require("path");
 const { _electron: electron } = require("playwright");
@@ -21,12 +21,12 @@ const OUT = path.join(ROOT, "docs", "guias", "pdf");
       win.destroy();
       return buf.toString("base64");
     }, { src: SRC });
-    let name = "Guia-TPV-si-no-arranca.pdf";
+    let name = "Guia-TPV-si-no-se-abre.pdf";
     try {
       fs.writeFileSync(path.join(OUT, name), Buffer.from(b64, "base64"));
     } catch (e) {
       if (e.code !== "EBUSY") throw e;
-      name = "Guia-TPV-si-no-arranca-nuevo.pdf"; // el PDF esta abierto en un visor
+      name = "Guia-TPV-si-no-se-abre-nuevo.pdf"; // el PDF esta abierto en un visor
       fs.writeFileSync(path.join(OUT, name), Buffer.from(b64, "base64"));
     }
     console.log("OK", name);
