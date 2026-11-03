@@ -733,6 +733,7 @@ async function runUpdateCheckOncePreCash() {
 
         // instalar (tu comportamiento actual)
         try {
+          logUpdater("instalando (pre-caja):", JSON.stringify(describeInstallContext()));
           spawnPostUpdateSplash();
           setTimeout(() => autoUpdater.quitAndInstall(true, true), 400);
         } catch {}
@@ -1286,9 +1287,12 @@ function spawnPostUpdateSplash() {
       fs.unlinkSync(postUpdateSplashMarkerPath());
     } catch (_) {}
 
+    // La ventanita usa su propia carpeta de datos: se le pasa la ruta del registro real.
+    const logArg = `--updater-log=${updaterLogFile()}`;
     const args = app.isPackaged
-      ? ["--post-update-splash"]
-      : [app.getAppPath(), "--post-update-splash"];
+      ? ["--post-update-splash", logArg]
+      : [app.getAppPath(), "--post-update-splash", logArg];
+    logUpdater("lanzando ventanita de instalando y llamando a quitAndInstall");
 
     const child = spawn(process.execPath, args, {
       detached: true,
@@ -1313,9 +1317,15 @@ function verifyPreviousInstallOutcome() {
     const secs = Math.round((Date.now() - Number(pending.at || Date.now())) / 1000);
     const from = String(pending.from || "");
     if (from && from !== app.getVersion()) {
+      logUpdater(`instalacion anterior APLICADA: ${from} -> ${app.getVersion()} (${secs}s hasta volver a abrir)`);
       logUpdateEventRemote("update-install-ok", { fromVersion: from, secondsToReopen: secs });
     } else {
-      logUpdateEventRemote("update-install-not-applied", { fromVersion: from, secondsSinceAttempt: secs });
+      logUpdater(`instalacion anterior NO APLICADA: sigue en ${app.getVersion()} (${secs}s desde el intento)`);
+      logUpdateEventRemote("update-install-not-applied", {
+        fromVersion: from,
+        secondsSinceAttempt: secs,
+        logTail: readUpdaterLogTail(20),
+      });
     }
   } catch {}
 }
@@ -1443,6 +1453,11 @@ function runPostUpdateSplashProcess() {
     const startedAt = Date.now();
     let slowShown = false;
     let failUntil = 0;
+    const logArg = process.argv.find((a) => a.startsWith("--updater-log="));
+    const splashLog = (msg) => {
+      if (logArg) appendUpdaterLogFile(logArg.slice("--updater-log=".length), `${new Date().toISOString()} [ventanita] ${msg}`);
+    };
+    splashLog("abierta, esperando a que la nueva version se vea");
     const setSplashText = (title, hint) => {
       try {
         win.webContents.executeJavaScript(
@@ -1461,6 +1476,7 @@ function runPostUpdateSplashProcess() {
       const elapsed = Date.now() - startedAt;
       if (!ready && !slowShown && elapsed >= SLOW_MS) {
         slowShown = true;
+        splashLog("30 s sin que la nueva version se vea: la instalacion tarda mas de lo normal");
         setSplashText(
           "Instalando TPV Recipok...",
           "Está tardando más de lo normal. No abras el TPV otra vez: se abrirá solo cuando termine.",
@@ -1469,6 +1485,7 @@ function runPostUpdateSplashProcess() {
       if (!ready && elapsed < MAX_WAIT_MS) return;
       if (!ready && !failUntil) {
         failUntil = Date.now() + FAIL_SHOW_MS;
+        splashLog("180 s sin que la nueva version se vea: se da por no terminada");
         setSplashText(
           "No se ha podido terminar la actualización",
           "Abre el TPV con su icono. Si no se abre, reinicia el ordenador. Si sigue sin funcionar, llama a soporte.",
@@ -1477,6 +1494,7 @@ function runPostUpdateSplashProcess() {
       }
       if (!ready && Date.now() < failUntil) return;
 
+      if (ready) splashLog(`la nueva version se ve tras ${Math.round(elapsed / 1000)} s: instalacion correcta`);
       clearInterval(timer);
       try {
         fs.unlinkSync(markerPath);
@@ -1489,13 +1507,64 @@ function runPostUpdateSplashProcess() {
   });
 }
 
-// (opcional) log a fichero para depurar en clientes
-function logUpdater(...args) {
-  try {
-    const p = path.join(app.getPath("userData"), "updater.log");
-    fs.appendFileSync(p, args.map((a) => String(a)).join(" ") + "\n");
-  } catch {}
+// Registro local de actualizaciones: <carpeta de datos>/updater.log (rota a updater.log.old pasados ~400 KB).
+// Lo escriben el propio TPV, electron-updater (descarga, comprobacion de integridad, lanzamiento del instalador) y la
+// ventanita de "instalando", que sobrevive al cierre del TPV. Asi, si una instalacion falla en silencio (el instalador
+// NSIS no tiene ventana ni log propio), queda al menos todo lo que pasa ANTES y el resultado en el siguiente arranque.
+const UPDATER_LOG_MAX_BYTES = 400 * 1024;
+
+function updaterLogFile() {
+  return path.join(app.getPath("userData"), "updater.log");
 }
+
+function appendUpdaterLogFile(file, text) {
+  try {
+    try {
+      if (fs.statSync(file).size > UPDATER_LOG_MAX_BYTES) fs.renameSync(file, file + ".old");
+    } catch (_) {}
+    fs.appendFileSync(file, text + "\n");
+  } catch (_) {}
+}
+
+function logUpdater(...args) {
+  let version = "?";
+  try {
+    version = app.getVersion();
+  } catch (_) {}
+  appendUpdaterLogFile(
+    updaterLogFile(),
+    `${new Date().toISOString()} [v${version}] ${args.map((a) => String(a)).join(" ")}`,
+  );
+}
+
+// electron-updater escribia solo en consola (que en un TPV instalado nadie ve): se redirige al fichero.
+function installUpdaterFileLogger() {
+  const write = (level) => (m) =>
+    logUpdater(`[electron-updater:${level}]`, typeof m === "string" ? m : (m && (m.stack || m.message)) || JSON.stringify(m));
+  autoUpdater.logger = { info: write("info"), warn: write("warn"), error: write("error"), debug: () => {} };
+}
+
+// Ultimas lineas del registro, para adjuntarlas al evento remoto cuando una instalacion no se aplico
+// (el servidor recorta cada texto a 240 caracteres y cada lista a 25 elementos).
+function readUpdaterLogTail(lines = 20) {
+  try {
+    const all = fs.readFileSync(updaterLogFile(), "utf8").split(/\r?\n/).filter(Boolean);
+    return all.slice(-lines).map((l) => l.slice(0, 230));
+  } catch (_) {
+    return [];
+  }
+}
+
+// Datos utiles para entender por que una instalacion pudo fallar (espacio libre, ruta, cuanto lleva abierto el TPV).
+function describeInstallContext() {
+  let free = "?";
+  try {
+    const st = fs.statfsSync(app.getPath("temp"));
+    free = `${Math.round((st.bavail * st.bsize) / 1048576)} MB`;
+  } catch (_) {}
+  return { freeTempMb: free, uptimeMin: Math.round(process.uptime() / 60), exe: process.execPath };
+}
+
 
 // Mismas credenciales que usa renderer.js (TPV_SYNC_API_URL/tpvApiKey en
 // config.js), leidas aqui a mano porque main.js (proceso Node) no tiene
@@ -2150,7 +2219,9 @@ async function runAutoUpdateGate() {
       autoUpdater.once("update-downloaded", () => {
         appIsInstallingUpdate = true;
         appInstallingSince = Date.now();
-        logUpdateEventRemote("update-gate-installing");
+        const installCtx = describeInstallContext();
+        logUpdater("instalando (gate):", JSON.stringify(installCtx));
+        logUpdateEventRemote("update-gate-installing", { freeTempMb: installCtx.freeTempMb, uptimeMin: installCtx.uptimeMin });
         splashSet("Instalando actualización…", 100);
         spawnPostUpdateSplash();
         setTimeout(() => autoUpdater.quitAndInstall(true, true), 600);
@@ -2750,6 +2821,7 @@ app.whenReady().then(async () => {
     // Ya hay un TPV en marcha (o terminando de actualizarse): antes este segundo arranque se cerraba sin decir
     // nada y el cajero creia que "el TPV no abre". Ahora se explica y se deja constancia en el servidor.
     logUpdateEventRemote("launch-blocked-second-instance");
+    logUpdater("arranque bloqueado: ya hay otra instancia del TPV en marcha (o terminando de actualizarse)");
     try {
       await dialog.showMessageBox({
         type: "info",
@@ -2764,6 +2836,8 @@ app.whenReady().then(async () => {
     return;
   }
 
+  installUpdaterFileLogger();
+  logUpdater(`arranque: version ${app.getVersion()}, pid ${process.pid}`);
   verifyPreviousInstallOutcome();
 
   bootstrapCurrentUserFromCfg();

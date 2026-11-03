@@ -11622,6 +11622,16 @@ mustContain(main, "const MAX_WAIT_MS = 180000;", "La ventanita de instalando no 
 mustContain(main, "No abras el TPV otra vez: se abrirá solo cuando termine.", "La ventanita de instalando avisa de que no hay que volver a abrir el TPV si tarda");
 mustContain(main, "No se ha podido terminar la actualización", "La ventanita de instalando explica que hacer si la instalacion no termina");
 
+// Registro local de actualizaciones (updater.log) para diagnosticar instalaciones que fallan en silencio
+mustContain(main, "function installUpdaterFileLogger() {", "electron-updater escribe en updater.log en vez de solo en consola");
+mustContain(main, "autoUpdater.logger = { info: write(\"info\"), warn: write(\"warn\"), error: write(\"error\"), debug: () => {} };", "El logger de electron-updater se redirige al fichero");
+mustContain(main, "const UPDATER_LOG_MAX_BYTES = 400 * 1024;", "El registro de actualizaciones rota por tamano");
+mustContain(main, "  installUpdaterFileLogger();\r\n  logUpdater(`arranque: version", "El logger se instala al arrancar, antes de comprobar actualizaciones");
+mustContain(main, "const logArg = `--updater-log=${updaterLogFile()}`;", "La ventanita de instalando recibe la ruta del registro real");
+mustContain(main, "splashLog(\"180 s sin que la nueva version se vea: se da por no terminada\");", "La ventanita de instalando deja su rastro en el registro");
+mustContain(main, "logTail: readUpdaterLogTail(20),", "Una instalacion no aplicada manda al servidor las ultimas lineas del registro");
+mustContain(main, "logUpdater(\"instalando (gate):\", JSON.stringify(installCtx));", "Antes de instalar se anota el contexto (espacio libre, tiempo abierto)");
+
 if (process.exitCode) {
   console.error("\nSmoke tests failed.");
   process.exit(1);
