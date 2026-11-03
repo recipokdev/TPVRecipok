@@ -44900,6 +44900,9 @@ function handleRealtimeChangeNotice(topic) {
       // Cambio en el borrador de otro dispositivo en la misma tienda: se refresca ya la franja de la mesa.
       __mesaViewerLast.sentAt = 0;
       mesaViewerTick?.();
+    } else if (topic === "customer-orders") {
+      // Encargos: otro terminal creo, cobro o cancelo uno (js/tpv/encargos.js).
+      window.TPV_ENCARGOS?.onRealtime?.();
     }
   } catch (e) {
     console.warn("Error procesando aviso de tiempo real:", e?.message || e);

@@ -434,6 +434,10 @@
 
   const wiz = {
     open: false,
+    mode: "new", // "new" = nuevo encargo; "advance" = cobrar otro anticipo de un encargo ya guardado
+    order: null,
+    collected: 0,
+    opCode: "",
     page: 1,
     saving: false,
     orderCode: "",
@@ -518,6 +522,10 @@
     wiz.codcliente = String(customer.codcliente || currentTerminal?.codcliente || "1");
     wiz.customerName = String(customer.nombre || "").trim() || "Cliente por defecto";
 
+    wiz.mode = "new";
+    wiz.order = null;
+    wiz.collected = 0;
+    wiz.opCode = "";
     wiz.orderCode = "";
     wiz.fsDoc = null;
     wiz.saving = false;
@@ -579,6 +587,11 @@
     return euroStrToCents(wiz.amountText || "");
   }
 
+  // Lo que falta por cobrar del encargo: el total, menos lo ya cobrado a cuenta (en un encargo nuevo, el total).
+  function wizRemaining() {
+    return Math.max(0, round2(wiz.total - (Number(wiz.collected) || 0)));
+  }
+
   function isCashCode(cod) {
     try {
       return CASH_CODPAGOS instanceof Set && CASH_CODPAGOS.has(String(cod || "").trim().toUpperCase());
@@ -589,14 +602,15 @@
 
   function renderWizard() {
     const p1 = wiz.page === 1;
+    $("encBackBtn").textContent = wiz.mode === "advance" ? "Cancelar" : "← Atrás";
     $("encPage1").classList.toggle("hidden", !p1);
     $("encPage2").classList.toggle("hidden", p1);
-    $("encWizTitle").textContent = p1 ? "Nuevo encargo · Datos" : "Nuevo encargo · Anticipo";
-    $("encWizStep").textContent = `Paso ${wiz.page} de 2`;
+    $("encWizTitle").textContent = wiz.mode === "advance" ? "Cobrar otro anticipo" : p1 ? "Nuevo encargo · Datos" : "Nuevo encargo · Anticipo";
+    $("encWizStep").textContent = wiz.mode === "advance" ? "" : `Paso ${wiz.page} de 2`;
     $("encFootP1").classList.toggle("hidden", !p1);
     $("encFootP2").classList.toggle("hidden", p1);
 
-    const lines = visibleSnapshotLines();
+    const lines = wiz.mode === "advance" ? [] : visibleSnapshotLines();
     const units = lines.length;
     $("encSumCount").textContent = `${units} ${units === 1 ? "producto" : "productos"}`;
     $("encSumTotal").textContent = fmtMoney(wiz.total);
@@ -622,16 +636,22 @@
   }
 
   function renderPage2() {
-    $("encP2Name").textContent = $("encName").value.trim() || "—";
-    const dayKey = wizDayKey();
-    $("encP2When").textContent = `Recoge ${pickupLabel(`${dayKey} ${wiz.time}`)} · ${visibleSnapshotLines().length} productos`;
-    $("encP2Total").textContent = fmtMoney(wiz.total);
+    if (wiz.mode === "advance" && wiz.order) {
+      $("encP2Name").textContent = wiz.order.customerName;
+      $("encP2When").textContent = `Recoge ${pickupLabel(wiz.order.pickupAt)} · Total ${fmtMoney(wiz.total)} · Cobrado ${fmtMoney(wiz.collected)}`;
+      $("encP2Total").textContent = fmtMoney(wizRemaining());
+    } else {
+      $("encP2Name").textContent = $("encName").value.trim() || "—";
+      const dayKey = wizDayKey();
+      $("encP2When").textContent = `Recoge ${pickupLabel(`${dayKey} ${wiz.time}`)} · ${visibleSnapshotLines().length} productos`;
+      $("encP2Total").textContent = fmtMoney(wiz.total);
+    }
 
     const cents = amountCents();
     $("encAmountDisplay").textContent = fmtMoney(cents / 100);
     $("encAmountDisplay").classList.toggle("is-active", wiz.activeField === "amount");
-    $("encAllBtn").textContent = `Todo (${fmtMoney(wiz.total)})`;
-    $("encPending").textContent = fmtMoney(Math.max(0, wiz.total - cents / 100));
+    $("encAllBtn").textContent = `Todo (${fmtMoney(wizRemaining())})`;
+    $("encPending").textContent = fmtMoney(Math.max(0, wizRemaining() - cents / 100));
 
     $("encMethods").innerHTML = wiz.formas
       .map(
@@ -651,7 +671,12 @@
     }
 
     const btn = $("encSaveBtn");
-    btn.textContent = cents > 0 ? `Guardar y cobrar ${fmtMoney(cents / 100)}` : "Guardar encargo";
+    btn.textContent =
+      wiz.mode === "advance"
+        ? `Cobrar ${fmtMoney(cents / 100)}`
+        : cents > 0
+          ? `Guardar y cobrar ${fmtMoney(cents / 100)}`
+          : "Guardar encargo";
     const err = page2Error();
     showWizError(err);
     btn.disabled = !!err || wiz.saving;
@@ -660,7 +685,11 @@
   function page2Error() {
     const cents = amountCents();
     if (cents < 0) return "El importe no es válido.";
-    if (cents / 100 > wiz.total + 0.0001) return "El anticipo no puede ser mayor que el total del encargo.";
+    if (wiz.mode === "advance" && cents <= 0) return "Escribe el importe del anticipo.";
+    if (cents / 100 > wizRemaining() + 0.0001)
+      return wiz.mode === "advance"
+        ? "El anticipo no puede ser mayor que lo que falta por cobrar."
+        : "El anticipo no puede ser mayor que el total del encargo.";
     if (cents > 0 && !cashSession?.open) return "Abre la caja para poder cobrar un anticipo.";
     if (cents > 0 && !currentTerminal?.id) return "Selecciona un terminal para cobrar un anticipo.";
     return "";
@@ -714,6 +743,7 @@
   }
 
   async function saveWizard(opts = {}) {
+    if (wiz.mode === "advance") return saveAdvance();
     if (wiz.saving) return;
     const err1 = validatePage1();
     if (err1) {
@@ -995,9 +1025,6 @@
     wizardBound = true;
 
     $("passToEncargoBtn")?.addEventListener("click", () => openWizard());
-    $("encargosListBtn")?.addEventListener("click", () => {
-      if (window.TPV_ENCARGOS?.openList) window.TPV_ENCARGOS.openList();
-    });
 
     // Teclado en pantalla al tocar los campos de texto (si está activado en Opciones)
     ["encName", "encPhone", "encNotes"].forEach((id) => {
@@ -1046,6 +1073,7 @@
     $("encNextBtn")?.addEventListener("click", () => goPage2());
     $("encSaveNoAdvBtn")?.addEventListener("click", () => saveWizard({ noAdvance: true }));
     $("encBackBtn")?.addEventListener("click", () => {
+      if (wiz.mode === "advance") return closeWizard();
       wiz.page = 1;
       showWizError("");
       renderWizard();
@@ -1065,9 +1093,9 @@
       wiz.cashTouched = true;
       renderPage2();
     });
-    $("encAllBtn")?.addEventListener("click", () => setAmountFromCents(toCents(wiz.total)));
-    $("encHalfBtn")?.addEventListener("click", () => setAmountFromCents(Math.round(toCents(wiz.total) / 2)));
-    $("encQuarterBtn")?.addEventListener("click", () => setAmountFromCents(Math.round(toCents(wiz.total) / 4)));
+    $("encAllBtn")?.addEventListener("click", () => setAmountFromCents(toCents(wizRemaining())));
+    $("encHalfBtn")?.addEventListener("click", () => setAmountFromCents(Math.round(toCents(wizRemaining()) / 2)));
+    $("encQuarterBtn")?.addEventListener("click", () => setAmountFromCents(Math.round(toCents(wizRemaining()) / 4)));
     $("encNoneBtn")?.addEventListener("click", () => setAmountFromCents(0));
     $("encMethods")?.addEventListener("click", (e) => {
       const b = e.target.closest("button[data-codpago]");
@@ -1086,10 +1114,500 @@
     });
   }
 
+  // ------------------------------------------------------------------ otro anticipo
+
+  async function openAdvanceDialog(order) {
+    if (!order || order.status !== "pendiente") return;
+    if (typeof TPV_STATE !== "undefined" && TPV_STATE?.offline) {
+      toast("Encargos necesita conexión con el servidor.", "warn", "Encargos");
+      return;
+    }
+    if (!cashSession?.open) {
+      toast("Abre la caja para poder cobrar un anticipo.", "warn", "Encargos");
+      return;
+    }
+    if (!(await requireAssignedAgentOrBlock({ showModal: true }))) return;
+    if (!(order.pending > 0)) {
+      toast("Este encargo ya está pagado por completo.", "info", "Encargos");
+      return;
+    }
+    try {
+      const cached = loadPayMethodsCache();
+      const formas = Array.isArray(cached) && cached.length ? cached : await fetchFormasPagoActivas();
+      wiz.formas = (formas || [])
+        .map((f) => ({ codpago: String(f.codpago || "").trim(), descripcion: String(f.descripcion || f.codpago || "").trim() }))
+        .filter((x) => x.codpago);
+    } catch {
+      wiz.formas = [];
+    }
+    if (!wiz.formas.length) wiz.formas = [{ codpago: "CONT", descripcion: "Efectivo" }];
+    wiz.codpago = (wiz.formas.find((f) => f.codpago === "CONT") || wiz.formas[0]).codpago;
+    wiz.mode = "advance";
+    wiz.order = order;
+    wiz.total = order.total;
+    wiz.collected = order.collected;
+    wiz.opCode = `${order.orderCode}-A${Date.now().toString(36).toUpperCase()}`;
+    wiz.saving = false;
+    wiz.savedOk = false;
+    wiz.fsDoc = null;
+    wiz.orderCode = "";
+    wiz.page = 2;
+    wiz.amountText = "";
+    wiz.cashText = "";
+    wiz.cashTouched = false;
+    wiz.activeField = "amount";
+    showWizError("");
+    wiz.open = true;
+    $("encargoWizardOverlay").classList.remove("hidden");
+    lockAppUI();
+    renderWizard();
+  }
+
+  async function saveAdvance() {
+    if (wiz.saving) return;
+    const err = page2Error();
+    if (err) return showWizError(err);
+    wiz.saving = true;
+    setWizBusy(true);
+    showWizError("");
+    const cents = amountCents();
+    const order0 = wiz.order;
+    try {
+      let r;
+      try {
+        r = await postWithRetry("add-customer-order-advance", {
+          orderId: order0.id,
+          advance: {
+            opCode: wiz.opCode,
+            amount: cents / 100,
+            codpago: wiz.codpago,
+            cajaId: String(getCajaIdSafe() || ""),
+            idtpv: String(currentTerminal?.id || ""),
+            agentName: wizAgentName(),
+          },
+          userName: wizAgentName(),
+          terminalId: String(currentTerminal?.id || ""),
+          sessionId: sessionId(),
+        });
+      } catch {
+        throw new Error("No hay conexión con el servidor. El anticipo no se ha anotado: pulsa Cobrar otra vez cuando vuelva (no se duplicará).");
+      }
+      if (!r.ok) {
+        if (r.status === 422 && r.json?.code === "advanceTooBig") throw new Error("Con este anticipo se cobraría más que el total del encargo (puede haber cambiado). Revisa el encargo.");
+        if (r.status === 423) throw new Error("Este encargo se está atendiendo en otro dispositivo. Inténtalo en unos segundos.");
+        throw new Error(r.json?.error || `El servidor no aceptó el anticipo (HTTP ${r.status}).`);
+      }
+      const order = r.json.data;
+      const ctx = { cents, cash: isCashCode(wiz.codpago), given: euroStrToCents(wiz.cashText || "") / 100, codpago: wiz.codpago };
+      wiz.savedOk = true;
+      closeWizard({ keepOrphanCheck: true });
+      if (cents > 0 && (isOpenDrawerAlwaysEnabled() || ctx.cash)) openDrawerNow({ source: "AUTO" }).catch(() => {});
+      syncFsObservaciones(order).catch(() => {});
+      toast(`Anticipo de ${fmtMoney(cents / 100)} cobrado ✓`, "ok", "Encargos");
+      lastResult = { order, ctx };
+      if (isAutoPrintEnabled()) printAdvanceVoucher(order, ctx).catch(() => {});
+      refreshCount().catch(() => {});
+      if (list.open) loadList().catch(() => {});
+      if (detail.open) openDetail(order.id).catch(() => {});
+    } catch (e) {
+      showWizError(String(e?.message || e));
+    } finally {
+      wiz.saving = false;
+      setWizBusy(false);
+      if (wiz.open) renderPage2();
+    }
+  }
+
+  // Identificador de esta sesión del TPV (para el candado de recogida entre dispositivos).
+  function sessionId() {
+    try {
+      let id = sessionStorage.getItem("tpv_encargos_session");
+      if (!id) {
+        id = `S${String(currentTerminal?.id || "0")}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+        sessionStorage.setItem("tpv_encargos_session", id);
+      }
+      return id;
+    } catch {
+      return `S${String(currentTerminal?.id || "0")}-nosession`;
+    }
+  }
+
+  // ------------------------------------------------------------------ lista de encargos
+
+  const list = { open: false, tab: "pendiente", q: "", rows: [], loading: false, counts: {}, seq: 0, error: "" };
+  const detail = { open: false, order: null };
+
+  function openList() {
+    if (!isEnabled()) return;
+    list.open = true;
+    list.tab = "pendiente";
+    list.q = "";
+    $("encListSearch").value = "";
+    $("encargosListOverlay").classList.remove("hidden");
+    lockAppUI();
+    loadList().catch(() => {});
+  }
+
+  function closeList() {
+    list.open = false;
+    $("encargosListOverlay").classList.add("hidden");
+    unlockAppUI();
+  }
+
+  function statusesForTab(tab) {
+    if (tab === "recogido") return "recogido,cerrado_sin_recoger";
+    if (tab === "cancelado") return "cancelado";
+    return "pendiente";
+  }
+
+  async function loadList() {
+    const mySeq = ++list.seq;
+    list.loading = true;
+    renderList();
+    const query = { status: statusesForTab(list.tab), withLines: "1", limit: "500" };
+    if (list.q) query.q = list.q;
+    if (list.tab !== "pendiente") query.from = dateKey(addDays(new Date(), -45));
+    try {
+      const r = await call("list-customer-orders", { query });
+      if (mySeq !== list.seq) return;
+      list.rows = r.ok && Array.isArray(r.json?.data) ? r.json.data : [];
+      list.error = r.ok ? "" : r.json?.error || "No se pudo cargar la lista.";
+    } catch {
+      if (mySeq !== list.seq) return;
+      list.rows = [];
+      list.error = "Sin conexión con el servidor.";
+    }
+    list.loading = false;
+    if (list.tab === "pendiente" && !list.q) list.counts.pendiente = list.rows.length;
+    renderList();
+  }
+
+  function orderSummaryText(o) {
+    const names = (Array.isArray(o.lines) ? o.lines : []).map((l) => String(l.name || "").trim()).filter(Boolean);
+    let txt = names.slice(0, 3).join(", ") + (names.length > 3 ? "…" : "");
+    if (o.notes) txt += (txt ? " · " : "") + `«${o.notes.replace(/\s+/g, " ").slice(0, 40)}»`;
+    return txt || "—";
+  }
+
+  function orderChip(o, today) {
+    if (o.status === "recogido") return { text: "RECOGIDO", cls: "is-done" };
+    if (o.status === "cerrado_sin_recoger") return { text: "CERRADO SIN RECOGER", cls: "is-off" };
+    if (o.status === "cancelado") return { text: "CANCELADO", cls: "is-off" };
+    if (String(o.pickupAt).slice(0, 10) < today) return { text: "VENCIDO", cls: "is-late" };
+    if (!(o.pending > 0)) return { text: "PAGADO · RECOGER", cls: "is-paid" };
+    return { text: "FALTA RECOGER", cls: "is-wait" };
+  }
+
+  function groupTitle(key, today, tomorrow) {
+    if (key < today) return { text: `VENCIDO · ${dayLabelLong(key)} (sin recoger)`, cls: "is-late" };
+    if (key === today) return { text: `HOY · ${dayLabelLong(key)}`, cls: "is-today" };
+    if (key === tomorrow) return { text: `MAÑANA · ${dayLabelLong(key)}`, cls: "" };
+    return { text: dayLabelLong(key).toUpperCase(), cls: "" };
+  }
+
+  function renderList() {
+    document.querySelectorAll("#encListTabs button[data-tab]").forEach((b) => {
+      b.classList.toggle("is-on", b.dataset.tab === list.tab);
+      if (b.dataset.tab === "pendiente") b.textContent = `Falta recoger${list.counts.pendiente != null ? ` (${list.counts.pendiente})` : ""}`;
+    });
+    const box = $("encListBody");
+    if (list.loading && !list.rows.length) {
+      box.innerHTML = `<div class="enc-empty">Cargando…</div>`;
+    } else if (list.error && !list.rows.length) {
+      box.innerHTML = `<div class="enc-empty is-err">${escapeHtml(list.error)}</div>`;
+    } else if (!list.rows.length) {
+      box.innerHTML = `<div class="enc-empty">${list.q ? "Ningún encargo coincide con la búsqueda." : list.tab === "pendiente" ? "No hay encargos pendientes." : "No hay encargos en esta lista (últimos 45 días)."}</div>`;
+    } else {
+      const today = dateKey(new Date());
+      const tomorrow = dateKey(addDays(new Date(), 1));
+      const rows = [...list.rows].sort((a, b) =>
+        list.tab === "pendiente" ? String(a.pickupAt).localeCompare(String(b.pickupAt)) : String(b.pickupAt).localeCompare(String(a.pickupAt)),
+      );
+      let html = "";
+      let lastKey = "";
+      rows.forEach((o) => {
+        const key = String(o.pickupAt).slice(0, 10);
+        if (list.tab === "pendiente") {
+          const gkey = key < today ? `late-${key}` : key;
+          if (gkey !== lastKey) {
+            lastKey = gkey;
+            const g = groupTitle(key, today, tomorrow);
+            html += `<div class="enc-group ${g.cls}">${escapeHtml(g.text)}</div>`;
+          }
+        } else if (key !== lastKey) {
+          lastKey = key;
+          html += `<div class="enc-group">${escapeHtml(dayLabelLong(key).toUpperCase())}</div>`;
+        }
+        const chip = orderChip(o, today);
+        const late = o.status === "pendiente" && key < today;
+        html +=
+          `<button type="button" class="enc-item${late ? " is-late" : ""}" data-id="${o.id}">` +
+          `<div class="enc-item-time"><strong>${escapeHtml(String(o.pickupAt).slice(11, 16))}</strong><small>${late ? "vencido" : "recogida"}</small></div>` +
+          `<div class="enc-item-main"><strong>${escapeHtml(o.customerName)}</strong><small>${escapeHtml([o.customerPhone, orderSummaryText(o)].filter(Boolean).join(" · "))}</small></div>` +
+          `<div class="enc-item-money"><span>Total ${escapeHtml(fmtMoney(o.total))}</span><small>Anticipo ${escapeHtml(fmtMoney(o.collected))}</small></div>` +
+          `<div class="enc-item-pend ${o.pending > 0 ? "is-due" : "is-ok"}">${o.status === "pendiente" ? `Falta ${escapeHtml(fmtMoney(o.pending))}` : ""}</div>` +
+          `<div class="enc-item-chip ${chip.cls}">${chip.text}</div>` +
+          `</button>`;
+      });
+      box.innerHTML = html;
+    }
+    const cartLines = typeof hasVisibleCartLines === "function" ? hasVisibleCartLines() : false;
+    $("encListNewBtn").disabled = !!passButtonReason();
+    $("encListCartInfo").textContent = cartLines ? `${getVisibleCartLines(cart).length} productos · ${fmtMoney(getCartTotal(cart))}` : "El carrito está vacío";
+  }
+
+  // ------------------------------------------------------------------ detalle de un encargo
+
+  async function openDetail(id) {
+    let r;
+    try {
+      r = await call("get-customer-order", { query: { orderId: String(id) } });
+    } catch {
+      toast("Sin conexión con el servidor.", "warn", "Encargos");
+      return;
+    }
+    if (!r.ok || !r.json?.data) {
+      toast(r.json?.error || "No se pudo abrir el encargo.", "warn", "Encargos");
+      if (list.open) loadList().catch(() => {});
+      return;
+    }
+    detail.order = r.json.data;
+    detail.open = true;
+    await renderDetail();
+    $("encargoDetailOverlay").classList.remove("hidden");
+    if (!document.body.classList.contains("modal-locked")) lockAppUI();
+  }
+
+  function closeDetail() {
+    detail.open = false;
+    detail.order = null;
+    $("encargoDetailOverlay").classList.add("hidden");
+    if (!list.open) unlockAppUI();
+  }
+
+  async function renderDetail() {
+    const o = detail.order;
+    if (!o) return;
+    const labels = await getFormasPagoMap().catch(() => ({}));
+    const pay = (c) => labels[String(c || "").trim()] || String(c || "");
+    const today = dateKey(new Date());
+    const chip = orderChip(o, today);
+    $("encDetTitle").textContent = o.customerName;
+    $("encDetChip").textContent = chip.text;
+    $("encDetChip").className = `enc-item-chip ${chip.cls}`;
+    $("encDetInfo").innerHTML =
+      `<div><strong>Recoge ${escapeHtml(pickupLabel(o.pickupAt))}</strong>${o.customerPhone ? " · " + escapeHtml(o.customerPhone) : ""}</div>` +
+      `<small>Código ${escapeHtml(o.orderCode)}${o.fsCodigo ? " · Pedido " + escapeHtml(o.fsCodigo) : ""}${o.fsFacturaCodigo ? " · Factura " + escapeHtml(o.fsFacturaCodigo) : ""} · creado por ${escapeHtml(o.createdBy || "—")} el ${escapeHtml(formatDateTimeEs(o.createdAtMs))}</small>` +
+      (o.notes ? `<div class="enc-det-note">Nota: ${escapeHtml(o.notes)}</div>` : "");
+    $("encDetLines").innerHTML = (Array.isArray(o.lines) ? o.lines : [])
+      .map((l) => `<div class="enc-detail-row"><span>${escapeHtml(fmtQty(l.qty))} × ${escapeHtml(l.name)}</span><span>${escapeHtml(fmtMoney(l.total))}</span></div>`)
+      .join("");
+    const moves = (o.moves || [])
+      .map((m) => {
+        const label = m.kind === "anticipo" ? "Anticipo" : m.kind === "devolucion" ? "Devuelto" : "Cobrado al recoger";
+        const sign = m.kind === "devolucion" ? "−" : "";
+        return `<div class="enc-detail-row"><span>${label} · ${escapeHtml(pay(m.codpago))} · ${escapeHtml(formatDateTimeEs(m.createdAtMs))}</span><span>${sign}${escapeHtml(fmtMoney(m.amount))}</span></div>`;
+      })
+      .join("");
+    $("encDetMoves").innerHTML = moves || `<div class="enc-detail-row"><span>Sin anticipo cobrado</span><span></span></div>`;
+    $("encDetTotals").innerHTML =
+      `<div class="enc-tot"><span>Total</span><strong>${escapeHtml(fmtMoney(o.total))}</strong></div>` +
+      `<div class="enc-tot"><span>Cobrado a cuenta</span><strong>${escapeHtml(fmtMoney(o.collected))}</strong></div>` +
+      (o.status === "pendiente" ? `<div class="enc-tot is-due"><span>Falta por cobrar</span><strong>${escapeHtml(fmtMoney(o.pending))}</strong></div>` : "");
+    const pend = o.status === "pendiente";
+    $("encDetAdvanceBtn").classList.toggle("hidden", !(pend && o.pending > 0));
+    $("encDetCancelBtn").classList.toggle("hidden", !pend);
+    $("encDetVoucherBtn").classList.toggle("hidden", !(o.collected > 0));
+  }
+
+  // ------------------------------------------------------------------ cancelar un encargo
+
+  async function cancelOrderFlow() {
+    const o0 = detail.order;
+    if (!o0 || o0.status !== "pendiente") return;
+    if (typeof TPV_STATE !== "undefined" && TPV_STATE?.offline) return toast("Encargos necesita conexión con el servidor.", "warn", "Encargos");
+    // Siempre sobre la versión actual del encargo (otro terminal pudo cobrar otro anticipo).
+    let fresh;
+    try {
+      const r = await call("get-customer-order", { query: { orderId: String(o0.id) } });
+      if (!r.ok) throw new Error();
+      fresh = r.json.data;
+    } catch {
+      return toast("No se pudo comprobar el encargo. Inténtalo de nuevo.", "warn", "Encargos");
+    }
+    if (fresh.status !== "pendiente") {
+      detail.order = fresh;
+      await renderDetail();
+      return toast("Este encargo ya no está pendiente.", "info", "Encargos");
+    }
+    // Se devuelve cada anticipo con su forma de pago (efectivo: se entrega; tarjeta/transferencia: se reversa).
+    const advances = (fresh.moves || []).filter((m) => m.kind === "anticipo");
+    let alreadyRefunded = (fresh.moves || []).filter((m) => m.kind === "devolucion").reduce((s, d) => s + d.amount, 0);
+    const toRefund = advances.map((m) => ({ codpago: m.codpago, amount: m.amount, opCode: m.opCode }));
+    for (const t of toRefund) {
+      const take = Math.min(t.amount, alreadyRefunded);
+      t.amount = round2(t.amount - take);
+      alreadyRefunded = round2(alreadyRefunded - take);
+    }
+    const refunds = toRefund.filter((t) => t.amount > 0);
+    if (refunds.length && !cashSession?.open) return toast("Abre la caja para poder devolver dinero.", "warn", "Encargos");
+
+    const labels = await getFormasPagoMap().catch(() => ({}));
+    const pay = (c) => labels[String(c || "").trim()] || String(c || "");
+    const total = refunds.reduce((s, r) => s + r.amount, 0);
+    const lines = refunds
+      .map(
+        (r) =>
+          `<li><strong>${escapeHtml(fmtMoney(r.amount))}</strong> · ${escapeHtml(pay(r.codpago))} — ${isCashCode(r.codpago) ? "se entrega al cliente" : "hay que reversar la operación (datáfono / banco)"}</li>`,
+      )
+      .join("");
+    const html =
+      `<div class="enc-cancel-text"><p>Vas a <strong>cancelar el encargo de ${escapeHtml(fresh.customerName)}</strong> (${escapeHtml(pickupLabel(fresh.pickupAt))}). El pedido de FacturaScripts también se cancela y libera el stock.</p>` +
+      (refunds.length
+        ? `<p>Hay que devolver <strong>${escapeHtml(fmtMoney(total))}</strong> de lo cobrado a cuenta:</p><ul>${lines}</ul><p class="enc-small">La devolución queda anotada en la caja de hoy.</p>`
+        : `<p>No había nada cobrado a cuenta, no hay que devolver dinero.</p>`) +
+      `<p class="enc-small">Si el cliente no va a recoger y no se le devuelve nada, usa «Cerrar sin recoger» en vez de cancelar.</p></div>`;
+    const ok = await confirmModal("Cancelar encargo", html, {
+      isHtml: true,
+      okButtonText: refunds.length ? "Cancelar y devolver" : "Cancelar encargo",
+    });
+    if (!ok) return;
+
+    const cajaId = String(getCajaIdSafe() || "");
+    const body = {
+      orderId: fresh.id,
+      expectedVersion: fresh.version,
+      refunds: refunds.map((r, i) => ({
+        opCode: `${r.opCode}-D${i + 1}`,
+        amount: r.amount,
+        codpago: r.codpago,
+        cajaId,
+        idtpv: String(currentTerminal?.id || ""),
+        agentName: wizAgentName(),
+      })),
+      cajaId,
+      userName: wizAgentName(),
+      terminalId: String(currentTerminal?.id || ""),
+      sessionId: sessionId(),
+    };
+    let r;
+    try {
+      r = await postWithRetry("cancel-customer-order", body);
+    } catch {
+      return toast("No hay conexión con el servidor. No se ha cancelado nada.", "warn", "Encargos");
+    }
+    if (r.status === 412) {
+      detail.order = r.json?.data || fresh;
+      await renderDetail();
+      return showMessageModal(
+        "El encargo ha cambiado",
+        "Mientras lo cancelabas, otro terminal lo modificó (por ejemplo, cobró otro anticipo). Revisa los datos actualizados y vuelve a cancelar. No se ha cancelado nada.",
+      );
+    }
+    if (!r.ok) return showMessageModal("No se pudo cancelar", r.json?.error || `El servidor no aceptó la cancelación (HTTP ${r.status}).`);
+    const order = r.json.data;
+    if (refunds.some((x) => isCashCode(x.codpago)) || (refunds.length && isOpenDrawerAlwaysEnabled())) openDrawerNow({ source: "AUTO" }).catch(() => {});
+    // Primero el texto (un pedido cancelado ya no se puede editar en FacturaScripts) y luego se cancela el pedido.
+    syncFsObservaciones(order)
+      .then(() => cancelFsPedidoQuietly(order.fsIdpedido))
+      .catch(() => {});
+    toast("Encargo cancelado ✓", "ok", "Encargos");
+    detail.order = order;
+    await renderDetail();
+    refreshCount().catch(() => {});
+    if (list.open) loadList().catch(() => {});
+  }
+
+  // ------------------------------------------------------------------ lista del día (impresa)
+
+  async function printTodayList() {
+    let rows = [];
+    const today = dateKey(new Date());
+    try {
+      const r = await call("list-customer-orders", { query: { status: "pendiente", to: today, withLines: "1", limit: "500" } });
+      if (!r.ok) throw new Error();
+      rows = (r.json.data || []).sort((a, b) => String(a.pickupAt).localeCompare(String(b.pickupAt)));
+    } catch {
+      return toast("No se pudo cargar la lista de hoy.", "warn", "Encargos");
+    }
+    if (!rows.length) return toast("No hay encargos para hoy ni vencidos.", "info", "Encargos");
+    const esc = escapeHtml;
+    const body = rows
+      .map((o) => {
+        const late = String(o.pickupAt).slice(0, 10) < today;
+        const items = (o.lines || []).map((l) => `${fmtQty(l.qty)} x ${l.name}`).join(", ");
+        return (
+          `<div class="sep"></div><div class="r b"><span>${esc(late ? dayLabelLong(String(o.pickupAt).slice(0, 10)) + " " : "")}${esc(String(o.pickupAt).slice(11, 16))} ${esc(o.customerName)}</span><span>${o.pending > 0 ? "Falta " + esc(fmtMoney(o.pending)) : "PAGADO"}</span></div>` +
+          (o.customerPhone ? `<div class="s">Tel. ${esc(o.customerPhone)}</div>` : "") +
+          `<div class="s">${esc(items)}</div>` +
+          (o.notes ? `<div class="s">Nota: ${esc(o.notes)}</div>` : "")
+        );
+      })
+      .join("");
+    const html = ticketShell(
+      `<div class="c b" style="font-size:15px">ENCARGOS PARA HOY (${rows.length})</div><div class="c s">${esc(dayLabelLong(today))} · impreso ${esc(formatDateTimeEs(Date.now()))}</div>` + body,
+    );
+    await printHtml(html);
+  }
+
+  // ------------------------------------------------------------------ tiempo real
+
+  let realtimeTimer = null;
+  function onRealtime() {
+    if (!isEnabled()) return;
+    if (realtimeTimer) clearTimeout(realtimeTimer);
+    realtimeTimer = setTimeout(() => {
+      realtimeTimer = null;
+      refreshCount().catch(() => {});
+      if (list.open) loadList().catch(() => {});
+      if (detail.open && detail.order) openDetail(detail.order.id).catch(() => {});
+    }, 400);
+  }
+
+  let listBound = false;
+  function bindListOnce() {
+    if (listBound) return;
+    listBound = true;
+    $("encargosListBtn")?.addEventListener("click", () => openList());
+    $("encListCloseBtn")?.addEventListener("click", () => closeList());
+    $("encListTabs")?.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-tab]");
+      if (!b) return;
+      list.tab = b.dataset.tab;
+      loadList().catch(() => {});
+    });
+    let searchTimer = null;
+    $("encListSearch")?.addEventListener("input", () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => {
+        list.q = $("encListSearch").value.trim();
+        loadList().catch(() => {});
+      }, 350);
+    });
+    $("encListSearch")?.addEventListener("click", () => openQwertyForInput($("encListSearch"), "text"));
+    $("encListBody")?.addEventListener("click", (e) => {
+      const it = e.target.closest(".enc-item");
+      if (it) openDetail(it.dataset.id).catch(() => {});
+    });
+    $("encListNewBtn")?.addEventListener("click", () => {
+      closeList();
+      openWizard();
+    });
+    $("encListPrintBtn")?.addEventListener("click", () => printTodayList());
+
+    $("encDetCloseBtn")?.addEventListener("click", () => closeDetail());
+    $("encDetCloseBtn2")?.addEventListener("click", () => closeDetail());
+    $("encDetAdvanceBtn")?.addEventListener("click", () => detail.order && openAdvanceDialog(detail.order));
+    $("encDetCancelBtn")?.addEventListener("click", () => cancelOrderFlow());
+    $("encDetReceiptBtn")?.addEventListener("click", () => detail.order && printReceipt(detail.order));
+    $("encDetVoucherBtn")?.addEventListener("click", () => detail.order && printAdvanceVoucher(detail.order, {}));
+  }
+
   // ------------------------------------------------------------------ arranque
 
   function init() {
     bindWizardOnce();
+    bindListOnce();
     bindToggleOnce();
     loadEnabled()
       .then(() => {
@@ -1110,6 +1628,11 @@
     call,
     postWithRetry,
     openWizard,
+    openList,
+    openDetail,
+    openAdvanceDialog,
+    onRealtime,
+    printTodayList,
     createFsPedido,
     cancelFsPedidoQuietly,
     getFsPedidoStateId,

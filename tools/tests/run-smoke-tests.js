@@ -11618,6 +11618,39 @@ if (
   else fail("Encargos 2b: html=" + okHtml + ", css=" + okCss + ", renderer=" + okRenderer + ", js=" + okJs);
 }
 
+// Encargos, parte 2c (2026-11-03): lista (pestañas, buscador, agrupada por dia con vencidos), detalle, otro anticipo,
+// cancelar con devolucion por forma de pago y lista del dia impresa. Se actualiza solo con el aviso en tiempo real.
+{
+  const encargosJs = fs.readFileSync(path.join(__dirname, "..", "..", "js", "tpv", "encargos.js"), "utf8");
+  const okHtml = [
+    'id="encargosListOverlay"', 'id="encListTabs"', 'id="encListSearch"', 'id="encListBody"', 'id="encListNewBtn"',
+    'id="encListPrintBtn"', 'id="encargoDetailOverlay"', 'id="encDetAdvanceBtn"', 'id="encDetCancelBtn"',
+    'id="encDetReceiptBtn"', 'id="encDetVoucherBtn"',
+  ].every((s) => index.includes(s)) && /data-tab="pendiente"/.test(index) && /data-tab="recogido"/.test(index) && /data-tab="cancelado"/.test(index);
+  const okCss = styles.includes(".enc-list-modal {") && styles.includes(".enc-item.is-late {") && styles.includes(".enc-item-chip.is-paid {");
+  const okRenderer =
+    renderer.includes('} else if (topic === "customer-orders") {') && renderer.includes("window.TPV_ENCARGOS?.onRealtime?.();");
+  const okJs =
+    // el mismo asistente sirve para «Cobrar otro anticipo»: nunca mas que lo que falta, con caja abierta
+    encargosJs.includes('wiz.mode = "advance";') &&
+    encargosJs.includes("El anticipo no puede ser mayor que lo que falta por cobrar.") &&
+    encargosJs.includes('postWithRetry("add-customer-order-advance"') &&
+    // la lista agrupa por dia con los vencidos aparte y el buscador va al servidor
+    encargosJs.includes("VENCIDO · ${dayLabelLong(key)} (sin recoger)") &&
+    encargosJs.includes('if (list.q) query.q = list.q;') &&
+    // cancelar: se devuelve cada anticipo con su forma de pago, sobre la version actual, y con caja abierta
+    encargosJs.includes('postWithRetry("cancel-customer-order", body)') &&
+    encargosJs.includes("expectedVersion: fresh.version") &&
+    encargosJs.includes("Abre la caja para poder devolver dinero.") &&
+    encargosJs.includes("hay que reversar la operación (datáfono / banco)") &&
+    // un pedido cancelado ya no se puede editar en FacturaScripts: primero el texto, luego se cancela
+    /syncFsObservaciones\(order\)\s*\.then\(\(\) => cancelFsPedidoQuietly\(order\.fsIdpedido\)\)/.test(encargosJs) &&
+    // lista del dia impresa
+    encargosJs.includes("ENCARGOS PARA HOY (");
+  if (okHtml && okCss && okRenderer && okJs) ok("Encargos 2c: lista por pestañas/dias con vencidos, detalle, otro anticipo, cancelar con devolucion (observaciones antes de cancelar el pedido) y lista del dia impresa; aviso en tiempo real");
+  else fail("Encargos 2c: html=" + okHtml + ", css=" + okCss + ", renderer=" + okRenderer + ", js=" + okJs);
+}
+
 console.log("\n[SMOKE] Checking manual checklist presence\n");
 
 const checklist = fs.readFileSync(checklistPath, "utf8");

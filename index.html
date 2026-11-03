@@ -1336,6 +1336,70 @@
       </div>
     </div>
 
+    <!-- Encargos: lista -->
+    <div id="encargosListOverlay" class="simple-overlay hidden">
+      <div class="enc-modal enc-list-modal" role="dialog" aria-modal="true" aria-labelledby="encListTitle">
+        <div class="enc-head">
+          <h2 id="encListTitle">Encargos</h2>
+          <button type="button" id="encListCloseBtn" class="enc-close" aria-label="Cerrar">✕</button>
+        </div>
+        <div class="enc-body">
+          <div class="enc-list-bar">
+            <button type="button" id="encListNewBtn" class="enc-btn enc-btn-green enc-btn-sm">
+              + Nuevo encargo con el carrito actual
+            </button>
+            <span id="encListCartInfo" class="enc-small"></span>
+            <input
+              id="encListSearch"
+              type="text"
+              class="enc-search"
+              placeholder="Buscar por nombre o teléfono…"
+              autocomplete="off"
+            />
+          </div>
+          <div class="enc-list-bar">
+            <div id="encListTabs" class="enc-chips">
+              <button type="button" class="enc-chip is-on" data-tab="pendiente">Falta recoger</button>
+              <button type="button" class="enc-chip" data-tab="recogido">Recogidos</button>
+              <button type="button" class="enc-chip" data-tab="cancelado">Cancelados</button>
+            </div>
+            <button type="button" id="encListPrintBtn" class="enc-btn enc-btn-outline enc-btn-sm">
+              Imprimir lista de hoy
+            </button>
+          </div>
+          <div id="encListBody" class="enc-list-body"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Encargos: detalle de un encargo -->
+    <div id="encargoDetailOverlay" class="simple-overlay hidden">
+      <div class="enc-modal enc-detail-modal" role="dialog" aria-modal="true" aria-labelledby="encDetTitle">
+        <div class="enc-head">
+          <h2 id="encDetTitle">Encargo</h2>
+          <span id="encDetChip" class="enc-item-chip"></span>
+          <button type="button" id="encDetCloseBtn" class="enc-close" aria-label="Cerrar">✕</button>
+        </div>
+        <div class="enc-body">
+          <div id="encDetInfo" class="enc-det-info"></div>
+          <div class="enc-label">Productos</div>
+          <div id="encDetLines" class="enc-sum-detail enc-det-lines"></div>
+          <div class="enc-label">Dinero</div>
+          <div id="encDetMoves" class="enc-sum-detail enc-det-moves"></div>
+          <div id="encDetTotals" class="enc-det-totals"></div>
+        </div>
+        <div class="enc-foot">
+          <div class="enc-foot-row enc-foot-wrap">
+            <button type="button" id="encDetAdvanceBtn" class="enc-btn enc-btn-blue enc-btn-sm">Cobrar otro anticipo</button>
+            <button type="button" id="encDetReceiptBtn" class="enc-btn enc-btn-outline enc-btn-sm">Imprimir resguardo</button>
+            <button type="button" id="encDetVoucherBtn" class="enc-btn enc-btn-outline enc-btn-sm">Imprimir justificante</button>
+            <button type="button" id="encDetCancelBtn" class="enc-btn enc-btn-danger enc-btn-sm">Cancelar encargo</button>
+            <button type="button" id="encDetCloseBtn2" class="enc-btn enc-btn-grey enc-btn-sm">Cerrar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Encargos: asistente «Nuevo encargo» (2 páginas, un solo guardado) -->
     <div id="encargoWizardOverlay" class="simple-overlay hidden">
       <div class="enc-modal" role="dialog" aria-modal="true" aria-labelledby="encWizTitle">
