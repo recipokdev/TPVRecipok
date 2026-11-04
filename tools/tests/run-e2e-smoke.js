@@ -823,8 +823,13 @@ async function runCartAdvancedAssertions(win) {
   await openOptionsOverlay(win);
 
   const visibleForAdmin = await win.evaluate(() => {
-    if (!window.TPV_STATE) window.TPV_STATE = {};
-    window.TPV_STATE.isAdmin = true;
+    // setAdminFlag tambien fija isAdminFromLogin: sin eso, al reabrir Opciones el acceso se recalcula desde el
+    // inicio de sesion (no admin en el perfil E2E) y las secciones solo-admin dejan de poder abrirse.
+    if (typeof setAdminFlag === "function") setAdminFlag(true, "e2e");
+    else {
+      if (!window.TPV_STATE) window.TPV_STATE = {};
+      window.TPV_STATE.isAdmin = true;
+    }
 
     try {
       if (typeof applyAdminOnlyUI === "function") applyAdminOnlyUI();
@@ -849,8 +854,13 @@ async function runCartAdvancedAssertions(win) {
   }
 
   const hiddenForNonAdmin = await win.evaluate(() => {
-    if (!window.TPV_STATE) window.TPV_STATE = {};
-    window.TPV_STATE.isAdmin = false;
+    // setAdminFlag tambien fija isAdminFromLogin: sin eso, al reabrir Opciones el acceso se recalcula desde el
+    // inicio de sesion (no admin en el perfil E2E) y las secciones solo-admin dejan de poder abrirse.
+    if (typeof setAdminFlag === "function") setAdminFlag(false, "e2e");
+    else {
+      if (!window.TPV_STATE) window.TPV_STATE = {};
+      window.TPV_STATE.isAdmin = false;
+    }
 
     try {
       if (typeof applyAdminOnlyUI === "function") applyAdminOnlyUI();
@@ -870,8 +880,13 @@ async function runCartAdvancedAssertions(win) {
   }
 
   await win.evaluate(() => {
-    if (!window.TPV_STATE) window.TPV_STATE = {};
-    window.TPV_STATE.isAdmin = true;
+    // setAdminFlag tambien fija isAdminFromLogin: sin eso, al reabrir Opciones el acceso se recalcula desde el
+    // inicio de sesion (no admin en el perfil E2E) y las secciones solo-admin dejan de poder abrirse.
+    if (typeof setAdminFlag === "function") setAdminFlag(true, "e2e");
+    else {
+      if (!window.TPV_STATE) window.TPV_STATE = {};
+      window.TPV_STATE.isAdmin = true;
+    }
     try {
       if (typeof applyAdminOnlyUI === "function") applyAdminOnlyUI();
       if (typeof refreshOptionsUI === "function") refreshOptionsUI();
@@ -902,6 +917,7 @@ async function runOptionsAdvancedAssertions(win) {
       if (header) header.click();
     }, sectionKey);
 
+    try {
     await win.waitForFunction(
       (key) => {
         const sec = document.querySelector(
@@ -912,6 +928,11 @@ async function runOptionsAdvancedAssertions(win) {
       sectionKey,
       { timeout: 10000 },
     );
+    } catch (e) {
+      const dbg = await win.evaluate((key) => { const sec = document.querySelector(`#optionsAccordion .opt-sec[data-sec="${key}"]`); return { isAdmin: !!window.TPV_STATE?.isAdmin, found: !!sec, open: sec?.dataset.open, display: sec ? getComputedStyle(sec).display : null, adminOnly: sec?.hasAttribute('data-admin-only') }; }, sectionKey);
+      console.log('[E2E][DBG] ' + sectionKey + ' ' + JSON.stringify(dbg));
+      throw e;
+    }
   };
 
   // A) Kiosk toggle should flip and restore correctly.
