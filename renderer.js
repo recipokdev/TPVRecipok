@@ -28947,18 +28947,28 @@ function buildCashClosePrintData(remoteCaja) {
 
   const fechaini = remoteCaja?.fechaini ? String(remoteCaja.fechaini) : "—";
 
+  // Con Encargos (js/tpv/encargos.js) los totales propios ya excluyen las facturas de encargos (su dinero va en su
+  // bloque). Los de FacturaScripts SI las cuentan como ventas (llevan el idcaja), asi que mezclarlos duplicaba el
+  // resto cobrado al recoger ("Total vendido", "Tickets", "Cobros Efectivo" y "Total cobrado hoy" salian de mas).
+  const encAware = !!cashSession.encargos;
   const totalVendido = Number(
-    remoteCaja?.totaltickets ?? cashSession.totalSales ?? 0,
+    encAware
+      ? (cashSession.totalSales ?? 0)
+      : (remoteCaja?.totaltickets ?? cashSession.totalSales ?? 0),
   );
   const numTickets = Number(
-    remoteCaja?.numtickets ?? cashSession.numtickets ?? 0,
+    encAware
+      ? (cashSession.numtickets ?? 0)
+      : (remoteCaja?.numtickets ?? cashSession.numtickets ?? 0),
   );
 
   const openingTotal = Number(
     cashSession.openingTotal || remoteCaja?.dineroini || 0,
   );
   const cashIncome = Number(
-    cashSession.cashSalesTotal || remoteCaja?.ingresos || 0,
+    encAware
+      ? (cashSession.cashSalesTotal ?? 0)
+      : (cashSession.cashSalesTotal || remoteCaja?.ingresos || 0),
   );
   const movements = Number(
     cashSession.cashMovementsTotal || remoteCaja?.totalmovi || 0,

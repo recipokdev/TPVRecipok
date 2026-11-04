@@ -11969,6 +11969,11 @@ mustContain(renderer, "window.TPV_UI?.onPowerResume?.(() => {", "La pantalla esc
 mustContain(renderer, "if (resumeHasWorkInProgress() || Date.now() - last < RESUME_RELOAD_GAP_MS) return \"empty-no-reload\";", "La recarga de ventana tras reanudar nunca se hace con trabajo a medias ni en bucle");
 mustContain(renderer, '"resume-empty-catalog"', "Sin articulos tras reanudar queda registrado en el servidor");
 
+// Informe de cierre impreso con Encargos: no mezcla los totales de FacturaScripts (cuentan la factura del encargo como venta)
+mustContain(renderer, "const encAware = !!cashSession.encargos;", "El informe de cierre sabe si hay encargos y usa entonces sus totales propios");
+mustContain(renderer, "? (cashSession.totalSales ?? 0)", "Total vendido del informe con encargos sale de los totales propios (sin duplicar el resto cobrado al recoger)");
+mustContain(renderer, "? (cashSession.cashSalesTotal ?? 0)", "Cobros en efectivo del informe con encargos no caen a los de FacturaScripts cuando valen 0");
+
 if (process.exitCode) {
   console.error("\nSmoke tests failed.");
   process.exit(1);
