@@ -31407,6 +31407,27 @@ async function loadDataFromApiImpl(opts = {}) {
     const productosData = Array.isArray(productosRes.value)
       ? productosRes.value
       : [];
+
+    // Una respuesta "correcta" pero con 0 productos (servidor ocupado, reconstruyendose, a medio arrancar...) dejaba la
+    // pantalla sin articulos y encima se guardaba como copia de arranque. Si ya habia catalogo (en pantalla o guardado),
+    // se conserva y se trata como un fallo de carga normal; en cualquier caso queda constancia en el servidor.
+    if (productosData.length === 0) {
+      const hadCatalog =
+        (Array.isArray(products) && products.length > 0) ||
+        (loadBootSnapshot()?.products?.length || 0) > 0;
+      reportClientEvent(
+        "boot",
+        "catalog-empty-response",
+        "La API devolvio 0 productos",
+        { hadCatalog, familias: familiasRaw.length, refresh: opts.refresh === true },
+        "error",
+      );
+      if (hadCatalog) {
+        const emptyErr = new Error("La API devolvio 0 productos");
+        emptyErr.emptyCatalog = true;
+        throw emptyErr;
+      }
+    }
     const tpvTerminales =
       tpvTerminalesRes.status === "fulfilled" &&
       Array.isArray(tpvTerminalesRes.value)
@@ -31885,7 +31906,12 @@ async function loadDataFromApiImpl(opts = {}) {
       );
 
       if (!opts.silentRetry) {
-        toast("Sin conexión: usando datos guardados en local.", "warn");
+        toast(
+          err?.emptyCatalog
+            ? "El servidor devolvió el catálogo vacío: se usan los datos guardados."
+            : "Sin conexión: usando datos guardados en local.",
+          "warn",
+        );
       }
       return;
     }

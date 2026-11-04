@@ -11943,11 +11943,23 @@ mustContain(main, "No se ha podido terminar la actualización", "La ventanita de
 mustContain(main, "function installUpdaterFileLogger() {", "electron-updater escribe en updater.log en vez de solo en consola");
 mustContain(main, "autoUpdater.logger = { info: write(\"info\"), warn: write(\"warn\"), error: write(\"error\"), debug: () => {} };", "El logger de electron-updater se redirige al fichero");
 mustContain(main, "const UPDATER_LOG_MAX_BYTES = 400 * 1024;", "El registro de actualizaciones rota por tamano");
-mustContain(main, "  installUpdaterFileLogger();\r\n  logUpdater(`arranque: version", "El logger se instala al arrancar, antes de comprobar actualizaciones");
+mustContain(main, "  installUpdaterFileLogger();\r\n  installPowerWatch();\r\n  logUpdater(`arranque: version", "El logger se instala al arrancar, antes de comprobar actualizaciones");
 mustContain(main, "const logArg = `--updater-log=${updaterLogFile()}`;", "La ventanita de instalando recibe la ruta del registro real");
 mustContain(main, "splashLog(\"180 s sin que la nueva version se vea: se da por no terminada\");", "La ventanita de instalando deja su rastro en el registro");
 mustContain(main, "logTail: readUpdaterLogTail(20),", "Una instalacion no aplicada manda al servidor las ultimas lineas del registro");
 mustContain(main, "logUpdater(\"instalando (gate):\", JSON.stringify(installCtx));", "Antes de instalar se anota el contexto (espacio libre, tiempo abierto)");
+
+// Salud de la ventana principal y catalogo vacio (Los Argentinos, 4-nov: pantalla sin articulos)
+mustContain(main, 'wc.on("render-process-gone", (_e, details) => {', "Se vigila la caida del proceso de dibujo de la ventana principal");
+mustContain(main, 'logUpdateEventRemote("window-render-gone", { reason, exitCode });', "La caida del proceso de dibujo queda en el servidor");
+mustContain(main, "if (windowRecoveries.length >= 2) {", "La recarga tras una caida tiene tope (2 en 10 min)");
+mustContain(main, 'logUpdateEventRemote("window-unresponsive");', "Una ventana que no responde queda registrada");
+mustContain(main, 'powerMonitor.on("resume", () => {', "Se registra la reanudacion del equipo tras suspension");
+mustContain(main, 'logUpdateEventRemote("power-resume", { sleptMin })', "La reanudacion se manda al servidor cuando ya hay red");
+mustContain(main, "  installMainWindowHealthWatch(mainWin);", "La ventana principal instala la vigilancia al crearse");
+mustContain(renderer, '"catalog-empty-response"', "Un catalogo vacio devuelto por la API queda registrado en el servidor");
+mustContain(renderer, "emptyErr.emptyCatalog = true;", "Un catalogo vacio no sustituye al que ya habia");
+mustContain(renderer, "El servidor devolvió el catálogo vacío: se usan los datos guardados.", "El cajero ve un aviso claro si el servidor devuelve el catalogo vacio");
 
 if (process.exitCode) {
   console.error("\nSmoke tests failed.");

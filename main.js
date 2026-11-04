@@ -497,6 +497,76 @@ function applyAutoZoom(win) {
   } catch (_) {}
 }
 
+// Salud de la ventana principal. Hasta ahora, si el motor de dibujo de la ventana se caia (o el equipo volvia de
+// la suspension con la ventana mal), no quedaba ningun rastro ni se recuperaba solo: pantalla en blanco o sin
+// contenido hasta que alguien reiniciaba el programa. Ahora queda en updater.log y en el servidor (eventos
+// window-* / power-*), y si el motor de dibujo se cae se recarga la ventana (como mucho 2 veces en 10 minutos).
+let windowRecoveries = [];
+
+function installMainWindowHealthWatch(win) {
+  const wc = win.webContents;
+
+  wc.on("render-process-gone", (_e, details) => {
+    const reason = String(details?.reason || "?");
+    const exitCode = details?.exitCode ?? null;
+    logUpdater("ventana principal: proceso de dibujo caido:", reason, "codigo", exitCode);
+    logUpdateEventRemote("window-render-gone", { reason, exitCode });
+    if (reason === "clean-exit" || appIsInstallingUpdate || win.isDestroyed()) return;
+
+    const now = Date.now();
+    windowRecoveries = windowRecoveries.filter((t) => now - t < 10 * 60 * 1000);
+    if (windowRecoveries.length >= 2) {
+      logUpdater("ventana principal: ya se recargo 2 veces en 10 min, no se recarga mas");
+      return;
+    }
+    windowRecoveries.push(now);
+    setTimeout(() => {
+      try {
+        if (!win.isDestroyed()) {
+          logUpdater("ventana principal: recargando tras la caida");
+          wc.reload();
+        }
+      } catch (_) {}
+    }, 1000);
+  });
+
+  wc.on("did-fail-load", (_e, code, desc, url, isMainFrame) => {
+    if (!isMainFrame || code === -3) return; // -3 = carga cancelada a proposito
+    logUpdater("ventana principal: fallo al cargar la pantalla:", code, desc);
+    logUpdateEventRemote("window-load-failed", { code, desc: String(desc || "").slice(0, 80) });
+  });
+
+  win.on("unresponsive", () => {
+    logUpdater("ventana principal: no responde");
+    logUpdateEventRemote("window-unresponsive");
+  });
+  win.on("responsive", () => {
+    logUpdater("ventana principal: vuelve a responder");
+  });
+}
+
+// Suspension/reanudacion del equipo: un TPV que se queda abierto de un dia para otro "despierta" con la red aun
+// sin conectar y datos viejos. Se deja constancia (local al momento; en el servidor unos segundos despues, cuando
+// ya hay red) para poder relacionarlo con un problema al abrir por la manana.
+let powerMonitorInstalled = false;
+function installPowerWatch() {
+  if (powerMonitorInstalled) return;
+  powerMonitorInstalled = true;
+  try {
+    const { powerMonitor } = require("electron");
+    let suspendedAt = 0;
+    powerMonitor.on("suspend", () => {
+      suspendedAt = Date.now();
+      logUpdater("equipo: suspendido");
+    });
+    powerMonitor.on("resume", () => {
+      const sleptMin = suspendedAt ? Math.round((Date.now() - suspendedAt) / 60000) : null;
+      logUpdater("equipo: reanudado tras", sleptMin == null ? "?" : sleptMin, "min");
+      setTimeout(() => logUpdateEventRemote("power-resume", { sleptMin }), 20000);
+    });
+  } catch (_) {}
+}
+
 function createWindow() {
   if (appIsInstallingUpdate) return;
   const isDev = !app.isPackaged;
@@ -585,6 +655,7 @@ function createWindow() {
   // que sobreviva tambien a una recarga completa de la pagina, no solo al
   // arranque.
   mainWin.webContents.on("did-finish-load", () => applyAutoZoom(mainWin));
+  installMainWindowHealthWatch(mainWin);
 
   // carga UI
   loadUI(mainWin);
@@ -2837,6 +2908,7 @@ app.whenReady().then(async () => {
   }
 
   installUpdaterFileLogger();
+  installPowerWatch();
   logUpdater(`arranque: version ${app.getVersion()}, pid ${process.pid}`);
   verifyPreviousInstallOutcome();
 
