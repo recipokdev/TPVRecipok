@@ -1119,7 +1119,7 @@
       ".r{display:flex;justify-content:space-between;gap:8px}.r>span:first-child{flex:1;min-width:0;word-break:break-word}.r>span:last-child{white-space:nowrap;text-align:right}" +
       ".big{font-size:15px;font-weight:700}.box{border:2px solid #000;padding:4px 6px;margin:6px 0;text-align:center}" +
       // Sin relleno negro: en la termica POS-80C un bloque negro grande hacia parar la impresora (pitido y error de Windows).
-      ".pick{border:3px solid #000;padding:6px 4px;margin:8px 0;text-align:center}.pick .l{font-size:12px;font-weight:700;letter-spacing:2px}.pick .v{font-size:20px;font-weight:900;margin-top:2px}" +
+      ".pick{border:5px solid #000;margin:8px 0;padding:4px 2px;text-align:center}.pick .l{font-size:13px;font-weight:800;letter-spacing:4px}.pick .v{font-size:25px;font-weight:900;margin-top:2px}" +
       ".note{border:2px solid #000;padding:5px 6px;margin:8px 0}.note .l{font-size:11px;font-weight:700;letter-spacing:1px}.note .v{font-size:16px;font-weight:800;margin-top:2px;word-break:break-word}" +
       "</style></head><body><div id=\"t\">" +
       innerHtml +
