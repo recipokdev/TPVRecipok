@@ -11974,6 +11974,14 @@ mustContain(renderer, "const encAware = !!cashSession.encargos;", "El informe de
 mustContain(renderer, "? (cashSession.totalSales ?? 0)", "Total vendido del informe con encargos sale de los totales propios (sin duplicar el resto cobrado al recoger)");
 mustContain(renderer, "? (cashSession.cashSalesTotal ?? 0)", "Cobros en efectivo del informe con encargos no caen a los de FacturaScripts cuando valen 0");
 
+// Encargos: justificante de devolucion al cancelar con anticipo
+const encargosRefundJs = fs.readFileSync(path.join(__dirname, "..", "..", "js", "tpv", "encargos.js"), "utf8");
+mustContain(encargosRefundJs, "async function printRefundVoucher(order, refunds) {", "Encargos tiene justificante de devolucion");
+mustContain(encargosRefundJs, "JUSTIFICANTE DE DEVOLUCIÓN", "El justificante de devolucion se titula como tal");
+mustContain(encargosRefundJs, "if (refunds.length && isAutoPrintEnabled()) printRefundVoucher(order, refunds).catch(() => {});", "Cancelar un encargo con devolucion imprime el justificante (con impresion automatica)");
+mustContain(encargosRefundJs, '$("encDetRefundBtn")?.addEventListener("click", () => detail.order && printRefundVoucher(detail.order));', "El detalle permite reimprimir el justificante de devolucion");
+mustContain(index, 'id="encDetRefundBtn"', "El detalle del encargo tiene el boton de justificante de devolucion");
+
 if (process.exitCode) {
   console.error("\nSmoke tests failed.");
   process.exit(1);

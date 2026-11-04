@@ -1179,6 +1179,42 @@
     return printHtml(html);
   }
 
+  // Justificante de devolucion: lo que se devuelve al cliente al cancelar un encargo con anticipo. Una linea por forma de
+  // pago: el efectivo se entrega; tarjeta/transferencia se reversa fuera del TPV (datafono / banco), y asi queda dicho.
+  async function printRefundVoucher(order, refunds) {
+    const esc = escapeHtml;
+    const rows = Array.isArray(refunds) && refunds.length
+      ? refunds
+      : (order.moves || []).filter((m) => m.kind === "devolucion").map((m) => ({ codpago: m.codpago, amount: m.amount }));
+    if (!rows.length) return false;
+    const total = round2(rows.reduce((s, r) => s + (Number(r.amount) || 0), 0));
+    const labels = await getFormasPagoMap().catch(() => ({}));
+    const body = rows
+      .map((r) => {
+        const label = labels[String(r.codpago || "").trim()] || String(r.codpago || "");
+        return (
+          `<div class="r"><span>${esc(label)}</span><span>${esc(fmtMoney(r.amount))}</span></div>` +
+          `<div class="s">${isCashCode(r.codpago) ? "Entregado en efectivo al cliente" : "Devolución a reversar en datáfono / banco"}</div>`
+        );
+      })
+      .join("");
+    const html = ticketShell(
+      companyHeaderHtml() +
+        `<div class="sep"></div><div class="c b" style="font-size:14px">JUSTIFICANTE DE DEVOLUCIÓN</div>` +
+        `<div class="c s">No es una factura</div>` +
+        `<div class="s">Encargo: ${esc(order.orderCode)} (cancelado)</div>` +
+        `<div class="s">Fecha: ${esc(formatDateTimeEs(Date.now()))}</div>` +
+        `<div>Cliente: <strong>${esc(order.customerName)}</strong></div>` +
+        `<div class="sep"></div>` +
+        body +
+        `<div class="sep"></div>` +
+        `<div class="r big"><span>TOTAL DEVUELTO</span><span>${esc(fmtMoney(total))}</span></div>` +
+        `<div class="sep"></div><div class="c s">Se devuelve el anticipo cobrado a cuenta.<br>El encargo queda cancelado.</div>` +
+        `<div class="s">TPV: ${esc(String(currentTerminal?.name || ""))} · Agente: ${esc(wizAgentName())}</div>`,
+    );
+    return printHtml(html);
+  }
+
   // ------------------------------------------------------------------ resguardo por email
 
   // Mismo cuadro, mismo PDF por IPC y mismo envío por el servidor que «Enviar factura»; solo cambia el documento.
@@ -1677,6 +1713,7 @@
     $("encDetPickupBtn").textContent = o.pending > 0 ? "Recoger y cobrar " + fmtMoney(o.pending) : "Entregar (ya pagado)";
     $("encDetCancelBtn").classList.toggle("hidden", !pend);
     $("encDetVoucherBtn").classList.toggle("hidden", !(o.collected > 0));
+    $("encDetRefundBtn").classList.toggle("hidden", !(o.moves || []).some((m) => m.kind === "devolucion"));
   }
 
   // ------------------------------------------------------------------ cancelar un encargo
@@ -1771,6 +1808,7 @@
       .then(() => cancelFsPedidoQuietly(order.fsIdpedido))
       .catch(() => {});
     toast("Encargo cancelado ✓", "ok", "Encargos");
+    if (refunds.length && isAutoPrintEnabled()) printRefundVoucher(order, refunds).catch(() => {});
     detail.order = order;
     await renderDetail();
     refreshCount().catch(() => {});
@@ -1861,6 +1899,7 @@
     $("encDetCloseUnclaimedBtn")?.addEventListener("click", () => closeUnclaimedFlow());
     $("encDetCancelBtn")?.addEventListener("click", () => cancelOrderFlow());
     $("encDetReceiptBtn")?.addEventListener("click", () => detail.order && printReceipt(detail.order));
+    $("encDetRefundBtn")?.addEventListener("click", () => detail.order && printRefundVoucher(detail.order));
     $("encDetEmailBtn")?.addEventListener("click", () => emailReceiptFlow(detail.order));
     $("encResEmailBtn")?.addEventListener("click", () => lastResult && emailReceiptFlow(lastResult.order));
     $("encDetVoucherBtn")?.addEventListener("click", () => detail.order && printAdvanceVoucher(detail.order, {}));
@@ -3045,6 +3084,7 @@
     buildFsObservaciones,
     printReceipt,
     printAdvanceVoucher,
+    printRefundVoucher,
     pickupLabel,
     formatDateTimeEs,
     dateKey,

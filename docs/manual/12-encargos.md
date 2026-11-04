@@ -42,6 +42,7 @@ Al tocar un encargo se abre su **detalle**: datos, productos, anticipos y devolu
 | **Editar encargo** | Cambia productos, día/hora, nombre, teléfono o nota (apartado 6). |
 | **Cobrar otro anticipo** | Añade otro pago a cuenta. |
 | **Imprimir resguardo / justificante** | Reimprime los papeles del cliente. |
+| **Imprimir justificante de devolución** | Solo aparece si ya se devolvió dinero: reimprime el papel de la devolución. |
 | **Enviar resguardo por email** | Manda el resguardo en PDF al correo del cliente (apartado 7). |
 | **Cerrar sin recoger** | Cierra un encargo que no se va a recoger y no se devuelve nada (apartado 8). |
 | **Cancelar encargo** | Anula el encargo y devuelve el dinero cobrado (apartado 8). |
@@ -77,7 +78,7 @@ Desde el detalle (**Enviar resguardo por email**) o desde la ventana de resultad
 
 Si el cliente **ya no quiere el pedido**, hay dos caminos según lo que se haga con el dinero:
 
-- **Cancelar encargo.** Se anula el encargo y se **devuelve cada anticipo con la forma de pago con la que se cobró**: el efectivo se entrega al cliente y, si fue con tarjeta o transferencia, el TPV recuerda que hay que **reversar la operación** en el datáfono o en el banco. La devolución queda anotada en la caja del día en que se hace, y el pedido de FacturaScripts también se cancela. Hace falta la caja abierta si hay dinero que devolver.
+- **Cancelar encargo.** Se anula el encargo y se **devuelve cada anticipo con la forma de pago con la que se cobró**: el efectivo se entrega al cliente y, si fue con tarjeta o transferencia, el TPV recuerda que hay que **reversar la operación** en el datáfono o en el banco. La devolución queda anotada en la caja del día en que se hace, y el pedido de FacturaScripts también se cancela. Si hay dinero que devolver, se imprime un **justificante de devolución** (con la impresión automática activada; si no, desde el detalle del encargo) que dice cuánto se devuelve por cada forma de pago. Hace falta la caja abierta si hay dinero que devolver.
 - **Cerrar sin recoger.** Si el cliente no viene a por el pedido y **no se le devuelve nada**, el anticipo se queda como una venta: el TPV emite **una factura por lo cobrado a cuenta**, con las líneas del encargo y un **descuento** por el resto (repartido para que el total salga exacto), y descuenta el stock. El encargo pasa a «Cerrado sin recoger».
 
 ## 9. Stock y encargos
