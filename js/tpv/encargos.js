@@ -584,6 +584,7 @@
     total: 0,
     codcliente: "",
     customerName: "",
+    contact: { name: "", phone: "" }, // nombre y telefono del cliente de la factura (para ponerlos con un toque)
     day: "today",
     customDay: "",
     time: "12:00",
@@ -703,6 +704,7 @@
 
     {
       const ct = customerContact(wiz.codcliente);
+      wiz.contact = ct;
       $("encName").value = ct.name;
       $("encPhone").value = ct.phone;
     }
@@ -760,14 +762,26 @@
     $("encBackBtn").textContent = wiz.mode === "advance" ? "Cancelar" : "← Atrás";
     $("encPage1").classList.toggle("hidden", !p1);
     $("encPage2").classList.toggle("hidden", p1);
+    const single = wiz.mode === "edit" || wiz.mode === "data";
     $("encWizTitle").textContent =
-      wiz.mode === "advance" ? "Cobrar otro anticipo" : wiz.mode === "edit" ? "Editar encargo · Datos" : p1 ? "Nuevo encargo · Datos" : "Nuevo encargo · Anticipo";
-    $("encWizStep").textContent = wiz.mode === "advance" || wiz.mode === "edit" ? "" : `Paso ${wiz.page} de 2`;
+      wiz.mode === "advance"
+        ? "Cobrar otro anticipo"
+        : wiz.mode === "edit"
+          ? "Editar encargo · Datos"
+          : wiz.mode === "data"
+            ? "Editar datos del encargo"
+            : p1
+              ? "Nuevo encargo · Datos"
+              : "Nuevo encargo · Anticipo";
+    $("encWizStep").textContent = wiz.mode === "advance" || single ? "" : `Paso ${wiz.page} de 2`;
     // Editar: una sola página, sin anticipo (los anticipos no se tocan aquí; «Cobrar otro anticipo» está en el detalle).
-    $("encNextBtn").classList.toggle("hidden", wiz.mode === "edit");
-    $("encSaveNoAdvBtn").textContent = wiz.mode === "edit" ? "Guardar cambios" : "Guardar sin anticipo";
-    $("encSaveNoAdvBtn").classList.toggle("enc-btn-blue", wiz.mode === "edit");
-    $("encSaveNoAdvBtn").classList.toggle("enc-btn-outline", wiz.mode !== "edit");
+    $("encNextBtn").classList.toggle("hidden", single);
+    $("encargoWizardOverlay").classList.toggle("enc-data-mode", wiz.mode === "data");
+    $("encSaveNoAdvBtn").textContent = single ? "Guardar cambios" : "Guardar sin anticipo";
+    $("encSaveNoAdvBtn").classList.toggle("enc-btn-blue", single);
+    $("encSaveNoAdvBtn").classList.toggle("enc-btn-outline", !single);
+    syncClearButtons();
+    if ($("encFootNote")) $("encFootNote").textContent = single ? "Los campos con * son obligatorios." : "Los campos con * son obligatorios. Hasta el último paso no se guarda nada.";
     $("encFootP1").classList.toggle("hidden", !p1);
     $("encFootP2").classList.toggle("hidden", p1);
 
@@ -896,7 +910,9 @@
     if (!/^\d{2}:\d{2}$/.test(wiz.time)) return "Indica la hora de recogida.";
     const when = new Date(`${day}T${wiz.time}:00`);
     // Al editar, un encargo vencido puede conservar su fecha: solo se exige futura si se ha cambiado.
-    const unchanged = wiz.mode === "edit" && `${day} ${wiz.time}` === edit.pickupAt;
+    const unchanged =
+      (wiz.mode === "edit" && `${day} ${wiz.time}` === edit.pickupAt) ||
+      (wiz.mode === "data" && wiz.order && `${day} ${wiz.time}` === wiz.order.pickupAt);
     if (!unchanged && when.getTime() < Date.now() - 5 * 60 * 1000) return "El día y la hora de recogida ya han pasado.";
     return "";
   }
@@ -912,6 +928,7 @@
   async function saveWizard(opts = {}) {
     if (wiz.mode === "advance") return saveAdvance();
     if (wiz.mode === "edit") return saveEdit();
+    if (wiz.mode === "data") return saveDataEdit();
     if (wiz.saving) return;
     const err1 = validatePage1();
     if (err1) {
@@ -1054,15 +1071,16 @@
   let lastResult = null;
   function showResult(order, ctx, title) {
     lastResult = { order, ctx };
-    $("encResTitle").textContent = title || "Encargo guardado ✓";
+    $("encResTitle").textContent = String(title || "Encargo guardado").replace(/\s*✓$/, "");
     $("encResText").innerHTML =
-      `<strong>${escapeHtml(order.customerName)}</strong><br>` +
-      `Recoge ${escapeHtml(pickupLabel(order.pickupAt))}<br>` +
-      `Total ${escapeHtml(fmtMoney(order.total))}` +
-      (order.collected > 0
-        ? ` · Anticipo cobrado ${escapeHtml(fmtMoney(order.collected))} · Falta ${escapeHtml(fmtMoney(order.pending))}`
-        : " · Sin anticipo") +
-      `<br><small>Código ${escapeHtml(order.orderCode)}${order.fsCodigo ? " · Pedido " + escapeHtml(order.fsCodigo) : ""}</small>`;
+      `<div class="enc-res-name">${escapeHtml(order.customerName)}</div>` +
+      `<div class="enc-res-when">Recoge ${escapeHtml(pickupLabel(order.pickupAt))}</div>` +
+      `<div class="enc-res-stats">` +
+      `<div><small>Total</small><strong>${escapeHtml(fmtMoney(order.total))}</strong></div>` +
+      `<div><small>Anticipo</small><strong>${escapeHtml(fmtMoney(order.collected))}</strong></div>` +
+      `<div class="${order.pending > 0 ? "is-due" : "is-ok"}"><small>Falta</small><strong>${escapeHtml(fmtMoney(order.pending))}</strong></div>` +
+      `</div>` +
+      `<div class="enc-res-code">Código ${escapeHtml(order.orderCode)}${order.fsCodigo ? " · Pedido " + escapeHtml(order.fsCodigo) : ""}</div>`;
     $("encResVoucherBtn").classList.toggle("hidden", !(order.collected > 0));
     $("encargoResultOverlay").classList.remove("hidden");
     lockAppUI();
@@ -1320,6 +1338,18 @@
       const inp = $(b.dataset.clear);
       b.classList.toggle("hidden", !(inp && inp.value));
     });
+    // Si el campo se vació, un botón junto al cliente de la factura permite volver a poner su nombre/teléfono de un toque.
+    const useName = $("encUseNameBtn");
+    const usePhone = $("encUsePhoneBtn");
+    const ct = wiz.contact || { name: "", phone: "" };
+    if (useName) {
+      useName.classList.toggle("hidden", !(ct.name && !$("encName").value.trim()));
+      useName.textContent = "Usar «" + ct.name + "» como nombre";
+    }
+    if (usePhone) {
+      usePhone.classList.toggle("hidden", !(ct.phone && !$("encPhone").value.trim()));
+      usePhone.textContent = "Usar el teléfono " + ct.phone;
+    }
   }
 
   let wizardBound = false;
@@ -1340,6 +1370,14 @@
       });
     });
     ["encName", "encPhone"].forEach((id) => $(id)?.addEventListener("input", syncClearButtons));
+    $("encUseNameBtn")?.addEventListener("click", () => {
+      $("encName").value = (wiz.contact && wiz.contact.name) || "";
+      syncClearButtons();
+    });
+    $("encUsePhoneBtn")?.addEventListener("click", () => {
+      $("encPhone").value = (wiz.contact && wiz.contact.phone) || "";
+      syncClearButtons();
+    });
     // el teclado en pantalla escribe sin lanzar "input": se repasa mientras el asistente está abierto
     setInterval(() => {
       if (wiz.open) syncClearButtons();
@@ -1745,6 +1783,7 @@
     $("encDetAdvanceBtn").classList.toggle("hidden", !(pend && o.pending > 0));
     $("encDetPickupBtn").classList.toggle("hidden", !pend);
     $("encDetEditBtn").classList.toggle("hidden", !pend);
+    $("encDetEditDataBtn").classList.toggle("hidden", !pend);
     $("encDetEmailBtn").classList.toggle("hidden", !pend);
     $("encDetCloseUnclaimedBtn").classList.toggle("hidden", !(pend && o.collected > 0));
     $("encDetPickupBtn").textContent = o.pending > 0 ? "Recoger y cobrar " + fmtMoney(o.pending) : "Entregar (ya pagado)";
@@ -2919,6 +2958,115 @@
     toast("Cambia los productos en el carrito y pulsa «Guardar cambios». Hasta entonces no se cambia nada.", "info", "Editando encargo");
   }
 
+  // Editar solo los datos de un encargo (nombre, teléfono, nota, día y hora) sin tocar el carrito ni el dinero:
+  // el servidor sube la versión y el texto del pedido de FacturaScripts se actualiza solo.
+  async function openDataEditor() {
+    const o0 = detail.order;
+    if (!o0 || o0.status !== "pendiente") return;
+    if (typeof TPV_STATE !== "undefined" && TPV_STATE?.offline) return toast("Encargos necesita conexión con el servidor.", "warn", "Encargos");
+    let fresh;
+    try {
+      const r = await call("get-customer-order", { query: { orderId: String(o0.id) } });
+      if (!r.ok) throw new Error();
+      fresh = r.json.data;
+    } catch {
+      return toast("No se pudo abrir el encargo. Inténtalo de nuevo.", "warn", "Encargos");
+    }
+    if (fresh.status !== "pendiente") {
+      detail.order = fresh;
+      await renderDetail();
+      return toast("Este encargo ya no está pendiente.", "info", "Encargos");
+    }
+    if (fresh.lockSession && fresh.lockSession !== sessionId()) {
+      return showMessageModal("Se está atendiendo en otro dispositivo", "Este encargo se está recogiendo en otro terminal. Espera unos segundos y vuelve a intentarlo.");
+    }
+    wiz.mode = "data";
+    wiz.order = fresh;
+    wiz.snapshot = [];
+    wiz.total = fresh.total;
+    wiz.collected = fresh.collected;
+    wiz.codcliente = String(fresh.codcliente || "");
+    wiz.customerName = customerNameForCod(fresh.codcliente) || "Cliente por defecto";
+    wiz.contact = customerContact(fresh.codcliente);
+    wiz.orderCode = "";
+    wiz.fsDoc = null;
+    wiz.saving = false;
+    wiz.savedOk = false;
+    wiz.serverError = "";
+    wiz.page = 1;
+    const [d, t] = String(fresh.pickupAt || "").split(" ");
+    if (d === dateKey(new Date())) wiz.day = "today";
+    else if (d === dateKey(addDays(new Date(), 1))) wiz.day = "tomorrow";
+    else {
+      wiz.day = "custom";
+      wiz.customDay = d;
+    }
+    wiz.time = t || "12:00";
+    $("encName").value = fresh.customerName || "";
+    $("encPhone").value = fresh.customerPhone || "";
+    $("encNotes").value = fresh.notes || "";
+    $("encDayInput").value = wiz.day === "custom" ? d : "";
+    $("encDayInput").classList.toggle("hidden", wiz.day !== "custom");
+    $("encSumDetail").classList.add("hidden");
+    showWizError("");
+    closeDetail();
+    closeList();
+    wiz.open = true;
+    $("encargoWizardOverlay").classList.remove("hidden");
+    lockAppUI();
+    renderWizard();
+  }
+
+  async function saveDataEdit() {
+    if (wiz.saving || !wiz.order) return;
+    const err1 = validatePage1();
+    if (err1) return showWizError(err1);
+    const name = $("encName").value.trim();
+    const phone = $("encPhone").value.trim();
+    const notes = $("encNotes").value.trim();
+    const pickupAt = `${wizDayKey()} ${wiz.time}`;
+    wiz.saving = true;
+    setWizBusy(true);
+    showWizError("");
+    try {
+      let r;
+      try {
+        r = await postWithRetry("update-customer-order", {
+          orderId: wiz.order.id,
+          expectedVersion: wiz.order.version,
+          customerName: name,
+          customerPhone: phone,
+          notes,
+          pickupAt,
+          userName: wizAgentName(),
+          terminalId: String(currentTerminal?.id || ""),
+          sessionId: sessionId(),
+        });
+      } catch {
+        throw new Error("No hay conexión con el servidor. No se ha guardado nada: pulsa Guardar cambios otra vez cuando vuelva la conexión.");
+      }
+      if (r.status === 412) throw new Error("Mientras editabas, otro terminal modificó este encargo (cobró un anticipo, lo editó…). No se ha guardado nada: ciérralo, ábrelo de nuevo y vuelve a editar los datos.");
+      if (r.status === 423) throw new Error("Este encargo se está atendiendo en otro dispositivo. Espera unos segundos y vuelve a pulsar Guardar cambios.");
+      if (!r.ok) throw new Error(r.json?.error || `El servidor no aceptó los cambios (HTTP ${r.status}).`);
+      const order = r.json.data;
+      wiz.savedOk = true;
+      closeWizard({ keepOrphanCheck: true });
+      wiz.mode = "new";
+      syncFsObservaciones(order).catch(() => {});
+      refreshCount().catch(() => {});
+      if (list.open) loadList().catch(() => {});
+      const changedWhenOrNote = String(order.pickupAt) !== String(wiz.order.pickupAt) || String(order.notes || "") !== String(wiz.order.notes || "");
+      const ctx = { cents: 0, modified: changedWhenOrNote };
+      showResult(order, ctx, "Datos modificados ✓");
+      if (isAutoPrintEnabled() && changedWhenOrNote) await printReceipt(order, ctx).catch(() => {});
+    } catch (e) {
+      showWizError(String(e?.message || e));
+    } finally {
+      wiz.saving = false;
+      setWizBusy(false);
+    }
+  }
+
   async function discardEdit() {
     if (!edit.active) return;
     const ok = await confirmModal("Descartar los cambios", "Se descartan los cambios del encargo y se vacía el carrito. El encargo queda como estaba.", { okButtonText: "Descartar" });
@@ -3005,9 +3153,10 @@
     wiz.time = t || "12:00";
     $("encName").value = edit.customerName;
     $("encPhone").value = edit.customerPhone;
+    wiz.contact = customerContact(wiz.codcliente);
     if (wiz.codcliente !== String(edit.codcliente)) {
       // se cambio de cliente: su nombre y telefono pasan al encargo
-      const ct = customerContact(wiz.codcliente);
+      const ct = wiz.contact;
       if (ct.name) $("encName").value = ct.name;
       if (ct.phone) $("encPhone").value = ct.phone;
     }
@@ -3140,6 +3289,7 @@
     if (editBound) return;
     editBound = true;
     $("encDetEditBtn")?.addEventListener("click", () => startEdit());
+    $("encDetEditDataBtn")?.addEventListener("click", () => openDataEditor());
     $("encEditSaveBtn")?.addEventListener("click", () => openEditWizard());
     $("encEditDiscardBtn")?.addEventListener("click", () => discardEdit());
   }

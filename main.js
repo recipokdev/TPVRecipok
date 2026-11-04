@@ -2447,7 +2447,30 @@ ipcMain.handle("printers:list", async () => {
 // Impresion real de un ticket HTML (Windows: silencioso; Linux: PDF + lp).
 // Extraido a funcion para reutilizarlo desde el handler normal y desde el boton
 // "Imprimir" de la ventana de previsualizacion (modo pruebas).
-async function printTicketHtml(html, deviceName) {
+// Los trabajos de impresion se mandan de uno en uno, con una pausa entre ellos. El callback de webContents.print solo
+// dice que el trabajo llego al spooler, no que la impresora terminara: al mandar dos tickets seguidos (resguardo y
+// justificante de un encargo, ticket y comanda...) una termica USB (POS-80C) se cortaba a mitad del primero y sacaba
+// simbolos raros en los dos, mientras que desde la vista previa (un trabajo cada vez) salia bien.
+const PRINT_GAP_MS = 2500;
+let printChain = Promise.resolve();
+let lastPrintDoneAt = 0;
+
+function printTicketHtml(html, deviceName) {
+  const run = async () => {
+    const wait = lastPrintDoneAt + PRINT_GAP_MS - Date.now();
+    if (wait > 0) await sleep(wait);
+    try {
+      return await printTicketHtmlNow(html, deviceName);
+    } finally {
+      lastPrintDoneAt = Date.now();
+    }
+  };
+  const p = printChain.then(run, run);
+  printChain = p.catch(() => {});
+  return p;
+}
+
+async function printTicketHtmlNow(html, deviceName) {
   if (!html) return { ok: false, error: "Falta html" };
   if (!deviceName) return { ok: false, error: "Falta deviceName" };
 

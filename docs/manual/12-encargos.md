@@ -42,6 +42,7 @@ Al tocar un encargo se abre su **detalle**: datos, productos, anticipos y devolu
 |---|---|
 | **Recoger y cobrar** | Entrega el pedido: cobra lo que falta y emite la factura (apartado 5). |
 | **Editar encargo** | Cambia productos, día/hora, nombre, teléfono o nota (apartado 6). |
+| **Editar datos** | Cambia solo el **nombre, teléfono, nota, día u hora**, sin tocar el carrito ni el dinero (apartado 6). |
 | **Cobrar otro anticipo** | Añade otro pago a cuenta. |
 | **Imprimir resguardo / justificante** | Reimprime los papeles del cliente. |
 | **Imprimir justificante de devolución** | Solo aparece si ya se devolvió dinero: reimprime el papel de la devolución. |
@@ -61,6 +62,10 @@ Si alguien más está recogiendo ese mismo encargo en otro terminal, el TPV avis
 > Si falta stock de algún producto al recoger, aparece el mismo aviso **«Sin stock suficiente»** que al cobrar, con la opción de cobrar sin stock.
 
 ## 6. Editar un encargo
+
+**Solo los datos:** si únicamente hay que corregir el nombre, el teléfono, la nota o el día/hora, abre el encargo y pulsa **Editar datos**: se abre el asistente con esos campos, **sin carrito**. Al guardar, el TPV muestra el resguardo de nuevo (si cambió el día/hora o la nota, sale marcado **«MODIFICADO»** y anula el anterior) y se actualiza el texto del pedido en FacturaScripts.
+
+**Productos o cliente de la factura:** para cambiar productos o el cliente, usa **Editar encargo**:
 
 1. Abre el encargo y pulsa **Editar encargo**. Los productos pasan al **carrito**, con una franja violeta **«Editando el encargo de…»** y los botones **Guardar cambios** y **Descartar**. Mientras editas, **Cobrar y Aparcar están bloqueados**. Para editar, el carrito debe estar vacío y hay que estar en el **TPV normal** (no en la vista del Modo Mesas, donde el carrito es el de la mesa).
 2. Cambia lo que haga falta: añade o quita productos, cambia cantidades… También puedes **cambiar el cliente** desde el propio carrito (el selector de cliente de siempre): al empezar a editar, el carrito lleva el cliente del encargo, y el que haya al guardar es el que se queda. Los precios siguen la tarifa de ese cliente.

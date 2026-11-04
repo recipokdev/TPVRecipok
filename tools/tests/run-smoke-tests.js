@@ -12004,6 +12004,18 @@ mustContain(encargosRefundJs, "function syncClearButtons() {", "Los campos de no
 mustContain(index, 'data-clear="encPhone"', "El telefono del encargo tiene su boton de vaciar");
 mustContain(styles, "Encima del pie de la tarjeta (no dentro)", "La etiqueta de reservados va fuera del pie de la tarjeta (no tapa el precio)");
 
+// Encargos: editar solo los datos, uso rapido del nombre del cliente, cuadro de resultado nuevo e impresion de uno en uno
+mustContain(encargosRefundJs, "async function openDataEditor() {", "Se pueden editar solo los datos de un encargo (sin carrito)");
+mustContain(encargosRefundJs, "async function saveDataEdit() {", "Guardar los datos de un encargo no manda lineas ni total (el servidor conserva el resto)");
+mustContain(encargosRefundJs, "if (wiz.mode === \"data\") return saveDataEdit();", "El asistente guarda segun su modo (data)");
+mustContain(encargosRefundJs, "syncFsObservaciones(order).catch(() => {});" , "Al editar datos se actualiza el texto del pedido de FacturaScripts");
+mustContain(index, 'id="encDetEditDataBtn"', "El detalle del encargo tiene Editar datos");
+mustContain(index, 'id="encUseNameBtn"', "Hay un boton para volver a poner el nombre del cliente en el encargo");
+mustContain(encargosRefundJs, 'Usar «" + ct.name + "» como nombre', "El boton de uso rapido dice que nombre pone");
+mustContain(index, 'class="enc-res-icon"', "El cuadro de resultado del encargo tiene el diseno nuevo");
+mustContain(main, "const PRINT_GAP_MS = 2500;", "Los tickets se mandan a la impresora de uno en uno con una pausa");
+mustContain(main, "async function printTicketHtmlNow(html, deviceName) {", "El envio real a la impresora queda detras de la cola");
+
 if (process.exitCode) {
   console.error("\nSmoke tests failed.");
   process.exit(1);
