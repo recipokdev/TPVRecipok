@@ -19,7 +19,7 @@ Solo un administrador: **Opciones → Encargos → Activar Encargos**. Al activa
 
 1. **Prepara el carrito** con los productos del pedido (con el cliente y los precios que correspondan, como en una venta).
 2. Pulsa **Pasar a encargo**.
-3. **Paso 1 de 2: datos.** Escribe el **nombre** del cliente (obligatorio), su **teléfono** y una **nota** (por ejemplo una dedicatoria). Elige el **día** de recogida (Hoy, Mañana u otro día) y la **hora**. No se puede elegir un día y hora que ya han pasado.
+3. **Paso 1 de 2: datos.** El **nombre** y el **teléfono** vienen ya rellenados con los del **cliente que hayas elegido en el carrito** (si no es el cliente por defecto); se pueden cambiar o vaciar de un toque con la **✕** que hay a la derecha de cada campo. El nombre es obligatorio. Añade una **nota** si hace falta (por ejemplo una dedicatoria): en el resguardo sale **en un recuadro destacado**. Elige el **día** de recogida (Hoy, Mañana u otro día) y la **hora**. No se puede elegir un día y hora que ya han pasado.
 4. **Paso 2 de 2: anticipo.** Elige cuánto cobra ahora (con el teclado numérico o con los atajos **Todo**, **50 %**, **25 %** y **Sin anticipo**) y la **forma de pago**. Si es en efectivo, puedes indicar lo que entrega el cliente y el TPV calcula el cambio. El anticipo no puede ser mayor que el total.
 5. Pulsa **Guardar y cobrar** (o **Guardar encargo** si no hay anticipo).
 
@@ -30,6 +30,8 @@ El TPV imprime el **resguardo** (lo que se entrega al cliente, con el día y la 
 El botón **Encargos** (con un contador) abre la lista, con tres pestañas: **Falta recoger**, **Recogidos** y **Cancelados**.
 
 - El contador del botón cuenta los encargos **de hoy y vencidos** que faltan por recoger; se pone **en rojo** si hay alguno vencido (de un día anterior).
+- Cada encargo pendiente tiene un botón **Cancelar** en la propia fila, para cancelarlo sin abrir el detalle (pide confirmación y devuelve el dinero cobrado a cuenta, igual que desde el detalle).
+- Al abrir la caja, si hay encargos para hoy, aparece el aviso **«Encargos por entregar hoy»** con la lista.
 - Se puede **buscar** por nombre, teléfono o código.
 - **Imprimir lista de hoy** saca en la impresora un listado con lo que hay que preparar hoy.
 - Al **abrir la caja** (una vez por caja y día) el TPV muestra un aviso con los encargos de hoy y los vencidos, para tenerlos presentes desde el principio del turno.

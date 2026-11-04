@@ -409,7 +409,7 @@
     if (!overlay) return;
     const late = rows.filter((o) => String(o.pickupAt || "").slice(0, 10) < today).length;
     $("encTodaySub").textContent =
-      `${rows.length} ${rows.length === 1 ? "encargo" : "encargos"} de hoy o vencidos por recoger` + (late ? ` (${late} vencido${late === 1 ? "" : "s"}).` : ".");
+      `${rows.length} ${rows.length === 1 ? "encargo" : "encargos"} de hoy o vencidos por entregar` + (late ? ` (${late} vencido${late === 1 ? "" : "s"}).` : ".");
     $("encTodayList").innerHTML = rows
       .map((o) => {
         const isLate = String(o.pickupAt || "").slice(0, 10) < today;
@@ -701,8 +701,11 @@
     if (!wiz.formas.length) wiz.formas = [{ codpago: "CONT", descripcion: "Efectivo" }];
     wiz.codpago = (wiz.formas.find((f) => f.codpago === "CONT") || wiz.formas[0]).codpago;
 
-    $("encName").value = "";
-    $("encPhone").value = "";
+    {
+      const ct = customerContact(wiz.codcliente);
+      $("encName").value = ct.name;
+      $("encPhone").value = ct.phone;
+    }
     $("encNotes").value = "";
     $("encDayInput").value = "";
     $("encSumDetail").classList.add("hidden");
@@ -1097,6 +1100,8 @@
       ".c{text-align:center}.b{font-weight:700}.s{font-size:11px}.sep{border-top:1px dashed #000;margin:8px 0}" +
       ".r{display:flex;justify-content:space-between;gap:8px}.r>span:first-child{flex:1;min-width:0;word-break:break-word}.r>span:last-child{white-space:nowrap;text-align:right}" +
       ".big{font-size:15px;font-weight:700}.box{border:2px solid #000;padding:4px 6px;margin:6px 0;text-align:center}" +
+      ".pick{background:#000;color:#fff;padding:6px 4px;margin:8px 0;text-align:center}.pick .l{font-size:12px;font-weight:700;letter-spacing:2px}.pick .v{font-size:19px;font-weight:900;margin-top:2px}" +
+      ".note{border:3px solid #000;padding:5px 6px;margin:8px 0}.note .l{font-size:11px;font-weight:700;letter-spacing:1px}.note .v{font-size:16px;font-weight:800;margin-top:2px;word-break:break-word}" +
       "</style></head><body><div id=\"t\">" +
       innerHtml +
       "</div></body></html>"
@@ -1140,10 +1145,10 @@
         modified +
         `<div class="s">Código: ${esc(order.orderCode)}</div>` +
         `<div class="s">Fecha: ${esc(formatDateTimeEs(order.createdAtMs))}</div>` +
-        `<div class="box"><div class="s">RECOGE</div><div class="big">${esc(pickupLabel(order.pickupAt).toUpperCase())}</div></div>` +
+        `<div class="pick"><div class="l">RECOGE</div><div class="v">${esc(pickupLabel(order.pickupAt).toUpperCase())}</div></div>` +
         `<div>Cliente: <strong>${esc(order.customerName)}</strong></div>` +
         (order.customerPhone ? `<div>Teléfono: ${esc(order.customerPhone)}</div>` : "") +
-        (order.notes ? `<div>Nota: ${esc(order.notes)}</div>` : "") +
+        (order.notes ? `<div class="note"><div class="l">NOTA</div><div class="v">${esc(order.notes)}</div></div>` : "") +
         `<div class="sep"></div>${lines}<div class="sep"></div>` +
         `<div class="r big"><span>TOTAL</span><span>${esc(fmtMoney(order.total))}</span></div>` +
         `<div class="r"><span>Anticipo cobrado</span><span>${esc(fmtMoney(order.collected))}</span></div>` +
@@ -1254,7 +1259,7 @@
       `<div class="bar"><span>RESGUARDO DE ENCARGO</span><span>${esc(fmtMoney(order.total))}</span></div>` +
       `<div class="box"><div style="font-size:12px;letter-spacing:1px">RECOGE</div><div class="big">${esc(pickupLabel(order.pickupAt).toUpperCase())}</div></div>` +
       `<div><strong>Cliente:</strong> ${esc(order.customerName)}${order.customerPhone ? " · " + esc(order.customerPhone) : ""}</div>` +
-      (order.notes ? `<div style="margin-top:4px"><strong>Nota:</strong> ${esc(order.notes)}</div>` : "") +
+      (order.notes ? `<div style="margin:8px 0;border:2px solid #1f2937;border-radius:8px;padding:8px 12px;font-size:15px;font-weight:700"><span style="font-size:12px;letter-spacing:1px">NOTA</span><br>${esc(order.notes)}</div>` : "") +
       `<table><thead><tr><th>Cant.</th><th>Descripción</th><th class="n">Precio</th><th class="n">Importe</th></tr></thead><tbody>${rows}` +
       `<tr class="tot"><td colspan="3" class="n">Total</td><td class="n">${esc(fmtMoney(order.total))}</td></tr>` +
       `<tr class="tot"><td colspan="3" class="n">Anticipo cobrado</td><td class="n">${esc(fmtMoney(order.collected))}</td></tr>` +
@@ -1310,12 +1315,35 @@
 
   // ------------------------------------------------------------------ enganche de los controles
 
+  function syncClearButtons() {
+    document.querySelectorAll("#encargoWizardOverlay .enc-input-x").forEach((b) => {
+      const inp = $(b.dataset.clear);
+      b.classList.toggle("hidden", !(inp && inp.value));
+    });
+  }
+
   let wizardBound = false;
   function bindWizardOnce() {
     if (wizardBound) return;
     wizardBound = true;
 
     $("passToEncargoBtn")?.addEventListener("click", () => openWizard());
+
+    // Botón ✕ para vaciar de un toque el nombre y el teléfono
+    document.querySelectorAll("#encargoWizardOverlay .enc-input-x").forEach((b) => {
+      b.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const inp = $(b.dataset.clear);
+        if (inp) inp.value = "";
+        syncClearButtons();
+      });
+    });
+    ["encName", "encPhone"].forEach((id) => $(id)?.addEventListener("input", syncClearButtons));
+    // el teclado en pantalla escribe sin lanzar "input": se repasa mientras el asistente está abierto
+    setInterval(() => {
+      if (wiz.open) syncClearButtons();
+    }, 400);
 
     // Teclado en pantalla al tocar los campos de texto (si está activado en Opciones)
     ["encName", "encPhone", "encNotes"].forEach((id) => {
@@ -1636,13 +1664,14 @@
         const chip = orderChip(o, today);
         const late = o.status === "pendiente" && key < today;
         html +=
-          `<button type="button" class="enc-item${late ? " is-late" : ""}" data-id="${o.id}">` +
+          `<div role="button" tabindex="0" class="enc-item${late ? " is-late" : ""}" data-id="${o.id}">` +
           `<div class="enc-item-time"><strong>${escapeHtml(String(o.pickupAt).slice(11, 16))}</strong><small>${late ? "vencido" : "recogida"}</small></div>` +
           `<div class="enc-item-main"><strong>${escapeHtml(o.customerName)}</strong><small>${escapeHtml([o.customerPhone, orderSummaryText(o)].filter(Boolean).join(" · "))}</small></div>` +
           `<div class="enc-item-money"><span>Total ${escapeHtml(fmtMoney(o.total))}</span><small>Anticipo ${escapeHtml(fmtMoney(o.collected))}</small></div>` +
           `<div class="enc-item-pend ${o.pending > 0 ? "is-due" : "is-ok"}">${o.status === "pendiente" ? `Falta ${escapeHtml(fmtMoney(o.pending))}` : ""}</div>` +
           `<div class="enc-item-chip ${chip.cls}">${chip.text}</div>` +
-          `</button>`;
+          `<div class="enc-item-act">${o.status === "pendiente" ? `<button type="button" class="enc-item-x" data-cancel-id="${o.id}" title="Cancelar este encargo">Cancelar</button>` : ""}</div>` +
+          `</div>`;
       });
       box.innerHTML = html;
     }
@@ -1725,6 +1754,27 @@
   }
 
   // ------------------------------------------------------------------ cancelar un encargo
+
+  // Cancelar desde la propia lista, sin abrir el detalle (pide confirmación y devuelve el dinero igual que desde el detalle).
+  async function quickCancel(id) {
+    let r;
+    try {
+      r = await call("get-customer-order", { query: { orderId: String(id) } });
+    } catch {
+      return toast("Sin conexión con el servidor.", "warn", "Encargos");
+    }
+    if (!r.ok || !r.json?.data) {
+      toast(r.json?.error || "No se pudo abrir el encargo.", "warn", "Encargos");
+      if (list.open) loadList().catch(() => {});
+      return;
+    }
+    detail.order = r.json.data;
+    try {
+      await cancelOrderFlow();
+    } finally {
+      if (!detail.open) detail.order = null;
+    }
+  }
 
   async function cancelOrderFlow() {
     const o0 = detail.order;
@@ -1845,7 +1895,7 @@
           `<div class="sep"></div><div class="r b"><span>${esc(late ? dayLabelLong(String(o.pickupAt).slice(0, 10)) + " " : "")}${esc(String(o.pickupAt).slice(11, 16))} ${esc(o.customerName)}</span><span>${o.pending > 0 ? "Falta " + esc(fmtMoney(o.pending)) : "PAGADO"}</span></div>` +
           (o.customerPhone ? `<div class="s">Tel. ${esc(o.customerPhone)}</div>` : "") +
           `<div class="s">${esc(items)}</div>` +
-          (o.notes ? `<div class="s">Nota: ${esc(o.notes)}</div>` : "")
+          (o.notes ? `<div style="font-size:13px;font-weight:800;border:2px solid #000;padding:2px 4px;margin-top:3px">NOTA: ${esc(o.notes)}</div>` : "")
         );
       })
       .join("");
@@ -1891,6 +1941,12 @@
     });
     $("encListSearch")?.addEventListener("click", () => openQwertyForInput($("encListSearch"), "text"));
     $("encListBody")?.addEventListener("click", (e) => {
+      const x = e.target.closest(".enc-item-x");
+      if (x) {
+        e.stopPropagation();
+        quickCancel(x.dataset.cancelId).catch(() => {});
+        return;
+      }
       const it = e.target.closest(".enc-item");
       if (it) openDetail(it.dataset.id).catch(() => {});
     });
@@ -2708,6 +2764,18 @@
   // Cliente de la factura del encargo = el cliente seleccionado en el carrito (asi se crea). Al editar, el carrito debe
   // llevar ESE cliente (si no, los precios de su tarifa y el cliente del pedido nuevo saldrian del que hubiera puesto
   // antes) y se puede cambiar desde el propio carrito: el pedido nuevo y, al recoger, la factura salen a nombre del elegido.
+  // Nombre y telefono por defecto de un encargo = los del cliente seleccionado en el carrito (si no es el cliente por defecto).
+  function customerContact(cod) {
+    const c = String(cod || "").trim();
+    if (!c || c === String(currentTerminal?.codcliente || "1")) return { name: "", phone: "" };
+    const found = (window.CUSTOMER_SELECTOR?.listCustomers?.() || []).find((x) => String(x.codcliente) === c);
+    if (!found) return { name: "", phone: "" };
+    return {
+      name: String(found.nombre || "").trim(),
+      phone: String(found.telefono1 || found.telefono2 || found.movil || "").trim(),
+    };
+  }
+
   function customerNameForCod(cod) {
     const c = String(cod || "").trim();
     if (!c) return "";
@@ -2937,6 +3005,12 @@
     wiz.time = t || "12:00";
     $("encName").value = edit.customerName;
     $("encPhone").value = edit.customerPhone;
+    if (wiz.codcliente !== String(edit.codcliente)) {
+      // se cambio de cliente: su nombre y telefono pasan al encargo
+      const ct = customerContact(wiz.codcliente);
+      if (ct.name) $("encName").value = ct.name;
+      if (ct.phone) $("encPhone").value = ct.phone;
+    }
     $("encNotes").value = edit.notes;
     $("encDayInput").value = wiz.day === "custom" ? d : "";
     $("encDayInput").classList.toggle("hidden", wiz.day !== "custom");

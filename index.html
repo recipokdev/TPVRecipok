@@ -1358,7 +1358,7 @@
     <!-- Encargos: aviso al abrir la caja (encargos de hoy y vencidos) -->
     <div id="encargosTodayOverlay" class="simple-overlay hidden">
       <div class="simple-dialog enc-today-dialog" role="dialog" aria-modal="true" aria-labelledby="encTodayTitle">
-        <h2 id="encTodayTitle">Encargos por recoger</h2>
+        <h2 id="encTodayTitle">Encargos por entregar hoy</h2>
         <p id="encTodaySub" class="enc-today-sub"></p>
         <div id="encTodayList" class="enc-today-list"></div>
         <div class="dialog-actions">
@@ -1453,11 +1453,17 @@
             <div class="enc-row">
               <label class="enc-field enc-grow">
                 <span>Nombre *</span>
-                <input id="encName" type="text" autocomplete="off" maxlength="160" />
+                <span class="enc-input-wrap">
+                  <input id="encName" type="text" autocomplete="off" maxlength="160" />
+                  <button type="button" class="enc-input-x hidden" data-clear="encName" aria-label="Borrar nombre">✕</button>
+                </span>
               </label>
               <label class="enc-field enc-grow">
                 <span>Teléfono (opcional)</span>
-                <input id="encPhone" type="text" inputmode="tel" autocomplete="off" maxlength="40" />
+                <span class="enc-input-wrap">
+                  <input id="encPhone" type="text" inputmode="tel" autocomplete="off" maxlength="40" />
+                  <button type="button" class="enc-input-x hidden" data-clear="encPhone" aria-label="Borrar teléfono">✕</button>
+                </span>
               </label>
             </div>
 

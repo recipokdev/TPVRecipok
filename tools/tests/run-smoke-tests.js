@@ -11993,6 +11993,17 @@ mustContain(encargosRefundJs, "for (const c of Array.isArray(l.children) ? l.chi
 mustContain(renderer, "const liveDerived = getLiveDerivedPackStock(product, _depth, opts);", "El stock derivado de un pack respeta ignoreEncargos (al recoger no se cuenta contra si mismo)");
 mustContain(renderer, "return getVisibleStockForProduct(parentEntry, depth + 1, opts);", "El padre de un pack derivado recibe tambien ignoreEncargos");
 
+// Encargos: ajustes de uso pedidos por el cliente (4-nov)
+mustContain(encargosRefundJs, "de hoy o vencidos por entregar`", "El aviso de encargos de hoy habla de entregar, no de recoger");
+mustContain(index, '<h2 id="encTodayTitle">Encargos por entregar hoy</h2>', "El titulo del aviso es Encargos por entregar hoy");
+mustContain(encargosRefundJs, '<div class="pick"><div class="l">RECOGE</div>', "El resguardo marca el dia y la hora de recogida en negro invertido");
+mustContain(encargosRefundJs, '<div class="note"><div class="l">NOTA</div>', "El resguardo marca la nota en un recuadro");
+mustContain(encargosRefundJs, "function customerContact(cod) {", "Nombre y telefono del encargo salen del cliente del carrito");
+mustContain(encargosRefundJs, "async function quickCancel(id) {", "Cancelar un encargo desde la lista, sin abrir el detalle");
+mustContain(encargosRefundJs, "function syncClearButtons() {", "Los campos de nombre y telefono tienen boton para vaciarlos");
+mustContain(index, 'data-clear="encPhone"', "El telefono del encargo tiene su boton de vaciar");
+mustContain(styles, "Encima del pie de la tarjeta (no dentro)", "La etiqueta de reservados va fuera del pie de la tarjeta (no tapa el precio)");
+
 if (process.exitCode) {
   console.error("\nSmoke tests failed.");
   process.exit(1);

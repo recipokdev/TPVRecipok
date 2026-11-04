@@ -15005,11 +15005,6 @@ function renderProducts() {
   >
     ${stockText}
   </div>
-  <div
-    class="product-stock-reserved${getEncargosReservedQty(prodId) > 0 ? "" : " hidden"}"
-    data-reserved-product-id="${prodId}"
-    title="Reservado para encargos de hoy (ya descontado del stock)"
-  >${getEncargosReservedQty(prodId) > 0 ? escapeHtml(fmtQty(getEncargosReservedQty(prodId))) + " reservados" : ""}</div>
   ${
     canShowStockEdit
       ? `<button
@@ -15026,6 +15021,15 @@ function renderProducts() {
 
         ${priceHtml}
       </div>
+      ${
+        showProductStockBadge
+          ? `<div
+  class="product-stock-reserved${getEncargosReservedQty(prodId) > 0 ? "" : " hidden"}"
+  data-reserved-product-id="${prodId}"
+  title="Reservado para encargos de hoy (ya descontado del stock)"
+>${getEncargosReservedQty(prodId) > 0 ? escapeHtml(fmtQty(getEncargosReservedQty(prodId))) + " reservados" : ""}</div>`
+          : ""
+      }
     `;
 
     const canEditPrices = isAdminUser() && isPriceEditModeEnabled();
