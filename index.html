@@ -1420,19 +1420,23 @@
           <div id="encDetMoves" class="enc-sum-detail enc-det-moves"></div>
           <div id="encDetTotals" class="enc-det-totals"></div>
         </div>
-        <div class="enc-foot">
-          <div class="enc-foot-row enc-foot-wrap">
-            <button type="button" id="encDetPickupBtn" class="enc-btn enc-btn-green enc-btn-sm">Recoger y cobrar</button>
-            <button type="button" id="encDetEditBtn" class="enc-btn enc-btn-outline enc-btn-sm">Editar encargo</button>
-            <button type="button" id="encDetEditDataBtn" class="enc-btn enc-btn-outline enc-btn-sm">Editar datos</button>
-            <button type="button" id="encDetAdvanceBtn" class="enc-btn enc-btn-blue enc-btn-sm">Cobrar otro anticipo</button>
-            <button type="button" id="encDetReceiptBtn" class="enc-btn enc-btn-outline enc-btn-sm">Imprimir resguardo</button>
-            <button type="button" id="encDetEmailBtn" class="enc-btn enc-btn-outline enc-btn-sm">Enviar resguardo por email</button>
-            <button type="button" id="encDetVoucherBtn" class="enc-btn enc-btn-outline enc-btn-sm">Imprimir justificante</button>
-            <button type="button" id="encDetRefundBtn" class="enc-btn enc-btn-outline enc-btn-sm hidden">Imprimir justificante de devolución</button>
-            <button type="button" id="encDetCloseUnclaimedBtn" class="enc-btn enc-btn-outline enc-btn-sm">Cerrar sin recoger</button>
-            <button type="button" id="encDetCancelBtn" class="enc-btn enc-btn-danger enc-btn-sm">Cancelar encargo</button>
-            <button type="button" id="encDetCloseBtn2" class="enc-btn enc-btn-grey enc-btn-sm">Cerrar</button>
+        <div class="enc-foot enc-det-foot">
+          <div class="enc-act-main">
+            <button type="button" id="encDetPickupBtn" class="enc-act enc-act-green">Recoger y cobrar</button>
+            <button type="button" id="encDetAdvanceBtn" class="enc-act enc-act-blue">Cobrar otro anticipo</button>
+          </div>
+          <div class="enc-act-grid">
+            <button type="button" id="encDetEditBtn" class="enc-act enc-act-soft">✏️ Editar encargo</button>
+            <button type="button" id="encDetEditDataBtn" class="enc-act enc-act-soft">📝 Editar datos</button>
+            <button type="button" id="encDetReceiptBtn" class="enc-act enc-act-soft">🖨 Resguardo</button>
+            <button type="button" id="encDetVoucherBtn" class="enc-act enc-act-soft">🧾 Justificante</button>
+            <button type="button" id="encDetEmailBtn" class="enc-act enc-act-soft">✉️ Enviar por email</button>
+            <button type="button" id="encDetRefundBtn" class="enc-act enc-act-soft hidden">↩ Justificante de devolución</button>
+          </div>
+          <div class="enc-act-end">
+            <button type="button" id="encDetCloseUnclaimedBtn" class="enc-act enc-act-ghost">Cerrar sin recoger</button>
+            <button type="button" id="encDetCancelBtn" class="enc-act enc-act-danger">Cancelar encargo</button>
+            <button type="button" id="encDetCloseBtn2" class="enc-act enc-act-grey">Cerrar</button>
           </div>
         </div>
       </div>

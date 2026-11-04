@@ -12021,6 +12021,12 @@ mustContain(main, "const PRINT_WINDOW_KEEP_MS = 10000;", "La ventana de impresio
 mustContain(main, "}, PRINT_WINDOW_KEEP_MS);", "El cierre de la ventana de impresion va retrasado");
 mustContain(main, "<title>TPV Recipok - ticket</title>", "El trabajo de impresion tiene un titulo corto en vez de la URL entera");
 
+// Tickets de Encargos: nada de relleno negro (la POS-80C paraba, pitaba y sacaba simbolos raros) y lista/detalle rediseñados
+mustContain(encargosRefundJs, ".pick{border:3px solid #000;padding:6px 4px;", "El recuadro de recoger del resguardo es de borde grueso, sin relleno negro");
+mustContain(index, 'class="enc-act enc-act-green"', "El detalle del encargo tiene los botones agrupados con el diseno nuevo");
+mustContain(encargosRefundJs, '<div class="enc-det-when">Recoge ', "El detalle muestra la hora de recogida destacada");
+mustContain(encargosRefundJs, 'class="enc-stat is-due"', "El detalle muestra Total, Cobrado y Falta en tarjetas");
+
 if (process.exitCode) {
   console.error("\nSmoke tests failed.");
   process.exit(1);

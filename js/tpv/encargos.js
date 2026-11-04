@@ -1118,8 +1118,9 @@
       ".c{text-align:center}.b{font-weight:700}.s{font-size:11px}.sep{border-top:1px dashed #000;margin:8px 0}" +
       ".r{display:flex;justify-content:space-between;gap:8px}.r>span:first-child{flex:1;min-width:0;word-break:break-word}.r>span:last-child{white-space:nowrap;text-align:right}" +
       ".big{font-size:15px;font-weight:700}.box{border:2px solid #000;padding:4px 6px;margin:6px 0;text-align:center}" +
-      ".pick{background:#000;color:#fff;padding:6px 4px;margin:8px 0;text-align:center}.pick .l{font-size:12px;font-weight:700;letter-spacing:2px}.pick .v{font-size:19px;font-weight:900;margin-top:2px}" +
-      ".note{border:3px solid #000;padding:5px 6px;margin:8px 0}.note .l{font-size:11px;font-weight:700;letter-spacing:1px}.note .v{font-size:16px;font-weight:800;margin-top:2px;word-break:break-word}" +
+      // Sin relleno negro: en la termica POS-80C un bloque negro grande hacia parar la impresora (pitido y error de Windows).
+      ".pick{border:3px solid #000;padding:6px 4px;margin:8px 0;text-align:center}.pick .l{font-size:12px;font-weight:700;letter-spacing:2px}.pick .v{font-size:20px;font-weight:900;margin-top:2px}" +
+      ".note{border:2px solid #000;padding:5px 6px;margin:8px 0}.note .l{font-size:11px;font-weight:700;letter-spacing:1px}.note .v{font-size:16px;font-weight:800;margin-top:2px;word-break:break-word}" +
       "</style></head><body><div id=\"t\">" +
       innerHtml +
       "</div></body></html>"
@@ -1701,8 +1702,9 @@
         }
         const chip = orderChip(o, today);
         const late = o.status === "pendiente" && key < today;
+        const isToday = o.status === "pendiente" && key === today;
         html +=
-          `<div role="button" tabindex="0" class="enc-item${late ? " is-late" : ""}" data-id="${o.id}">` +
+          `<div role="button" tabindex="0" class="enc-item${late ? " is-late" : ""}${isToday ? " is-today" : ""}" data-id="${o.id}">` +
           `<div class="enc-item-time"><strong>${escapeHtml(String(o.pickupAt).slice(11, 16))}</strong><small>${late ? "vencido" : "recogida"}</small></div>` +
           `<div class="enc-item-main"><strong>${escapeHtml(o.customerName)}</strong><small>${escapeHtml([o.customerPhone, orderSummaryText(o)].filter(Boolean).join(" · "))}</small></div>` +
           `<div class="enc-item-money"><span>Total ${escapeHtml(fmtMoney(o.total))}</span><small>Anticipo ${escapeHtml(fmtMoney(o.collected))}</small></div>` +
@@ -1757,13 +1759,20 @@
     $("encDetTitle").textContent = o.customerName;
     $("encDetChip").textContent = chip.text;
     $("encDetChip").className = `enc-item-chip ${chip.cls}`;
+    const invName = customerNameForCod(o.codcliente);
     $("encDetInfo").innerHTML =
-      `<div><strong>Recoge ${escapeHtml(pickupLabel(o.pickupAt))}</strong>${o.customerPhone ? " · " + escapeHtml(o.customerPhone) : ""}</div>` +
-      `<small>Código ${escapeHtml(o.orderCode)}${o.fsCodigo ? " · Pedido " + escapeHtml(o.fsCodigo) : ""}${o.fsFacturaCodigo ? " · Factura " + escapeHtml(o.fsFacturaCodigo) : ""} · creado por ${escapeHtml(o.createdBy || "—")} el ${escapeHtml(formatDateTimeEs(o.createdAtMs))}</small>` +
-      (customerNameForCod(o.codcliente) && String(o.codcliente) !== String(currentTerminal?.codcliente || "1")
-        ? `<div class="enc-det-note">Factura a nombre de: ${escapeHtml(customerNameForCod(o.codcliente))}</div>`
+      `<div class="enc-det-when">Recoge ${escapeHtml(pickupLabel(o.pickupAt))}</div>` +
+      `<div class="enc-det-meta">` +
+      (o.customerPhone ? `<span class="enc-det-tag">📞 ${escapeHtml(o.customerPhone)}</span>` : "") +
+      (invName && String(o.codcliente) !== String(currentTerminal?.codcliente || "1")
+        ? `<span class="enc-det-tag is-invoice">Factura a nombre de: ${escapeHtml(invName)}</span>`
         : "") +
-      (o.notes ? `<div class="enc-det-note">Nota: ${escapeHtml(o.notes)}</div>` : "");
+      `<span class="enc-det-tag">Código ${escapeHtml(o.orderCode)}</span>` +
+      (o.fsCodigo ? `<span class="enc-det-tag">Pedido ${escapeHtml(o.fsCodigo)}</span>` : "") +
+      (o.fsFacturaCodigo ? `<span class="enc-det-tag">Factura ${escapeHtml(o.fsFacturaCodigo)}</span>` : "") +
+      `<span class="enc-det-tag">Creado por ${escapeHtml(o.createdBy || "—")} · ${escapeHtml(formatDateTimeEs(o.createdAtMs))}</span>` +
+      `</div>` +
+      (o.notes ? `<div class="enc-det-notecard"><b>Nota</b><span>${escapeHtml(o.notes)}</span></div>` : "");
     $("encDetLines").innerHTML = (Array.isArray(o.lines) ? o.lines : [])
       .map((l) => `<div class="enc-detail-row"><span>${escapeHtml(fmtQty(l.qty))} × ${escapeHtml(l.name)}</span><span>${escapeHtml(fmtMoney(l.total))}</span></div>`)
       .join("");
@@ -1776,9 +1785,9 @@
       .join("");
     $("encDetMoves").innerHTML = moves || `<div class="enc-detail-row"><span>Sin anticipo cobrado</span><span></span></div>`;
     $("encDetTotals").innerHTML =
-      `<div class="enc-tot"><span>Total</span><strong>${escapeHtml(fmtMoney(o.total))}</strong></div>` +
-      `<div class="enc-tot"><span>Cobrado a cuenta</span><strong>${escapeHtml(fmtMoney(o.collected))}</strong></div>` +
-      (o.status === "pendiente" ? `<div class="enc-tot is-due"><span>Falta por cobrar</span><strong>${escapeHtml(fmtMoney(o.pending))}</strong></div>` : "");
+      `<div class="enc-stat"><small>Total</small><strong>${escapeHtml(fmtMoney(o.total))}</strong></div>` +
+      `<div class="enc-stat"><small>Cobrado a cuenta</small><strong>${escapeHtml(fmtMoney(o.collected))}</strong></div>` +
+      (o.status === "pendiente" ? `<div class="enc-stat is-due"><small>Falta por cobrar</small><strong>${escapeHtml(fmtMoney(o.pending))}</strong></div>` : "");
     const pend = o.status === "pendiente";
     $("encDetAdvanceBtn").classList.toggle("hidden", !(pend && o.pending > 0));
     $("encDetPickupBtn").classList.toggle("hidden", !pend);
