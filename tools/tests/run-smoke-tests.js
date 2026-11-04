@@ -12016,6 +12016,11 @@ mustContain(index, 'class="enc-res-icon"', "El cuadro de resultado del encargo t
 mustContain(main, "const PRINT_GAP_MS = 2500;", "Los tickets se mandan a la impresora de uno en uno con una pausa");
 mustContain(main, "async function printTicketHtmlNow(html, deviceName) {", "El envio real a la impresora queda detras de la cola");
 
+// Impresion fisica: la ventana oculta no se cierra nada mas recibir el callback y el trabajo lleva un titulo corto
+mustContain(main, "const PRINT_WINDOW_KEEP_MS = 10000;", "La ventana de impresion se deja viva unos segundos tras el callback");
+mustContain(main, "}, PRINT_WINDOW_KEEP_MS);", "El cierre de la ventana de impresion va retrasado");
+mustContain(main, "<title>TPV Recipok - ticket</title>", "El trabajo de impresion tiene un titulo corto en vez de la URL entera");
+
 if (process.exitCode) {
   console.error("\nSmoke tests failed.");
   process.exit(1);

@@ -2386,7 +2386,10 @@ async function createHiddenPrintWindow(html) {
     },
   });
 
-  const dataUrl = "data:text/html;charset=utf-8," + encodeURIComponent(html);
+  // Sin <title>, Windows pone de nombre del trabajo la URL entera (el HTML codificado, miles de caracteres), y si falla
+  // el aviso de Windows enseña ese churro. Con un titulo corto el nombre del trabajo es legible.
+  const titled = /<title[\s>]/i.test(html) ? html : String(html).replace(/<head([^>]*)>/i, "<head$1><title>TPV Recipok - ticket</title>");
+  const dataUrl = "data:text/html;charset=utf-8," + encodeURIComponent(titled);
   await win.loadURL(dataUrl);
 
   // Espera a que las imagenes (p.ej. el logo de la empresa) terminen de
@@ -2452,6 +2455,7 @@ ipcMain.handle("printers:list", async () => {
 // justificante de un encargo, ticket y comanda...) una termica USB (POS-80C) se cortaba a mitad del primero y sacaba
 // simbolos raros en los dos, mientras que desde la vista previa (un trabajo cada vez) salia bien.
 const PRINT_GAP_MS = 2500;
+const PRINT_WINDOW_KEEP_MS = 10000;
 let printChain = Promise.resolve();
 let lastPrintDoneAt = 0;
 
@@ -2495,10 +2499,15 @@ async function printTicketHtmlNow(html, deviceName) {
     } catch (e) {
       return { ok: false, error: e?.message || String(e) };
     } finally {
+      // El callback de print() avisa de que el trabajo llego al spooler, pero la ventana sigue alimentando a la
+      // impresora: cerrarla de golpe cortaba el ticket a mitad (la termica paraba, pitaba y Windows lo reintentaba
+      // con un aviso de error). Se deja viva unos segundos antes de cerrarla.
       if (win) {
-        try {
-          win.close();
-        } catch (_) {}
+        setTimeout(() => {
+          try {
+            win.close();
+          } catch (_) {}
+        }, PRINT_WINDOW_KEEP_MS);
       }
     }
   }
