@@ -11961,6 +11961,14 @@ mustContain(renderer, '"catalog-empty-response"', "Un catalogo vacio devuelto po
 mustContain(renderer, "emptyErr.emptyCatalog = true;", "Un catalogo vacio no sustituye al que ya habia");
 mustContain(renderer, "El servidor devolvió el catálogo vacío: se usan los datos guardados.", "El cajero ve un aviso claro si el servidor devuelve el catalogo vacio");
 
+// Reanudacion tras suspension (Los Argentinos: TPV abierto de un dia para otro)
+mustContain(main, 'mainWin.webContents.send("power:resumed");', "El proceso principal avisa a la pantalla cuando el equipo vuelve de la suspension");
+mustContain(preload, 'onPowerResume: (cb) => ipcRenderer.on("power:resumed", () => cb()),', "El preload expone el aviso de reanudacion");
+mustContain(renderer, "async function handlePowerResume(opts = {}) {", "La pantalla recarga el catalogo al reanudar el equipo");
+mustContain(renderer, "window.TPV_UI?.onPowerResume?.(() => {", "La pantalla escucha el aviso de reanudacion");
+mustContain(renderer, "if (resumeHasWorkInProgress() || Date.now() - last < RESUME_RELOAD_GAP_MS) return \"empty-no-reload\";", "La recarga de ventana tras reanudar nunca se hace con trabajo a medias ni en bucle");
+mustContain(renderer, '"resume-empty-catalog"', "Sin articulos tras reanudar queda registrado en el servidor");
+
 if (process.exitCode) {
   console.error("\nSmoke tests failed.");
   process.exit(1);

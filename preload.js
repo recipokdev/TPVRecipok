@@ -89,6 +89,7 @@ contextBridge.exposeInMainWorld("TPV_UI", {
   onGuard: (cb) => ipcRenderer.on("tpv:guard", (_e, payload) => cb(payload)),
   onCustomerForceClosed: (cb) =>
     ipcRenderer.on("customer:forceClosed", () => cb()),
+  onPowerResume: (cb) => ipcRenderer.on("power:resumed", () => cb()),
 });
 
 contextBridge.exposeInMainWorld("TPV_UI_MODE", {
