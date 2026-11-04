@@ -874,7 +874,7 @@ mustContain(
 );
 mustContain(
   renderer,
-  "const shouldShow = (!needsAdmin || isAdmin) && (!needsMesas || mesasEnabled);",
+  "(!needsAdmin || isAdmin) && (!needsMesas || mesasEnabled) && !el.hasAttribute(\"data-feature-off\")",
   "Combined admin/mesas visibility check present",
 );
 
@@ -11575,6 +11575,27 @@ if (
     encargosJs.includes("cfgSet(CFG_NOVELTY_SEEN_KEY, true);");
   if (okHtml && okCss && okRenderer && okJs) ok("Encargos 2a: opcion apagada por defecto (admin), botones ocultos hasta activarla, botonera en 6 columnas solo con encargos-on, aviso de novedad una vez y solo a un administrador");
   else fail("Encargos 2a: html=" + okHtml + ", css=" + okCss + ", renderer=" + okRenderer + ", js=" + okJs);
+}
+
+// Encargos solo para clientes concretos (2026-11-04): un cliente al que el servidor no se lo ha dado no ve nada tras
+// actualizar (ni popup de novedad, ni seccion en Opciones, ni texto en el changelog).
+{
+  const encargosJs = fs.readFileSync(path.join(__dirname, "..", "..", "js", "tpv", "encargos.js"), "utf8");
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "..", "renderer.js"), "utf8");
+  const indexHtml = fs.readFileSync(path.join(__dirname, "..", "..", "index.html"), "utf8");
+  const changelogRaw = fs.readFileSync(path.join(__dirname, "..", "..", "changelog.json"), "utf8");
+  const okSec = /data-sec="encargos" data-admin-only data-feature-off style="display: none"/.test(indexHtml);
+  const okAdmin = renderer.includes('!el.hasAttribute("data-feature-off")');
+  const okOpen = renderer.includes("window.TPV_ENCARGOS?.ensureAvailability?.().catch(() => {});");
+  const okJs =
+    encargosJs.includes("async function ensureAvailability()") &&
+    encargosJs.includes('if (!window.TPV_STATE?.isAdmin) return false;') &&
+    encargosJs.includes("const show = state.serverAvailable === true || state.enabled;") &&
+    encargosJs.includes("return (await ensureAvailability()) === true;") &&
+    encargosJs.includes("    applyAvailabilityUI();\n    refreshPassButton();".replace(/\n/g, encargosJs.includes("\r\n") ? "\r\n" : "\n"));
+  const okChangelog = !/encargo/i.test(changelogRaw);
+  if (okSec && okAdmin && okOpen && okJs && okChangelog) ok("Encargos solo para clientes concretos: seccion de Opciones oculta y aviso de novedad solo si el servidor lo da a la empresa; nada en el changelog");
+  else fail("Encargos clientes concretos: seccion=" + okSec + ", admin=" + okAdmin + ", open=" + okOpen + ", js=" + okJs + ", changelog=" + okChangelog);
 }
 
 // Encargos, parte 2b (2026-11-03): asistente «Nuevo encargo» de dos paginas con un solo guardado. El pedido de

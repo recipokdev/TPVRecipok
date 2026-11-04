@@ -74,6 +74,43 @@
     return !!state.enabled;
   }
 
+  // Encargos solo se ofrece (seccion de Opciones, aviso de novedad) a las empresas a las que el servidor se lo ha
+  // dado (customer_orders_pilot_slugs). Lo comprueba un administrador con una lectura barata, como mucho cada 6 h;
+  // el resto de usuarios no hace ninguna llamada. Sin confirmacion del servidor (o sin red) no se enseña nada.
+  const AVAIL_TTL_MS = 6 * 60 * 60 * 1000;
+  const AVAIL_RETRY_MS = 2 * 60 * 1000;
+  let availCheckedAt = 0;
+  let availInFlight = null;
+
+  function applyAvailabilityUI() {
+    const sec = document.querySelector('#optionsAccordion .opt-sec[data-sec="encargos"]');
+    if (!sec) return;
+    const show = state.serverAvailable === true || state.enabled;
+    sec.toggleAttribute("data-feature-off", !show);
+    sec.style.display = show && window.TPV_STATE?.isAdmin ? "" : "none";
+    if (typeof syncOptionsGroupTitles === "function") syncOptionsGroupTitles();
+  }
+
+  async function ensureAvailability() {
+    if (!window.TPV_STATE?.isAdmin) return false;
+    const wait = state.serverAvailable === null ? AVAIL_RETRY_MS : AVAIL_TTL_MS;
+    if (availCheckedAt && Date.now() - availCheckedAt < wait) return state.serverAvailable === true;
+    if (availInFlight) return availInFlight;
+    availInFlight = (async () => {
+      try {
+        await call("list-customer-orders", { query: { status: "pendiente", limit: "1" } });
+      } catch {
+        // sin red o sin empresa: se vuelve a intentar pronto
+      }
+      availCheckedAt = Date.now();
+      applyAvailabilityUI();
+      return state.serverAvailable === true;
+    })().finally(() => {
+      availInFlight = null;
+    });
+    return availInFlight;
+  }
+
   async function loadEnabled() {
     const v = await cfgGet(CFG_ENABLED_KEY);
     state.enabled = v !== undefined && v !== null && v !== "" ? parseBoolLike(v, false) : false;
@@ -90,6 +127,7 @@
     $("passToEncargoBtn")?.classList.toggle("hidden", !on);
     $("cartActionGrid")?.classList.toggle("encargos-on", on);
     if (!on) setBadge(0, false);
+    applyAvailabilityUI();
     refreshPassButton();
   }
 
@@ -346,7 +384,9 @@
     if (isEnabled()) return false;
     if (document.body.classList.contains("modal-locked")) return false;
     if (document.querySelector(".simple-overlay:not(.hidden), .critical-overlay:not(.hidden)")) return false;
-    return !!getCurrentSlugForReservations();
+    if (!getCurrentSlugForReservations()) return false;
+    // Solo a las empresas a las que el servidor les ha dado Encargos: al resto no les sale nada.
+    return (await ensureAvailability()) === true;
   }
 
   function showNovelty() {
@@ -3343,6 +3383,8 @@
     loadEnabled,
     applyUI,
     bindToggleOnce,
+    ensureAvailability,
+    applyAvailabilityUI,
     refreshCount,
     refreshPassButton,
     scheduleNovelty,

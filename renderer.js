@@ -13989,7 +13989,9 @@ function applyAdminOnlyUI() {
   els.forEach((el) => {
     const needsAdmin = el.hasAttribute("data-admin-only");
     const needsMesas = el.hasAttribute("data-mesas-only");
-    const shouldShow = (!needsAdmin || isAdmin) && (!needsMesas || mesasEnabled);
+    // data-feature-off: seccion de una funcion que el servidor aun no ha dado a esta empresa (Encargos).
+    const shouldShow =
+      (!needsAdmin || isAdmin) && (!needsMesas || mesasEnabled) && !el.hasAttribute("data-feature-off");
     el.style.display = shouldShow ? "" : "none";
   });
 
@@ -33949,6 +33951,8 @@ async function openOptions() {
   // terminaban, asi que si el servidor iba lento, "Opciones" parecia
   // tardar varios segundos en reaccionar aunque no hubiera ningun fallo.
   optionsOverlay?.classList.remove("hidden");
+  // La seccion Encargos solo aparece si el servidor se la ha dado a esta empresa (se comprueba en segundo plano).
+  window.TPV_ENCARGOS?.ensureAvailability?.().catch(() => {});
 
   const optionsLoadingBanner = document.getElementById(
     "optionsLoadingBanner",
