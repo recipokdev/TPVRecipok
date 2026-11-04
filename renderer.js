@@ -61798,6 +61798,77 @@ async function checkFSOnline() {
   }
 }
 
+// Al volver el equipo de la suspension (un TPV que se deja abierto de un dia para otro) el catalogo en pantalla es el
+// de ayer y la red tarda en volver. El monitor de conexion solo recarga si detecta un corte; si la red vuelve antes de
+// su siguiente comprobacion, se quedaba con los datos viejos (o sin articulos, si algo fallo justo al despertar).
+// Aqui se espera a que haya conexion y se recarga el catalogo; si sigue sin articulos y no hay nada a medias en
+// pantalla, se recarga la ventana (como mucho una vez cada 30 minutos).
+const RESUME_STALE_MS = 5 * 60 * 1000;
+const RESUME_RELOAD_GAP_MS = 30 * 60 * 1000;
+const RESUME_RELOAD_KEY = "tpv_resume_reload_at";
+let __resumeRefreshBusy = false;
+
+function resumeHasWorkInProgress() {
+  const payOpen = typeof payOverlay !== "undefined" && payOverlay && !payOverlay.classList.contains("hidden");
+  return (
+    !!isPayingNow ||
+    payOpen ||
+    (Array.isArray(cart) && cart.length > 0) ||
+    !!MESAS_INLINE_ACTIVE ||
+    !!window.TPV_ENCARGOS?.isEditing?.()
+  );
+}
+
+async function handlePowerResume(opts = {}) {
+  if (__resumeRefreshBusy) return "busy";
+  __resumeRefreshBusy = true;
+  try {
+    await sleep(opts.settleMs ?? 8000);
+    const cfg = window.RECIPOK_API || {};
+    if (!cfg.baseUrl || !cfg.apiKey) return "no-config";
+    if (BOOT_IN_FLIGHT || isPayingNow) return "busy-app";
+
+    const emptyCatalog = !Array.isArray(products) || products.length === 0;
+    const stale = Date.now() - Number(LAST_FULL_LOAD_AT || 0) > RESUME_STALE_MS;
+    if (!emptyCatalog && !stale) return "fresh";
+
+    let online = false;
+    for (let i = 1; i <= 6 && !online; i++) {
+      online = (await checkFSOnline().catch(() => false)) === true;
+      if (!online) await sleep((opts.retryMs ?? 5000) * Math.min(i, 3));
+    }
+    if (!online) {
+      reportClientEvent("boot", "resume-no-connection", "Sin conexion tras reanudar el equipo", { emptyCatalog }, "warn");
+      return "offline";
+    }
+
+    await loadDataFromApi({ refresh: true, silentRetry: true });
+
+    if (Array.isArray(products) && products.length > 0) return "refreshed";
+
+    reportClientEvent("boot", "resume-empty-catalog", "Sin articulos tras reanudar el equipo", { hadWork: resumeHasWorkInProgress() }, "error");
+    let last = 0;
+    try {
+      last = Number(localStorage.getItem(RESUME_RELOAD_KEY) || 0);
+    } catch {}
+    if (resumeHasWorkInProgress() || Date.now() - last < RESUME_RELOAD_GAP_MS) return "empty-no-reload";
+    try {
+      localStorage.setItem(RESUME_RELOAD_KEY, String(Date.now()));
+    } catch {}
+    if (!opts.dryRun) window.location.reload();
+    return "reloaded";
+  } catch (e) {
+    console.warn("handlePowerResume:", e?.message || e);
+    return "error";
+  } finally {
+    __resumeRefreshBusy = false;
+  }
+}
+window.TPV_UI?.onPowerResume?.(() => {
+  handlePowerResume().catch(() => {});
+});
+window.__handlePowerResume = handlePowerResume;
+
 let isOnlineFS = null; // 👈 para forzar primera actualización
 
 async function startOnlineMonitor() {

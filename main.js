@@ -562,6 +562,9 @@ function installPowerWatch() {
     powerMonitor.on("resume", () => {
       const sleptMin = suspendedAt ? Math.round((Date.now() - suspendedAt) / 60000) : null;
       logUpdater("equipo: reanudado tras", sleptMin == null ? "?" : sleptMin, "min");
+      try {
+        if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send("power:resumed");
+      } catch (_) {}
       setTimeout(() => logUpdateEventRemote("power-resume", { sleptMin }), 20000);
     });
   } catch (_) {}
