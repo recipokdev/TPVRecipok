@@ -123,7 +123,7 @@ Detalles que se han decidido sobre la marcha (a confirmar):
 - **Por qué no se descuenta el stock real a primera hora:** sería un ajuste inventado que luego la factura volvería a descontar (doble descuento), habría que deshacerlo al cancelar o cerrar sin recoger, y en los clientes con WooCommerce cada cambio de stock dispara avisos a su web.
 - **Avisar, no bloquear:** al vender en mostrador un producto sin disponible por reservas, aviso con «Vender igualmente». Solo productos con stock controlado. La tarjeta del producto muestra «N reservados» solo si «Mostrar stock en productos» está activo.
 - **Sin stock físico al recoger:** FacturaScripts permite el stock negativo solo en los productos con «venta sin stock». Al recoger se reutiliza el aviso «Sin stock suficiente» con «Cobrar sin stock» que ya existe al cobrar, para que la factura no sea rechazada.
-- **Datos necesarios:** guardar en cada línea del encargo el producto (`idproducto`/referencia), no solo el nombre y el precio. Primera versión: productos simples y variantes; los packs, después.
+- **Datos necesarios:** guardar en cada línea del encargo el producto (`idproducto`/referencia), no solo el nombre y el precio. Primera versión: productos simples y variantes. **Packs (4-nov, implementado):** la reserva incluye al propio pack y a sus componentes elegidos; el servidor, en `withLines=slim`, devuelve de cada línea `children: [{ref, qty}]` (sacado de la copia `cartChildren` guardada con el encargo) y el TPV traduce cada referencia a producto. En los packs con stock derivado, el parent reservado ya baja el stock visible del pack.
 - **Orden de trabajo:** después de «Recoger y cobrar» y del cierre de caja (tamaño M, ~1 día con pruebas).
 
 ## 4. Qué guarda cada sitio

@@ -8011,12 +8011,12 @@ console.log(
 
 mustContain(
   renderer,
-  "function getLiveDerivedPackStock(product, depth) {",
+  "function getLiveDerivedPackStock(product, depth, opts = null) {",
   "New getLiveDerivedPackStock computes the fraction product's stock from the parent's LIVE visible stock (reservations already subtracted), by recursively calling getVisibleStockForProduct on the parent -- it inherits whatever mechanism already makes a normal product's own badge instant, instead of duplicating that logic",
 );
 mustContain(
   renderer,
-  "  const liveDerived = getLiveDerivedPackStock(product, _depth);\r\n  if (liveDerived !== null) return liveDerived;",
+  "  const liveDerived = getLiveDerivedPackStock(product, _depth, opts);\r\n  if (liveDerived !== null) return liveDerived;",
   "getVisibleStockForProduct (the single function every stock badge, cart tile, and the sale-blocking stock check already go through) now short-circuits to the live derived value for a fraction product before falling back to its own frozen stockfis -- every existing call site benefits with no changes needed at the call sites themselves",
 );
 mustContain(
@@ -11981,6 +11981,17 @@ mustContain(encargosRefundJs, "JUSTIFICANTE DE DEVOLUCIÓN", "El justificante de
 mustContain(encargosRefundJs, "if (refunds.length && isAutoPrintEnabled()) printRefundVoucher(order, refunds).catch(() => {});", "Cancelar un encargo con devolucion imprime el justificante (con impresion automatica)");
 mustContain(encargosRefundJs, '$("encDetRefundBtn")?.addEventListener("click", () => detail.order && printRefundVoucher(detail.order));', "El detalle permite reimprimir el justificante de devolucion");
 mustContain(index, 'id="encDetRefundBtn"', "El detalle del encargo tiene el boton de justificante de devolucion");
+
+// Encargos: cambiar el cliente de la factura al editar, y packs que reservan stock
+mustContain(encargosRefundJs, "function selectCustomerForEdit(cod) {", "Al editar un encargo el carrito lleva el cliente del encargo");
+mustContain(encargosRefundJs, "selectCustomerForEdit(fresh.codcliente);", "Empezar a editar pone el cliente del encargo en el carrito");
+mustContain(encargosRefundJs, "selectCustomerForEdit(edit.codcliente);", "Recuperar una edicion tras reiniciar tambien pone el cliente del encargo");
+mustContain(encargosRefundJs, "wiz.codcliente = String(window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() || edit.codcliente || \"1\");", "Guardar la edicion usa el cliente que haya en el carrito");
+mustContain(encargosRefundJs, "codcliente: wiz.codcliente,", "El pedido nuevo y el servidor reciben el cliente elegido al editar");
+mustContain(encargosRefundJs, "Factura a nombre de:", "El detalle del encargo dice a nombre de quien sale la factura");
+mustContain(encargosRefundJs, "for (const c of Array.isArray(l.children) ? l.children : []) {", "Los componentes de un pack reservan stock en los encargos");
+mustContain(renderer, "const liveDerived = getLiveDerivedPackStock(product, _depth, opts);", "El stock derivado de un pack respeta ignoreEncargos (al recoger no se cuenta contra si mismo)");
+mustContain(renderer, "return getVisibleStockForProduct(parentEntry, depth + 1, opts);", "El padre de un pack derivado recibe tambien ignoreEncargos");
 
 if (process.exitCode) {
   console.error("\nSmoke tests failed.");

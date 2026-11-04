@@ -260,8 +260,8 @@
   // Encargos de hoy y vencidos que faltan por recoger; en rojo si hay alguno vencido.
   // Reserva virtual de stock (decisión del jefe, 3-nov): lo de los encargos pendientes con recogida de hoy o anterior
   // se resta del stock que ve el TPV (tarjeta y aviso al vender) sin tocar el stock real de FacturaScripts. Empieza a
-  // las 00:00 del día de la recogida y se libera sola cuando el encargo deja de estar pendiente. Productos simples y
-  // variantes por ahora (los packs, después).
+  // las 00:00 del día de la recogida y se libera sola cuando el encargo deja de estar pendiente. Un pack reserva igual
+  // que en el carrito: su propia unidad y cada componente elegido (por referencia, con la cantidad ya multiplicada).
   const reserved = { map: new Map(), day: "" };
 
   function getReservedQty(idproducto) {
@@ -276,6 +276,11 @@
         const id = Number(l.idproducto) || 0;
         const q = Number(l.qty) || 0;
         if (id > 0 && q > 0) next.set(id, (next.get(id) || 0) + q);
+        for (const c of Array.isArray(l.children) ? l.children : []) {
+          const cq = Number(c.qty) || 0;
+          const cid = cq > 0 ? Number(resolveProductIdByReferenceSync(String(c.ref || ""))) || 0 : 0;
+          if (cid > 0) next.set(cid, round2((next.get(cid) || 0) + cq));
+        }
       }
     }
     reserved.map = next;
@@ -1688,6 +1693,9 @@
     $("encDetInfo").innerHTML =
       `<div><strong>Recoge ${escapeHtml(pickupLabel(o.pickupAt))}</strong>${o.customerPhone ? " · " + escapeHtml(o.customerPhone) : ""}</div>` +
       `<small>Código ${escapeHtml(o.orderCode)}${o.fsCodigo ? " · Pedido " + escapeHtml(o.fsCodigo) : ""}${o.fsFacturaCodigo ? " · Factura " + escapeHtml(o.fsFacturaCodigo) : ""} · creado por ${escapeHtml(o.createdBy || "—")} el ${escapeHtml(formatDateTimeEs(o.createdAtMs))}</small>` +
+      (customerNameForCod(o.codcliente) && String(o.codcliente) !== String(currentTerminal?.codcliente || "1")
+        ? `<div class="enc-det-note">Factura a nombre de: ${escapeHtml(customerNameForCod(o.codcliente))}</div>`
+        : "") +
       (o.notes ? `<div class="enc-det-note">Nota: ${escapeHtml(o.notes)}</div>` : "");
     $("encDetLines").innerHTML = (Array.isArray(o.lines) ? o.lines : [])
       .map((l) => `<div class="enc-detail-row"><span>${escapeHtml(fmtQty(l.qty))} × ${escapeHtml(l.name)}</span><span>${escapeHtml(fmtMoney(l.total))}</span></div>`)
@@ -2697,6 +2705,33 @@
   }
   const MESAS_EDIT_MSG = "Sal del Modo Mesas (✕ arriba a la derecha) y vuelve a pulsar «Editar encargo»: los encargos se editan en el TPV normal.";
 
+  // Cliente de la factura del encargo = el cliente seleccionado en el carrito (asi se crea). Al editar, el carrito debe
+  // llevar ESE cliente (si no, los precios de su tarifa y el cliente del pedido nuevo saldrian del que hubiera puesto
+  // antes) y se puede cambiar desde el propio carrito: el pedido nuevo y, al recoger, la factura salen a nombre del elegido.
+  function customerNameForCod(cod) {
+    const c = String(cod || "").trim();
+    if (!c) return "";
+    const list = window.CUSTOMER_SELECTOR?.listCustomers?.() || [];
+    const found = list.find((x) => String(x.codcliente) === c);
+    return found ? String(found.nombre || "").trim() : "";
+  }
+
+  function selectCustomerForEdit(cod) {
+    const CS = window.CUSTOMER_SELECTOR;
+    const c = String(cod || "").trim();
+    if (!CS || !c) return;
+    try {
+      if (String(CS.getSelectedCustomerCodcliente?.() || "") === c) return;
+      const list = CS.listCustomers?.() || [];
+      const found = list.find((x) => String(x.codcliente) === c);
+      if (found) CS.setSelected(found);
+      else if (c === String(currentTerminal?.codcliente || "1")) CS.resetToDefault();
+      else CS.setSelected({ codcliente: c, nombre: "" });
+    } catch (e) {
+      console.warn("[ENCARGOS] no se pudo poner el cliente del encargo en el carrito:", e?.message || e);
+    }
+  }
+
   function buildCartFromOrder(order) {
     const out = [];
     for (const l of Array.isArray(order.lines) ? order.lines : []) {
@@ -2791,6 +2826,7 @@
     pushCartHistoryStep("encargo-edit-load");
     cart = built;
     setCurrentParkedTicketIndex(null);
+    selectCustomerForEdit(fresh.codcliente);
     renderCart();
     Object.assign(edit, {
       active: true,
@@ -2842,6 +2878,7 @@
     if (!pr || edit.active) return;
     if (hasVisibleCartLines()) {
       Object.assign(edit, pr, { active: true, pendingRestore: null });
+      selectCustomerForEdit(edit.codcliente);
       applyEditUI();
     } else if (Date.now() - Number(edit.restoreAt || 0) > 20000) {
       edit.pendingRestore = null;
@@ -2878,8 +2915,11 @@
     wiz.mode = "edit";
     wiz.order = null;
     wiz.collected = edit.collected;
-    wiz.codcliente = edit.codcliente;
-    wiz.customerName = "El mismo del encargo";
+    wiz.codcliente = String(window.CUSTOMER_SELECTOR?.getSelectedCustomerCodcliente?.() || edit.codcliente || "1");
+    {
+      const nm = customerNameForCod(wiz.codcliente) || (wiz.codcliente === String(currentTerminal?.codcliente || "1") ? "Cliente por defecto" : "Cliente " + wiz.codcliente);
+      wiz.customerName = wiz.codcliente === String(edit.codcliente) ? nm : nm + " (cambiado)";
+    }
     wiz.orderCode = "";
     wiz.editNumero2 = "";
     wiz.fsDoc = null;
@@ -2933,7 +2973,7 @@
       if (!wiz.fsDoc) {
         wiz.fsDoc = await createFsPedido({
           numero2: wiz.editNumero2,
-          codcliente: edit.codcliente,
+          codcliente: wiz.codcliente,
           codalmacen: String(currentTerminal?.codalmacen || "").trim(),
           observaciones: `ENCARGO ${edit.orderCode} · ${name}${phone ? " · " + phone : ""}\nRecogida: ${pickupLabel(pickupAt)}${notes ? "\nNota: " + notes : ""}\n(encargo editado)`,
           lineas: buildFsLinesFromCart(wiz.snapshot),
@@ -2953,6 +2993,7 @@
           customerPhone: phone,
           notes,
           pickupAt,
+          codcliente: wiz.codcliente,
           total: fsTotal,
           lines: wizLinesForSave(),
           fsIdpedido: wiz.fsDoc.idpedido,

@@ -43377,7 +43377,7 @@ function getVisibleStockForProduct(productOrId, _depth = 0, opts = null) {
 
   if (!product) return null;
 
-  const liveDerived = getLiveDerivedPackStock(product, _depth);
+  const liveDerived = getLiveDerivedPackStock(product, _depth, opts);
   if (liveDerived !== null) return liveDerived;
 
   const realStock = parseManagedStockValue(product.stockfis);
@@ -57381,7 +57381,7 @@ function applyDerivedPackStockOverrides(productsArray) {
 // ya tiene cualquier producto normal al tocar el carrito, sin esperar al
 // ciclo de 10s. `depth` es solo una guarda anti-recursion (un padre nunca
 // deberia ser el a su vez otro producto-pack derivado).
-function getLiveDerivedPackStock(product, depth) {
+function getLiveDerivedPackStock(product, depth, opts = null) {
   if (depth > 3) return null;
   if (product?.isDerivedPackStock !== true) return null;
 
@@ -57389,7 +57389,7 @@ function getLiveDerivedPackStock(product, depth) {
     const parentId = resolveProductIdByReferenceSync(parentRef);
     const parentEntry = parentId ? findProductByBaseId(parentId) : null;
     if (!parentEntry) return null;
-    return getVisibleStockForProduct(parentEntry, depth + 1);
+    return getVisibleStockForProduct(parentEntry, depth + 1, opts);
   });
 }
 

@@ -61,9 +61,9 @@ Si alguien más está recogiendo ese mismo encargo en otro terminal, el TPV avis
 ## 6. Editar un encargo
 
 1. Abre el encargo y pulsa **Editar encargo**. Los productos pasan al **carrito**, con una franja violeta **«Editando el encargo de…»** y los botones **Guardar cambios** y **Descartar**. Mientras editas, **Cobrar y Aparcar están bloqueados**. Para editar, el carrito debe estar vacío y hay que estar en el **TPV normal** (no en la vista del Modo Mesas, donde el carrito es el de la mesa).
-2. Cambia lo que haga falta: añade o quita productos, cambia cantidades…
+2. Cambia lo que haga falta: añade o quita productos, cambia cantidades… También puedes **cambiar el cliente** desde el propio carrito (el selector de cliente de siempre): al empezar a editar, el carrito lleva el cliente del encargo, y el que haya al guardar es el que se queda. Los precios siguen la tarifa de ese cliente.
 3. Pulsa **Guardar cambios**. Revisa el día, la hora, el nombre, el teléfono y la nota, y pulsa **Guardar cambios** otra vez.
-4. El TPV imprime un **nuevo resguardo marcado «MODIFICADO»**, que anula el anterior.
+4. El TPV imprime un **nuevo resguardo marcado «MODIFICADO»**, que anula el anterior. Si cambiaste el cliente, el asistente lo indica con **«(cambiado)»** y la **factura saldrá a nombre del nuevo cliente** al recoger el pedido. En el detalle del encargo se ve siempre **«Factura a nombre de»** (cuando no es el cliente por defecto).
 
 Reglas:
 - **No se puede dejar el total por debajo de lo ya cobrado a cuenta.** Si el cliente quiere menos, **cancela el encargo** (se le devuelve el dinero) y crea otro.
@@ -89,7 +89,7 @@ Un encargo **no descuenta stock** al crearlo; el stock real baja al facturar, co
 - Si «**Mostrar stock**» está activado (Opciones → Productos), la tarjeta del producto enseña el stock disponible y un pequeño **«N reservados»**.
 - Si vendes en mostrador más de lo disponible, el TPV **avisa pero no bloquea** (aparece el aviso «Sin stock suficiente» con la opción de cobrar igualmente).
 - La reserva se libera sola cuando el encargo se recoge, se cancela o se cierra sin recoger.
-- Por ahora, los productos compuestos (packs) no reservan.
+- **Los packs reservan igual que en una venta:** el propio pack y cada uno de sus componentes (con la cantidad ya multiplicada). Por ejemplo, 4 «Medio pollo» reservan 2 «Pollo entero». En los packs con stock derivado, el stock que se ve baja a la vez que el del producto del que salen.
 
 ## 10. Cierre de caja
 
