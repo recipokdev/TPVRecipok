@@ -12160,6 +12160,51 @@ body.theme-dark .email-config-qrtext code {
   font-size: 25px;
   letter-spacing: -0.5px;
 }
+.enc-item-main small {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+.enc-item-lines {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+.enc-item-line {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #eef2f7;
+  color: #1e293b;
+  font-size: 13px;
+  font-weight: 600;
+}
+.enc-item-note {
+  margin-top: 6px;
+  padding: 5px 10px;
+  border-radius: 10px;
+  background: #fefce8;
+  border: 1px solid #fde68a;
+  color: #713f12;
+  font-size: 13px;
+  font-weight: 600;
+}
+.enc-item-note b {
+  margin-right: 4px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.enc-item {
+  align-items: start;
+}
+.enc-item-time,
+.enc-item-money,
+.enc-item-pend,
+.enc-item-chip,
+.enc-item-act {
+  align-self: center;
+}
 .enc-item-x {
   border: 1px solid #fecaca;
   background: #fff;

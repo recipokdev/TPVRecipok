@@ -12027,6 +12027,12 @@ mustContain(index, 'class="enc-act enc-act-green"', "El detalle del encargo tien
 mustContain(encargosRefundJs, '<div class="enc-det-when">Recoge ', "El detalle muestra la hora de recogida destacada");
 mustContain(encargosRefundJs, 'class="enc-stat is-due"', "El detalle muestra Total, Cobrado y Falta en tarjetas");
 
+// Encargos: filas de la lista con todos los productos y lista de hoy para la pared (sin precios)
+mustContain(encargosRefundJs, "function orderLinesHtml(o) {", "Las filas de la lista de encargos muestran todos los productos y la nota, sin recortar");
+mustContain(encargosRefundJs, '<div class="w-line">', "La lista de hoy impresa pone un producto por linea");
+mustContain(encargosRefundJs, '<div class="w-name">', "La lista de hoy impresa destaca el nombre");
+mustContain(encargosRefundJs, "${o.pending > 0 ? \"A COBRAR\" : \"PAGADO\"}", "La lista de hoy impresa dice si esta pagado o a cobrar, sin importes");
+
 if (process.exitCode) {
   console.error("\nSmoke tests failed.");
   process.exit(1);

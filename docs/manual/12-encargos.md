@@ -30,10 +30,10 @@ El TPV imprime el **resguardo** (lo que se entrega al cliente, con el día y la 
 El botón **Encargos** (con un contador) abre la lista, con tres pestañas: **Falta recoger**, **Recogidos** y **Cancelados**.
 
 - El contador del botón cuenta los encargos **de hoy y vencidos** que faltan por recoger; se pone **en rojo** si hay alguno vencido (de un día anterior).
-- Cada encargo pendiente tiene un botón **Cancelar** en la propia fila, para cancelarlo sin abrir el detalle (pide confirmación y devuelve el dinero cobrado a cuenta, igual que desde el detalle).
+- En la lista, cada fila muestra **todos los productos y la nota completos** (la fila crece lo que haga falta). Cada encargo pendiente tiene un botón **Cancelar** en la propia fila, para cancelarlo sin abrir el detalle (pide confirmación y devuelve el dinero cobrado a cuenta, igual que desde el detalle).
 - Al abrir la caja, si hay encargos para hoy, aparece el aviso **«Encargos por entregar hoy»** con la lista.
 - Se puede **buscar** por nombre, teléfono o código.
-- **Imprimir lista de hoy** saca en la impresora un listado con lo que hay que preparar hoy.
+- **Imprimir lista de hoy** saca en la impresora un listado **para colgar en la pared**: por cada encargo de hoy y vencido, la **hora en grande**, el **nombre**, el teléfono, **un producto por línea** (cantidad y nombre) y la **nota enmarcada**, sin precios. Cada encargo indica si está **PAGADO** o **A COBRAR**.
 - Al **abrir la caja** (una vez por caja y día) el TPV muestra un aviso con los encargos de hoy y los vencidos, para tenerlos presentes desde el principio del turno.
 
 Al tocar un encargo se abre su **detalle**: datos, productos, anticipos y devoluciones cobrados, y lo que falta por cobrar. Desde ahí:

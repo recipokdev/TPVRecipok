@@ -1644,6 +1644,14 @@
     renderList();
   }
 
+  // Productos del encargo completos (sin recortar) y la nota aparte: en la lista cada fila crece lo que haga falta.
+  function orderLinesHtml(o) {
+    const lines = (Array.isArray(o.lines) ? o.lines : []).filter((l) => l && String(l.name || "").trim());
+    const chips = lines.map((l) => `<span class="enc-item-line">${escapeHtml(fmtQty(l.qty))} × ${escapeHtml(String(l.name).trim())}</span>`).join("");
+    const note = o.notes ? `<div class="enc-item-note"><b>Nota</b> ${escapeHtml(String(o.notes).replace(/\s+/g, " "))}</div>` : "";
+    return (chips ? `<div class="enc-item-lines">${chips}</div>` : "") + note;
+  }
+
   function orderSummaryText(o) {
     const names = (Array.isArray(o.lines) ? o.lines : []).map((l) => String(l.name || "").trim()).filter(Boolean);
     let txt = names.slice(0, 3).join(", ") + (names.length > 3 ? "…" : "");
@@ -1706,7 +1714,7 @@
         html +=
           `<div role="button" tabindex="0" class="enc-item${late ? " is-late" : ""}${isToday ? " is-today" : ""}" data-id="${o.id}">` +
           `<div class="enc-item-time"><strong>${escapeHtml(String(o.pickupAt).slice(11, 16))}</strong><small>${late ? "vencido" : "recogida"}</small></div>` +
-          `<div class="enc-item-main"><strong>${escapeHtml(o.customerName)}</strong><small>${escapeHtml([o.customerPhone, orderSummaryText(o)].filter(Boolean).join(" · "))}</small></div>` +
+          `<div class="enc-item-main"><strong>${escapeHtml(o.customerName)}</strong>${o.customerPhone ? `<small>📞 ${escapeHtml(o.customerPhone)}</small>` : ""}${orderLinesHtml(o)}</div>` +
           `<div class="enc-item-money"><span>Total ${escapeHtml(fmtMoney(o.total))}</span><small>Anticipo ${escapeHtml(fmtMoney(o.collected))}</small></div>` +
           `<div class="enc-item-pend ${o.pending > 0 ? "is-due" : "is-ok"}">${o.status === "pendiente" ? `Falta ${escapeHtml(fmtMoney(o.pending))}` : ""}</div>` +
           `<div class="enc-item-chip ${chip.cls}">${chip.text}</div>` +
@@ -1935,20 +1943,30 @@
     }
     if (!rows.length) return toast("No hay encargos para hoy ni vencidos.", "info", "Encargos");
     const esc = escapeHtml;
+    // Para colgar en la pared: los datos del resguardo (hora, nombre, teléfono, productos, nota) sin precios y bien
+    // marcados. Sin rellenos negros ni bordes gruesos: la termica POS-80C no los aguanta (ver ticketShell).
     const body = rows
       .map((o) => {
         const late = String(o.pickupAt).slice(0, 10) < today;
-        const items = (o.lines || []).map((l) => `${fmtQty(l.qty)} x ${l.name}`).join(", ");
+        const items = (Array.isArray(o.lines) ? o.lines : [])
+          .filter((l) => l && String(l.name || "").trim())
+          .map((l) => `<div class="w-line">${esc(fmtQty(l.qty))} x ${esc(String(l.name).trim())}</div>`)
+          .join("");
         return (
-          `<div class="sep"></div><div class="r b"><span>${esc(late ? dayLabelLong(String(o.pickupAt).slice(0, 10)) + " " : "")}${esc(String(o.pickupAt).slice(11, 16))} ${esc(o.customerName)}</span><span>${o.pending > 0 ? "Falta " + esc(fmtMoney(o.pending)) : "PAGADO"}</span></div>` +
-          (o.customerPhone ? `<div class="s">Tel. ${esc(o.customerPhone)}</div>` : "") +
-          `<div class="s">${esc(items)}</div>` +
-          (o.notes ? `<div style="font-size:13px;font-weight:800;border:2px solid #000;padding:2px 4px;margin-top:3px">NOTA: ${esc(o.notes)}</div>` : "")
+          `<div class="sep"></div>` +
+          `<div class="r"><span class="w-time">${esc(String(o.pickupAt).slice(11, 16))}</span><span class="w-state">${o.pending > 0 ? "A COBRAR" : "PAGADO"}</span></div>` +
+          (late ? `<div class="s b">VENCIDO: era para ${esc(dayLabelLong(String(o.pickupAt).slice(0, 10)))}</div>` : "") +
+          `<div class="w-name">${esc(o.customerName)}</div>` +
+          (o.customerPhone ? `<div class="w-phone">Tel. ${esc(o.customerPhone)}</div>` : "") +
+          `<div class="w-lines">${items}</div>` +
+          (o.notes ? `<div class="note"><div class="l">NOTA</div><div class="v">${esc(o.notes)}</div></div>` : "")
         );
       })
       .join("");
     const html = ticketShell(
-      `<div class="c b" style="font-size:15px">ENCARGOS PARA HOY (${rows.length})</div><div class="c s">${esc(dayLabelLong(today))} · impreso ${esc(formatDateTimeEs(Date.now()))}</div>` + body,
+      `<style>.w-time{font-size:26px;font-weight:900;letter-spacing:-0.5px}.w-state{font-size:13px;font-weight:800;border:2px solid #000;padding:2px 6px;align-self:center}.w-name{font-size:19px;font-weight:900;margin-top:2px;word-break:break-word}.w-phone{font-size:14px;font-weight:700}.w-lines{margin:4px 0 2px}.w-line{font-size:15px;font-weight:700;line-height:1.3;word-break:break-word}</style>` +
+        `<div class="c b" style="font-size:18px">ENCARGOS PARA HOY (${rows.length})</div><div class="c s">${esc(dayLabelLong(today))} · impreso ${esc(formatDateTimeEs(Date.now()))}</div>` +
+        body,
     );
     await printHtml(html);
   }
