@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "ARREGLO: al actualizar, la pantalla se quedaba un instante vacía entre que se cerraba el TPV y aparecía la ventanita «Instalando TPV Recipok…». Ahora el TPV espera a que esa ventanita ya se vea antes de cerrarse, así que siempre hay algo en pantalla durante toda la actualización. En modo kiosko, además, tras actualizar el TPV reafirma el primer plano de su ventana (unos segundos después de abrir) para que la barra de tareas de Windows no se quede encima."
+      ]
     },
     {
       "version": "0.2.59",

@@ -570,6 +570,25 @@ function installPowerWatch() {
   } catch (_) {}
 }
 
+// Tras una actualizacion el TPV lo abre el instalador, y Windows no le da el foco a una ventana abierta por otro
+// proceso: en kiosco la barra de tareas se quedaba encima (se iba al hacer clic varias veces en el TPV). Se reafirma el
+// primer plano unas cuantas veces justo despues de mostrar la ventana. No hace nada fuera del kiosco.
+function nudgeKioskToForeground(win) {
+  if (process.platform !== "win32") return;
+  [0, 400, 1500, 4000].forEach((delay) => {
+    setTimeout(() => {
+      try {
+        if (!win || win.isDestroyed() || !win.isVisible()) return;
+        win.setAlwaysOnTop(true);
+        win.show();
+        win.focus();
+        win.moveTop();
+        if (!win.isFullScreen()) win.setFullScreen(true);
+      } catch (_) {}
+    }, delay);
+  });
+}
+
 function createWindow() {
   if (appIsInstallingUpdate) return;
   const isDev = !app.isPackaged;
@@ -693,6 +712,7 @@ function createWindow() {
 
     mainWin.show();
     notifyPostUpdateSplashReady();
+    if (kioskMode) nudgeKioskToForeground(mainWin);
     // si NO es kiosk, maximiza al arrancar
     if (!kioskMode) {
       try {
@@ -809,7 +829,7 @@ async function runUpdateCheckOncePreCash() {
         try {
           logUpdater("instalando (pre-caja):", JSON.stringify(describeInstallContext()));
           spawnPostUpdateSplash();
-          setTimeout(() => autoUpdater.quitAndInstall(true, true), 400);
+          quitAndInstallWhenSplashVisible();
         } catch {}
         done({ ok: true, updated: true, installing: true });
       });
@@ -1346,6 +1366,39 @@ function postUpdateSplashMarkerPath() {
   return path.join(app.getPath("temp"), "tpv-recipok-post-update-ready.flag");
 }
 
+// La ventanita (otro proceso de Electron, tarda 1-3 s en arrancar) escribe esto en cuanto ya se ve. El TPV espera a
+// verlo antes de llamar a quitAndInstall: antes cerraba a los 400-600 ms y el escritorio quedaba vacio hasta que la
+// ventanita aparecia (Sergi, 2026-11-05: "hay un momento durante la actualizacion que no aparece nada").
+function postUpdateSplashShownPath() {
+  return path.join(app.getPath("temp"), "tpv-recipok-post-update-shown.flag");
+}
+
+function quitAndInstallWhenSplashVisible(maxWaitMs = 6000) {
+  const startedAt = Date.now();
+  const tick = () => {
+    let shown = false;
+    try {
+      shown = fs.existsSync(postUpdateSplashShownPath());
+    } catch (_) {}
+    const elapsed = Date.now() - startedAt;
+    if (shown || elapsed >= maxWaitMs || process.platform !== "win32") {
+      logUpdater(
+        shown
+          ? `ventanita de instalando visible tras ${elapsed} ms: se cierra el TPV e instala`
+          : `ventanita de instalando sin confirmar tras ${elapsed} ms: se instala igualmente`,
+      );
+      try {
+        autoUpdater.quitAndInstall(true, true);
+      } catch (e) {
+        logUpdater(`quitAndInstall fallo: ${e?.message || e}`);
+      }
+      return;
+    }
+    setTimeout(tick, 100);
+  };
+  setTimeout(tick, 300);
+}
+
 // Llamar justo antes de quitAndInstall(): lanza un proceso independiente
 // (mismo ejecutable, con un flag especial) que sobrevive a que esta app se
 // cierre, y que se queda mostrando "Instalando..." hasta que la nueva version
@@ -1359,6 +1412,9 @@ function spawnPostUpdateSplash() {
   try {
     try {
       fs.unlinkSync(postUpdateSplashMarkerPath());
+    } catch (_) {}
+    try {
+      fs.unlinkSync(postUpdateSplashShownPath());
     } catch (_) {}
 
     // La ventanita usa su propia carpeta de datos: se le pasa la ruta del registro real.
@@ -1515,7 +1571,12 @@ function runPostUpdateSplashProcess() {
     `;
 
     win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
-    win.once("ready-to-show", () => win.show());
+    win.once("ready-to-show", () => {
+      win.show();
+      try {
+        fs.writeFileSync(postUpdateSplashShownPath(), String(Date.now()));
+      } catch (_) {}
+    });
 
     const markerPath = postUpdateSplashMarkerPath();
     const POLL_MS = 300;
@@ -2298,7 +2359,7 @@ async function runAutoUpdateGate() {
         logUpdateEventRemote("update-gate-installing", { freeTempMb: installCtx.freeTempMb, uptimeMin: installCtx.uptimeMin });
         splashSet("Instalando actualización…", 100);
         spawnPostUpdateSplash();
-        setTimeout(() => autoUpdater.quitAndInstall(true, true), 600);
+        quitAndInstallWhenSplashVisible();
         setTimeout(() => {
           try {
             app.exit(0);

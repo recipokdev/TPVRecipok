@@ -11669,6 +11669,22 @@ if (
   else fail("Falta el stock por almacen (renderer.js: isMultiWarehouseStockMode, applyWarehouseStockToProducts, pickStockRowByWarehouse strict, ensureStockRowForWarehouse) -- revisar el cambio de 2026-11-05");
 }
 
+// Actualizacion sin huecos (2026-11-05): el TPV no se cierra hasta que la ventanita de "instalando" ya se ve, y en kiosco
+// reafirma el primer plano tras abrir (barra de tareas).
+{
+  const mainJs = fs.readFileSync(path.join(root, "main.js"), "utf8");
+  const okS =
+    mainJs.includes("function postUpdateSplashShownPath() {") &&
+    mainJs.includes("function quitAndInstallWhenSplashVisible(maxWaitMs = 6000) {") &&
+    (mainJs.match(/quitAndInstallWhenSplashVisible\(\);/g) || []).length === 2 &&
+    !/setTimeout\(\(\) => autoUpdater\.quitAndInstall\(true, true\), (400|600)\)/.test(mainJs) &&
+    /win\.once\("ready-to-show", \(\) => \{\s*win\.show\(\);\s*try \{\s*fs\.writeFileSync\(postUpdateSplashShownPath\(\)/.test(mainJs) &&
+    mainJs.includes("function nudgeKioskToForeground(win) {") &&
+    mainJs.includes("if (kioskMode) nudgeKioskToForeground(mainWin);");
+  if (okS) ok("Actualizar: el TPV espera a que la ventanita de instalando se vea antes de cerrarse; en kiosco reafirma el primer plano tras abrir");
+  else fail("Falta la espera a la ventanita de instalando o el refuerzo de primer plano en kiosco (main.js: quitAndInstallWhenSplashVisible, nudgeKioskToForeground) -- revisar el cambio de 2026-11-05");
+}
+
 // Encargos, parte 2b (2026-11-03): asistente «Nuevo encargo» de dos paginas con un solo guardado. El pedido de
 // FacturaScripts lo crea el TPV (sin duplicar por numero2), el servidor guarda encargo + anticipo juntos, el dinero se
 // escribe tambien en las observaciones del pedido, y un pedido que no llegue a guardarse no queda huerfano.
