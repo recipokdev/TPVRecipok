@@ -7690,6 +7690,44 @@ body.theme-dark .cart-batch-divider.cart-batch-divider--pending {
   font-weight: 700;
 }
 
+/* Real de cliente 2026-11-05 (Los Argentinos): en una pantalla pequeña, con un
+   administrador elegido (campo de PIN + teclado) el login es mas alto que la
+   pantalla y "Salir / Entrar" quedaban debajo, hacia falta desplazar para
+   verlos (y salia tambien barra horizontal). Los botones se quedan siempre
+   visibles abajo, el teclado se compacta si la pantalla es baja y no hay
+   desplazamiento horizontal. */
+#loginOverlay .simple-dialog {
+  overflow-x: hidden;
+}
+
+/* el campo del PIN tiene width:100% + padding en linea, sin border-box se pasaba 18px
+   del ancho del dialogo y salia barra de desplazamiento horizontal */
+#loginOverlay #loginPass {
+  box-sizing: border-box;
+}
+
+#loginOverlay .dialog-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: inherit;
+  padding: 8px 0 2px;
+  margin-top: 4px;
+}
+
+@media (max-height: 800px) {
+  #loginOverlay .pin-key {
+    padding: 8px 0;
+    font-size: 16px;
+  }
+  #loginOverlay .login-pin-wrap {
+    margin-top: 6px;
+  }
+  #loginOverlay .login-pin-pad {
+    gap: 6px;
+  }
+}
+
 .login-status {
   margin-top: 8px;
   min-height: 18px;

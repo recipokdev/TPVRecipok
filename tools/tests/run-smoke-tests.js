@@ -11622,6 +11622,17 @@ if (
   else fail("Login: pinSection debe buscarse con pinPad.closest(\".login-pin-wrap\") (renderer.js openLoginModal) -- revisar el cambio de 2026-11-05");
 }
 
+// Login en pantalla pequena (2026-11-05): Salir/Entrar siempre visibles (sticky), teclado compacto en pantallas bajas y
+// campo del PIN con border-box (sin barra horizontal).
+{
+  const css = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+  const okCss = /#loginOverlay \.dialog-actions \{[^}]*position: sticky;[^}]*bottom: 0;/.test(css) &&
+    /#loginOverlay #loginPass \{[^}]*box-sizing: border-box;/.test(css) &&
+    /@media \(max-height: 800px\) \{\s*#loginOverlay \.pin-key \{/.test(css);
+  if (okCss) ok("Login en pantalla pequena: Salir/Entrar siempre visibles, teclado compacto y sin barra horizontal");
+  else fail("Falta el CSS del login para pantallas pequenas (styles.css: #loginOverlay .dialog-actions sticky, #loginPass border-box, media max-height 800px) -- revisar el cambio de 2026-11-05");
+}
+
 // Encargos, parte 2b (2026-11-03): asistente «Nuevo encargo» de dos paginas con un solo guardado. El pedido de
 // FacturaScripts lo crea el TPV (sin duplicar por numero2), el servidor guarda encargo + anticipo juntos, el dinero se
 // escribe tambien en las observaciones del pedido, y un pedido que no llegue a guardarse no queda huerfano.
