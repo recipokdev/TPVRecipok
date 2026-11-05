@@ -17290,7 +17290,9 @@ async function openLoginModal() {
   const okBtn = document.getElementById("loginOkBtn");
   const exitBtn = document.getElementById("loginExitBtn");
   const pinPad = document.getElementById("loginPinPad");
-  const pinSection = document.querySelector(".login-pin-wrap");
+  // Ojo: ".login-pin-wrap" tambien existe en el modal del PIN de agente (sale antes en el
+  // HTML), asi que se busca desde el propio teclado del login y no con querySelector global.
+  const pinSection = pinPad?.closest(".login-pin-wrap") || null;
   const pinTitle = passInp.previousElementSibling;
 
   if (!overlay || !usersBar || !passInp || !okBtn || !exitBtn) return false;

@@ -11612,6 +11612,16 @@ if (
   else fail("Falta detachCashIfOwnedByOtherTerminal en el cambio de terminal (renderer.js) -- revisar el cambio de 2026-11-05: fn=" + okFn + ", llamadas=" + okCalls);
 }
 
+// Login (2026-11-05): al elegir un usuario no administrador se ocultaba el campo del PIN pero no el teclado, porque
+// querySelector(".login-pin-wrap") cogia el del modal del PIN de agente (sale antes en el HTML). Se busca desde el
+// teclado del propio login.
+{
+  const okSel = renderer.includes('const pinSection = pinPad?.closest(".login-pin-wrap") || null;') &&
+    !renderer.includes('const pinSection = document.querySelector(".login-pin-wrap");');
+  if (okSel) ok("Login: usuario no administrador oculta el campo del PIN y tambien su teclado (no toca el del PIN de agente)");
+  else fail("Login: pinSection debe buscarse con pinPad.closest(\".login-pin-wrap\") (renderer.js openLoginModal) -- revisar el cambio de 2026-11-05");
+}
+
 // Encargos, parte 2b (2026-11-03): asistente «Nuevo encargo» de dos paginas con un solo guardado. El pedido de
 // FacturaScripts lo crea el TPV (sin duplicar por numero2), el servidor guarda encargo + anticipo juntos, el dinero se
 // escribe tambien en las observaciones del pedido, y un pedido que no llegue a guardarse no queda huerfano.
