@@ -10729,6 +10729,7 @@ async function loadMesasModuleAvailability() {
       features.mesasEnabled === true ||
       features.mesasEnabled === 1 ||
       String(features.mesasEnabled || "").trim() === "1";
+    applyWarehouseStockFeatureFromServer(features.warehouseStock);
   } catch (e) {
     MESAS_MODULE_ENABLED = false;
     console.warn(
@@ -41452,7 +41453,7 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "", ticketId = null
         continue;
       }
 
-      const multiWh = isMultiWarehouseStockMode();
+      const multiWh = hasMultipleWarehouses();
       let stockRow = pickStockRowByWarehouse(
         stockRowsByReference,
         getCurrentWarehouseCode(),
@@ -56457,13 +56458,54 @@ function getWarehouseStockState() {
   return window.__whStock;
 }
 
-function isMultiWarehouseStockMode() {
+// Hay mas de un almacen entre los terminales de la empresa. Basta para las protecciones (reserva/ajuste nunca usan la
+// fila de otro almacen), que no son una preferencia.
+function hasMultipleWarehouses() {
   const set = new Set(
     (Array.isArray(terminals) ? terminals : [])
       .map((t) => String(t?.codalmacen || "").trim().toUpperCase())
       .filter(Boolean),
   );
   return set.size > 1 && !!getCurrentWarehouseCode();
+}
+
+// Ver en pantalla el stock del almacen del terminal en vez de la suma: solo para las empresas que el servidor marca
+// (warehouse_stock_slugs en config.php, via get-client-features). Sin respuesta del servidor se usa la ultima guardada, y
+// si nunca hubo, la suma de siempre.
+function getWarehouseStockFeatureKey() {
+  return `tpv_wh_stock_feature::${String(getCurrentSlugForReservations() || "").trim() || "default"}`;
+}
+
+function isWarehouseStockFeatureOn() {
+  if (typeof window.__whStockFeature === "boolean") return window.__whStockFeature;
+  try {
+    return localStorage.getItem(getWarehouseStockFeatureKey()) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function applyWarehouseStockFeatureFromServer(value) {
+  if (typeof value !== "boolean") return;
+  const prev = isWarehouseStockFeatureOn();
+  window.__whStockFeature = value;
+  try {
+    localStorage.setItem(getWarehouseStockFeatureKey(), value ? "1" : "0");
+  } catch {}
+  if (value !== prev) {
+    if (value) {
+      refreshWarehouseStockView({ fetch: true }).catch(() => {});
+    } else {
+      // vuelve a la suma de siempre: se recarga el stock de los productos
+      getWarehouseStockState().map = null;
+      __productsDeltaWatermark = null; // pasada completa: el delta no devolveria los productos sin cambios
+      refreshProductsStockOnly?.().catch(() => {});
+    }
+  }
+}
+
+function isMultiWarehouseStockMode() {
+  return isWarehouseStockFeatureOn() && hasMultipleWarehouses();
 }
 
 function buildWarehouseStockMap(rows, warehouseCode) {
@@ -56671,7 +56713,7 @@ async function fetchStockRowForProduct(product) {
       const byProduct = await fetchStockRowsByParams({
         "filter[idproducto]": baseId,
       });
-      const multiWh = isMultiWarehouseStockMode();
+      const multiWh = hasMultipleWarehouses();
       let picked = pickStockRowByWarehouse(byProduct, warehouse, { strict: multiWh });
       if (!picked && multiWh && byProduct.length) {
         picked = await ensureStockRowForWarehouse(byProduct[0], warehouse);
@@ -56691,7 +56733,7 @@ async function fetchStockRowForProduct(product) {
   const list = await fetchStockRowsByProductReference(product);
   if (!list.length) return null;
 
-  const multiWh = isMultiWarehouseStockMode();
+  const multiWh = hasMultipleWarehouses();
   let picked = pickStockRowByWarehouse(list, warehouse, { strict: multiWh });
   if (!picked && multiWh) picked = await ensureStockRowForWarehouse(list[0], warehouse);
   return picked;

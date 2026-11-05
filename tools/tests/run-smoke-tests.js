@@ -11651,6 +11651,11 @@ if (
 {
   const okW =
     renderer.includes("function isMultiWarehouseStockMode() {") &&
+    renderer.includes("function hasMultipleWarehouses() {") &&
+    renderer.includes("function isWarehouseStockFeatureOn() {") &&
+    renderer.includes("applyWarehouseStockFeatureFromServer(features.warehouseStock);") &&
+    renderer.includes("return isWarehouseStockFeatureOn() && hasMultipleWarehouses();") &&
+    renderer.includes("const multiWh = hasMultipleWarehouses();") &&
     renderer.includes("return set.size > 1 && !!getCurrentWarehouseCode();") &&
     renderer.includes("function applyWarehouseStockToProducts(list) {") &&
     renderer.includes("function pickStockRowByWarehouse(rows, warehouseCode = \"\", opts = {}) {") &&
@@ -11660,7 +11665,7 @@ if (
     renderer.includes("refreshWarehouseStockView({ fetch: true }).catch(() => {});") &&
     renderer.includes("setWarehouseStockRows(stocksData);") &&
     renderer.includes("// Varias tiendas: el stock de cada producto es el de ESTE almacen, no la suma de todos.");
-  if (okW) ok("Stock por almacen: con varios almacenes cada TPV enseña el de su terminal y reservas/ajustes usan solo su fila (la crea a 0 si falta)");
+  if (okW) ok("Stock por almacen: solo las empresas marcadas por el servidor ven el de su terminal (el resto, la suma); reservas/ajustes usan solo su fila con varios almacenes (la crea a 0 si falta)");
   else fail("Falta el stock por almacen (renderer.js: isMultiWarehouseStockMode, applyWarehouseStockToProducts, pickStockRowByWarehouse strict, ensureStockRowForWarehouse) -- revisar el cambio de 2026-11-05");
 }
 
