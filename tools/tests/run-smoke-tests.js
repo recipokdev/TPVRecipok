@@ -12035,6 +12035,7 @@ mustContain(index, 'id="encUseNameBtn"', "Hay un boton para volver a poner el no
 mustContain(encargosRefundJs, 'Usar «" + ct.name + "» como nombre', "El boton de uso rapido dice que nombre pone");
 mustContain(index, 'class="enc-res-icon"', "El cuadro de resultado del encargo tiene el diseno nuevo");
 mustContain(main, "const PRINT_GAP_MS = 2500;", "Los tickets se mandan a la impresora de uno en uno con una pausa");
+mustContain(main, "const printQueues = new Map(); // deviceName -> { chain, lastDoneAt }", "La cola de impresion es por impresora: ticket y comanda en impresoras distintas no se esperan entre si");
 mustContain(main, "async function printTicketHtmlNow(html, deviceName) {", "El envio real a la impresora queda detras de la cola");
 
 // Impresion fisica: la ventana oculta no se cierra nada mas recibir el callback y el trabajo lleva un titulo corto

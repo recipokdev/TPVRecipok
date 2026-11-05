@@ -2454,23 +2454,29 @@ ipcMain.handle("printers:list", async () => {
 // dice que el trabajo llego al spooler, no que la impresora terminara: al mandar dos tickets seguidos (resguardo y
 // justificante de un encargo, ticket y comanda...) una termica USB (POS-80C) se cortaba a mitad del primero y sacaba
 // simbolos raros en los dos, mientras que desde la vista previa (un trabajo cada vez) salia bien.
+// La cola es POR IMPRESORA: un ticket en el mostrador y una comanda en la cocina (impresoras distintas) no se esperan.
 const PRINT_GAP_MS = 2500;
 const PRINT_WINDOW_KEEP_MS = 10000;
-let printChain = Promise.resolve();
-let lastPrintDoneAt = 0;
+const printQueues = new Map(); // deviceName -> { chain, lastDoneAt }
 
 function printTicketHtml(html, deviceName) {
+  const key = String(deviceName || "");
+  let q = printQueues.get(key);
+  if (!q) {
+    q = { chain: Promise.resolve(), lastDoneAt: 0 };
+    printQueues.set(key, q);
+  }
   const run = async () => {
-    const wait = lastPrintDoneAt + PRINT_GAP_MS - Date.now();
+    const wait = q.lastDoneAt + PRINT_GAP_MS - Date.now();
     if (wait > 0) await sleep(wait);
     try {
       return await printTicketHtmlNow(html, deviceName);
     } finally {
-      lastPrintDoneAt = Date.now();
+      q.lastDoneAt = Date.now();
     }
   };
-  const p = printChain.then(run, run);
-  printChain = p.catch(() => {});
+  const p = q.chain.then(run, run);
+  q.chain = p.catch(() => {});
   return p;
 }
 
