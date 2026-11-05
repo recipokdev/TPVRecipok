@@ -60064,6 +60064,22 @@ function setRefundOverlayMode(mode, opts = {}) {
   }
 }
 
+// Observaciones del ticket completas (en la lista se recortan a 2 lineas): el texto largo -- p.ej. el de un encargo con
+// anticipo -- no se podia leer en ningun sitio. Respeta los saltos de linea.
+function setRefundTicketObs(facturaRow) {
+  const el = document.getElementById("refundTicketObs");
+  if (!el) return;
+  const txt = String(facturaRow?.observaciones ?? facturaRow?._raw?.observaciones ?? "").trim();
+  el.textContent = "";
+  if (txt) {
+    const b = document.createElement("b");
+    b.textContent = "Observaciones";
+    el.appendChild(b);
+    el.appendChild(document.createTextNode(txt));
+  }
+  el.classList.toggle("hidden", !txt);
+}
+
 function openRefundOverlayForViewOnly({
   facturaRow,
   lineasInfo,
@@ -60092,6 +60108,7 @@ function openRefundOverlayForViewOnly({
   if (n) n.textContent = facturaRow?.codigo || "-";
   if (c) c.textContent = facturaRow?.nombrecliente || "Cliente";
   if (t) t.textContent = eurES(facturaRow?.total || 0);
+  setRefundTicketObs(facturaRow);
 
   setRefundOverlayMode("info", { total: facturaRow?.total || 0 });
   overlay.classList.remove("hidden");
@@ -60585,6 +60602,7 @@ async function openRefundForFactura(facturaRow) {
   if (n) n.textContent = facturaRow.codigo || `#${facturaRow.idfactura}`;
   if (c) c.textContent = facturaRow.nombrecliente || "Cliente";
   if (t) t.textContent = eurES(facturaRow.total || 0);
+  setRefundTicketObs(facturaRow);
 
   overlay.classList.remove("hidden");
   bindRefundLineClicks();

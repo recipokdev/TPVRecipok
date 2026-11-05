@@ -12035,6 +12035,9 @@ mustContain(index, 'id="encUseNameBtn"', "Hay un boton para volver a poner el no
 mustContain(encargosRefundJs, 'Usar «" + ct.name + "» como nombre', "El boton de uso rapido dice que nombre pone");
 mustContain(index, 'class="enc-res-icon"', "El cuadro de resultado del encargo tiene el diseno nuevo");
 mustContain(main, "const PRINT_GAP_MS = 2500;", "Los tickets se mandan a la impresora de uno en uno con una pausa");
+mustContain(index, 'id="refundTicketObs"', "Informacion de ticket / Devolucion tienen un recuadro con las observaciones completas del ticket (la lista las recorta a 2 lineas)");
+mustContain(renderer, "setRefundTicketObs(facturaRow);", "Las observaciones completas se rellenan en el modo informacion y en el de devolucion");
+mustContain(styles, ".refund-ticket-obs {", "Estilo del recuadro de observaciones del ticket");
 mustContain(main, "const printQueues = new Map(); // deviceName -> { chain, lastDoneAt }", "La cola de impresion es por impresora: ticket y comanda en impresoras distintas no se esperan entre si");
 mustContain(main, "async function printTicketHtmlNow(html, deviceName) {", "El envio real a la impresora queda detras de la cola");
 

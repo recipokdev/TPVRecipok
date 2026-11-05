@@ -8542,6 +8542,32 @@ body.theme-dark .cart-batch-divider.cart-batch-divider--pending {
   border: 1px solid #dbeafe;
 }
 
+/* Observaciones completas en Informacion de ticket / Devolucion (la lista las recorta a 2 lineas) */
+.refund-ticket-obs {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fefce8;
+  border: 1px solid #fde68a;
+  color: #422006;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.refund-ticket-obs.hidden {
+  display: none;
+}
+.refund-ticket-obs b {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #92400e;
+}
+
 /* ===== Cerrar Caja  =====*/
 /*Agent cash close tpv*/
 .cash-agent-title {
