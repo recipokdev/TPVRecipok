@@ -8,7 +8,8 @@
       "changes": [
         "ARREGLO: al cambiar de terminal (por ejemplo, un TPV que se lleva a otra sucursal) con una caja abierta, el TPV seguía usando la caja del terminal anterior: en FacturaScripts esa caja es de otro terminal y el nuevo no tenía ninguna abierta. Ahora, al cambiar de terminal, el TPV suelta esa caja (sigue abierta para quien la usa, no se cierra) y busca la caja abierta del terminal nuevo o pide abrirla.",
         "ARREGLO: en la pantalla de inicio de sesión, al elegir un usuario que no es administrador desaparecía el campo del PIN pero se quedaba el teclado numérico, que solo confundía (el personal no escribe PIN). Ahora se oculta todo; con un administrador salen el campo y el teclado como siempre.",
-        "ARREGLO: en pantallas pequeñas, al elegir un administrador en el inicio de sesión los botones «Salir» y «Entrar» quedaban fuera de la vista y había que desplazar la ventana (con barra horizontal incluida) para pulsarlos. Ahora se quedan siempre visibles abajo, el teclado numérico se compacta en pantallas bajas y ya no hay barra horizontal."
+        "ARREGLO: en pantallas pequeñas, al elegir un administrador en el inicio de sesión los botones «Salir» y «Entrar» quedaban fuera de la vista y había que desplazar la ventana (con barra horizontal incluida) para pulsarlos. Ahora se quedan siempre visibles abajo, el teclado numérico se compacta en pantallas bajas y ya no hay barra horizontal.",
+        "ARREGLO: si el TPV está en línea y con sesión iniciada pero la pantalla se queda sin artículos (catálogo que no llegó o llegó vacío al arrancar, p. ej. justo tras actualizar), ahora se recarga solo a los ~15 segundos, con pocos reintentos espaciados, y deja constancia en el servidor. Antes había que cerrar sesión y volver a entrar o pulsar el botón 🔄."
       ]
     },
     {

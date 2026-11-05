@@ -11633,6 +11633,19 @@ if (
   else fail("Falta el CSS del login para pantallas pequenas (styles.css: #loginOverlay .dialog-actions sticky, #loginPass border-box, media max-height 800px) -- revisar el cambio de 2026-11-05");
 }
 
+// Pantalla sin articulos en linea (2026-11-05): vigilante que recarga el catalogo vacio estando en linea con sesion.
+{
+  const okW =
+    renderer.includes("async function emptyCatalogWatchTick(now = Date.now()) {") &&
+    renderer.includes("if (LOGIN_ACTIVE || !hasActiveLoginSession()) return \"no-session\";") &&
+    renderer.includes("if (TPV_STATE?.offline || TPV_STATE?.locked) return \"offline\";") &&
+    renderer.includes("await loadDataFromApi({ refresh: true, silentRetry: true });") &&
+    renderer.includes("const EMPTY_CATALOG_WATCH_BACKOFF_MS = [0, 30000, 60000, 120000];") &&
+    renderer.includes("}, EMPTY_CATALOG_WATCH_TICK_MS);");
+  if (okW) ok("Catalogo vacio en linea con sesion: se recarga solo a los ~15 s con reintentos espaciados y deja constancia en el servidor");
+  else fail("Falta el vigilante de catalogo vacio (renderer.js: emptyCatalogWatchTick) -- revisar el cambio de 2026-11-05");
+}
+
 // Encargos, parte 2b (2026-11-03): asistente «Nuevo encargo» de dos paginas con un solo guardado. El pedido de
 // FacturaScripts lo crea el TPV (sin duplicar por numero2), el servidor guarda encargo + anticipo juntos, el dinero se
 // escribe tambien en las observaciones del pedido, y un pedido que no llegue a guardarse no queda huerfano.

@@ -62066,6 +62066,75 @@ window.TPV_UI?.onPowerResume?.(() => {
 });
 window.__handlePowerResume = handlePowerResume;
 
+// Pantalla sin articulos estando EN LINEA (Los Argentinos 2026-11-05: un TPV recien actualizado arrancaba con el
+// catalogo vacio y no se rellenaba hasta cerrar sesion y volver a entrar). El refresco periodico solo actualiza el stock
+// de los productos que ya hay, nunca rellena un catalogo vacio, y la carga inicial fallida no se reintenta sola en
+// todos los caminos. Este vigilante, con sesion iniciada, en linea y sin carga en curso, recarga el catalogo si lleva
+// ~15 s vacio (reintentos espaciados, pocos) y deja constancia en el servidor para poder ver por que paso.
+const EMPTY_CATALOG_WATCH_TICK_MS = 5000;
+const EMPTY_CATALOG_WATCH_AFTER_MS = 15000;
+const EMPTY_CATALOG_WATCH_BACKOFF_MS = [0, 30000, 60000, 120000];
+let __emptyCatalogSince = 0;
+let __emptyCatalogAttempts = 0;
+let __emptyCatalogNextAt = 0;
+let __emptyCatalogBusy = false;
+
+async function emptyCatalogWatchTick(now = Date.now()) {
+  const hasCatalog = Array.isArray(products) && products.length > 0;
+  if (hasCatalog) {
+    if (__emptyCatalogAttempts > 0) {
+      reportClientEvent("boot", "empty-catalog-recovered", "El catalogo vacio se recupero solo", { attempts: __emptyCatalogAttempts }, "warn");
+    }
+    __emptyCatalogSince = 0;
+    __emptyCatalogAttempts = 0;
+    __emptyCatalogNextAt = 0;
+    return "ok";
+  }
+
+  const cfg = window.RECIPOK_API || {};
+  if (!cfg.baseUrl || !cfg.apiKey) return "no-config";
+  if (LOGIN_ACTIVE || !hasActiveLoginSession()) return "no-session";
+  if (TPV_STATE?.offline || TPV_STATE?.locked) return "offline";
+  if (BOOT_IN_FLIGHT || TPV_LOADING || __dataLoadInFlight || __emptyCatalogBusy || isPayingNow) return "busy";
+
+  if (!__emptyCatalogSince) __emptyCatalogSince = now;
+  if (now - __emptyCatalogSince < EMPTY_CATALOG_WATCH_AFTER_MS) return "waiting";
+  if (__emptyCatalogAttempts >= EMPTY_CATALOG_WATCH_BACKOFF_MS.length) return "gave-up";
+  if (now < __emptyCatalogNextAt) return "backoff";
+
+  __emptyCatalogBusy = true;
+  try {
+    __emptyCatalogAttempts += 1;
+    __emptyCatalogNextAt = now + (EMPTY_CATALOG_WATCH_BACKOFF_MS[__emptyCatalogAttempts] ?? 120000);
+    if (__emptyCatalogAttempts === 1) {
+      reportClientEvent(
+        "boot",
+        "empty-catalog-online",
+        "Pantalla sin articulos estando en linea",
+        {
+          categories: Array.isArray(categories) ? categories.length : -1,
+          terminal: currentTerminal?.id ?? null,
+          codalmacen: currentTerminal?.codalmacen ?? null,
+          cashOpen: !!cashSession?.open,
+        },
+        "error",
+      );
+    }
+    await loadDataFromApi({ refresh: true, silentRetry: true });
+    renderMainUI?.(true);
+    return "retried";
+  } catch (e) {
+    console.warn("emptyCatalogWatchTick:", e?.message || e);
+    return "error";
+  } finally {
+    __emptyCatalogBusy = false;
+  }
+}
+window.__emptyCatalogWatchTick = emptyCatalogWatchTick;
+setInterval(() => {
+  emptyCatalogWatchTick().catch(() => {});
+}, EMPTY_CATALOG_WATCH_TICK_MS);
+
 let isOnlineFS = null; // 👈 para forzar primera actualización
 
 async function startOnlineMonitor() {
