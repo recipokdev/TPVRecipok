@@ -25204,6 +25204,9 @@ function setCurrentTerminal(terminal) {
   if (cashSession?.open) {
     primeFastTicketPredictorOnCashOpen().catch(() => {});
   }
+
+  // Stock por almacen: otro terminal puede ser de otro almacen.
+  refreshWarehouseStockView({ fetch: true }).catch(() => {});
 }
 
 function getAgentsForTerminalId(terminalId) {
@@ -31817,6 +31820,14 @@ async function loadDataFromApiImpl(opts = {}) {
           };
         })
       : [];
+
+    // Stock por almacen (varias tiendas): se guardan las filas de stock y se enseña el de este terminal.
+    if (stocksRes.status === "fulfilled") {
+      setWarehouseStockRows(stocksData);
+      if (applyWarehouseStockToProducts(products)) {
+        applyDerivedPackStockOverrides(products);
+      }
+    }
 
     // ===== Agentes =====
     if (agentesMaestros.length) {
@@ -41441,10 +41452,18 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "", ticketId = null
         continue;
       }
 
-      const stockRow = pickStockRowByWarehouse(
+      const multiWh = isMultiWarehouseStockMode();
+      let stockRow = pickStockRowByWarehouse(
         stockRowsByReference,
         getCurrentWarehouseCode(),
+        { strict: multiWh },
       );
+      if (!stockRow && multiWh) {
+        stockRow = await ensureStockRowForWarehouse(
+          stockRowsByReference[0],
+          getCurrentWarehouseCode(),
+        );
+      }
 
       if (!stockRow) {
         throw new Error(`No se encontró fila de stock para producto ${idProd}`);
@@ -45463,6 +45482,26 @@ async function refreshProductsStockOnly() {
 
     if (!Array.isArray(products) || !products.length) {
       return false;
+    }
+
+    // Varias tiendas: el stock de cada producto es el de ESTE almacen, no la suma de todos.
+    if (isMultiWarehouseStockMode()) {
+      await refreshWarehouseStockMap();
+      const st = getWarehouseStockState();
+      if (st.map && managedStockCatalogLoaded) {
+        products.forEach((p) => {
+          const baseId = Number(p.baseProductId || p.id || 0);
+          if (!baseId || !managedStockProductIds.has(baseId)) return;
+          const v = st.map.get(baseId) ?? 0;
+          const cur = stockById.get(baseId) || {
+            stockManaged: p.stockManaged,
+            allowSellWithoutStock: p.allowSellWithoutStock,
+            observaciones: p.observaciones,
+          };
+          cur.stockfisRaw = v;
+          stockById.set(baseId, cur);
+        });
+      }
     }
 
     // Productos nuevos (ver noteNewProductsFromDelta). En la primera pasada completa tras arrancar el
@@ -56407,7 +56446,119 @@ async function apiDeleteProductAddon({ id, idproducto }) {
   }
 }
 
-function pickStockRowByWarehouse(rows, warehouseCode = "") {
+// ===== Stock por almacen (empresas con varias tiendas) =====
+// Real de cliente (Los Argentinos, 2026-11-05): al abrir una segunda tienda con su propio almacen, FacturaScripts guarda
+// el stock por almacen (una fila por producto y almacen), pero el TPV enseñaba productos.stockfis, que es la SUMA de
+// todos los almacenes: el cajero de Sella veia el stock (negativo) de la otra tienda. Con mas de un almacen entre los
+// terminales de la empresa, cada TPV enseña ahora el stock del almacen de SU terminal. Con un solo almacen no cambia
+// nada. El estado vive en window para no depender del orden de declaracion en este fichero.
+function getWarehouseStockState() {
+  if (!window.__whStock) window.__whStock = { rows: null, map: null, wh: "" };
+  return window.__whStock;
+}
+
+function isMultiWarehouseStockMode() {
+  const set = new Set(
+    (Array.isArray(terminals) ? terminals : [])
+      .map((t) => String(t?.codalmacen || "").trim().toUpperCase())
+      .filter(Boolean),
+  );
+  return set.size > 1 && !!getCurrentWarehouseCode();
+}
+
+function buildWarehouseStockMap(rows, warehouseCode) {
+  const wanted = String(warehouseCode || "").trim().toUpperCase();
+  const map = new Map();
+  (Array.isArray(rows) ? rows : []).forEach((r) => {
+    if (String(r?.codalmacen || "").trim().toUpperCase() !== wanted) return;
+    const idp = Number(r?.idproducto || 0);
+    if (!idp) return;
+    const q = Number(r?.cantidad);
+    map.set(idp, (map.get(idp) || 0) + (Number.isFinite(q) ? q : 0));
+  });
+  return map;
+}
+
+// Sustituye el stock (suma de almacenes) de cada producto con control de stock por el de este almacen. Un producto sin
+// fila en este almacen tiene 0 aqui (asi lo trata FacturaScripts). Devuelve true si algo cambio.
+function applyWarehouseStockToProducts(list) {
+  if (!Array.isArray(list) || !list.length) return false;
+  const st = getWarehouseStockState();
+  if (!isMultiWarehouseStockMode() || !st.map) return false;
+  if (!managedStockCatalogLoaded) return false;
+
+  let changed = false;
+  list.forEach((p) => {
+    const baseId = Number(getProductBaseId(p) || 0);
+    if (!baseId || !managedStockProductIds.has(baseId)) return;
+    const v = st.map.get(baseId) ?? 0;
+    if (p.stockfis !== v || p.stockfisRaw !== v) {
+      p.stockfis = v;
+      p.stockfisRaw = v;
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+function setWarehouseStockRows(rows) {
+  const st = getWarehouseStockState();
+  st.rows = Array.isArray(rows) ? rows : null;
+  st.wh = getCurrentWarehouseCode();
+  st.map = st.rows ? buildWarehouseStockMap(st.rows, st.wh) : null;
+}
+
+// Relee solo las filas de ESTE almacen (una peticion). Si falla, se conserva lo que habia.
+async function refreshWarehouseStockMap() {
+  if (!isMultiWarehouseStockMode() || TPV_STATE?.offline) return false;
+  const wh = getCurrentWarehouseCode();
+  try {
+    const rows = await fetchApiResourceWithParams("stocks", {
+      "filter[codalmacen]": wh,
+      limit: 0,
+    });
+    if (!Array.isArray(rows)) return false;
+    const st = getWarehouseStockState();
+    st.rows = rows;
+    st.wh = wh;
+    st.map = buildWarehouseStockMap(rows, wh);
+    return true;
+  } catch (e) {
+    console.warn("No se pudo leer el stock del almacen:", e?.message || e);
+    return false;
+  }
+}
+
+// Repinta el stock con el almacen actual. fetch=true relee las filas del almacen en segundo plano (cambio de terminal).
+async function refreshWarehouseStockView({ fetch = false } = {}) {
+  try {
+    const st = getWarehouseStockState();
+    if (!isMultiWarehouseStockMode()) {
+      st.map = null;
+      return false;
+    }
+    if (st.rows && st.wh !== getCurrentWarehouseCode()) {
+      // las filas guardadas son de otro almacen: sirven mientras llegan las nuevas
+      st.map = buildWarehouseStockMap(st.rows, getCurrentWarehouseCode());
+      st.wh = getCurrentWarehouseCode();
+    }
+    if (fetch) await refreshWarehouseStockMap();
+    const changed = applyWarehouseStockToProducts(products);
+    const derived = applyDerivedPackStockOverrides(products);
+    if (changed || derived) {
+      renderProducts?.();
+      updateRenderedProductStocks?.();
+    }
+    return changed;
+  } catch (e) {
+    console.warn("refreshWarehouseStockView:", e?.message || e);
+    return false;
+  }
+}
+
+// strict: en empresas con varios almacenes NUNCA se devuelve la fila de otro almacen (antes, sin fila propia, se
+// devolvia la primera de la lista, de otra tienda, y una reserva o un ajuste manual tocaba el stock de la otra tienda).
+function pickStockRowByWarehouse(rows, warehouseCode = "", opts = {}) {
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) return null;
 
@@ -56423,9 +56574,30 @@ function pickStockRowByWarehouse(rows, warehouseCode = "") {
           .toUpperCase() === wanted,
     );
     if (byWarehouse) return byWarehouse;
+    if (opts.strict) return null;
   }
 
   return list[0] || null;
+}
+
+// Crea (a 0) la fila de stock de este almacen para un producto que solo la tiene en otros. Es lo mismo que haria
+// FacturaScripts en la primera venta; se hace antes para que la reserva y el ajuste vayan a la fila de ESTE almacen.
+async function ensureStockRowForWarehouse(sampleRow, warehouseCode) {
+  const wh = String(warehouseCode || "").trim();
+  const idproducto = Number(sampleRow?.idproducto || 0);
+  const referencia = String(sampleRow?.referencia || "").trim();
+  if (!wh || !idproducto || !referencia) return null;
+  const find = async () => {
+    const rows = await fetchStockRowsByParams({
+      "filter[idproducto]": idproducto,
+      "filter[codalmacen]": wh,
+    });
+    return pickStockRowByWarehouse(rows, wh, { strict: true });
+  };
+  const existing = await find();
+  if (existing) return existing;
+  await apiWrite("stocks", "POST", { codalmacen: wh, idproducto, referencia, cantidad: 0 });
+  return await find();
 }
 
 async function fetchStockRowsByParams(params = {}) {
@@ -56499,7 +56671,11 @@ async function fetchStockRowForProduct(product) {
       const byProduct = await fetchStockRowsByParams({
         "filter[idproducto]": baseId,
       });
-      const picked = pickStockRowByWarehouse(byProduct, warehouse);
+      const multiWh = isMultiWarehouseStockMode();
+      let picked = pickStockRowByWarehouse(byProduct, warehouse, { strict: multiWh });
+      if (!picked && multiWh && byProduct.length) {
+        picked = await ensureStockRowForWarehouse(byProduct[0], warehouse);
+      }
       if (picked) return picked;
     } catch (e) {
       console.warn(
@@ -56515,7 +56691,10 @@ async function fetchStockRowForProduct(product) {
   const list = await fetchStockRowsByProductReference(product);
   if (!list.length) return null;
 
-  return pickStockRowByWarehouse(list, warehouse);
+  const multiWh = isMultiWarehouseStockMode();
+  let picked = pickStockRowByWarehouse(list, warehouse, { strict: multiWh });
+  if (!picked && multiWh) picked = await ensureStockRowForWarehouse(list[0], warehouse);
+  return picked;
 }
 
 async function updateStockRowCantidad(stockRow, nextQty) {

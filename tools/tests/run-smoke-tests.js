@@ -11646,6 +11646,24 @@ if (
   else fail("Falta el vigilante de catalogo vacio (renderer.js: emptyCatalogWatchTick) -- revisar el cambio de 2026-11-05");
 }
 
+// Stock por almacen (2026-11-05): con varios almacenes entre los terminales, cada TPV enseña el stock de SU almacen
+// (no productos.stockfis, que es la suma) y nunca usa la fila de stock de otro almacen (reserva y ajuste manual).
+{
+  const okW =
+    renderer.includes("function isMultiWarehouseStockMode() {") &&
+    renderer.includes("return set.size > 1 && !!getCurrentWarehouseCode();") &&
+    renderer.includes("function applyWarehouseStockToProducts(list) {") &&
+    renderer.includes("function pickStockRowByWarehouse(rows, warehouseCode = \"\", opts = {}) {") &&
+    renderer.includes("if (opts.strict) return null;") &&
+    renderer.includes("async function ensureStockRowForWarehouse(sampleRow, warehouseCode) {") &&
+    renderer.includes("{ strict: multiWh },") &&
+    renderer.includes("refreshWarehouseStockView({ fetch: true }).catch(() => {});") &&
+    renderer.includes("setWarehouseStockRows(stocksData);") &&
+    renderer.includes("// Varias tiendas: el stock de cada producto es el de ESTE almacen, no la suma de todos.");
+  if (okW) ok("Stock por almacen: con varios almacenes cada TPV enseña el de su terminal y reservas/ajustes usan solo su fila (la crea a 0 si falta)");
+  else fail("Falta el stock por almacen (renderer.js: isMultiWarehouseStockMode, applyWarehouseStockToProducts, pickStockRowByWarehouse strict, ensureStockRowForWarehouse) -- revisar el cambio de 2026-11-05");
+}
+
 // Encargos, parte 2b (2026-11-03): asistente «Nuevo encargo» de dos paginas con un solo guardado. El pedido de
 // FacturaScripts lo crea el TPV (sin duplicar por numero2), el servidor guarda encargo + anticipo juntos, el dinero se
 // escribe tambien en las observaciones del pedido, y un pedido que no llegue a guardarse no queda huerfano.
