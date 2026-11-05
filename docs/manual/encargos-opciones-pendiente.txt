@@ -1,0 +1,7 @@
+Texto retirado de docs/manual/10-opciones.md (capitulo Opciones del manual general) mientras Encargos solo esta para clientes concretos.
+Volver a ponerlo justo antes de '### Modo Mesas (solo administradores)' cuando se abra a todos.
+
+### Encargos (solo administradores)
+
+- **Activar Encargos.** Apagado por defecto; se activa en cada terminal. Añade los botones **Pasar a encargo** y **Encargos** al carrito (se explica en su manual aparte). Si tu empresa aún no lo tiene activado en el servidor, el TPV lo avisa al intentar encenderlo.
+

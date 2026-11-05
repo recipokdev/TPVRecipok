@@ -20,6 +20,8 @@ Si intentas imprimir un ticket y todavía no hay impresora elegida, el TPV abre 
 
 > **Consejo:** usa siempre el botón de **probar** después de cambiar de impresora, para comprobar que sale bien.
 
+**Varios tickets seguidos.** Si el TPV manda dos o más tickets seguidos a la **misma** impresora (por ejemplo el ticket y una comanda), salen de uno en uno con una pausa de un par de segundos entre ellos; es normal y evita que las impresoras térmicas se corten a mitad. Si cada uno va a una impresora distinta (tickets en el mostrador y comandas en la cocina), no se esperan entre sí.
+
 ## 2. El ticket
 
 El ticket es el comprobante de la venta que se entrega al cliente.

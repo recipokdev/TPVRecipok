@@ -68,6 +68,8 @@ El TPV comprueba por sí solo si hay una versión nueva y la descarga en segundo
 
 Es mejor actualizar **fuera del horario de servicio**, con la caja cerrada. Por eso, **al cerrar la caja** el TPV propone actualizarse si hay una versión nueva (con una cuenta atrás que puedes cancelar); se puede desactivar en esta misma sección. Si un equipo no se reinicia nunca, se queda con la versión antigua: reinícialo de vez en cuando.
 
+Si dejas el TPV encendido de un día para otro y el equipo se **suspende**, al volver el TPV espera a que haya conexión y **vuelve a cargar el catálogo** solo (unos segundos después de despertar). Si no hay nada a medias en pantalla y sigue sin artículos, el TPV recarga también su ventana; si tienes un carrito, un cobro o una mesa abierta, no la toca. Si la ventana del TPV se queda sin responder o se cae, también se recarga sola.
+
 Durante la instalación aparece una ventanita **«Instalando TPV Recipok…»**. En equipos lentos puede tardar **más de un minuto**: **no abras el TPV otra vez**, se abrirá solo cuando termine. Si pasados unos minutos la ventanita avisa de que no se ha podido terminar, abre el TPV con su icono o reinicia el ordenador.
 
 ## 5. Cambiar el equipo de empresa o dejarlo para otra

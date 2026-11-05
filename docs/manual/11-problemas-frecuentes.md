@@ -104,6 +104,15 @@ En **Aparcados**, pulsa **Sync**. Si sigue igual, pulsa **Reiniciar**: borra la 
 ### El TPV va lento
 Comprueba la conexión a internet. Si el equipo tiene pantalla pequeña, en **Opciones → Pantalla** puedes ajustar la **Escala de la interfaz**.
 
+### La pantalla se ha quedado sin artículos
+Suele pasar al dejar el TPV encendido de un día para otro. Espera unos segundos: al volver de la suspensión el TPV recarga el catálogo solo. Si el servidor llegara a contestar con el catálogo vacío, el TPV conserva el que ya tenía y avisa con un mensaje. Si sigue sin artículos, comprueba el internet del local, cierra y vuelve a abrir el TPV y, si no se arregla, avisa al soporte de Recipok indicando la hora y, si puedes, con una foto de la pantalla.
+
+### El TPV no se abre después de actualizar
+Mientras se instala una versión nueva aparece una ventanita **«Instalando TPV Recipok…»**. En equipos lentos puede tardar **más de un minuto**: **no abras el TPV otra vez**, se abrirá solo al terminar. Si pasados unos minutos la ventanita avisa de que no se ha podido terminar, abre el TPV con su icono o reinicia el ordenador. Si aun así no abre, avisa al soporte de Recipok: el TPV guarda un registro de cada actualización que nos ayuda a ver qué ha pasado.
+
+### La ventana del TPV se queda en blanco o no responde
+El TPV vigila su propia ventana: si se cae o deja de responder, **se recarga sola** (como mucho dos veces cada diez minutos). Espera unos segundos. Si se repite varias veces, reinicia el TPV y avisa al soporte.
+
 ### ¿Cómo sé qué versión tengo?
 Abajo a la izquierda, junto al estado de la conexión, aparece el número de versión. Las novedades de cada versión están en **Opciones → Actualización automática → Changelog**.
 
