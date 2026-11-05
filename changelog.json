@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "ARREGLO: al cambiar de terminal (por ejemplo, un TPV que se lleva a otra sucursal) con una caja abierta, el TPV seguía usando la caja del terminal anterior: en FacturaScripts esa caja es de otro terminal y el nuevo no tenía ninguna abierta. Ahora, al cambiar de terminal, el TPV suelta esa caja (sigue abierta para quien la usa, no se cierra) y busca la caja abierta del terminal nuevo o pide abrirla."
+      ]
     },
     {
       "version": "0.2.58",

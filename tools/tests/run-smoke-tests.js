@@ -11598,6 +11598,20 @@ if (
   else fail("Encargos clientes concretos: seccion=" + okSec + ", admin=" + okAdmin + ", open=" + okOpen + ", js=" + okJs + ", changelog=" + okChangelog);
 }
 
+// Los Argentinos (2026-11-05): un TPV llevado a otra sucursal mantenia la caja abierta del terminal anterior al
+// cambiar de terminal (en FacturaScripts esa caja es de otro terminal). Al cambiar, el TPV suelta la caja local (sin
+// cerrarla en FS) y busca o pide abrir la del terminal nuevo; en modo caja compartida no se toca.
+{
+  const okFn =
+    renderer.includes("async function detachCashIfOwnedByOtherTerminal() {") &&
+    /async function detachCashIfOwnedByOtherTerminal\(\) \{\s*if \(isSharedCashModeEnabled\(\)\) return false;/.test(renderer) &&
+    renderer.includes("if (!remoteIdtpv || remoteIdtpv === idtpv) return false;") &&
+    renderer.includes("await maybeOpenCashOrRecover?.().catch?.(() => {});");
+  const okCalls = (renderer.match(/await detachCashIfOwnedByOtherTerminal\(\);/g) || []).length >= 2;
+  if (okFn && okCalls) ok("Cambiar de terminal con la caja abierta de otro terminal: se suelta (sin cerrarla en FS) y se busca/pide la del terminal nuevo; nada en modo caja compartida");
+  else fail("Falta detachCashIfOwnedByOtherTerminal en el cambio de terminal (renderer.js) -- revisar el cambio de 2026-11-05: fn=" + okFn + ", llamadas=" + okCalls);
+}
+
 // Encargos, parte 2b (2026-11-03): asistente «Nuevo encargo» de dos paginas con un solo guardado. El pedido de
 // FacturaScripts lo crea el TPV (sin duplicar por numero2), el servidor guarda encargo + anticipo juntos, el dinero se
 // escribe tambien en las observaciones del pedido, y un pedido que no llegue a guardarse no queda huerfano.

@@ -27293,6 +27293,64 @@ async function checkSharedCajaHealthOnce() {
   }
 }
 
+// Cliente real (Los Argentinos, 2026-11-05): un TPV que se llevaron a una segunda
+// sucursal arrancaba con la caja abierta de la sucursal original; el administrador
+// cambiaba de terminal (Constitucion -> Sella) y el TPV seguia usando ESA caja, que en
+// FacturaScripts es del otro terminal (en Sella no habia ninguna abierta y las ventas
+// habrian salido con la caja de la otra tienda). Cada terminal tiene su propia caja
+// (ver isSharedCashModeEnabled), asi que al cambiar de terminal el TPV suelta la caja
+// local -- SIN cerrarla en FacturaScripts, sigue abierta para quien la usa -- y busca o
+// pide abrir la del terminal nuevo. Sin conexion no se puede comprobar de quien es la
+// caja: no se toca nada (el arranque ya la valida al recuperarla).
+async function detachCashIfOwnedByOtherTerminal() {
+  if (isSharedCashModeEnabled()) return false;
+  if (!cashSession?.open) return false;
+  if (TPV_STATE?.offline || TPV_STATE?.locked) return false;
+
+  const idtpv = Number(currentTerminal?.id || 0) || 0;
+  const idcaja = getCajaIdSafe();
+  if (!idtpv || !idcaja) return false;
+
+  let remoteCaja = null;
+  try {
+    remoteCaja = await apiReadCajaById(idcaja);
+  } catch {
+    return false;
+  }
+
+  const remoteIdtpv = Number(remoteCaja?.idtpv || 0) || 0;
+  if (!remoteIdtpv || remoteIdtpv === idtpv) return false;
+
+  cashSession.open = false;
+  cashSession.remoteCajaId = null;
+  pushCustomerState();
+
+  stopProductsStockAutoRefresh?.();
+  stopParkedReservationsAutoRefresh?.();
+  stopSharedCajaHealthMonitor?.();
+  stopPayMethodsAutoRefresh?.();
+  disconnectRealtimeSocket?.();
+
+  try {
+    localStorage.removeItem("tpv_remoteCajaId");
+  } catch {}
+
+  updateCashButtonLabel?.();
+  renderCashIdChip?.();
+  refreshAgentGuardUI?.();
+  renderMainUI?.(true);
+
+  toast(
+    `La caja abierta era del terminal ${remoteIdtpv}, no de ${currentTerminal?.name || idtpv}. Sigue abierta allí; aquí se busca o se abre la de este terminal.`,
+    "warn",
+    "Caja",
+  );
+
+  cashOpenDialogShown = false;
+  await maybeOpenCashOrRecover?.().catch?.(() => {});
+  return true;
+}
+
 async function checkSharedCajaStateOnce({ notify = true } = {}) {
   if (!isSharedCashModeEnabled()) return null;
   if (TPV_STATE?.offline || TPV_STATE?.locked) return null;
@@ -30093,6 +30151,7 @@ if (terminalOkBtn) {
 
       renderMainAgentBar();
       hideTerminalOverlay();
+      await detachCashIfOwnedByOtherTerminal();
       return;
     }
     // CAMBIO RÁPIDO DE AGENTE
@@ -30142,6 +30201,7 @@ if (terminalOkBtn) {
       );
 
       hideTerminalOverlay();
+      await detachCashIfOwnedByOtherTerminal();
       return;
     }
 
