@@ -11669,6 +11669,14 @@ if (
   else fail("Falta el stock por almacen (renderer.js: isMultiWarehouseStockMode, applyWarehouseStockToProducts, pickStockRowByWarehouse strict, ensureStockRowForWarehouse) -- revisar el cambio de 2026-11-05");
 }
 
+// Ticket: el estilo .muted no debe atenuar (2026-11-06): con opacity < 1 las termicas imprimen gris tramado (nombre legal,
+// cabecera Cant./Ref./Total, forma de pago).
+{
+  const tpl = fs.readFileSync(path.join(root, "ticket_print.html"), "utf8");
+  if (/\.muted\s*\{\s*opacity:\s*1;\s*\}/.test(tpl)) ok("Ticket: .muted se imprime en negro solido (opacity 1), sin gris tramado en termicas");
+  else fail("ticket_print.html: .muted vuelve a atenuar (opacity < 1) y las termicas lo imprimen como gris tramado -- revisar el cambio de 2026-11-06");
+}
+
 // Divisa publicada por tienda (2026-11-06): el TPV manda su moneda efectiva (euro = null) con set-display-settings al
 // arrancar si difiere de la del servidor, para la app de camareros.
 {
