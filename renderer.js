@@ -15223,6 +15223,9 @@ function renderMainUI(force = false) {
     if (catContainer) catContainer.innerHTML = "";
     if (subCatContainer) subCatContainer.innerHTML = "";
     productReorderModeNoticeEl?.classList.add("hidden");
+    // La cuadricula acaba de vaciarse: el siguiente renderMainUI() (p. ej. al recuperar la caja del terminal nuevo tras
+    // cambiar de terminal) debe repintarla aunque no sea forzado, o se queda vacia hasta pulsar "actualizar".
+    mainUiRendered = false;
     renderCart?.();
     return;
   }

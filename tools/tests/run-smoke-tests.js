@@ -11669,6 +11669,15 @@ if (
   else fail("Falta el stock por almacen (renderer.js: isMultiWarehouseStockMode, applyWarehouseStockToProducts, pickStockRowByWarehouse strict, ensureStockRowForWarehouse) -- revisar el cambio de 2026-11-05");
 }
 
+// Cambio de terminal con caja abierta (2026-11-06): renderMainUI vacia la cuadricula con la caja "cerrada" y debe
+// dejar mainUiRendered=false, o al recuperar la caja del terminal nuevo el repintado no forzado sale sin pintar.
+{
+  const rend = fs.readFileSync(path.join(root, "renderer.js"), "utf8");
+  const okT = /if \(!cashSession\?\.open\) \{[\s\S]{0,1200}?mainUiRendered = false;\s*renderCart\?\.\(\);\s*return;/.test(rend);
+  if (okT) ok("Cambio de terminal: al vaciar la pantalla por caja cerrada se marca mainUiRendered=false para que se repinte al recuperar la caja");
+  else fail("renderMainUI no marca mainUiRendered=false al vaciar la cuadricula con la caja cerrada (productos en blanco tras cambiar de terminal) -- revisar el cambio de 2026-11-06");
+}
+
 // Actualizacion sin huecos (2026-11-05): el TPV no se cierra hasta que la ventanita de "instalando" ya se ve, y en kiosco
 // reafirma el primer plano tras abrir (barra de tareas).
 {
