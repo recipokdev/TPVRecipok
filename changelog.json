@@ -6,6 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
+        "MEJORA: el TPV comunica al servidor la moneda con la que vende cada tienda (la de FacturaScripts, o la que se elija en Opciones), para que la app de camareros muestre los importes en esa moneda en vez de siempre en euros. Con euros no cambia nada.",
         "ARREGLO: al cambiar de terminal (por ejemplo de Constitución a Sella) con la caja abierta, la lista de productos y las familias se quedaban en blanco hasta pulsar el botón de actualizar. Ahora, al encontrar o abrir la caja del terminal nuevo, la pantalla se repinta sola.",
         "ARREGLO: al actualizar, la pantalla se quedaba un instante vacía entre que se cerraba el TPV y aparecía la ventanita «Instalando TPV Recipok…». Ahora el TPV espera a que esa ventanita ya se vea antes de cerrarse, así que siempre hay algo en pantalla durante toda la actualización. En modo kiosko, además, tras actualizar el TPV reafirma el primer plano de su ventana (unos segundos después de abrir) para que la barra de tareas de Windows no se quede encima."
       ]

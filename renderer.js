@@ -5382,6 +5382,9 @@ async function publishDisplaySettingsToServer(partial) {
     };
     if (typeof partial.familiesFirst === "boolean") body.familiesFirst = partial.familiesFirst;
     if (typeof partial.productSortMode === "string") body.productSortMode = partial.productSortMode;
+    // Divisa con la que vende la tienda (2026-11-06, pedido de la app de camareros): objeto, o null para borrarla
+    // (euro = sin dato; la app pinta "€" como siempre). Clave ausente = el servidor no la toca.
+    if (Object.prototype.hasOwnProperty.call(partial, "currency")) body.currency = partial.currency;
     await fetchWithTimeout(
       `${TPV_SYNC_API_URL}?action=set-display-settings`,
       {
@@ -5398,6 +5401,24 @@ async function publishDisplaySettingsToServer(partial) {
   } catch (e) {
     console.warn("[DISPLAY-SETTINGS] no se pudo publicar:", e?.message || e);
   }
+}
+
+// La divisa que se publica: la que usa este TPV ahora mismo (CURRENCY). El euro se manda como null (sin dato).
+function getCurrencyForDisplayPublish() {
+  const c = CURRENCY;
+  if (!c || !/^[A-Z]{3}$/.test(String(c.code || "")) || c.code === "EUR") return null;
+  return {
+    code: c.code,
+    symbol: c.symbol,
+    symbolBefore: c.symbolBefore !== false,
+    decimals: c.decimals,
+    decSep: c.decSep,
+    thousandsSep: c.thousandsSep || "",
+  };
+}
+
+function displayCurrencySignature(c) {
+  return c ? JSON.stringify([c.code, c.symbol, !!c.symbolBefore, Number(c.decimals), c.decSep, c.thousandsSep || ""]) : "";
 }
 
 let __displaySettingsStartupSynced = false;
@@ -5423,6 +5444,11 @@ async function syncDisplaySettingsOnStartup(attempt = 0) {
     const partial = {};
     if (data.familiesFirst === null || data.familiesFirst === undefined) partial.familiesFirst = !!familiesFirstModeEnabled;
     if (!data.productSortMode) partial.productSortMode = normalizeProductSortMode(productSortMode);
+    // La divisa no es una preferencia: el servidor debe reflejar la que usa este TPV (si cambia, tras reiniciar).
+    const localCurrency = getCurrencyForDisplayPublish();
+    if (displayCurrencySignature(localCurrency) !== displayCurrencySignature(data.currency || null)) {
+      partial.currency = localCurrency;
+    }
     if (Object.keys(partial).length) await publishDisplaySettingsToServer(partial);
   } catch (e) {
     console.warn("[DISPLAY-SETTINGS] sincronizacion inicial:", e?.message || e);

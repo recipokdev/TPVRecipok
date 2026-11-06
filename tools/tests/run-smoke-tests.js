@@ -11669,6 +11669,20 @@ if (
   else fail("Falta el stock por almacen (renderer.js: isMultiWarehouseStockMode, applyWarehouseStockToProducts, pickStockRowByWarehouse strict, ensureStockRowForWarehouse) -- revisar el cambio de 2026-11-05");
 }
 
+// Divisa publicada por tienda (2026-11-06): el TPV manda su moneda efectiva (euro = null) con set-display-settings al
+// arrancar si difiere de la del servidor, para la app de camareros.
+{
+  const rend = fs.readFileSync(path.join(root, "renderer.js"), "utf8");
+  const okC =
+    rend.includes("function getCurrencyForDisplayPublish() {") &&
+    rend.includes("function displayCurrencySignature(c) {") &&
+    rend.includes('if (Object.prototype.hasOwnProperty.call(partial, "currency")) body.currency = partial.currency;') &&
+    rend.includes("displayCurrencySignature(localCurrency) !== displayCurrencySignature(data.currency || null)") &&
+    rend.includes("partial.currency = localCurrency;");
+  if (okC) ok("El TPV publica su divisa efectiva por tienda (set-display-settings, currency; euro = null) al arrancar si difiere de la del servidor");
+  else fail("Falta publicar la divisa de la tienda desde el TPV (renderer.js getCurrencyForDisplayPublish / syncDisplaySettingsOnStartup) -- revisar el cambio de 2026-11-06");
+}
+
 // Cambio de terminal con caja abierta (2026-11-06): renderMainUI vacia la cuadricula con la caja "cerrada" y debe
 // dejar mainUiRendered=false, o al recuperar la caja del terminal nuevo el repintado no forzado sale sin pintar.
 {
