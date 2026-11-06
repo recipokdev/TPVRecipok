@@ -12036,10 +12036,9 @@ mustContain(fs.readFileSync(path.join(__dirname, "..", "..", "js", "tpv", "encar
 function changelogTextHasTerminalRule() {
   try {
     const cl = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "changelog.json"), "utf8"));
-    // El release renombra la entrada "actual" a la version nueva ANTES de lanzar los tests: se mira en las ultimas.
-    return (cl.versions || [])
-      .slice(0, 4)
-      .some((v) => (v.changes || []).some((c) => /solo un administrador puede elegir el terminal/i.test(c)));
+    // La nota vive en una version ya publicada (0.2.57) y cada release la empuja una posicion: se mira en todo el historial
+    // (con .slice(0, 4) fallaba al lanzar la 0.2.60 y bloqueaba el release).
+    return (cl.versions || []).some((v) => (v.changes || []).some((c) => /solo un administrador puede elegir el terminal/i.test(c)));
   } catch {
     return false;
   }
