@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.60",
+      "date": "2026-11-06",
+      "title": "Release 0.2.60",
       "changes": [
         "ARREGLO: en el ticket impreso, el nombre legal de la empresa, la cabecera «Cant. / Ref. / Total» y la forma de pago salían más claros y punteados que el resto del texto en impresoras térmicas. Ahora se imprimen en negro sólido, igual que el resto.",
         "MEJORA: el TPV comunica al servidor la moneda con la que vende cada tienda (la de FacturaScripts, o la que se elija en Opciones), para que la app de camareros muestre los importes en esa moneda en vez de siempre en euros. Con euros no cambia nada.",
