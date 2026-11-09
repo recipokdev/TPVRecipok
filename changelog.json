@@ -5,7 +5,10 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "ARREGLO: el stock podía quedarse de más (por ejemplo, el sistema decía 8 pollos y quedaban 2) cuando dos TPV cobraban a la vez pedidos aparcados con el mismo producto. Al cobrar, un TPV lee el stock y lo vuelve a escribir; si justo en medio el otro TPV creaba su factura (que también resta stock), la escritura pisaba esa resta. Ahora, al cobrar, el TPV reserva el producto mientras crea la factura y el otro espera unos instantes a que termine (nunca se bloquea un cobro: si no se consigue a tiempo se cobra igualmente y queda anotado para soporte). Con un solo TPV no cambia nada.",
+        "MEJORA: el TPV deja constancia en el servidor (solo para soporte; no se muestra nada ni cambia el funcionamiento) de si el usuario estaba como administrador, si el modo de edición de precio estaba activo y qué opciones se cambian al cerrar Opciones (nombre de la opción, valor anterior y nuevo). Así, cuando alguien diga «no me sale tal opción», se puede comprobar qué había cambiado. No se guarda ningún PIN ni contraseña."
+      ]
     },
     {
       "version": "0.2.60",

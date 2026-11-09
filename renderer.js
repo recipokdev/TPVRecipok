@@ -902,7 +902,12 @@ function sanitizeClientEventDetail(detail) {
   return out;
 }
 
-function reportClientEvent(category, code, message, detail, severity) {
+// opts.trail = true -> "rastro" de acciones (quien era admin, que opciones se cambiaron): cada cambio es un hecho
+// distinto, asi que NO se deduplica a 5 min (un on->off->on seguido debe verse entero) y tiene su propio tope
+// (30 cada 10 min) para no gastar el de los avisos de fallos ni ser tapado por ellos.
+let __clientTrailWindow = { start: 0, n: 0 };
+
+function reportClientEvent(category, code, message, detail, severity, opts) {
   try {
     if (TPV_STATE?.offline) return;
     if (typeof isSafeTrainingModeEnabled === "function" && isSafeTrainingModeEnabled()) return;
@@ -914,17 +919,25 @@ function reportClientEvent(category, code, message, detail, severity) {
     const msg = String(message || "").slice(0, 300);
     const k = `${cat}|${cod}|${msg.slice(0, 80)}`;
     const now = Date.now();
-    const seen = __clientEventSeen.get(k) || { sentAt: 0, pending: 0 };
-    if (now - seen.sentAt < 5 * 60 * 1000) {
-      seen.pending += 1;
-      __clientEventSeen.set(k, seen);
-      return;
+    const isTrail = !!(opts && opts.trail);
+    let seen = { sentAt: 0, pending: 0 };
+    if (isTrail) {
+      if (now - __clientTrailWindow.start > 10 * 60 * 1000) __clientTrailWindow = { start: now, n: 0 };
+      if (__clientTrailWindow.n >= 30) return;
+      __clientTrailWindow.n += 1;
+    } else {
+      seen = __clientEventSeen.get(k) || { sentAt: 0, pending: 0 };
+      if (now - seen.sentAt < 5 * 60 * 1000) {
+        seen.pending += 1;
+        __clientEventSeen.set(k, seen);
+        return;
+      }
+      if (now - __clientEventWindow.start > 10 * 60 * 1000) __clientEventWindow = { start: now, n: 0 };
+      if (__clientEventWindow.n >= 40) return;
+      __clientEventWindow.n += 1;
+      __clientEventSeen.set(k, { sentAt: now, pending: 0 });
+      if (__clientEventSeen.size > 300) __clientEventSeen.delete(__clientEventSeen.keys().next().value);
     }
-    if (now - __clientEventWindow.start > 10 * 60 * 1000) __clientEventWindow = { start: now, n: 0 };
-    if (__clientEventWindow.n >= 40) return;
-    __clientEventWindow.n += 1;
-    __clientEventSeen.set(k, { sentAt: now, pending: 0 });
-    if (__clientEventSeen.size > 300) __clientEventSeen.delete(__clientEventSeen.keys().next().value);
     const appVersion = String(document.getElementById("appVersion")?.textContent || "")
       .trim()
       .replace(/^v/i, "");
@@ -953,6 +966,64 @@ function reportClientEvent(category, code, message, detail, severity) {
     ).catch(() => {});
   } catch {
     /* es solo diagnostico: nunca debe romper nada */
+  }
+}
+
+// ===== Rastro de acceso y de cambios en Opciones (2026-11-09) =====
+// Para poder responder despues a "no me sale tal opcion": queda en el servidor (audit "client-other", codigos
+// "access-state" y "options-changed") quien estaba como administrador, con que usuario/agente y si el modo de
+// edicion de precio estaba activo, y que opciones se tocaron. Solo observacional (nunca bloquea ni avisa al
+// cajero). No se guarda ningun PIN, contraseña ni dato de clientes finales.
+let __accessStateLastSig = "";
+let __accessStateTimer = null;
+
+let __accessStateReason = "";
+
+function reportAccessState(reason) {
+  try {
+    // Dentro de una misma tanda (login = admin + carga del modo de precio) manda el primer motivo.
+    if (__accessStateTimer) clearTimeout(__accessStateTimer);
+    else __accessStateReason = String(reason || "");
+    reason = __accessStateReason;
+    // Se espera un poco y se lee el estado entonces: al iniciar sesion el admin se fija antes que el modo de
+    // edicion de precio, y asi sale UN evento con todo ya cargado en vez de dos a medias.
+    __accessStateTimer = setTimeout(() => {
+      __accessStateTimer = null;
+      try {
+        const pick = (fn, fallback) => {
+          try {
+            const v = fn();
+            return v === undefined || v === null ? fallback : v;
+          } catch {
+            return fallback;
+          }
+        };
+        const detail = {
+          isAdmin: !!window.TPV_STATE?.isAdmin,
+          loginAdmin: !!window.TPV_STATE?.isAdminFromLogin,
+          priceEdit: !!window.TPV_STATE?.priceEditMode,
+          agentPinMode: !!pick(() => agentAdminPinModeEnabled, false),
+          user: String(pick(() => getLoginUser(), "")).slice(0, 60),
+          agent: String(pick(() => currentAgent?.codagente, "")).slice(0, 20),
+        };
+        const sig = JSON.stringify(detail);
+        if (sig === __accessStateLastSig) return; // sin cambios desde el ultimo evento
+        __accessStateLastSig = sig;
+        const yn = (v) => (v ? "sí" : "no");
+        reportClientEvent(
+          "other",
+          "access-state",
+          `Acceso: admin ${yn(detail.isAdmin)}, edición de precio ${yn(detail.priceEdit)} (${String(reason || "").slice(0, 40)})`,
+          { ...detail, reason: String(reason || "").slice(0, 40) },
+          "warn",
+          { trail: true },
+        );
+      } catch {
+        /* solo diagnostico */
+      }
+    }, 2500);
+  } catch {
+    /* solo diagnostico */
   }
 }
 
@@ -9576,6 +9647,9 @@ function setAdminFlag(isAdmin, source = "unknown") {
     );
   } catch {}
 
+  // Rastro en el servidor de quien estaba como admin (solo diagnostico).
+  reportAccessState(`admin:${source}`);
+
   // UI de permisos (botones admin, etc.)
   applyAdminOnlyUI?.();
   refreshOptionsUI?.();
@@ -10495,14 +10569,93 @@ async function apiLogCobroFollowupIssue({ idfactura, codigo, step, message }) {
 // candado. Si se agotan los intentos, sigue igualmente (ver nota de
 // fail-open arriba): es mejor arriesgar una carrera rara y poco frecuente
 // que bloquear un cobro/aparcado real por un candado que no se libera.
-async function acquireStockLockWithRetry(idProducto, attempts = 5) {
+async function acquireStockLockWithRetry(idProducto, attempts = 5, ttlSec = undefined) {
   let last = { acquired: true };
   for (let i = 0; i < attempts; i++) {
-    last = await apiAcquireStockLock(idProducto);
+    last = await apiAcquireStockLock(idProducto, ttlSec);
     if (last?.acquired) return last;
     await sleep(200 + Math.random() * 250);
   }
   return last;
+}
+
+// ===== Candado de stock alrededor de la factura de una venta (2026-11-09) =====
+// Real (Asador el Gallo, 8-nov, pollo: el sistema decia 8 y quedaban 2): al cobrar un aparcado, un TPV lee el
+// stock de FacturaScripts y escribe "leido + reserva" (valor absoluto). Si justo entre la lectura y la
+// escritura el OTRO TPV crea su factura (FacturaScripts resta el stock dentro de esa peticion, ~5 s con el
+// plugin de la web), la escritura pisa esa resta y el stock se queda de mas (+1, +1,5...). El candado por
+// producto ya serializaba TPV contra TPV en las escrituras de reserva, pero NO cubria la creacion de la
+// factura. Ahora la venta coge el candado de sus productos con stock ANTES de crear la factura y lo suelta
+// al terminar, y la liberacion de reserva del cobro (syncReservedStockDeltaToFS) espera mas a que el otro
+// TPV acabe su factura. Sigue siendo "fail-open": si no se consigue a tiempo se vende igual (nunca se
+// bloquea un cobro) y queda anotado en el servidor para poder revisarlo.
+function getManagedStockProductIdsForSaleLock(items) {
+  const ids = [];
+  try {
+    buildReservedQtyByProductMap(items).forEach((qty, id) => {
+      if (!(Number(qty) > 0)) return; // devoluciones: no compiten
+      const p = findProductByBaseId(id);
+      if (p && parseManagedStockValue(p.stockfis) === null) return; // sin gestion de stock
+      ids.push(id);
+    });
+  } catch {
+    return [];
+  }
+  return ids.slice(0, 20);
+}
+
+async function withSaleStockLocks(items, fn) {
+  let held = [];
+  let notAcquired = 0;
+  try {
+    const ids =
+      isReservedStockSyncedToFsEnabled() && !TPV_STATE?.offline
+        ? getManagedStockProductIdsForSaleLock(items)
+        : [];
+    if (ids.length) {
+      const acquiring = Promise.all(
+        ids.map(async (id) => {
+          const r = await acquireStockLockWithRetry(id, 12, 30);
+          if (!r?.acquired) notAcquired += 1;
+          return r?.acquired ? id : 0;
+        }),
+      );
+      // Tope de espera total: si el servidor va lento no se retrasa mas el cobro; lo que se consiga despues
+      // se suelta solo en cuanto llegue (para no dejar candados pegados).
+      const got = await Promise.race([
+        acquiring,
+        new Promise((resolve) => setTimeout(() => resolve(null), 4500)),
+      ]);
+      if (got === null) {
+        acquiring
+          .then((late) => Promise.all(late.filter(Boolean).map((id) => apiReleaseStockLock(id).catch(() => {}))))
+          .catch(() => {});
+        notAcquired = ids.length;
+      } else {
+        held = got.filter(Boolean);
+      }
+      if (notAcquired > 0) {
+        reportClientEvent(
+          "stock",
+          "sale-lock-not-acquired",
+          "La venta se hizo sin el candado de stock de algunos productos (otro TPV lo tenia o el servidor tardo)",
+          { productos: ids.length, sinCandado: notAcquired },
+          "warn",
+        );
+      }
+    }
+  } catch {
+    held = [];
+  }
+  try {
+    return await fn();
+  } finally {
+    // Se espera a soltarlos (en paralelo, rapido): la liberacion de reserva de este mismo cobro vuelve a
+    // pedir el candado y no debe encontrarse con este a medio soltar.
+    if (held.length) {
+      await Promise.all(held.map((id) => apiReleaseStockLock(id).catch(() => {})));
+    }
+  }
 }
 
 async function apiListTerminalPresenceRemote() {
@@ -33676,6 +33829,77 @@ function renderOptionsPreviews() {
   });
 }
 
+// ===== Rastro de cambios en Opciones (2026-11-09) =====
+// Al abrir Opciones (ya cargadas) se guarda una foto de los interruptores/valores/listas que describe
+// OPT_PREVIEW_DEFS, y al cerrarlas se compara: si algo cambio, UN evento al servidor ("options-changed") con
+// "Opcion: antes → despues". Asi no hay que tocar cada opcion por separado y las nuevas que se añadan a la tabla
+// quedan cubiertas solas. Ignora botones (A) y apartados a medida (X: nombres de impresora...). No se guardan
+// valores de campos con datos personales (cliente por defecto) ni de listas que cargan solas despues (puertos).
+const OPT_AUDIT_NO_VALUE_IDS = new Set(["terminalDefaultCustomerSelect"]);
+const OPT_AUDIT_IGNORE_IDS = new Set(["scalePortSelect"]);
+let __optAuditSnapshot = null;
+
+function snapshotOptionsForAudit() {
+  const snap = new Map();
+  Object.values(OPT_PREVIEW_DEFS).forEach((defs) => {
+    defs.forEach((def) => {
+      if (def.kind !== "toggle" && def.kind !== "value" && def.kind !== "count") return;
+      if (OPT_AUDIT_IGNORE_IDS.has(def.id)) return;
+      let r = null;
+      try {
+        r = computeOptPreviewItem(def);
+      } catch {}
+      if (!r) return;
+      let v;
+      if (def.kind === "toggle") v = r.state === "on" ? "sí" : "no";
+      else v = r.text.startsWith(`${def.label}: `) ? r.text.slice(def.label.length + 2) : "(vacío)";
+      snap.set(def.id, { label: def.label, v });
+    });
+  });
+  return snap;
+}
+
+function markOptionsAuditBaseline() {
+  try {
+    __optAuditSnapshot = snapshotOptionsForAudit();
+  } catch {
+    __optAuditSnapshot = null;
+  }
+}
+
+function reportOptionsChangesOnClose() {
+  const before = __optAuditSnapshot;
+  __optAuditSnapshot = null;
+  if (!before) return;
+  try {
+    const after = snapshotOptionsForAudit();
+    const changes = [];
+    after.forEach((a, id) => {
+      const b = before.get(id);
+      if (!b || b.v === a.v) return;
+      changes.push(OPT_AUDIT_NO_VALUE_IDS.has(id) ? `${a.label}: cambiada` : `${a.label}: ${b.v} → ${a.v}`);
+    });
+    if (!changes.length) return;
+    reportClientEvent(
+      "other",
+      "options-changed",
+      `Opciones cambiadas: ${changes.join("; ")}`,
+      {
+        count: changes.length,
+        admin: !!window.TPV_STATE?.isAdmin,
+        user: String(getLoginUser?.() || "").slice(0, 60),
+        agent: String(currentAgent?.codagente || "").slice(0, 20),
+      },
+      "warn",
+      { trail: true },
+    );
+    // Si se tocó el modo de edición de precio o el PIN de admin, el estado de acceso cambió: se anota también.
+    reportAccessState("options-closed");
+  } catch {
+    /* solo diagnostico */
+  }
+}
+
 let optionsPreviewRenderTimer = null;
 function scheduleRenderOptionsPreviews() {
   if (optionsPreviewRenderTimer) return;
@@ -34188,9 +34412,11 @@ async function openOptions() {
   optionsAccordionEl?.classList.remove("opt-loading");
   syncOptionsPreviewItemStates();
   renderOptionsPreviews();
+  markOptionsAuditBaseline();
 }
 
 function closeOptions() {
+  reportOptionsChangesOnClose();
   optionsOverlay?.classList.add("hidden");
   resetOptionsSearch();
 }
@@ -41456,7 +41682,13 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "", ticketId = null
     // esto, la lectura-calculo-escritura de abajo no es atomica y 2 TPV
     // tocando el mismo producto casi a la vez pueden pisarse el ajuste sin
     // que nadie se entere. Fail-open: si no se consigue, seguimos igual.
-    const lockInfo = await acquireStockLockWithRetry(idProd);
+    // Al COBRAR un aparcado se espera mas (~6 s): el otro TPV puede estar creando su factura (que resta
+    // stock dentro de FacturaScripts, ~5 s) y escribir ahora pisaria esa resta (ver withSaleStockLocks). Esta
+    // liberacion va en segundo plano tras la venta, asi que esperar no retrasa al cajero.
+    const lockInfo = await acquireStockLockWithRetry(
+      idProd,
+      /^cobrar/i.test(String(reason || "")) ? 20 : 5,
+    );
 
     try {
       const product = findProductByBaseId(idProd);
@@ -46670,7 +46902,9 @@ async function processConfirmedSale(ctx) {
         stockOverrideProductIds.map((id) => setProductVentasInStock(id, true)),
       );
     }
-    const sendResult = await sendOrQueueFactura(ticketPayload);
+    const sendResult = await withSaleStockLocks(cartSnapshot, () =>
+      sendOrQueueFactura(ticketPayload),
+    );
 
     // ========= OFFLINE =========
     if (!sendResult.ok && sendResult.queued) {
@@ -64766,6 +65000,7 @@ async function loadPriceEditModeFromCfg() {
   } catch {
     window.TPV_STATE.priceEditMode = false;
   }
+  reportAccessState("price-edit-load");
 }
 
 async function setPriceEditMode(v) {
@@ -64774,6 +65009,7 @@ async function setPriceEditMode(v) {
     const TPV_CFG = window.TPV_CFG;
     if (TPV_CFG) await TPV_CFG.set("ui.priceEditMode", !!v);
   } catch {}
+  reportAccessState("price-edit-toggle");
   renderProducts?.();
 }
 

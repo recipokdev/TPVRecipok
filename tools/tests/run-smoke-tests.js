@@ -2667,7 +2667,7 @@ mustContain(
 );
 mustContain(
   renderer,
-  "async function acquireStockLockWithRetry(idProducto, attempts = 5)",
+  "async function acquireStockLockWithRetry(idProducto, attempts = 5, ttlSec = undefined)",
   "acquireStockLockWithRetry helper present (retries with backoff if another TPV holds it)",
 );
 
@@ -2702,7 +2702,7 @@ mustContain(
   const endIdx = idx >= 0 ? renderer.indexOf("function rebuildRemoteReservedByProductMap()", idx) : -1;
   const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
   if (
-    scoped.includes("const lockInfo = await acquireStockLockWithRetry(idProd);") &&
+    scoped.includes("const lockInfo = await acquireStockLockWithRetry(") &&
     scoped.includes("if (lockInfo?.acquired) {") &&
     scoped.includes("await apiReleaseStockLock(idProd).catch(() => {});")
   ) {
@@ -11148,7 +11148,7 @@ if (
 
 console.log("\n[SMOKE] Checking 2026-10-27 registro de eventos de cliente en el servidor\n");
 if (
-  renderer.includes("function reportClientEvent(category, code, message, detail, severity) {") &&
+  renderer.includes("function reportClientEvent(category, code, message, detail, severity, opts) {") &&
   renderer.includes("`${TPV_SYNC_API_URL}?action=log-client-event`") &&
   renderer.includes("if (__clientEventWindow.n >= 40) return;") &&
   renderer.includes('window.addEventListener("unhandledrejection", (e) => {') &&
@@ -12174,6 +12174,26 @@ mustContain(encargosRefundJs, "function orderLinesHtml(o) {", "Las filas de la l
 mustContain(encargosRefundJs, '<div class="w-line">', "La lista de hoy impresa pone un producto por linea");
 mustContain(encargosRefundJs, '<div class="w-name">', "La lista de hoy impresa destaca el nombre");
 mustContain(encargosRefundJs, "${o.pending > 0 ? \"A COBRAR\" : \"PAGADO\"}", "La lista de hoy impresa dice si esta pagado o a cobrar, sin importes");
+
+// Carrera de stock entre 2 TPV (Asador el Gallo, 8-nov-2026): la factura de la venta coge el candado de stock
+// de sus productos y la liberacion de reserva del cobro espera mas a que el otro TPV termine su factura.
+mustContain(renderer, "async function withSaleStockLocks(items, fn) {", "La venta coge el candado de stock de sus productos mientras crea la factura");
+mustContain(renderer, "const sendResult = await withSaleStockLocks(cartSnapshot, () =>", "La factura de la venta se crea dentro de withSaleStockLocks");
+mustContain(renderer, "async function acquireStockLockWithRetry(idProducto, attempts = 5, ttlSec = undefined) {", "El candado de stock admite mas intentos y TTL propio");
+mustContain(renderer, "/^cobrar/i.test(String(reason || \"\")) ? 20 : 5,", "La liberacion de reserva al cobrar espera hasta ~6 s al otro TPV (el resto, 5 intentos)");
+mustContain(renderer, '"sale-lock-not-acquired",', "Si la venta no consigue el candado (fail-open) queda anotado en el servidor");
+mustContain(renderer, "const r = await acquireStockLockWithRetry(id, 12, 30);", "El candado de la venta dura hasta 30 s (el POST de la factura puede tardar ~5 s)");
+
+// Rastro de acceso (quien era admin / modo precio) y de cambios en Opciones, para diagnosticar "no me sale la opcion"
+mustContain(renderer, "function reportAccessState(reason) {", "El TPV anota en el servidor el estado de acceso (admin, edicion de precio, usuario, agente)");
+mustContain(renderer, "reportAccessState(`admin:${source}`);", "setAdminFlag anota el estado de acceso");
+mustContain(renderer, 'reportAccessState("price-edit-toggle");', "Cambiar el modo de edicion de precio anota el estado de acceso");
+mustContain(renderer, "{ trail: true },", "Los eventos de rastro no se deduplican y tienen su propio tope");
+mustContain(renderer, "if (__clientTrailWindow.n >= 30) return;", "Tope propio de los eventos de rastro (30 cada 10 min)");
+mustContain(renderer, "function reportOptionsChangesOnClose() {", "Al cerrar Opciones se anotan las opciones que cambiaron");
+mustContain(renderer, "markOptionsAuditBaseline();", "Al abrir Opciones se guarda la foto inicial para comparar");
+mustContain(renderer, "function closeOptions() {\n  reportOptionsChangesOnClose();".replace(/\n/g, renderer.includes("\r\n") ? "\r\n" : "\n"), "closeOptions compara antes de cerrar");
+mustContain(renderer, 'const OPT_AUDIT_NO_VALUE_IDS = new Set(["terminalDefaultCustomerSelect"]);', "El cliente por defecto no se guarda con su valor (dato personal)");
 
 if (process.exitCode) {
   console.error("\nSmoke tests failed.");
