@@ -35858,7 +35858,7 @@ function hideBackgroundUpdateNotice() {
 }
 
 // Aviso fijo cuando este arranque concreto se abrio SIN internet real (ver
-// NO_INTERNET_BYPASS_MS en main.js): no se pudo comprobar si hay una version
+// "Entrar ahora" sin internet en main.js): no se pudo comprobar si hay una version
 // mas reciente, asi que se sigue usando la actual. Se consulta una vez al
 // arrancar (no es un aviso que pueda "saltar" en medio de la sesion).
 function showStartupNoInternetBanner() {

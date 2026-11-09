@@ -2105,15 +2105,13 @@ function getCompanyFromCfgForMain() {
 // entiende por que: evita que parezca que el programa se ha colgado).
 const SLOW_RETRY_HINT_MS = 20_000;
 
-// Sin salida real a internet (ni Google, ni Cloudflare, ni GitHub responden)
-// tras esperar un rato razonable, se deja abrir con la version actual en vez
-// de reintentar para siempre. Sin internet el TPV no puede hablar con NINGUN
-// servidor real de todos modos, asi que el riesgo que esta comprobacion
-// evita (un cliente desactualizado hablando con el servidor real) no existe
-// mientras dure el corte. Si SI hay internet pero falla la API del cliente o
-// la busqueda de actualizacion en GitHub, esto no aplica: ahi se sigue
-// reintentando para siempre (es justo el caso que la comprobacion protege).
-const NO_INTERNET_BYPASS_MS = 50_000;
+// Sin salida real a internet (ni Google, ni Cloudflare, ni GitHub responden), o con internet pero sin que
+// conteste la API de la empresa: el TPV espera SIN tope y se abre cuando vuelva la conexion (con la ultima
+// version si la hay). Antes, sin internet, se abria solo con la version actual a los 50 s; Sergi (2026-11-09)
+// prefiere esperar: un TPV que se actualiza despues, con el cajero ya delante, es peor. Para que nadie se
+// quede bloqueado, pasados 10 s la ventanita muestra el tiempo esperado y el boton "Entrar ahora".
+// Sin internet el TPV puede vender sin conexion (cola offline), asi que esa salida manual importa.
+
 
 // Cuando la BUSQUEDA de actualizacion no responde (GitHub da 504/5xx, no contesta o la red falla a medias)
 // aunque SI haya internet, el TPV sigue reintentando SIN tope: en cuanto vuelva se actualiza y se abre ya
@@ -2141,10 +2139,48 @@ function elapsedRetryHint(startedAt) {
   return " Esto puede tardar unos minutos. No cierres el programa.";
 }
 
+// Vigilante del boton "Entrar ahora" de la ventanita de arranque (fases de conexion/API): pasados 10 s
+// muestra el texto que devuelve buildText(ms) y el boton; resuelve `promise` si la persona lo pulsa.
+function createEnterNowWatcher(buildText) {
+  const startedAt = Date.now();
+  let resolveFn = null;
+  let skipped = false;
+  let stopped = false;
+  const promise = new Promise((resolve) => {
+    resolveFn = resolve;
+  });
+  const timer = setInterval(async () => {
+    try {
+      if (stopped || skipped || !splashWin || splashWin.isDestroyed()) return;
+      const elapsed = Date.now() - startedAt;
+      if (elapsed < UPDATE_CHECK_ENTER_BUTTON_AFTER_MS) return;
+      splashSet(buildText(elapsed), undefined, true);
+      if (await splashEnterRequested()) {
+        skipped = true;
+        resolveFn({ skipped: true });
+      }
+    } catch {}
+  }, 1000);
+  return {
+    promise,
+    isSkipped: () => skipped,
+    // Mientras true, el texto de la ventanita lo pone este vigilante (no las llamadas normales de splashSet).
+    ownsText: () => Date.now() - startedAt >= UPDATE_CHECK_ENTER_BUTTON_AFTER_MS,
+    stop: () => {
+      stopped = true;
+      clearInterval(timer);
+    },
+    elapsedMs: () => Date.now() - startedAt,
+  };
+}
+
+function formatWaitClock(elapsedMs) {
+  const totalSec = Math.floor(elapsedMs / 1000);
+  return `${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, "0")}`;
+}
+
 async function waitForInternetAndApiGate() {
   // 1) Internet real (evita "wifi con portal cautivo" o sin salida)
-  const internetCheckStartedAt = Date.now();
-
   // Probes: si alguno responde, consideramos "hay salida"
   // (usa varios por si GitHub está bloqueado en alguna red)
   const internetProbes = [
@@ -2156,48 +2192,66 @@ async function waitForInternetAndApiGate() {
     { url: "https://github.com", label: "GitHub" },
   ];
 
-  while (true) {
-    if (Date.now() - internetCheckStartedAt >= NO_INTERNET_BYPASS_MS) {
-      logUpdater(
-        "[GATE] Sin internet tras espera razonable, se abre con la version actual.",
-      );
-      logUpdateEventRemote("update-gate-no-internet-bypass", {
-        elapsedMs: Date.now() - internetCheckStartedAt,
-      });
-      splashSet(
-        "Sin conexión: abriendo con la versión actual...",
-        20,
-      );
-      await sleep(600);
-      return { ok: true, noInternet: true };
-    }
+  // "Entrar ahora" pulsado: se abre con la version actual sin esperar a la conexion/API.
+  const skipResult = (phase, watcher) => {
+    logUpdater(
+      `[GATE] "Entrar ahora" pulsado en la fase ${phase} tras ${Math.round(watcher.elapsedMs() / 1000)} s; se abre con la version actual.`,
+    );
+    logUpdateEventRemote("update-gate-user-skip", {
+      phase,
+      elapsedMs: watcher.elapsedMs(),
+    });
+    splashSet("Abriendo el TPV…", 90, false);
+    watcher.stop();
+    return { ok: true, userSkipped: true, noInternet: phase === "internet" };
+  };
 
-    splashSet(
-      `Comprobando tu conexión a internet...${elapsedRetryHint(internetCheckStartedAt)}`,
+  const netWatcher = createEnterNowWatcher(
+    (ms) =>
+      `Sin conexión a internet (llevamos ${formatWaitClock(ms)}). Seguimos intentándolo. Si necesitas empezar ya, entra sin conexión con la versión actual.`,
+  );
+  const netSet = (text, pct) => {
+    if (!netWatcher.ownsText()) splashSet(text, pct);
+  };
+  const SKIP = Symbol("skip");
+  const raceSkip = (watcher, p) =>
+    Promise.race([p, watcher.promise.then(() => SKIP)]);
+
+  while (true) {
+    if (netWatcher.isSkipped()) return skipResult("internet", netWatcher);
+
+    netSet(
+      `Comprobando tu conexión a internet...${elapsedRetryHint(Date.now() - netWatcher.elapsedMs())}`,
       10,
     );
 
     // DNS rápido (con 2-3 hosts distintos)
-    const dnsAny =
-      (await dnsOk("google.com")) ||
-      (await dnsOk("cloudflare.com")) ||
-      (await dnsOk("github.com"));
+    const dnsAny = await raceSkip(
+      netWatcher,
+      (async () =>
+        (await dnsOk("google.com")) ||
+        (await dnsOk("cloudflare.com")) ||
+        (await dnsOk("github.com")))(),
+    );
+    if (dnsAny === SKIP) return skipResult("internet", netWatcher);
 
     if (!dnsAny) {
-      splashSet(
-        `Sin internet (DNS). Esperando conexión...${elapsedRetryHint(internetCheckStartedAt)}`,
+      netSet(
+        `Sin internet (DNS). Esperando conexión...${elapsedRetryHint(Date.now() - netWatcher.elapsedMs())}`,
         10,
       );
-      await sleep(2500);
+      if ((await raceSkip(netWatcher, sleep(2500))) === SKIP)
+        return skipResult("internet", netWatcher);
       continue;
     }
 
-    splashSet("Internet detectado. Verificando salida...", 25);
+    netSet("Internet detectado. Verificando salida...", 25);
 
     // HTTPS real: basta con que UNO funcione
     let okOut = false;
     for (const p of internetProbes) {
-      const r = await httpsGetOk(p.url, { timeoutMs: 7000 });
+      const r = await raceSkip(netWatcher, httpsGetOk(p.url, { timeoutMs: 7000 }));
+      if (r === SKIP) return skipResult("internet", netWatcher);
       if (r.ok || (r.status >= 200 && r.status < 500)) {
         // Nota: algunos probes pueden devolver 403/404 pero eso confirma salida.
         // Con tu httpsGetOk actual, ok = 200..399, pero aquí aceptamos 4xx como "hay internet".
@@ -2207,73 +2261,90 @@ async function waitForInternetAndApiGate() {
     }
 
     if (!okOut) {
-      splashSet(
-        `Conectado a red, pero sin salida a internet. Reintentando...${elapsedRetryHint(internetCheckStartedAt)}`,
+      netSet(
+        `Conectado a red, pero sin salida a internet. Reintentando...${elapsedRetryHint(Date.now() - netWatcher.elapsedMs())}`,
         25,
       );
-      await sleep(2500);
+      if ((await raceSkip(netWatcher, sleep(2500))) === SKIP)
+        return skipResult("internet", netWatcher);
       continue;
     }
 
     break; // ✅ Internet OK
   }
+  netWatcher.stop();
+  splashSet(undefined, undefined, false); // quita "Entrar ahora" si se habia mostrado en la fase de internet
 
   // 2) API OK (solo si ya hay empresa configurada en cfg)
   // A partir de aqui SI hay internet real: si esta parte falla (servidor del
-  // cliente caido, etc.) se sigue reintentando para siempre a proposito, sin
-  // ningun bypass.
+  // cliente caido, etc.) se sigue reintentando sin tope, con el boton "Entrar ahora" pasados 10 s.
   const { baseUrl, apiKey, email } = getCompanyFromCfgForMain();
 
   // Si todavía no hay empresa resuelta, no bloqueamos por API:
   // la UI necesitará internet igual para activarse (y pedirá email).
   if (!baseUrl || !apiKey) {
-    splashSet("Internet OK. Preparando...", 55);
+    splashSet("Internet OK. Preparando...", 55, false);
     return { ok: true };
   }
 
   logUpdateEventRemote("update-gate-api-connecting");
-  const apiCheckStartedAt = Date.now();
+  const apiWatcher = createEnterNowWatcher(
+    (ms) =>
+      `El servidor de tu empresa no responde (llevamos ${formatWaitClock(ms)}). Seguimos intentándolo. Si necesitas empezar ya, entra con la versión actual.`,
+  );
+  const apiSet = (text, pct) => {
+    if (!apiWatcher.ownsText()) splashSet(text, pct);
+  };
   while (true) {
-    splashSet(
-      `Conectando con el servidor (${email || "tu empresa"})...${elapsedRetryHint(apiCheckStartedAt)}`,
+    if (apiWatcher.isSkipped()) return skipResult("api", apiWatcher);
+    apiSet(
+      `Conectando con el servidor (${email || "tu empresa"})...${elapsedRetryHint(Date.now() - apiWatcher.elapsedMs())}`,
       55,
     );
 
     const url = `${baseUrl.replace(/\/+$/, "")}/productos?limit=1`;
-    const rr = await httpsGetOk(url, {
-      timeoutMs: 7000,
-      headers: { Accept: "application/json", Token: apiKey },
-    });
+    const rr = await raceSkip(
+      apiWatcher,
+      httpsGetOk(url, {
+        timeoutMs: 7000,
+        headers: { Accept: "application/json", Token: apiKey },
+      }),
+    );
+    if (rr === SKIP) return skipResult("api", apiWatcher);
 
     if (rr.ok) {
-      splashSet("Servidor OK. Buscando actualizaciones...", 70);
+      apiWatcher.stop();
+      splashSet("Servidor OK. Buscando actualizaciones...", 70, false);
       return { ok: true };
     }
 
     // Si el token/baseUrl están mal, no nos quedamos en bucle infinito:
     // dejamos que la UI gestione re-activación / re-login.
     if ([401, 403, 404].includes(rr.status)) {
+      apiWatcher.stop();
       splashSet(
         "Servidor responde pero credenciales no válidas. Abriendo...",
         70,
+        false,
       );
       await sleep(400);
       return { ok: true };
     }
 
-    splashSet(
-      `Servidor no disponible todavía. Esperando...${elapsedRetryHint(apiCheckStartedAt)}`,
+    apiSet(
+      `Servidor no disponible todavía. Esperando...${elapsedRetryHint(Date.now() - apiWatcher.elapsedMs())}`,
       55,
     );
-    await sleep(2500);
+    if ((await raceSkip(apiWatcher, sleep(2500))) === SKIP)
+      return skipResult("api", apiWatcher);
   }
 }
 
 let appIsInstallingUpdate = false;
 let appInstallingSince = 0;
-// Se puso true en este arranque porque no habia internet de verdad (ver
-// NO_INTERNET_BYPASS_MS): la app se abrio con la version actual sin poder
-// comprobar actualizaciones. La UI lo consulta una vez al arrancar para
+// Se puso true en este arranque porque no habia internet de verdad y la persona
+// pulso "Entrar ahora" (ver waitForInternetAndApiGate): la app se abrio con la
+// version actual sin poder comprobar actualizaciones. La UI lo consulta una vez al arrancar para
 // mostrar un aviso fijo.
 let startupNoInternetFlag = false;
 
@@ -2294,8 +2365,16 @@ async function runAutoUpdateGate() {
   // Bloquea hasta internet + API si hay cfg
   const netGate = await waitForInternetAndApiGate();
 
-  // De verdad no hay internet (ver NO_INTERNET_BYPASS_MS): se abre con la
-  // version actual sin buscar actualizacion, avisando en la propia app.
+  // La persona pulso "Entrar ahora" sin internet (o sin que conteste la API): se abre con la
+  // version actual sin buscar actualizacion, avisando en la propia app si no habia internet.
+  if (netGate?.userSkipped) {
+    return {
+      updatedOrReady: true,
+      updateCheckFailed: true,
+      userSkipped: true,
+      noInternet: !!netGate.noInternet,
+    };
+  }
   if (netGate?.noInternet) {
     return { updatedOrReady: true, noInternet: true };
   }

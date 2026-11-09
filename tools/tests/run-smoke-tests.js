@@ -384,23 +384,42 @@ mustContain(
   "Startup gate shows elapsed-wait hint during retries",
 );
 
-// Sin internet de verdad (ni Google, ni Cloudflare, ni GitHub responden) tras
-// un tiempo razonable: se abre con la version actual en vez de bloquear para
-// siempre (el riesgo que evita la comprobacion no existe sin conexion).
-mustContain(
+// Sin internet de verdad (ni Google, ni Cloudflare, ni GitHub responden): el TPV espera SIN tope (ya no se
+// abre solo a los 50 s, decision de Sergi 2026-11-09) y pasados 10 s ofrece "Entrar ahora" + el tiempo esperado.
+mustNotContain(
   main,
-  "const NO_INTERNET_BYPASS_MS = 50_000;",
-  "No-internet startup bypass constant present",
+  "NO_INTERNET_BYPASS_MS",
+  "Ya no hay apertura automatica por tiempo sin internet (solo el boton Entrar ahora)",
 );
 mustContain(
   main,
-  "return { ok: true, noInternet: true };",
-  "Internet check returns noInternet bypass signal",
+  "return { ok: true, userSkipped: true, noInternet: phase === \"internet\" };",
+  "Entrar ahora en la fase de internet devuelve la senal noInternet (para el aviso fijo) y userSkipped",
+);
+mustContain(
+  main,
+  "function createEnterNowWatcher(buildText) {",
+  "Las fases de internet y de API del gate tienen el vigilante del boton Entrar ahora",
+);
+mustContain(
+  main,
+  "Sin conexión a internet (llevamos ${formatWaitClock(ms)}).",
+  "Sin internet la ventanita muestra el tiempo que lleva esperando",
+);
+mustContain(
+  main,
+  "El servidor de tu empresa no responde (llevamos ${formatWaitClock(ms)}).",
+  "Con internet pero sin respuesta de la API de la empresa tambien hay tiempo esperado y boton Entrar ahora",
 );
 mustContain(
   main,
   "if (netGate?.noInternet) {",
   "Update gate skips update check when there is no internet at all",
+);
+mustContain(
+  main,
+  "if (netGate?.userSkipped) {",
+  "Update gate abre con la version actual si se pulso Entrar ahora en la fase de internet/API",
 );
 mustContain(
   main,
@@ -6301,8 +6320,8 @@ mustContain(
 );
 mustContain(
   main,
-  'logUpdateEventRemote("update-gate-no-internet-bypass"',
-  "The boot update gate logs when it bypasses the internet-wait gate",
+  "const skipResult = (phase, watcher) => {",
+  "The boot update gate logs (with the phase) when the person presses Entrar ahora while waiting for internet/API",
 );
 
 mustNotContain(
