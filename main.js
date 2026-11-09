@@ -2115,21 +2115,20 @@ const SLOW_RETRY_HINT_MS = 20_000;
 // reintentando para siempre (es justo el caso que la comprobacion protege).
 const NO_INTERNET_BYPASS_MS = 50_000;
 
-// Tope de espera cuando la BUSQUEDA de actualizacion falla sin que haya ninguna encontrada (GitHub
-// responde 504/5xx, no responde o la red falla a medias) aunque SI haya internet. Antes se reintentaba
-// para siempre y el TPV no abria hasta que GitHub volvia: real (2026-11-08/09) Sabor 5 min, Ben Trempat
-// 2 y 3 min, Los Argentinos 2 min con la pantalla "Actualizando el programa, no lo cierres" sin que se
-// actualizara nada. Pasado este tiempo se abre con la version actual, igual que sin internet; la
-// actualizacion se sigue ofreciendo despues (aviso de version nueva, actualizar al cerrar la caja, comprobacion
-// manual). Si ya se encontro una actualizacion y se esta descargando, NO se corta.
-const UPDATE_CHECK_GIVE_UP_MS = 90_000;
-
-// A partir de aqui (sin version encontrada) la ventanita ofrece el boton "Entrar ahora" y la cuenta atras.
+// Cuando la BUSQUEDA de actualizacion no responde (GitHub da 504/5xx, no contesta o la red falla a medias)
+// aunque SI haya internet, el TPV sigue reintentando SIN tope: en cuanto vuelva se actualiza y se abre ya
+// con la ultima version (Sergi, 2026-11-09: un TPV abierto con la version vieja, que se actualiza despues
+// con el cajero ya delante, es peor que uno que espera). Para que nadie se quede bloqueado, pasados 10 s
+// sin version encontrada la ventanita muestra un contador de tiempo y el boton "Entrar ahora", que abre ya
+// con la version actual (la actualizacion se ofrece despues: aviso de version nueva, actualizar al cerrar
+// la caja, comprobacion manual). Real (2026-11-08/09): Sabor esperaba 5 min, Ben Trempat 2 y 3 min y Los
+// Argentinos 2 min sin ningun aviso. Si ya se encontro una version, no hay boton: se espera la instalacion.
 const UPDATE_CHECK_ENTER_BUTTON_AFTER_MS = 10_000;
 
-function shouldGiveUpUpdateCheck(elapsedMs, updateFoundSeen) {
-  if (updateFoundSeen) return false;
-  return Number(elapsedMs) >= UPDATE_CHECK_GIVE_UP_MS;
+// Con la espera sin tope, cada intento fallido no debe llenar el registro del servidor (uno cada ~5 s
+// durante horas): solo se anotan los 3 primeros y despues uno de cada 12 (~1 min).
+function shouldLogGateAttempt(attempt) {
+  return attempt <= 3 || attempt % 12 === 0;
 }
 
 // Texto pensado para el cajero (nada tecnico: sin numero de intento ni
@@ -2324,11 +2323,10 @@ async function runAutoUpdateGate() {
   // true en cuanto se encuentra una version nueva que se va a descargar: a partir de ahi no se abandona.
   let updateFoundSeen = false;
 
-  // Pasados 10 s sin version encontrada la ventanita muestra "Entrar ahora" y una cuenta atras hasta que
-  // el TPV se abre solo (UPDATE_CHECK_GIVE_UP_MS). Quien este delante puede entrar ya con la version actual;
-  // si nadie esta (arranque desatendido) se abre solo. La actualizacion se sigue ofreciendo despues
-  // (aviso de version nueva, actualizar al cerrar la caja, comprobacion manual). Una vez encontrada una
-  // version se quita el boton y se espera la descarga/instalacion como siempre.
+  // Pasados 10 s sin version encontrada la ventanita muestra el tiempo que lleva esperando y el boton
+  // "Entrar ahora" (abre ya con la version actual; la actualizacion se ofrece despues). Sin tope: si nadie lo
+  // pulsa se sigue reintentando hasta que vuelva la conexion y se instale la ultima version. Una vez
+  // encontrada una version se quita el boton y se espera la descarga/instalacion como siempre.
   let enterButtonShown = false;
   let skipResolve = null;
   const skipPromise = new Promise((resolve) => {
@@ -2346,10 +2344,11 @@ async function runAutoUpdateGate() {
       }
       const elapsed = Date.now() - updateCheckStartedAt;
       if (elapsed < UPDATE_CHECK_ENTER_BUTTON_AFTER_MS) return;
-      const left = Math.max(0, Math.ceil((UPDATE_CHECK_GIVE_UP_MS - elapsed) / 1000));
+      const totalSec = Math.floor(elapsed / 1000);
+      const clock = `${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, "0")}`;
       enterButtonShown = true;
       splashSet(
-        `La búsqueda de actualizaciones está tardando más de lo normal. El TPV se abrirá solo en ${left} s.`,
+        `No se puede comprobar si hay actualizaciones (llevamos ${clock}). Seguimos intentándolo. Si necesitas empezar ya, entra con la versión actual.`,
         undefined,
         true,
       );
@@ -2398,9 +2397,12 @@ async function runAutoUpdateGate() {
       };
 
       autoUpdater.once("error", (err) => {
-        logUpdateEventRemote("update-gate-error", {
-          message: err?.message || String(err),
-        });
+        if (shouldLogGateAttempt(attempt)) {
+          logUpdateEventRemote("update-gate-error", {
+            message: err?.message || String(err),
+            attempt,
+          });
+        }
         done({ ok: false, reason: "error" });
       });
 
@@ -2466,17 +2468,10 @@ async function runAutoUpdateGate() {
         done({ ok: false, reason: "throw" });
       }
 
-      // ✅ timeout de este intento: NO ABRIR, solo resolver para reintentar. Mientras solo se esta
-      // BUSCANDO (nada encontrado) el intento no puede pasarse del tope total (UPDATE_CHECK_GIVE_UP_MS);
-      // si ya se encontro una version y se descarga, se mantiene el tiempo de siempre.
-      const remainingToGiveUpMs =
-        UPDATE_CHECK_GIVE_UP_MS - (Date.now() - updateCheckStartedAt);
-      const attemptTimeoutMs = updateFoundSeen
-        ? CHECK_TIMEOUT_MS
-        : Math.max(8_000, Math.min(CHECK_TIMEOUT_MS, remainingToGiveUpMs));
+      // ✅ timeout de este intento: NO ABRIR, solo resolver para reintentar ("Entrar ahora" corta la espera)
       setTimeout(() => {
         done({ ok: false, reason: "timeout" });
-      }, attemptTimeoutMs);
+      }, CHECK_TIMEOUT_MS);
     });
     const result = await Promise.race([attemptPromise, skipPromise]);
 
@@ -2508,30 +2503,14 @@ async function runAutoUpdateGate() {
       return result;
     }
 
-    // Si falló/timeout -> esperar y reintentar (con tope: ver UPDATE_CHECK_GIVE_UP_MS)
-    const elapsedCheckMs = Date.now() - updateCheckStartedAt;
-    if (shouldGiveUpUpdateCheck(elapsedCheckMs, updateFoundSeen)) {
-      logUpdater(
-        `[GATE] No se pudo comprobar actualizaciones tras ${Math.round(elapsedCheckMs / 1000)} s (${attempt} intentos, ${result?.reason || "?"}); se abre con la version actual.`,
-      );
-      logUpdateEventRemote("update-gate-giveup", {
+    // Si falló/timeout -> esperar y reintentar (sin tope; la persona puede pulsar "Entrar ahora")
+    if (shouldLogGateAttempt(attempt)) {
+      logUpdateEventRemote("update-gate-retry", {
         attempt,
-        elapsedMs: elapsedCheckMs,
         reason: result?.reason || "",
+        elapsedMs: Date.now() - updateCheckStartedAt,
       });
-      clearInterval(gateUiTimer);
-      splashSet("No se pudo comprobar si hay actualizaciones. Abriendo el TPV…", 90, false);
-      try {
-        autoUpdater.removeAllListeners();
-      } catch {}
-      await sleep(800);
-      return { updatedOrReady: true, updateCheckFailed: true };
     }
-
-    logUpdateEventRemote("update-gate-retry", {
-      attempt,
-      reason: result?.reason || "",
-    });
     gateSplashText(
       updateFoundSeen
         ? `Actualizando el programa, no lo cierres...${elapsedRetryHint(updateCheckStartedAt)}`

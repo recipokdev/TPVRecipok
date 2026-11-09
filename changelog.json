@@ -6,7 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
-        "ARREGLO: si al abrir el TPV GitHub (donde se buscan las actualizaciones) fallaba o no respondía (errores 504), el TPV se quedaba en la ventanita «Actualizando el programa, no lo cierres…» hasta que volvía, a veces varios minutos, aunque no hubiera nada que actualizar. Ahora, pasados 10 segundos sin respuesta aparece un botón «Entrar ahora» (con una cuenta atrás) para abrir ya el TPV con la versión actual, y si nadie lo pulsa el TPV se abre solo a los 90 segundos; la actualización se ofrece después como siempre. Si ya se ha encontrado una actualización y se está descargando, no se corta."
+        "ARREGLO: si al abrir el TPV GitHub (donde se buscan las actualizaciones) fallaba o no respondía (errores 504), el TPV se quedaba en la ventanita «Actualizando el programa, no lo cierres…» hasta que volvía, a veces varios minutos y sin ningún aviso. Ahora, pasados 10 segundos sin respuesta, la ventanita muestra cuánto lleva esperando y un botón «Entrar ahora» para abrir ya el TPV con la versión actual si se necesita empezar; si no se pulsa, sigue intentándolo y, en cuanto vuelve la conexión, instala la última versión y abre con ella. Si ya se ha encontrado una actualización y se está descargando, el botón desaparece y se espera a que termine."
       ]
     },
     {

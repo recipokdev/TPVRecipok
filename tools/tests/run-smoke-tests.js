@@ -12175,29 +12175,30 @@ mustContain(encargosRefundJs, '<div class="w-line">', "La lista de hoy impresa p
 mustContain(encargosRefundJs, '<div class="w-name">', "La lista de hoy impresa destaca el nombre");
 mustContain(encargosRefundJs, "${o.pending > 0 ? \"A COBRAR\" : \"PAGADO\"}", "La lista de hoy impresa dice si esta pagado o a cobrar, sin importes");
 
-// Gate de actualizacion: tope de 90 s cuando GitHub falla (504) sin haber encontrado ninguna version
-// (real 8/9-nov-2026: Sabor 5 min, Ben Trempat 2+3 min, Los Argentinos 2 min con el TPV sin abrir)
-mustContain(main, "const UPDATE_CHECK_GIVE_UP_MS = 90_000;", "El gate de actualizacion se rinde a los 90 s si GitHub no deja comprobar");
-mustContain(main, "if (shouldGiveUpUpdateCheck(elapsedCheckMs, updateFoundSeen)) {", "El gate abre el TPV con la version actual al rendirse");
-mustContain(main, 'logUpdateEventRemote("update-gate-giveup", {', "Al rendirse el gate queda anotado en el servidor (update-gate-giveup)");
-mustContain(main, "updateFoundSeen = true;", "Si ya se encontro una actualizacion, el gate no se rinde (no corta la descarga)");
+// Gate de actualizacion cuando la busqueda no responde (GitHub 504...): SIN tope (se abre con la ultima version en
+// cuanto vuelva), pero pasados 10 s la ventanita muestra el tiempo esperado y el boton "Entrar ahora"
+// (real 8/9-nov-2026: Sabor 5 min, Ben Trempat 2+3 min, Los Argentinos 2 min con el TPV sin abrir y sin aviso)
 mustContain(main, "const UPDATE_CHECK_ENTER_BUTTON_AFTER_MS = 10_000;", "El boton Entrar ahora aparece a los 10 s sin version encontrada");
 mustContain(main, '<button class="enter" id="enter" type="button">Entrar ahora</button>', "La ventanita de arranque tiene el boton Entrar ahora");
 mustContain(main, "async function splashEnterRequested() {", "El proceso principal detecta si se pulso Entrar ahora");
 mustContain(main, 'logUpdateEventRemote("update-gate-user-skip", { attempt, elapsedMs: elapsedSkipMs });', "Pulsar Entrar ahora queda anotado en el servidor (update-gate-user-skip)");
 mustContain(main, "const result = await Promise.race([attemptPromise, skipPromise]);", "Entrar ahora corta tambien un intento de busqueda en curso");
-mustContain(main, "El TPV se abrirá solo en ${left} s.", "La ventanita muestra la cuenta atras hasta que el TPV se abre solo");
+mustContain(main, "No se puede comprobar si hay actualizaciones (llevamos ${clock}).", "La ventanita muestra el tiempo que lleva esperando (contador creciente)");
+mustContain(main, "if (shouldLogGateAttempt(attempt)) {", "Los reintentos del gate se anotan con limite (no llenan el registro del servidor)");
+mustNotContain(main, "update-gate-giveup", "El gate ya NO se rinde solo: sin apertura automatica por tiempo");
+mustNotContain(main, "UPDATE_CHECK_GIVE_UP_MS", "No queda ningun tope de tiempo en el gate de actualizacion");
 {
-  const m = main.match(/function shouldGiveUpUpdateCheck\(elapsedMs, updateFoundSeen\) \{[\s\S]*?\n\}/);
-  const k = main.match(/const UPDATE_CHECK_GIVE_UP_MS = ([0-9_]+);/);
-  if (!m || !k) {
-    fail("No se pudo extraer shouldGiveUpUpdateCheck de main.js para probarla");
+  const m = main.match(/function shouldLogGateAttempt\(attempt\) \{[\s\S]*?\n\}/);
+  if (!m) {
+    fail("No se pudo extraer shouldLogGateAttempt de main.js para probarla");
   } else {
-    const fn = new Function(`const UPDATE_CHECK_GIVE_UP_MS = ${k[1]}; ${m[0]}; return shouldGiveUpUpdateCheck;`)();
-    if (fn(89_999, false) === false && fn(90_000, false) === true && fn(500_000, false) === true && fn(500_000, true) === false && fn(0, false) === false) {
-      ok("shouldGiveUpUpdateCheck: no se rinde antes de 90 s, se rinde a partir de 90 s y nunca si ya hay una actualizacion encontrada");
+    const fn = new Function(`${m[0]}; return shouldLogGateAttempt;`)();
+    const logged = [];
+    for (let a = 1; a <= 60; a++) if (fn(a)) logged.push(a);
+    if (logged.join(",") === "1,2,3,12,24,36,48,60") {
+      ok("shouldLogGateAttempt: anota los 3 primeros intentos y despues uno de cada 12");
     } else {
-      fail("shouldGiveUpUpdateCheck no se comporta como se espera (tope 90 s, nunca con actualizacion encontrada)");
+      fail("shouldLogGateAttempt no se comporta como se espera: " + logged.join(","));
     }
   }
 }
