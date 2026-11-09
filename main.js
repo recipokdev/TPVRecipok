@@ -2081,6 +2081,20 @@ const SLOW_RETRY_HINT_MS = 20_000;
 // reintentando para siempre (es justo el caso que la comprobacion protege).
 const NO_INTERNET_BYPASS_MS = 50_000;
 
+// Tope de espera cuando la BUSQUEDA de actualizacion falla sin que haya ninguna encontrada (GitHub
+// responde 504/5xx, no responde o la red falla a medias) aunque SI haya internet. Antes se reintentaba
+// para siempre y el TPV no abria hasta que GitHub volvia: real (2026-11-08/09) Sabor 5 min, Ben Trempat
+// 2 y 3 min, Los Argentinos 2 min con la pantalla "Actualizando el programa, no lo cierres" sin que se
+// actualizara nada. Pasado este tiempo se abre con la version actual, igual que sin internet; la
+// actualizacion se sigue ofreciendo despues (aviso de version nueva, actualizar al cerrar la caja, comprobacion
+// manual). Si ya se encontro una actualizacion y se esta descargando, NO se corta.
+const UPDATE_CHECK_GIVE_UP_MS = 90_000;
+
+function shouldGiveUpUpdateCheck(elapsedMs, updateFoundSeen) {
+  if (updateFoundSeen) return false;
+  return Number(elapsedMs) >= UPDATE_CHECK_GIVE_UP_MS;
+}
+
 // Texto pensado para el cajero (nada tecnico: sin numero de intento ni
 // segundos en crudo) -- el detalle fino de cuanto lleva esperando y en que
 // intento va se manda al log remoto (ver logUpdateEventRemote), no a la
@@ -2270,6 +2284,8 @@ async function runAutoUpdateGate() {
   const updateCheckStartedAt = Date.now();
   logUpdateEventRemote("update-gate-searching");
   let lastLoggedDownloadPct = -1;
+  // true en cuanto se encuentra una version nueva que se va a descargar: a partir de ahi no se abandona.
+  let updateFoundSeen = false;
 
   while (true) {
     attempt++;
@@ -2340,6 +2356,7 @@ async function runAutoUpdateGate() {
           });
         }
 
+        updateFoundSeen = true;
         logUpdateEventRemote("update-gate-update-found", { targetVersion });
         splashSet("Actualización encontrada. Descargando…", 30);
         try {
@@ -2374,10 +2391,17 @@ async function runAutoUpdateGate() {
         done({ ok: false, reason: "throw" });
       }
 
-      // ✅ timeout de este intento: NO ABRIR, solo resolver para reintentar
+      // ✅ timeout de este intento: NO ABRIR, solo resolver para reintentar. Mientras solo se esta
+      // BUSCANDO (nada encontrado) el intento no puede pasarse del tope total (UPDATE_CHECK_GIVE_UP_MS);
+      // si ya se encontro una version y se descarga, se mantiene el tiempo de siempre.
+      const remainingToGiveUpMs =
+        UPDATE_CHECK_GIVE_UP_MS - (Date.now() - updateCheckStartedAt);
+      const attemptTimeoutMs = updateFoundSeen
+        ? CHECK_TIMEOUT_MS
+        : Math.max(8_000, Math.min(CHECK_TIMEOUT_MS, remainingToGiveUpMs));
       setTimeout(() => {
         done({ ok: false, reason: "timeout" });
-      }, CHECK_TIMEOUT_MS);
+      }, attemptTimeoutMs);
     });
 
     // Si todo ok y no hay update -> salimos y abrimos TPV
@@ -2386,13 +2410,33 @@ async function runAutoUpdateGate() {
     // Si está instalando -> no seguimos
     if (result?.installing) return result;
 
-    // Si falló/timeout -> esperar y reintentar
+    // Si falló/timeout -> esperar y reintentar (con tope: ver UPDATE_CHECK_GIVE_UP_MS)
+    const elapsedCheckMs = Date.now() - updateCheckStartedAt;
+    if (shouldGiveUpUpdateCheck(elapsedCheckMs, updateFoundSeen)) {
+      logUpdater(
+        `[GATE] No se pudo comprobar actualizaciones tras ${Math.round(elapsedCheckMs / 1000)} s (${attempt} intentos, ${result?.reason || "?"}); se abre con la version actual.`,
+      );
+      logUpdateEventRemote("update-gate-giveup", {
+        attempt,
+        elapsedMs: elapsedCheckMs,
+        reason: result?.reason || "",
+      });
+      splashSet("No se pudo comprobar si hay actualizaciones. Abriendo el TPV…", 90);
+      try {
+        autoUpdater.removeAllListeners();
+      } catch {}
+      await sleep(800);
+      return { updatedOrReady: true, updateCheckFailed: true };
+    }
+
     logUpdateEventRemote("update-gate-retry", {
       attempt,
       reason: result?.reason || "",
     });
     splashSet(
-      `Actualizando el programa, no lo cierres...${elapsedRetryHint(updateCheckStartedAt)}`,
+      updateFoundSeen
+        ? `Actualizando el programa, no lo cierres...${elapsedRetryHint(updateCheckStartedAt)}`
+        : "No se pudo comprobar si hay actualizaciones. Reintentando… si no responde, se abrirá el TPV.",
       25,
     );
     await sleep(RETRY_WAIT_MS);

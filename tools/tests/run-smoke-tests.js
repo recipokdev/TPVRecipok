@@ -12175,6 +12175,27 @@ mustContain(encargosRefundJs, '<div class="w-line">', "La lista de hoy impresa p
 mustContain(encargosRefundJs, '<div class="w-name">', "La lista de hoy impresa destaca el nombre");
 mustContain(encargosRefundJs, "${o.pending > 0 ? \"A COBRAR\" : \"PAGADO\"}", "La lista de hoy impresa dice si esta pagado o a cobrar, sin importes");
 
+// Gate de actualizacion: tope de 90 s cuando GitHub falla (504) sin haber encontrado ninguna version
+// (real 8/9-nov-2026: Sabor 5 min, Ben Trempat 2+3 min, Los Argentinos 2 min con el TPV sin abrir)
+mustContain(main, "const UPDATE_CHECK_GIVE_UP_MS = 90_000;", "El gate de actualizacion se rinde a los 90 s si GitHub no deja comprobar");
+mustContain(main, "if (shouldGiveUpUpdateCheck(elapsedCheckMs, updateFoundSeen)) {", "El gate abre el TPV con la version actual al rendirse");
+mustContain(main, 'logUpdateEventRemote("update-gate-giveup", {', "Al rendirse el gate queda anotado en el servidor (update-gate-giveup)");
+mustContain(main, "updateFoundSeen = true;", "Si ya se encontro una actualizacion, el gate no se rinde (no corta la descarga)");
+{
+  const m = main.match(/function shouldGiveUpUpdateCheck\(elapsedMs, updateFoundSeen\) \{[\s\S]*?\n\}/);
+  const k = main.match(/const UPDATE_CHECK_GIVE_UP_MS = ([0-9_]+);/);
+  if (!m || !k) {
+    fail("No se pudo extraer shouldGiveUpUpdateCheck de main.js para probarla");
+  } else {
+    const fn = new Function(`const UPDATE_CHECK_GIVE_UP_MS = ${k[1]}; ${m[0]}; return shouldGiveUpUpdateCheck;`)();
+    if (fn(89_999, false) === false && fn(90_000, false) === true && fn(500_000, false) === true && fn(500_000, true) === false && fn(0, false) === false) {
+      ok("shouldGiveUpUpdateCheck: no se rinde antes de 90 s, se rinde a partir de 90 s y nunca si ya hay una actualizacion encontrada");
+    } else {
+      fail("shouldGiveUpUpdateCheck no se comporta como se espera (tope 90 s, nunca con actualizacion encontrada)");
+    }
+  }
+}
+
 // Carrera de stock entre 2 TPV (Asador el Gallo, 8-nov-2026): la factura de la venta coge el candado de stock
 // de sus productos y la liberacion de reserva del cobro espera mas a que el otro TPV termine su factura.
 mustContain(renderer, "async function withSaleStockLocks(items, fn) {", "La venta coge el candado de stock de sus productos mientras crea la factura");
