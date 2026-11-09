@@ -1203,7 +1203,7 @@ async function runBackgroundPrefetchDownload() {
 function createSplashWindow() {
   splashWin = new BrowserWindow({
     width: 520,
-    height: 260,
+    height: 310,
     resizable: false,
     movable: true,
     minimizable: false,
@@ -1291,6 +1291,19 @@ function createSplashWindow() {
         font-size: 12px;
         opacity: 0.6;
       }
+      .enter{
+        display:none;
+        margin-top: 14px;
+        padding: 9px 20px;
+        font-size: 14px;
+        font-weight: 700;
+        color:#052e16;
+        background:#22c55e;
+        border:0;
+        border-radius:10px;
+        cursor:pointer;
+      }
+      .enter:disabled{ opacity:.6; cursor:default; }
     </style>
   </head>
   <body>
@@ -1300,9 +1313,17 @@ function createSplashWindow() {
       <div class="bar"><div class="fill" id="fill"></div></div>
       <div class="pct" id="pct">0%</div>
       <div class="hint">No cierres esta ventana.</div>
+      <button class="enter" id="enter" type="button">Entrar ahora</button>
 
       <script>
-        const set = (text, percent) => {
+        const enterBtn = document.getElementById("enter");
+        // El proceso principal lee este indicador (la ventanita no tiene canal propio hacia el).
+        enterBtn.addEventListener("click", () => {
+          window.__enterNow = true;
+          enterBtn.disabled = true;
+          enterBtn.textContent = "Abriendo…";
+        });
+        const set = (text, percent, showEnter) => {
           const s = document.getElementById("status");
           const f = document.getElementById("fill");
           const p = document.getElementById("pct");
@@ -1312,13 +1333,16 @@ function createSplashWindow() {
             f.style.width = clamped + "%";
             p.textContent = clamped.toFixed(0) + "%";
           }
+          if (typeof showEnter === "boolean") {
+            enterBtn.style.display = showEnter ? "inline-block" : "none";
+          }
         };
 
         // Recibimos mensajes desde el proceso principal
         window.addEventListener("message", (ev) => {
           if (!ev || !ev.data) return;
-          const { text, percent } = ev.data;
-          set(text, percent);
+          const { text, percent, showEnter } = ev.data;
+          set(text, percent, showEnter);
         });
       </script>
     </div>
@@ -1336,13 +1360,23 @@ function createSplashWindow() {
   return splashWin;
 }
 
-function splashSet(text, percent) {
+function splashSet(text, percent, showEnter) {
   if (!splashWin || splashWin.isDestroyed()) return;
   splashWin.webContents
     .executeJavaScript(
-      `window.postMessage(${JSON.stringify({ text, percent })}, "*");`,
+      `window.postMessage(${JSON.stringify({ text, percent, showEnter })}, "*");`,
     )
     .catch(() => {});
+}
+
+// true si la persona ha pulsado "Entrar ahora" en la ventanita de arranque.
+async function splashEnterRequested() {
+  if (!splashWin || splashWin.isDestroyed()) return false;
+  try {
+    return !!(await splashWin.webContents.executeJavaScript("window.__enterNow === true"));
+  } catch {
+    return false;
+  }
 }
 
 function closeSplash() {
@@ -2090,6 +2124,9 @@ const NO_INTERNET_BYPASS_MS = 50_000;
 // manual). Si ya se encontro una actualizacion y se esta descargando, NO se corta.
 const UPDATE_CHECK_GIVE_UP_MS = 90_000;
 
+// A partir de aqui (sin version encontrada) la ventanita ofrece el boton "Entrar ahora" y la cuenta atras.
+const UPDATE_CHECK_ENTER_BUTTON_AFTER_MS = 10_000;
+
 function shouldGiveUpUpdateCheck(elapsedMs, updateFoundSeen) {
   if (updateFoundSeen) return false;
   return Number(elapsedMs) >= UPDATE_CHECK_GIVE_UP_MS;
@@ -2287,9 +2324,47 @@ async function runAutoUpdateGate() {
   // true en cuanto se encuentra una version nueva que se va a descargar: a partir de ahi no se abandona.
   let updateFoundSeen = false;
 
+  // Pasados 10 s sin version encontrada la ventanita muestra "Entrar ahora" y una cuenta atras hasta que
+  // el TPV se abre solo (UPDATE_CHECK_GIVE_UP_MS). Quien este delante puede entrar ya con la version actual;
+  // si nadie esta (arranque desatendido) se abre solo. La actualizacion se sigue ofreciendo despues
+  // (aviso de version nueva, actualizar al cerrar la caja, comprobacion manual). Una vez encontrada una
+  // version se quita el boton y se espera la descarga/instalacion como siempre.
+  let enterButtonShown = false;
+  let skipResolve = null;
+  const skipPromise = new Promise((resolve) => {
+    skipResolve = resolve;
+  });
+  const gateUiTimer = setInterval(async () => {
+    try {
+      if (!splashWin || splashWin.isDestroyed()) return;
+      if (updateFoundSeen) {
+        if (enterButtonShown) {
+          enterButtonShown = false;
+          splashSet(undefined, undefined, false);
+        }
+        return;
+      }
+      const elapsed = Date.now() - updateCheckStartedAt;
+      if (elapsed < UPDATE_CHECK_ENTER_BUTTON_AFTER_MS) return;
+      const left = Math.max(0, Math.ceil((UPDATE_CHECK_GIVE_UP_MS - elapsed) / 1000));
+      enterButtonShown = true;
+      splashSet(
+        `La búsqueda de actualizaciones está tardando más de lo normal. El TPV se abrirá solo en ${left} s.`,
+        undefined,
+        true,
+      );
+      if (await splashEnterRequested()) skipResolve({ skipped: true });
+    } catch {}
+  }, 1000);
+  // Texto de la ventanita durante la busqueda: pasados 10 s lo gobierna la cuenta atras de arriba.
+  const gateSplashText = (text, pct) => {
+    if (!updateFoundSeen && Date.now() - updateCheckStartedAt >= UPDATE_CHECK_ENTER_BUTTON_AFTER_MS) return;
+    splashSet(text, pct);
+  };
+
   while (true) {
     attempt++;
-    splashSet(
+    gateSplashText(
       `Buscando actualizaciones...${elapsedRetryHint(updateCheckStartedAt)}`,
       25,
     );
@@ -2298,7 +2373,7 @@ async function runAutoUpdateGate() {
     const currentVersion = app.getVersion();
     autoUpdater.allowDowngrade = shouldAllowDowngrade(policy, currentVersion);
 
-    const result = await new Promise((resolve) => {
+    const attemptPromise = new Promise((resolve) => {
       let finished = false;
       const done = (r) => {
         if (finished) return;
@@ -2403,12 +2478,35 @@ async function runAutoUpdateGate() {
         done({ ok: false, reason: "timeout" });
       }, attemptTimeoutMs);
     });
+    const result = await Promise.race([attemptPromise, skipPromise]);
+
+    // La persona ha pulsado "Entrar ahora": se abre con la version actual.
+    if (result?.skipped) {
+      clearInterval(gateUiTimer);
+      const elapsedSkipMs = Date.now() - updateCheckStartedAt;
+      logUpdater(
+        `[GATE] "Entrar ahora" pulsado tras ${Math.round(elapsedSkipMs / 1000)} s (${attempt} intentos); se abre con la version actual.`,
+      );
+      logUpdateEventRemote("update-gate-user-skip", { attempt, elapsedMs: elapsedSkipMs });
+      splashSet("Abriendo el TPV…", 90, false);
+      try {
+        autoUpdater.removeAllListeners();
+      } catch {}
+      await sleep(400);
+      return { updatedOrReady: true, updateCheckFailed: true, userSkipped: true };
+    }
 
     // Si todo ok y no hay update -> salimos y abrimos TPV
-    if (result?.ok && result.updatedOrReady) return { updatedOrReady: true };
+    if (result?.ok && result.updatedOrReady) {
+      clearInterval(gateUiTimer);
+      return { updatedOrReady: true };
+    }
 
     // Si está instalando -> no seguimos
-    if (result?.installing) return result;
+    if (result?.installing) {
+      clearInterval(gateUiTimer);
+      return result;
+    }
 
     // Si falló/timeout -> esperar y reintentar (con tope: ver UPDATE_CHECK_GIVE_UP_MS)
     const elapsedCheckMs = Date.now() - updateCheckStartedAt;
@@ -2421,7 +2519,8 @@ async function runAutoUpdateGate() {
         elapsedMs: elapsedCheckMs,
         reason: result?.reason || "",
       });
-      splashSet("No se pudo comprobar si hay actualizaciones. Abriendo el TPV…", 90);
+      clearInterval(gateUiTimer);
+      splashSet("No se pudo comprobar si hay actualizaciones. Abriendo el TPV…", 90, false);
       try {
         autoUpdater.removeAllListeners();
       } catch {}
@@ -2433,13 +2532,14 @@ async function runAutoUpdateGate() {
       attempt,
       reason: result?.reason || "",
     });
-    splashSet(
+    gateSplashText(
       updateFoundSeen
         ? `Actualizando el programa, no lo cierres...${elapsedRetryHint(updateCheckStartedAt)}`
-        : "No se pudo comprobar si hay actualizaciones. Reintentando… si no responde, se abrirá el TPV.",
+        : "No se pudo comprobar si hay actualizaciones. Reintentando…",
       25,
     );
-    await sleep(RETRY_WAIT_MS);
+    // La espera entre intentos tambien se corta si se pulsa "Entrar ahora".
+    await Promise.race([sleep(RETRY_WAIT_MS), skipPromise]);
 
     // Muy importante: limpiar listeners antes del siguiente intento
     try {

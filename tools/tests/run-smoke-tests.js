@@ -12181,6 +12181,12 @@ mustContain(main, "const UPDATE_CHECK_GIVE_UP_MS = 90_000;", "El gate de actuali
 mustContain(main, "if (shouldGiveUpUpdateCheck(elapsedCheckMs, updateFoundSeen)) {", "El gate abre el TPV con la version actual al rendirse");
 mustContain(main, 'logUpdateEventRemote("update-gate-giveup", {', "Al rendirse el gate queda anotado en el servidor (update-gate-giveup)");
 mustContain(main, "updateFoundSeen = true;", "Si ya se encontro una actualizacion, el gate no se rinde (no corta la descarga)");
+mustContain(main, "const UPDATE_CHECK_ENTER_BUTTON_AFTER_MS = 10_000;", "El boton Entrar ahora aparece a los 10 s sin version encontrada");
+mustContain(main, '<button class="enter" id="enter" type="button">Entrar ahora</button>', "La ventanita de arranque tiene el boton Entrar ahora");
+mustContain(main, "async function splashEnterRequested() {", "El proceso principal detecta si se pulso Entrar ahora");
+mustContain(main, 'logUpdateEventRemote("update-gate-user-skip", { attempt, elapsedMs: elapsedSkipMs });', "Pulsar Entrar ahora queda anotado en el servidor (update-gate-user-skip)");
+mustContain(main, "const result = await Promise.race([attemptPromise, skipPromise]);", "Entrar ahora corta tambien un intento de busqueda en curso");
+mustContain(main, "El TPV se abrirá solo en ${left} s.", "La ventanita muestra la cuenta atras hasta que el TPV se abre solo");
 {
   const m = main.match(/function shouldGiveUpUpdateCheck\(elapsedMs, updateFoundSeen\) \{[\s\S]*?\n\}/);
   const k = main.match(/const UPDATE_CHECK_GIVE_UP_MS = ([0-9_]+);/);
