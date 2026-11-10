@@ -9,14 +9,17 @@
 //      con su stock inicial (solo demo). Imprime los ids de ticket para revisar el registro de reservas en el servidor.
 // COBRA DE VERDAD en el demo (2 facturas de prueba).
 // Con --mesas: mismo recorrido en Modo Mesas (mesa M3 del demo, que deja limpia) para comprobar que Mesas no se rompe.
+// Con --no-ops: apaga en el cliente el piloto de operaciones por partes (hoy solo activo en el demo) para imitar a un cliente real.
 // Con --merge: tras dividir, deshace la division (Partes = 1) y cobra el pedido unificado de una sola vez.
 // Uso: node tools/tests/run-split-tpv-normal.js [ruta-capturas] [--merge] [--mesas]
 process.env.TPV_RUN_BACKGROUND = "1";
 const path = require("path"), os = require("os"), fs = require("fs");
 const { _electron: electron } = require("playwright");
-const ROOT = path.resolve(__dirname, "..", "..");
+// TPV_ROOT: ejecutar el arnes contra otra copia del codigo (p. ej. una copia de main para comparar).
+const ROOT = process.env.TPV_ROOT ? path.resolve(process.env.TPV_ROOT) : path.resolve(__dirname, "..", "..");
 const MERGE = process.argv.includes("--merge");
 const MESAS = process.argv.includes("--mesas");
+const NO_OPS = process.argv.includes("--no-ops");
 const TABLE = "tut-room-1::m3";
 const SHOTS = process.argv.find((a, i) => i > 1 && !a.startsWith("--")) || "";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -66,16 +69,17 @@ async function drivePay(X) {
   try {
     A = await launch("tpvrecipok-2tpv-real-1", "A");
     await sleep(8000);
-    out.estado = await A.win.evaluate(async (MESAS) => {
+    out.estado = await A.win.evaluate(async ([MESAS, NO_OPS]) => {
       await setMesasInlineModeEnabled(!!MESAS, { persist: false });
       if (MESAS) { setMesasInlineView("transacciones", { persist: false }); }
+      if (NO_OPS) { parkedOpsIsEnabled = () => false; } // como los clientes reales: guardado entero, sin el piloto de operaciones
       if (typeof splitTpvEnabled !== "undefined") { // (en una version sin la funcion, el arnes tambien sirve)
         splitTpvEnabled = true; // solo en memoria: no toca la configuracion guardada del perfil
         refreshSplitFromCartButtonUI();
       }
       window.__dismiss = () => { const ov = document.getElementById("msgOverlay"); if (ov && !ov.classList.contains("hidden")) { Array.from(ov.querySelectorAll("button")).pop()?.click(); } };
       return { login: hasActiveLoginSession(), cajaAbierta: !!cashSession?.open, mesas: !!MESAS_INLINE_ACTIVE };
-    }, MESAS);
+    }, [MESAS, NO_OPS]);
     if (!out.estado.login || !out.estado.cajaAbierta) throw new Error("Falta sesion iniciada o caja abierta (no se escribe PIN): " + JSON.stringify(out.estado));
 
     const pick = await A.win.evaluate(async () => {
@@ -106,13 +110,57 @@ async function drivePay(X) {
 
     // 1) carrito nuevo con 2 unidades de cada producto
     if (MESAS) {
+      // Mesa limpia: borra cualquier pedido sin cobrar de M3 (de pruebas anteriores) y su borrador antes de empezar.
+      out.limpieza_previa = await A.win.evaluate(async (TABLE) => {
+        cart = []; setCurrentParkedTicketIndex(null); renderCart();
+        let borrados = 0;
+        for (let round = 0; round < 3; round++) {
+          const mine = parkedTickets.filter((t) => !t.paid && t.mesaUid === TABLE);
+          if (!mine.length) break;
+          for (const t of mine) { try { await apiDeleteParkedReservation(t); borrados++; } catch (e) {} }
+          // fuera tambien de la lista local (si no, vuelve a salir como pedido abierto de la mesa)
+          for (let i = parkedTickets.length - 1; i >= 0; i--) {
+            if (!parkedTickets[i].paid && parkedTickets[i].mesaUid === TABLE) parkedTickets.splice(i, 1);
+          }
+          saveParkedTicketsCache();
+          await new Promise((r) => setTimeout(r, 1500));
+          await refreshRemoteParkedReservationsOnly().catch(() => {});
+        }
+        const st = loadMesasTablesStateForInline();
+        if (st?.tableTicketMap) delete st.tableTicketMap[TABLE];
+        if (st?.draftCartByTable) delete st.draftCartByTable[TABLE];
+        saveMesasTablesStateForInline(st);
+        return { borrados, quedan: parkedTickets.filter((t) => !t.paid && t.mesaUid === TABLE).length };
+      }, TABLE);
+      await sleep(1500);
       await A.win.evaluate((TABLE) => { updateMesasSelectionFromContext({ tableUid: TABLE }); syncTpvCartWithSelectedMesa(); }, TABLE);
       await sleep(800);
     }
-    await A.win.evaluate(async (ids) => {
-      cart = ids.map((id) => buildCartLine(findProductByBaseId(id), 2));
-      renderCart();
-    }, prods.map((p) => p.id));
+    if (MESAS) {
+      // En Mesas los productos se añaden como lo haria un camarero (addToCart, 1 vez cada uno) y luego se sube la cantidad
+      // a 2 con la propia funcion del carrito; despues se espera a que el pedido de la mesa quede GUARDADO con eso.
+      await A.win.evaluate(async (ids) => {
+        for (const id of ids) {
+          for (let k = 0; k < 2; k++) { await addToCart(findProductByBaseId(id)); await new Promise((r) => setTimeout(r, 1500)); }
+        }
+      }, prods.map((p) => p.id));
+      const tS = Date.now();
+      while (Date.now() - tS < 30000) {
+        const okSaved = await A.win.evaluate(() => {
+          const t = getCurrentLoadedParkedTicket();
+          const sum = (arr) => arr.reduce((a, l) => a + Number(l.qty || 0), 0);
+          return !!t && cart.length >= 2 && t.items?.length === cart.length && sum(t.items) === sum(cart) && sum(cart) === 4;
+        });
+        if (okSaved) break;
+        await sleep(500);
+      }
+      await sleep(2500);
+    } else {
+      await A.win.evaluate(async (ids) => {
+        cart = ids.map((id) => buildCartLine(findProductByBaseId(id), 2));
+        renderCart();
+      }, prods.map((p) => p.id));
+    }
     await sleep(MESAS ? 6000 : 600); // en Mesas el autoguardado crea el pedido de la mesa
     out.boton_dividir_visible = await A.win.evaluate(() => !!document.getElementById("splitFromCartBtn") && !document.getElementById("splitFromCartBtn").classList.contains("hidden"));
     if (SHOTS) await A.win.screenshot({ path: path.join(SHOTS, "split_1_carrito.png") });
@@ -129,12 +177,23 @@ async function drivePay(X) {
     if (SHOTS) await A.win.screenshot({ path: path.join(SHOTS, "split_2_asistente.png") });
 
     // 3) igualitario, 2 partes
-    await A.win.evaluate(async () => {
+    await A.win.evaluate(async (MESAS) => {
       const sel = document.getElementById("splitTicketModeSelect");
-      sel.value = "equal"; sel.dispatchEvent(new Event("change"));
+      if (MESAS) {
+        // por articulos: 1 unidad de cada linea a cada parte (asignacion exacta, sin fracciones)
+        sel.value = "items"; sel.dispatchEvent(new Event("change"));
+        splitTicketPartsCount = 2;
+        if (splitTicketPartsInput) splitTicketPartsInput.value = "2";
+        splitTicketMode = "items";
+        initSplitItemsMatrixFromCurrentCart();
+        // cada linea (qty 1) va entera a la parte (indice par -> 1, impar -> 2)
+        splitTicketItemsMatrix = cart.map((l, i) => (i % 2 === 0 ? [Number(l.qty), 0] : [0, Number(l.qty)]));
+      } else {
+        sel.value = "equal"; sel.dispatchEvent(new Event("change"));
+      }
       await new Promise((r) => setTimeout(r, 300));
       await confirmSplitTicket();
-    });
+    }, MESAS);
     await sleep(2500);
     out.tras_dividir = await A.win.evaluate(() => ({
       partes: parkedTickets.filter((t) => !t.paid && getTicketSplitMeta(t)).map((t) => ({ id: t.id, name: t.name, parte: getTicketSplitMeta(t)?.part, total: t.total, modo: inferTicketParkingMode(t) })),
@@ -165,8 +224,20 @@ async function drivePay(X) {
     } else {
     // 4) cobrar parte 1 -> debe cargarse sola la parte 2 -> cobrar parte 2
     out.cobro1 = await drivePay(A);
-    await sleep(3500);
-    out.tras_cobro1 = await A.win.evaluate(() => ({ cargado: getCurrentLoadedParkedTicket()?.name || null, cart: cart.map((l) => ({ n: String(l.name).slice(0, 14), q: l.qty })) }));
+    // espera (hasta 30 s) a que termine de verdad el cobro de fondo y se cargue sola la parte 2
+    const tW = Date.now();
+    while (Date.now() - tW < 30000) {
+      const p2 = await A.win.evaluate(() => getTicketSplitMeta(getCurrentLoadedParkedTicket())?.part === 2);
+      if (p2) break;
+      await sleep(500);
+    }
+    out.espera_parte2_s = Math.round((Date.now() - tW) / 100) / 10;
+    const dump = () => A.win.evaluate((BASE) => ({
+      cargado: getCurrentLoadedParkedTicket()?.name || null,
+      cart: cart.map((l) => ({ n: String(l.name).slice(0, 14), q: l.qty })),
+      tickets: parkedTickets.filter((t) => String(t.name || "").startsWith(BASE) || (!t.paid && t.mesaUid === "tut-room-1::m3")).map((t) => ({ id: String(t.id).slice(-5), name: t.name, paid: !!t.paid, closing: !!t.closingInProgress, items: (t.items || []).map((l) => l.qty).join("+") })),
+    }), String(out.ticket_origen?.name || "@@"));
+    out.tras_cobro1 = await dump();
     if (SHOTS) await A.win.screenshot({ path: path.join(SHOTS, "split_4_parte2_auto.png") });
     await A.win.evaluate(() => window.__dismiss());
     out.cobro2 = await drivePay(A);
@@ -177,6 +248,16 @@ async function drivePay(X) {
 
     // 5) stock: inicial - 2 (neto de ventas) en cada producto
     out.stock = [];
+    // espera a que el stock se estabilice (2 lecturas seguidas iguales, hasta 60 s): el cobro de fondo puede tardar
+    for (const p of prods) {
+      let prev = null, same = 0;
+      for (let i = 0; i < 20 && same < 2; i++) {
+        const v = await readStock(p.id);
+        same = v === prev ? same + 1 : 0;
+        prev = v;
+        if (same < 2) await sleep(3000);
+      }
+    }
     for (const p of prods) {
       const fin = await readStock(p.id);
       out.stock.push({ id: p.id, nombre: p.name, inicial: p.stock, final: fin, esperado: p.stock - 2, DESCUADRE: Number((fin - (p.stock - 2)).toFixed(3)) });
