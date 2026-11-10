@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.62",
+      "date": "2026-11-10",
+      "title": "Release 0.2.62",
       "changes": [
         "ARREGLO: al abrir el TPV sin internet (o con internet pero sin que conteste el servidor de la empresa), el TPV se abría solo a los 50 segundos con la versión antigua, o se quedaba esperando sin ninguna salida. Ahora espera a que vuelva la conexión (y entonces busca la última versión y se abre con ella); pasados 10 segundos la ventanita muestra cuánto lleva esperando y un botón «Entrar ahora» para empezar ya con la versión actual (sin conexión, el TPV puede vender igualmente y sincroniza al volver internet).",
         "ARREGLO: si al abrir el TPV GitHub (donde se buscan las actualizaciones) fallaba o no respondía (errores 504), el TPV se quedaba en la ventanita «Actualizando el programa, no lo cierres…» hasta que volvía, a veces varios minutos y sin ningún aviso. Ahora, pasados 10 segundos sin respuesta, la ventanita muestra cuánto lleva esperando y un botón «Entrar ahora» para abrir ya el TPV con la versión actual si se necesita empezar; si no se pulsa, sigue intentándolo y, en cuanto vuelve la conexión, instala la última versión y abre con ella. Si ya se ha encontrado una actualización y se está descargando, el botón desaparece y se espera a que termine."
