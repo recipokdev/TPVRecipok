@@ -23,7 +23,10 @@ const kills = [];
 async function launch(dirName, label) {
   const env = { ...process.env, TPV_MULTI_INSTANCE: "1", TPV_USER_DATA: path.join(os.tmpdir(), dirName), TPV_TEST_LABEL: label };
   delete env.TPV_E2E; delete env.TPV_E2E_USER_DATA; delete env.TPV_MODE;
-  const app = await electron.launch({ args: [ROOT], cwd: ROOT, env });
+  // TPV_EXE: lanzar la version EMPAQUETADA (p. ej. C:/tmp/tpv-split-build/win-unpacked/TPV-Recipok.exe) en vez del codigo fuente.
+  const app = process.env.TPV_EXE
+    ? await electron.launch({ executablePath: process.env.TPV_EXE, args: [], env })
+    : await electron.launch({ args: [ROOT], cwd: ROOT, env });
   const pid = app.process().pid;
   kills.push(() => { try { require("child_process").execSync(`taskkill /PID ${pid} /T /F`, { stdio: "ignore" }); } catch {} });
   let win = null; const t0 = Date.now();
