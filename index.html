@@ -513,6 +513,14 @@
       <!-- TOTAL -->
       <div class="cart-total-row">
         <span id="cartTotalLabel">Total</span>
+        <button
+          type="button"
+          id="splitFromCartBtn"
+          class="small-btn cart-split-from-cart-btn hidden"
+          title="Dividir la cuenta en varias partes para cobrarlas por separado"
+        >
+          Dividir
+        </button>
         <span id="totalAmount">0,00 €</span>
       </div>
       <!-- Solo con un pedido dividido en partes: total de la mesa y lo que falta por cobrar -->
@@ -2556,6 +2564,11 @@
                 class="opt-preview-item"
                 data-toggle-id="autoPrintTicketOnParkToggle"
                 >imprimir ticket al guardar</span
+              >,
+              <span
+                class="opt-preview-item"
+                data-toggle-id="splitTpvToggle"
+                >dividir cuenta en TPV normal</span
               >
             </div>
             <div class="opt-sec-b">
@@ -2600,6 +2613,21 @@
                 </div>
                 <label class="switch">
                   <input type="checkbox" id="autoPrintTicketOnParkToggle" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Dividir cuenta en el TPV normal</div>
+                  <div class="opt-row-sub">
+                    Muestra el botón «Dividir» junto al total (y en los pedidos
+                    abiertos) para repartir la cuenta por artículos o a partes
+                    iguales y cobrar cada parte por separado, también fuera de
+                    Modo Mesas (p. ej. «para llevar»).
+                  </div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="splitTpvToggle" />
                   <span class="slider"></span>
                 </label>
               </div>

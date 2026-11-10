@@ -5,7 +5,11 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "NOVEDAD: dividir la cuenta también en el TPV normal (por ejemplo «para llevar»), no solo en Modo Mesas. Se activa en Opciones → Carrito → «Dividir cuenta en el TPV normal» (apagado por defecto). Aparece un botón «Dividir» junto al total del carrito (y en los pedidos abiertos desde Pedidos): se reparte la cuenta por artículos o a partes iguales, y al cobrar una parte se abre sola la siguiente hasta terminar. Se puede deshacer con Partes = 1.",
+        "ARREGLO: al dividir una cuenta (en Modo Mesas y ahora también en el TPV normal), el stock de los productos con stock gestionado subía de más al cobrar las partes (una unidad de más por cada unidad que iba a las partes 2, 3...). Ahora cada parte libera solo su reserva y el stock cuadra, tanto al cobrar todas las partes como al deshacer la división.",
+        "ARREGLO: al dividir una cuenta aparecía a veces el aviso «Esta mesa se actualizó desde otro terminal» sin que nadie más la hubiera tocado."
+      ]
     },
     {
       "version": "0.2.62",

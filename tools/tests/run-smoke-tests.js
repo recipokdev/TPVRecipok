@@ -12081,6 +12081,39 @@ mustContain(checklist, "Parked Tickets", "Parked flow checklist documented");
 // 2026-11-03 (Los Argentinos): un equipo estuvo dias en la 0.2.48 y la actualizacion al reiniciar dejo al TPV sin abrir
 // sin ningun aviso. Ofrecer actualizar al cerrar la caja + instalacion que no desaparece en silencio.
 mustContain(renderer, "async function offerUpdateAfterCashClose() {", "Al cerrar la caja el TPV ofrece actualizarse si hay una version nueva");
+
+// Dividir cuenta fuera de Modo Mesas (TPV normal / "para llevar", punto 9 del informe de Lumi) y reparto de la
+// reserva de stock entre partes (en demo sobraba 1 unidad por producto al cobrar todas las partes, 2026-11-10).
+mustContain(renderer, 'const OPTIONS_SPLIT_TPV_ENABLED_KEY = "ui.splitTpvEnabled";', "Dividir en TPV normal: opcion guardada en la configuracion (apagada por defecto)");
+mustContain(renderer, "let splitTpvEnabled = false;", "Dividir en TPV normal: apagado por defecto");
+mustContain(renderer, "function isTpvTicketSplitContext() {", "Dividir en TPV normal: contexto propio (no interfiere con el de Mesas)");
+mustContain(renderer, "async function startSplitFromCart() {", "Dividir en TPV normal: el boton junto al total aparca el carrito y abre el asistente");
+mustContain(renderer, "const mesaScope = isTpvTicketSplitContext() ? null : getSelectedMesaScopeContext();", "Las partes de una division de TPV normal no heredan la mesa seleccionada");
+mustContain(renderer, "tryResumePendingSplitSession({ afterPay: true });", "Tras cobrar una parte se abre sola la siguiente (tambien en TPV normal)");
+mustContain(renderer, "if (!inMesasView && !(opts?.afterPay === true && splitTpvEnabled)) return false;", "Fuera de Mesas solo se reanuda tras cobrar una parte, nunca al refrescar");
+mustContain(renderer, "async function logSplitStockRedistribution(moves) {", "Al dividir/unificar se reparte la reserva de stock anotada en el servidor entre las partes");
+mustContain(renderer, "await logSplitStockRedistribution(moves);", "Dividir: cada parte nueva y el pedido original reciben su reserva en el registro de stock");
+mustContain(renderer, "await logSplitStockRedistribution(mergeLedgerMoves);", "Unificar: la reserva de las partes vuelve al pedido original en el registro de stock");
+mustContain(renderer, 'moves.push({ ticketId: st.id, deltaMap: reserved, reason: "crear aparcado" });', "Cada parte nueva se anota como 'crear aparcado' (asi el servidor se fia de su balance al cobrarla)");
+mustContain(renderer, "    return !!res?.ok;", "apiLogStockLedgerEntry dice si anoto de verdad (para reintentar el reparto)");
+mustContain(renderer, "  refreshSplitFromCartButtonUI();", "El boton Dividir del carrito se refresca con la botonera");
+{
+  const htmlSplit = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  if (htmlSplit.includes('id="splitFromCartBtn"') && htmlSplit.includes('id="splitTpvToggle"')) {
+    ok("index.html tiene el boton Dividir del carrito y el interruptor de Opciones");
+  } else {
+    fail("index.html: faltan splitFromCartBtn o splitTpvToggle");
+  }
+  const iCart = renderer.indexOf("cart = loadedShareLines.map((it) => ({ ...it }));");
+  const iToast = renderer.indexOf("toast(`Ticket dividido en ${targetSplitParts} partes.`");
+  const refreshCall = "refreshRemoteParkedReservationsOnly().catch(() => {});";
+  const iRefresh = renderer.lastIndexOf(refreshCall, iToast);
+  if (iCart > 0 && iToast > iCart && iRefresh > iCart) {
+    ok("Dividir: el refresco del servidor va despues de poner el carrito de la parte 1 (sin aviso falso de 'otro terminal')");
+  } else {
+    fail("Dividir: el refresco del servidor debe ir DESPUES de actualizar el carrito de la parte 1");
+  }
+}
 mustContain(renderer, "  offerUpdateAfterCashClose().catch(() => {});\r\n}\r\n\r\n// ===== [07] API: llamadas Recipok/FacturaScripts =====", "La oferta de actualizar se lanza al final del cierre de caja confirmado, sin retrasarlo");
 mustContain(renderer, "if (pendingSales > 0 || loadParkedSyncQueue().length > 0) return;", "No se ofrece actualizar con ventas o aparcados sin enviar");
 mustContain(renderer, "backgroundUpdateSettings?.offerOnCashClose === false", "La oferta de actualizar se puede apagar en Opciones");
