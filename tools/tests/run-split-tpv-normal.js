@@ -10,6 +10,7 @@
 // COBRA DE VERDAD en el demo (2 facturas de prueba).
 // Con --mesas: mismo recorrido en Modo Mesas (mesa M3 del demo, que deja limpia) para comprobar que Mesas no se rompe.
 // Con --no-ops: apaga en el cliente el piloto de operaciones por partes (hoy solo activo en el demo) para imitar a un cliente real.
+// Con --trace: registra cada llamada a parkCurrentCart / autoguardado (con su pila) para investigar duplicados.
 // Con --merge: tras dividir, deshace la division (Partes = 1) y cobra el pedido unificado de una sola vez.
 // Uso: node tools/tests/run-split-tpv-normal.js [ruta-capturas] [--merge] [--mesas]
 process.env.TPV_RUN_BACKGROUND = "1";
@@ -20,6 +21,7 @@ const ROOT = process.env.TPV_ROOT ? path.resolve(process.env.TPV_ROOT) : path.re
 const MERGE = process.argv.includes("--merge");
 const MESAS = process.argv.includes("--mesas");
 const NO_OPS = process.argv.includes("--no-ops");
+const TRACE = process.argv.includes("--trace");
 const TABLE = "tut-room-1::m3";
 const SHOTS = process.argv.find((a, i) => i > 1 && !a.startsWith("--")) || "";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -80,6 +82,26 @@ async function drivePay(X) {
       window.__dismiss = () => { const ov = document.getElementById("msgOverlay"); if (ov && !ov.classList.contains("hidden")) { Array.from(ov.querySelectorAll("button")).pop()?.click(); } };
       return { login: hasActiveLoginSession(), cajaAbierta: !!cashSession?.open, mesas: !!MESAS_INLINE_ACTIVE };
     }, [MESAS, NO_OPS]);
+    if (TRACE) {
+      await A.win.evaluate(() => {
+        window.__ptrace = [];
+        const T0 = Date.now();
+        const stack = () => String(new Error().stack || "").split(String.fromCharCode(10)).slice(3, 9).map((l) => l.trim().replace(/^at /, "")).join(" < ");
+        const wrap = (name, describe) => {
+          const orig = window[name] || eval(name);
+          const w = function (...a) {
+            try { window.__ptrace.push({ t: ((Date.now() - T0) / 1000).toFixed(2), fn: name, ...describe(a), stack: stack() }); } catch (e) { window.__ptrace.push({ fn: name, err: String(e) }); }
+            return orig.apply(this, a);
+          };
+          try { eval(`${name} = w`); } catch (e) { window.__ptrace.push({ fn: name, installErr: String(e) }); }
+        };
+        const loadedInfo = () => { const t = getCurrentLoadedParkedTicket(); return { loaded: t ? String(t.id).slice(-5) : null, closing: !!t?.closingInProgress, paid: !!t?.paid, cartLen: cart.length }; };
+        wrap("parkCurrentCart", (a) => ({ silent: a[2]?.silentAutoSave === true, ...loadedInfo() }));
+        wrap("scheduleMesasAutoSave", () => ({ ...loadedInfo() }));
+        wrap("beginParkedCheckoutLock", (a) => ({ idx: a[0] }));
+        wrap("markParkedTicketAsPaidByIndex", (a) => ({ idx: a[0] }));
+      });
+    }
     if (!out.estado.login || !out.estado.cajaAbierta) throw new Error("Falta sesion iniciada o caja abierta (no se escribe PIN): " + JSON.stringify(out.estado));
 
     const pick = await A.win.evaluate(async () => {
@@ -238,6 +260,7 @@ async function drivePay(X) {
       tickets: parkedTickets.filter((t) => String(t.name || "").startsWith(BASE) || (!t.paid && t.mesaUid === "tut-room-1::m3")).map((t) => ({ id: String(t.id).slice(-5), name: t.name, paid: !!t.paid, closing: !!t.closingInProgress, items: (t.items || []).map((l) => l.qty).join("+") })),
     }), String(out.ticket_origen?.name || "@@"));
     out.tras_cobro1 = await dump();
+    if (TRACE) out.park_trace = await A.win.evaluate(() => window.__ptrace);
     if (SHOTS) await A.win.screenshot({ path: path.join(SHOTS, "split_4_parte2_auto.png") });
     await A.win.evaluate(() => window.__dismiss());
     out.cobro2 = await drivePay(A);

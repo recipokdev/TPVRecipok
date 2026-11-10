@@ -12097,6 +12097,11 @@ mustContain(renderer, "await logSplitStockRedistribution(mergeLedgerMoves);", "U
 mustContain(renderer, 'moves.push({ ticketId: st.id, deltaMap: reserved, reason: "crear aparcado" });', "Cada parte nueva se anota como 'crear aparcado' (asi el servidor se fia de su balance al cobrarla)");
 mustContain(renderer, "    return !!res?.ok;", "apiLogStockLedgerEntry dice si anoto de verdad (para reintentar el reparto)");
 mustContain(renderer, "  refreshSplitFromCartButtonUI();", "El boton Dividir del carrito se refresca con la botonera");
+// Duplicado al cobrar la parte 1 de una division con el piloto de operaciones en Mesas (investigado 2026-11-10): la
+// reanudacion recargaba el pedido que se estaba cobrando y el autoguardado creaba un pedido nuevo con su carrito.
+mustContain(renderer, "    if (t?.closingInProgress) return false;", "La reanudacion de una division no recarga la parte que se esta cobrando");
+mustContain(renderer, "  if (loaded?.closingInProgress) return null;", "El autoguardado de Mesas no guarda un pedido que se esta cobrando");
+mustContain(renderer, "  if (loaded?.closingInProgress) return; // se esta cobrando: no se autoguarda (ver getMesasAutoSaveIntent)", "El autoguardado del TPV normal no guarda un pedido que se esta cobrando");
 {
   const htmlSplit = fs.readFileSync(path.join(root, "index.html"), "utf8");
   if (htmlSplit.includes('id="splitFromCartBtn"') && htmlSplit.includes('id="splitTpvToggle"')) {

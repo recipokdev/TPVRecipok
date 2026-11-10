@@ -48294,6 +48294,11 @@ function findPendingSplitTicketIndex(groupId, part) {
 
   return (Array.isArray(parkedTickets) ? parkedTickets : []).findIndex((t) => {
     if (t?.paid) return false;
+    // Una parte que se esta cobrando AHORA (closingInProgress) no se vuelve a cargar: al empezar a cobrar la
+    // parte 1 el carrito se vacia, y la reanudacion recargaba esa misma parte (aun sin marcar como cobrada);
+    // con el piloto de operaciones el autoguardado la daba por modificada y creaba un pedido DUPLICADO de esa
+    // parte, dejaba la parte 2 sin abrir y reservas de stock sueltas (investigado 2026-11-10).
+    if (t?.closingInProgress) return false;
     const meta = getTicketSplitMeta(t);
     return (
       meta &&
@@ -48485,6 +48490,9 @@ function getMesasAutoSaveIntent() {
 
   const loaded = getCurrentLoadedParkedTicket();
   if (loaded?.paid) return null;
+  // Un pedido que se esta cobrando (aqui o en otro TPV) no se autoguarda: parkCurrentCart no lo trata como el
+  // mismo pedido y crearia uno NUEVO con su carrito (duplicado de la cuenta que se acaba de cobrar).
+  if (loaded?.closingInProgress) return null;
 
   if (loaded) {
     if (!hasVisibleCartLines() || !hasUnsavedChangesForLoadedParkedTicket(loaded))
@@ -48568,6 +48576,7 @@ async function runTpvAutoSaveIfNeeded() {
 
   const loaded = getCurrentLoadedParkedTicket();
   if (!loaded || loaded?.paid) return;
+  if (loaded?.closingInProgress) return; // se esta cobrando: no se autoguarda (ver getMesasAutoSaveIntent)
   if (!hasVisibleCartLines() || !hasUnsavedChangesForLoadedParkedTicket(loaded))
     return;
   if (!cashSession?.open || !currentTerminal) return;
