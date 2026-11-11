@@ -27,3 +27,4 @@ release/
 
 # Config con la API key del TPV (se genera en CI a partir de un secret)
 config.js
+tools/tests/reports/

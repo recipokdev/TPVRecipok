@@ -108,6 +108,19 @@ const cleanTable = (X) => X.win.evaluate(async (TABLE) => {
   return { borrados, quedan: parkedTickets.filter((t) => !t.paid && t.mesaUid === TABLE).length };
 }, TABLE);
 
+// Comprobaciones (veredicto) para la bateria de pruebas: ver tools/tests/battery/.
+function buildChecks(out) {
+  const c = [];
+  c.push(["La prueba terminó sin errores ni abortos de seguridad", !out.ERROR && !out.ABORTADO, out.ERROR || out.ABORTADO || ""]);
+  if (STALE) {
+    c.push(["Con un borrador viejo en el plano, el pedido conserva sus líneas y suma el producto nuevo", out.stale?.pedidoUnidadesDespues === out.stale?.esperado, `${out.stale?.pedidoUnidadesAntes} -> ${out.stale?.pedidoUnidadesDespues} (esperado ${out.stale?.esperado})`]);
+  } else {
+    c.push([`Los ${out.adds} productos añadidos seguidos se guardan todos (no se pierde ninguno)`, out.PERDIDAS === 0, `perdidas ${out.PERDIDAS}`]);
+    if (out.final?.B) c.push(["El otro TPV ve el pedido completo", (out.final.B.pedidosMesa || []).length === 1 && out.final.B.pedidosMesa[0].unidades === out.adds, JSON.stringify(out.final.B.pedidosMesa)]);
+  }
+  return c;
+}
+
 (async () => {
   const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kills.forEach((f) => f()); process.exit(1); }, 300000);
   const out = { noOps: NO_OPS, soloA: SOLO_A, adds: ADDS };
@@ -205,8 +218,9 @@ const cleanTable = (X) => X.win.evaluate(async (TABLE) => {
       }
     } catch (e) { out.limpiezaERR = String(e.message).slice(0, 160); }
     console.log(JSON.stringify(out, null, 1));
+    const verdict = require("./battery/verdict.js").emitVerdict(buildChecks(out));
     clearTimeout(hard);
     kills.forEach((f) => f());
-    process.exit(0);
+    process.exit(verdict.fails ? 1 : 0);
   }
 })();

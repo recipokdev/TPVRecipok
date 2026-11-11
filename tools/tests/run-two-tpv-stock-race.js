@@ -60,6 +60,19 @@ async function drivePay(X) {
   return { timeout: true };
 }
 
+// Comprobaciones (veredicto) para la bateria de pruebas: ver tools/tests/battery/. El modo "control" es el CONTROL NEGATIVO
+// (sin el candado de venta debe quedar stock de mas: demuestra que la prueba detecta el fallo); "fix" es la prueba de verdad.
+function buildChecks(out) {
+  const c = [];
+  c.push(["La prueba terminó sin errores", !out.ERROR, out.ERROR || ""]);
+  if (MODE === "fix") {
+    c.push(["Con dos TPV cobrando a la vez el mismo producto, el stock cuadra (sin stock de más)", out.DESCUADRE === 0, `descuadre ${out.DESCUADRE}`]);
+  } else {
+    c.push(["Control negativo: sin el candado de venta SÍ sobra stock (la prueba detecta el fallo)", out.DESCUADRE === 1, `descuadre ${out.DESCUADRE}`]);
+  }
+  return c;
+}
+
 (async () => {
   const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kills.forEach((f) => f()); process.exit(1); }, 280000);
   const out = { modo: MODE };
@@ -184,8 +197,9 @@ async function drivePay(X) {
       }
     } catch (e) { out.limpiezaERR = String(e.message).slice(0, 160); }
     console.log(JSON.stringify(out, null, 1));
+    const verdict = require("./battery/verdict.js").emitVerdict(buildChecks(out));
     clearTimeout(hard);
     kills.forEach((f) => f());
-    process.exit(0);
+    process.exit(verdict.fails ? 1 : 0);
   }
 })();

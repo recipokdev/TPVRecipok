@@ -88,6 +88,20 @@ const tableTickets = (X, BASE) => X.win.evaluate(([TABLE, BASE]) => parkedTicket
   .filter((t) => (t.mesaUid === TABLE || String(t.name || "").startsWith(BASE)) && (!t.paid || String(t.name || "").startsWith(BASE)))
   .map((t) => ({ id: String(t.id).slice(-5), name: t.name, paid: !!t.paid, closing: !!t.closingInProgress, items: (t.items || []).map((l) => l.qty).join("+") })), [TABLE, BASE]);
 
+// Comprobaciones (veredicto) para la bateria de pruebas: ver tools/tests/battery/. Pensadas para el caso --seq (el concurrente
+// forzado tiene un conflicto conocido, ya presente en main: A y B acaban sobre la misma parte).
+function buildChecks(out) {
+  const c = [];
+  const fin = Array.isArray(out.A_final) ? out.A_final : [];
+  c.push(["La prueba terminó sin errores", !out.ERROR, out.ERROR || ""]);
+  c.push(["La cuenta se divide en 2 partes visibles en los dos TPV", (out.A_tras_dividir || []).length === 2 && (out.B_ve_partes || []).length === 2]);
+  c.push(["Las 2 partes quedan cobradas", fin.length === 2 && fin.every((t) => t.paid), JSON.stringify(fin.map((t) => t.name + (t.paid ? " pagada" : " PENDIENTE")))]);
+  c.push(["No queda ningún pedido pendiente en la mesa (ni en A ni en B)", out.pendientes_en_mesa?.A === 0 && out.pendientes_en_mesa?.B === 0, JSON.stringify(out.pendientes_en_mesa)]);
+  (out.stock || []).forEach((s) => c.push([`El stock de «${s.nombre}» cuadra`, s.DESCUADRE === 0, `descuadre ${s.DESCUADRE}`]));
+  if (!(out.stock || []).length) c.push(["Se pudo leer el stock final", false]);
+  return c;
+}
+
 (async () => {
   const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kills.forEach((f) => f()); process.exit(1); }, 330000);
   const out = { noOps: NO_OPS };
@@ -285,8 +299,9 @@ const tableTickets = (X, BASE) => X.win.evaluate(([TABLE, BASE]) => parkedTicket
       }
     } catch (e) { out.limpiezaERR = String(e.message).slice(0, 160); }
     console.log(JSON.stringify(out, null, 1));
+    const verdict = require("./battery/verdict.js").emitVerdict(buildChecks(out));
     clearTimeout(hard);
     kills.forEach((f) => f());
-    process.exit(0);
+    process.exit(verdict.fails ? 1 : 0);
   }
 })();

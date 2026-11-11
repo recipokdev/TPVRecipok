@@ -67,6 +67,25 @@ async function drivePay(X) {
   return { timeout: true };
 }
 
+// Comprobaciones (veredicto) para la bateria de pruebas: ver tools/tests/battery/.
+function buildChecks(out) {
+  const c = [];
+  const st = Array.isArray(out.stock) ? out.stock : [];
+  c.push(["La prueba terminó sin errores", !out.ERROR, out.ERROR || ""]);
+  if (!MESAS) c.push(["El botón «Dividir» aparece junto al total del carrito", out.boton_dividir_visible === true]);
+  c.push(["Se abre el asistente de división", out.asistente_abierto === true]);
+  c.push(["El pedido se divide en 2 partes", (out.tras_dividir?.partes || []).length === 2, JSON.stringify((out.tras_dividir?.partes || []).map((p) => p.name))]);
+  if (MERGE) {
+    c.push(["Deshacer la división deja un solo pedido (sin partes)", out.tras_unificar?.partes === 0 && !/\(\d+\/\d+\)/.test(String(out.tras_unificar?.cargado || "")), String(out.tras_unificar?.cargado)]);
+  } else {
+    c.push(["Al cobrar la parte 1 se abre sola la parte 2", /2\/2/.test(String(out.tras_cobro1?.cargado || "")), String(out.tras_cobro1?.cargado)]);
+  }
+  c.push(["No queda ninguna parte pendiente tras cobrar todo", out.tras_cobro2?.pendientes === 0, `pendientes ${out.tras_cobro2?.pendientes}`]);
+  st.forEach((s) => c.push([`El stock de «${s.nombre}» cuadra tras vender y cobrar`, s.DESCUADRE === 0, `descuadre ${s.DESCUADRE}`]));
+  if (!st.length) c.push(["Se pudo leer el stock final", false]);
+  return c;
+}
+
 (async () => {
   const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kills.forEach((f) => f()); process.exit(1); }, 280000);
   const out = {};
@@ -318,8 +337,9 @@ async function drivePay(X) {
       }
     } catch (e) { out.limpiezaERR = String(e.message).slice(0, 160); }
     console.log(JSON.stringify(out, null, 1));
+    const verdict = require("./battery/verdict.js").emitVerdict(buildChecks(out));
     clearTimeout(hard);
     kills.forEach((f) => f());
-    process.exit(0);
+    process.exit(verdict.fails ? 1 : 0);
   }
 })();
