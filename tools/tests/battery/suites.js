@@ -150,6 +150,36 @@ const SUITES = [
     args: ["tools/tests/run-app-writes-vs-tpv-ops.js"], timeoutMs: 360000,
   },
   {
+    id: "mesas-vista-2tpv", area: C, level: "full", demo: true, title: "Mesas con 2 TPV: los dos ven lo mismo (carrito, barra «Enviar comanda» y deshacer)",
+    what: "Dos TPV abren la misma mesa. Uno añade un producto y sube la cantidad; se comprueba que el otro lo ve solo, que la barra «Enviar comanda» cuenta líneas (no unidades), que hay un único pedido compartido y que no sale nada a cocina antes de tiempo.",
+    args: ["tools/tests/run-two-tpv-vista.js"], timeoutMs: 360000,
+  },
+  {
+    id: "ops-2tpv-mesas", area: E, level: "full", demo: true, title: "Guardado por partes con 2 TPV en Modo Mesas: cambios a la vez en el mismo pedido",
+    what: "Dos TPV editan a la vez el pedido de la misma mesa: líneas distintas, +1 a la misma línea y una línea que uno quita mientras el otro la edita. Se comprueba que los dos TPV y el servidor acaban con exactamente lo mismo, sin perder ni duplicar nada.",
+    args: ["tools/tests/run-two-tpv-ops.js"], timeoutMs: 360000,
+  },
+  {
+    id: "ops-2tpv-normal", area: E, level: "full", demo: true, title: "Guardado por partes con 2 TPV en TPV normal: cambios a la vez en el mismo aparcado",
+    what: "Lo mismo que la prueba anterior pero con un pedido aparcado del TPV normal (sin Modo Mesas).",
+    args: ["tools/tests/run-two-tpv-ops-normal.js"], timeoutMs: 360000,
+  },
+  {
+    id: "ops-2tpv-cobro", area: E, level: "full", demo: true, title: "Dos TPV cobrando el mismo aparcado a la vez, y cobrar mientras el otro añade una línea",
+    what: "COBRA DE VERDAD en la demo (2 facturas de prueba). Los dos pulsan Cobrar sobre el mismo pedido: solo se crea una factura. Después uno cobra mientras el otro añade una línea: la línea no se factura ni se pierde sin avisar, y el stock cuadra.",
+    args: ["tools/tests/run-two-tpv-ops-pay.js"], timeoutMs: 360000,
+  },
+  {
+    id: "ops-2tpv-dividir", area: D, level: "full", demo: true, title: "Dividir la cuenta mientras otro TPV sube una cantidad (guardado por partes)",
+    what: "Un TPV divide la cuenta de la mesa en 2 partes mientras el otro sube la cantidad de una línea: quedan solo las 2 partes, las dos pantallas ven lo mismo y no se duplica ni se pierde ninguna unidad.",
+    args: ["tools/tests/run-two-tpv-ops-split.js"], timeoutMs: 360000,
+  },
+  {
+    id: "recuperacion-pantalla", area: B, level: "full", demo: true, title: "Recuperación al volver: suspensión del equipo, catálogo vacío y caída de la pantalla",
+    what: "Simula que el equipo se suspende y se reanuda, que la API devuelve 0 productos, que la pantalla se queda sin artículos y que el proceso de dibujo se cae: el TPV recarga solo el catálogo, conserva el anterior si el servidor responde vacío, no recarga en bucle ni con un carrito a medias, y deja constancia en el registro.",
+    args: ["tools/tests/run-resume-refresh.js"], timeoutMs: 660000,
+  },
+  {
     id: "dividir-normal", area: D, level: "full", demo: true, title: "Dividir cuenta en TPV normal y cobrar las partes",
     what: "Divide un carrito en 2 partes, cobra la primera y comprueba que se abre sola la segunda; al terminar no quedan partes y el stock cuadra.",
     args: ["tools/tests/run-split-tpv-normal.js"], timeoutMs: 400000,

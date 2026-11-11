@@ -1,6 +1,6 @@
-// run-two-tpv-vista.js -- prueba MANUAL (no entra en npm test): dos TPV reales en la MISMA mesa del
+// run-two-tpv-vista.js -- prueba (entra en la bateria, nivel full): dos TPV reales en la MISMA mesa del
 // demo (M3) -- compara lo que muestra cada uno (flecha deshacer, barra "Enviar comanda" y contador)
-// al añadir/subir productos en A. Hace capturas en TPV_SHOT_DIR. Comanda automatica a 15 min
+// al añadir/subir productos en A, y comprueba que los dos ven lo mismo. Con TPV_SHOT_DIR hace capturas. Comanda automatica a 15 min
 // (no sale nada a cocina) e impresion simulada. Deja la mesa limpia.
 // Uso: TPV_SHOT_DIR=carpeta node tools/tests/run-two-tpv-vista.js
 process.env.TPV_RUN_BACKGROUND = "1";
@@ -78,28 +78,65 @@ async function cleanTable(A, B) {
   return del;
 }
 
+function buildChecks(out) {
+  const c = [];
+  const ok = (name, cond, extra) => c.push([name, !!cond, extra === undefined ? "" : typeof extra === "string" ? extra : JSON.stringify(extra)]);
+  const n = out.nombre;
+  const q = (v) => n + ":" + v;
+  const P = (k) => out["paso_" + k] || { A: {}, B: {} };
+  const oculto = (t) => t === "(oculto)" || t === undefined;
+  const mismoPedido = (p) => (p.A.tickets || []).length === 1 && (p.B.tickets || []).length === 1 && p.A.tickets[0] === p.B.tickets[0];
+  ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || "");
+  ok("Los dos TPV están en Modo Mesas con la comanda automática activa", (out.modo || []).length === 2 && out.modo.every((m) => m.mesas && m.activa), out.modo);
+  const p0 = P("0-mesa-vacia");
+  ok("Mesa vacía: ningún TPV muestra productos, ni barra «Enviar comanda», ni flechas de deshacer/rehacer", ["A", "B"].every((x) => (p0[x].carrito || []).length === 0 && oculto(p0[x].barra) && oculto(p0[x].deshacer) && oculto(p0[x].rehacer) && (p0[x].tickets || []).length === 0), p0);
+  const p1 = P("1-A-anade-1");
+  ok("A añade 1 producto: A lo ve en su carrito y la barra «Enviar comanda» aparece con 1 línea", (p1.A.carrito || []).join() === q(1) && /Enviar comanda/.test(p1.A.barra || "") && /\b1\b/.test(p1.A.barra || ""), p1.A);
+  ok("A añade 1 producto: se guarda un único pedido de la mesa con 1 línea", (p1.A.tickets || []).length === 1 && /:1$/.test((p1.A.tickets || [""])[0]), p1.A.tickets);
+  const p1b = P("1b-9s-despues");
+  ok("9 s después B ve el mismo carrito (1 unidad) sin hacer nada", (p1b.B.carrito || []).join() === q(1), p1b.B);
+  ok("B muestra también la barra «Enviar comanda» con 1 línea (aviso de lo pendiente)", /Enviar comanda/.test(p1b.B.barra || "") && /\b1\b/.test(p1b.B.barra || ""), p1b.B.barra);
+  ok("A y B comparten UN solo pedido de la mesa (no se crea uno por TPV)", mismoPedido(p1b), { A: p1b.A.tickets, B: p1b.B.tickets });
+  // Cada «añadir» crea una linea nueva (comportamiento por defecto): se compara por UNIDADES y la barra por LINEAS
+  const unidades = (arr) => (arr || []).reduce((t, x) => t + Number(String(x).split(":")[1] || 0), 0);
+  const lineasBarra = (t) => { const m2 = String(t || "").match(/Enviar comanda (\d+)/); return m2 ? Number(m2[1]) : null; };
+  const p2 = P("2-A-sube-cantidad");
+  ok("A añade otra unidad: A ve 2 unidades y la barra «Enviar comanda» cuenta LÍNEAS (tantas como líneas hay en el carrito, no unidades sueltas)", unidades(p2.A.carrito) === 2 && lineasBarra(p2.A.barra) === (p2.A.carrito || []).length, p2.A);
+  ok("Tras añadir, A puede deshacer (flecha visible)", !oculto(p2.A.deshacer), p2.A.deshacer);
+  const p2b = P("2b-9s-despues");
+  ok("9 s después B ve 2 unidades y la misma barra que A", unidades(p2b.B.carrito) === 2 && unidades(p2b.A.carrito) === 2 && lineasBarra(p2b.B.barra) === lineasBarra(p2b.A.barra), { A: p2b.A, B: p2b.B });
+  ok("Siguen siendo un solo pedido en los dos TPV", mismoPedido(p2b), { A: p2b.A.tickets, B: p2b.B.tickets });
+  const p3 = P("3-B-reabre-mesa");
+  ok("B reabre la mesa y sigue viendo 2 unidades, con un solo pedido", unidades(p3.B.carrito) === 2 && (p3.B.tickets || []).length === 1, p3.B);
+  const prints = ["0-mesa-vacia", "1-A-anade-1", "1b-9s-despues", "2-A-sube-cantidad", "2b-9s-despues", "3-B-reabre-mesa"].map((k) => [P(k).A.prints, P(k).B.prints]).flat();
+  ok("Con la comanda automática a 15 min no sale nada a cocina en ningún TPV durante la prueba", prints.every((x) => x === 0), prints);
+  return c;
+}
+
 (async () => {
-  const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kills.forEach((f) => f()); process.exit(1); }, 290000);
+  const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kills.forEach((f) => f()); process.exit(1); }, 330000);
   const out = {};
   let A, B;
   try {
     A = await launch("tpvrecipok-2tpv-real-1", "A");
     B = await launch("tpvrecipok-2tpv-real-2", "B");
     await sleep(8000);
-    const prep = (X) => X.win.evaluate((TABLE) => {
+    const prep = (X) => X.win.evaluate(async (TABLE) => {
+      await setMesasInlineModeEnabled(true, { persist: false }); setMesasInlineView("transacciones", { persist: false });
       window.__saved = { on: localStorage.getItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY), delay: localStorage.getItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY) };
       localStorage.setItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY, "1");
       localStorage.setItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY, "900");
       window.__prints = []; window.__net = []; const __of = window.fetch.bind(window); window.fetch = (u, o) => { const m = String(u && u.url || u).match(/action=([a-z-]+)/); if (m && /parked|mesas-layout/.test(m[1]) && String((o && o.method) || 'GET') !== 'GET') __net.push(Date.now() % 100000 + ' ' + m[1]); return __of(u, o); };
       printComandaWithContext = async (o) => { __prints.push((o.isReturn ? "DEV " : "") + (o.lines || []).map((l) => String(l.name).slice(0, 7) + ":" + l.qty).sort().join(",")); return { ok: true }; };
       getConfiguredComandaPrinterForPrint = () => "FAKE";
-      window.__prods = products.filter((x) => ['Varios 10'].includes(String(x.name)) && Number(x.price) > 0);
+      window.__prods = products.filter((x) => Number(x.price) > 0 && !x.variants && !isOfferPackProductById(getProductBaseId(x)) && !(getProductAddonsForProduct(x) || []).length && !productHasDerivedStockMarker(x)).slice(0, 1);
       window.__sel = () => { updateMesasSelectionFromContext({ tableUid: TABLE }); syncTpvCartWithSelectedMesa(); };
       window.__tickets = () => parkedTickets.filter((t) => !t.paid && t.mesaUid === TABLE).map((t) => ({ items: (t.items || []).map((l) => String(l.name).slice(0, 7) + ":" + l.qty).sort().join(","), impreso: JSON.stringify(t.comandaState?.printedQtyByLineKey ? Object.values(t.comandaState.printedQtyByLineKey) : []) }));
       return { mesas: MESAS_INLINE_ACTIVE, reglas: __mesasComandaRulesLoaded, activa: isAutoComandaOnSaveEnabled() };
     }, TABLE);
     out.modo = [await prep(A), await prep(B)];
 
+    out.nombre = await A.win.evaluate(() => String(__prods[0].name).slice(0, 8));
     out.limpiezaInicial = await cleanTable(A, B);
     const DIR = process.env.TPV_SHOT_DIR || os.tmpdir();
     const fs = require('fs');
@@ -109,7 +146,7 @@ async function cleanTable(A, B) {
       return { carrito: cart.map((c) => String(c.name).slice(0, 8) + ':' + c.qty), deshacer: vis('parkedUndoBtn'), rehacer: vis('parkedRedoBtn'), barra: vis('sendComandaBar'), tickets: parkedTickets.filter((t) => t.mesaUid === T && !t.paid).map((t) => String(t.id).slice(-6) + ':' + (t.items || []).length), idx: currentParkedTicketIndex, prints: __prints.length };
     }, TABLE);
     const shot = async (tag) => {
-      for (const [n, X] of [['A', A], ['B', B]]) {
+      if (process.env.TPV_SHOT_DIR) for (const [n, X] of [['A', A], ['B', B]]) {
         await X.win.screenshot({ path: path.join(DIR, `paso-${tag}-${n}.png`), clip: { x: 1140, y: 0, width: 780, height: 1000 } }).catch(() => {});
       }
       out['paso_' + tag] = { A: await info(A), B: await info(B) };
@@ -133,7 +170,6 @@ async function cleanTable(A, B) {
     await B.win.evaluate(() => { __sel(); });
     await sleep(2000);
     await shot('3-B-reabre-mesa');
-    out.OK = true;
   } catch (e) {
     out.ERROR = String(e && e.message || e).slice(0, 300);
   } finally {
@@ -150,8 +186,9 @@ async function cleanTable(A, B) {
       }
     } catch (e) { out.limpiezaERR = String(e.message).slice(0, 120); }
     console.log(JSON.stringify(out, null, 1));
+    const verdict = require("./battery/verdict.js").emitVerdict(buildChecks(out));
     clearTimeout(hard);
     kills.forEach((f) => f());
-    process.exit(0);
+    process.exit(verdict.fails ? 1 : 0);
   }
 })();

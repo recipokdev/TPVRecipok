@@ -154,8 +154,8 @@ function buildChecks(out) {
       await A.win.screenshot({ path: path.join(process.env.TPV_SHOT_DIR, "mesa-pedido-app.png") });
     }
     out.prints_A = await A.win.evaluate(() => __prints2.slice());
-    out.latencia_primera_impresion_s = (() => { const ts = out.prints_A.map((p) => p.t).filter(Boolean); return ts.length ? Math.round((Math.min(...ts) - out.t_post) / 100) / 10 : null; })();
     out.prints_B = await B.win.evaluate(() => __prints2.slice());
+    out.latencia_primera_impresion_s = (() => { const ts = [...out.prints_A, ...out.prints_B].map((p) => p.t).filter(Boolean); return ts.length ? Math.round((Math.min(...ts) - out.t_post) / 100) / 10 : null; })();
     out.local_A = await A.win.evaluate((T) => { const t = parkedTickets.find((x) => String(x.id) === T); return t ? { userName: t.userName, agentName: t.agentName, agentCode: t.agentCode } : "(no esta)"; }, TICKET);
     // (el veredicto se calcula en buildChecks)
   } catch (e) {

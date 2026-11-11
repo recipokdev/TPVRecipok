@@ -1,4 +1,4 @@
-// run-resume-refresh.js -- prueba MANUAL (no entra en npm test) de la vigilancia de la ventana y de la reanudacion tras
+// run-resume-refresh.js -- prueba (entra en la bateria, nivel full) de la vigilancia de la ventana y de la reanudacion tras
 // suspension, con UN TPV real contra la demo (perfil persistente de run-two-tpv.js, sesion ya iniciada, nunca PIN).
 // Solo lee catalogo; los eventos de diagnostico que se mandan van a la demo.
 // Comprueba: (R1) catalogo reciente -> no recarga; (R2) catalogo viejo -> recarga; (R3) catalogo vacio -> se recupera;
@@ -18,10 +18,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const kills = [];
 const log = (...a) => console.log(new Date().toISOString().slice(14, 23), ...a);
 const results = [];
-const check = (name, ok, extra = "") => {
-  results.push([name, !!ok]);
-  console.log(`${ok ? "[OK]  " : "[FAIL]"} ${name}${extra ? " -> " + extra : ""}`);
-};
+const check = (name, ok, extra = "") => { results.push([name, !!ok, String(extra || "")]); };
 
 async function findWindow(app) {
   let win = null;
@@ -52,7 +49,6 @@ async function findWindow(app) {
     await sleep(8000); // el arranque recupera solo el carrito guardado de la ejecucion anterior
     const prep = () => win.evaluate(() => {
       cart = []; renderCart();
-      if (typeof MESAS_INLINE_ACTIVE !== "undefined" && MESAS_INLINE_ACTIVE) return "mesas";
       document.querySelectorAll(".simple-overlay:not(.hidden)").forEach((o) => o.classList.add("hidden"));
       document.body.classList.remove("modal-locked");
       localStorage.removeItem("tpv_resume_reload_at");
@@ -159,12 +155,11 @@ async function findWindow(app) {
     check("R7b updater.log recoge la caida y la recarga", /proceso de dibujo caido/.test(ulog2) && /recargando tras la caida/.test(ulog2));
   } catch (e) {
     console.error("ERROR:", e);
-    results.push(["excepcion", false]);
+    results.push(["La prueba terminó sin errores", false, String((e && e.message) || e).slice(0, 200)]);
   } finally {
     clearTimeout(hard);
     kills.forEach((k) => k());
-    const bad = results.filter((x) => !x[1]).length;
-    console.log(`\nRESULTADO: ${results.length - bad} OK, ${bad} FAIL`);
-    process.exit(bad ? 1 : 0);
+    const verdict = require("./battery/verdict.js").emitVerdict(results);
+    process.exit(verdict.fails ? 1 : 0);
   }
 })();
