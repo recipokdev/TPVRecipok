@@ -51,13 +51,15 @@ El informe queda en `tools/tests/reports/battery-<fecha>/report.html` (y una cop
 
 ## Estado actual de la cobertura
 
-Con veredicto automático hoy: reglas internas del código, venta/aparcados/opciones en TPV normal, Modo Mesas básico, líneas que no se
+Con veredicto automático hoy: reglas internas del código, venta/aparcados/opciones en TPV normal, movimientos de caja, cobro en efectivo y
+con tarjeta, devoluciones (parcial y total) y totales de cierre, Modo Mesas básico, líneas que no se
 pierden con 2 TPV, dividir cuenta (TPV normal y Mesas, con y sin guardado por partes, con 1 y 2 TPV), carrera de stock con 2 TPV y
 Encargos (crear, editar, recoger, cancelar, cierre de caja, variantes, añadidos de pago, varias tiendas).
 
 Pendiente de convertir a pruebas con veredicto (existen como scripts manuales que solo imprimen datos): comanda y auto-comanda,
 mover y fusionar mesas, cobro fallido, cambio entre mesas ocupadas, fallos de red en el guardado, pedidos de la app de camareros.
-Pendiente de crear: caja (apertura, movimientos, cierre) automática, arranque con GitHub caído / sin internet, devoluciones.
+Pendiente de crear: apertura y cierre real de la caja (la prueba de caja solo abre y cancela el cuadro de cierre, para no cerrar la caja
+compartida de la demo), arranque con GitHub caído / sin internet.
 
 ## Relación con el `stable patch`
 

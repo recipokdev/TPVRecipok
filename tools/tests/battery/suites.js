@@ -64,6 +64,11 @@ const SUITES = [
 
   // ---------------------------------------------------------------- nivel full: TPV reales contra la demo
   {
+    id: "caja-devoluciones", area: B, level: "full", demo: true, title: "Caja y devoluciones: movimientos, ventas, devoluciones y cierre",
+    what: "Con el TPV real: movimientos de caja (entrada y salida), una venta en efectivo y otra con tarjeta, devolución parcial de una y total de la otra por la pantalla de Tickets. Comprueba que efectivo, total de ventas, nº de tickets y total esperado de caja suben y bajan lo justo (y que el cuadro de «Cerrar caja» muestra lo mismo), que las rectificativas quedan bien y que el stock cuadra.",
+    args: ["tools/tests/run-caja-devoluciones.js"], timeoutMs: 450000,
+  },
+  {
     id: "mesas-lineas-sin-ops", area: C, level: "full", demo: true, title: "Mesas con 2 TPV: los productos añadidos no se pierden",
     what: "Dos TPV con la misma mesa; uno añade 4 productos seguidos. Comprueba que se guardan los 4 y que el otro TPV ve el pedido completo (guardado entero, como los clientes).",
     args: ["tools/tests/run-two-tpv-lines-lost.js", "--no-ops"], timeoutMs: 300000,
