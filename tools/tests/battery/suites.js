@@ -175,6 +175,11 @@ const SUITES = [
     args: ["tools/tests/run-two-tpv-edit-and-pay.js"], timeoutMs: 480000,
   },
   {
+    id: "mesas-boton-al-cargar", area: C, level: "full", demo: true, title: "Pulsar Mesas mientras el TPV todavía está cargando",
+    what: "Se pulsa el botón de Mesas justo al arrancar, antes de que termine la carga: el TPV lo recuerda, avisa «entrará en Modo Mesas al terminar» y entra solo en Modo Mesas cuando acaba de cargar (antes no hacía nada y sin aviso).",
+    args: ["tools/tests/run-mesas-button-during-load.js"], timeoutMs: 200000,
+  },
+  {
     id: "ops-2tpv-dividir", area: D, level: "full", demo: true, title: "Dividir la cuenta mientras otro TPV sube una cantidad (guardado por partes)",
     what: "Un TPV divide la cuenta de la mesa en 2 partes mientras el otro sube la cantidad de una línea: quedan solo las 2 partes, las dos pantallas ven lo mismo y no se duplica ni se pierde ninguna unidad.",
     args: ["tools/tests/run-two-tpv-ops-split.js"], timeoutMs: 360000,

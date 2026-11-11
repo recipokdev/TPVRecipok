@@ -1,7 +1,7 @@
-// run-mesas-button-during-load.js -- prueba MANUAL (no entra en npm test): pulsar el boton de Mesas
+// run-mesas-button-during-load.js -- prueba (entra en la bateria, nivel full): pulsar el boton de Mesas
 // MIENTRAS el TPV aun carga debe recordarse y entrar en Modo Mesas al terminar la carga (antes no
-// hacia nada y sin aviso). Una instancia real contra el demo, sesion ya iniciada (nunca PIN). Fuerza
-// salir de Mesas en el perfil de prueba (sin guardar ese modo) para que la entrada sea observable.
+// hacia nada y sin aviso). Una instancia real contra el demo, sesion ya iniciada (nunca PIN). Al acabar deja el perfil
+// fuera de Mesas (sin guardar ese modo) para no influir en otras pruebas.
 // Uso: node tools/tests/run-mesas-button-during-load.js
 process.env.TPV_RUN_BACKGROUND = "1";
 const path = require("path"), os = require("os");
@@ -35,12 +35,23 @@ let kill = () => {};
     for (let i = 0; i < 40 && (await win.evaluate(() => TPV_LOADING)); i++) await sleep(1000);
     await sleep(2500);
     out.tras_la_carga = await win.evaluate(() => ({ loading: TPV_LOADING, pendiente: __pendingMesasEntry, mesasActivo: MESAS_INLINE_ACTIVE, vista: MESAS_INLINE_VIEW }));
+    try { await win.evaluate(async () => { await setMesasInlineModeEnabled(false, { persist: false }); try { localStorage.removeItem("tpv_parkedOpsDisabled"); } catch {} }); } catch {}
+    try { await app.evaluate(({ session }) => session.defaultSession.flushStorageData()); } catch {}
   } catch (e) {
     out.ERROR = String(e && e.message || e).slice(0, 300);
   } finally {
     console.log(JSON.stringify(out, null, 1));
+    const p = out.pulsar || {}, a = out.al_aparecer || {}, t = out.tras_la_carga || {};
+    const verdict = require("./battery/verdict.js").emitVerdict([
+      ["La prueba terminó sin errores", !out.ERROR, out.ERROR || ""],
+      ["Al arrancar el TPV está cargando y todavía fuera de Modo Mesas (se puede probar el caso)", a.loading === true && a.mesasActivo === false, a],
+      ["Pulsar Mesas mientras carga no se pierde: queda recordado como pendiente", p.pendiente === true, p],
+      ["Pulsar Mesas mientras carga avisa al cajero (\"entrará en Modo Mesas al terminar\")", /entrar[aá] en Modo Mesas/i.test(p.toast || ""), p.toast || ""],
+      ["Al terminar la carga entra solo en Modo Mesas", t.loading === false && t.mesasActivo === true, t],
+      ["Una vez dentro ya no queda nada pendiente", t.pendiente === false, t],
+    ]);
     clearTimeout(hard);
     kill();
-    process.exit(0);
+    process.exit(verdict.fails ? 1 : 0);
   }
 })();
