@@ -58,8 +58,8 @@ const SUITES = [
     args: ["tools/tests/run-e2e-demo.js"], timeoutMs: 600000,
   },
   {
-    id: "ticket-impreso", area: B, level: "standard", title: "Contenido del ticket impreso (sin imprimir de verdad)",
-    what: "Genera el ticket tal como se mandaría a la impresora y comprueba su contenido: datos de la empresa, número, fecha, cliente, terminal y agente, cada línea con su cantidad e importe, descuentos, añadidos, packs, cuentas divididas, resumen de IVA, total, entregado y cambio, y el tipo de documento (simplificada, general, rectificativa, devolución, no facturado). No toca la demo ni la impresora.",
+    id: "ticket-impreso", area: B, level: "standard", title: "Contenido de lo impreso: ticket, cierre de caja y comanda de cocina (sin imprimir de verdad)",
+    what: "Genera el ticket tal como se mandaría a la impresora y comprueba su contenido: datos de la empresa, número, fecha, cliente, terminal y agente, cada línea con su cantidad e importe, descuentos, añadidos, packs, cuentas divididas, resumen de IVA, total, entregado y cambio, y el tipo de documento (simplificada, general, rectificativa, devolución, no facturado). También el informe de cierre de caja (totales, formas de pago, agentes, observaciones) y la comanda de cocina (mesa, camarero, líneas, añadidos, devolución, reimpresión). No toca la demo ni la impresora.",
     args: ["tools/tests/run-ticket-print.js"], timeoutMs: 200000,
   },
   {

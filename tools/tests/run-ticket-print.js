@@ -97,6 +97,53 @@ const EMPRESA = { nombrecorto: "BAR PRUEBA", nombre: "Bar de Prueba SL", cifnif:
       // T11: ticket sin lineas ni pagos no revienta
       await imprimir("vacio", { numero: "S-0007", codserie: "S", lineas: [] });
 
+      // ---- Informe de cierre de caja (cash_close_print.html) ----
+      const leerDoc = () => { const jobs = window.TPV_TEST.getPrintJobs(); const j = jobs[jobs.length - 1]; return j ? new DOMParser().parseFromString(j.payload.html, "text/html") : null; };
+      const tx = (doc, id) => (doc.getElementById(id)?.textContent || "").replace(/\s+/g, " ").trim();
+      const visible = (doc, id) => { const e = doc.getElementById(id); return !!e && e.style.display !== "none"; };
+      const filas = (doc, id) => Array.from(doc.querySelectorAll("#" + id + " .row")).map((r) => r.textContent.replace(/\s+/g, " ").trim());
+      const informeBase = {
+        companyShortName: "BAR PRUEBA", companyLegalName: "Bar de Prueba SL", fecha: "11/11/2026", hora: "23:10", cajaId: "CAJA-77", terminal: "TPV PRUEBA", fechaini: "11/11/2026 08:00",
+        totalVendido: 123.45, numTickets: 17, openingTotal: 100, cashIncome: 60.5, movements: -20, expectedCash: 140.5, countedCash: 139, difference: -1.5,
+        methods: [{ code: "TARJ", label: "Tarjeta", count: 9, total: 80 }, { code: "CONT", label: "Efectivo", count: 8, total: 43.45 }], totalPaymentUses: 17, payEditsCount: 2,
+        agentSales: [{ agentName: "Ana", count: 5, total: 40 }, { agentName: "Luis", count: 12, total: 83.45 }], userObs: "Falto 1,50 en caja", autoLogText: "Apertura 08:00 &amp; cierre 23:10",
+      };
+      const imprimirInforme = async (clave, rep) => {
+        window.TPV_TEST.clearPrintJobs();
+        await printCashCloseReport({ ...informeBase, ...rep });
+        await new Promise((r) => setTimeout(r, 150));
+        const d = leerDoc();
+        const jobs = window.TPV_TEST.getPrintJobs();
+        res[clave] = !d ? { sinTrabajo: true } : {
+          trabajos: jobs.length, tipo: jobs[jobs.length - 1].type, fecha: tx(d, "ccDate"), caja: tx(d, "ccCajaId"), terminal: tx(d, "ccTerminal"), inicio: tx(d, "ccOpeningAt"), empresa: tx(d, "companyShortName"), razon: tx(d, "companyLegalName"),
+          vendido: tx(d, "ccTotalSales"), tickets: tx(d, "ccNumTickets"), apertura: tx(d, "ccOpeningCash"), efectivo: tx(d, "ccCashIncome"), movimientos: tx(d, "ccMovements"), esperado: tx(d, "ccExpectedCash"), contado: tx(d, "ccCountedCash"), diferencia: tx(d, "ccDifference"),
+          metodos: filas(d, "ccMethods"), metodosTotal: visible(d, "ccMethodsTotalWrap") ? tx(d, "ccMethodsTotal") : "", usos: visible(d, "ccPayUsesWrap") ? tx(d, "ccPayUses") : "", cambiosPago: visible(d, "ccPayChangesWrap") ? tx(d, "ccPayChanges") : "",
+          agentes: visible(d, "ccAgentsWrap") ? filas(d, "ccAgents") : [], agentesTotal: visible(d, "ccAgentsTotalWrap") ? tx(d, "ccAgentsTotal") : "", obs: visible(d, "ccObsWrap") ? tx(d, "ccObs") : "", log: visible(d, "ccAutoLogWrap") ? tx(d, "ccAutoLog") : "",
+        };
+      };
+      res.fm = { e140_5: fmtMoney(140.5), e123_45: fmtMoney(123.45), e80: fmtMoney(80), e43_45: fmtMoney(43.45), e123_45b: fmtMoney(123.45), e100: fmtMoney(100), e60_5: fmtMoney(60.5), e_20: fmtMoney(-20), e139: fmtMoney(139), e_1_5: fmtMoney(-1.5), e40: fmtMoney(40), e83_45: fmtMoney(83.45) };
+      await imprimirInforme("cierre", {});
+      await imprimirInforme("cierreSinExtras", { payEditsCount: 0, agentSales: [], userObs: "", autoLogText: "", totalPaymentUses: 0, methods: [{ code: "CONT", label: "Efectivo <b>", count: 1, total: 5 }] });
+
+      // ---- Comanda de cocina (comanda_print.html) ----
+      const lineasCom = [{ qty: 2, name: "Cafe solo", referencia: "CAF", addons: [{ nombre: "avena" }, { nombre: "sin azucar" }] }, { qty: 1, name: "Tostada <b>&</b>", referencia: "TOS" }];
+      const imprimirComanda = async (clave, extra) => {
+        window.TPV_TEST.clearPrintJobs();
+        const r = await printComandaWithContext({ scope: { roomName: "Terraza", tableName: "M7" }, lines: lineasCom, obsText: "sin gluten", partNumber: null, printerName: "E2E Mock Printer", ...extra });
+        await new Promise((x) => setTimeout(x, 150));
+        const d = leerDoc();
+        res[clave] = !d ? { sinTrabajo: true, r } : {
+          r: r && r.ok, titulo: tx(d, "comandaTitle"), devolucionVisible: visible(d, "comandaReturnBanner"), reimpresionVisible: visible(d, "comandaReprintBanner"), mesaGrande: tx(d, "comandaMesaBig"), mesa: tx(d, "comandaMesa"), agente: tx(d, "comandaAgent"),
+          fecha: tx(d, "comandaDate"), hora: tx(d, "comandaTime"), parte: visible(d, "comandaPartRow") ? tx(d, "comandaPart") : "", obs: tx(d, "comandaObs"), compacto: !!d.getElementById("comanda")?.classList.contains("compact"),
+          filas: Array.from(d.querySelectorAll("#comandaItems .comanda-item")).map((i) => ({ qty: (i.querySelector(".comanda-qty")?.textContent || "").trim(), desc: (i.querySelector(".comanda-desc")?.firstChild?.textContent || "").trim(), addons: (i.querySelector(".comanda-desc-addons")?.textContent || "").trim(), quitar: !!i.querySelector(".comanda-desc-return-tag") })),
+        };
+      };
+      await imprimirComanda("comanda", { partNumber: 2 });
+      await imprimirComanda("comandaSinObs", { obsText: "" });
+      await imprimirComanda("comandaDevolucion", { isReturn: true });
+      await imprimirComanda("comandaReimpresion", { isReprint: true });
+      await imprimirComanda("comandaCamarero", { agentLabel: "Camarero App" });
+
       // T12: bytes ESC/POS (impresion RAW de Linux)
       try {
         const bytes = buildEscposTicketBytes({ numero: "S-0001", fecha: "11/11/2026", hora: "13:45", company: EMPRESA, terminalName: "TPV PRUEBA", agentName: "AGENTE PRUEBA", codserie: "S", clientName: "Cliente X" }, [L("Cafe solo", 2, 1), L("Agua", 1, 1, { taxRate: 21 })], 3.41);
@@ -165,6 +212,35 @@ function buildChecks(out) {
   ok("Un nombre con «<», «&» y comillas sale como texto y no rompe el ticket", (es.lineas || []).length === 1 && es.lineas[0].desc === 'Pan <b>&</b> "vino"', es.lineas);
   const va = r.vacio || {};
   ok("Un ticket sin líneas ni pagos no rompe la impresión (total 0,00)", va.devuelve === true && (va.lineas || []).length === 0 && has(va.total, "0,00"), { devuelve: va.devuelve, total: va.total });
+
+  // ---- Informe de cierre de caja ----
+  const f = r.fm || {};
+  const ci = r.cierre || {};
+  ok("Cierre de caja: se manda un solo trabajo de impresión con empresa, caja, terminal, fecha de cierre y de apertura", ci.trabajos === 1 && ci.tipo === "ticket" && ci.empresa === "BAR PRUEBA" && ci.razon === "Bar de Prueba SL" && ci.caja === "CAJA-77" && ci.terminal === "TPV PRUEBA" && ci.fecha === "11/11/2026 23:10" && ci.inicio === "11/11/2026 08:00", { trabajos: ci.trabajos, empresa: ci.empresa, caja: ci.caja, terminal: ci.terminal, fecha: ci.fecha, inicio: ci.inicio });
+  ok("Cierre de caja: total vendido 123,45, 17 tickets, apertura 100, efectivo cobrado 60,50, movimientos -20, esperado 140,50, contado 139 y diferencia -1,50",
+    ci.vendido === f.e123_45 && ci.tickets === "17" && ci.apertura === f.e100 && ci.efectivo === f.e60_5 && ci.movimientos === f.e_20 && ci.esperado === f.e140_5 && ci.contado === f.e139 && ci.diferencia === f.e_1_5,
+    { vendido: ci.vendido, tickets: ci.tickets, apertura: ci.apertura, efectivo: ci.efectivo, movimientos: ci.movimientos, esperado: ci.esperado, contado: ci.contado, diferencia: ci.diferencia });
+  ok("Cierre de caja: formas de pago ordenadas por nombre con su número de cobros e importe (Efectivo 8 · 43,45; Tarjeta 9 · 80,00) y su total 123,45 (igual al vendido)",
+    (ci.metodos || []).length === 2 && has(ci.metodos[0], "Efectivo(8)" + f.e43_45) && has(ci.metodos[1], "Tarjeta(9)" + f.e80) && ci.metodosTotal === f.e123_45b && ci.metodosTotal === ci.vendido, { metodos: ci.metodos, total: ci.metodosTotal });
+  ok("Cierre de caja: usos de forma de pago (17) y cambios de pago (2)", ci.usos === "17" && ci.cambiosPago === "2", { usos: ci.usos, cambios: ci.cambiosPago });
+  ok("Cierre de caja: ventas por agente, de mayor a menor (Luis 12 · 83,45; Ana 5 · 40,00) y su total 123,45", (ci.agentes || []).length === 2 && has(ci.agentes[0], "Luis(12)" + f.e83_45) && has(ci.agentes[1], "Ana(5)" + f.e40) && ci.agentesTotal === f.e123_45, { agentes: ci.agentes, total: ci.agentesTotal });
+  ok("Cierre de caja: salen las observaciones del cajero y el registro automático (con «&» ya decodificado)", ci.obs === "Falto 1,50 en caja" && ci.log === "Apertura 08:00 & cierre 23:10", { obs: ci.obs, log: ci.log });
+  const cx = r.cierreSinExtras || {};
+  ok("Cierre de caja sin extras: no salen usos, cambios de pago, agentes, observaciones ni registro, y un nombre con «<b>» sale como texto", cx.usos === "" && cx.cambiosPago === "" && (cx.agentes || []).length === 0 && cx.agentesTotal === "" && cx.obs === "" && cx.log === "" && (cx.metodos || []).length === 1 && cx.metodos[0].startsWith("Efectivo <b> (1)"), { usos: cx.usos, cambios: cx.cambiosPago, agentes: cx.agentes, obs: cx.obs, log: cx.log, metodos: cx.metodos });
+
+  // ---- Comanda de cocina ----
+  const co = r.comanda || {};
+  ok("Comanda: se imprime y lleva «COMANDA», la mesa en grande (M7), «Terraza · M7», el camarero, fecha, hora y «Parte 2»", co.r === true && /COMANDA/.test(co.titulo) && co.mesaGrande === "M7" && co.mesa === "Terraza · M7" && co.agente === (r.app.agente || "-") && /^\d{2}\/\d{2}\/\d{4}$/.test(co.fecha) && /^\d{1,2}:\d{2}/.test(co.hora) && co.parte === "Parte 2", { r: co.r, titulo: co.titulo, mesaGrande: co.mesaGrande, mesa: co.mesa, agente: co.agente, fecha: co.fecha, hora: co.hora, parte: co.parte });
+  ok("Comanda: cada línea con su cantidad y nombre (2 · Cafe solo; 1 · Tostada) y los añadidos debajo («+avena, +sin azucar»); nada sale marcado como «QUITAR»",
+    (co.filas || []).length === 2 && co.filas[0].qty === "2" && /Cafe solo/.test(co.filas[0].desc) && co.filas[0].addons === "+avena, +sin azucar" && co.filas[1].qty === "1" && /Tostada/.test(co.filas[1].desc) && co.filas.every((x) => !x.quitar) && !co.devolucionVisible && !co.reimpresionVisible, co.filas);
+  ok("Comanda: las observaciones salen («sin gluten») y, sin ellas, «Sin observaciones»; sin número de parte no se muestra «Parte»", co.obs === "sin gluten" && (r.comandaSinObs || {}).obs === "Sin observaciones" && (r.comandaSinObs || {}).parte === "", { obs: co.obs, sinObs: (r.comandaSinObs || {}).obs, parteSinNumero: (r.comandaSinObs || {}).parte });
+  ok("Comanda: un nombre con «<b>» sale como texto en cocina", (co.filas || [])[1] && co.filas[1].desc.includes("Tostada <b>&</b>"), (co.filas || [])[1]);
+  const cd = r.comandaDevolucion || {};
+  ok("Comanda de devolución a cocina: título «DEVOLUCIÓN», aviso visible y cada línea marcada «QUITAR»", /DEVOLUCI/.test(cd.titulo) && cd.devolucionVisible === true && (cd.filas || []).length === 2 && cd.filas.every((x) => x.quitar), { titulo: cd.titulo, aviso: cd.devolucionVisible, filas: cd.filas });
+  const cr = r.comandaReimpresion || {};
+  ok("Reimpresión de una comanda: aviso «REIMPRESIÓN» visible y sin aviso de devolución", cr.reimpresionVisible === true && cr.devolucionVisible === false && /COMANDA/.test(cr.titulo), { reimpresion: cr.reimpresionVisible, devolucion: cr.devolucionVisible, titulo: cr.titulo });
+  const cc = r.comandaCamarero || {};
+  ok("Comanda de un pedido de la app de camareros: en el papel sale el nombre del camarero de la app y no el del agente del TPV", cc.agente === "Camarero App", cc.agente);
 
   const e = r.escpos || {};
   ok("Impresión directa (Linux, ESC/POS): empieza con la orden de inicio, acaba con el corte y lleva empresa, líneas y total",
