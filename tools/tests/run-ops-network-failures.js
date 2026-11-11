@@ -1,16 +1,19 @@
-// run-ops-network-failures.js -- prueba MANUAL (no entra en npm test) del guardado por operaciones
-// ante FALLOS DE RED, con UNA instancia real contra el demo (TPV normal). Perfil persistente de
+// run-ops-network-failures.js -- prueba (entra en la bateria, nivel full) del guardado ante FALLOS DE RED, con UNA
+// instancia real contra el demo (TPV normal). Por defecto con el guardado por operaciones (piloto); con --noops con el
+// guardado entero, que es el que usan hoy los clientes. Perfil persistente de
 // run-two-tpv.js, sesion ya iniciada (nunca PIN). Simula en la propia pagina (envolviendo fetch):
 //   S1  la peticion NO llega al servidor (error de red) y luego se sigue editando -> nada se pierde ni se duplica
 //   S2  el servidor APLICA la operacion pero la respuesta se pierde (error de red) y luego se sigue editando
 //       -> la operacion no se aplica dos veces (el caso peligroso: un +1 que acabaria siendo +2)
 //   S3  respuesta 500 sin aplicar -> se reintenta y converge
-// Requiere parked_ops_pilot_slugs_tpv = ['demo']. Parkea un pedido ZZ y lo borra al terminar.
-// Uso: node tools/tests/run-ops-network-failures.js
+// Requiere parked_ops_pilot_slugs_tpv = ['demo'] (sin --noops). Parkea un pedido ZZ y lo borra al terminar.
+// (Hallo un fallo real, 2026-11-11: tras la caida la cantidad subia sola por la fusion en 3 vias; arreglado.)
+// Uso: node tools/tests/run-ops-network-failures.js [--noops]
 process.env.TPV_RUN_BACKGROUND = "1";
 const path = require("path"), os = require("os");
 const { _electron: electron } = require("playwright");
-const ROOT = path.resolve(__dirname, "..", "..");
+const ROOT = process.env.TPV_ROOT ? path.resolve(process.env.TPV_ROOT) : path.resolve(__dirname, "..", "..");
+const NOOPS = process.argv.includes("--noops");
 const NAME = "ZZ ops red " + Date.now();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let kill = () => {};
@@ -29,28 +32,50 @@ async function launch(dirName, label) {
   return { app, pid, win };
 }
 
+function buildChecks(out) {
+  const c = [];
+  const ok = (name, cond, extra) => c.push([name, !!cond, extra === undefined ? "" : typeof extra === "string" ? extra : JSON.stringify(extra)]);
+  const n = out.nombres || [];
+  const norm = (...pairs) => pairs.map(([i, q]) => n[i] + ":" + q).sort().join(",");
+  const same = (a, b) => String(a) === String(b);
+  ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || "");
+  ok(NOOPS ? "Modo guardado entero (como los clientes)" : "Modo guardado por partes activo (piloto)", out.modo?.mesas === false && out.modo?.opsTpv === !NOOPS, out.modo);
+  ok("Pedido base guardado en el servidor: 1 unidad del producto 1", same(out.inicio, norm([0, 1])), out.inicio);
+  const hizoFallos = (k) => (out[k] || []).filter((x) => /^inyectado/.test(x)).length > 0;
+  ok("S1 (la petición no llega): el fallo se produjo de verdad y se reintentó", hizoFallos("S1_llamadas") && hizoFallos("S1b_llamadas"), { S1: out.S1_llamadas, S1b: out.S1b_llamadas });
+  ok("S1: restablecida la red, el servidor tiene todo (2 uds. + la línea nueva): nada perdido ni duplicado", same(out.S1_servidor, norm([0, 2], [2, 1])), out.S1_servidor);
+  ok("S1: el carrito del cajero coincide con el servidor (la cantidad no sube sola)", same(out.S1_carrito, out.S1_servidor), { carrito: out.S1_carrito, servidor: out.S1_servidor });
+  ok("S2 (el servidor aplica pero la respuesta se pierde): el fallo se produjo de verdad", hizoFallos("S2_llamadas") && hizoFallos("S2b_llamadas"), { S2: out.S2_llamadas, S2b: out.S2b_llamadas });
+  ok("S2: la operación NO se aplica dos veces (3 uds., no 4 ni más) y llegan las líneas nuevas", same(out.S2_servidor, norm([0, 3], [2, 1], [3, 1])), out.S2_servidor);
+  ok("S2: el carrito coincide con el servidor", same(out.S2_carrito, out.S2_servidor), { carrito: out.S2_carrito, servidor: out.S2_servidor });
+  ok("S3 (el servidor responde 500 sin aplicar): se reintenta y converge (4 uds.)", hizoFallos("S3_llamadas") && same(out.S3_servidor, norm([0, 4], [2, 1], [3, 1])), { llamadas: out.S3_llamadas, servidor: out.S3_servidor });
+  ok("S3: el carrito coincide con el servidor al final", same(out.S3_carrito, out.S3_servidor), { carrito: out.S3_carrito, servidor: out.S3_servidor });
+  return c;
+}
+
 (async () => {
-  const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kill(); process.exit(1); }, 295000);
+  const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kill(); process.exit(1); }, 330000);
   const out = {};
   let A, tid = null;
   try {
     A = await launch("tpvrecipok-2tpv-real-1", "A");
     await sleep(8000);
+    if (NOOPS) await A.win.evaluate(() => { localStorage.setItem("tpv_parkedOpsDisabled", "1"); });
     out.modo = await A.win.evaluate(async (NAME) => {
       await setMesasInlineModeEnabled(false, { persist: false });
-      window.__prods = products.filter((x) => Number(x.price) > 0);
+      { const seen = new Set(); window.__prods = []; for (const p of products.filter((x) => Number(x.price) > 0 && !x.variants && !isOfferPackProductById(getProductBaseId(x)) && !(getProductAddonsForProduct(x) || []).length && !productHasDerivedStockMarker(x))) { const k = String(p.name).slice(0, 7); if (!seen.has(k)) { seen.add(k); __prods.push(p); } if (__prods.length >= 4) break; } }
       window.__fail = null; // null | "drop" | "lost" | "500"
       window.__calls = [];
       const of = window.fetch.bind(window);
       window.fetch = async (u, o) => {
         const url = String(u && u.url || u);
-        if (/action=save-parked-reservation-ops/.test(url) && window.__fail) {
-          const mode = window.__fail; window.__calls.push("ops:" + mode);
+        if (/action=(save-parked-reservation-ops|create-parked-reservation|update-parked-reservation)(&|$)/.test(url) && window.__fail) {
+          const mode = window.__fail; window.__calls.push("inyectado:" + mode);
           if (mode === "drop") throw new TypeError("Failed to fetch");
           if (mode === "lost") { await of(u, o); throw new TypeError("Failed to fetch"); }
           if (mode === "500") return new Response(JSON.stringify({ ok: false }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
-        if (/action=save-parked-reservation/.test(url) && !/-ops/.test(url) && String((o && o.method) || "GET") !== "GET") window.__calls.push("full");
+        if (/action=(create|update)-parked-reservation(&|$)/.test(url)) window.__calls.push("full:ok");
         else if (/action=save-parked-reservation-ops/.test(url)) window.__calls.push("ops:ok");
         return of(u, o);
       };
@@ -75,6 +100,7 @@ async function launch(dirName, label) {
     await sleep(3000);
     tid = await A.win.evaluate(() => { const i = __find(); const t = parkedTickets[i]; restoreParkedCartByIndex(i); return t && String(t.id); });
     await sleep(2500);
+    out.nombres = await A.win.evaluate(() => __prods.map((p) => String(p.name).slice(0, 7)));
     out.inicio = await A.win.evaluate(() => __server());
 
     const step = async (label, fail, edit) => {
@@ -104,14 +130,13 @@ async function launch(dirName, label) {
     // S3: error 500 sin aplicar
     await step("S3", "500", () => { const l = cart[0]; updateCartItemQuantity(l._lineId, (Number(l.qty) || 1) + 1); });
     await settle("S3");
-    out.esperado = "P0 = 1 +1(S1) +1(S2) +1(S3) = 4; P2 x1; P3 x1";
   } catch (e) {
     out.ERROR = String(e && e.message || e).slice(0, 300);
   } finally {
     try {
       if (A && tid) {
         out.limpieza = await A.win.evaluate(async (tid) => {
-          __fail = null;
+          __fail = null; try { localStorage.removeItem("tpv_parkedOpsDisabled"); } catch {}
           const t = parkedTickets.find((x) => String(x.id) === String(tid));
           try { if (t) await apiDeleteParkedReservation(t); } catch (e) {}
           cart = []; setCurrentParkedTicketIndex(null); renderCart();
@@ -121,9 +146,13 @@ async function launch(dirName, label) {
         await sleep(2500);
       }
     } catch (e) { out.limpiezaERR = String(e.message).slice(0, 120); }
+    // Pase lo que pase, el interruptor de "sin guardado por partes" no puede quedarse puesto en el perfil (si no, las pruebas
+    // siguientes correrian sin guardado por partes sin avisar): se quita y se vuelca a disco antes de cerrar a la fuerza.
+    try { if (A) { await A.win.evaluate(() => { try { localStorage.removeItem("tpv_parkedOpsDisabled"); } catch {} }); await Promise.race([A.app.evaluate(({ session }) => session.defaultSession.flushStorageData()).catch(() => {}), sleep(4000)]); await sleep(1000); } } catch (e) {}
     console.log(JSON.stringify(out, null, 1));
+    const verdict = require("./battery/verdict.js").emitVerdict(buildChecks(out));
     clearTimeout(hard);
     kill();
-    process.exit(0);
+    process.exit(verdict.fails ? 1 : 0);
   }
 })();

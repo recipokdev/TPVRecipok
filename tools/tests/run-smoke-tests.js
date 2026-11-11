@@ -10919,6 +10919,23 @@ if (
   fail("Falta la fusion en 3 vias / marca de fusion tras 412 / lineas quitadas al cobrarse en otro TPV (renderer.js mergeMissingRemoteLinesIntoCart, handleStaleParkedWriteConflict, handleLoadedTicketPaidElsewhere)");
 }
 
+console.log("\n[SMOKE] Checking 2026-11-11 la fusion en 3 vias no se usa con el guardado por partes (la cantidad subia sola tras una caida de red)\n");
+{
+  const i3 = renderer.indexOf("const opsOnForThisTicket = (() => {");
+  const j3 = renderer.indexOf("reconcileItems(base3, ticket.items, cart)");
+  if (
+    i3 > 0 &&
+    j3 > i3 &&
+    j3 - i3 < 1500 &&
+    renderer.includes("if (!opsOnForThisTicket && window.TPV_PARKED_OPS?.reconcileItems) {") &&
+    renderer.includes('isMesasModeTicket(ticket) ? "mesas" : "tpv"')
+  ) {
+    ok("Con el guardado por partes activo no se aplica la fusion en 3 vias de mergeMissingRemoteLinesIntoCart (tomaba mi copia local por 'lo remoto' y sumaba mi cambio dos veces en cada refresco: tras una caida de red la cantidad subia sola 2,3,4...); con el guardado entero (clientes) sigue activa. Hallado por la bateria (run-ops-network-failures.js, con y sin --noops)");
+  } else {
+    fail("Falta la guarda opsOnForThisTicket antes de la fusion en 3 vias (renderer.js mergeMissingRemoteLinesIntoCart): con el guardado por partes la cantidad subiria sola tras una caida de red");
+  }
+}
+
 console.log("\n[SMOKE] Checking 2026-10-27 cuadro de borrar aparcados: devolver stock es lo normal, 'fantasma' solo la excepcion\n");
 if (
   renderer.includes('okButtonText: "Eliminar y devolver el stock (lo normal)"') &&

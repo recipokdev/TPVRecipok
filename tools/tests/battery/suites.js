@@ -21,6 +21,7 @@ const C = "Modo Mesas";
 const D = "Dividir cuenta";
 const E = "Varios TPV a la vez y stock";
 const F = "Encargos";
+const G = "Pedidos de la app de camareros";
 
 const SUITES = [
   // ---------------------------------------------------------------- nivel quick: solo codigo
@@ -129,6 +130,26 @@ const SUITES = [
     args: ["tools/tests/run-pay-total-changed.js"], timeoutMs: 360000,
   },
   {
+    id: "red-guardado-ops", area: B, level: "full", demo: true, title: "Fallos de red al guardar un pedido (guardado por partes)",
+    what: "Con el TPV real se simulan tres fallos de red mientras se edita un pedido: la petición no llega, el servidor la aplica pero la respuesta se pierde, y el servidor da error 500. Al volver la red el servidor y el carrito tienen exactamente lo editado: nada perdido, nada duplicado y la cantidad no sube sola.",
+    args: ["tools/tests/run-ops-network-failures.js"], timeoutMs: 360000,
+  },
+  {
+    id: "red-guardado-entero", area: B, level: "full", demo: true, title: "Fallos de red al guardar un pedido (guardado entero)",
+    what: "Lo mismo con el guardado entero, que es el que usan hoy los clientes.",
+    args: ["tools/tests/run-ops-network-failures.js", "--noops"], timeoutMs: 360000,
+  },
+  {
+    id: "camareros-autor-comanda", area: G, level: "full", demo: true, title: "Pedido de la app: sigue a nombre del camarero y su comanda sale al momento",
+    what: "Un pedido creado por la API como lo hace la app de camareros (a nombre de «Cintia») no pasa a nombre del agente del TPV; las líneas enviadas conservan a la camarera y la comanda sale a su nombre, sin esperar la espera de la comanda automática (60 s) y una sola vez en total aunque haya 2 TPV.",
+    args: ["tools/tests/run-app-ticket-author.js"], timeoutMs: 360000,
+  },
+  {
+    id: "camareros-escribe-con-ops", area: G, level: "full", demo: true, title: "La app escribe el mismo pedido que el TPV con guardado por partes",
+    what: "La app guarda el pedido entero (como siempre) mientras el TPV usa el guardado por partes: líneas nuevas, pedido reescrito sin identificadores (sin pisar precios a 0 €), cambios a la vez en la misma cantidad y una versión caducada que el servidor rechaza (412). No se pierde ni se duplica nada.",
+    args: ["tools/tests/run-app-writes-vs-tpv-ops.js"], timeoutMs: 360000,
+  },
+  {
     id: "dividir-normal", area: D, level: "full", demo: true, title: "Dividir cuenta en TPV normal y cobrar las partes",
     what: "Divide un carrito en 2 partes, cobra la primera y comprueba que se abre sola la segunda; al terminar no quedan partes y el stock cuadra.",
     args: ["tools/tests/run-split-tpv-normal.js"], timeoutMs: 400000,
@@ -185,4 +206,4 @@ const SUITES = [
   },
 ];
 
-module.exports = { SUITES, AREAS: [A, B, C, D, E, F] };
+module.exports = { SUITES, AREAS: [A, B, C, D, E, F, G] };

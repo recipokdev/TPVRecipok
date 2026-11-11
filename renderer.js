@@ -11926,7 +11926,21 @@ function mergeMissingRemoteLinesIntoCart(ticket) {
   // llevan _lineId, se usa la misma integracion en 3 vias (base / mi carrito / remoto) del guardado
   // por operaciones: lo que quite yo sigue quitado, lo que quite el otro tambien, las cantidades
   // se suman y las lineas nuevas de cada lado se conservan. Sin base o sin ids: fusion aditiva de siempre.
-  if (window.TPV_PARKED_OPS?.reconcileItems) {
+  // NO se usa con el guardado por operaciones activo (2026-11-11, hallado por la bateria: caida de red
+  // y vuelta -> la cantidad subia sola 2,3,4,5...): alli parkedOpsReconcileRemoteIntoMerged ya integra
+  // por su cuenta y, mientras hay un guardado en vuelo, deja en `ticket.items` MI propia copia local; este
+  // bloque la tomaba por "lo remoto" y sumaba mi mismo cambio dos veces, en cada refresco.
+  const opsOnForThisTicket = (() => {
+    try {
+      return parkedOpsIsEnabled(
+        String(ticket?.slug || getCurrentSlugForReservations() || ""),
+        isMesasModeTicket(ticket) ? "mesas" : "tpv",
+      );
+    } catch {
+      return false;
+    }
+  })();
+  if (!opsOnForThisTicket && window.TPV_PARKED_OPS?.reconcileItems) {
     const hasIds = (arr) =>
       Array.isArray(arr) && arr.length > 0 && arr.every((l) => String(l?._lineId || "").trim());
     const base3 = ticket.__prevItemsBeforeRemoteMerge;
