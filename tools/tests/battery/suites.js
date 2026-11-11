@@ -84,6 +84,16 @@ const SUITES = [
     args: ["tools/tests/run-two-tpv-lines-lost.js", "--no-ops", "--solo-a", "--stale-draft"], timeoutMs: 300000,
   },
   {
+    id: "comanda-auto", area: C, level: "full", demo: true, title: "Comanda automática: cuenta atrás, pausa, espera propia y «No enviar solo»",
+    what: "Con el TPV real (sin imprimir de verdad): al añadir un producto se arma la cuenta atrás y sale UNA comanda; en pausa o al quitar el producto no sale nada; la espera de Opciones y la propia de la mesa se respetan; «No enviar solo» desactiva el envío hasta que cambie el pedido.",
+    args: ["tools/tests/run-comanda-auto.js"], timeoutMs: 360000,
+  },
+  {
+    id: "comanda-2tpv", area: E, level: "full", demo: true, title: "Comanda automática con 2 TPV: cada producto sale a cocina una sola vez",
+    what: "Dos TPV con la misma mesa y la comanda automática activa: lo que añade uno, o los dos casi a la vez, sale a cocina una sola vez en total (no una por TPV) y los dos acaban con el mismo pedido.",
+    args: ["tools/tests/run-two-tpv-comanda.js"], timeoutMs: 360000,
+  },
+  {
     id: "dividir-normal", area: D, level: "full", demo: true, title: "Dividir cuenta en TPV normal y cobrar las partes",
     what: "Divide un carrito en 2 partes, cobra la primera y comprueba que se abre sola la segunda; al terminar no quedan partes y el stock cuadra.",
     args: ["tools/tests/run-split-tpv-normal.js"], timeoutMs: 400000,
