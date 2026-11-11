@@ -11673,6 +11673,21 @@ function syncTpvCartWithSelectedMesa(opts = {}) {
       return;
     }
 
+    // Pedido YA cargado en este TPV: el carrito es la copia de trabajo (igual que en el guardado por operaciones, mas
+    // arriba) y no se reemplaza por el borrador del plano. El plano es COMPARTIDO: trae el borrador de la mesa de OTRA
+    // terminal (o uno viejo) y, al aplicarlo, el carrito quedaba con menos lineas que el pedido; el autoguardado veia
+    // "carrito != pedido" y guardaba ese borrador viejo ENCIMA del pedido (Mesas pierde lineas, reproducido con 2 TPV
+    // y guardado entero el 2026-11-11: 4 unidades guardadas -> 1 en 6 s).
+    if (
+      hasDraftForUid &&
+      currentParkedTicketIndex != null &&
+      Number(currentParkedTicketIndex) === idx
+    ) {
+      refreshParkButtonUI?.();
+      refreshParkedEditingBanner?.();
+      return;
+    }
+
     const draftItems = Array.isArray(draftByTable?.[uid])
       ? draftByTable[uid]
       : [];
@@ -11688,6 +11703,22 @@ function syncTpvCartWithSelectedMesa(opts = {}) {
       saveMesasTablesStateForInline(state);
       renderMesasTransContextBar();
       restoreParkedCartByIndex(idx);
+      return;
+    }
+
+    if (
+      hasDraftForUid &&
+      draftItems.length &&
+      isDraftStaleSubsetOfTicket(draftItems, parkedTickets[idx]?.items)
+    ) {
+      // Borrador viejo/incompleto de este pedido: se descarta (tambien del plano compartido, para que no vuelva
+      // a contaminar) y se carga el pedido guardado.
+      delete draftByTable[uid];
+      state.draftCartByTable = draftByTable;
+      saveMesasTablesStateForInline(state);
+      renderMesasTransContextBar();
+      restoreParkedCartByIndex(idx);
+      updateParkedCountBadge?.();
       return;
     }
 
@@ -11728,6 +11759,31 @@ function syncTpvCartWithSelectedMesa(opts = {}) {
   refreshParkButtonUI?.();
   refreshParkedEditingBanner?.();
   updateParkedCountBadge?.();
+}
+
+// Un borrador de carrito de mesa (draftCartByTable, viaja en el plano COMPARTIDO) es una version VIEJA e INCOMPLETA del
+// pedido guardado cuando todas sus lineas estan en el pedido (mismo producto/precio/descuento, cantidad igual o menor) y en
+// total suma menos unidades. Cargarlo como carrito hacia que el autoguardado machacara el pedido con menos lineas (Mesas
+// pierde lineas). Cualquier otro caso (el borrador trae algo que el pedido no tiene, o es igual) NO es "viejo": se trata como siempre.
+function isDraftStaleSubsetOfTicket(draftItems, ticketItems) {
+  const keyOf = (l) => `${l.id}|${l.name}|${l.price}|${l.cartLineDiscountPct}`;
+  const tally = (arr) => {
+    const m = new Map();
+    normalizeTicketLinesForCompare(arr).forEach((l) => m.set(keyOf(l), (m.get(keyOf(l)) || 0) + l.qty));
+    return m;
+  };
+  const d = tally(draftItems);
+  const t = tally(ticketItems);
+  if (!d.size || !t.size) return false;
+  let dSum = 0;
+  let tSum = 0;
+  d.forEach((v) => (dSum += v));
+  t.forEach((v) => (tSum += v));
+  if (!(dSum < tSum - 0.0005)) return false;
+  for (const [k, q] of d) {
+    if (!(t.has(k) && q <= t.get(k) + 0.0005)) return false;
+  }
+  return true;
 }
 
 function normalizeTicketLinesForCompare(lines) {

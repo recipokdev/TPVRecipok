@@ -12081,6 +12081,44 @@ mustContain(checklist, "Parked Tickets", "Parked flow checklist documented");
 // 2026-11-03 (Los Argentinos): un equipo estuvo dias en la 0.2.48 y la actualizacion al reiniciar dejo al TPV sin abrir
 // sin ningun aviso. Ofrecer actualizar al cerrar la caja + instalacion que no desaparece en silencio.
 mustContain(renderer, "async function offerUpdateAfterCashClose() {", "Al cerrar la caja el TPV ofrece actualizarse si hay una version nueva");
+
+// Mesas pierde lineas (2026-11-11, reproducido con 2 TPV y guardado entero: 4 unidades guardadas -> 1 en 6 s): un refresco del plano
+// compartido reemplazaba el carrito del pedido ya cargado por el borrador de la mesa (de otra terminal o viejo), y el autoguardado
+// guardaba ese carrito incompleto ENCIMA del pedido.
+mustContain(renderer, "function isDraftStaleSubsetOfTicket(draftItems, ticketItems) {", "Existe el detector de borradores de mesa viejos/incompletos");
+mustContain(renderer, "      isDraftStaleSubsetOfTicket(draftItems, parkedTickets[idx]?.items)", "Un borrador viejo/incompleto no se carga como carrito del pedido de la mesa");
+mustContain(renderer, "    // Pedido YA cargado en este TPV: el carrito es la copia de trabajo (igual que en el guardado por operaciones, mas", "Un pedido ya cargado no se reemplaza por el borrador del plano compartido");
+{
+  const grab = (name) => {
+    const m = renderer.match(new RegExp("function " + name + String.raw`\([^)]*\) \{[\s\S]*?\r?\n\}`));
+    return m ? m[0] : null;
+  };
+  const fnStale = grab("isDraftStaleSubsetOfTicket");
+  const fnNorm = grab("normalizeTicketLinesForCompare");
+  if (!fnStale || !fnNorm) {
+    fail("No se pudieron extraer isDraftStaleSubsetOfTicket / normalizeTicketLinesForCompare de renderer.js para probarlas");
+  } else {
+    const stale = new Function(
+      "clampDiscountPercent", "parseNumericLike",
+      `${fnNorm}\n${fnStale}\nreturn isDraftStaleSubsetOfTicket;`,
+    )((v) => Number(v) || 0, (v, d) => (v === undefined || v === null || v === "" ? d : Number(v)));
+    const L = (id, qty, price = 1) => ({ id, name: "P" + id, qty, price });
+    const ticket = [L(1, 1), L(2, 1), L(3, 2)];
+    const cases = [
+      ["borrador de 1 linea del pedido de 3 -> viejo", stale([L(1, 1)], ticket), true],
+      ["borrador con menos cantidad en una linea -> viejo", stale([L(1, 1), L(3, 1)], ticket), true],
+      ["borrador igual al pedido -> no es viejo", stale(ticket, ticket), false],
+      ["borrador con un producto que el pedido no tiene -> no es viejo", stale([L(1, 1), L(9, 1)], ticket), false],
+      ["borrador con MAS cantidad que el pedido en una linea -> no es viejo", stale([L(1, 2)], ticket), false],
+      ["borrador vacio -> no es viejo", stale([], ticket), false],
+      ["pedido vacio -> no es viejo", stale([L(1, 1)], []), false],
+    ];
+    cases.forEach(([name, got, want]) => {
+      if (got === want) ok("isDraftStaleSubsetOfTicket: " + name);
+      else fail("isDraftStaleSubsetOfTicket: " + name + " (esperado " + want + ", obtenido " + got + ")");
+    });
+  }
+}
 mustContain(renderer, "  offerUpdateAfterCashClose().catch(() => {});\r\n}\r\n\r\n// ===== [07] API: llamadas Recipok/FacturaScripts =====", "La oferta de actualizar se lanza al final del cierre de caja confirmado, sin retrasarlo");
 mustContain(renderer, "if (pendingSales > 0 || loadParkedSyncQueue().length > 0) return;", "No se ofrece actualizar con ventas o aparcados sin enviar");
 mustContain(renderer, "backgroundUpdateSettings?.offerOnCashClose === false", "La oferta de actualizar se puede apagar en Opciones");

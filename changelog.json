@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "ARREGLO: en Modo Mesas, con dos TPV en la misma mesa, los productos recién añadidos podían desaparecer del pedido pocos segundos después (por ejemplo, 4 productos añadidos y solo 1 guardado). Otro TPV con la mesa abierta o un borrador antiguo de la mesa hacían que el carrito se sustituyera por una versión incompleta que luego se guardaba encima del pedido. Ahora un pedido ya abierto no se reemplaza por el borrador compartido, y un borrador claramente antiguo e incompleto se descarta."
+      ]
     },
     {
       "version": "0.2.62",
