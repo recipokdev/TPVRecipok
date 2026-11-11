@@ -10948,6 +10948,19 @@ if (
   fail("Falta guardar el pedido vacio al quitar el cajero todas las lineas en Mesas (renderer.js getMesasAutoSaveIntent / parkCurrentCart allowEmptyItems)");
 }
 
+console.log("\n[SMOKE] Checking 2026-11-11 stock: la reserva y la factura del mismo producto se esperan entre si dentro del TPV (antes se perdia una resta al cobrar enseguida tras añadir)\n");
+if (
+  renderer.includes("function acquireLocalStockMutex(idProducto, maxWaitMs = 8000) {") &&
+  renderer.includes("const releaseLocal = await acquireLocalStockMutex(idProd, 8000);") &&
+  renderer.includes("releaseLocal();") &&
+  renderer.includes("localReleases.push(await acquireLocalStockMutex(id, Math.max(0, localDeadline - Date.now())));") &&
+  renderer.includes("localReleases.forEach((r) => { try { r(); } catch {} });")
+) {
+  ok("La escritura de reserva de stock (syncReservedStockDeltaToFS) y la factura de la venta (withSaleStockLocks) usan una exclusion por producto dentro del TPV (acquireLocalStockMutex, con tope de espera): sin ella, cobrar justo tras añadir un producto dejaba el stock 1 unidad de mas porque la resta de la factura y la escritura absoluta de la reserva se pisaban. Hallado por la bateria (run-two-tpv-edit-and-pay.js)");
+} else {
+  fail("Falta la exclusion local por producto entre la reserva de stock y la factura de la venta (renderer.js acquireLocalStockMutex / withSaleStockLocks / syncReservedStockDeltaToFS)");
+}
+
 console.log("\n[SMOKE] Checking 2026-10-27 cuadro de borrar aparcados: devolver stock es lo normal, 'fantasma' solo la excepcion\n");
 if (
   renderer.includes('okButtonText: "Eliminar y devolver el stock (lo normal)"') &&

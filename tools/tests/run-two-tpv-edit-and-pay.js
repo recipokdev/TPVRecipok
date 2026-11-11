@@ -203,6 +203,11 @@ function buildChecks(out) {
       if (!window.__realBuild) { window.__realBuild = window.buildFsLinesFromCart; window.buildFsLinesFromCart = (c) => window.__realBuild(c).map((l) => ({ ...l, descripcion: String(l.descripcion || "") + " [PRUEBA EDITAR+COBRAR 2 TPV]" })); }
       // registro de los ajustes de stock que hace cada TPV (para ver quien descuenta o libera, y cuando)
       window.__slog = [];
+      if (!window.__realUpd) {
+        window.__realUpd = updateStockRowCantidad;
+        updateStockRowCantidad = async (row, q) => { const p = (window.__prods || []).find((x) => String(getProductBaseId(x)) === String(row && row.idproducto)); const t = Date.now() % 100000; const r = await window.__realUpd(row, q); window.__slog.push(t + "-" + (Date.now() % 100000) + " PATCH " + (p ? p.name.slice(0, 8) : (row && row.idproducto)) + " leida=" + (row && row.cantidad) + " escribe=" + q); return r; };
+      }
+      if (!window.__realSend2) { const cur = sendOrQueueFactura; window.__realSend2 = cur; sendOrQueueFactura = async (...a) => { const t = Date.now() % 100000; const r = await cur(...a); window.__slog.push(t + "-" + (Date.now() % 100000) + " FACTURA ok=" + !!(r && r.ok)); return r; }; }
       if (!window.__realSync && typeof syncReservedStockDeltaToFS === "function") {
         window.__realSync = syncReservedStockDeltaToFS;
         syncReservedStockDeltaToFS = async (map, reason, tid) => {
@@ -234,10 +239,9 @@ function buildChecks(out) {
     out.stock_inicial = stock0;
 
     const run = (id, extra) => scenario(A, B, { GAP, AOPEN: false, LEGACY: true, CONFLICT: false, PAY: true, NAME: `ZZ editpay ${id} ${STAMP}`, ...extra });
-    // Orden S2 (por partes) -> S1 (entero) -> S3. Pasar de entero a por partes DENTRO de la misma sesion (algo que ningun
-    // cajero hace: es un interruptor del piloto) dejo en 4 de 5 pruebas el stock de Mamellas 1 unidad por encima; en el orden
-    // inverso y con cada modo por separado cuadra siempre. TPV_EP_ONLY solo sirve para diagnosticar.
-    const only = String(process.env.TPV_EP_ONLY || "S2,S1,S3");
+    // Orden entero -> por partes -> conflicto. Pasar de entero a por partes en la misma sesion dejaba el stock 1 por encima
+    // (reserva y factura del mismo producto solapadas en el mismo TPV; arreglado con acquireLocalStockMutex). TPV_EP_ONLY solo diagnostica.
+    const only = String(process.env.TPV_EP_ONLY || "S1,S2,S3");
     for (const id of only.split(",")) {
       if (id === "S1") out.S1 = await run("S1", { LEGACY: true });
       if (id === "S2") out.S2 = await run("S2", { LEGACY: false });

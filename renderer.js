@@ -10627,6 +10627,39 @@ async function acquireStockLockWithRetry(idProducto, attempts = 5, ttlSec = unde
   return last;
 }
 
+// ===== Exclusion DENTRO de este TPV por producto (2026-11-11) =====
+// El candado del servidor (acquire-stock-lock) se identifica por terminal, asi que dos operaciones del MISMO TPV
+// lo "comparten" y no se esperan entre si. Real (prueba editar-y-cobrar con 2 TPV): un cajero anade un producto a
+// un pedido aparcado y cobra enseguida; la escritura de la reserva (lee X, escribe X-1 absoluto) seguia en vuelo
+// cuando empezo la factura, FacturaScripts resto su unidad (X -> X-1) y las dos escrituras dejaron X-1 en vez de
+// X-2: se perdia la resta de la venta (el stock se queda de mas). Cuanto mas lento el servidor, mas ancha la
+// ventana. Esta cola por producto hace que la reserva y la factura de un mismo producto se esperen entre si.
+// Fail-open con tope de espera: nunca bloquea un cobro ni un aparcado.
+const __localStockMutexTails = new Map();
+function acquireLocalStockMutex(idProducto, maxWaitMs = 8000) {
+  const key = Number(idProducto || 0) || 0;
+  if (!key) return Promise.resolve(() => {});
+  const prev = __localStockMutexTails.get(key) || Promise.resolve();
+  let releaseFn = () => {};
+  const mine = new Promise((resolve) => { releaseFn = resolve; });
+  const tail = prev.then(() => mine);
+  __localStockMutexTails.set(key, tail);
+  tail.then(() => {
+    if (__localStockMutexTails.get(key) === tail) __localStockMutexTails.delete(key);
+  });
+  let timer = null;
+  const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(false), Math.max(0, maxWaitMs)); });
+  return Promise.race([prev.then(() => true), timeout]).then(() => {
+    clearTimeout(timer);
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      releaseFn();
+    };
+  });
+}
+
 // ===== Candado de stock alrededor de la factura de una venta (2026-11-09) =====
 // Real (Asador el Gallo, 8-nov, pollo: el sistema decia 8 y quedaban 2): al cobrar un aparcado, un TPV lee el
 // stock de FacturaScripts y escribe "leido + reserva" (valor absoluto). Si justo entre la lectura y la
@@ -10655,12 +10688,19 @@ function getManagedStockProductIdsForSaleLock(items) {
 async function withSaleStockLocks(items, fn) {
   let held = [];
   let notAcquired = 0;
+  let localReleases = [];
   try {
     const ids =
       isReservedStockSyncedToFsEnabled() && !TPV_STATE?.offline
         ? getManagedStockProductIdsForSaleLock(items)
         : [];
     if (ids.length) {
+      // Primero la exclusion dentro de este TPV (en orden de id para no cruzarse con otra venta), con un tope total
+      // de 4,5 s: si una reserva de ese producto sigue en vuelo, la venta espera a que acabe su lectura-escritura.
+      const localDeadline = Date.now() + 4500;
+      for (const id of [...ids].sort((a, b) => Number(a) - Number(b))) {
+        localReleases.push(await acquireLocalStockMutex(id, Math.max(0, localDeadline - Date.now())));
+      }
       const acquiring = Promise.all(
         ids.map(async (id) => {
           const r = await acquireStockLockWithRetry(id, 12, 30);
@@ -10703,6 +10743,7 @@ async function withSaleStockLocks(items, fn) {
     if (held.length) {
       await Promise.all(held.map((id) => apiReleaseStockLock(id).catch(() => {})));
     }
+    localReleases.forEach((r) => { try { r(); } catch {} });
   }
 }
 
@@ -41815,6 +41856,7 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "", ticketId = null
     // Al COBRAR un aparcado se espera mas (~6 s): el otro TPV puede estar creando su factura (que resta
     // stock dentro de FacturaScripts, ~5 s) y escribir ahora pisaria esa resta (ver withSaleStockLocks). Esta
     // liberacion va en segundo plano tras la venta, asi que esperar no retrasa al cajero.
+    const releaseLocal = await acquireLocalStockMutex(idProd, 8000);
     const lockInfo = await acquireStockLockWithRetry(
       idProd,
       /^cobrar/i.test(String(reason || "")) ? 20 : 5,
@@ -41887,6 +41929,7 @@ async function syncReservedStockDeltaToFS(deltaMap, reason = "", ticketId = null
       if (lockInfo?.acquired) {
         await apiReleaseStockLock(idProd).catch(() => {});
       }
+      releaseLocal();
     }
   }
 
