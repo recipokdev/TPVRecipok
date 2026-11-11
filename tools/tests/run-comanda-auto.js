@@ -110,10 +110,13 @@ function buildChecks(out) {
       return { login: hasActiveLoginSession(), caja: !!cashSession?.open, mesas: !!MESAS_INLINE_ACTIVE, prods: __prods.length };
     }, M3);
     out.estado = est;
+    await sleep(6000); // deja pasar la sincronizacion de arranque
     if (!est.login || !est.caja || est.prods < 3) throw new Error("Falta sesion/caja abierta o productos: " + JSON.stringify(est));
     const ev = (f, ...a) => win.evaluate(f, ...a);
     const waitPending = async (n, ms = 12000) => { for (let i = 0; i < ms / 500 && (await ev(() => __autoComandaPending.size)) !== n; i++) await sleep(500); };
-    const prints = () => ev(() => __prints.slice());
+    // Solo cuentan las comandas de los productos de ESTA prueba: al abrir el Modo Mesas el TPV tambien imprime lo pendiente
+    // de otras mesas con lineas sin enviar (restos de la prueba anterior), y eso no es lo que aqui se comprueba.
+    const prints = () => ev(() => __prints.filter((p) => __prods.slice(0, 3).some((pr) => String(p).includes(String(pr.name).slice(0, 7) + ":"))));
     const click = (id) => ev((id) => document.getElementById(id).click(), id);
     const nameOf = (i) => ev((i) => String(__prods[i].name).slice(0, 7), i);
 
@@ -205,6 +208,7 @@ function buildChecks(out) {
         await Promise.race([app.evaluate(({ session }) => session.defaultSession.flushStorageData()).catch(() => {}), sleep(4000)]);
       }
     } catch (e) { out.limpiezaERR = String(e.message).slice(0, 120); }
+    try { out.comandas_ajenas = await win.evaluate(() => __prints.filter((p) => !__prods.slice(0, 3).some((pr) => String(p).includes(String(pr.name).slice(0, 7) + ":")))); } catch {}
     console.log(JSON.stringify(out, null, 1));
     const verdict = require("./battery/verdict.js").emitVerdict(buildChecks(out));
     clearTimeout(hard);

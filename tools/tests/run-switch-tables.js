@@ -51,7 +51,7 @@ function buildChecks(out) {
   const exp = [`m1=${n[3]}:1`, `m3=${n[0]}:1`];
   const same = (x, y) => JSON.stringify(x) === JSON.stringify(y);
   ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || "");
-  ok("Modo Mesas activo" + (NOOPS ? " con guardado entero" : ""), out.modo?.mesas === true && (NOOPS ? out.modo.ops === false : true), out.modo);
+  ok("Modo Mesas activo" + (NOOPS ? " con guardado entero" : ""), out.modo?.mesas === true && out.modo.ops === !NOOPS, out.modo);
   ok("Se crean dos pedidos, uno en cada mesa, en la copia local y en el servidor", same(out.creados?.local, exp) && same(out.creados?.servidor, exp), out.creados);
   const saltos = [["salto1_m3", n[0]], ["salto2_m1", n[3]], ["salto3_m3", n[0]], ["salto4_m1", n[3]]];
   saltos.forEach(([k, prod]) => ok(`Al pasar a la mesa ${k.slice(-2).toUpperCase()} (${k.slice(5, 6)}º salto) el carrito es el SUYO y ningún pedido se pisa`, out[k]?.cart === `${prod}:1` && same(out[k]?.local, exp), out[k]));

@@ -1,4 +1,4 @@
-// run-app-ticket-author.js -- prueba MANUAL (no entra en npm test): un pedido de la APP DE CAMAREROS
+// run-app-ticket-author.js -- prueba (entra en la bateria, nivel full): un pedido de la APP DE CAMAREROS
 // (creado por la API a nombre de "Cintia") no debe quedar a nombre del agente del TPV: el TPV conserva
 // userName en sus guardados, las lineas enviadas llevan sentBy "Cintia" y la comanda de cocina se
 // imprime con agentLabel "Cintia" Y SIN esperar la espera de la comanda automatica (60 s): se mide la
@@ -79,6 +79,26 @@ async function cleanTable(A, B) {
   return del;
 }
 
+function buildChecks(out) {
+  const c = [];
+  const ok = (name, cond, extra) => c.push([name, !!cond, extra === undefined ? "" : typeof extra === "string" ? extra : JSON.stringify(extra)]);
+  const srv = out.servidor && typeof out.servidor === "object" ? out.servidor : null;
+  const prints = [...(out.prints_A || []), ...(out.prints_B || [])];
+  const n = out.nombres || [];
+  const unidades = (nombre) => prints.reduce((t, p) => t + (p.lines || []).filter((l) => l.startsWith(nombre + ":")).reduce((a, l) => a + Number(l.split(":")[1] || 0), 0), 0);
+  ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || "");
+  ok("Los dos TPV están en Modo Mesas con la comanda automática activa", (out.modo || []).length === 2 && out.modo.every((m) => m.mesas && m.activa), out.modo);
+  ok("La app de camareros crea el pedido en el servidor (respuesta correcta)", out.app_create_status === 200 || out.app_create_status === 201, out.app_create_status);
+  ok("El pedido sigue a nombre de la camarera de la app (Cintia) y no del agente del TPV", srv && srv.userName === "Cintia", srv && srv.userName);
+  ok("Las líneas enviadas por la app llevan a Cintia como camarera (o ninguna)", srv && (srv.lineas || []).length === 2 && srv.lineas.every((l) => !l.sentBy || l.sentBy === "Cintia"), srv && srv.lineas);
+  ok("Los TPV conservan el nombre de la camarera en su copia (no lo pisan con el del agente)", out.local_A && out.local_A.userName === "Cintia", out.local_A);
+  ok("La comanda de cocina sale (al menos una)", prints.length >= 1, prints.length);
+  ok("La comanda sale a nombre de Cintia (agentLabel)", prints.length >= 1 && prints.every((p) => p.agentLabel === "Cintia"), prints.map((p) => p.agentLabel));
+  ok("La comanda de un pedido de la app sale SIN esperar la espera de la comanda automática (60 s): en pocos segundos", out.latencia_primera_impresion_s !== null && out.latencia_primera_impresion_s < 25, out.latencia_primera_impresion_s);
+  ok("Cada producto del pedido sale a cocina una sola vez en total (no una por TPV): 1 + 2 unidades", n.length === 2 && unidades(n[0]) === 1 && unidades(n[1]) === 2, { n, prints: prints.map((p) => p.lines) });
+  return c;
+}
+
 (async () => {
   const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kills.forEach((f) => f()); process.exit(1); }, 290000);
   const out = {};
@@ -87,7 +107,8 @@ async function cleanTable(A, B) {
     A = await launch("tpvrecipok-2tpv-real-1", "A");
     B = await launch("tpvrecipok-2tpv-real-2", "B");
     await sleep(8000);
-    const prep = (X) => X.win.evaluate((TABLE) => {
+    const prep = (X) => X.win.evaluate(async (TABLE) => {
+      await setMesasInlineModeEnabled(true, { persist: false }); setMesasInlineView("transacciones", { persist: false });
       window.__saved = { on: localStorage.getItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY), delay: localStorage.getItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY) };
       localStorage.setItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY, "1");
       localStorage.setItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY, "60");
@@ -106,7 +127,8 @@ async function cleanTable(A, B) {
     const cfgSrc = require("fs").readFileSync(path.join(ROOT, "config.js"), "utf8");
     const apiKey = (cfgSrc.match(/tpvApiKey:\s*"([^"]+)"/) || [])[1];
     const API = (cfgSrc.match(/https:\/\/plus\.recipok\.com\/tpv\/api\/index\.php/) || [])[0];
-    const prods = await A.win.evaluate(() => { const f = (n) => products.find((p) => String(p.name || "").startsWith(n)); const m = (p) => ({ idproducto: p.id, referencia: p.ref || p.referencia || p.name, descripcion: p.name, name: p.name, price: Number(p.price), codimpuesto: p.codimpuesto || null }); const a = products.filter((x) => Number(x.price) > 0); return [m(a[0]), m(a[1])]; });
+    const prods = await A.win.evaluate(() => { const f = (n) => products.find((p) => String(p.name || "").startsWith(n)); const m = (p) => ({ idproducto: p.id, referencia: p.ref || p.referencia || p.name, descripcion: p.name, name: p.name, price: Number(p.price), codimpuesto: p.codimpuesto || null }); const seen = new Set(); const a = []; for (const p of products.filter((x) => Number(x.price) > 0 && !x.variants && !isOfferPackProductById(getProductBaseId(x)) && !(getProductAddonsForProduct(x) || []).length && !productHasDerivedStockMarker(x))) { const k = String(p.name).slice(0, 8); if (!seen.has(k)) { seen.add(k); a.push(p); } if (a.length >= 2) break; } return [m(a[0]), m(a[1])]; });
+    out.nombres = prods.map((p) => String(p.name).slice(0, 8));
     const TICKET = "camarero-ZZauthor-" + Date.now();
     const mk = (p, q) => ({ ...p, cantidad: q, qty: q, pvpunitario: p.price, grossPrice: p.price, taxRate: 21, _lineId: "L" + Math.random().toString(36).slice(2, 12), sentBatchAt: new Date().toISOString() });
     const items = [mk(prods[0], 1), mk(prods[1], 2)];
@@ -135,7 +157,7 @@ async function cleanTable(A, B) {
     out.latencia_primera_impresion_s = (() => { const ts = out.prints_A.map((p) => p.t).filter(Boolean); return ts.length ? Math.round((Math.min(...ts) - out.t_post) / 100) / 10 : null; })();
     out.prints_B = await B.win.evaluate(() => __prints2.slice());
     out.local_A = await A.win.evaluate((T) => { const t = parkedTickets.find((x) => String(x.id) === T); return t ? { userName: t.userName, agentName: t.agentName, agentCode: t.agentCode } : "(no esta)"; }, TICKET);
-    out.OK = !!srv && srv.userName === "Cintia" && (srv.items || []).every((l) => !l.sentBy || l.sentBy === "Cintia") && [...out.prints_A, ...out.prints_B].length >= 1 && [...out.prints_A, ...out.prints_B].every((p) => p.agentLabel === "Cintia");
+    // (el veredicto se calcula en buildChecks)
   } catch (e) {
     out.ERROR = String(e && e.message || e).slice(0, 300);
   } finally {
@@ -152,8 +174,9 @@ async function cleanTable(A, B) {
       }
     } catch (e) { out.limpiezaERR = String(e.message).slice(0, 120); }
     console.log(JSON.stringify(out, null, 1));
+    const verdict = require("./battery/verdict.js").emitVerdict(buildChecks(out));
     clearTimeout(hard);
     kills.forEach((f) => f());
-    process.exit(0);
+    process.exit(verdict.fails ? 1 : 0);
   }
 })();

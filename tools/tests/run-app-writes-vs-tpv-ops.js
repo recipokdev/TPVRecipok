@@ -1,4 +1,4 @@
-// run-app-writes-vs-tpv-ops.js -- prueba MANUAL (no entra en npm test): como se porta el TPV (con el
+// run-app-writes-vs-tpv-ops.js -- prueba (entra en la bateria, nivel full): como se porta el TPV (con el
 // guardado por operaciones activo) cuando la APP DE CAMAREROS escribe el mismo pedido de Modo Mesas
 // con el guardado ENTERO de siempre (create-parked-reservation con expectedUpdatedAt). Una sola
 // instancia real contra el demo (mesa M3); la "app" se simula con una peticion cruda con otro
@@ -9,7 +9,7 @@
 //      con solo pvpunitario (sin price/grossPrice/taxRate): el TPV no debe ponerle precio 0
 //   S3 la app sube la cantidad de una linea mientras el TPV sube otra (a la vez)
 //   S4 la app manda la version vieja (expectedUpdatedAt caducado) -> 412 y no pisa nada
-// Uso: node tools/tests/run-app-writes-vs-tpv-ops.js   (despues: node tools/tests/two-tpv-clean-m3.js)
+// Uso: node tools/tests/run-app-writes-vs-tpv-ops.js
 process.env.TPV_RUN_BACKGROUND = "1";
 const path = require("path"), os = require("os");
 const { _electron: electron } = require("playwright");
@@ -32,15 +32,40 @@ async function launch(dirName, label) {
   return { app, pid, win };
 }
 
+function buildChecks(out) {
+  const c = [];
+  const ok = (name, cond, extra) => c.push([name, !!cond, extra === undefined ? "" : typeof extra === "string" ? extra : JSON.stringify(extra)]);
+  const n = out.nombres || [];
+  const norm = (...pairs) => pairs.map(([i, q]) => n[i] + ":" + q).sort().join(",");
+  const same = (a, b) => String(a) === String(b);
+  const good = (st) => st === 200 || st === 201;
+  const conv = (o, esperado) => o && same(o.servidor, esperado) && same(o.cart, esperado);
+  ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || "");
+  ok("El TPV está en Modo Mesas con el guardado por partes activo (la app sigue usando el guardado entero)", out.modo?.mesas === true && out.modo?.ops === true, out.modo);
+  ok("Base: el pedido de la mesa tiene 2 + 1 unidades y el servidor y el carrito coinciden", conv(out.base, norm([0, 2], [2, 1])), out.base);
+  ok("S1: la app añade una línea nueva (conservando los id de las demás): el TPV la recibe sin perder nada", good(out.S1_status) && conv(out.S1, norm([0, 2], [2, 1], [3, 1])), { status: out.S1_status, S1: out.S1 });
+  ok("S1: el TPV sube una unidad después y se suma sobre lo de la app (nada perdido)", conv(out.S1_tras_A_sube, norm([0, 3], [2, 1], [3, 1])), out.S1_tras_A_sube);
+  ok("S2: la app reescribe el pedido SIN ningún _lineId y añade una línea: el pedido no se vacía ni se duplica", good(out.S2_status) && conv(out.S2, norm([0, 3], [2, 1], [3, 1], [4, 1])), { status: out.S2_status, S2: out.S2 });
+  const l = out.S2_linea_de_la_app || {};
+  const lc = out.S2_linea_en_carrito || {};
+  ok("S2: la línea de la app con solo «pvpunitario» conserva su precio (0,85) en el servidor y en el carrito del TPV: NO se queda a 0 €", Number(l.pvpunitario) === 0.85 && Number(l.grossPrice) === 0.85 && Number(lc.price) === 0.85 && Number(lc.grossPrice) === 0.85, { servidor: l, carrito: lc });
+  ok("S2: el TPV sella un identificador estable en esa línea", l.lineId === "si", l);
+  ok("S2: el TPV sube una unidad después y todo sigue cuadrando", conv(out.S2_tras_A_sube, norm([0, 4], [2, 1], [3, 1], [4, 1])), out.S2_tras_A_sube);
+  ok("S3: la app sube una cantidad y el TPV otra A LA VEZ: se conservan las dos subidas", good(out.S3_status) && conv(out.S3, norm([0, 5], [2, 1], [3, 1], [4, 2])), { status: out.S3_status, S3: out.S3 });
+  ok("S4: la app manda una versión caducada: el servidor la rechaza (412) y no pisa nada", out.S4_status === 412 && out.S4_servidor_igual === true, { status: out.S4_status, igual: out.S4_servidor_igual });
+  return c;
+}
+
 (async () => {
-  const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kill(); process.exit(1); }, 280000);
+  const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kill(); process.exit(1); }, 330000);
   const out = {};
   let A;
   try {
     A = await launch("tpvrecipok-2tpv-real-1", "A");
     await sleep(8000);
-    out.modo = await A.win.evaluate((TABLE) => {
-      window.__prods = products.filter((x) => Number(x.price) > 0);
+    out.modo = await A.win.evaluate(async (TABLE) => {
+      await setMesasInlineModeEnabled(true, { persist: false }); setMesasInlineView("transacciones", { persist: false });
+      { const seen = new Set(); window.__prods = []; for (const p of products.filter((x) => Number(x.price) > 0 && !x.variants && !isOfferPackProductById(getProductBaseId(x)) && !(getProductAddonsForProduct(x) || []).length && !productHasDerivedStockMarker(x))) { const k = String(p.name).slice(0, 7); if (!seen.has(k)) { seen.add(k); __prods.push(p); } if (__prods.length >= 6) break; } }
       window.__of = window.fetch.bind(window);
       window.__sel = () => { updateMesasSelectionFromContext({ tableUid: TABLE }); syncTpvCartWithSelectedMesa(); };
       window.__cart = () => cart.map((c) => String(c.name).slice(0, 7) + ":" + c.qty).sort().join(",");
@@ -70,6 +95,13 @@ async function launch(dirName, label) {
       return { mesas: MESAS_INLINE_ACTIVE, ops: parkedOpsIsEnabled(getCurrentSlugForReservations(), "mesas") };
     }, TABLE);
 
+    for (let k = 0; k < 20 && !out.modo.ops; k++) {
+      await A.win.evaluate(async () => { try { await refreshRemoteParkedReservationsOnly(); } catch (e) {} });
+      await sleep(2000);
+      out.modo.ops = await A.win.evaluate(() => parkedOpsIsEnabled(getCurrentSlugForReservations(), "mesas"));
+    }
+    out.nombres = await A.win.evaluate(() => __prods.map((p) => String(p.name).slice(0, 7)));
+
     const state = async (label) => {
       await A.win.evaluate(async () => { await refreshRemoteParkedReservationsOnly(); });
       await sleep(1500);
@@ -79,7 +111,7 @@ async function launch(dirName, label) {
     // Base: dos lineas (P0 x2, P2 x1)
     await A.win.evaluate(() => { __sel(); });
     await sleep(800);
-    await A.win.evaluate(async () => { await addToCart(__prods[0]); });
+    await A.win.evaluate(async () => { addToCart(__prods[0]); });
     await sleep(3500);
     await A.win.evaluate(() => { updateCartItemQuantity(cart[0]._lineId, 2); cart.push(buildCartLine(__prods[2], 1)); renderCart(); });
     await sleep(5000);
@@ -102,6 +134,7 @@ async function launch(dirName, label) {
     await sleep(3000);
     await state("S2");
     out.S2_linea_de_la_app = await A.win.evaluate(async () => { const l = ((await __srvRaw()).items || []).find((x) => x.pvpunitario != null || x.name === __prods[4].name); return l ? { pvpunitario: l.pvpunitario, price: l.price, grossPrice: l.grossPrice, lineId: l._lineId ? 'si' : 'no' } : '(no esta)'; });
+    out.S2_linea_en_carrito = await A.win.evaluate(() => { const l = cart.find((x) => x.name === __prods[4].name); return l ? { price: Number(l.price), grossPrice: Number(l.grossPrice), qty: l.qty } : "(no esta)"; });
     await A.win.evaluate(() => { const l = cart[0]; updateCartItemQuantity(l._lineId, (Number(l.qty) || 1) + 1); });
     await sleep(6000);
     await state("S2_tras_A_sube");
@@ -145,8 +178,9 @@ async function launch(dirName, label) {
       }
     } catch (e) { out.limpiezaERR = String(e.message).slice(0, 120); }
     console.log(JSON.stringify(out, null, 1));
+    const verdict = require("./battery/verdict.js").emitVerdict(buildChecks(out));
     clearTimeout(hard);
     kill();
-    process.exit(0);
+    process.exit(verdict.fails ? 1 : 0);
   }
 })();
