@@ -582,9 +582,11 @@ async function getPayableProducts(win) {
           index: idx,
           name,
           unitPrice: parsePrice(priceTxt),
+          // Las fichas de oferta/pack abren la ventana de configuracion del pack al pulsarlas (no se añaden directas).
+          isOffer: tile.classList.contains("is-offer"),
         };
       })
-      .filter((p) => Number(p.unitPrice || 0) > 0);
+      .filter((p) => Number(p.unitPrice || 0) > 0 && !p.isOffer);
   });
 }
 
@@ -838,11 +840,12 @@ async function runCartAdvancedAssertions(win) {
         refreshPriceEditToggleUI();
     } catch {}
 
+    // Tampoco sirve una seccion con data-feature-off (Encargos, oculta hasta que el servidor la habilita a la empresa).
     // "Modo Mesas" es admin-only Y mesas-only a la vez: si el cliente de
     // prueba no tiene Mesas activo, ese seguira oculto aunque isAdmin=true.
     // Se usa un admin-only que no dependa de Mesas para esta comprobacion.
     const sec = document.querySelector(
-      '#optionsOverlay [data-admin-only]:not([data-mesas-only])',
+      '#optionsOverlay [data-admin-only]:not([data-mesas-only]):not([data-feature-off])',
     );
     if (!sec) return false;
     const st = window.getComputedStyle(sec);
@@ -869,7 +872,7 @@ async function runCartAdvancedAssertions(win) {
         refreshPriceEditToggleUI();
     } catch {}
 
-    const sec = document.querySelector("#optionsOverlay [data-admin-only]");
+    const sec = document.querySelector("#optionsOverlay [data-admin-only]:not([data-feature-off])");
     if (!sec) return false;
     const st = window.getComputedStyle(sec);
     return st.display === "none";
@@ -1170,9 +1173,11 @@ async function runSaleAndPrintAssertions(win) {
           index: idx,
           name,
           unitPrice: parsePrice(priceTxt),
+          // Las fichas de oferta/pack abren la ventana de configuracion del pack al pulsarlas (no se añaden directas).
+          isOffer: tile.classList.contains("is-offer"),
         };
       })
-      .filter((p) => Number(p.unitPrice || 0) > 0);
+      .filter((p) => Number(p.unitPrice || 0) > 0 && !p.isOffer);
   });
 
   if (!Array.isArray(picks) || !picks.length) {
@@ -1197,10 +1202,26 @@ async function runSaleAndPrintAssertions(win) {
     0,
   );
 
-  const total = await getTotalAmountValue(win);
+  // El carrito se actualiza de forma asincrona tras cada clic: se espera (hasta 5 s) a que el total llegue al esperado
+  // en vez de leerlo justo despues del ultimo clic.
+  let total = await getTotalAmountValue(win);
+  for (let i = 0; i < 20 && !almostEqual(total, expectedTotal); i += 1) {
+    await win.waitForTimeout(250);
+    total = await getTotalAmountValue(win);
+  }
   if (!almostEqual(total, expectedTotal)) {
+    const openOverlays = await win.evaluate(() =>
+      Array.from(document.querySelectorAll(".simple-overlay:not(.hidden), .modal-overlay:not(.hidden)")).map(
+        (o) => o.id || o.className,
+      ),
+    );
+    const diag = await win.evaluate((specs) => ({
+      fichas: specs.map((sp) => { const t = document.querySelectorAll(".product-tile")[sp.index]; return t ? `${sp.name}: class="${t.className}" aria-disabled=${t.getAttribute("aria-disabled")} texto="${(t.innerText || "").replace(/\s+/g, " ").slice(0, 80)}"` : `${sp.name}: sin ficha`; }),
+      carrito: (typeof cart !== "undefined" ? cart : []).map((l) => `${l.name} x${l.qty}`),
+      avisos: Array.from(document.querySelectorAll(".toast, .toast-item, #toastHost > *")).map((t) => (t.innerText || "").replace(/\s+/g, " ").trim()).filter(Boolean).slice(-4),
+    }), lineSpecs);
     fail(
-      `Unexpected cart total. Expected ${expectedTotal.toFixed(2)}, got ${total}`,
+      `Unexpected cart total. Expected ${expectedTotal.toFixed(2)}, got ${total} (ventanas abiertas: ${openOverlays.join(", ") || "ninguna"}; carrito: ${diag.carrito.join(" | ")}; avisos: ${diag.avisos.join(" | ")}; fichas: ${diag.fichas.join(" // ")})`,
     );
   }
   ok(`Cart total after product adds is correct (${expectedTotal.toFixed(2)})`);
@@ -1219,20 +1240,43 @@ async function runSaleAndPrintAssertions(win) {
     { timeout: 10000 },
   );
 
-  await win.waitForFunction(
-    () => {
-      const totalEl = document.getElementById("totalAmount");
-      const badge = document.getElementById("parkedCountBadge");
-      const raw = String(totalEl?.textContent || "")
-        .replace(/[^0-9,.-]/g, "")
-        .replace(".", "")
-        .replace(",", ".");
-      const total = Number(raw);
-      const parked = Number(String(badge?.textContent || "0").trim()) || 0;
-      return Number.isFinite(total) && total <= 0.001 && parked >= 1;
-    },
-    { timeout: 25000 },
-  );
+  // Si algun producto no tiene stock suficiente (la demo tiene stocks muy negativos) la app pregunta "¿Continuar de todos
+  // modos?" antes de aparcar: se acepta, como haria un cajero.
+  await win.waitForTimeout(800);
+  const stockAsk = await win.evaluate(() => {
+    const o = document.querySelector("#msgOverlay:not(.hidden)");
+    return !!o && /stock insuficiente/i.test(document.getElementById("msgText")?.innerText || "");
+  });
+  if (stockAsk) {
+    await win.click("#msgOkBtn");
+    ok("Stock warning on park accepted (continue anyway)");
+  }
+
+  try {
+    await win.waitForFunction(
+      () => {
+        const totalEl = document.getElementById("totalAmount");
+        const badge = document.getElementById("parkedCountBadge");
+        const raw = String(totalEl?.textContent || "")
+          .replace(/[^0-9,.-]/g, "")
+          .replace(".", "")
+          .replace(",", ".");
+        const total = Number(raw);
+        const parked = Number(String(badge?.textContent || "0").trim()) || 0;
+        return Number.isFinite(total) && total <= 0.001 && parked >= 1;
+      },
+      null,
+      { timeout: 25000 },
+    );
+  } catch (e) {
+    const diag = await win.evaluate(() => ({
+      total: document.getElementById("totalAmount")?.textContent,
+      parked: document.getElementById("parkedCountBadge")?.textContent,
+      ventanas: Array.from(document.querySelectorAll(".simple-overlay:not(.hidden), .modal-overlay:not(.hidden)")).map((o) => o.id || o.className),
+      mensaje: (document.querySelector("#msgOverlay:not(.hidden) #msgText")?.innerText || "").replace(/\s+/g, " ").slice(0, 200),
+    }));
+    fail(`Parked ticket was not created in time: ${JSON.stringify(diag)}`);
+  }
 
   ok("Parked ticket created");
 
@@ -1412,6 +1456,12 @@ async function runSaleAndPrintAssertions(win) {
     fail(`Parked cleanup failed. Remaining parked badge=${parkedBadge}`);
   }
   ok("Parked ticket deleted and cleaned up");
+
+  // La ventana de aparcados puede seguir abierta tras borrar el ultimo: se cierra para poder seguir vendiendo.
+  if (await win.evaluate(() => !document.getElementById("parkedTicketsOverlay")?.classList.contains("hidden"))) {
+    await win.click("#parkedCloseBtn");
+    await win.waitForTimeout(300);
+  }
 
   // Recreate cart quickly for payment + printing assertions
   for (const spec of lineSpecs) {
