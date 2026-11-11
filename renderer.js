@@ -2803,6 +2803,8 @@ const OPTIONS_PRODUCT_DISPLAY_FIELD_MODE_KEY = "ui.productDisplayFieldMode";
 const OPTIONS_DISCOUNT_QUICK_PERCENTS_KEY = "ui.discountQuickPercents";
 const DISCOUNT_QUICK_PERCENTS_MAX = 5;
 const OPTIONS_AUTO_PRINT_TICKET_ON_PARK_KEY = "ui.autoPrintTicketOnPark";
+// Dividir cuenta tambien fuera de Modo Mesas (TPV normal / "para llevar"). Apagado por defecto.
+const OPTIONS_SPLIT_TPV_ENABLED_KEY = "ui.splitTpvEnabled";
 // Cada hueco (campo de Opciones) conserva su propio valor/posicion siempre;
 // null = campo vacio (sin boton ahi). Por defecto: los 4 de toda la vida.
 const DISCOUNT_QUICK_PERCENT_SLOTS_DEFAULT = [10, 20, 50, 100, null];
@@ -2874,6 +2876,8 @@ let cartPanelWidthPx = 0;
 let cartDiscountToolsToggleBound = false;
 let autoPrintTicketOnParkEnabled = false;
 let autoPrintTicketOnParkToggleBound = false;
+let splitTpvEnabled = false;
+let splitTpvToggleBound = false;
 let cartWidthControlsToggleBound = false;
 let cartWidthDragHandleBound = false;
 let cartWidthDragActive = false;
@@ -4050,6 +4054,47 @@ function bindAutoPrintTicketOnParkToggleOnce() {
 
   el.addEventListener("change", async () => {
     await saveAutoPrintTicketOnParkToggle(!!el.checked);
+  });
+}
+
+// Peticion real de cliente (Lumi, 2026-10-20, punto 9): dividir la cuenta tambien en el TPV normal
+// ("para llevar"), no solo en Modo Mesas. Reutiliza el mismo asistente y las mismas partes (tickets aparcados
+// del mismo grupo, cobradas una a una). Apagado por defecto: añade un boton nuevo.
+async function loadSplitTpvToggle() {
+  const el = document.getElementById("splitTpvToggle");
+  let enabled = false;
+
+  try {
+    const cfgVal = await window.TPV_CFG?.get?.(OPTIONS_SPLIT_TPV_ENABLED_KEY);
+    if (cfgVal !== undefined && cfgVal !== null && cfgVal !== "") {
+      enabled = parseBoolLike(cfgVal, false);
+    }
+  } catch {}
+
+  splitTpvEnabled = !!enabled;
+  if (el) el.checked = splitTpvEnabled;
+  refreshSplitFromCartButtonUI?.();
+}
+
+async function saveSplitTpvToggle(enabled) {
+  splitTpvEnabled = !!enabled;
+
+  try {
+    await window.TPV_CFG?.set?.(OPTIONS_SPLIT_TPV_ENABLED_KEY, splitTpvEnabled);
+  } catch {}
+  refreshSplitFromCartButtonUI?.();
+  refreshParkedEditingBanner?.();
+}
+
+function bindSplitTpvToggleOnce() {
+  if (splitTpvToggleBound) return;
+  splitTpvToggleBound = true;
+
+  const el = document.getElementById("splitTpvToggle");
+  if (!el) return;
+
+  el.addEventListener("change", async () => {
+    await saveSplitTpvToggle(!!el.checked);
   });
 }
 
@@ -10272,12 +10317,12 @@ async function apiLogStockLedgerEntry({ ticketId, idProducto, delta, reason }) {
   const slug = String(getCurrentSlugForReservations() || "").trim();
   const syncApiKey = getTpvSyncApiKey();
   if (!idProd || !ticket || !slug || !syncApiKey || !Number.isFinite(delta)) {
-    return;
+    return true; // sin registro posible (sin clave/slug): no hay nada que reintentar
   }
 
   try {
     const url = `${TPV_SYNC_API_URL}?action=log-stock-delta`;
-    await fetchWithTimeout(
+    const res = await fetchWithTimeout(
       url,
       {
         method: "POST",
@@ -10297,7 +10342,10 @@ async function apiLogStockLedgerEntry({ ticketId, idProducto, delta, reason }) {
       },
       3000,
     );
-  } catch {}
+    return !!res?.ok;
+  } catch {
+    return false;
+  }
 }
 
 // Pide un codigo de emparejamiento nuevo para este negocio (app de
@@ -14268,6 +14316,7 @@ async function runBootFlow() {
     await loadAllowCloseWithParkedToggle?.();
     await loadCartDiscountToolsToggle?.();
     await loadAutoPrintTicketOnParkToggle?.();
+    await loadSplitTpvToggle?.();
     await loadMesasDinersFamilyRules?.();
     await loadMesasComandaFamilyRules?.();
     await loadParkStockWarningToggle?.();
@@ -16227,7 +16276,7 @@ function refreshSplitMesaTotals(cartItems) {
     });
 
     label.textContent = `Tu parte: ${meta.part} de ${meta.total}`;
-    allEl.textContent = `Mesa completa: ${eur(round2(all))}`;
+    allEl.textContent = `${isMesasModeTicket(loaded) ? "Mesa" : "Cuenta"} completa: ${eur(round2(all))}`;
     pendEl.textContent = `Por cobrar: ${eur(round2(pending))}`;
     row.classList.remove("hidden");
   } catch {
@@ -23593,8 +23642,9 @@ function refreshParkedEditingBanner() {
   const showDeleteAction = true;
   const delBtnEl = document.getElementById("parkedDeleteBtn");
   if (delBtnEl) delBtnEl.textContent = showMesasActions ? "Borrar mesa" : "Borrar";
+  const showTpvSplit = !showMesasActions && isTpvTicketSplitContext();
   setActionButtonsVisible({
-    split: showMesasActions,
+    split: showMesasActions || showTpvSplit,
     // El boton pequeño "Comanda" sobra: la barra grande de abajo (con ✎ para
     // la ventana con observacion) lo sustituye (2026-10-15).
     comanda: false,
@@ -23602,7 +23652,7 @@ function refreshParkedEditingBanner() {
     del: showDeleteAction,
   });
   setActionButtonsDisabled({
-    split: !showMesasActions,
+    split: !(showMesasActions || showTpvSplit),
     comanda: !showMesasActions,
     meta: false,
     del: !showDeleteAction,
@@ -24906,7 +24956,7 @@ async function markParkedTicketAsPaidByIndex(
   refreshParkedEditingBanner();
 
   if (splitMeta) {
-    tryResumePendingSplitSession();
+    tryResumePendingSplitSession({ afterPay: true });
   }
 
   PENDING_RUNTIME_PARKED_SYNC_KEY = "";
@@ -33735,6 +33785,7 @@ const OPT_PREVIEW_DEFS = {
     OPT_PV.T("Desagrupar líneas", "groupLinesToggle"),
     OPT_PV.T("Descuentos manuales", "cartDiscountToolsToggle"),
     OPT_PV.T("Imprimir ticket al guardar", "autoPrintTicketOnParkToggle"),
+    OPT_PV.T("Dividir cuenta en TPV normal", "splitTpvToggle"),
     OPT_PV.T("Alargar carrito", "cartWidthControlsToggle"),
     OPT_PV.V("Cliente por defecto", "terminalDefaultCustomerSelect"),
     OPT_PV.V("Al salir de un aparcado", "parkedCustomerResetModeSelect"),
@@ -34376,6 +34427,7 @@ async function openOptions() {
   bindScaleManualCaptureToggleOnce();
   bindCartDiscountToolsToggleOnce();
   bindAutoPrintTicketOnParkToggleOnce();
+  bindSplitTpvToggleOnce();
   bindSafeTrainingModeToggleOnce();
   bindCartGlobalDiscountButtonsOnce();
   bindTariffOptionsOnce();
@@ -34427,6 +34479,7 @@ async function openOptions() {
     loadScaleManualCaptureModeToggle(),
     loadCartDiscountToolsToggle(),
     loadAutoPrintTicketOnParkToggle(),
+    loadSplitTpvToggle(),
     loadSafeTrainingModeToggle(),
     loadTariffManagerOptionsData(),
     loadProductTileSizeSetting(),
@@ -48297,6 +48350,11 @@ function findPendingSplitTicketIndex(groupId, part) {
 
   return (Array.isArray(parkedTickets) ? parkedTickets : []).findIndex((t) => {
     if (t?.paid) return false;
+    // Una parte que se esta cobrando AHORA (closingInProgress) no se vuelve a cargar: al empezar a cobrar la
+    // parte 1 el carrito se vacia, y la reanudacion recargaba esa misma parte (aun sin marcar como cobrada);
+    // con el piloto de operaciones el autoguardado la daba por modificada y creaba un pedido DUPLICADO de esa
+    // parte, dejaba la parte 2 sin abrir y reservas de stock sueltas (investigado 2026-11-10).
+    if (t?.closingInProgress) return false;
     const meta = getTicketSplitMeta(t);
     return (
       meta &&
@@ -48306,14 +48364,17 @@ function findPendingSplitTicketIndex(groupId, part) {
   });
 }
 
-function tryResumePendingSplitSession() {
+function tryResumePendingSplitSession(opts = {}) {
   if (SPLIT_RESUME_IN_FLIGHT) return false;
-  if (!MESAS_INLINE_ACTIVE || MESAS_INLINE_VIEW !== "transacciones")
-    return false;
+  const inMesasView = MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones";
+  // Fuera de Mesas (TPV normal) solo se reanuda justo despues de cobrar una parte (afterPay), nunca "a pelo"
+  // al refrescar: asi un "Salir" del pedido no vuelve a cargar la parte siguiente.
+  if (!inMesasView && !(opts?.afterPay === true && splitTpvEnabled)) return false;
   if (currentParkedTicketIndex !== null) return false;
 
   const state = loadSplitSessionState();
   if (!state) return false;
+  if (!inMesasView && state.mesaUid) return false;
 
   const idx = findPendingSplitTicketIndex(state.groupId, state.nextPart);
   if (idx < 0) return false;
@@ -48342,9 +48403,72 @@ function shouldShowPreprintForLoadedTicket() {
   return hasLoadedOpenTicketForMesasTrans();
 }
 
+// Dividir cuenta FUERA de Modo Mesas (TPV normal / "para llevar"): hay un pedido de TPV normal abierto
+// (cargado del listado de Pedidos o aparcado justo al pulsar Dividir) y la opcion esta activada. En Mesas manda
+// siempre el flujo de Mesas de siempre.
+function isTpvTicketSplitContext() {
+  if (!splitTpvEnabled) return false;
+  if (MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") return false;
+  const t = getCurrentLoadedParkedTicket();
+  return !!t && !t.paid && !isMesasModeTicket(t);
+}
+
 function isMesasTicketSplitAllowed() {
+  if (isTpvTicketSplitContext()) return hasVisibleCartLines(cart);
   if (!shouldShowSplitPayAndPreprint()) return false;
   return hasVisibleCartLines(cart);
+}
+
+// Boton "Dividir" junto al total, solo para un carrito de TPV normal que aun NO esta aparcado: al pulsarlo se
+// guarda el carrito como pedido de TPV normal (igual que Aparcar) y se abre el asistente de division.
+function refreshSplitFromCartButtonUI() {
+  const btn = document.getElementById("splitFromCartBtn");
+  if (!btn) return;
+  const show =
+    splitTpvEnabled &&
+    !!cashSession?.open &&
+    !(MESAS_INLINE_ACTIVE && MESAS_INLINE_VIEW === "transacciones") &&
+    !getCurrentLoadedParkedTicket() &&
+    hasVisibleCartLines(cart);
+  btn.classList.toggle("hidden", !show);
+  btn.disabled = !show || isParkingNow || isParkingNowSilent;
+}
+
+async function startSplitFromCart() {
+  if (!splitTpvEnabled) return;
+  if (getCurrentLoadedParkedTicket()) {
+    openSplitTicketModal();
+    return;
+  }
+  if (!hasVisibleCartLines(cart)) {
+    toast("Añade productos antes de dividir la cuenta.", "warn", "Dividir");
+    return;
+  }
+  // Se aparca igual que con el boton Aparcar (sin imprimir ni preguntar) y se vuelve a cargar el pedido recien
+  // creado para dividirlo (en TPV normal, aparcar vacia el carrito y no deja nada cargado).
+  const idsBefore = new Set(
+    (Array.isArray(parkedTickets) ? parkedTickets : []).map((t) => String(t?.id || "")),
+  );
+  await parkCurrentCart("", "", {
+    openListAfterSave: false,
+    skipAutoPrint: true,
+    skipStockConfirm: true,
+    parkingMode: PARKED_MODE_TPV,
+  });
+  const newIdx = (Array.isArray(parkedTickets) ? parkedTickets : []).findIndex(
+    (t) => !t?.paid && !idsBefore.has(String(t?.id || "")) && !isMesasModeTicket(t),
+  );
+  if (newIdx < 0) {
+    toast("No se pudo preparar el pedido para dividirlo. Inténtalo de nuevo.", "warn", "Dividir");
+    return;
+  }
+  const newTicketId = parkedTickets[newIdx]?.id;
+  // La reserva de stock del pedido recien aparcado termina en segundo plano: se espera antes de repartirlo.
+  await waitForPendingParkedStockSyncTail(newTicketId);
+  const idxNow = parkedTickets.findIndex((t) => String(t?.id || "") === String(newTicketId) && !t?.paid);
+  if (idxNow < 0) return;
+  restoreParkedCartByIndex(idxNow);
+  openSplitTicketModal();
 }
 
 function resolveProductByCartLine(line) {
@@ -48383,6 +48507,7 @@ function isMesasComandaAllowed() {
 }
 
 function refreshPayAndPreprintLayout() {
+  refreshSplitFromCartButtonUI();
   const payBtnEl = document.getElementById("payBtn");
   const cartActionGrid = document.getElementById("cartActionGrid");
   const parkBtnEl = document.getElementById("parkBtn");
@@ -48421,6 +48546,9 @@ function getMesasAutoSaveIntent() {
 
   const loaded = getCurrentLoadedParkedTicket();
   if (loaded?.paid) return null;
+  // Un pedido que se esta cobrando (aqui o en otro TPV) no se autoguarda: parkCurrentCart no lo trata como el
+  // mismo pedido y crearia uno NUEVO con su carrito (duplicado de la cuenta que se acaba de cobrar).
+  if (loaded?.closingInProgress) return null;
 
   if (loaded) {
     if (!hasVisibleCartLines() || !hasUnsavedChangesForLoadedParkedTicket(loaded))
@@ -48504,6 +48632,7 @@ async function runTpvAutoSaveIfNeeded() {
 
   const loaded = getCurrentLoadedParkedTicket();
   if (!loaded || loaded?.paid) return;
+  if (loaded?.closingInProgress) return; // se esta cobrando: no se autoguarda (ver getMesasAutoSaveIntent)
   if (!hasVisibleCartLines() || !hasUnsavedChangesForLoadedParkedTicket(loaded))
     return;
   if (!cashSession?.open || !currentTerminal) return;
@@ -49375,7 +49504,9 @@ function refreshSplitTicketActionUi() {
 function openSplitTicketModal() {
   if (!isMesasTicketSplitAllowed()) {
     toast(
-      "Abre un ticket de mesa con productos para dividir.",
+      splitTpvEnabled
+        ? "Abre un pedido con productos para dividir."
+        : "Abre un ticket de mesa con productos para dividir.",
       "warn",
       "Dividir",
     );
@@ -49415,6 +49546,35 @@ function openSplitTicketModal() {
   refreshSplitTicketActionUi();
 
   splitTicketOverlay?.classList.remove("hidden");
+}
+
+// Al dividir (o unificar) un pedido NO cambia el stock real: ya estaba reservado por el pedido entero. Pero el
+// servidor lleva la cuenta de lo reservado POR TICKET (stock_sync_ledger) y al cobrar libera "lo que el servidor
+// tiene anotado de ese ticket": sin repartir la anotacion entre las partes, la parte 1 liberaba la reserva del pedido
+// ENTERO y las demas liberaban la suya otra vez -> el stock subia de mas (visto con 2 productos en demo,
+// 2026-11-10: sobraba 1 unidad de cada uno). Aqui solo se mueve la anotacion; cada moves[i] =
+// { ticketId, deltaMap (Map idProducto -> unidades; >0 reserva, <0 libera), reason }.
+async function logSplitStockRedistribution(moves) {
+  const jobs = [];
+  (Array.isArray(moves) ? moves : []).forEach((m) => {
+    if (!m?.ticketId || !(m.deltaMap instanceof Map)) return;
+    m.deltaMap.forEach((delta, idProducto) => {
+      jobs.push(async () => {
+        const args = { ticketId: m.ticketId, idProducto, delta, reason: m.reason };
+        if (await apiLogStockLedgerEntry(args)) return true;
+        return !!(await apiLogStockLedgerEntry(args)); // un reintento
+      });
+    });
+  });
+  const results = await Promise.all(jobs.map((f) => f()));
+  const allOk = results.every(Boolean);
+  if (!allOk) {
+    console.warn("[STOCK] No se pudo repartir del todo la reserva de stock entre las partes de la division.");
+    reportClientEvent?.("stock", "split-ledger-incomplete", "No se pudo anotar el reparto de stock al dividir la cuenta", {
+      moves: jobs.length,
+    }, "warn");
+  }
+  return allOk;
 }
 
 async function confirmSplitTicket() {
@@ -49568,6 +49728,36 @@ async function confirmSplitTicket() {
       stripSplitSuffixFromTicketName(loaded?.name) ||
       `Ticket #${loadedDisplayNo || ""}`;
 
+    // Lo reservado por cada parte que se funde pasa a este pedido (ver logSplitStockRedistribution).
+    const mergeLedgerMoves = [];
+    {
+      const toLoaded = new Map();
+      sameGroupEntries
+        .filter((entry) => String(entry.ticket?.id || "") !== String(loaded?.id || ""))
+        .forEach((entry) => {
+          const reserved = buildReservedQtyByProductMap(entry.ticket?.items || []);
+          const away = new Map();
+          reserved.forEach((qty, idProd) => {
+            toLoaded.set(idProd, roundQty3((toLoaded.get(idProd) || 0) + qty));
+            away.set(idProd, -qty);
+          });
+          if (away.size) {
+            mergeLedgerMoves.push({
+              ticketId: entry.ticket?.id,
+              deltaMap: away,
+              reason: "eliminar aparcado",
+            });
+          }
+        });
+      if (toLoaded.size) {
+        mergeLedgerMoves.push({
+          ticketId: loaded?.id,
+          deltaMap: toLoaded,
+          reason: "actualizar aparcado (unificar division)",
+        });
+      }
+    }
+
     loaded.items = mergedLines;
     loaded.total = getCartTotal(mergedLines);
     loaded.name = baseName;
@@ -49626,7 +49816,7 @@ async function confirmSplitTicket() {
       }
     }
 
-    refreshRemoteParkedReservationsOnly().catch(() => {});
+    await logSplitStockRedistribution(mergeLedgerMoves);
 
     cart = mergedLines.map((it) => ({ ...it }));
     renderCart();
@@ -49640,6 +49830,8 @@ async function confirmSplitTicket() {
     refreshParkedEditingBanner();
     refreshParkButtonUI();
     updateParkedCountBadge();
+
+    refreshRemoteParkedReservationsOnly().catch(() => {});
 
     closeSplitTicketModal();
     toast("División deshecha: ticket unificado.", "ok", "Dividir");
@@ -49704,7 +49896,7 @@ async function confirmSplitTicket() {
     loaded?.name || `Ticket #${loadedDisplayNo || ""}`,
   ).trim();
   const splitGroupId = makeSplitGroupId();
-  const mesaScope = getSelectedMesaScopeContext();
+  const mesaScope = isTpvTicketSplitContext() ? null : getSelectedMesaScopeContext();
   const splitTickets = [];
 
   for (let i = 2; i <= targetSplitParts; i += 1) {
@@ -49807,7 +49999,28 @@ async function confirmSplitTicket() {
     }
   }
 
-  refreshRemoteParkedReservationsOnly().catch(() => {});
+  // Cada parte nueva pasa a tener anotada SU reserva ("crear aparcado": asi el servidor se fia de su balance al
+  // cobrarla) y el pedido original deja de tener anotada la que se llevan las demas partes.
+  {
+    const moves = [];
+    const leaving = new Map();
+    splitTickets.forEach((st) => {
+      const reserved = buildReservedQtyByProductMap(st.items || []);
+      if (!reserved.size) return;
+      moves.push({ ticketId: st.id, deltaMap: reserved, reason: "crear aparcado" });
+      reserved.forEach((qty, idProd) => {
+        leaving.set(idProd, roundQty3((leaving.get(idProd) || 0) - qty));
+      });
+    });
+    if (leaving.size) {
+      moves.push({
+        ticketId: loaded.id,
+        deltaMap: leaving,
+        reason: "actualizar aparcado (dividir)",
+      });
+    }
+    await logSplitStockRedistribution(moves);
+  }
 
   cart = loadedShareLines.map((it) => ({ ...it }));
   renderCart();
@@ -49821,6 +50034,10 @@ async function confirmSplitTicket() {
   refreshParkedEditingBanner();
   refreshParkButtonUI();
   updateParkedCountBadge();
+
+  // El refresco del servidor va DESPUES de poner el carrito de la parte 1: antes comparaba el carrito antiguo
+  // (entero) con el pedido ya dividido y avisaba "esta mesa se actualizó desde otro terminal" sin ser verdad.
+  refreshRemoteParkedReservationsOnly().catch(() => {});
 
   closeSplitTicketModal();
   toast(`Ticket dividido en ${targetSplitParts} partes.`, "ok", "Dividir");
@@ -51748,6 +51965,15 @@ if (preprintTicketBtn) {
     preprintCurrentMesaTicket();
   });
   refreshPreprintButtonUI();
+}
+
+const splitFromCartBtnEl = document.getElementById("splitFromCartBtn");
+if (splitFromCartBtnEl) {
+  splitFromCartBtnEl.addEventListener("click", () => {
+    startSplitFromCart().catch((e) =>
+      console.warn("No se pudo dividir desde el carrito:", e?.message || e),
+    );
+  });
 }
 
 const parkedSplitBtnEl = document.getElementById("parkedSplitBtn");
@@ -55116,10 +55342,12 @@ async function bootstrapApp() {
 
   bindCartDiscountToolsToggleOnce();
   bindAutoPrintTicketOnParkToggleOnce();
+  bindSplitTpvToggleOnce();
   bindSafeTrainingModeToggleOnce();
   bindCartGlobalDiscountButtonsOnce();
   await loadCartDiscountToolsToggle();
   await loadAutoPrintTicketOnParkToggle();
+  await loadSplitTpvToggle();
   await loadSafeTrainingModeToggle();
   refreshCartDiscountUi();
 
