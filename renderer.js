@@ -21230,6 +21230,13 @@ async function parkCurrentCart(name = "", obs = "", opts = {}) {
         existing.total = total;
         existing.discountSummary = discountSummary;
         existing.cartGlobalDiscountPct = currentGlobalDiscountPct;
+      } else if (opts?.allowEmptyItems === true && Array.isArray(existing.items) && existing.items.length) {
+        // Pedido que el cajero ha dejado vacio quitando sus lineas (solo lo pide el autoguardado de Mesas, ver
+        // getMesasAutoSaveIntent): se guarda vacio. Sin esto solo se actualizaban los datos y las lineas
+        // quitadas seguian en el servidor (y se imprimian a cocina). El delta de stock negativo libera la reserva.
+        existing.items = [];
+        existing.total = 0;
+        existing.discountSummary = null;
       }
       existing.codcliente = selectedCustomerCod;
       // Bug real (Asador el Gallo, 2026-09-27): a diferencia de .name (que sí
@@ -48565,8 +48572,20 @@ function getMesasAutoSaveIntent() {
   if (loaded?.closingInProgress) return null;
 
   if (loaded) {
-    if (!hasVisibleCartLines() || !hasUnsavedChangesForLoadedParkedTicket(loaded))
-      return null;
+    if (!hasVisibleCartLines()) {
+      // Real (2026-11-11, bateria): el cajero añade un plato y lo quita a los 2 s -> el carrito vacio no se
+      // guardaba nunca, el pedido guardado conservaba la linea (stock reservado incluido) y ~15 s despues el
+      // sondeo remoto imprimia a cocina la comanda de ese plato ya quitado. Si el carrito esta vacio porque
+      // EL CAJERO quito las lineas de este pedido (PARKED_LINK_KEPT_EMPTY_ID), se guarda el pedido vacio.
+      // Un carrito vacio por cualquier otra causa (cambio de mesa, carga, cobro...) sigue sin guardarse.
+      const keptEmptyHere =
+        PARKED_LINK_KEPT_EMPTY_ID &&
+        (Number(loaded.id || loaded.ticketId || 0) || 0) === PARKED_LINK_KEPT_EMPTY_ID &&
+        Array.isArray(loaded.items) &&
+        loaded.items.length > 0;
+      return keptEmptyHere ? { loaded, emptied: true } : null;
+    }
+    if (!hasUnsavedChangesForLoadedParkedTicket(loaded)) return null;
     return { loaded };
   }
 
@@ -48609,6 +48628,7 @@ async function runMesasAutoSaveIfNeeded() {
       skipAutoPrint: true,
       skipStockConfirm: true,
       parkingMode: PARKED_MODE_MESAS,
+      allowEmptyItems: intent.emptied === true,
     });
     // El autoguardado NO imprime (skipAutoPrint), asi que nunca armaba la
     // comanda automatica: se imprimia solo por el sondeo remoto, sin cuenta

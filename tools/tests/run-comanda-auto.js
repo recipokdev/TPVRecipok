@@ -50,6 +50,13 @@ function buildChecks(out) {
   const devs = (d.enviados || []).filter((p) => String(p).startsWith("DEV "));
   ok("D: quitar un producto ya enviado manda solo un aviso de DEVOLUCIÓN a cocina con ese producto", devs.length === 1 && devs[0].includes(`${d.prod}:1`), d.enviados);
   ok("D: el aviso de devolución no se repite", (d.enviadosTarde || []).length === (d.enviados || []).length, d.enviadosTarde);
+  const e = out.E || {};
+  ok("E: antes de quitar, el pedido de la mesa existe con la línea del plato", e.antes?.hay === true && e.antes.lineas === 1, e.antes);
+  ok("E: al quitar el único plato, el pedido guardado queda vacío (la línea ya no está) y el carrito también", e.tras?.hay === true && e.tras.lineas === 0 && e.tras.carrito === 0, e.tras);
+  ok("E: no queda ninguna cuenta atrás armada por un plato que ya no está", e.tras?.pendientes === 0, e.tras);
+  ok("E: pasado el tiempo del sondeo remoto no sale NINGUNA comanda del plato quitado", Array.isArray(e.enviados) && e.enviados.length === 0, e.enviados);
+  ok("E: el pedido sigue vacío pasado el tiempo (nada lo resucita)", e.final?.lineas === 0 && e.final?.carrito === 0, e.final);
+  ok("E: si se añade algo después, se actualiza ese mismo pedido (no se crea otro)", e.despues?.pedidos === 1 && e.despues.lineas === 1, e.despues);
   return c;
 }
 
@@ -191,6 +198,30 @@ function buildChecks(out) {
     out.D.enviados = await prints();
     await sleep(5000);
     out.D.enviadosTarde = await prints();
+
+    // E) añadir un plato y quitarlo enseguida (2 s): el pedido guardado debe quedar VACIO (en local y en el servidor)
+    // y no debe salir NUNCA una comanda del plato quitado (fallo real hallado por la bateria, 2026-11-11: el carrito
+    // vacio no se guardaba, el pedido conservaba la linea y ~15 s despues el sondeo imprimia ese plato).
+    step("E");
+    await ev(async () => { await __clean(); __prints.length = 0; localStorage.setItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY, "8"); }); await sleep(2000);
+    await ev(() => { __sel(); }); await sleep(800);
+    out.E = { prod: await nameOf(3) };
+    await ev(() => { addToCart(__prods[3]); });
+    await sleep(3500); // guardado inicial (el pedido existe en el servidor con la linea)
+    await ev(async () => { await refreshRemoteParkedReservationsOnly(); });
+    out.E.antes = await ev(() => { const t = parkedTickets.find((x) => !x.paid && x.mesaUid === "tut-room-1::m3"); return { hay: !!t, lineas: (t?.items || []).length }; });
+    await ev(() => { const l = cart[0]; if (l) updateCartItemQuantity(l._lineId, 0, { deleteLine: true }); });
+    await sleep(4000);
+    await ev(async () => { await refreshRemoteParkedReservationsOnly(); });
+    out.E.tras = await ev(() => { const t = parkedTickets.find((x) => !x.paid && x.mesaUid === "tut-room-1::m3"); return { hay: !!t, lineas: (t?.items || []).length, carrito: (cart || []).length, pendientes: __autoComandaPending.size }; });
+    await sleep(25000); // mas que el sondeo remoto que imprimia el plato quitado
+    await ev(async () => { await refreshRemoteParkedReservationsOnly(); });
+    out.E.enviados = await prints();
+    out.E.final = await ev(() => { const t = parkedTickets.find((x) => !x.paid && x.mesaUid === "tut-room-1::m3"); return { lineas: (t?.items || []).length, carrito: (cart || []).length }; });
+    // y si despues se vuelve a añadir algo, actualiza ese mismo pedido (no crea otro)
+    await ev(() => { addToCart(__prods[3]); });
+    await sleep(4000);
+    out.E.despues = await ev(() => { const ts = parkedTickets.filter((x) => !x.paid && x.mesaUid === "tut-room-1::m3"); return { pedidos: ts.length, lineas: (ts[0]?.items || []).length }; });
   } catch (e) {
     out.ERROR = String((e && e.message) || e).slice(0, 300);
   } finally {

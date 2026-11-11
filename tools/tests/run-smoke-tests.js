@@ -10936,6 +10936,18 @@ console.log("\n[SMOKE] Checking 2026-11-11 la fusion en 3 vias no se usa con el 
   }
 }
 
+console.log("\n[SMOKE] Checking 2026-11-11 Mesas: quitar el unico plato guarda el pedido vacio (antes la linea seguia en el servidor y se imprimia a cocina)\n");
+if (
+  renderer.includes("return keptEmptyHere ? { loaded, emptied: true } : null;") &&
+  renderer.includes("allowEmptyItems: intent.emptied === true,") &&
+  renderer.includes("} else if (opts?.allowEmptyItems === true && Array.isArray(existing.items) && existing.items.length) {") &&
+  renderer.includes("(Number(loaded.id || loaded.ticketId || 0) || 0) === PARKED_LINK_KEPT_EMPTY_ID")
+) {
+  ok("El autoguardado de Mesas guarda el pedido VACIO cuando el cajero ha quitado todas sus lineas (getMesasAutoSaveIntent emptied + parkCurrentCart allowEmptyItems): sin esto la linea quitada seguia en el servidor con su stock reservado y ~15 s despues el sondeo remoto imprimia a cocina el plato ya quitado. Hallado por la bateria (run-comanda-auto.js, seccion E)");
+} else {
+  fail("Falta guardar el pedido vacio al quitar el cajero todas las lineas en Mesas (renderer.js getMesasAutoSaveIntent / parkCurrentCart allowEmptyItems)");
+}
+
 console.log("\n[SMOKE] Checking 2026-10-27 cuadro de borrar aparcados: devolver stock es lo normal, 'fantasma' solo la excepcion\n");
 if (
   renderer.includes('okButtonText: "Eliminar y devolver el stock (lo normal)"') &&
