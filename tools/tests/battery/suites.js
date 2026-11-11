@@ -114,6 +114,21 @@ const SUITES = [
     args: ["tools/tests/run-two-tpv-mesa-in-use.js"], timeoutMs: 360000,
   },
   {
+    id: "cobro-fallido", area: C, level: "full", demo: true, title: "Cobro que falla en Mesas: el pedido sigue abierto una sola vez y se puede volver a cobrar",
+    what: "Se fuerza un error de stock al cobrar una mesa (sin crear factura): sale el aviso «Cobro fallido», el pedido sigue abierto UNA vez (sin duplicado) y el otro TPV ve lo mismo. Quitado el fallo, se cobra de verdad, la mesa queda libre y el stock cuadra.",
+    args: ["tools/tests/run-cobro-fallido.js"], timeoutMs: 450000,
+  },
+  {
+    id: "mesa-libre-al-cobrar", area: C, level: "full", demo: true, title: "Cobrar una mesa la deja libre, sin duplicados ni segunda comanda",
+    what: "Al marcar el pedido de una mesa como cobrado: la mesa queda libre (sin «Cuenta cobrada»), no queda pedido abierto, no sale una segunda comanda ni el botón «Enviar devolución», y el otro TPV lo ve igual.",
+    args: ["tools/tests/run-mesa-libre-al-cobrar.js"], timeoutMs: 360000,
+  },
+  {
+    id: "cobro-pedido-cambiado", area: E, level: "full", demo: true, title: "Si el pedido cambia mientras se cobra, no se cobra el total viejo",
+    what: "Con 2 TPV: A abre la ventana de cobro y B añade una línea al pedido. Al confirmar, A no cobra el importe antiguo: avisa del cambio (con el importe viejo y el nuevo), no cobra nada y el pedido sigue abierto una sola vez.",
+    args: ["tools/tests/run-pay-total-changed.js"], timeoutMs: 360000,
+  },
+  {
     id: "dividir-normal", area: D, level: "full", demo: true, title: "Dividir cuenta en TPV normal y cobrar las partes",
     what: "Divide un carrito en 2 partes, cobra la primera y comprueba que se abre sola la segunda; al terminar no quedan partes y el stock cuadra.",
     args: ["tools/tests/run-split-tpv-normal.js"], timeoutMs: 400000,

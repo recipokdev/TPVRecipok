@@ -1,4 +1,4 @@
-// run-mesa-libre-al-cobrar.js -- prueba MANUAL (no entra en npm test): en Modo Mesas, al marcar el pedido como COBRADO (se llama a markParkedTicketAsPaidByIndex, sin crear factura) la mesa
+// run-mesa-libre-al-cobrar.js -- prueba (entra en la bateria, nivel full): en Modo Mesas, al marcar el pedido como COBRADO (se llama a markParkedTicketAsPaidByIndex, sin crear factura) la mesa
 // queda LIBRE (sin etapa "Cuenta cobrada"), sin pedido duplicado, sin segunda comanda y sin
 // "Enviar devolucion". NO crea factura (el cobro real se prueba con run-two-tpv-ops-pay.js). Dos TPV reales, mesa M3.
 // Impresion simulada. Uso: node tools/tests/run-mesa-libre-al-cobrar.js
@@ -77,15 +77,35 @@ async function cleanTable(A, B) {
   return del;
 }
 
+function buildChecks(out) {
+  const c = [];
+  const ok = (name, cond, extra) => c.push([name, !!cond, extra === undefined ? "" : typeof extra === "string" ? extra : JSON.stringify(extra)]);
+  const abiertos = (x) => (x?.tickets || []).filter((t) => /u\d$/.test(t)).length;
+  const slim = (x) => x && { estado: x.estado, etapa: x.etapa, vinculo: x.vinculo, carrito: x.carrito, abiertos: abiertos(x), barra: x.barra };
+  ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || "");
+  ok("Los dos TPV están en Modo Mesas con la comanda automática activa", (out.modo || []).length === 2 && out.modo.every((m) => m.mesas && m.activa), out.modo);
+  const a = out.antes_de_cobrar?.A;
+  ok("Antes de cobrar: la mesa tiene 1 pedido abierto con 2 productos y ya salió su comanda", abiertos(a) === 1 && (a?.carrito || []).length === 2 && a?.prints === 1, slim(a));
+  const l = out.ultimo;
+  ok("Tras cobrar: la mesa queda LIBRE (sin etapa «Cuenta cobrada» ni pedido vinculado)", l?.estado === "libre" && !l?.etapa && !l?.vinculo, slim(l));
+  ok("Tras cobrar: no queda ningún pedido abierto (sin duplicado) y el carrito está vacío", abiertos(l) === 0 && (l?.carrito || []).length === 0, slim(l));
+  ok("Tras cobrar: no aparece el botón «Enviar devolución» a cocina", String(l?.barra) === "(oculta)", l?.barra);
+  ok("Cobrar no genera una segunda comanda (solo la del pedido)", (out.prints_A || []).length === 1 && (out.prints_B || []).length === 0, { A: out.prints_A, B: out.prints_B });
+  const b = out.B_despues;
+  ok("El otro TPV también ve la mesa libre y sin pedidos abiertos", b?.estado === "libre" && abiertos(b) === 0 && !b?.vinculo, slim(b));
+  return c;
+}
+
 (async () => {
-  const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kills.forEach((f) => f()); process.exit(1); }, 520000);
+  const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kills.forEach((f) => f()); process.exit(1); }, 330000);
   const out = {};
   let A, B;
   try {
     A = await launch("tpvrecipok-2tpv-real-1", "A");
     B = await launch("tpvrecipok-2tpv-real-2", "B");
     await sleep(8000);
-    const prep = (X) => X.win.evaluate((TABLE) => {
+    const prep = (X) => X.win.evaluate(async (TABLE) => {
+      await setMesasInlineModeEnabled(true, { persist: false }); setMesasInlineView("transacciones", { persist: false });
       window.__saved = { on: localStorage.getItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY), delay: localStorage.getItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY) };
       localStorage.setItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY, "1");
       localStorage.setItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY, "8");
@@ -115,6 +135,7 @@ async function cleanTable(A, B) {
     await A.win.evaluate(async (T) => {
       const idx = parkedTickets.findIndex((t) => t.mesaUid === T && !t.paid && (t.items || []).length);
       window.__idxPagado = idx;
+      window.__idPagado = parkedTickets[idx]?.id;
       await markParkedTicketAsPaidByIndex(idx, { codigo: 'ZZTEST', idfactura: 0 });
     }, TABLE);
     console.log('STEP cobro confirmado, observando');
@@ -126,7 +147,7 @@ async function cleanTable(A, B) {
     out.prints_A = await A.win.evaluate(() => __prints.slice());
     out.prints_B = await B.win.evaluate(() => __prints.slice());
     const last = out.linea_tiempo[out.linea_tiempo.length - 1].A;
-    out.OK = last.estado === 'libre' && !last.etapa && !last.vinculo && (last.tickets || []).every((t) => /P/.test(t)) && out.prints_A.length === 1 && String(last.barra) === '(oculta)';
+    out.ultimo = last;
   } catch (e) {
     out.ERROR = String(e && e.message || e).slice(0, 300);
   } finally {
@@ -139,12 +160,15 @@ async function cleanTable(A, B) {
             if (window.__saved.delay === null) localStorage.removeItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY); else localStorage.setItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY, window.__saved.delay);
           }).catch(() => {});
         }
+        // el pedido de prueba marcado como cobrado (sin factura) tambien se borra del servidor, para no acumular
+        out.borradoPagado = await A.win.evaluate(async () => { const t = parkedTickets.find((x) => String(x.id) === String(window.__idPagado)); if (!t) return "no"; try { markParkedTicketAsDeleted(t); await apiDeleteParkedReservation(t); parkedTickets = parkedTickets.filter((x) => x !== t); saveParkedTicketsCache(parkedTickets); return "ok"; } catch (e) { return "err"; } }).catch(() => "err");
         out.limpiezaFinal = await cleanTable(A, B);
       }
     } catch (e) { out.limpiezaERR = String(e.message).slice(0, 120); }
     console.log(JSON.stringify(out, null, 1));
+    const verdict = require("./battery/verdict.js").emitVerdict(buildChecks(out));
     clearTimeout(hard);
     kills.forEach((f) => f());
-    process.exit(0);
+    process.exit(verdict.fails ? 1 : 0);
   }
 })();
