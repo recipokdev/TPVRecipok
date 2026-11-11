@@ -200,10 +200,12 @@ function buildChecks(out) {
       }
       await sleep(2500);
     } else {
-      await A.win.evaluate(async (ids) => {
+      await A.win.evaluate(async ([ids, RENAME]) => {
         cart = ids.map((id) => buildCartLine(findProductByBaseId(id), 2));
+        // Solo para sacar capturas del manual: nombres de muestra en pantalla (el catalogo de la demo copia el de un cliente real).
+        if (RENAME) cart.forEach((l, i) => { l.name = ["Café con leche", "Croissant"][i] || l.name; l.descripcion = l.name; l.secondaryName = ""; l.descripcion2 = ""; });
         renderCart();
-      }, prods.map((p) => p.id));
+      }, [prods.map((p) => p.id), !!process.env.TPV_SHOT_RENAME]);
     }
     await sleep(MESAS ? 6000 : 600); // en Mesas el autoguardado crea el pedido de la mesa
     out.boton_dividir_visible = await A.win.evaluate(() => !!document.getElementById("splitFromCartBtn") && !document.getElementById("splitFromCartBtn").classList.contains("hidden"));
@@ -244,6 +246,11 @@ function buildChecks(out) {
       cargado: getCurrentLoadedParkedTicket()?.name || null,
       cart: cart.map((l) => ({ n: String(l.name).slice(0, 14), q: l.qty })),
     }));
+    if (SHOTS && process.env.TPV_SHOT_RENAME) {
+      // nombres de muestra tambien tras recargar el pedido (al recargarlo vuelve el nombre del catalogo) y sin avisos en pantalla
+      await A.win.evaluate(() => { cart.forEach((l, i) => { l.name = ["Café con leche", "Croissant"][i] || l.name; l.descripcion = l.name; l.secondaryName = ""; l.descripcion2 = ""; }); renderCart(); document.querySelectorAll(".toast, .toast-item, #toastHost > *").forEach((e) => e.remove()); });
+      await sleep(500);
+    }
     if (SHOTS) await A.win.screenshot({ path: path.join(SHOTS, "split_3_parte1.png") });
     out.ids = out.tras_dividir.partes.map((p) => p.id);
 

@@ -82,7 +82,44 @@ Si no quieres que se te pregunte siempre, un administrador puede desactivarlo en
 
 Si un pedido se queda sin cobrar de un día para otro, el botón **Aparcados** se marca con el número en rojo, y una vez al día, con la caja abierta, el TPV te muestra un aviso. Abre la lista, entra en **Días anteriores** y cobra o elimina esos pedidos para tener la lista al día.
 
-## 6. Consejos
+## 6. Dividir la cuenta
+
+Sirve para cobrar un mismo pedido en **varias cuentas** (cada persona paga lo suyo, o a partes iguales), también fuera de Modo Mesas, por ejemplo en el mostrador o en un pedido «para llevar».
+
+> Esta función viene **apagada**. Un administrador la activa en **Opciones → Carrito → «Dividir cuenta en el TPV normal»** (ver el capítulo «Opciones»).
+
+Con ella activada, junto al total del carrito aparece el botón **Dividir**.
+
+@fig img/dividir-tpv-carrito.png | crop=1405,100,505,800 | width=48 | marks=1:1809,853 | Carrito con el botón «Dividir» junto al total.
+
+1. **Dividir.** Con productos en el carrito, púlsalo: el TPV guarda el pedido como aparcado y abre la ventana para repartirlo. Si ya tienes abierto un pedido desde **Aparcados**, el botón **Dividir** está en la cabecera del pedido.
+
+@fig img/dividir-tpv-asistente.png | crop=510,292,900,434 | marks=1:1318,424;2:680,462;3:1180,548;4:1329,684 | Ventana «Dividir ticket».
+
+1. **Partes.** En cuántas cuentas quieres dividir (de 2 a 12).
+2. **Modo.** *Por artículos (asignación manual)*: tú indicas cuántas unidades de cada producto van en cada cuenta. *Igualitario*: cada cuenta lleva la misma fracción de cada línea y las partes suman siempre el total exacto.
+3. **Columnas P1, P2…** En el modo por artículos, escribe o usa **+** y **−** para repartir las unidades. Debajo de cada producto se lee lo que aún no has asignado («Restante»).
+4. **Generar división.** Crea las cuentas separadas.
+
+Cada parte pasa a ser un pedido con el nombre del original y su número, por ejemplo «Ticket #12 (2/3)». Se abre la primera, con estas señales:
+
+@fig img/dividir-tpv-partes.png | crop=1405,100,505,780 | width=48 | marks=1:1521,180;2:1735,180;3:1460,278;4:1470,831;5:1470,860 | La parte 1 de 2 abierta.
+
+1. **← «Parte 1 de 2» →.** Qué parte tienes abierta y cuántas hay; las flechas pasan a la anterior o a la siguiente.
+2. **Dividir.** Vuelve a abrir la ventana (por ejemplo, para deshacer la división).
+3. **Cantidad y precio dividido.** En el modo igualitario, cada producto conserva su cantidad de siempre y debajo se lee «2 x 2,50 € ÷ 2».
+4. **Tu parte.** El total grande es lo que paga **esta cuenta**.
+5. **Cuenta completa / Por cobrar.** El total de todo el pedido y lo que queda por cobrar, que baja al cobrar cada parte.
+
+**Cobrar las partes.** Pulsa **Cobrar** como siempre. Al terminar una parte, el TPV abre **solo la siguiente** («Siguiente parte lista»); al cobrar la última aparece «División completada». Si sales sin cobrar todas, las partes que faltan quedan en **Aparcados** como pedidos «(2/2)», «(3/3)»… y las cobras cuando quieras desde allí.
+
+**Deshacer la división.** Con ninguna parte cobrada todavía, abre **Dividir**, pon **Partes = 1** y pulsa **Revertir división**: todo vuelve a ser un único pedido con las cantidades originales.
+
+El **stock** se reparte solo entre las partes: no tienes que hacer nada para que cuadre.
+
+En **Modo Mesas** la división funciona igual, con una explicación más detallada en el capítulo «Modo Mesas».
+
+## 7. Consejos
 
 - Pon un nombre reconocible al aparcar: la lista se entiende mucho mejor.
 - No cierres la jornada con pedidos olvidados: revisa **Días anteriores** de vez en cuando.

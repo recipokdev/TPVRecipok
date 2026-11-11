@@ -27,6 +27,7 @@ Con la sesión iniciada puedes ver y cambiar las Opciones **aunque la caja esté
 - **Desagrupar líneas.** Activado: cada toque sobre un producto crea una línea nueva, aunque sea el mismo producto. Desactivado: las unidades se suman en una sola línea.
 - **Descuentos manuales en carrito.** Permite aplicar descuento a una línea o a todo el carrito (el de línea tiene prioridad sobre el general).
 - **Imprimir ticket automáticamente al guardar/aparcar.** Al aparcar o actualizar un pedido (Mesas o TPV normal), el ticket se imprime al instante.
+- **Dividir cuenta en el TPV normal.** (Apagado de fábrica.) Muestra el botón **Dividir** junto al total del carrito y en los pedidos abiertos de Aparcados, para repartir la cuenta por artículos o a partes iguales y cobrar cada parte por separado, también fuera de Modo Mesas (por ejemplo «para llevar»). Se explica en el capítulo «Aparcados y pedidos».
 - **Alargar carrito.** Muestra un asa junto al carrito para arrastrar y hacerlo más ancho.
 - **Cliente por defecto del terminal.** El cliente que se usa en las ventas si no eliges otro. Se guarda en FacturaScripts para este TPV.
 - **Cliente al salir de un aparcado.** Al terminar de aparcar o cobrar un ticket que tenía un cliente distinto, indica a qué cliente vuelve el selector.
@@ -143,6 +144,7 @@ Así vienen las opciones principales en un TPV nuevo. Lo que tu administrador ca
 - **Orden de los productos:** *Manual (prioridad)*. Los demás: *Por defecto (FacturaScripts)*, *Referencia*, *Descripción* e *ID de producto*.
 - **Moneda:** *Automática* (la divisa por defecto de FacturaScripts; si es el euro, todo sale como siempre).
 - **Desagrupar líneas:** activado (cada toque crea una línea nueva).
+- **Dividir cuenta en el TPV normal:** apagado.
 - **Accesos rápidos de descuento:** 10, 20, 50 y 100 %.
 - **Aviso de stock al aparcar:** activado. **Preguntar por el stock al Borrar pendientes:** activado.
 - **Actualización automática:** avisos activados; se comprueba **cada hora** (otras opciones: 30 minutos, 2 horas, 4 horas).
