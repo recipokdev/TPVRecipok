@@ -1,4 +1,4 @@
-// run-two-tpv-mesa-in-use.js -- prueba MANUAL (no entra en npm test) del aviso suave "mesa en uso"
+// run-two-tpv-mesa-in-use.js -- prueba (entra en la bateria, nivel full) del aviso suave "mesa en uso"
 // con DOS TPV reales contra el demo (mesa M3 / M1). No guarda ningun pedido ni imprime nada.
 // Perfiles persistentes de run-two-tpv.js, sesion ya iniciada (nunca PIN). Requiere
 // parked_ops_pilot_slugs_mesas = ['demo'].
@@ -27,6 +27,21 @@ async function launch(dirName, label) {
   return { app, pid, win, label };
 }
 
+function buildChecks(out) {
+  const c = [];
+  const ok = (name, cond, extra) => c.push([name, !!cond, extra === undefined ? "" : typeof extra === "string" ? extra : JSON.stringify(extra)]);
+  const aviso = (t) => /tiene esta mesa abierta/.test(String(t || ""));
+  ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || "");
+  ok("Los dos TPV están en Modo Mesas", (out.modo || []).length === 2 && out.modo.every((m) => m.mesas), out.modo);
+  ok("Mismo agente en los dos TPV con la misma mesa: NO hay aviso (es la misma persona)", out.mismo_agente_A === "" && out.mismo_agente_B === "", { A: out.mismo_agente_A, B: out.mismo_agente_B });
+  ok("Con otro agente en la misma mesa, B ve el aviso con el nombre del agente de A", aviso(out.B_ve_a_A) && /TPV/.test(out.B_ve_a_A), out.B_ve_a_A);
+  ok("Con otro agente en la misma mesa, A ve el aviso con el nombre del agente de B", aviso(out.A_ve_a_B) && /Marcela/.test(out.A_ve_a_B), out.A_ve_a_B);
+  ok("Si B cambia de mesa, A deja de ver el aviso y B no lo ve en la otra mesa", out.A_tras_cambiar_B === "" && out.B_en_otra_mesa === "", { A: out.A_tras_cambiar_B, B: out.B_en_otra_mesa });
+  ok("Si B vuelve a la mesa, el aviso reaparece", aviso(out.B_vuelve), out.B_vuelve);
+  ok("Si B sale de las transacciones, el aviso se oculta en B y desaparece en A", out.B_sale_aviso_oculto === "" && out.A_tras_salir_B === "", { B: out.B_sale_aviso_oculto, A: out.A_tras_salir_B });
+  return c;
+}
+
 (async () => {
   const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kills.forEach((f) => f()); process.exit(1); }, 280000);
   const out = {};
@@ -35,6 +50,7 @@ async function launch(dirName, label) {
     A = await launch("tpvrecipok-2tpv-real-1", "A");
     B = await launch("tpvrecipok-2tpv-real-2", "B");
     await sleep(8000);
+    for (const X of [A, B]) await X.win.evaluate(async () => { await setMesasInlineModeEnabled(true, { persist: false }); setMesasInlineView("transacciones", { persist: false }); });
     const notice = (X) => X.win.evaluate(() => { const el = document.getElementById("mesaInUseNotice"); return el && !el.classList.contains("hidden") ? el.textContent : ""; });
     const sel = (X, uid) => X.win.evaluate((u) => { updateMesasSelectionFromContext({ tableUid: u }); syncTpvCartWithSelectedMesa(); }, uid);
     out.modo = await Promise.all([A, B].map((X) => X.win.evaluate(() => ({ mesas: MESAS_INLINE_ACTIVE, ops: parkedOpsIsEnabled(getCurrentSlugForReservations(), "mesas"), agente: String(currentAgent?.name || currentAgent?.nick || ""), term: String(currentTerminal?.name || "") }))));
@@ -48,7 +64,6 @@ async function launch(dirName, label) {
     // B pasa a ser otro agente: ahora si
     await B.win.evaluate(() => { currentAgent = { id: 2, codagente: "2", name: "Marcela" }; });
     await sleep(33000);
-    out.A_sola = "(ver siguiente)";
     out.B_ve_a_A = await notice(B);
     out.A_ve_a_B = await notice(A);
 
@@ -71,8 +86,9 @@ async function launch(dirName, label) {
     out.ERROR = String(e && e.message || e).slice(0, 300);
   } finally {
     console.log(JSON.stringify(out, null, 1));
+    const verdict = require("./battery/verdict.js").emitVerdict(buildChecks(out));
     clearTimeout(hard);
     kills.forEach((f) => f());
-    process.exit(0);
+    process.exit(verdict.fails ? 1 : 0);
   }
 })();

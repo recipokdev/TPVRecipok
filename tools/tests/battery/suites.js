@@ -94,6 +94,26 @@ const SUITES = [
     args: ["tools/tests/run-two-tpv-comanda.js"], timeoutMs: 360000,
   },
   {
+    id: "mesas-cambiar-ocupadas", area: C, level: "full", demo: true, title: "Modo Mesas: ir y volver entre dos mesas ocupadas (guardado por partes)",
+    what: "Con dos mesas con pedido, se pasa de una a otra varias veces como haría el camarero: cada mesa conserva SUS productos (ninguna pisa a la otra), en el TPV y en el servidor.",
+    args: ["tools/tests/run-switch-tables.js"], timeoutMs: 300000,
+  },
+  {
+    id: "mesas-cambiar-ocupadas-sin-ops", area: C, level: "full", demo: true, title: "Modo Mesas: ir y volver entre dos mesas ocupadas (guardado entero)",
+    what: "Lo mismo con el guardado entero, que es el que usan hoy los clientes.",
+    args: ["tools/tests/run-switch-tables.js", "--noops"], timeoutMs: 300000,
+  },
+  {
+    id: "mesas-mover-fusionar", area: E, level: "full", demo: true, title: "Mover y fusionar mesas con 2 TPV",
+    what: "Un TPV cambia el pedido de una mesa a otra y luego fusiona dos mesas mientras el otro TPV las tiene abiertas: el pedido queda solo en el destino, nada resucita en la mesa de origen y la fusión deja un único pedido con todo.",
+    args: ["tools/tests/run-two-tpv-move-merge.js"], timeoutMs: 360000,
+  },
+  {
+    id: "mesas-en-uso", area: E, level: "full", demo: true, title: "Aviso «mesa en uso» entre 2 TPV",
+    what: "Con la misma mesa abierta en dos TPV: sin aviso si es el mismo agente; con agentes distintos cada uno ve quién tiene la mesa; el aviso desaparece al cambiar de mesa o salir y reaparece al volver.",
+    args: ["tools/tests/run-two-tpv-mesa-in-use.js"], timeoutMs: 360000,
+  },
+  {
     id: "dividir-normal", area: D, level: "full", demo: true, title: "Dividir cuenta en TPV normal y cobrar las partes",
     what: "Divide un carrito en 2 partes, cobra la primera y comprueba que se abre sola la segunda; al terminar no quedan partes y el stock cuadra.",
     args: ["tools/tests/run-split-tpv-normal.js"], timeoutMs: 400000,

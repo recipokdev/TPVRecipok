@@ -1,4 +1,4 @@
-// run-two-tpv-move-merge.js -- prueba MANUAL (no entra en npm test) de CAMBIAR DE MESA y FUSIONAR
+// run-two-tpv-move-merge.js -- prueba (entra en la bateria, nivel full) de CAMBIAR DE MESA y FUSIONAR
 // MESAS con DOS TPV reales a la vez contra el demo (mesas M1 y M3, que deja limpias). Perfiles
 // persistentes de run-two-tpv.js, sesion ya iniciada (nunca PIN). Requiere
 // parked_ops_pilot_slugs_mesas = ['demo'].
@@ -8,7 +8,7 @@
 //      M1 (no en M3); B ve M3 libre y NO resucita el pedido; B abre un pedido nuevo en M3.
 //   3) A FUSIONA M3 (pedido de B) en M1: un solo pedido en M1 con todo, ninguno en M3; B queda con M3
 //      libre (no resucita lo fusionado).
-// Uso: node tools/tests/run-two-tpv-move-merge.js   (despues: node tools/tests/two-tpv-clean-m3.js)
+// Uso: node tools/tests/run-two-tpv-move-merge.js
 process.env.TPV_RUN_BACKGROUND = "1";
 const path = require("path"), os = require("os");
 const { _electron: electron } = require("playwright");
@@ -73,16 +73,44 @@ async function cleanTables(A, B) {
   return del;
 }
 
+function buildChecks(out) {
+  const c = [];
+  const ok = (name, cond, extra) => c.push([name, !!cond, extra === undefined ? "" : typeof extra === "string" ? extra : JSON.stringify(extra)]);
+  const n = out.nombres || [];
+  const items = (...idx) => idx.map((i) => `${n[i]}:1`).sort().join(",");
+  const solo = (arr, mesa, it) => Array.isArray(arr) && arr.length === 1 && arr[0].mesa === mesa && arr[0].items === it;
+  ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || "");
+  ok("Los dos TPV están en Modo Mesas", (out.modo || []).length === 2 && out.modo.every((m) => m.mesas), out.modo);
+  const p1 = out.paso1 || {};
+  ok("Paso 1: A crea un pedido en M3 y B lo ve igual (2 productos, un solo pedido)", p1.A_cart === items(0, 2) && p1.B_cart === items(0, 2) && solo(p1.servidor, "m3", items(0, 2)), p1);
+  const p2 = out.paso2 || {};
+  ok("Paso 2: A cambia el pedido de M3 a M1 y la operación se confirma", out.paso2_resultado === true);
+  ok("Paso 2: en el servidor el pedido queda SOLO en M1 con sus 2 productos (ninguno en M3)", solo(p2.servidor, "m1", items(0, 2)), p2.servidor);
+  ok("Paso 2: A y B ven el pedido en M1 y ninguno lo conserva en M3", solo(p2.A_local, "m1", items(0, 2)) && solo(p2.B_local, "m1", items(0, 2)), { A: p2.A_local, B: p2.B_local });
+  ok("Paso 2: B, que estaba en M3, la ve libre (el pedido movido NO resucita)", p2.B_cart_en_M3 === "", p2.B_cart_en_M3);
+  const p2b = out.paso2b || {};
+  ok("Paso 2: B abre un pedido nuevo en M3 y conviven los dos (M1 con 2 productos, M3 con 1)", Array.isArray(p2b.servidor) && p2b.servidor.length === 2 && p2b.servidor.some((x) => x.mesa === "m1" && x.items === items(0, 2)) && p2b.servidor.some((x) => x.mesa === "m3" && x.items === items(3)) && p2b.B_cart === items(3), p2b);
+  const p3 = out.paso3 || {};
+  ok("Paso 3: A fusiona M3 en M1 y la operación se confirma", out.paso3_resultado === true);
+  ok("Paso 3: en el servidor queda UN solo pedido, en M1, con los 3 productos", solo(p3.servidor, "m1", items(0, 2, 3)), p3.servidor);
+  ok("Paso 3: A y B ven un solo pedido en M1 con todo y ninguno en M3", solo(p3.A_local, "m1", items(0, 2, 3)) && solo(p3.B_local, "m1", items(0, 2, 3)), { A: p3.A_local, B: p3.B_local });
+  ok("Paso 3: B ve M3 libre (lo fusionado NO resucita)", p3.B_cart === "", p3.B_cart);
+  const pd = out.paso3_despues || {};
+  ok("Pasados 12 s (autoguardado de B) sigue habiendo un solo pedido y M3 sigue libre", solo(pd.servidor, "m1", items(0, 2, 3)) && pd.B_cart === "", pd);
+  return c;
+}
+
 (async () => {
-  const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kills.forEach((f) => f()); process.exit(1); }, 290000);
+  const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kills.forEach((f) => f()); process.exit(1); }, 330000);
   const out = {};
   let A, B;
   try {
     A = await launch("tpvrecipok-2tpv-real-1", "A");
     B = await launch("tpvrecipok-2tpv-real-2", "B");
     await sleep(8000);
-    const prep = (X) => X.win.evaluate(([M1, M3]) => {
-      window.__prods = products.filter((x) => Number(x.price) > 0);
+    const prep = (X) => X.win.evaluate(async ([M1, M3]) => {
+      await setMesasInlineModeEnabled(true, { persist: false }); setMesasInlineView("transacciones", { persist: false });
+      { const seen = new Set(); window.__prods = []; for (const p of products.filter((x) => Number(x.price) > 0 && !x.variants && !isOfferPackProductById(getProductBaseId(x)) && !(getProductAddonsForProduct(x) || []).length && !productHasDerivedStockMarker(x))) { const k = String(p.name).slice(0, 7); if (!seen.has(k)) { seen.add(k); __prods.push(p); } if (__prods.length >= 4) break; } }
       window.__of = window.fetch.bind(window);
       window.__sel = (u) => { updateMesasSelectionFromContext({ tableUid: u }); syncTpvCartWithSelectedMesa(); };
       window.__cart = () => cart.map((c) => String(c.name).slice(0, 7) + ":" + c.qty).sort().join(",");
@@ -98,12 +126,13 @@ async function cleanTables(A, B) {
     }, [M1, M3]);
     out.modo = [await prep(A), await prep(B)];
     out.limpiezaInicial = await cleanTables(A, B);
+    out.nombres = await A.win.evaluate(() => __prods.map((p) => String(p.name).slice(0, 7)));
 
     // 1) A crea el pedido en M3; B abre M3
     await A.win.evaluate((M3) => { __sel(M3); }, M3);
     await B.win.evaluate((M3) => { __sel(M3); }, M3);
     await sleep(800);
-    await A.win.evaluate(async () => { await addToCart(__prods[0]); });
+    await A.win.evaluate(() => { addToCart(__prods[0]); });
     await sleep(3500);
     await A.win.evaluate(() => { cart.push(buildCartLine(__prods[2], 1)); renderCart(); });
     await sleep(4500);
@@ -123,7 +152,7 @@ async function cleanTables(A, B) {
     };
 
     // B (en M3, ya libre) abre un pedido nuevo con otro producto
-    await B.win.evaluate(async () => { await addToCart(__prods[3]); });
+    await B.win.evaluate(() => { addToCart(__prods[3]); });
     await sleep(5000);
     out.paso2b = { servidor: await A.win.evaluate(() => __srv()), B_cart: await B.win.evaluate(() => __cart()) };
 
@@ -146,8 +175,9 @@ async function cleanTables(A, B) {
   } finally {
     try { if (A && B) out.limpiezaFinal = await cleanTables(A, B); } catch (e) { out.limpiezaERR = String(e.message).slice(0, 120); }
     console.log(JSON.stringify(out, null, 1));
+    const verdict = require("./battery/verdict.js").emitVerdict(buildChecks(out));
     clearTimeout(hard);
     kills.forEach((f) => f());
-    process.exit(0);
+    process.exit(verdict.fails ? 1 : 0);
   }
 })();
