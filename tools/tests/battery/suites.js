@@ -170,6 +170,11 @@ const SUITES = [
     args: ["tools/tests/run-two-tpv-ops.js"], timeoutMs: 360000,
   },
   {
+    id: "ops-2tpv-mesas-comanda", area: C, level: "full", demo: true, title: "Dos TPV tocando la misma mesa con la comanda automática encendida",
+    what: "Lo mismo que la prueba de cambios a la vez en Modo Mesas, pero con la comanda automática activa: las líneas ya enviadas a cocina se suben, se quitan y se editan desde los dos TPV a la vez. Comprueba que los dos TPV y el servidor acaban iguales, que todo lo añadido sale solo a cocina y que no queda nada pendiente.",
+    args: ["tools/tests/run-two-tpv-ops-auto.js"], timeoutMs: 360000,
+  },
+  {
     id: "ops-2tpv-normal", area: E, level: "full", demo: true, title: "Guardado por partes con 2 TPV en TPV normal: cambios a la vez en el mismo aparcado",
     what: "Lo mismo que la prueba anterior pero con un pedido aparcado del TPV normal (sin Modo Mesas).",
     args: ["tools/tests/run-two-tpv-ops-normal.js"], timeoutMs: 360000,

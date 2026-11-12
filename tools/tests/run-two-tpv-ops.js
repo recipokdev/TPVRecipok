@@ -11,6 +11,9 @@ const { _electron: electron } = require("playwright");
 const ROOT = path.resolve(__dirname, "..", "..");
 const kills = [];
 const NORMAL = process.argv.includes("--normal");
+// --auto: con la comanda automatica ENCENDIDA (espera de 2 s) y la impresora simulada anotando lo que "saldria" a cocina; asi las
+// lineas ya enviadas pasan a ser "en cocina" entre pasos (caso real: quitar o subir una linea ya enviada mientras otro TPV la edita).
+const AUTO = process.argv.includes("--auto");
 const TABLE = "tut-room-1::m3";
 const NAME = "ZZ ops normal " + Date.now();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -98,6 +101,18 @@ function buildChecks(out) {
     m.length === 2 && m.every((x) => x.mesas === !NORMAL && x.ops === true), m);
   ok("Paso 1: A crea el pedido con 1 producto y queda guardado en el servidor", (NORMAL || out.paso1_A?.cart === norm([0, 1])) && out.paso1_A?.srv === norm([0, 1]) && out.paso1_A?.pedidos === 1, out.paso1_A);
   ok("Paso 2: B abre el pedido y ve el mismo producto", out.paso2_B?.cart === norm([0, 1]), out.paso2_B);
+  if (AUTO) {
+    const conv = (k) => { const A = out[k + "_A"] || {}, B = out[k + "_B"] || {}; return !!A.cart && A.cart === B.cart && A.cart === A.srv && B.cart === B.srv && A.pedidos === 1 && B.pedidos === 1; };
+    ok("Con la comanda automática: paso 3 (cambios a la vez en líneas distintas): A, B y el servidor acaban iguales y con un solo pedido", conv("paso3"), { A: out.paso3_A, B: out.paso3_B });
+    ok("Con la comanda automática: paso 4 (+1 simultáneo a la misma línea): A, B y el servidor acaban iguales", conv("paso4"), { A: out.paso4_A, B: out.paso4_B });
+    ok("Con la comanda automática: paso 5 (A quita una línea ya enviada mientras B la sube): A, B y el servidor acaban iguales y con un solo pedido", conv("paso5"), { quitada: out.victim, A: out.paso5_A, B: out.paso5_B });
+    const prints = [].concat(out.impresoA || [], out.impresoB || []);
+    ok("La comanda automática funcionó (salió algo a cocina) y ninguna línea salió dos veces seguidas con lo mismo", prints.length > 0 && prints.every((p, i) => !(i > 0 && p.lines === prints[i - 1].lines && p.ret === prints[i - 1].ret && p.t - prints[i - 1].t < 1500)), prints);
+    ok("Al final no queda nada pendiente de enviar a cocina en ninguno de los dos TPV (todo lo añadido salió solo)", Array.isArray(out.pendientesFin) && out.pendientesFin.every((p) => Array.isArray(p) && p.length === 0), out.pendientesFin);
+    ok("Se usó de verdad el guardado por partes", [].concat(out.llamadasA || [], out.llamadasB || []).some((x) => /^save-parked-reservation-ops/.test(x)));
+    ok("La limpieza dejó el pedido/mesa sin restos", out.limpieza === "ok", out.limpieza);
+    return c;
+  }
   const e3 = norm([0, 2], [2, 1], [3, 1]);
   ok("Paso 3 (a la vez: A añade una línea nueva, B sube la primera y añade otra): se conserva todo en A, en B y en el servidor, sin duplicar el pedido", todoIgual("paso3", e3), { esperado: e3, ...resumen("paso3") });
   const e4 = norm([0, 4], [2, 1], [3, 1]);
@@ -130,9 +145,19 @@ function buildChecks(out) {
       const seen = new Set(); window.__prods = [];
       for (const p of products.filter((x) => Number(x.price) > 0 && !x.variants && !isOfferPackProductById(getProductBaseId(x)) && !(getProductAddonsForProduct(x) || []).length && !productHasDerivedStockMarker(x))) { const k = String(p.name).slice(0, 7); if (!seen.has(k)) { seen.add(k); __prods.push(p); } if (__prods.length >= 4) break; }
       // la comanda automatica del perfil (a veces a 8 s) imprimiria/marcaria como enviadas las lineas: se apaga y se simula la impresora
-      window.__saved = { on: localStorage.getItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY) };
-      localStorage.setItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY, "0");
-      printComandaWithContext = async () => ({ ok: true });
+      window.__saved = { on: localStorage.getItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY), delay: localStorage.getItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY) };
+      window.__prints = [];
+      if (P.AUTO) {
+        localStorage.setItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY, "1");
+        localStorage.setItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY, "2");
+        // sin impresora de comandas guardada en el perfil el TPV abre el selector de impresora y la comanda automatica se queda esperando
+        // (y bloqueada para siempre): se simula una impresora configurada
+        ensureComandaPrinterOrPrompt = async () => "Impresora simulada";
+        printComandaWithContext = async (o) => { window.__prints.push({ t: Date.now() % 100000, ret: !!o?.isReturn, lines: (o?.lines || []).map((l) => String(l.name).slice(0, 7) + ":" + l.qty).sort().join(",") }); return { ok: true }; };
+      } else {
+        localStorage.setItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY, "0");
+        printComandaWithContext = async () => ({ ok: true });
+      }
       window.__calls = [];
       const of = window.fetch.bind(window);
       window.fetch = (u, o) => {
@@ -147,7 +172,7 @@ function buildChecks(out) {
       const agg = (arr) => { const mm = {}; for (const l of arr || []) { const k = String(l.name).slice(0, 7); mm[k] = (mm[k] || 0) + (Number(l.qty) || 0); } return Object.entries(mm).map(([k, v]) => k + ":" + v).sort().join(","); };
       window.__state = () => { const t = parkedTickets[__find()]; return { idx: currentParkedTicketIndex, cart: agg(cart), srv: t ? agg(t.items) : "(no hay pedido)", pedidos: parkedTickets.filter(mine).length, id: t ? String(t.id) : null }; };
       return true;
-    }, { NORMAL, TABLE, NAME });
+    }, { NORMAL, TABLE, NAME, AUTO });
     await prep(A); await prep(B);
     // el guardado por partes se aprende del servidor al arrancar: esperar y leerlo
     await sleep(6000);
@@ -223,6 +248,12 @@ function buildChecks(out) {
     ]);
     await sleep(9000); await refresh(); await sleep(2500);
     await stateOf("paso5");
+    if (AUTO) {
+      await sleep(8000); // la comanda automatica de lo ultimo (2 s de espera + sondeo) tiene que haber salido
+      out.pendientesFin = await Promise.all([A, B].map((X) => X.win.evaluate(() => { const t = getCurrentLoadedParkedTicket(); return t ? getComandaDeltaLinesForTicket(t, cart).concat(getComandaReturnedLinesForTicket(t, cart)).map((l) => String(l.name).slice(0, 7) + ":" + l.qty) : "(sin pedido)"; })));
+    }
+    out.impresoA = await A.win.evaluate(() => window.__prints.slice());
+    out.impresoB = await B.win.evaluate(() => window.__prints.slice());
     out.llamadasA = await A.win.evaluate(() => window.__calls.slice());
     out.llamadasB = await B.win.evaluate(() => window.__calls.slice());
   } catch (e) {
@@ -230,7 +261,7 @@ function buildChecks(out) {
   } finally {
     // limpieza: borrar el pedido de prueba (y desvincular la mesa M3, igual que "Borrar mesa")
     try {
-      if (A && B) for (const X of [A, B]) await X.win.evaluate(() => { if (!window.__saved) return; if (window.__saved.on === null) localStorage.removeItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY); else localStorage.setItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY, window.__saved.on); }).catch(() => {});
+      if (A && B) for (const X of [A, B]) await X.win.evaluate(() => { if (!window.__saved) return; if (window.__saved.on === null) localStorage.removeItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY); else localStorage.setItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY, window.__saved.on); if (window.__saved.delay === null) localStorage.removeItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY); else localStorage.setItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY, window.__saved.delay); }).catch(() => {});
       if (A) {
         out.limpieza = await A.win.evaluate(async (P) => {
           cart = []; setCurrentParkedTicketIndex(null); renderCart();
