@@ -10948,6 +10948,16 @@ if (
   fail("Falta guardar el pedido vacio al quitar el cajero todas las lineas en Mesas (renderer.js getMesasAutoSaveIntent / parkCurrentCart allowEmptyItems)");
 }
 
+console.log("\n[SMOKE] Checking 2026-11-12 caja nueva empieza con 0 tickets (resetCashRuntimeForNewCaja reinicia numtickets)\n");
+if (
+  renderer.replace(/\r\n/g, "\n").includes("cashSession.cashMovementsTotal = 0;\n  // Caja nueva = 0 tickets") &&
+  renderer.replace(/\r\n/g, "\n").includes("  cashSession.numtickets = 0;\n\n  cashSession.expectedCashFS = null;")
+) {
+  ok("resetCashRuntimeForNewCaja reinicia numtickets: al cerrar la caja y abrir otra sin reiniciar el programa, el contador de tickets de la caja nueva arrancaba con el de la anterior (257 en vez de 0). Hallado por la bateria (run-caja-open-close.js)");
+} else {
+  fail("Falta reiniciar numtickets al abrir una caja nueva (renderer.js resetCashRuntimeForNewCaja)");
+}
+
 console.log("\n[SMOKE] Checking 2026-11-12 las instancias de prueba (TPV_MULTI_INSTANCE) no tocan accesos directos ni arranque automatico del equipo\n");
 if (
   main.replace(/\r\n/g, "\n").includes("// Instancias de prueba (TPV_MULTI_INSTANCE): nunca tocan los accesos directos del equipo.\n  if (IS_MULTI_INSTANCE) return;") &&

@@ -254,6 +254,11 @@ const SUITES = [
     what: "Un encargo con una variante y un producto con añadido de pago: el pedido, la factura y el stock real son correctos; el encargo de una tienda no se ve ni reserva stock en otra.",
     args: ["tools/tests/run-encargos-variants-stores.js"], timeoutMs: 500000,
   },
+  {
+    id: "caja-abrir-cerrar", area: B, level: "full", demo: true, title: "Cerrar y abrir la caja de verdad (la última: cierra la caja compartida de la demo y abre otra)",
+    what: "Cierra la caja de la demo por la pantalla real contando 70 €, comprueba el informe que saldría impreso (totales, esperado, contado y diferencia) y que FacturaScripts la deja cerrada; luego abre una caja nueva con 100 € y comprueba que empieza a cero y que un segundo TPV se engancha a ella. Si algo falla a medias, vuelve a abrir la caja. Deja una caja cerrada más en la demo; no lanzar mientras alguien prueba en ella.",
+    args: ["tools/tests/run-caja-open-close.js"], timeoutMs: 660000,
+  },
 ];
 
 module.exports = { SUITES, AREAS: [A, B, C, D, E, F, G] };

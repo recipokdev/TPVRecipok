@@ -51,14 +51,13 @@ El informe queda en `tools/tests/reports/battery-<fecha>/report.html` (y una cop
 
 ## Estado actual de la cobertura
 
-Con veredicto automático hoy: reglas internas del código, arranque con GitHub caído o con el servidor de la empresa sin responder (aviso, contador y botón «Entrar ahora»), contenido de lo impreso (ticket con empresa, líneas, descuentos, añadidos, packs, IVA, total, cambio y tipo de documento; informe de cierre de caja; comanda de cocina), venta/aparcados/opciones en TPV normal, movimientos de caja, cobro en efectivo y
+Con veredicto automático hoy: reglas internas del código, cierre y apertura real de la caja (informe impreso, FacturaScripts, caja compartida), arranque con GitHub caído o con el servidor de la empresa sin responder (aviso, contador y botón «Entrar ahora»), contenido de lo impreso (ticket con empresa, líneas, descuentos, añadidos, packs, IVA, total, cambio y tipo de documento; informe de cierre de caja; comanda de cocina), venta/aparcados/opciones en TPV normal, movimientos de caja, cobro en efectivo y
 con tarjeta, devoluciones (parcial y total) y totales de cierre, Modo Mesas básico (incluido pulsar Mesas mientras el TPV aún carga), comanda automática (1 y 2 TPV), cambiar entre mesas ocupadas, mover y fusionar mesas, aviso «mesa en uso», cobro que falla, cobrar una mesa y que el pedido cambie mientras se cobra, fallos de red al guardar, pedidos de la app de camareros, lo que ven dos TPV en la misma mesa (carrito, barra «Enviar comanda», deshacer), recuperación al volver (suspensión del equipo, catálogo vacío, caída de la pantalla), cambios a la vez en el mismo pedido con el guardado por partes (Mesas y TPV normal), cobro simultáneo del mismo pedido, quitar un plato, añadir otro y cobrar enseguida (el caso real de Asador, con guardado entero y por partes) y dos cajeros editando el mismo pedido, dividir mientras otro TPV edita, líneas que no se
 pierden con 2 TPV, dividir cuenta (TPV normal y Mesas, con y sin guardado por partes, con 1 y 2 TPV), carrera de stock con 2 TPV y
 Encargos (crear, editar, recoger, cancelar, cierre de caja, variantes, añadidos de pago, varias tiendas).
 
 Fuera de la batería (se lanzan con `npm run test:e2e:*`): `run-e2e-smoke.js`, `run-e2e-real-demo.js` y `run-e2e-customer-papelera.js`.
-Pendiente de crear: apertura y cierre real de la caja (la prueba de caja solo abre y cancela el cuadro de cierre, para no cerrar la caja
-compartida de la demo).
+La prueba `caja-abrir-cerrar` cierra y abre la caja compartida de la demo de verdad, así que va la última y deja una caja cerrada más en la demo (no se puede borrar).
 
 ## Relación con el `stable patch`
 

@@ -28603,6 +28603,8 @@ function resetCashRuntimeForNewCaja() {
 
   cashSession.cashSalesTotal = 0;
   cashSession.cashMovementsTotal = 0;
+  // Caja nueva = 0 tickets (antes se arrastraba el contador de la caja anterior al cerrar y abrir sin reiniciar el programa).
+  cashSession.numtickets = 0;
 
   cashSession.expectedCashFS = null;
   cashSession.encargos = null;
