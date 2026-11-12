@@ -10652,11 +10652,17 @@ function acquireLocalStockMutex(idProducto, maxWaitMs = 8000) {
   return Promise.race([prev.then(() => true), timeout]).then(() => {
     clearTimeout(timer);
     let done = false;
-    return () => {
+    let watchdog = null;
+    const release = () => {
       if (done) return;
       done = true;
+      clearTimeout(watchdog);
       releaseFn();
     };
+    // Red de seguridad: si quien la tiene nunca la suelta (una peticion colgada), se libera sola a los 30 s para que
+    // no retrase todos los cobros siguientes de ese producto.
+    watchdog = setTimeout(release, 30000);
+    return release;
   });
 }
 
@@ -45821,6 +45827,9 @@ function parseFsProductTimestamp(str) {
 // «Cobrar sin stock», FacturaScripts rechazaba la factura (422) y el cobro salia como «sin stock justo ahora». Se pide
 // desde unos segundos ANTES de la marca: repetir filas ya vistas es inofensivo (la fusion es idempotente).
 const PRODUCTS_DELTA_WATERMARK_OVERLAP_SEC = 3;
+// El solape solo hace falta en la consulta SIGUIENTE a un cambio de marca (un cambio tardio del mismo segundo ya existe 10 s
+// despues). Aplicarlo siempre repetiria cada 10 s todas las filas del ultimo segundo (miles tras una importacion masiva).
+let __productsDeltaOverlapPending = false;
 function shiftFsProductWatermark(str, seconds) {
   const ts = parseFsProductTimestamp(str);
   if (ts === null) return str;
@@ -45900,10 +45909,12 @@ async function refreshProductsStockOnly() {
       ? await fetchApiResourceWithParams("productos", { limit: 0 })
       : await fetchApiResourceWithParams("productos", {
           limit: 0,
-          "filter[actualizado_gt]": shiftFsProductWatermark(
-            __productsDeltaWatermark,
-            PRODUCTS_DELTA_WATERMARK_OVERLAP_SEC,
-          ),
+          "filter[actualizado_gt]": __productsDeltaOverlapPending
+            ? shiftFsProductWatermark(
+                __productsDeltaWatermark,
+                PRODUCTS_DELTA_WATERMARK_OVERLAP_SEC,
+              )
+            : __productsDeltaWatermark,
         });
     const list = Array.isArray(productosData) ? productosData : [];
 
@@ -45920,7 +45931,11 @@ async function refreshProductsStockOnly() {
         latestRaw = p.actualizado;
       }
     });
-    if (latestRaw) __productsDeltaWatermark = latestRaw;
+    __productsDeltaOverlapPending = false;
+    if (latestRaw && latestRaw !== __productsDeltaWatermark) {
+      __productsDeltaWatermark = latestRaw;
+      __productsDeltaOverlapPending = true;
+    }
     if (needsFullSync) __productsLastFullSyncAt = Date.now();
 
     const stockById = new Map();

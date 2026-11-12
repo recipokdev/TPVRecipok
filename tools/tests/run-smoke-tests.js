@@ -3322,8 +3322,8 @@ mustContain(
   const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
   if (
     scoped.includes('fetchApiResourceWithParams("productos", { limit: 0 })') &&
-    scoped.includes('"filter[actualizado_gt]": shiftFsProductWatermark(') && scoped.includes('__productsDeltaWatermark,') &&
-    scoped.includes("if (latestRaw) __productsDeltaWatermark = latestRaw;")
+    scoped.includes('"filter[actualizado_gt]": __productsDeltaOverlapPending') && scoped.includes('shiftFsProductWatermark(') &&
+    scoped.includes("__productsDeltaWatermark = latestRaw;")
   ) {
     ok(
       "refreshProductsStockOnly fetches only products changed since the last known watermark instead of the full catalog every time",
@@ -10986,7 +10986,7 @@ console.log("\n[SMOKE] Checking 2026-11-12 el refresco de productos pide desde u
       fn.shiftFsProductWatermark("11-11-2026 12:41:40", 3) === "11-11-2026 12:41:37" &&
       fn.shiftFsProductWatermark("01-03-2026 00:00:01", 3) === "28-02-2026 23:59:58" &&
       fn.shiftFsProductWatermark("basura", 3) === "basura" &&
-      rn.includes('"filter[actualizado_gt]": shiftFsProductWatermark(\n            __productsDeltaWatermark,\n            PRODUCTS_DELTA_WATERMARK_OVERLAP_SEC,');
+      rn.includes('"filter[actualizado_gt]": __productsDeltaOverlapPending') && rn.includes("let __productsDeltaOverlapPending = false;");
   } catch (e) {
     good = false;
   }
@@ -11023,6 +11023,7 @@ if (
   renderer.includes("function acquireLocalStockMutex(idProducto, maxWaitMs = 8000) {") &&
   renderer.includes("const releaseLocal = await acquireLocalStockMutex(idProd, 8000);") &&
   renderer.includes("releaseLocal();") &&
+  renderer.includes("watchdog = setTimeout(release, 30000);") &&
   renderer.includes("localReleases.push(await acquireLocalStockMutex(id, Math.max(0, localDeadline - Date.now())));") &&
   renderer.includes("localReleases.forEach((r) => { try { r(); } catch {} });")
 ) {
