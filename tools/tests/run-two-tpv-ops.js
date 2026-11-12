@@ -154,7 +154,18 @@ function buildChecks(out) {
     const flags = (X) => X.win.evaluate((P) => ({ mesas: MESAS_INLINE_ACTIVE, ops: parkedOpsIsEnabled(getCurrentSlugForReservations(), P.NORMAL ? "tpv" : "mesas") }), { NORMAL });
     out.modo = [await flags(A), await flags(B)];
     out.nombres = await A.win.evaluate(() => __prods.map((p) => String(p.name).slice(0, 7)));
-    if (!NORMAL) out.limpiezaInicial = await cleanTable(A, B);
+    if (!NORMAL) {
+      // La prueba anterior (otra suite sobre la misma mesa) puede dejar un guardado tardio que "resucita" el pedido justo
+      // despues de su limpieza: se limpia y se vuelve a mirar hasta que la mesa y los dos carritos estan vacios.
+      out.limpiezaInicial = 0;
+      for (let pasada = 0; pasada < 4; pasada++) {
+        out.limpiezaInicial += await cleanTable(A, B);
+        await sleep(6000);
+        const resto = await Promise.all([A, B].map((X) => X.win.evaluate((T) => ({ cart: cart.length, pedidos: parkedTickets.filter((t) => !t.paid && t.mesaUid === T).length }), TABLE).catch(() => ({ cart: -1, pedidos: -1 }))));
+        out.restoInicial = resto;
+        if (resto.every((r) => r.cart === 0 && r.pedidos === 0)) break;
+      }
+    }
     if (out.nombres.length < 4) throw new Error("No hay 4 productos sencillos en el demo");
     const both = (fn, ...a) => Promise.all([A.win.evaluate(fn, ...a), B.win.evaluate(fn, ...a)]);
     const refresh = async () => { await both(async () => { await refreshRemoteParkedReservationsOnly(); }); };

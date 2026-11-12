@@ -65,6 +65,8 @@ async function launch(dirName, label) {
       if (adv) {
         await w.evaluate(() => document.getElementById("encNextBtn").click());
         for (const k of adv.split("")) await w.evaluate((k) => document.querySelector(`#encKeypad [data-key="${k}"]`).click(), k);
+        // las formas de pago del asistente se cargan aparte: esperar a que este el boton antes de pulsarlo
+        await w.waitForFunction((m) => [...document.querySelectorAll("#encMethods button")].some((x) => new RegExp(m, "i").test(x.textContent)), method, { timeout: 30000 });
         await w.evaluate((m) => { [...document.querySelectorAll("#encMethods button")].find((x) => new RegExp(m, "i").test(x.textContent)).click(); }, method);
         await w.evaluate(() => document.getElementById("encSaveBtn").click());
       } else await w.evaluate(() => document.getElementById("encSaveNoAdvBtn").click());

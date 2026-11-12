@@ -113,6 +113,9 @@ async function findWindow(app) {
 
     // R5 sin articulos y sin remedio -> una recarga, no en bucle, nunca con carrito
     await win.evaluate(() => { window.__fetchMode = "empty"; localStorage.removeItem("tpv_boot_snapshot_v1"); try { for (const k of Object.keys(localStorage)) if (/boot.?snapshot/i.test(k)) localStorage.removeItem(k); } catch {} products = []; localStorage.removeItem("tpv_resume_reload_at"); });
+    // Sin trabajo a medias: una suite anterior puede haber dejado el perfil en Modo Mesas o con un carrito, y con eso
+    // el TPV (con razon) no recarga la ventana.
+    await win.evaluate(async () => { cart = []; try { setCurrentParkedTicketIndex(null); } catch {} try { await setMesasInlineModeEnabled(false, { persist: false }); } catch {} renderCart(); });
     r = await win.evaluate(() => window.__handlePowerResume({ settleMs: 100, retryMs: 300, dryRun: true }));
     const r2 = await win.evaluate(() => window.__handlePowerResume({ settleMs: 100, retryMs: 300, dryRun: true }));
     await win.evaluate(() => { localStorage.removeItem("tpv_resume_reload_at"); cart = [{ id: 1, name: "x", price: 1, qty: 1 }]; products = []; });
