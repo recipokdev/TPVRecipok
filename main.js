@@ -292,6 +292,8 @@ function ensureOneShortcut(shortcutPath, exePath, { createIfMissing }) {
 function ensureAppShortcuts() {
   if (process.platform !== "win32") return;
   if (!app.isPackaged) return;
+  // Instancias de prueba (TPV_MULTI_INSTANCE): nunca tocan los accesos directos del equipo.
+  if (IS_MULTI_INSTANCE) return;
   try {
     const exePath = app.getPath("exe");
     if (!exePath || !fs.existsSync(exePath)) return; // sin exe no hay nada que hacer
@@ -3000,6 +3002,7 @@ if (process.platform === "win32") {
 
 function cleanOldAutoStartIfWrong() {
   if (!app.isPackaged) return;
+  if (IS_MULTI_INSTANCE) return; // instancia de prueba: no toca el arranque automatico del equipo
 
   try {
     const cur = app.getLoginItemSettings();
@@ -3032,6 +3035,9 @@ function cleanOldAutoStartIfWrong() {
 function configureAutoStart() {
   if (!app.isPackaged) {
     return { ok: false, reason: "not-packaged" };
+  }
+  if (IS_MULTI_INSTANCE) {
+    return { ok: false, reason: "multi-instance" }; // instancia de prueba: no toca el arranque automatico del equipo
   }
 
   const cfg = readCfg();

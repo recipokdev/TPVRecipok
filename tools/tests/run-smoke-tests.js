@@ -10948,6 +10948,17 @@ if (
   fail("Falta guardar el pedido vacio al quitar el cajero todas las lineas en Mesas (renderer.js getMesasAutoSaveIntent / parkCurrentCart allowEmptyItems)");
 }
 
+console.log("\n[SMOKE] Checking 2026-11-12 las instancias de prueba (TPV_MULTI_INSTANCE) no tocan accesos directos ni arranque automatico del equipo\n");
+if (
+  main.replace(/\r\n/g, "\n").includes("// Instancias de prueba (TPV_MULTI_INSTANCE): nunca tocan los accesos directos del equipo.\n  if (IS_MULTI_INSTANCE) return;") &&
+  main.includes("if (IS_MULTI_INSTANCE) return; // instancia de prueba: no toca el arranque automatico del equipo") &&
+  main.includes('return { ok: false, reason: "multi-instance" };')
+) {
+  ok("ensureAppShortcuts, cleanOldAutoStartIfWrong y configureAutoStart no hacen nada con TPV_MULTI_INSTANCE: un TPV empaquetado de pruebas (puerta de actualizacion) reescribia los accesos directos y la entrada de arranque automatico del equipo apuntandolos a su exe temporal");
+} else {
+  fail("Falta la proteccion de accesos directos / arranque automatico para instancias de prueba (main.js IS_MULTI_INSTANCE en ensureAppShortcuts, cleanOldAutoStartIfWrong y configureAutoStart)");
+}
+
 console.log("\n[SMOKE] Checking 2026-11-11 stock: la reserva y la factura del mismo producto se esperan entre si dentro del TPV (antes se perdia una resta al cobrar enseguida tras añadir)\n");
 if (
   renderer.includes("function acquireLocalStockMutex(idProducto, maxWaitMs = 8000) {") &&

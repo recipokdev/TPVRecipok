@@ -63,6 +63,11 @@ const SUITES = [
     args: ["tools/tests/run-ticket-print.js"], timeoutMs: 200000,
   },
   {
+    id: "puerta-actualizacion", area: B, level: "full", title: "Arranque con GitHub caído o sin respuesta del servidor de la empresa",
+    what: "Arranca un TPV empaquetado de pruebas contra un «GitHub» falso: con un 504 sale el aviso con contador y el botón «Entrar ahora» a los 10 s, no se abre solo con la versión vieja y al pulsar abre en segundos; si GitHub vuelve, se abre solo; sin novedades abre directo; y con el servidor de la empresa caído también hay contador y botón. No toca la demo ni los accesos directos del equipo. Necesita internet.",
+    args: ["tools/tests/run-update-gate.js"], timeoutMs: 480000,
+  },
+  {
     id: "e2e-mesas", area: C, level: "standard", title: "Modo Mesas: abrir, cambiar de mesa y cerrar",
     what: "Con el TPV real: entrar y salir de Modo Mesas y cambiar entre mesas con el selector rápido.",
     args: ["tools/tests/run-e2e-mesas-mode.js"], timeoutMs: 300000,
