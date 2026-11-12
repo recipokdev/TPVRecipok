@@ -57419,6 +57419,52 @@ function applyStockQtyToLocalProducts(product, qty) {
   updateRenderedProductStocks?.();
 }
 
+// Rastro de las ediciones MANUALES de stock (2026-11-12). Editar el stock a mano (Opciones/ficha -> numpad) escribe el
+// valor directo en FacturaScripts sin factura ni reserva de por medio, asi que el detector de descuadres del servidor
+// lo veia como "inexplicado" (Asador, pollo: 8,5 -> 3,5 y 0 -> 10). Ahora queda anotado en el registro de la caja
+// (sale en el cierre, como los cambios de precio) y como evento al servidor (audit_log, sin limite de 5 min).
+function buildManualStockChangeInfo(product, before, after, row) {
+  const name = String(product?.referencia || product?.name || "Producto").trim();
+  const b = Number(before);
+  const a = Number(after);
+  const fmt = (n) => (Number.isFinite(n) ? String(Math.round(n * 1000) / 1000).replace(".", ",") : "?");
+  const diff = Number.isFinite(a) && Number.isFinite(b) ? Math.round((a - b) * 1000) / 1000 : null;
+  return {
+    name,
+    text: `${name} | ${fmt(b)} → ${fmt(a)}`,
+    message: `Stock editado a mano: ${name} ${fmt(b)} → ${fmt(a)}`,
+    detail: {
+      idproducto: Number(product?.baseProductId || product?.id || row?.idproducto || 0) || null,
+      referencia: String(row?.referencia || product?.referencia || "").trim(),
+      antes: Number.isFinite(b) ? b : null,
+      despues: Number.isFinite(a) ? a : null,
+      diferencia: diff,
+      almacen: String(row?.codalmacen || "").trim(),
+    },
+  };
+}
+
+async function logManualStockChange(product, before, after, row) {
+  try {
+    const info = buildManualStockChangeInfo(product, before, after, row);
+    const idcaja = getCajaIdSafe?.() || null;
+    if (idcaja) {
+      const ctx = getLogCtx?.() || { idcaja };
+      await appendCajaAutoLogLineForId(idcaja, buildCajaLogLineWith(ctx, "Cambio de stock manual", info.text));
+    }
+    reportClientEvent(
+      "stock",
+      "manual-edit",
+      info.message,
+      { ...info.detail, usuario: String(getLoginUser?.() || "").trim(), agente: String(currentAgent?.name || currentAgent?.nick || "").trim() },
+      "warn",
+      { trail: true },
+    );
+  } catch (e) {
+    console.warn("[STOCKEDIT] no pude dejar rastro:", e?.message || e);
+  }
+}
+
 async function openProductStockEditFlow(product) {
   if (!isAdminUser()) {
     toast("Solo administradores.", "warn", "Stock");
@@ -57479,6 +57525,7 @@ async function openProductStockEditFlow(product) {
     await updateStockRowCantidad(stockRow, roundedNext);
     applyStockQtyToLocalProducts(product, roundedNext);
     toast("Stock actualizado correctamente.", "ok", "Stock");
+    logManualStockChange(product, currentQty, roundedNext, stockRow).catch(() => {});
   } catch (e) {
     console.error("Error actualizando stock:", e);
     toast(e?.message || "No se pudo actualizar el stock.", "err", "Stock");

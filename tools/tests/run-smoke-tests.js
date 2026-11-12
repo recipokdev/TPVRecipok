@@ -10948,6 +10948,31 @@ if (
   fail("Falta guardar el pedido vacio al quitar el cajero todas las lineas en Mesas (renderer.js getMesasAutoSaveIntent / parkCurrentCart allowEmptyItems)");
 }
 
+console.log("\n[SMOKE] Checking 2026-11-12 las ediciones manuales de stock dejan rastro (registro de caja + evento al servidor)\n");
+{
+  const rn = renderer.replace(/\r\n/g, "\n");
+  const a = rn.indexOf("function buildManualStockChangeInfo(");
+  const b = rn.indexOf("async function logManualStockChange(");
+  let good = false;
+  try {
+    const info = new Function(rn.slice(a, b) + "; return buildManualStockChangeInfo;")()({ referencia: "3", name: "Pollo", baseProductId: 12 }, 8.5, 3.5, { idproducto: 12, referencia: "3", codalmacen: "ALG" });
+    good =
+      info.message === "Stock editado a mano: 3 8,5 → 3,5" &&
+      info.text === "3 | 8,5 → 3,5" &&
+      info.detail.antes === 8.5 && info.detail.despues === 3.5 && info.detail.diferencia === -5 && info.detail.idproducto === 12 && info.detail.almacen === "ALG" &&
+      rn.includes('logManualStockChange(product, currentQty, roundedNext, stockRow).catch(() => {});') &&
+      rn.includes('"Cambio de stock manual", info.text') &&
+      rn.includes('"manual-edit",') && rn.includes("{ trail: true },");
+  } catch (e) {
+    good = false;
+  }
+  if (good) {
+    ok("openProductStockEditFlow deja rastro de cada edicion manual de stock (logManualStockChange: linea «Cambio de stock manual» en el registro de la caja y evento stock/manual-edit al servidor con antes, despues y usuario; probado el texto con 8,5 -> 3,5): Asador (pollo, 11-nov) tenia dos cambios a mano que el detector de descuadres marcaba como «inexplicado»");
+  } else {
+    fail("Falta el rastro de las ediciones manuales de stock (renderer.js buildManualStockChangeInfo / logManualStockChange / openProductStockEditFlow)");
+  }
+}
+
 console.log("\n[SMOKE] Checking 2026-11-12 el refresco de productos pide desde unos segundos ANTES de la marca (cambios del mismo segundo no se perdian)\n");
 {
   const rn = renderer.replace(/\r\n/g, "\n");
