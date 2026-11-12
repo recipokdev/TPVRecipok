@@ -45814,6 +45814,21 @@ function parseFsProductTimestamp(str) {
   return Number.isFinite(t) ? t : null;
 }
 
+// Marca de agua con solape (2026-11-12). 'actualizado' llega en segundos y el filtro es "mayor que": un cambio que cae
+// en el MISMO segundo que la marca ya guardada nunca se volvia a pedir. Real (Zoen, 11-nov 12:41:40): una venta sin stock
+// pone ventasinstock=1 en el producto, factura y lo vuelve a poner a 0 en el mismo segundo en que el refresco ya habia
+// leido el "1"; la marca quedo en 12:41:40, el "0" no se volvio a leer y 7 minutos despues el TPV se saltaba el aviso
+// «Cobrar sin stock», FacturaScripts rechazaba la factura (422) y el cobro salia como «sin stock justo ahora». Se pide
+// desde unos segundos ANTES de la marca: repetir filas ya vistas es inofensivo (la fusion es idempotente).
+const PRODUCTS_DELTA_WATERMARK_OVERLAP_SEC = 3;
+function shiftFsProductWatermark(str, seconds) {
+  const ts = parseFsProductTimestamp(str);
+  if (ts === null) return str;
+  const d = new Date(ts - Math.max(0, Number(seconds) || 0) * 1000);
+  const p2 = (n) => String(n).padStart(2, "0");
+  return `${p2(d.getDate())}-${p2(d.getMonth() + 1)}-${d.getFullYear()} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+}
+
 // Productos NUEVOS creados en FacturaScripts con el TPV ya abierto (2026-10-23): este refresco solo
 // actualiza el stock de los productos que el TPV YA tiene en su catalogo, asi que uno nuevo no aparecia
 // hasta reiniciar el programa -- ni para venderlo, ni para reservar/liberar su stock (Asador el Gallo:
@@ -45885,7 +45900,10 @@ async function refreshProductsStockOnly() {
       ? await fetchApiResourceWithParams("productos", { limit: 0 })
       : await fetchApiResourceWithParams("productos", {
           limit: 0,
-          "filter[actualizado_gt]": __productsDeltaWatermark,
+          "filter[actualizado_gt]": shiftFsProductWatermark(
+            __productsDeltaWatermark,
+            PRODUCTS_DELTA_WATERMARK_OVERLAP_SEC,
+          ),
         });
     const list = Array.isArray(productosData) ? productosData : [];
 

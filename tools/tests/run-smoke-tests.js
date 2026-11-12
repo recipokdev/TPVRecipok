@@ -3322,7 +3322,7 @@ mustContain(
   const scoped = idx >= 0 && closeIdx >= 0 ? renderer.slice(idx, closeIdx) : "";
   if (
     scoped.includes('fetchApiResourceWithParams("productos", { limit: 0 })') &&
-    scoped.includes('"filter[actualizado_gt]": __productsDeltaWatermark') &&
+    scoped.includes('"filter[actualizado_gt]": shiftFsProductWatermark(') && scoped.includes('__productsDeltaWatermark,') &&
     scoped.includes("if (latestRaw) __productsDeltaWatermark = latestRaw;")
   ) {
     ok(
@@ -10946,6 +10946,30 @@ if (
   ok("El autoguardado de Mesas guarda el pedido VACIO cuando el cajero ha quitado todas sus lineas (getMesasAutoSaveIntent emptied + parkCurrentCart allowEmptyItems): sin esto la linea quitada seguia en el servidor con su stock reservado y ~15 s despues el sondeo remoto imprimia a cocina el plato ya quitado. Hallado por la bateria (run-comanda-auto.js, seccion E)");
 } else {
   fail("Falta guardar el pedido vacio al quitar el cajero todas las lineas en Mesas (renderer.js getMesasAutoSaveIntent / parkCurrentCart allowEmptyItems)");
+}
+
+console.log("\n[SMOKE] Checking 2026-11-12 el refresco de productos pide desde unos segundos ANTES de la marca (cambios del mismo segundo no se perdian)\n");
+{
+  const rn = renderer.replace(/\r\n/g, "\n");
+  const a = rn.indexOf("function parseFsProductTimestamp(str)");
+  const b = rn.indexOf("// Productos NUEVOS creados en FacturaScripts con el TPV ya abierto (2026-10-23)");
+  let good = false;
+  try {
+    const fn = new Function(rn.slice(a, b) + "; return { shiftFsProductWatermark, PRODUCTS_DELTA_WATERMARK_OVERLAP_SEC };")();
+    good =
+      fn.PRODUCTS_DELTA_WATERMARK_OVERLAP_SEC >= 2 &&
+      fn.shiftFsProductWatermark("11-11-2026 12:41:40", 3) === "11-11-2026 12:41:37" &&
+      fn.shiftFsProductWatermark("01-03-2026 00:00:01", 3) === "28-02-2026 23:59:58" &&
+      fn.shiftFsProductWatermark("basura", 3) === "basura" &&
+      rn.includes('"filter[actualizado_gt]": shiftFsProductWatermark(\n            __productsDeltaWatermark,\n            PRODUCTS_DELTA_WATERMARK_OVERLAP_SEC,');
+  } catch (e) {
+    good = false;
+  }
+  if (good) {
+    ok("refreshProductsStockOnly pide filter[actualizado_gt] con la marca MENOS 3 s (shiftFsProductWatermark, probada con fechas normales, cambio de dia y texto raro): antes un cambio del mismo segundo que la marca no se volvia a leer, el TPV se quedaba con ventasinstock=1 de una venta sin stock y se saltaba el aviso de cobrar sin stock (Zoen 11-nov, factura rechazada con 422)");
+  } else {
+    fail("Falta el solape de la marca de agua del refresco de productos (renderer.js shiftFsProductWatermark / PRODUCTS_DELTA_WATERMARK_OVERLAP_SEC)");
+  }
 }
 
 console.log("\n[SMOKE] Checking 2026-11-12 caja nueva empieza con 0 tickets (resetCashRuntimeForNewCaja reinicia numtickets)\n");
