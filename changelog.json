@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "ARREGLO: en Modo Mesas con dos TPV en la misma mesa (con el guardado entero de siempre), añadir varios productos seguidos en un TPV podía hacer que el otro TPV, al guardar, borrara del pedido el último producto añadido. Ahora el segundo TPV reconoce que ese producto lo añadió el otro y lo conserva."
+      ]
     },
     {
       "version": "0.2.63",

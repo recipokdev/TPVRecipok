@@ -10901,6 +10901,18 @@ if (
   fail("Falta la guarda entre Cobrar y Vaciar/Salir (renderer.js isClearingCartNow / clearCartBtn / onPayButtonClick)");
 }
 
+console.log("\n[SMOKE] Checking 2026-11-13 la base de la fusion en 3 vias no avanza con lo ajeno que no se incorporo\n");
+if (
+  renderer.includes("const oldBase = prevLastRemoteItems.get(lrId);") &&
+  renderer.includes("if (!sameAsLocal && Array.isArray(oldBase) && oldBase.length) baseToStore = oldBase;") &&
+  renderer.includes("nextLastRemoteItems.set(lrId, JSON.parse(JSON.stringify(baseToStore)));") &&
+  !renderer.includes("nextLastRemoteItems.set(lrId, JSON.parse(JSON.stringify(ticket.items)));")
+) {
+  ok("La base de la fusion en 3 vias solo avanza si lo del servidor es el eco de mi copia o se incorporo (Mesas con 2 TPV perdia el ultimo producto)");
+} else {
+  fail("Falta que la base de la fusion en 3 vias no avance con cambios ajenos no incorporados (renderer.js syncParkedTicketsFromRemote, nextLastRemoteItems)");
+}
+
 console.log("\n[SMOKE] Checking 2026-10-27 dos cajeros en el mismo aparcado: fusion en 3 vias y lineas quitadas\n");
 if (
   renderer.includes("function handleLoadedTicketPaidElsewhere(paidTicket, baseItems = null) {") &&

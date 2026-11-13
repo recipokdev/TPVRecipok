@@ -43439,7 +43439,21 @@ function syncParkedTicketsFromRemote(list) {
       try {
         const lrId = String(ticket?.id || ticket?.ticketId || "");
         if (lrId && Array.isArray(ticket?.items)) {
-          nextLastRemoteItems.set(lrId, JSON.parse(JSON.stringify(ticket.items)));
+          // Real (bateria, 2 TPV en Mesas con guardado entero, 2026-11-13): si este TPV prefirio su copia local y NO
+          // incorporo lo que traia el servidor (p. ej. el cuarto producto que acababa de añadir el otro TPV), no hay que
+          // anotarlo como "lo ultimo que vi del servidor": en el siguiente sondeo la fusion en 3 vias lo usaba como base,
+          // veia ese producto como una linea que YO habia quitado y, al guardar, lo borraba del servidor. Solo se avanza
+          // la base si lo del servidor coincide con mi copia (es el eco de mi propio guardado); si difiere y no lo
+          // incorpore, se conserva la base anterior para que el cambio ajeno aun cuente como ajeno.
+          let baseToStore = ticket.items;
+          if (shouldPreferLocalSnapshot) {
+            const oldBase = prevLastRemoteItems.get(lrId);
+            const sameAsLocal =
+              JSON.stringify(normalizeTicketLinesForCompare(ticket.items)) ===
+              JSON.stringify(normalizeTicketLinesForCompare(prevItems));
+            if (!sameAsLocal && Array.isArray(oldBase) && oldBase.length) baseToStore = oldBase;
+          }
+          nextLastRemoteItems.set(lrId, JSON.parse(JSON.stringify(baseToStore)));
         }
       } catch {}
 
