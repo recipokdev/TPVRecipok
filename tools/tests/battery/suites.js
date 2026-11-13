@@ -186,7 +186,7 @@ const SUITES = [
   },
   {
     id: "editar-y-cobrar-2tpv", area: E, level: "full", demo: true, title: "Caso real de Asador: un TPV quita y añade un plato y cobra enseguida, y dos cajeros tocando el mismo pedido",
-    what: "COBRA DE VERDAD en la demo (2 facturas de prueba). Un TPV aparca, otro lo abre, quita un plato, añade otro y cobra a los 150 ms: sale una sola factura y un solo pedido cobrado con las líneas finales, en guardado entero (el de Asador) y por partes. Después, dos cajeros editan el mismo pedido a la vez: convergen, nada resucita. El stock cuadra y queda restaurado.",
+    what: "COBRA DE VERDAD en la demo (2 facturas de prueba). Un TPV aparca, otro lo abre, quita un plato, añade otro y cobra a los 150 ms: sale una sola factura y un solo pedido cobrado con las líneas finales, en guardado entero (el de Asador) y por partes. Después, dos cajeros editan el mismo pedido a la vez: con el guardado por partes convergen siempre y se suman las dos ediciones (comprobación obligatoria); con el guardado entero antiguo es un hueco conocido e intermitente (el guardado de uno pisa al del otro), por eso esa parte sale solo como informativa. El stock cuadra y queda restaurado.",
     args: ["tools/tests/run-two-tpv-edit-and-pay.js"], timeoutMs: 480000,
   },
   {

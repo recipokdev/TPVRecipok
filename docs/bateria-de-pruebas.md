@@ -64,3 +64,7 @@ La prueba `caja-abrir-cerrar` cierra y abre la caja compartida de la demo de ver
 Hoy, al publicar, `npm run release` ejecuta `npm test` (las reglas sobre el código, unos segundos) y el hook de pre-push ejecuta además
 las pruebas de Mesas. La batería no está conectada a la publicación: se lanza a mano (por ejemplo `npm run battery` antes de publicar,
 o `npm run battery:full` antes de una versión importante).
+
+## Comprobaciones informativas
+
+Alguna comprobación se anota en el informe pero no cuenta como fallo cuando describe un hueco ya conocido y con solución. Hoy hay una: en la prueba «Caso real de Asador» (`run-two-tpv-edit-and-pay.js`), el escenario S3 (dos cajeros editando el mismo pedido a la vez con el guardado ENTERO antiguo). Ahí el guardado de un TPV puede pisar al del otro de forma intermitente (mismo ritmo en 0.2.62 y 0.2.63: unas 3 de cada 8 ejecuciones). El escenario S4 repite el mismo conflicto con el guardado POR PARTES y sí es obligatorio: converge siempre y se suman las dos ediciones. Cuando el guardado por partes llegue a todos los clientes, S3 se puede retirar.
