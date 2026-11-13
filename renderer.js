@@ -871,6 +871,238 @@ function installE2ERemoteWriteGuard(_baseUrl) {
   installRemoteWriteGuard();
 }
 
+// ===== [03b] Servicio desactivado: la clave de API de FacturaScripts ya no vale (2026-11-13) =====
+// Cuando Recipok da de baja a un cliente desactiva su clave de API en FacturaScripts. Antes el TPV lo tomaba por un
+// corte de red: seguia vendiendo con la cache local y acumulando ventas sin subir (que al reactivar se subirian de
+// golpe). Ahora, si FacturaScripts responde 401 «Clave de API no válida», el TPV lo confirma (mira si la clave ha
+// cambiado en clients.json y repite el sondeo 3 s despues) y, si sigue rechazada, se bloquea con un aviso claro: no deja
+// vender, no encola nada y deja de llamar a los servidores. Cada 60 s (o al pulsar «Reintentar») vuelve a sondear y,
+// si la clave vuelve a valer, se reanuda solo, sin ventas atrasadas que subir.
+const SERVICE_KEY_REJECTED_RE = /clave de api no v[aá]lida/i;
+// FacturaScripts bloquea unos 10 min la IP (429 «se ha bloqueado temporalmente el acceso desde su IP») tras 5 intentos con
+// una clave mala: mientras el TPV esta bloqueado se sondea cada 11 min (el bloqueo de IP ya habra caducado entre intentos y
+// el contador no llega a 5) y a mano con «Reintentar» (como mucho cada 30 s). Se reanuda solo en cuanto la clave vuelve a valer.
+const SERVICE_PROBE_EVERY_MS = 11 * 60 * 1000;
+const SERVICE_MANUAL_RETRY_GAP_MS = 30000;
+const SERVICE_CONFIRM_GAP_MS = 3000;
+let __serviceLastManualRetryAt = 0;
+const SERVICE_MIN_CHECK_GAP_MS = 10000;
+let __serviceSuspended = false;
+let __serviceCheckInFlight = null;
+let __serviceLastCheckAt = 0;
+let __serviceProbeTimer = null;
+let __serviceNativeFetch = null;
+
+function serviceUrlStartsWith(url, base) {
+  const b = String(base || "").trim().replace(/\/+$/, "");
+  return !!b && String(url || "").startsWith(b);
+}
+
+function isCompanyApiUrl(url) {
+  return serviceUrlStartsWith(url, window.RECIPOK_API?.baseUrl);
+}
+
+function isServiceGuardedUrl(url) {
+  try {
+    if (isCompanyApiUrl(url)) return true;
+    if (String(url || "").includes("action=log-client-event")) return false;
+    return typeof TPV_SYNC_API_URL !== "undefined" && serviceUrlStartsWith(url, TPV_SYNC_API_URL);
+  } catch {
+    return false;
+  }
+}
+
+// 401 + mensaje «Clave de API no válida» (firma exacta de FacturaScripts; un 401/403 de otro origen no cuenta).
+async function responseIsKeyRejected(res) {
+  try {
+    if (!res || res.status !== 401) return false;
+    const text = await res.text();
+    let msg = text;
+    try {
+      msg = String(JSON.parse(text)?.message ?? text);
+    } catch {}
+    return SERVICE_KEY_REJECTED_RE.test(msg);
+  } catch {
+    return false;
+  }
+}
+
+// "ok" | "rejected" | "unknown" (sin red, 5xx, 429... no se bloquea por eso).
+async function probeServiceKey(apiKey) {
+  const base = String(window.RECIPOK_API?.baseUrl || "").trim().replace(/\/+$/, "");
+  const key = String(apiKey ?? window.RECIPOK_API?.apiKey ?? "").trim();
+  if (!base || !key) return "unknown";
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 8000);
+  try {
+    const f = __serviceNativeFetch || window.fetch.bind(window);
+    const res = await f(`${base}/productos?limit=1`, {
+      headers: { Accept: "application/json", Token: key },
+      cache: "no-store",
+      signal: ctl.signal,
+    });
+    if (res.ok) return "ok";
+    return (await responseIsKeyRejected(res)) ? "rejected" : "unknown";
+  } catch {
+    return "unknown";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Autocuracion: si en clients.json la clave de esta empresa es otra y funciona, se adopta. "adopted" | "inactive" | "same"
+async function tryAdoptNewServiceKey() {
+  try {
+    const email = normalizeEmail(localStorage.getItem("tpv_companyEmail") || "");
+    if (!email) return "same";
+    const data = await fetchClientsJson();
+    const client = (Array.isArray(data?.clients) ? data.clients : []).find((c) => normalizeEmail(c?.email) === email);
+    if (!client) return "same";
+    if (client.active === false) return "inactive";
+    const newKey = String(client.apiKey || "").trim();
+    const curKey = String(window.RECIPOK_API?.apiKey || "").trim();
+    if (!newKey || newKey === curKey) return "same";
+    if ((await probeServiceKey(newKey)) !== "ok") return "same";
+    await saveResolvedCompany({ email, baseUrl: window.RECIPOK_API?.baseUrl || "", apiKey: newKey });
+    return "adopted";
+  } catch {
+    return "same";
+  }
+}
+
+function showServiceSuspendedOverlay(show) {
+  const el = document.getElementById("serviceSuspendedOverlay");
+  if (!el) return;
+  el.classList.toggle("hidden", !show);
+  const who = document.getElementById("serviceSuspendedCompany");
+  if (who) who.textContent = String(localStorage.getItem("tpv_companyEmail") || "").trim();
+  const btn = document.getElementById("serviceSuspendedRetryBtn");
+  if (btn && !btn.__serviceWired) {
+    btn.__serviceWired = true;
+    btn.addEventListener("click", () => {
+      reprobeService(true);
+    });
+  }
+}
+
+function scheduleServiceReprobe() {
+  if (__serviceProbeTimer) clearTimeout(__serviceProbeTimer);
+  __serviceProbeTimer = setTimeout(async () => {
+    __serviceProbeTimer = null;
+    if (!__serviceSuspended) return;
+    await reprobeService();
+  }, SERVICE_PROBE_EVERY_MS);
+}
+
+async function reprobeService(manual = false) {
+  const status = document.getElementById("serviceSuspendedStatus");
+  if (manual) {
+    // Cada intento con una clave mala cuenta para el bloqueo de IP de FacturaScripts: no se deja insistir.
+    if (Date.now() - __serviceLastManualRetryAt < SERVICE_MANUAL_RETRY_GAP_MS) {
+      if (status) status.textContent = "Espera unos segundos antes de volver a intentarlo.";
+      return false;
+    }
+    __serviceLastManualRetryAt = Date.now();
+  }
+  if (status) status.textContent = "Comprobando...";
+  const adopted = await tryAdoptNewServiceKey();
+  const r = adopted === "adopted" ? "ok" : await probeServiceKey();
+  if (r === "ok") {
+    resumeService();
+    return true;
+  }
+  if (status) {
+    status.textContent =
+      r === "rejected" ? "Sigue desactivado." : "No se ha podido comprobar ahora. Se volverá a intentar.";
+  }
+  if (__serviceSuspended) scheduleServiceReprobe();
+  return false;
+}
+
+function suspendService(reason) {
+  if (__serviceSuspended) return;
+  try {
+    reportClientEvent("api", "service-suspended", "Servicio desactivado: clave de API rechazada por FacturaScripts", { reason: String(reason || "") }, "error");
+  } catch {}
+  __serviceSuspended = true;
+  showServiceSuspendedOverlay(true);
+  const status = document.getElementById("serviceSuspendedStatus");
+  if (status) status.textContent = "";
+  scheduleServiceReprobe();
+}
+
+function resumeService() {
+  if (!__serviceSuspended) return;
+  __serviceSuspended = false;
+  if (__serviceProbeTimer) {
+    clearTimeout(__serviceProbeTimer);
+    __serviceProbeTimer = null;
+  }
+  showServiceSuspendedOverlay(false);
+  try {
+    toast("Servicio reactivado.", "success");
+  } catch {}
+  try {
+    loadDataFromApi({ refresh: true, silentRetry: true });
+  } catch {}
+}
+
+function checkServiceKey(reason) {
+  if (__serviceSuspended) return Promise.resolve("suspended");
+  if (__serviceCheckInFlight) return __serviceCheckInFlight;
+  if (Date.now() - __serviceLastCheckAt < SERVICE_MIN_CHECK_GAP_MS) return Promise.resolve("recent");
+  __serviceLastCheckAt = Date.now();
+  __serviceCheckInFlight = (async () => {
+    try {
+      const adopted = await tryAdoptNewServiceKey();
+      if (adopted === "adopted") return "adopted";
+      if (adopted === "inactive") {
+        suspendService("cuenta-desactivada");
+        return "suspended";
+      }
+      // Esta comprobacion solo arranca tras ver un 401 con el mensaje exacto de FacturaScripts. Se confirma con un sondeo
+      // 3 s despues: si la clave FUNCIONA, fue un fallo suelto y no se bloquea; en cualquier otro caso (sigue
+      // rechazada, o ya responde 429 «demasiadas peticiones» porque FacturaScripts frena a quien insiste con una clave
+      // mala, o hay un fallo del servidor) se bloquea. Si fue un falso positivo, el sondeo cada 60 s lo reanuda solo.
+      await new Promise((r) => setTimeout(r, SERVICE_CONFIRM_GAP_MS));
+      const confirm = await probeServiceKey();
+      if (confirm === "ok") return "ok";
+      suspendService(reason || "clave-rechazada");
+      return "suspended";
+    } finally {
+      __serviceCheckInFlight = null;
+      __serviceLastCheckAt = Date.now();
+    }
+  })();
+  return __serviceCheckInFlight;
+}
+
+function installServiceGuard() {
+  if (window.__TPV_SERVICE_GUARD_INSTALLED__) return;
+  const nativeFetch = window.fetch.bind(window);
+  __serviceNativeFetch = nativeFetch;
+  window.fetch = async (input, init = {}) => {
+    const url =
+      typeof input === "string" ? input : input && typeof input.url === "string" ? input.url : "";
+    if (__serviceSuspended && isServiceGuardedUrl(url)) {
+      const err = new Error("Servicio desactivado: contacta con Recipok.");
+      err.code = "TPV_SERVICE_SUSPENDED";
+      throw err;
+    }
+    const res = await nativeFetch(input, init);
+    if (res.status === 401 && isCompanyApiUrl(url) && !__serviceSuspended) {
+      responseIsKeyRejected(res.clone())
+        .then((bad) => {
+          if (bad) checkServiceKey("401");
+        })
+        .catch(() => {});
+    }
+    return res;
+  };
+  window.__TPV_SERVICE_GUARD_INSTALLED__ = true;
+}
+installServiceGuard();
+
 const TPV_DEBUG_LOGS = false;
 const BROKEN_PRODUCT_IMAGE_URLS = new Set();
 
@@ -55354,6 +55586,11 @@ async function validateBaseUrlOrThrow(baseUrl, apiKey) {
     }
 
     if (!res.ok) {
+      if (await responseIsKeyRejected(res)) {
+        const rejected = new Error("Clave de API rechazada por FacturaScripts");
+        rejected.serviceKeyRejected = true;
+        throw rejected;
+      }
       throw new Error(`Ping falló: HTTP ${res.status}`);
     }
 
@@ -55917,6 +56154,13 @@ async function bootstrapCompany() {
       return true;
     } catch (e) {
       console.warn("No se pudo validar la empresa guardada:", e);
+
+      // Clave de API desactivada en FacturaScripts (baja del servicio): se confirma y, si sigue rechazada, el TPV se
+      // bloquea con un aviso claro en vez de seguir vendiendo en local (ver [03b] Servicio desactivado).
+      if (e?.serviceKeyRejected) {
+        checkServiceKey("boot");
+        return true;
+      }
 
       // Si es un fallo de conexión/timeout/429, mantenemos la cfg guardada y NO pedimos email.
       if (isConnectivityLikeError(e)) {

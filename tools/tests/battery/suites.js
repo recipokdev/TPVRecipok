@@ -190,6 +190,11 @@ const SUITES = [
     args: ["tools/tests/run-two-tpv-edit-and-pay.js"], timeoutMs: 480000,
   },
   {
+    id: "servicio-desactivado", area: A, level: "full", demo: true, title: "Servicio desactivado: clave de API rechazada",
+    what: "Se simula (solo en memoria, sin tocar el servidor) que la clave de FacturaScripts de la empresa deja de valer. Si en clients.json hay una clave nueva que funciona, el TPV la adopta solo y no se bloquea. Si la clave está desactivada de verdad, el TPV se bloquea con el aviso «Servicio desactivado», deja de llamar a los servidores, no guarda ninguna venta pendiente y no guarda la clave mala; y cuando la clave vuelve a valer, pulsando Reintentar se reanuda solo.",
+    args: ["tools/tests/run-service-suspended.js"], timeoutMs: 260000,
+  },
+  {
     id: "mesas-boton-al-cargar", area: C, level: "full", demo: true, title: "Pulsar Mesas mientras el TPV todavía está cargando",
     what: "Se pulsa el botón de Mesas justo al arrancar, antes de que termine la carga: el TPV lo recuerda, avisa «entrará en Modo Mesas al terminar» y entra solo en Modo Mesas cuando acaba de cargar (antes no hacía nada y sin aviso).",
     args: ["tools/tests/run-mesas-button-during-load.js"], timeoutMs: 200000,

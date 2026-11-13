@@ -6,6 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
+        "NOVEDAD: si a un cliente se le da de baja el servicio (se desactiva su clave de API de FacturaScripts) y sigue teniendo el TPV instalado, el TPV ya no sigue vendiendo en local ni acumula ventas sin subir: se bloquea con el aviso «Servicio desactivado, contacta con Recipok», sin guardar nada pendiente. Si se reactiva, el TPV se reanuda solo (lo comprueba cada pocos minutos, o al instante pulsando Reintentar), sin ventas atrasadas. Si en cambio solo se cambió la clave y la nueva funciona, la adopta sin avisar.",
         "ARREGLO: en Modo Mesas con dos TPV en la misma mesa (con el guardado entero de siempre), añadir varios productos seguidos en un TPV podía hacer que el otro TPV, al guardar, borrara del pedido el último producto añadido. Ahora el segundo TPV reconoce que ese producto lo añadió el otro y lo conserva."
       ]
     },

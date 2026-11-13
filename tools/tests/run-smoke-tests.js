@@ -10901,6 +10901,37 @@ if (
   fail("Falta la guarda entre Cobrar y Vaciar/Salir (renderer.js isClearingCartNow / clearCartBtn / onPayButtonClick)");
 }
 
+console.log("\n[SMOKE] Checking 2026-11-13 servicio desactivado (clave de API rechazada): se bloquea con aviso, sin colas ni llamadas\n");
+{
+  const idx = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const css = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+  const okSvc =
+    renderer.includes("const SERVICE_KEY_REJECTED_RE = /clave de api no v[aá]lida/i;") &&
+    renderer.includes("async function responseIsKeyRejected(res) {") &&
+    renderer.includes("if (!res || res.status !== 401) return false;") &&
+    renderer.includes("function installServiceGuard() {") &&
+    renderer.includes("installServiceGuard();") &&
+    renderer.includes('err.code = "TPV_SERVICE_SUSPENDED";') &&
+    renderer.includes('if (String(url || "").includes("action=log-client-event")) return false;') &&
+    renderer.includes("const confirm = await probeServiceKey();") &&
+    renderer.includes('if (confirm === "ok") return "ok";') &&
+    renderer.includes("async function tryAdoptNewServiceKey() {") &&
+    renderer.includes("function resumeService() {") &&
+    renderer.includes("scheduleServiceReprobe();") &&
+    renderer.includes("rejected.serviceKeyRejected = true;") &&
+    renderer.includes('if (e?.serviceKeyRejected) {') &&
+    renderer.includes('checkServiceKey("boot");') &&
+    idx.includes('id="serviceSuspendedOverlay"') &&
+    idx.includes('id="serviceSuspendedRetryBtn"') &&
+    idx.includes("Servicio desactivado") &&
+    css.includes("#serviceSuspendedOverlay {");
+  if (okSvc) {
+    ok("Clave de API rechazada (401 «Clave de API no válida»): se confirma, se bloquea con aviso, sin colas ni llamadas, y se reanuda solo");
+  } else {
+    fail("Falta el bloqueo por clave de API rechazada (renderer.js [03b] Servicio desactivado, index.html #serviceSuspendedOverlay, styles.css)");
+  }
+}
+
 console.log("\n[SMOKE] Checking 2026-11-13 la base de la fusion en 3 vias no avanza con lo ajeno que no se incorporo\n");
 if (
   renderer.includes("const oldBase = prevLastRemoteItems.get(lrId);") &&

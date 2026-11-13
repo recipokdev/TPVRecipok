@@ -4415,6 +4415,29 @@ body.mesas-inline-trans-mode
   z-index: 1000001;
 }
 
+/* Servicio desactivado (clave de API rechazada): por encima de todo, sin cerrarse. */
+#serviceSuspendedOverlay {
+  z-index: 1000050;
+  background: rgba(0, 0, 0, 0.75);
+}
+.service-suspended-dialog {
+  max-width: 460px;
+  text-align: center;
+  padding: 22px 26px;
+}
+.service-suspended-note,
+.service-suspended-company {
+  color: #666;
+  font-size: 0.9em;
+}
+.service-suspended-status {
+  min-height: 1.3em;
+  font-weight: 600;
+}
+.service-suspended-actions {
+  margin-top: 10px;
+}
+
 /* Mismo z-index base que #ticketsOverlay (.simple-overlay): sin esto, al
    abrirse desde la lista de Tickets (que sigue detrás, visible), el
    desempate por orden en el DOM lo dejaba tapado e invisible. */

@@ -1337,6 +1337,27 @@
       </div>
     </div>
 
+    <!-- Servicio desactivado: la clave de API de FacturaScripts ya no vale. No se puede cerrar; se reanuda solo. -->
+    <div id="serviceSuspendedOverlay" class="simple-overlay hidden" role="alertdialog" aria-modal="true">
+      <div class="simple-dialog service-suspended-dialog">
+        <h2>Servicio desactivado</h2>
+        <p>
+          El servicio de este TPV está <strong>desactivado</strong>.
+          Contacta con <strong>Recipok</strong> para reactivarlo.
+        </p>
+        <p class="service-suspended-note">
+          Mientras tanto no se puede vender y no se guarda ninguna venta
+          pendiente. Si ya lo han reactivado, pulsa <strong>Reintentar</strong>;
+          si no, el TPV lo comprobará solo cada pocos minutos.
+        </p>
+        <p class="service-suspended-company" id="serviceSuspendedCompany"></p>
+        <p class="service-suspended-status" id="serviceSuspendedStatus" aria-live="polite"></p>
+        <div class="service-suspended-actions">
+          <button type="button" id="serviceSuspendedRetryBtn" class="btn btn-primary">Reintentar</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Aviso de la novedad «Encargos» (sale una sola vez, a un administrador) -->
     <div id="encargosNoveltyOverlay" class="simple-overlay hidden">
       <div class="simple-dialog encargos-novelty-dialog">
