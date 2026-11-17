@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.65",
+      "date": "2026-11-17",
+      "title": "Release 0.2.65",
       "changes": [
         "NOVEDAD: en la ventana de cobrar, debajo del teclado numérico, hay botones de billetes rápidos de 5, 10, 20 y 50 €. Cada billete que pulsas se SUMA al efectivo entregado (dos de 5 = 10; 5 + 10 + 20 = 35), igual que los va dando el cliente, y se ve el cambio al momento (si te equivocas, la tecla C borra los importes). Si tenías seleccionada otra forma de pago, el billete va al efectivo sin tocar la otra; si el cliente paga el total con el billete, la tarjeta se ajusta sola. Si el cliente no tiene forma de pago en efectivo, los botones no aparecen.",
         "ARREGLO: en modo kiosco, al encender el ordenador la barra de tareas de Windows podía quedarse visible encima del TPV y cortar la parte de abajo (el TPV arranca antes de que la barra termine de cargar). Ahora, con el modo kiosco activado, el TPV se vuelve a activar solo (un parpadeo de décimas de segundo) cuando la barra de tareas termina de cargar, igual que al pulsar «Mostrar escritorio» y luego el TPV, y la barra se oculta.",
