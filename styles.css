@@ -7999,6 +7999,24 @@ body.theme-dark .cart-batch-divider.cart-batch-divider--pending {
   font-size: 22px;
 }
 
+/* Billetes rapidos (5/10/20/50 €) bajo el teclado: en la fila 5, junto a la "C" roja. */
+.pay-bills {
+  grid-row: 5;
+  grid-column: 1 / 4;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.pay-bills.hidden {
+  display: none;
+}
+.pay-key.pay-bill {
+  background: #dcfce7;
+  color: #166534;
+  font-size: 18px;
+  padding: 0;
+}
+
 .pay-btn {
   border: none;
   border-radius: 10px;
@@ -11069,6 +11087,10 @@ body.theme-dark .pay-trash {
 body.theme-dark .pay-key {
   background: #1f2937;
   color: #e5e7eb;
+}
+body.theme-dark .pay-key.pay-bill {
+  background: #14532d;
+  color: #bbf7d0;
 }
 
 body.theme-dark .pay-btn {

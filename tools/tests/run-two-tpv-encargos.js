@@ -60,7 +60,10 @@ async function launch(dirName, label) {
     const badge = (w) => w.evaluate(() => document.getElementById("encargosCountBadge").textContent);
     const create = async (w, name, adv, method) => {
       await w.evaluate(async () => { cart = []; renderCart(); for (const id of [489, 543]) await addToCart(products.find((x) => x.id === id), 2); renderCart(); });
-      await w.evaluate(() => document.getElementById("passToEncargoBtn").click()); await sleep(800);
+      await w.evaluate(() => document.getElementById("passToEncargoBtn").click());
+      // esperar a que el asistente este abierto (abrirlo espera al agente, la tarifa y las formas de pago: con un sleep fijo,
+      // a veces se pulsaba "Siguiente" antes y el asistente abria en el paso 1 -> los botones de pago nunca salian)
+      await w.waitForFunction(() => !document.getElementById("encargoWizardOverlay").classList.contains("hidden"), null, { timeout: 30000 }); await sleep(300);
       await w.evaluate((n) => { document.getElementById("encName").value = n; document.querySelector('#encDayChips [data-day="tomorrow"]').click(); }, name);
       if (adv) {
         await w.evaluate(() => document.getElementById("encNextBtn").click());

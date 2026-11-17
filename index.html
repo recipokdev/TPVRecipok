@@ -1887,6 +1887,14 @@
               <!-- columna acciones (como la imagen) -->
               <button class="pay-key pay-key-yellow" data-k="back">⌫</button>
               <button class="pay-key pay-key-red" data-k="clear">C</button>
+
+              <!-- billetes rapidos: pulsar uno pone ese importe como entregado en efectivo -->
+              <div class="pay-bills" id="payBills">
+                <button class="pay-key pay-bill" data-k="bill:5">5 €</button>
+                <button class="pay-key pay-bill" data-k="bill:10">10 €</button>
+                <button class="pay-key pay-bill" data-k="bill:20">20 €</button>
+                <button class="pay-key pay-bill" data-k="bill:50">50 €</button>
+              </div>
             </div>
 
             <div class="pay-footer-right">
@@ -4216,12 +4224,17 @@
                     "Automático" ajusta letra/iconos/botones según la
                     resolución real de esta pantalla, para que quepa todo en
                     equipos con pantalla pequeña. Cambia esto solo si en este
-                    equipo concreto el automático no acierta.
+                    equipo concreto el automático no acierta. Si la letra se ve
+                    pequeña, sube la escala a 110%, 125% o 150%.
                   </div>
+                  <div class="opt-row-sub" id="uiZoomInfo"></div>
                 </div>
                 <div class="opt-row-actions">
                   <select id="uiZoomSelect" class="opt-select">
                     <option value="auto">Automático</option>
+                    <option value="1.5">150%</option>
+                    <option value="1.25">125%</option>
+                    <option value="1.1">110%</option>
                     <option value="1">100%</option>
                     <option value="0.9">90%</option>
                     <option value="0.8">80%</option>

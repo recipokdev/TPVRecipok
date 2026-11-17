@@ -95,7 +95,8 @@ async function launch(dirName, label) {
       return { lineas: cart.map((l) => ({ name: l.name, ref: l.referencia, qty: l.qty, addons: (l.addons || []).map((x) => x.nombre + ":" + x.precio) })), total: round2(getCartTotal(cart)) };
     }, [sold.id, ADDON_PRODUCT, prep.addon]);
     log("carrito:", JSON.stringify(cartInfo));
-    await a.evaluate(() => document.getElementById("passToEncargoBtn").click()); await sleep(900);
+    await a.evaluate(() => document.getElementById("passToEncargoBtn").click());
+    await a.waitForFunction(() => !document.getElementById("encargoWizardOverlay").classList.contains("hidden"), null, { timeout: 30000 }); await sleep(300);
     await a.evaluate((n) => { document.getElementById("encName").value = n; document.querySelector('#encDayChips [data-day="today"]').click(); }, NAME);
     await a.evaluate(() => document.getElementById("encNextBtn").click());
     for (const k of "1") await a.evaluate((k) => document.querySelector(`#encKeypad [data-key="${k}"]`).click(), k);

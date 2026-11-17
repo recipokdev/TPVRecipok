@@ -48207,7 +48207,7 @@ async function apiUpdateCajaAfterSale({ totalVenta, pagos }) {
   };
 
   try {
-    await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
+    await putTpvcajaTotalsRetryingDeadlock(remoteId, payload);
   } catch (e) {
     if (isNetworkError(e) || isProbablyNetworkError(e)) {
       const wrapped = new Error(e?.message || String(e));
@@ -48218,6 +48218,23 @@ async function apiUpdateCajaAfterSale({ totalVenta, pagos }) {
       throw wrapped;
     }
     throw e;
+  }
+}
+
+// Guarda los totales de la caja (PUT con el ACUMULADO completo, por eso es idempotente y se puede repetir sin riesgo).
+// FacturaScripts a veces responde "Deadlock found when trying to get lock" cuando dos escrituras chocan en hora punta
+// (real de cliente: Asador el Gallo, domingo 15-nov, 4 veces). Se reintenta unas veces con espera creciente; los fallos
+// de red NO se reintentan aqui (los gestiona la cola de reintento de quien llama) ni cualquier otro error.
+async function putTpvcajaTotalsRetryingDeadlock(remoteId, payload) {
+  const attempts = 4;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
+    } catch (e) {
+      if (isNetworkError(e) || isProbablyNetworkError(e)) throw e;
+      if (!isDeadlockError(e) || i === attempts) throw e;
+      await sleep(250 * i);
+    }
   }
 }
 
@@ -48262,7 +48279,7 @@ async function apiUpdateCajaAfterRefund({ totalRefundAbs, cashRefundAbs }) {
   };
 
   try {
-    await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
+    await putTpvcajaTotalsRetryingDeadlock(remoteId, payload);
   } catch (e) {
     if (isNetworkError(e) || isProbablyNetworkError(e)) {
       const wrapped = new Error(e?.message || String(e));
@@ -48313,7 +48330,7 @@ async function apiUpdateCajaAfterPaymentMethodChange({ cashDelta }) {
   };
 
   try {
-    await apiWrite(`tpvcajas/${remoteId}`, "PUT", payload);
+    await putTpvcajaTotalsRetryingDeadlock(remoteId, payload);
   } catch (e) {
     if (isNetworkError(e) || isProbablyNetworkError(e)) {
       const wrapped = new Error(e?.message || String(e));
@@ -53037,6 +53054,10 @@ function renderPayMethods() {
     selectPayInput(payModalState.selectedCodpago);
   }
 
+  // Los billetes rapidos solo tienen sentido si hay alguna forma de pago en efectivo.
+  const payBillsEl = document.getElementById("payBills");
+  if (payBillsEl) payBillsEl.classList.toggle("hidden", !payCashForma(null));
+
   renderPayHeaderTotals();
 }
 
@@ -53072,6 +53093,41 @@ function payKeyAppend(ch) {
   // ✅ CLAMP también desde keypad
   clampNonCashValue(cod);
 
+  renderPayHeaderTotals();
+  setPayError("");
+}
+
+// Billetes rapidos (5/10/20/50 EUR) bajo el teclado: pulsar uno SUMA ese importe al entregado en efectivo (dos de 5 =
+// 10; 5+10+20 = 35, como los va dando el cliente; la tecla C borra si hay error). Si la forma de pago seleccionada no es
+// efectivo, se usa la primera de efectivo y se selecciona. Si hay otras formas con importe (p. ej. tarjeta), el recorte
+// de "no efectivo" (clampNonCashValue) ajusta lo que sobre, igual que al teclear el efectivo a mano.
+function payCashForma(preferredCod) {
+  const formas = Array.isArray(payModalState.formas) ? payModalState.formas : [];
+  const isCash = (fp) => isCashPago({ codpago: fp.codpago, descripcion: fp.descripcion });
+  const preferred = formas.find((fp) => fp.codpago === preferredCod);
+  if (preferred && isCash(preferred)) return preferred;
+  return formas.find(isCash) || null;
+}
+
+function payKeyBill(amount) {
+  const n = Number(amount);
+  if (!Number.isFinite(n) || n <= 0) return;
+  const fp = payCashForma(payModalState.selectedCodpago);
+  if (!fp) return;
+  const cod = fp.codpago;
+
+  // SUMA al efectivo que ya hubiera (el cliente da varios billetes: 5+5 = 10, 5+10+20 = 35). En centimos para no
+  // arrastrar decimales de coma flotante. Un error se corrige con la tecla C.
+  const prev = Number(String(payModalState.values[cod] || "").replace(",", "."));
+  const totalCents = toCents(Number.isFinite(prev) ? prev : 0) + toCents(n);
+  payModalState.values[cod] = String(fromCents(totalCents));
+  const inp = payMethodsList
+    ? payMethodsList.querySelector(`.pay-amount[data-codpago="${cod}"]`)
+    : null;
+  if (inp) inp.value = payModalState.values[cod];
+
+  selectPayInput(cod);
+  clampNonCashValue(cod);
   renderPayHeaderTotals();
   setPayError("");
 }
@@ -53154,6 +53210,7 @@ function bindPayKeypadOnce() {
 
     if (k === "back") payKeyBackspace();
     else if (k === "clear") payKeyClearAll();
+    else if (k.startsWith("bill:")) payKeyBill(k.slice(5));
     else payKeyAppend(k);
   };
 
@@ -65549,8 +65606,20 @@ function formatUiZoomPreviewText(rawValue) {
   return `escala de la interfaz: ${pct}% (fijo)`;
 }
 
+// "Pantalla detectada: 1366x768 · escala aplicada: 100%" -- para saber que pantalla tiene cada sucursal sin ir a verla.
+async function refreshUiZoomInfo() {
+  const el = document.getElementById("uiZoomInfo");
+  if (!el || !window.TPV_UI_MODE?.getZoomInfo) return;
+  try {
+    const i = await window.TPV_UI_MODE.getZoomInfo();
+    if (!i || !i.width) return;
+    el.textContent = `Pantalla detectada: ${i.width}x${i.height} · escala aplicada: ${Math.round(i.effectiveZoom * 100)}%`;
+  } catch {}
+}
+
 async function initUiZoomSelect() {
   if (!uiZoomSelect) return;
+  refreshUiZoomInfo();
 
   const saved = await window.TPV_CFG.get("uiZoomOverride");
   const value =
@@ -65565,6 +65634,7 @@ async function initUiZoomSelect() {
     const override = raw === "auto" ? null : Number(raw);
     await window.TPV_CFG.set("uiZoomOverride", override);
     await window.TPV_UI_MODE.setZoomOverride(override);
+    refreshUiZoomInfo();
     if (uiZoomPreviewItem) {
       uiZoomPreviewItem.textContent = formatUiZoomPreviewText(raw);
     }

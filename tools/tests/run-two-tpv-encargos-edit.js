@@ -65,7 +65,8 @@ async function launch(dirName, label) {
 
     const create = async (w, name) => {
       await w.evaluate(async () => { cart = []; renderCart(); for (const id of [489, 543]) await addToCart(products.find((x) => x.id === id), 2); renderCart(); });
-      await w.evaluate(() => document.getElementById("passToEncargoBtn").click()); await sleep(800);
+      await w.evaluate(() => document.getElementById("passToEncargoBtn").click());
+      await w.waitForFunction(() => !document.getElementById("encargoWizardOverlay").classList.contains("hidden"), null, { timeout: 30000 }); await sleep(300);
       await w.evaluate((n) => { document.getElementById("encName").value = n; document.querySelector('#encDayChips [data-day="tomorrow"]').click(); }, name);
       await w.evaluate(() => document.getElementById("encSaveNoAdvBtn").click());
       await w.waitForFunction(() => !document.getElementById("encargoResultOverlay").classList.contains("hidden"), null, { timeout: 60000 });

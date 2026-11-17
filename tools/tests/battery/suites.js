@@ -53,6 +53,16 @@ const SUITES = [
     args: ["tools/tests/run-e2e-safe-checks.js"], timeoutMs: 300000,
   },
   {
+    id: "billetes-cobro", area: B, level: "standard", title: "Cobro: botones de billetes rápidos (5, 10, 20 y 50 €)",
+    what: "Abre el TPV en un perfil aislado, sin red, y comprueba los botones de billetes del modal de cobro: salen debajo del teclado, pulsar varios suma sus importes como entregado en efectivo (2×5 = 10; 5+10+20 = 35) con su cambio, también sobre un importe tecleado con coma o decimales, con la tarjeta seleccionada va al efectivo sin tocar la tarjeta, se recorta la tarjeta si el billete cubre el total, se ocultan si no hay efectivo y no se pueden pulsar en un ticket gratuito. No toca la demo.",
+    args: ["tools/tests/run-pay-bills.js"], timeoutMs: 150000,
+  },
+  {
+    id: "escala-interfaz", area: B, level: "standard", title: "Escala de la interfaz: ajuste manual hasta 150 % y pantalla detectada",
+    what: "Abre el TPV en un perfil aislado, sin red, y comprueba que Opciones ofrece 110, 125 y 150 % además de 100 % y menos, que el ajuste manual se respeta (sin recortarlo al 100 %) y se recorta a 150 % si el valor es absurdo, que el automático nunca amplía, que la ventana aplica el zoom guardado al recargar y que Opciones muestra la pantalla detectada. No toca la demo.",
+    args: ["tools/tests/run-ui-zoom.js"], timeoutMs: 150000,
+  },
+  {
     id: "e2e-tpv", area: B, level: "standard", title: "Venta completa en TPV normal (demo)",
     what: "Con el TPV real: añadir productos, descuentos y precios, aparcar, recuperar, editar y borrar un pedido, abrir el cobro, imprimir el ticket y cambiar opciones.",
     args: ["tools/tests/run-e2e-demo.js"], timeoutMs: 600000,

@@ -11852,6 +11852,44 @@ if (
   else fail("ticket_print.html: .muted vuelve a atenuar (opacity < 1) y las termicas lo imprimen como gris tramado -- revisar el cambio de 2026-11-06");
 }
 
+// Escala de la interfaz (2026-11-17, Los Argentinos: "el texto es muuuy pequeño"): el manual sube hasta 150%; el automatico no.
+{
+  const okZ =
+    main.includes("const MANUAL_ZOOM_MAX = 1.5;") &&
+    main.includes("Math.min(MANUAL_ZOOM_MAX, Math.max(AUTO_ZOOM_MIN, override))") &&
+    main.includes("const AUTO_ZOOM_MAX = 1;") &&
+    main.includes('ipcMain.handle("ui:getZoomInfo"') &&
+    preload.includes("getZoomInfo: () => ipcRenderer.invoke(\"ui:getZoomInfo\")") &&
+    fs.readFileSync(path.join(root, "index.html"), "utf8").includes('<option value="1.5">150%</option>') &&
+    renderer.includes("async function refreshUiZoomInfo()");
+  if (okZ) ok("Escala de la interfaz: el ajuste manual llega al 150% (el automatico sigue sin ampliar) y Opciones muestra la pantalla detectada");
+  else fail("Falta el ajuste de escala hasta 150% (main.js MANUAL_ZOOM_MAX, ui:getZoomInfo, opciones 110/125/150 en index.html) -- revisar el cambio de 2026-11-17");
+}
+
+// Totales de caja con deadlock de FacturaScripts (2026-11-17, Asador el Gallo: 4 "Deadlock found" en tpvcajas el domingo
+// 15, uno dejo un cobro-followup-incompleto): el PUT del acumulado (idempotente) se reintenta con espera creciente.
+{
+  const puts = (renderer.match(/await putTpvcajaTotalsRetryingDeadlock\(remoteId, payload\);/g) || []).length;
+  const okD =
+    puts === 3 &&
+    renderer.includes("async function putTpvcajaTotalsRetryingDeadlock(remoteId, payload) {") &&
+    renderer.includes("if (!isDeadlockError(e) || i === attempts) throw e;") &&
+    renderer.includes("if (isNetworkError(e) || isProbablyNetworkError(e)) throw e;");
+  if (okD) ok("Totales de caja (venta, devolucion, cambio de metodo de pago): un 'Deadlock found' de FacturaScripts se reintenta con espera creciente; los errores de red siguen yendo a la cola de reintento y el resto de errores no se reintentan");
+  else fail(`Falta el reintento por deadlock en los totales de caja (renderer.js putTpvcajaTotalsRetryingDeadlock; usos encontrados: ${puts}, esperados: 3) -- revisar el cambio de 2026-11-17`);
+}
+
+// Cierre de caja y comanda (2026-11-17, Los Argentinos con P80Plus-USL): lo mismo que el ticket -- nada de opacity < 1 en
+// las plantillas termicas, el gris se imprime como puntitos y parece que falta tinta.
+{
+  for (const name of ["cash_close_print.html", "comanda_print.html"]) {
+    const tpl = fs.readFileSync(path.join(root, name), "utf8");
+    const dim = (tpl.match(/opacity:\s*(0?\.\d+)/g) || []);
+    if (dim.length === 0) ok(`${name}: sin opacity < 1 (negro solido en termicas)`);
+    else fail(`${name}: tiene ${dim.join(", ")} y las termicas lo imprimen como gris tramado -- revisar el cambio de 2026-11-17`);
+  }
+}
+
 // Divisa publicada por tienda (2026-11-06): el TPV manda su moneda efectiva (euro = null) con set-display-settings al
 // arrancar si difiere de la del servidor, para la app de camareros.
 {
@@ -11889,6 +11927,49 @@ if (
     mainJs.includes("if (kioskMode) nudgeKioskToForeground(mainWin);");
   if (okS) ok("Actualizar: el TPV espera a que la ventanita de instalando se vea antes de cerrarse; en kiosco reafirma el primer plano tras abrir");
   else fail("Falta la espera a la ventanita de instalando o el refuerzo de primer plano en kiosco (main.js: quitAndInstallWhenSplashVisible, nudgeKioskToForeground) -- revisar el cambio de 2026-11-05");
+}
+
+// Kiosco en Windows (2026-11-16): la barra de tareas nunca debe verse encima del TPV. Windows solo la oculta cuando la
+// ventana a pantalla completa PASA A SER la activa con la barra ya cargada; al encender el equipo el TPV arranca antes
+// y la barra salia encima (a mano: "Mostrar escritorio" + pulsar el TPV). El vigilante repite esa reactivacion por codigo.
+{
+  const mainJs = fs.readFileSync(path.join(root, "main.js"), "utf8");
+  const mainJsFlat = mainJs.split(/\s+/).join(" ");
+  const okK =
+    mainJs.includes("function startKioskTaskbarGuard(win) {") &&
+    mainJs.includes("function stopKioskTaskbarGuard() {") &&
+    mainJs.includes("function reactivateKioskWindow(win) {") &&
+    mainJs.includes("function kioskTaskbarPresent(win) {") &&
+    mainJs.includes('win.setAlwaysOnTop(true, "screen-saver");') &&
+    mainJs.includes("kioskGuardTimer = setTimeout(tick, young ? 2000 : 15000);") &&
+    // reactivar = ocultar, y a los 250 ms mostrar con foco
+    mainJsFlat.includes("win.hide(); } catch (_) {} setTimeout(() => { try { if (win && !win.isDestroyed()) { win.show();") &&
+    mainJsFlat.includes("win.focus(); win.moveTop(); } } catch (_) {} kioskGuardCycling = false; }, 250);") &&
+    // la primera reactivacion no se gasta antes de que la ventana sea visible
+    mainJsFlat.includes("if (!win.isVisible()) { // aun no se ha mostrado la ventana: esperar, para que la primera reactivacion cuente } else if (present && !kioskGuardTaskbarSeen) {") &&
+    mainJsFlat.includes("startKioskTaskbarGuard(win); } else { stopKioskTaskbarGuard();") &&
+    mainJsFlat.includes('win.setAlwaysOnTop(true, "screen-saver"); win.show(); win.focus(); win.moveTop();') &&
+    // el vigilante no corre en las pruebas ni fuera de Windows
+    mainJsFlat.includes('function startKioskTaskbarGuard(win) { if (process.platform !== "win32") return; if (IS_E2E) return;');
+  if (okK) ok("Kiosco: vigilante que reactiva la ventana cuando aparece la barra de tareas (arranque tardio de la barra) y la mantiene por encima; se para al quitar el kiosco");
+  else fail("Falta el vigilante de la barra de tareas en kiosco (main.js: startKioskTaskbarGuard / reactivateKioskWindow / stopKioskTaskbarGuard) -- revisar el cambio de 2026-11-16");
+}
+
+// Billetes rapidos en el modal de cobro (2026-11-16, peticion del jefe de Sergi): 5/10/20/50 EUR bajo el teclado.
+{
+  const idx = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const rend = fs.readFileSync(path.join(root, "renderer.js"), "utf8");
+  const css = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+  const okB =
+    ["5", "10", "20", "50"].every((n) => idx.includes('data-k="bill:' + n + '"')) &&
+    idx.includes('id="payBills"') &&
+    rend.includes("function payKeyBill(amount) {") &&
+    rend.includes("function payCashForma(preferredCod) {") &&
+    rend.includes('else if (k.startsWith("bill:")) payKeyBill(k.slice(5));') &&
+    rend.includes('payBillsEl.classList.toggle("hidden", !payCashForma(null));') &&
+    css.includes(".pay-bills {");
+  if (okB) ok("Cobro: botones de billetes rapidos 5/10/20/50 EUR bajo el teclado (ponen el importe entregado en efectivo)");
+  else fail("Faltan los billetes rapidos del modal de cobro (index.html #payBills, renderer.js payKeyBill/payCashForma, styles.css .pay-bills) -- revisar el cambio de 2026-11-16");
 }
 
 // Encargos, parte 2b (2026-11-03): asistente «Nuevo encargo» de dos paginas con un solo guardado. El pedido de

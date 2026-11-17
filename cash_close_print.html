@@ -37,8 +37,10 @@
       .bold {
         font-weight: 700;
       }
+      /* Sin atenuar: con opacity < 1 el negro pasa a gris y en las termicas se imprime como tramado claro (parece que
+         falta tinta). Real de cliente (Los Argentinos, 2026-11-17: "Impreso", "Total vendido", "Tickets"). */
       .muted {
-        opacity: 0.9;
+        opacity: 1;
       }
       .small {
         font-size: 11px;
@@ -76,7 +78,7 @@
       }
       .kpi-lbl {
         font-size: 11px;
-        opacity: 0.9;
+        opacity: 1;
       }
       .kpi-val {
         font-size: 16px;

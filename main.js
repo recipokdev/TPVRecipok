@@ -389,6 +389,135 @@ function isKioskMode() {
   }
 }
 
+// Kiosco en Windows: que la barra de tareas NUNCA se vea encima del TPV.
+// En Windows la barra de tareas solo se oculta cuando una ventana a pantalla completa PASA A SER la ventana activa
+// estando ya la barra cargada. Al encender el equipo el TPV arranca (inicio de Windows) antes de que cargue la barra:
+// el TPV ya era la ventana activa, la barra aparece despues, encima, y Windows no vuelve a comprobarlo -> se veia la
+// barra y se cortaba la parte de abajo del TPV (a mano se arreglaba con "Mostrar escritorio" + pulsar el TPV, que
+// vuelve a activar la ventana). Aqui se repite esa reactivacion por codigo (ocultar y volver a mostrar la ventana con
+// foco, ~0,3 s) cuando la barra de tareas aparece o cambian las pantallas, ademas de mantener la ventana por encima.
+// Solo Windows y solo con el kiosco activo; se para al desactivar el kiosco.
+let kioskGuardTimer = null;
+let kioskGuardWin = null;
+let kioskGuardStartedAt = 0;
+let kioskGuardListeners = null;
+let kioskGuardTaskbarSeen = false;
+let kioskGuardCycling = false;
+let kioskGuardDisplayTimer = null;
+
+function raiseKioskWindow(win) {
+  try {
+    if (!win || win.isDestroyed() || !win.isVisible()) return;
+    if (win.isMinimized()) win.restore();
+    win.setAlwaysOnTop(true, "screen-saver");
+    if (!win.isFullScreen()) win.setFullScreen(true);
+    win.moveTop();
+  } catch (_) {}
+}
+
+// La barra de tareas existe si el area util de la pantalla es menor que la pantalla entera.
+function kioskTaskbarPresent(win) {
+  try {
+    const d = screen.getDisplayMatching(win.getBounds());
+    const b = d.bounds;
+    const w = d.workArea;
+    return w.width < b.width || w.height < b.height;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Equivale a "Mostrar escritorio" + pulsar el TPV: la ventana vuelve a ser la activa y Windows oculta la barra.
+function reactivateKioskWindow(win) {
+  if (kioskGuardCycling) return;
+  if (!win || win.isDestroyed() || !win.isVisible() || win.isMinimized()) return;
+  kioskGuardCycling = true;
+  try {
+    win.hide();
+  } catch (_) {}
+  setTimeout(() => {
+    try {
+      if (win && !win.isDestroyed()) {
+        win.show();
+        win.setAlwaysOnTop(true, "screen-saver");
+        if (!win.isFullScreen()) win.setFullScreen(true);
+        win.focus();
+        win.moveTop();
+      }
+    } catch (_) {}
+    kioskGuardCycling = false;
+  }, 250);
+}
+
+function stopKioskTaskbarGuard() {
+  if (kioskGuardTimer) clearTimeout(kioskGuardTimer);
+  if (kioskGuardDisplayTimer) clearTimeout(kioskGuardDisplayTimer);
+  kioskGuardTimer = null;
+  kioskGuardDisplayTimer = null;
+  if (kioskGuardWin && kioskGuardListeners) {
+    try {
+      if (!kioskGuardWin.isDestroyed()) kioskGuardWin.removeListener("blur", kioskGuardListeners.onBlur);
+    } catch (_) {}
+    try {
+      screen.removeListener("display-metrics-changed", kioskGuardListeners.onDisplay);
+      screen.removeListener("display-added", kioskGuardListeners.onDisplay);
+      screen.removeListener("display-removed", kioskGuardListeners.onDisplay);
+    } catch (_) {}
+  }
+  kioskGuardWin = null;
+  kioskGuardListeners = null;
+  kioskGuardTaskbarSeen = false;
+}
+
+function startKioskTaskbarGuard(win) {
+  if (process.platform !== "win32") return;
+  if (IS_E2E) return;
+  stopKioskTaskbarGuard();
+  if (!win || win.isDestroyed()) return;
+  kioskGuardWin = win;
+  kioskGuardStartedAt = Date.now();
+
+  const tick = () => {
+    if (!kioskGuardWin || kioskGuardWin !== win || win.isDestroyed()) return stopKioskTaskbarGuard();
+    raiseKioskWindow(win);
+    const present = kioskTaskbarPresent(win);
+    if (!win.isVisible()) {
+      // aun no se ha mostrado la ventana: esperar, para que la primera reactivacion cuente
+    } else if (present && !kioskGuardTaskbarSeen) {
+      // la barra acaba de aparecer (o ya estaba al arrancar): reactivar ahora y otra vez a los 4 s
+      kioskGuardTaskbarSeen = true;
+      reactivateKioskWindow(win);
+      setTimeout(() => reactivateKioskWindow(win), 4000);
+    } else if (!present) {
+      kioskGuardTaskbarSeen = false;
+    }
+    const young = Date.now() - kioskGuardStartedAt < 3 * 60 * 1000;
+    kioskGuardTimer = setTimeout(tick, young ? 2000 : 15000);
+  };
+
+  // Al perder el foco: solo subir la ventana (sin reactivar, para no entrar en bucle).
+  const onBlur = () => setTimeout(() => raiseKioskWindow(win), 300);
+  // Cambio de pantallas / area util (la barra aparece, Explorer se reinicia, monitor nuevo): reactivar.
+  const onDisplay = () => {
+    if (kioskGuardDisplayTimer) clearTimeout(kioskGuardDisplayTimer);
+    kioskGuardDisplayTimer = setTimeout(() => {
+      kioskGuardDisplayTimer = null;
+      raiseKioskWindow(win);
+      if (kioskTaskbarPresent(win)) reactivateKioskWindow(win);
+    }, 800);
+  };
+  kioskGuardListeners = { onBlur, onDisplay };
+  win.on("blur", onBlur);
+  screen.on("display-metrics-changed", onDisplay);
+  screen.on("display-added", onDisplay);
+  screen.on("display-removed", onDisplay);
+  win.once("closed", () => {
+    if (kioskGuardWin === win) stopKioskTaskbarGuard();
+  });
+
+  tick();
+}
+
 function applyKioskMode(win, enabled) {
   if (!win || win.isDestroyed()) return;
 
@@ -397,7 +526,9 @@ function applyKioskMode(win, enabled) {
   if (enabled) {
     win.setMenuBarVisibility(false);
     win.setAutoHideMenuBar(true);
-    win.setAlwaysOnTop(true);
+    // En Windows el nivel "screen-saver" deja la ventana por encima de la barra de tareas.
+    if (isWin) win.setAlwaysOnTop(true, "screen-saver");
+    else win.setAlwaysOnTop(true);
 
     // ✅ Windows: NO usar setKiosk (da problemas al salir)
     if (!isWin) win.setKiosk(true);
@@ -411,7 +542,10 @@ function applyKioskMode(win, enabled) {
 
     // opcional (evita Alt+F4 fácil, pero no siempre conviene)
     // win.setClosable(false);
+
+    startKioskTaskbarGuard(win);
   } else {
+    stopKioskTaskbarGuard();
     // salir: primero quitar kiosk (solo linux/mac), luego fullscreen
     if (!isWin) win.setKiosk(false);
 
@@ -454,6 +588,10 @@ const AUTO_ZOOM_REFERENCE_WIDTH = 1366;
 const AUTO_ZOOM_REFERENCE_HEIGHT = 768;
 const AUTO_ZOOM_MIN = 0.7;
 const AUTO_ZOOM_MAX = 1;
+// Tope del ajuste MANUAL (Opciones). El automatico nunca amplia (no sabe el tamaño fisico de la pantalla: una de 1920x1080
+// puede ser de 15" o de 24"), pero una sucursal con la pantalla pequeña y letra minuscula (Los Argentinos, 2026-11-17: "el
+// texto es muuuy pequeño") puede subirlo a mano hasta 150%.
+const MANUAL_ZOOM_MAX = 1.5;
 
 function computeAutoZoomFactor() {
   try {
@@ -486,10 +624,30 @@ function resolveEffectiveZoomFactor() {
     const cfg = readCfg();
     const override = cfg.uiZoomOverride;
     if (typeof override === "number" && override > 0) {
-      return Math.min(AUTO_ZOOM_MAX, Math.max(AUTO_ZOOM_MIN, override));
+      return Math.min(MANUAL_ZOOM_MAX, Math.max(AUTO_ZOOM_MIN, override));
     }
   } catch {}
   return computeAutoZoomFactor();
+}
+
+// Para mostrar en Opciones que pantalla detecta el TPV y que escala esta aplicando (asi se sabe la resolucion de cada sucursal).
+function getZoomInfo() {
+  let width = 0;
+  let height = 0;
+  let scaleFactor = 1;
+  try {
+    const d = screen.getPrimaryDisplay();
+    width = d.workAreaSize.width;
+    height = d.workAreaSize.height;
+    scaleFactor = d.scaleFactor || 1;
+  } catch {}
+  return {
+    width,
+    height,
+    windowsScale: scaleFactor,
+    autoZoom: computeAutoZoomFactor(),
+    effectiveZoom: resolveEffectiveZoomFactor(),
+  };
 }
 
 function applyAutoZoom(win) {
@@ -581,7 +739,7 @@ function nudgeKioskToForeground(win) {
     setTimeout(() => {
       try {
         if (!win || win.isDestroyed() || !win.isVisible()) return;
-        win.setAlwaysOnTop(true);
+        win.setAlwaysOnTop(true, "screen-saver");
         win.show();
         win.focus();
         win.moveTop();
@@ -3868,7 +4026,9 @@ ipcMain.handle("ui:setKioskMode", async (_e, enabled) => {
   return { ok: true };
 });
 
-// override: null/"auto" = vuelve al calculo automatico; un numero (0.7-1) =
+ipcMain.handle("ui:getZoomInfo", async () => getZoomInfo());
+
+// override: null/"auto" = vuelve al calculo automatico; un numero (0.7-1.5) =
 // fijado a mano. Reaplica al instante, sin reiniciar el TPV -- ver
 // resolveEffectiveZoomFactor/computeAutoZoomFactor mas arriba.
 ipcMain.handle("ui:setZoomOverride", async (_e, override) => {
