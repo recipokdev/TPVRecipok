@@ -122,7 +122,7 @@ Abajo a la izquierda, junto al estado de la conexión, aparece el número de ver
 Un administrador puede desactivar **Teclado en pantalla** en **Opciones → Pantalla**.
 
 ### La pantalla se ve demasiado grande o pequeña
-En **Opciones → Pantalla → Escala de la interfaz**: «Automático» suele ajustarlo bien; cámbialo solo si en ese equipo no acierta.
+En **Opciones → Pantalla → Escala de la interfaz** (administradores). Si **la letra se ve pequeña**, elige **110 %**, **125 %** o **150 %**; si **no cabe todo**, elige 90, 80 o 70 %. «Automático» solo reduce la escala en pantallas pequeñas: nunca la agranda, así que en una pantalla de mucha resolución pero poco tamaño hay que subirla a mano. Debajo del selector verás la pantalla que detecta el TPV y la escala que está aplicando.
 
 ### Quiero salir del modo pantalla completa
 En **Opciones → Pantalla**, desactiva **Modo TPV (kiosk)** (administradores): así puedes minimizar el programa y usar el equipo con normalidad.

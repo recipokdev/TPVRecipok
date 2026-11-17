@@ -105,7 +105,7 @@ Para productos que se venden por peso.
 
 ### Pantalla (solo administradores)
 - **Modo TPV (kiosk).** El programa ocupa toda la pantalla. Si lo desactivas, puedes minimizarlo y usar el equipo como un ordenador normal. En una instalación **nueva** arranca **apagado**.
-- **Escala de la interfaz.** «Automático» ajusta letra, iconos y botones según la resolución para que quepa todo, incluso en pantallas pequeñas. Cámbialo solo si en ese equipo el automático no acierta.
+- **Escala de la interfaz.** «Automático» **reduce** letra, iconos y botones según la resolución para que quepa todo en pantallas pequeñas (nunca los agranda). Si en ese equipo la letra se ve pequeña, súbela a mano a **110 %**, **125 %** o **150 %**; si no cabe todo, bájala a 90, 80 o 70 %. El cambio se aplica al momento y se recuerda al reiniciar. Debajo del selector se muestra la **pantalla detectada** (por ejemplo, 1366x768) y la **escala aplicada**.
 - **Teclado en pantalla.** Desactívalo si el TPV tiene teclado físico: al tocar un campo de texto no se abrirá el teclado táctil.
 - **Pantalla cliente (2.ª pantalla).** Actívala solo si el equipo tiene una pantalla secundaria; en **Pantalla a usar** eliges cuál.
 
@@ -140,7 +140,7 @@ Así vienen las opciones principales en un TPV nuevo. Lo que tu administrador ca
 
 - **Iniciar TPV al encender el PC:** activado.
 - **Modo TPV (kiosk):** apagado en instalaciones nuevas.
-- **Teclado en pantalla:** activado. **Pantalla cliente:** apagada.
+- **Teclado en pantalla:** activado. **Pantalla cliente:** apagada. **Escala de la interfaz:** *Automático*.
 - **Orden de los productos:** *Manual (prioridad)*. Los demás: *Por defecto (FacturaScripts)*, *Referencia*, *Descripción* e *ID de producto*.
 - **Moneda:** *Automática* (la divisa por defecto de FacturaScripts; si es el euro, todo sale como siempre).
 - **Desagrupar líneas:** activado (cada toque crea una línea nueva).

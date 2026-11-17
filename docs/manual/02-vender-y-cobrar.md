@@ -122,11 +122,24 @@ Cuando el pedido esté listo, pulsa **Cobrar**.
 1. **Total** a cobrar.
 2. **Cambio.** Mientras escribes lo que entrega el cliente, aquí aparece lo que hay que devolverle. Si todavía falta dinero por indicar, aparece en negativo lo que falta por cobrar.
 3. **Formas de pago.** Aparecen las configuradas en tu empresa (por ejemplo *Al contado*, *Tarjeta de crédito*, *Transferencia bancaria*). Escribe el importe en la forma de pago que corresponda, o pulsa **Máx** para poner en ella todo el importe pendiente. Puedes repartir una misma venta entre varias formas de pago.
-4. **Teclado numérico.** Para escribir los importes con el dedo. El botón dorado borra la última cifra y la **C** borra **todos los importes** escritos (de todas las formas de pago). Para quitar solo el de una forma de pago, usa el icono de papelera de su fila.
+4. **Teclado numérico.** Para escribir los importes con el dedo. El botón dorado borra la última cifra y la **C** borra **todos los importes** escritos (de todas las formas de pago). Para quitar solo el de una forma de pago, usa el icono de papelera de su fila. Debajo del teclado están los **billetes rápidos** (se explican justo debajo de esta lista).
 5. **Confirmar Pago.** Emite la venta y, si tienes la opción activada, imprime el ticket. **Cancelar** vuelve al pedido sin cobrar nada.
 6. **Abrir cajón.** Abre el cajón portamonedas sin tener que hacer una venta.
 
 Los campos **Número**, **Serie** y **Observaciones** son opcionales: la serie viene elegida por defecto y las observaciones quedan guardadas en la venta.
+
+### Billetes rápidos (5, 10, 20 y 50 €)
+
+Debajo del teclado numérico hay cuatro botones verdes con los billetes que más se usan: **5 €**, **10 €**, **20 €** y **50 €**. Sirven para anotar de un toque lo que te va dando el cliente.
+
+@fig img/cobrar-billetes.png | crop=500,240,920,540 | width=80 | Con el total en 13,50 €, un toque en **20 €** pone 20 en *Efectivo* y el cambio sale al momento (6,50 €).
+
+- **Cada toque suma.** Si el cliente te da dos billetes de 5 €, tocas **5 €** dos veces y entregado queda en 10 €. Si te da uno de 5, uno de 10 y uno de 20, tocas **5 €**, **10 €** y **20 €** y queda en 35 €.
+- **El cambio se actualiza** con cada toque. Mientras no llegue al total, aparece en negativo lo que falta.
+- **Van siempre al efectivo**, aunque tengas seleccionada otra forma de pago (por ejemplo, tarjeta): el TPV pasa al efectivo y no toca los demás importes. Solo si ya habías escrito un importe en otra forma de pago y el billete cubre ya el total, ese importe se recorta solo para no cobrar de más.
+- Para una cantidad que no es un billete (por ejemplo, 2,50 € en monedas), usa el teclado numérico: los billetes se pueden combinar con lo que ya hayas escrito.
+- Si te equivocas, la **C** borra **todos los importes** y empiezas de nuevo.
+- Si tu empresa no tiene ninguna forma de pago en efectivo, los botones de billetes **no aparecen**. En un ticket de 0 €, el teclado y los billetes están bloqueados.
 
 > **Consejo:** si el cliente paga con dos medios (parte en efectivo y parte con tarjeta), escribe cada importe en su forma de pago y comprueba que el cambio queda a cero antes de confirmar.
 
