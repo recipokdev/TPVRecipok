@@ -646,7 +646,13 @@ let currentParkedTicketIndex = null;
 // Id del aparcado cuyo carrito ha dejado vacio EL CAJERO quitando lineas (no un cobro ni "Salir"): se
 // mantiene el vinculo con ese pedido aunque el carrito este vacio, para que lo que se añada despues
 // ACTUALICE ese mismo pedido en vez de crear uno nuevo y dejar el viejo vivo (Asador el Gallo, 2026-10-27).
-let PARKED_LINK_KEPT_EMPTY_ID = 0;
+// Identificador del pedido (TEXTO, no numero): los pedidos que crea la app de camareros tienen ids no numericos
+// ("camarero-1795...-kgi33q"); con Number() daban 0 y el guardado del pedido vaciado por el cajero nunca se activaba
+// (visto 2026-11-18 en la prueba conjunta: se quitaban todas las lineas y el servidor las conservaba).
+let PARKED_LINK_KEPT_EMPTY_ID = "";
+function parkedLinkIdOf(t) {
+  return String(t?.id ?? t?.ticketId ?? "").trim();
+}
 // Feedback de cliente real (stress test 2026-08-26): currentParkedTicketIndex
 // es solo una POSICION. Si la lista de aparcados cambia de orden despues de
 // abrir un ticket concreto pero ANTES de cobrarlo (llega uno nuevo, un sync
@@ -660,6 +666,7 @@ let PARKED_LINK_KEPT_EMPTY_ID = 0;
 // ningun otro sitio.
 let ACTIVE_PARKED_TICKET_SYNC_KEY = "";
 let ACTIVE_PARKED_TICKET_ID = 0;
+let ACTIVE_PARKED_TICKET_ID_STR = "";
 
 function setCurrentParkedTicketIndex(index) {
   currentParkedTicketIndex = index;
@@ -674,8 +681,9 @@ function setCurrentParkedTicketIndex(index) {
     ? String(getParkedTicketSyncKey(t) || "").trim()
     : "";
   ACTIVE_PARKED_TICKET_ID = t ? Number(t?.id || 0) || 0 : 0;
-  if (PARKED_LINK_KEPT_EMPTY_ID && PARKED_LINK_KEPT_EMPTY_ID !== ACTIVE_PARKED_TICKET_ID) {
-    PARKED_LINK_KEPT_EMPTY_ID = 0;
+  ACTIVE_PARKED_TICKET_ID_STR = t ? parkedLinkIdOf(t) : "";
+  if (PARKED_LINK_KEPT_EMPTY_ID && PARKED_LINK_KEPT_EMPTY_ID !== ACTIVE_PARKED_TICKET_ID_STR) {
+    PARKED_LINK_KEPT_EMPTY_ID = "";
   }
 }
 
@@ -688,7 +696,7 @@ function armKeepParkedLinkIfCartEmptied() {
     if (currentParkedTicketIndex == null || hasVisibleCartLines()) return;
     const t = Array.isArray(parkedTickets) ? parkedTickets[currentParkedTicketIndex] : null;
     if (!t || t.paid || isPayingNow) return;
-    PARKED_LINK_KEPT_EMPTY_ID = Number(t.id || t.ticketId || 0) || 0;
+    PARKED_LINK_KEPT_EMPTY_ID = parkedLinkIdOf(t);
   } catch {}
 }
 
@@ -17591,7 +17599,7 @@ function renderCart() {
   pushCustomerState();
   refreshAgentGuardUI?.();
 
-  if (uiLines.length) PARKED_LINK_KEPT_EMPTY_ID = 0;
+  if (uiLines.length) PARKED_LINK_KEPT_EMPTY_ID = "";
 
   if (!uiLines.length && currentParkedTicketIndex !== null) {
     let shouldClearCurrentParkedIndex = true;
@@ -17622,7 +17630,7 @@ function renderCart() {
         keptTicket &&
         !keptTicket.paid &&
         !isPayingNow &&
-        (Number(keptTicket.id || keptTicket.ticketId || 0) || 0) === PARKED_LINK_KEPT_EMPTY_ID
+        parkedLinkIdOf(keptTicket) === PARKED_LINK_KEPT_EMPTY_ID
       ) {
         shouldClearCurrentParkedIndex = false;
       }
@@ -49301,7 +49309,7 @@ function getMesasAutoSaveIntent() {
       // Un carrito vacio por cualquier otra causa (cambio de mesa, carga, cobro...) sigue sin guardarse.
       const keptEmptyHere =
         PARKED_LINK_KEPT_EMPTY_ID &&
-        (Number(loaded.id || loaded.ticketId || 0) || 0) === PARKED_LINK_KEPT_EMPTY_ID &&
+        parkedLinkIdOf(loaded) === PARKED_LINK_KEPT_EMPTY_ID &&
         Array.isArray(loaded.items) &&
         loaded.items.length > 0;
       return keptEmptyHere ? { loaded, emptied: true } : null;

@@ -83,6 +83,11 @@ const SUITES = [
     args: ["tools/tests/run-comanda-live-ticket.js"], timeoutMs: 120000,
   },
   {
+    id: "vaciar-mesa-de-la-app", area: C, level: "standard", title: "Vaciar una mesa cuyo pedido creó la app de camareros",
+    what: "Abre el TPV en un perfil aislado, sin red, y comprueba que cuando el cajero quita todas las líneas de un pedido creado por la app de camareros (su identificador lleva texto, no solo números) se activa el guardado del pedido vacío, igual que con un pedido numérico; que un carrito vacío por otra causa no se guarda vacío; y que la marca se retira al añadir una línea o cambiar de pedido. Antes del arreglo las líneas quitadas se quedaban en el servidor. No toca la demo.",
+    args: ["tools/tests/run-empty-table-app-ticket.js"], timeoutMs: 120000,
+  },
+  {
     id: "e2e-tpv", area: B, level: "standard", title: "Venta completa en TPV normal (demo)",
     what: "Con el TPV real: añadir productos, descuentos y precios, aparcar, recuperar, editar y borrar un pedido, abrir el cobro, imprimir el ticket y cambiar opciones.",
     args: ["tools/tests/run-e2e-demo.js"], timeoutMs: 600000,

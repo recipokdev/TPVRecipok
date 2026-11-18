@@ -10802,13 +10802,13 @@ if (
 
 console.log("\n[SMOKE] Checking 2026-10-27 dejar vacio un aparcado abierto no lo suelta (Asador el Gallo: pedido duplicado y stock doble)\n");
 if (
-  renderer.includes("let PARKED_LINK_KEPT_EMPTY_ID = 0;") &&
+  renderer.includes('let PARKED_LINK_KEPT_EMPTY_ID = "";') &&
   renderer.includes("function armKeepParkedLinkIfCartEmptied() {") &&
   (renderer.match(/armKeepParkedLinkIfCartEmptied\(\);/g) || []).length >= 2 &&
-  renderer.includes("if (uiLines.length) PARKED_LINK_KEPT_EMPTY_ID = 0;") &&
+  renderer.includes('if (uiLines.length) PARKED_LINK_KEPT_EMPTY_ID = "";') &&
   renderer.includes("if (shouldClearCurrentParkedIndex && PARKED_LINK_KEPT_EMPTY_ID) {") &&
-  renderer.includes("(Number(keptTicket.id || keptTicket.ticketId || 0) || 0) === PARKED_LINK_KEPT_EMPTY_ID") &&
-  renderer.includes("PARKED_LINK_KEPT_EMPTY_ID !== ACTIVE_PARKED_TICKET_ID")
+  renderer.includes("parkedLinkIdOf(keptTicket) === PARKED_LINK_KEPT_EMPTY_ID") &&
+  renderer.includes("PARKED_LINK_KEPT_EMPTY_ID !== ACTIVE_PARKED_TICKET_ID_STR")
 ) {
   ok("Si el cajero deja vacio (quitando lineas) el aparcado que tiene abierto, el TPV ya no lo suelta: lo que añada despues actualiza ESE pedido en vez de crear uno nuevo y dejar el viejo vivo con su stock reservado (antes se duplicaba el pedido y el stock se descontaba dos veces); cobrar o 'Salir' siguen soltandolo");
 } else {
@@ -10984,7 +10984,7 @@ if (
   renderer.includes("return keptEmptyHere ? { loaded, emptied: true } : null;") &&
   renderer.includes("allowEmptyItems: intent.emptied === true,") &&
   renderer.includes("} else if (opts?.allowEmptyItems === true && Array.isArray(existing.items) && existing.items.length) {") &&
-  renderer.includes("(Number(loaded.id || loaded.ticketId || 0) || 0) === PARKED_LINK_KEPT_EMPTY_ID")
+  renderer.includes("parkedLinkIdOf(loaded) === PARKED_LINK_KEPT_EMPTY_ID")
 ) {
   ok("El autoguardado de Mesas guarda el pedido VACIO cuando el cajero ha quitado todas sus lineas (getMesasAutoSaveIntent emptied + parkCurrentCart allowEmptyItems): sin esto la linea quitada seguia en el servidor con su stock reservado y ~15 s despues el sondeo remoto imprimia a cocina el plato ya quitado. Hallado por la bateria (run-comanda-auto.js, seccion E)");
 } else {
@@ -11935,6 +11935,17 @@ if (
     renderer.includes("if (liveSeq > mySeq) return;");
   if (okV) ok("Confirmar una comanda sella tambien la copia VIVA del pedido (la de la lista) y le pasa el estado de comanda sin hacerla retroceder: asi un re-guardado entero ya no pisa el sello ni el seq en el servidor");
   else fail("Falta aplicar la confirmacion de comanda a la copia viva del pedido (renderer.js findLiveParkedTicketFor / mirrorComandaStateToLiveTicket en commitComandaPrintedState) -- revisar el cambio de 2026-11-18");
+}
+
+// Vaciar una mesa de un pedido de la app (2026-11-18): el id con texto ("camarero-...") no puede pasar por Number().
+{
+  const okE =
+    renderer.includes("function parkedLinkIdOf(t) {") &&
+    renderer.includes("ACTIVE_PARKED_TICKET_ID_STR = t ? parkedLinkIdOf(t) : \"\";") &&
+    renderer.includes("PARKED_LINK_KEPT_EMPTY_ID = parkedLinkIdOf(t);") &&
+    renderer.includes("Number(t.id || t.ticketId || 0) || 0") === false;
+  if (okE) ok("Vaciar una mesa cuyo pedido creo la app de camareros (id con texto) guarda el pedido vacio: la marca del cajero compara el id como TEXTO, no con Number() (que daba 0)");
+  else fail("Falta comparar como texto el id del pedido vaciado por el cajero (renderer.js parkedLinkIdOf / PARKED_LINK_KEPT_EMPTY_ID) -- revisar el cambio de 2026-11-18");
 }
 
 // Cierre de caja y comanda (2026-11-17, Los Argentinos con P80Plus-USL): lo mismo que el ticket -- nada de opacity < 1 en
