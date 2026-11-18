@@ -37178,7 +37178,8 @@ async function autoUpdateWhenIdleTick(opts = {}) {
     if (TPV_STATE?.offline || TPV_STATE?.locked || manualUpdateActionInFlight || backgroundUpdateCheckInFlight) return "busy-app";
     if (BOOT_IN_FLIGHT || isPayingNow) return "busy-app";
 
-    // Solo con la descarga ya lista: reiniciar es casi instantaneo y no hace falta internet para instalarla.
+    // Solo con la descarga ya lista: el reinicio es rapido (no hay que bajar nada), pero al arrancar la pantalla de
+    // actualizacion vuelve a consultar al servidor; sin internet abre con la version vieja, asi que antes se comprueba la conexion.
     const status = await updaterApi.getBackgroundPrefetchStatus().catch(() => null);
     if (!status?.ready) return "not-ready";
     const targetVersion = String(status.readyVersion || "").trim();
@@ -37191,6 +37192,13 @@ async function autoUpdateWhenIdleTick(opts = {}) {
       (o) => o.id !== "loginOverlay",
     );
     if (blocking.length) return "overlay-open";
+
+    let online = false;
+    for (let i = 1; i <= 2 && !online; i++) {
+      online = (await checkFSOnline().catch(() => false)) === true;
+      if (!online && i < 2) await sleep(opts.retryMs ?? 3000);
+    }
+    if (!online) return "offline";
 
     // Mientras se miraba todo esto, alguien puede haber tocado la pantalla.
     if (opts.now == null && Date.now() - __lastUserInputAt < needIdleMs) return "not-idle";

@@ -41,6 +41,8 @@ function check(label, cond, extra) {
         getBackgroundPrefetchStatus: async () => ({ ready: window.__upd.ready, readyVersion: "9.9.9", percent: 100, running: false }),
         relaunchForUpdate: async () => { window.__calls.relaunch++; return { ok: true }; },
       };
+      window.__online = true;
+      window.checkFSOnline = async () => window.__online;
       backgroundUpdateSettings = { ...backgroundUpdateSettings, enabled: true, offerOnCashClose: true };
       TPV_STATE.offline = false; TPV_STATE.locked = false;
       cart = []; renderCart();
@@ -49,7 +51,7 @@ function check(label, cond, extra) {
     });
     const MIN = 60 * 1000;
     // idleMin = minutos "sin tocar la pantalla" que se simulan adelantando el reloj
-    const run = (idleMin) => win.evaluate((ms) => autoUpdateWhenIdleTick({ now: Date.now() + ms }), idleMin * MIN);
+    const run = (idleMin) => win.evaluate((ms) => autoUpdateWhenIdleTick({ now: Date.now() + ms, retryMs: 1 }), idleMin * MIN);
     const relaunches = () => win.evaluate(() => window.__calls.relaunch);
     const reset = () => win.evaluate(() => { window.__calls.relaunch = 0; localStorage.removeItem("tpv_idle_update_declined_at"); localStorage.removeItem("tpv_idle_update_tried_at"); });
 
@@ -87,6 +89,11 @@ function check(label, cond, extra) {
     check("En modo offline no actualiza", r === "busy-app", r);
     await win.evaluate(() => { TPV_STATE.offline = false; });
 
+    await win.evaluate(() => { window.__online = false; });
+    r = await run(15);
+    check("Si el TPV cree estar en linea pero no hay conexion real (p. ej. justo al despertar), no reinicia", r === "offline" && (await relaunches()) === 0, r);
+    await win.evaluate(() => { window.__online = true; });
+
     await win.evaluate(() => { backgroundUpdateSettings = { ...backgroundUpdateSettings, offerOnCashClose: false }; });
     r = await run(15);
     check("Si esta desactivado en Opciones no actua", r === "disabled", r);
@@ -94,7 +101,7 @@ function check(label, cond, extra) {
 
     // todo despejado: caja cerrada, 11 min, descarga lista -> cuenta atras -> ACEPTAR
     await reset();
-    let p = win.evaluate((ms) => autoUpdateWhenIdleTick({ now: Date.now() + ms }), 11 * MIN);
+    let p = win.evaluate((ms) => autoUpdateWhenIdleTick({ now: Date.now() + ms, retryMs: 1 }), 11 * MIN);
     await win.waitForFunction(() => !document.getElementById("msgOverlay").classList.contains("hidden"), null, { timeout: 20000 });
     const txt = await win.evaluate(() => document.getElementById("msgText").innerText.replace(/\s+/g, " "));
     check("Se muestra la cuenta atras: «lleva un rato sin usarse» y la version nueva", /rato sin usarse/i.test(txt) && /9\.9\.9/.test(txt), txt.slice(0, 160));
@@ -107,7 +114,7 @@ function check(label, cond, extra) {
     // caja abierta con 31 min sin usar -> tambien
     await reset();
     await win.evaluate(() => { cashSession.open = true; });
-    p = win.evaluate((ms) => autoUpdateWhenIdleTick({ now: Date.now() + ms }), 31 * MIN);
+    p = win.evaluate((ms) => autoUpdateWhenIdleTick({ now: Date.now() + ms, retryMs: 1 }), 31 * MIN);
     await win.waitForFunction(() => !document.getElementById("msgOverlay").classList.contains("hidden"), null, { timeout: 20000 });
     await win.click("#msgOkBtn");
     r = await p;
@@ -116,7 +123,7 @@ function check(label, cond, extra) {
 
     // POSPONER
     await reset();
-    p = win.evaluate((ms) => autoUpdateWhenIdleTick({ now: Date.now() + ms }), 11 * MIN);
+    p = win.evaluate((ms) => autoUpdateWhenIdleTick({ now: Date.now() + ms, retryMs: 1 }), 11 * MIN);
     await win.waitForFunction(() => !document.getElementById("msgOverlay").classList.contains("hidden"), null, { timeout: 20000 });
     await win.click("#msgCancelBtn");
     r = await p;

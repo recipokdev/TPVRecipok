@@ -11900,6 +11900,7 @@ if (
     renderer.includes("async function autoUpdateWhenIdleTick(opts = {}) {") &&
     renderer.includes("const IDLE_UPDATE_AFTER_MS_CAJA_CLOSED = 10 * 60 * 1000;") &&
     renderer.includes("const IDLE_UPDATE_AFTER_MS_CAJA_OPEN = 30 * 60 * 1000;") &&
+    renderer.includes('if (!online) return "offline";') &&
     renderer.includes('if (!status?.ready) return "not-ready";') &&
     renderer.includes('if (resumeHasWorkInProgress()) return "work-in-progress";') &&
     renderer.includes('if (now - triedAt < IDLE_UPDATE_TRIED_GAP_MS) return "tried-recently";') &&
