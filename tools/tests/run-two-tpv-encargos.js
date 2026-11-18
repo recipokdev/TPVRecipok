@@ -46,6 +46,9 @@ async function launch(dirName, label) {
       window.ensurePrinterSelectedForPrint = async () => ""; window.openDrawerNow = async () => true;
       const real = window.buildFsLinesFromCart;
       window.buildFsLinesFromCart = (c) => real(c).map((l) => ({ ...l, descripcion: String(l.descripcion || "") + " [PRUEBA ENCARGOS]" }));
+      // Las pruebas de Mesas de antes dejan el perfil en Modo Mesas (se guarda): con Mesas activo "Pasar a encargo" sale deshabilitado
+      // y el asistente no abre (fallo real de la bateria completa, 17 y 18-nov, que sueltas no se veia).
+      if (typeof MESAS_INLINE_ACTIVE !== "undefined" && MESAS_INLINE_ACTIVE) { await setMesasInlineModeEnabled(false); await new Promise((r) => setTimeout(r, 1500)); }
       await window.TPV_CFG.set("ui.encargosEnabled", true); await window.TPV_CFG.set("ui.encargosNoveltySeen", true);
       await window.TPV_ENCARGOS.loadEnabled();
       cart = []; setCurrentParkedTicketIndex(null); renderCart();
