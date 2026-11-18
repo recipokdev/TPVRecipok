@@ -121,6 +121,25 @@ function check(label, cond, extra) {
     check("Caja abierta y 31 min sin usarse: tambien actualiza", r === "relaunching" && (await relaunches()) === 1, r);
     await win.evaluate(() => { cashSession.open = false; });
 
+    // Mesas en pantalla: con 11 min o 5 h NO; con 7 h SI (un cliente de Mesas con el mapa siempre abierto, de un dia para otro)
+    await reset();
+    await win.evaluate(() => { MESAS_INLINE_ACTIVE = true; });
+    r = await run(11);
+    check("Mesas en pantalla y 11 min sin usarse: no actualiza (cuenta como trabajo)", r === "work-in-progress" && (await relaunches()) === 0, r);
+    r = await run(300);
+    check("Mesas en pantalla y 5 h sin usarse: todavia no", r === "work-in-progress" && (await relaunches()) === 0, r);
+    p = win.evaluate((ms) => autoUpdateWhenIdleTick({ now: Date.now() + ms, retryMs: 1 }), 7 * 60 * MIN);
+    await win.waitForFunction(() => !document.getElementById("msgOverlay").classList.contains("hidden"), null, { timeout: 20000 });
+    await win.click("#msgOkBtn");
+    r = await p;
+    check("Mesas en pantalla y 7 h sin usarse (de un dia para otro): SI actualiza", r === "relaunching" && (await relaunches()) === 1, r);
+    // ... pero ni con 7 h si hay un carrito
+    await reset();
+    await win.evaluate(() => { cart = [{ id: 1, name: "X", qty: 1, price: 1 }]; });
+    r = await run(7 * 60);
+    check("Con 7 h sin usarse pero con un carrito con productos, no actualiza", r === "work-in-progress" && (await relaunches()) === 0, r);
+    await win.evaluate(() => { cart = []; renderCart(); MESAS_INLINE_ACTIVE = false; });
+
     // POSPONER
     await reset();
     p = win.evaluate((ms) => autoUpdateWhenIdleTick({ now: Date.now() + ms, retryMs: 1 }), 11 * MIN);

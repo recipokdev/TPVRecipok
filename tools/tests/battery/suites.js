@@ -69,7 +69,7 @@ const SUITES = [
   },
   {
     id: "actualizar-si-inactivo", area: B, level: "standard", title: "Actualizar solo tras un rato sin usar el TPV",
-    what: "Abre el TPV en un perfil aislado, sin red, con un actualizador falso y el reloj adelantado, y comprueba que con la versión nueva ya descargada solo se ofrece actualizar tras 10 minutos sin tocar la pantalla con la caja cerrada (30 con la caja abierta), que no actúa con carrito, cobro, otras ventanas, sin conexión, sin descarga lista o si se desactiva en Opciones, que no insiste en 2 horas tras un intento ni en 3 horas tras posponer, y que aceptar reinicia una sola vez. No toca la demo.",
+    what: "Abre el TPV en un perfil aislado, sin red, con un actualizador falso y el reloj adelantado, y comprueba que con la versión nueva ya descargada solo se ofrece actualizar tras 10 minutos sin tocar la pantalla con la caja cerrada (30 con la caja abierta, 6 horas con Mesas en pantalla), que no actúa con carrito, cobro, otras ventanas, sin conexión, sin descarga lista o si se desactiva en Opciones, que no insiste en 2 horas tras un intento ni en 3 horas tras posponer, y que aceptar reinicia una sola vez. No toca la demo.",
     args: ["tools/tests/run-update-when-idle.js"], timeoutMs: 150000,
   },
   {

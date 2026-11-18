@@ -37138,6 +37138,9 @@ window.TPV_UI?.onPowerResume?.(() => {
 const IDLE_UPDATE_TICK_MS = 2 * 60 * 1000;
 const IDLE_UPDATE_AFTER_MS_CAJA_CLOSED = 10 * 60 * 1000;
 const IDLE_UPDATE_AFTER_MS_CAJA_OPEN = 30 * 60 * 1000;
+// Con 6 h o mas sin tocar el equipo (de un dia para otro, p. ej.) se actualiza tambien con Mesas en pantalla: sigue sin hacerlo con
+// carrito, cobro, ventanas o ventas sin enviar. Sin esto, un cliente de Mesas con el mapa siempre abierto no se actualizaria nunca.
+const IDLE_UPDATE_LONG_AFTER_MS = 6 * 60 * 60 * 1000;
 const IDLE_UPDATE_DECLINED_KEY = "tpv_idle_update_declined_at";
 const IDLE_UPDATE_DECLINED_GAP_MS = 3 * 60 * 60 * 1000;
 const IDLE_UPDATE_TRIED_KEY = "tpv_idle_update_tried_at";
@@ -37164,6 +37167,7 @@ async function autoUpdateWhenIdleTick(opts = {}) {
 
     const now = Number(opts.now ?? Date.now());
     const needIdleMs = cashSession?.open ? IDLE_UPDATE_AFTER_MS_CAJA_OPEN : IDLE_UPDATE_AFTER_MS_CAJA_CLOSED;
+    const longIdle = now - __lastUserInputAt >= IDLE_UPDATE_LONG_AFTER_MS;
     if (now - __lastUserInputAt < needIdleMs) return "not-idle";
 
     let declinedAt = 0;
@@ -37184,8 +37188,8 @@ async function autoUpdateWhenIdleTick(opts = {}) {
     if (!status?.ready) return "not-ready";
     const targetVersion = String(status.readyVersion || "").trim();
 
-    // Nada en marcha.
-    if (resumeHasWorkInProgress()) return "work-in-progress";
+    // Nada en marcha (con 6 h o mas sin tocar, el mapa de Mesas en pantalla no cuenta como trabajo).
+    if (resumeHasWorkInProgress({ ignoreMesasView: longIdle })) return "work-in-progress";
     const pendingSales = Number(await window.TPV_QUEUE?.count?.().catch(() => 0)) || 0;
     if (pendingSales > 0 || loadParkedSyncQueue().length > 0) return "pending-sync";
     const blocking = [...document.querySelectorAll(".simple-overlay:not(.hidden), .critical-overlay:not(.hidden)")].filter(
@@ -63467,13 +63471,13 @@ const RESUME_RELOAD_GAP_MS = 30 * 60 * 1000;
 const RESUME_RELOAD_KEY = "tpv_resume_reload_at";
 let __resumeRefreshBusy = false;
 
-function resumeHasWorkInProgress() {
+function resumeHasWorkInProgress(opts = {}) {
   const payOpen = typeof payOverlay !== "undefined" && payOverlay && !payOverlay.classList.contains("hidden");
   return (
     !!isPayingNow ||
     payOpen ||
     (Array.isArray(cart) && cart.length > 0) ||
-    !!MESAS_INLINE_ACTIVE ||
+    (!opts.ignoreMesasView && !!MESAS_INLINE_ACTIVE) ||
     !!window.TPV_ENCARGOS?.isEditing?.()
   );
 }
