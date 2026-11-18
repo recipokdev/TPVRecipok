@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.66",
+      "date": "2026-11-18",
+      "title": "Release 0.2.66",
       "changes": [
         "MEJORA: si el equipo se suspende en vez de apagarse (se deja el PC dormido de un día para otro) el TPV se quedaba en la versión vieja aunque la nueva ya estuviera descargada. Ahora, al despertar el equipo, si hay una versión nueva, la caja está cerrada y no hay nada en marcha (ni carrito, ni cobro, ni ventas o aparcados sin enviar), ofrece actualizar con la misma cuenta atrás cancelable de después de cerrar la caja. Si se pospone, no vuelve a preguntar en 6 horas.",
         "MEJORA: el TPV se actualiza solo cuando se queda sin usar. Antes, si abrían el TPV y lo dejaban encendido sin tocarlo, nunca se enteraba de que había versión nueva (el aviso de la esquina se puede ignorar). Ahora, con la versión nueva ya descargada y nada en marcha (ni carrito, ni cobro, ni Mesas, ni ventas o aparcados sin enviar), tras 10 minutos sin tocar la pantalla con la caja cerrada (30 con la caja abierta) sale la cuenta atrás de 30 segundos, que se puede cancelar, y se reinicia. Con 6 horas o más sin tocar el equipo (de un día para otro) también se actualiza con la caja abierta o con Mesas en pantalla, siempre que no haya nada en marcha. Si se pospone, no vuelve a preguntar en 3 horas. El interruptor de Opciones pasa a llamarse «Actualizar solo cuando no hay nada en marcha» y cubre este caso, el de después de cerrar la caja y el de al despertar el equipo."
