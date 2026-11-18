@@ -50996,6 +50996,36 @@ function getNextComandaPartNumber(ticket) {
   return Math.max(1, Number(state?.seq || 0) + 1);
 }
 
+// La copia VIVA de un pedido (el objeto que hay ahora en la lista parkedTickets, localizado por id): distinta de la
+// referencia que alguien capturo antes de esperar a la impresora si la sincronizacion la sustituyo mientras tanto.
+function findLiveParkedTicketFor(ticket) {
+  try {
+    const id = String(ticket?.id ?? "").trim();
+    if (!id || !Array.isArray(parkedTickets)) return null;
+    return parkedTickets.find((t) => t && String(t.id ?? "").trim() === id) || null;
+  } catch {
+    return null;
+  }
+}
+
+// Copia el estado de comanda recien confirmado a la copia viva, sin hacerla retroceder si esta ya tiene uno mas nuevo.
+function mirrorComandaStateToLiveTicket(ticket) {
+  const live = findLiveParkedTicketFor(ticket);
+  if (!live || live === ticket || !ticket?.comandaState) return;
+  const liveSeq = Math.max(0, Number(live?.comandaState?.seq || 0) || 0);
+  const mySeq = Math.max(0, Number(ticket.comandaState.seq || 0) || 0);
+  if (liveSeq > mySeq) return;
+  live.comandaState = {
+    seq: mySeq,
+    printedQtyByLineKey: { ...(ticket.comandaState.printedQtyByLineKey || {}) },
+    lastPrintedAt: ticket.comandaState.lastPrintedAt,
+  };
+  live.updatedAt = ticket.updatedAt;
+  live.localRevisionAt = ticket.localRevisionAt;
+  live.comandaAutoPrintFailedAt = null;
+  live.comandaAutoPrintFailedError = null;
+}
+
 function commitComandaPrintedState(ticket, sourceLines = cart) {
   if (!ticket || typeof ticket !== "object") return;
   const filteredLines = getComandaPrintableLines(sourceLines || []);
@@ -51064,11 +51094,17 @@ function commitComandaPrintedState(ticket, sourceLines = cart) {
         });
       };
       stampOther(ticket?.items);
+      // El pedido que se confirma puede ser una referencia VIEJA: durante la espera de la impresion la sincronizacion
+      // con el servidor sustituye el objeto de la lista por otro. Si el sello solo se pone en el objeto huerfano, la
+      // copia viva queda sin sello y su siguiente guardado entero lo pisa en el servidor (visto con la app de camareros,
+      // 2026-11-18: la linea impresa volvia a "sin enviar"). Se sella tambien la copia viva, localizada por id.
+      const liveTicket = findLiveParkedTicketFor(ticket);
+      if (liveTicket && liveTicket !== ticket) stampOther(liveTicket.items);
       const loadedNow =
         currentParkedTicketIndex != null
           ? parkedTickets?.[currentParkedTicketIndex]
           : null;
-      if (loadedNow && loadedNow === ticket) stampOther(cart);
+      if (loadedNow && (loadedNow === ticket || loadedNow === liveTicket)) stampOther(cart);
     }
   } catch (e) {
     console.warn("No se pudo sellar el envio a cocina en las lineas:", e?.message || e);
@@ -51087,6 +51123,7 @@ function commitComandaPrintedState(ticket, sourceLines = cart) {
   cancelAutoComandaForTicket(ticket?.id);
   ticket.updatedAt = new Date();
   ticket.localRevisionAt = Date.now();
+  mirrorComandaStateToLiveTicket(ticket);
 
   // Cualquier impresion con exito (manual o automatica, local o por poll
   // remoto) limpia un aviso de fallo previo: si estaba fallando y ahora ha

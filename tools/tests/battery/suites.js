@@ -78,6 +78,11 @@ const SUITES = [
     args: ["tools/tests/run-thermal-logo.js"], timeoutMs: 150000,
   },
   {
+    id: "comanda-copia-viva", area: C, level: "standard", title: "Confirmar una comanda cuando el pedido de la lista ya fue sustituido",
+    what: "Abre el TPV en un perfil aislado, sin red, y simula lo que ocurría con la app de camareros: mientras se espera a la impresora, la sincronización con el servidor sustituye el pedido de la lista. Comprueba que la confirmación de la comanda (número de comanda y sello de cada línea) llega a la copia que sigue viva, que no hace retroceder una copia más nueva, y que el caso normal y el pedido que ya no está en la lista siguen igual. Antes del arreglo la línea impresa volvía a salir como «sin enviar». No toca la demo.",
+    args: ["tools/tests/run-comanda-live-ticket.js"], timeoutMs: 120000,
+  },
+  {
     id: "e2e-tpv", area: B, level: "standard", title: "Venta completa en TPV normal (demo)",
     what: "Con el TPV real: añadir productos, descuentos y precios, aparcar, recuperar, editar y borrar un pedido, abrir el cobro, imprimir el ticket y cambiar opciones.",
     args: ["tools/tests/run-e2e-demo.js"], timeoutMs: 600000,

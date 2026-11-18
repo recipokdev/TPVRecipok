@@ -6,7 +6,8 @@
       "date": "",
       "title": "",
       "changes": [
-        "ARREGLO: el logo de la empresa en los tickets y en el cierre de caja salía a puntitos en las impresoras térmicas, como si faltara tinta (un logo de color, por ejemplo marrón, es un gris para una térmica, que solo imprime negro o blanco). Ahora el TPV lo convierte a negro y blanco puros, del tamaño exacto en que se imprime, y los trazos salen limpios. Si el logo es una foto o un degradado lo deja como estaba. Se puede desactivar en Opciones → Impresora → «Logo en blanco y negro nítido»."
+        "ARREGLO: el logo de la empresa en los tickets y en el cierre de caja salía a puntitos en las impresoras térmicas, como si faltara tinta (un logo de color, por ejemplo marrón, es un gris para una térmica, que solo imprime negro o blanco). Ahora el TPV lo convierte a negro y blanco puros, del tamaño exacto en que se imprime, y los trazos salen limpios. Si el logo es una foto o un degradado lo deja como estaba. Se puede desactivar en Opciones → Impresora → «Logo en blanco y negro nítido».",
+        "ARREGLO: en Modo Mesas con la app de camareros, una línea ya impresa en cocina podía volver a aparecer como «sin enviar» (y no salir nunca a cocina) cuando la app guardaba el pedido mientras el TPV esperaba a la impresora. Pasaba porque el TPV confirmaba la comanda sobre una copia del pedido que la sincronización con el servidor ya había sustituido, y su siguiente guardado pisaba el número de comanda y el sello de las líneas. Ahora la confirmación se aplica también a la copia que sigue viva."
       ]
     },
     {

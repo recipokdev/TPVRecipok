@@ -11925,6 +11925,18 @@ if (
   else fail("Falta el logo en blanco y negro para termicas (renderer.js getCompanyLogoForThermal en ticket y cierre, index.html thermalLogoToggle) -- revisar el cambio de 2026-11-18");
 }
 
+// Comanda confirmada sobre una referencia vieja (2026-11-18, prueba conjunta con la app de camareros): el sello y el seq tambien a la copia viva.
+{
+  const okV =
+    renderer.includes("function findLiveParkedTicketFor(ticket) {") &&
+    renderer.includes("function mirrorComandaStateToLiveTicket(ticket) {") &&
+    renderer.includes("if (liveTicket && liveTicket !== ticket) stampOther(liveTicket.items);") &&
+    renderer.includes("mirrorComandaStateToLiveTicket(ticket);") &&
+    renderer.includes("if (liveSeq > mySeq) return;");
+  if (okV) ok("Confirmar una comanda sella tambien la copia VIVA del pedido (la de la lista) y le pasa el estado de comanda sin hacerla retroceder: asi un re-guardado entero ya no pisa el sello ni el seq en el servidor");
+  else fail("Falta aplicar la confirmacion de comanda a la copia viva del pedido (renderer.js findLiveParkedTicketFor / mirrorComandaStateToLiveTicket en commitComandaPrintedState) -- revisar el cambio de 2026-11-18");
+}
+
 // Cierre de caja y comanda (2026-11-17, Los Argentinos con P80Plus-USL): lo mismo que el ticket -- nada de opacity < 1 en
 // las plantillas termicas, el gris se imprime como puntitos y parece que falta tinta.
 {
