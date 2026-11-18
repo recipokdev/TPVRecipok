@@ -88,6 +88,7 @@ Con la sesión iniciada puedes ver y cambiar las Opciones **aunque la caja esté
 ### Impresora
 - **Impresora de tickets.** Elige y prueba la impresora de tickets; se guarda para las próximas impresiones.
 - **Imprimir automáticamente al cobrar.** Imprime el ticket nada más cobrar.
+- **Logo en blanco y negro nítido.** Activado por defecto. Las impresoras térmicas solo imprimen negro o blanco, así que un logo de colores (por ejemplo, marrón) sale a puntitos, como si faltara tinta. Con esta opción el logo del ticket y del cierre de caja se imprime en negro sólido, con los trazos limpios. Si tu logo es una foto o un degradado, el TPV lo detecta y lo imprime como estaba; también puedes desactivar la opción. La factura en A4 mantiene el logo en color.
 - **Impresora de comandas.** Impresora que se usa solo para las comandas de cocina.
 - **Correo de facturas.** Cuenta de correo desde la que se envían las facturas a los clientes (solo administradores). Consulta el capítulo «Tickets, devoluciones y facturas».
 
@@ -140,7 +141,7 @@ Así vienen las opciones principales en un TPV nuevo. Lo que tu administrador ca
 
 - **Iniciar TPV al encender el PC:** activado.
 - **Modo TPV (kiosk):** apagado en instalaciones nuevas.
-- **Teclado en pantalla:** activado. **Pantalla cliente:** apagada. **Escala de la interfaz:** *Automático*.
+- **Teclado en pantalla:** activado. **Pantalla cliente:** apagada. **Escala de la interfaz:** *Automático*. **Logo en blanco y negro nítido:** activado.
 - **Orden de los productos:** *Manual (prioridad)*. Los demás: *Por defecto (FacturaScripts)*, *Referencia*, *Descripción* e *ID de producto*.
 - **Moneda:** *Automática* (la divisa por defecto de FacturaScripts; si es el euro, todo sale como siempre).
 - **Desagrupar líneas:** activado (cada toque crea una línea nueva).

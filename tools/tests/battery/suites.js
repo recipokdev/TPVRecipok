@@ -73,6 +73,11 @@ const SUITES = [
     args: ["tools/tests/run-update-when-idle.js"], timeoutMs: 150000,
   },
   {
+    id: "logo-termico", area: B, level: "standard", title: "Logo en blanco y negro puro para impresoras térmicas",
+    what: "Abre el TPV en un perfil aislado, sin red, y con imágenes generadas por la propia prueba comprueba que una caligrafía de color (como la de Los Argentinos) se convierte en negro y blanco puros del tamaño exacto de impresión (8 puntos por mm), que una foto o un degradado se deja como estaba, que lo transparente sale blanco, que el interruptor de Opciones lo apaga y que si la imagen no se puede leer no falla. No toca la demo.",
+    args: ["tools/tests/run-thermal-logo.js"], timeoutMs: 150000,
+  },
+  {
     id: "e2e-tpv", area: B, level: "standard", title: "Venta completa en TPV normal (demo)",
     what: "Con el TPV real: añadir productos, descuentos y precios, aparcar, recuperar, editar y borrar un pedido, abrir el cobro, imprimir el ticket y cambiar opciones.",
     args: ["tools/tests/run-e2e-demo.js"], timeoutMs: 600000,

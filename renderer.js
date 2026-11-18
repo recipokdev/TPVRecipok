@@ -32816,6 +32816,159 @@ function applyLogoAspectAwareMaxHeight(logoEl, tallMaxHeight) {
   }
 }
 
+// Logo en BLANCO Y NEGRO PURO para las impresoras termicas (2026-11-18). Real: el logo de Los Argentinos es una caligrafia
+// MARRON sobre blanco (JPEG 480x300); una termica solo imprime negro o blanco, asi que el driver convierte el marron (un gris
+// medio) en puntitos y el logo sale tramado "como sin tinta". Aqui se redibuja el logo al tamano exacto en que se imprime
+// (8 puntos/mm = 203 dpi), se aplica un umbral (Otsu, con un pequeño sesgo hacia el negro para no adelgazar trazos finos) y se
+// entrega un PNG solo negro/blanco. Si la imagen parece una FOTO (muchos tonos medios) o algo falla, se deja el logo original.
+// Solo para tickets y cierre de caja (termicas); la factura A4 mantiene el logo en color. Interruptor en Opciones -> Impresora.
+const THERMAL_LOGO_CFG_KEY = "ui.thermalLogoBw";
+const THERMAL_LOGO_DOTS_PER_MM = 8;
+// Una foto o un degradado reparte los pixeles entre MUCHOS niveles de gris; un logo (colores planos + bordes suavizados) solo
+// pesa en unos pocos. Se cuentan los tramos de 16 niveles que reunen >= 8 % de los pixeles que no son blancos.
+const THERMAL_LOGO_PHOTO_MIN_BINS = 6;
+let __thermalLogoCache = { key: "", out: "" };
+
+async function isThermalLogoEnabled() {
+  try {
+    const v = await window.TPV_CFG?.get?.(THERMAL_LOGO_CFG_KEY);
+    if (v !== undefined && v !== null && v !== "") return parseBoolLike(v, true);
+  } catch {}
+  return true;
+}
+
+// Luminancia (0-255) de cada pixel, componiendo la transparencia sobre blanco.
+function thermalLogoLuma(rgba, w, h) {
+  const n = w * h;
+  const luma = new Uint8Array(n);
+  for (let p = 0, i = 0; p < n; p++, i += 4) {
+    const a = rgba[i + 3] / 255;
+    const r = rgba[i] * a + 255 * (1 - a);
+    const g = rgba[i + 1] * a + 255 * (1 - a);
+    const b = rgba[i + 2] * a + 255 * (1 - a);
+    luma[p] = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+  }
+  return luma;
+}
+
+// Umbral de Otsu del histograma de luminancia.
+function thermalLogoOtsu(luma) {
+  const hist = new Array(256).fill(0);
+  for (let i = 0; i < luma.length; i++) hist[luma[i]]++;
+  const n = luma.length;
+  let sum = 0;
+  for (let t = 0; t < 256; t++) sum += t * hist[t];
+  let sumB = 0;
+  let wB = 0;
+  let best = -1;
+  let thr = 128;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (!wB) continue;
+    const wF = n - wB;
+    if (!wF) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB;
+    const mF = (sum - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > best) {
+      best = between;
+      thr = t;
+    }
+  }
+  return thr;
+}
+
+// Cuantos tramos de gris (16 niveles cada uno) pesan de verdad entre los pixeles que no son (casi) blancos.
+function thermalLogoToneBins(luma) {
+  const bins = new Array(16).fill(0);
+  let inked = 0;
+  for (let i = 0; i < luma.length; i++) {
+    if (luma[i] >= 235) continue;
+    bins[luma[i] >> 4]++;
+    inked++;
+  }
+  if (!inked) return 0;
+  return bins.filter((n) => n / inked >= 0.08).length;
+}
+
+function thermalLogoDrawToCanvas(img, w, h) {
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const g = c.getContext("2d", { willReadFrequently: true });
+  g.fillStyle = "#fff";
+  g.fillRect(0, 0, w, h);
+  g.imageSmoothingEnabled = true;
+  g.imageSmoothingQuality = "high";
+  g.drawImage(img, 0, 0, w, h);
+  return { c, g };
+}
+
+// Devuelve { dataUrl, reason, threshold, midFraction }. dataUrl vacio = no tocar el logo (reason dice por que).
+async function thermalizeLogoFromUrl(url, targetW, targetH) {
+  const img = await new Promise((resolve, reject) => {
+    const i = new Image();
+    i.onload = () => resolve(i);
+    i.onerror = () => reject(new Error("no se pudo cargar el logo"));
+    i.src = url;
+  });
+  const nw = img.naturalWidth;
+  const nh = img.naturalHeight;
+  if (!nw || !nh) return { dataUrl: "", reason: "sin-tamano" };
+
+  // 1) Analisis a (casi) tamano natural: logo de lineas o foto.
+  const k = Math.min(1, 1024 / Math.max(nw, nh));
+  const sw = Math.max(1, Math.round(nw * k));
+  const sh = Math.max(1, Math.round(nh * k));
+  const sample = thermalLogoDrawToCanvas(img, sw, sh);
+  const sampleLuma = thermalLogoLuma(sample.g.getImageData(0, 0, sw, sh).data, sw, sh);
+  const toneBins = thermalLogoToneBins(sampleLuma);
+  if (toneBins >= THERMAL_LOGO_PHOTO_MIN_BINS) return { dataUrl: "", reason: "parece-foto", toneBins };
+
+  // 2) Redibujar al tamano de impresion y umbralizar.
+  const tw = Math.max(16, Math.round(targetW));
+  const th = Math.max(16, Math.round(targetH));
+  const out = thermalLogoDrawToCanvas(img, tw, th);
+  const imgData = out.g.getImageData(0, 0, tw, th);
+  const luma = thermalLogoLuma(imgData.data, tw, th);
+  const threshold = Math.max(120, Math.min(205, thermalLogoOtsu(luma) + 12));
+  for (let p = 0, i = 0; p < luma.length; p++, i += 4) {
+    const v = luma[p] < threshold ? 0 : 255;
+    imgData.data[i] = v;
+    imgData.data[i + 1] = v;
+    imgData.data[i + 2] = v;
+    imgData.data[i + 3] = 255;
+  }
+  out.g.putImageData(imgData, 0, 0);
+  return { dataUrl: out.c.toDataURL("image/png"), reason: "ok", threshold, toneBins };
+}
+window.__thermalizeLogoFromUrl = thermalizeLogoFromUrl;
+
+// URL (o data URL) del logo a usar en un impreso termico. tallMaxHeightMm = alto maximo que le da la plantilla a un logo
+// cuadrado/vertical (los anchos usan 18 mm), para sacar el tamano exacto en puntos.
+async function getCompanyLogoForThermal(tallMaxHeightMm = 30) {
+  const url = companyLogoUrl || "";
+  if (!url) return "";
+  try {
+    if (!(await isThermalLogoEnabled())) return url;
+    await ensureCompanyLogoAspectRatio();
+    const aspect = companyLogoAspectRatio || 2;
+    const maxH = aspect < 1.8 ? tallMaxHeightMm : 18;
+    const widthMm = Math.min(60, maxH * aspect);
+    const w = Math.round(widthMm * THERMAL_LOGO_DOTS_PER_MM);
+    const h = Math.round(w / aspect);
+    const key = `${url}|${w}x${h}`;
+    if (__thermalLogoCache.key === key) return __thermalLogoCache.out || url;
+    const r = await thermalizeLogoFromUrl(url, w, h);
+    __thermalLogoCache = { key, out: r.dataUrl || "" };
+    return r.dataUrl || url;
+  } catch (e) {
+    console.warn("[thermal-logo] se usa el logo original:", e?.message || e);
+    return url;
+  }
+}
+
 async function restoreTerminalAgentFromCfg() {
   const cfg = window.TPV_CFG;
   if (!cfg) return;
@@ -34048,6 +34201,7 @@ const OPT_PREVIEW_DEFS = {
     OPT_PV.A("Abrir cajón ahora", "optionsOpenDrawerBtn"),
   ],
   impresora: [
+    OPT_PV.T("Logo en blanco y negro nítido", "thermalLogoToggle"),
     OPT_PV.X("Impresora de tickets", "currentPrinterName", (el) => {
       const t = optPvText(el);
       return !t || t === "—"
@@ -40768,10 +40922,11 @@ async function printTicket(ticket) {
     const logoEl = doc.getElementById("companyLogo");
     const logoUrl = companyLogoUrl || "";
     if (logoEl && logoUrl) {
-      logoEl.setAttribute("src", logoUrl);
       logoEl.style.display = "inline-block";
       await ensureCompanyLogoAspectRatio();
       applyLogoAspectAwareMaxHeight(logoEl, "30mm");
+      // termica: logo en blanco y negro puro (ver getCompanyLogoForThermal)
+      logoEl.setAttribute("src", await getCompanyLogoForThermal(30));
     }
     setText(doc, "companyShortName", emp?.nombrecorto || "—");
     setText(doc, "companyLegalName", emp?.nombre || "");
@@ -40988,10 +41143,11 @@ async function printCashCloseReport(report) {
 
     const logoEl = doc.getElementById("companyLogo");
     if (logoEl && companyLogoUrl) {
-      logoEl.setAttribute("src", companyLogoUrl);
       logoEl.style.display = "inline-block";
       await ensureCompanyLogoAspectRatio();
       applyLogoAspectAwareMaxHeight(logoEl, "30mm");
+      // termica: logo en blanco y negro puro (ver getCompanyLogoForThermal)
+      logoEl.setAttribute("src", await getCompanyLogoForThermal(30));
     }
 
     _setText("companyShortName", report.companyShortName || "");
@@ -65820,6 +65976,19 @@ async function initKioskToggle() {
 }
 
 initKioskToggle();
+
+// Interruptor «Logo en blanco y negro nítido» (Opciones -> Impresora): activado por defecto.
+(async function initThermalLogoToggle() {
+  const el = document.getElementById("thermalLogoToggle");
+  if (!el) return;
+  el.checked = await isThermalLogoEnabled();
+  el.addEventListener("change", async () => {
+    __thermalLogoCache = { key: "", out: "" };
+    try {
+      await window.TPV_CFG?.set?.(THERMAL_LOGO_CFG_KEY, !!el.checked);
+    } catch {}
+  });
+})();
 
 const uiZoomSelect = document.getElementById("uiZoomSelect");
 const uiZoomPreviewItem = document.getElementById("uiZoomPreviewItem");

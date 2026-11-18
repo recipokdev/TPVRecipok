@@ -11911,6 +11911,20 @@ if (
   else fail("Falta la actualizacion por inactividad (renderer.js autoUpdateWhenIdleTick) -- revisar el cambio de 2026-11-18");
 }
 
+// Logo termico (2026-11-18, Los Argentinos: logo marron que la termica trama en puntitos): blanco y negro puro en ticket y cierre.
+{
+  const okL =
+    renderer.includes("async function getCompanyLogoForThermal(tallMaxHeightMm = 30) {") &&
+    renderer.includes("const THERMAL_LOGO_DOTS_PER_MM = 8;") &&
+    renderer.includes("const THERMAL_LOGO_PHOTO_MIN_BINS = 6;") &&
+    renderer.includes("async function thermalizeLogoFromUrl(url, targetW, targetH) {") &&
+    renderer.split("await getCompanyLogoForThermal(30)").length - 1 === 2 &&
+    renderer.includes('OPT_PV.T("Logo en blanco y negro nítido", "thermalLogoToggle"),') &&
+    fs.readFileSync(path.join(root, "index.html"), "utf8").includes('id="thermalLogoToggle"');
+  if (okL) ok("Logo para termicas: el ticket y el cierre de caja usan el logo en blanco y negro puro (interruptor en Opciones -> Impresora); una foto se deja como esta");
+  else fail("Falta el logo en blanco y negro para termicas (renderer.js getCompanyLogoForThermal en ticket y cierre, index.html thermalLogoToggle) -- revisar el cambio de 2026-11-18");
+}
+
 // Cierre de caja y comanda (2026-11-17, Los Argentinos con P80Plus-USL): lo mismo que el ticket -- nada de opacity < 1 en
 // las plantillas termicas, el gris se imprime como puntitos y parece que falta tinta.
 {

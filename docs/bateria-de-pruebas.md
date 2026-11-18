@@ -37,6 +37,7 @@ El informe queda en `tools/tests/reports/battery-<fecha>/report.html` (y una cop
 - **Limpieza automática:** antes y después de las pruebas con la demo se borran los encargos y pedidos de prueba (solo los que empiezan por
   `TEST2TPV…` o `TEST-ENC-…`, nunca algo que escriba una persona probando). Necesita acceso `ssh recipok-plesk`; si no lo hay, el informe lo
   avisa y puede fallar una prueba de Encargos si quedan restos de una ejecución anterior.
+- **La demo debe tener una caja ABIERTA** antes de lanzar `full`: las pruebas de Encargos (y otras) dan por hecha una caja abierta; si alguien la cierra, el botón «Pasar a encargo» queda deshabilitado y esas pruebas fallan a los ~50 s con 0 comprobaciones (parece un fallo de la prueba y no lo es). Se abre una con 100 € (2 billetes de 50) desde el propio TPV de pruebas. Además, las pruebas de Mesas dejan el perfil en Modo Mesas: las de Encargos lo desactivan al empezar.
 - **No lanzar `full` mientras otra persona prueba en la demo** (por ejemplo, el jefe probando Encargos): comparten caja y los totales del
   cierre de caja se mezclarían y alguna prueba podría fallar sin que haya un fallo real.
 
@@ -55,6 +56,8 @@ Con veredicto automático hoy: reglas internas del código, cierre y apertura re
 con tarjeta, devoluciones (parcial y total) y totales de cierre, Modo Mesas básico (incluido pulsar Mesas mientras el TPV aún carga), comanda automática (1 y 2 TPV), cambiar entre mesas ocupadas, mover y fusionar mesas, aviso «mesa en uso», cobro que falla, cobrar una mesa y que el pedido cambie mientras se cobra, fallos de red al guardar, pedidos de la app de camareros, lo que ven dos TPV en la misma mesa (carrito, barra «Enviar comanda», deshacer), recuperación al volver (suspensión del equipo, catálogo vacío, caída de la pantalla), cambios a la vez en el mismo pedido con el guardado por partes (Mesas y TPV normal, y en Mesas con la comanda automática encendida), cobro simultáneo del mismo pedido, quitar un plato, añadir otro y cobrar enseguida (el caso real de Asador, con guardado entero y por partes) y dos cajeros editando el mismo pedido, dividir mientras otro TPV edita, líneas que no se
 pierden con 2 TPV, dividir cuenta (TPV normal y Mesas, con y sin guardado por partes, con 1 y 2 TPV), carrera de stock con 2 TPV y
 Encargos (crear, editar, recoger, cancelar, cierre de caja, variantes, añadidos de pago, varias tiendas) y el bloqueo «Servicio desactivado» cuando la clave de API de FacturaScripts deja de valer (con un servidor simulado local: FacturaScripts bloquea la IP tras unos intentos con clave mala y eso rompería las demás pruebas de la demo).
+
+Con TPV real aislado y **sin red** (nivel `standard`, no tocan la demo): billetes rápidos de Cobrar, escala de la interfaz hasta 150 %, logo en blanco y negro para térmicas (con imágenes generadas por la propia prueba), actualizar al reanudar el equipo y actualizar tras un rato sin usar (con un actualizador falso y el reloj adelantado).
 
 Fuera de la batería (se lanzan con `npm run test:e2e:*`): `run-e2e-smoke.js`, `run-e2e-real-demo.js` y `run-e2e-customer-papelera.js`.
 La prueba `caja-abrir-cerrar` cierra y abre la caja compartida de la demo de verdad, así que va la última y deja una caja cerrada más en la demo (no se puede borrar).

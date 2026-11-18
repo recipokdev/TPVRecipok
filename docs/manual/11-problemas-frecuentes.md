@@ -73,6 +73,9 @@ Otro terminal (o la tablet de un camarero) modificó la mesa. Revisa el pedido: 
 - Comprueba que la impresora está encendida, con papel y conectada.
 - Si no hay impresora elegida, el TPV abre **Seleccionar impresora**: elige la tuya y pulsa **Guardar**.
 
+### El logo o algunas letras salen a puntitos, como si faltara tinta
+Las impresoras térmicas solo imprimen negro o blanco: un logo de color o un texto en gris lo convierten en puntitos. En **Opciones → Impresora** comprueba que **Logo en blanco y negro nítido** está activado (lo está por defecto) y actualiza el TPV a la última versión, que imprime el cierre de caja y la comanda en negro sólido. Si el papel sale muy claro en general, sube la densidad de impresión desde la utilidad del fabricante de la impresora.
+
 ### El cajón no se abre
 - Comprueba que está conectado a la impresora de tickets.
 - Prueba **Abrir cajón manualmente** (**Opciones → Caja**).
@@ -106,6 +109,9 @@ Comprueba la conexión a internet. Si el equipo tiene pantalla pequeña, en **Op
 
 ### La pantalla se ha quedado sin artículos
 Suele pasar al dejar el TPV encendido de un día para otro. Espera unos segundos: al volver de la suspensión el TPV recarga el catálogo solo. Si el servidor llegara a contestar con el catálogo vacío, el TPV conserva el que ya tenía y avisa con un mensaje. Si sigue sin artículos, comprueba el internet del local, cierra y vuelve a abrir el TPV y, si no se arregla, avisa al soporte de Recipok indicando la hora y, si puedes, con una foto de la pantalla.
+
+### El TPV me muestra una cuenta atrás para reiniciar
+Cuando hay una versión nueva ya descargada, el TPV se ofrece a reiniciarse **solo cuando no hay nada en marcha**: al cerrar la caja, al despertar el equipo con la caja cerrada o tras un rato sin usarlo (10 minutos con la caja cerrada, 30 con la caja abierta, 6 horas con Mesas en pantalla). Muestra una cuenta atrás de 30 a 45 segundos que puedes **cancelar**; si la cancelas, no vuelve a preguntar en unas horas. Nunca ocurre con una venta, un cobro, un carrito con productos o ventas pendientes de enviar. Un administrador puede desactivarlo en **Opciones → Programa → Actualizar solo cuando no hay nada en marcha**.
 
 ### El TPV no se abre después de actualizar
 Mientras se instala una versión nueva aparece una ventanita **«Instalando TPV Recipok…»**. En equipos lentos puede tardar **más de un minuto**: **no abras el TPV otra vez**, se abrirá solo al terminar. Si pasados unos minutos la ventanita avisa de que no se ha podido terminar, abre el TPV con su icono o reinicia el ordenador. Si aun así no abre, avisa al soporte de Recipok: el TPV guarda un registro de cada actualización que nos ayuda a ver qué ha pasado.

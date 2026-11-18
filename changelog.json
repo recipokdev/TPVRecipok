@@ -5,7 +5,9 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "ARREGLO: el logo de la empresa en los tickets y en el cierre de caja salía a puntitos en las impresoras térmicas, como si faltara tinta (un logo de color, por ejemplo marrón, es un gris para una térmica, que solo imprime negro o blanco). Ahora el TPV lo convierte a negro y blanco puros, del tamaño exacto en que se imprime, y los trazos salen limpios. Si el logo es una foto o un degradado lo deja como estaba. Se puede desactivar en Opciones → Impresora → «Logo en blanco y negro nítido»."
+      ]
     },
     {
       "version": "0.2.66",
