@@ -11879,6 +11879,21 @@ if (
   else fail(`Falta el reintento por deadlock en los totales de caja (renderer.js putTpvcajaTotalsRetryingDeadlock; usos encontrados: ${puts}, esperados: 3) -- revisar el cambio de 2026-11-17`);
 }
 
+// Actualizar al reanudar el equipo (2026-11-18, Los Argentinos 1 suspende el PC y se quedaba en la version vieja con la nueva ya
+// descargada): se ofrece SOLO con version nueva + caja cerrada segun el servidor + nada en marcha.
+{
+  const okR =
+    renderer.includes("async function offerUpdateAfterResume(opts = {}) {") &&
+    renderer.includes("remote = isSharedCashModeEnabled() ? await apiReadLastOpenCajaGlobal() : await apiReadLastOpenCajaForTpv(idtpv);") &&
+    renderer.includes('if (list.some((c) => c && isCajaOpen(c))) return "caja-open";') &&
+    renderer.includes('if (resumeHasWorkInProgress()) return "work-in-progress";') &&
+    renderer.includes('o.id !== "loginOverlay"') &&
+    renderer.includes("window.TPV_UI?.onPowerResume?.(() => {") &&
+    renderer.includes("  offerUpdateAfterResume().catch(() => {});");
+  if (okR) ok("Al reanudar el equipo del suspendido se ofrece actualizar solo con version nueva, caja cerrada segun el servidor y nada en marcha (la pantalla de acceso no cuenta como trabajo); posponer silencia 6 h");
+  else fail("Falta la oferta de actualizar al reanudar (renderer.js offerUpdateAfterResume) -- revisar el cambio de 2026-11-18");
+}
+
 // Cierre de caja y comanda (2026-11-17, Los Argentinos con P80Plus-USL): lo mismo que el ticket -- nada de opacity < 1 en
 // las plantillas termicas, el gris se imprime como puntitos y parece que falta tinta.
 {

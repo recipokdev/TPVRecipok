@@ -37026,6 +37026,109 @@ async function offerUpdateAfterCashClose() {
   }
 }
 
+// Ofrecer actualizar al REANUDAR el equipo de la suspension (2026-11-18). Real: Los Argentinos suspende el PC en vez de
+// apagarlo y su terminal 1 se quedo en 0.2.64 con la 0.2.65 ya descargada: la actualizacion solo se instala al arrancar
+// el programa (o tras cerrar la caja DESDE ese terminal, ver offerUpdateAfterCashClose), y alli nadie reinicia ni cierra
+// caja en ese terminal. Al despertar se mira si hay version nueva y, SOLO si no hay nada en marcha, se ofrece con la misma
+// cuenta atras cancelable. La caja se consulta al servidor (no al estado local, que tras una noche puede estar viejo:
+// en Los Argentinos la cierra el otro terminal). Si algo no esta claro, no se hace nada.
+const RESUME_UPDATE_SETTLE_MS = 25000;
+const RESUME_UPDATE_DECLINED_KEY = "tpv_resume_update_declined_at";
+const RESUME_UPDATE_DECLINED_GAP_MS = 6 * 60 * 60 * 1000;
+let __resumeUpdateOfferBusy = false;
+
+async function offerUpdateAfterResume(opts = {}) {
+  if (__resumeUpdateOfferBusy) return "busy";
+  __resumeUpdateOfferBusy = true;
+  try {
+    if (!backgroundUpdateSettings?.enabled || backgroundUpdateSettings?.offerOnCashClose === false) return "disabled";
+    const updaterApi = window.__TPV_UPDATER_TEST_OVERRIDE || window.TPV_UPDATER; // el override solo lo usan las pruebas
+    if (!updaterApi?.checkNow || !updaterApi?.relaunchForUpdate) return "no-api";
+
+    await sleep(opts.settleMs ?? RESUME_UPDATE_SETTLE_MS);
+
+    let declinedAt = 0;
+    try {
+      declinedAt = Number(localStorage.getItem(RESUME_UPDATE_DECLINED_KEY) || 0);
+    } catch {}
+    if (Date.now() - declinedAt < RESUME_UPDATE_DECLINED_GAP_MS) return "declined-recently";
+
+    if (TPV_STATE?.offline || manualUpdateActionInFlight || backgroundUpdateCheckInFlight) return "busy-app";
+    if (BOOT_IN_FLIGHT || isPayingNow) return "busy-app";
+
+    // Nada en marcha: ni carrito, ni cobro, ni Mesas, ni encargo a medias, ni ventas/aparcados sin enviar.
+    if (resumeHasWorkInProgress()) return "work-in-progress";
+    const pendingSales = Number(await window.TPV_QUEUE?.count?.().catch(() => 0)) || 0;
+    if (pendingSales > 0 || loadParkedSyncQueue().length > 0) return "pending-sync";
+    // Con la pantalla de acceso a la vista no hay nada en marcha; cualquier otra ventana abierta si.
+    const blocking = [...document.querySelectorAll(".simple-overlay:not(.hidden), .critical-overlay:not(.hidden)")].filter(
+      (o) => o.id !== "loginOverlay",
+    );
+    if (blocking.length) return "overlay-open";
+
+    // La caja, segun el SERVIDOR: si no se puede saber, no se actualiza.
+    let online = false;
+    for (let i = 1; i <= 4 && !online; i++) {
+      online = (await checkFSOnline().catch(() => false)) === true;
+      if (!online) await sleep((opts.retryMs ?? 5000) * i);
+    }
+    if (!online) return "offline";
+    const idtpv = Number(currentTerminal?.id || 0) || 0;
+    let remote;
+    try {
+      remote = isSharedCashModeEnabled() ? await apiReadLastOpenCajaGlobal() : await apiReadLastOpenCajaForTpv(idtpv);
+    } catch {
+      return "caja-unknown";
+    }
+    const list = Array.isArray(remote) ? remote : remote ? [remote] : [];
+    if (list.some((c) => c && isCajaOpen(c))) return "caja-open";
+
+    // Mientras se esperaba, puede haber empezado algo.
+    if (resumeHasWorkInProgress() || manualUpdateActionInFlight || isPayingNow) return "work-in-progress";
+
+    manualUpdateActionInFlight = true;
+    try {
+      const check = await updaterApi.checkNow();
+      if (!check?.ok || check?.devMode || !check?.updateAvailable) return "no-update";
+      const targetVersion = String(check?.targetVersion || "").trim();
+      reportClientEvent("update", "offer-after-resume", `Se ofrece actualizar a ${targetVersion || "?"} al reanudar el equipo`, {}, "info");
+
+      const proceed = await runUpdateRelaunchCountdown({
+        seconds: 45,
+        targetVersion,
+        intro: "El equipo acaba de despertar, la caja está cerrada y hay una versión nueva del TPV.",
+      });
+      if (!proceed) {
+        try {
+          localStorage.setItem(RESUME_UPDATE_DECLINED_KEY, String(Date.now()));
+        } catch {}
+        reportClientEvent("update", "offer-after-resume-declined", "Se pospone la actualización", {}, "info");
+        toast("Actualización pospuesta. Puedes hacerla desde Opciones → Actualizar programa.", "info", "Actualizar programa");
+        return "declined";
+      }
+      persistRuntimeCartSnapshot({ force: true });
+      reportClientEvent("update", "offer-after-resume-accepted", `Reinicio para actualizar a ${targetVersion || "?"}`, {}, "info");
+      const relaunch = await updaterApi.relaunchForUpdate();
+      if (!relaunch?.ok) {
+        showMessageModal("Actualizar programa", String(relaunch?.message || "No se pudo reiniciar el programa."));
+        return "relaunch-failed";
+      }
+      return "relaunching";
+    } finally {
+      manualUpdateActionInFlight = false;
+    }
+  } catch (e) {
+    console.warn("[UPDATE-OFFER-RESUME] fallo (no critico):", e?.message || e);
+    return "error";
+  } finally {
+    __resumeUpdateOfferBusy = false;
+  }
+}
+window.__offerUpdateAfterResume = offerUpdateAfterResume;
+window.TPV_UI?.onPowerResume?.(() => {
+  offerUpdateAfterResume().catch(() => {});
+});
+
 async function startManualUpdateFlowFromOptions() {
   if (manualUpdateActionInFlight) {
     toast(

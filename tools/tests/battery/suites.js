@@ -63,6 +63,11 @@ const SUITES = [
     args: ["tools/tests/run-ui-zoom.js"], timeoutMs: 150000,
   },
   {
+    id: "actualizar-al-reanudar", area: B, level: "standard", title: "Actualizar al reanudar el equipo de la suspensión",
+    what: "Abre el TPV en un perfil aislado, sin red, con un actualizador y una consulta de caja falsos, y comprueba que al despertar el equipo solo ofrece actualizar si hay versión nueva Y la caja está cerrada según el servidor Y no hay nada en marcha (carrito, cobro, otras ventanas, sin conexión, ventas sin enviar), que no actúa si se desactiva en Opciones o no se puede consultar la caja, que muestra la cuenta atrás cancelable, que aceptar reinicia una sola vez y que posponer no vuelve a molestar en 6 horas. No toca la demo.",
+    args: ["tools/tests/run-update-on-resume.js"], timeoutMs: 150000,
+  },
+  {
     id: "e2e-tpv", area: B, level: "standard", title: "Venta completa en TPV normal (demo)",
     what: "Con el TPV real: añadir productos, descuentos y precios, aparcar, recuperar, editar y borrar un pedido, abrir el cobro, imprimir el ticket y cambiar opciones.",
     args: ["tools/tests/run-e2e-demo.js"], timeoutMs: 600000,
