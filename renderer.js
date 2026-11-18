@@ -34036,7 +34036,7 @@ const optPvIsGatedOff = (el) => {
 const OPT_PREVIEW_DEFS = {
   actualizacion: [
     OPT_PV.T("Avisos de versión nueva", "updateNoticeEnabledToggle"),
-    OPT_PV.T("Ofrecer actualizar al cerrar la caja", "updateOfferOnCloseToggle"),
+    OPT_PV.T("Actualizar solo cuando no hay nada en marcha", "updateOfferOnCloseToggle"),
     OPT_PV.V("Comprobar", "updateNoticeIntervalSelect", (t) =>
       t.replace(/^Cada\s+/i, "cada "),
     ),
@@ -37128,6 +37128,115 @@ window.__offerUpdateAfterResume = offerUpdateAfterResume;
 window.TPV_UI?.onPowerResume?.(() => {
   offerUpdateAfterResume().catch(() => {});
 });
+
+// Actualizar solo cuando el TPV lleva un rato SIN USARSE (2026-11-18). Real: abren el TPV, se ponen con otra cosa y lo dejan
+// encendido dias; el aviso de la esquina se puede ignorar y las ofertas de "tras cerrar caja" / "al reanudar" no llegan a
+// dispararse. Si la version nueva ya esta DESCARGADA (el reinicio tarda segundos), no hay nada en marcha y nadie toca la
+// pantalla en un rato (10 min con la caja cerrada, 30 con la caja abierta), se muestra la misma cuenta atras cancelable y se
+// reinicia. Sin descarga lista no se hace nada (no se fuerza una descarga en primer plano). Si no hay internet al arrancar,
+// la pantalla de actualizacion se rinde sola y entra ("Entrar ahora").
+const IDLE_UPDATE_TICK_MS = 2 * 60 * 1000;
+const IDLE_UPDATE_AFTER_MS_CAJA_CLOSED = 10 * 60 * 1000;
+const IDLE_UPDATE_AFTER_MS_CAJA_OPEN = 30 * 60 * 1000;
+const IDLE_UPDATE_DECLINED_KEY = "tpv_idle_update_declined_at";
+const IDLE_UPDATE_DECLINED_GAP_MS = 3 * 60 * 60 * 1000;
+const IDLE_UPDATE_TRIED_KEY = "tpv_idle_update_tried_at";
+const IDLE_UPDATE_TRIED_GAP_MS = 2 * 60 * 60 * 1000;
+let __lastUserInputAt = Date.now();
+let __idleUpdateBusy = false;
+["pointerdown", "keydown", "touchstart", "wheel"].forEach((ev) => {
+  window.addEventListener(
+    ev,
+    () => {
+      __lastUserInputAt = Date.now();
+    },
+    { capture: true, passive: true },
+  );
+});
+
+async function autoUpdateWhenIdleTick(opts = {}) {
+  if (__idleUpdateBusy || __resumeUpdateOfferBusy) return "busy";
+  __idleUpdateBusy = true;
+  try {
+    if (!backgroundUpdateSettings?.enabled || backgroundUpdateSettings?.offerOnCashClose === false) return "disabled";
+    const updaterApi = window.__TPV_UPDATER_TEST_OVERRIDE || window.TPV_UPDATER; // el override solo lo usan las pruebas
+    if (!updaterApi?.getBackgroundPrefetchStatus || !updaterApi?.relaunchForUpdate) return "no-api";
+
+    const now = Number(opts.now ?? Date.now());
+    const needIdleMs = cashSession?.open ? IDLE_UPDATE_AFTER_MS_CAJA_OPEN : IDLE_UPDATE_AFTER_MS_CAJA_CLOSED;
+    if (now - __lastUserInputAt < needIdleMs) return "not-idle";
+
+    let declinedAt = 0;
+    let triedAt = 0;
+    try {
+      declinedAt = Number(localStorage.getItem(IDLE_UPDATE_DECLINED_KEY) || 0);
+      triedAt = Number(localStorage.getItem(IDLE_UPDATE_TRIED_KEY) || 0);
+    } catch {}
+    if (now - declinedAt < IDLE_UPDATE_DECLINED_GAP_MS) return "declined-recently";
+    if (now - triedAt < IDLE_UPDATE_TRIED_GAP_MS) return "tried-recently";
+
+    if (TPV_STATE?.offline || TPV_STATE?.locked || manualUpdateActionInFlight || backgroundUpdateCheckInFlight) return "busy-app";
+    if (BOOT_IN_FLIGHT || isPayingNow) return "busy-app";
+
+    // Solo con la descarga ya lista: reiniciar es casi instantaneo y no hace falta internet para instalarla.
+    const status = await updaterApi.getBackgroundPrefetchStatus().catch(() => null);
+    if (!status?.ready) return "not-ready";
+    const targetVersion = String(status.readyVersion || "").trim();
+
+    // Nada en marcha.
+    if (resumeHasWorkInProgress()) return "work-in-progress";
+    const pendingSales = Number(await window.TPV_QUEUE?.count?.().catch(() => 0)) || 0;
+    if (pendingSales > 0 || loadParkedSyncQueue().length > 0) return "pending-sync";
+    const blocking = [...document.querySelectorAll(".simple-overlay:not(.hidden), .critical-overlay:not(.hidden)")].filter(
+      (o) => o.id !== "loginOverlay",
+    );
+    if (blocking.length) return "overlay-open";
+
+    // Mientras se miraba todo esto, alguien puede haber tocado la pantalla.
+    if (opts.now == null && Date.now() - __lastUserInputAt < needIdleMs) return "not-idle";
+    if (manualUpdateActionInFlight || isPayingNow) return "busy-app";
+
+    manualUpdateActionInFlight = true;
+    try {
+      try {
+        localStorage.setItem(IDLE_UPDATE_TRIED_KEY, String(now));
+      } catch {}
+      reportClientEvent("update", "offer-when-idle", `Se ofrece actualizar a ${targetVersion || "?"} tras un rato sin usar el TPV`, { caja: !!cashSession?.open }, "info");
+      const proceed = await runUpdateRelaunchCountdown({
+        seconds: 30,
+        targetVersion,
+        intro: "El TPV lleva un rato sin usarse y hay una versión nueva ya descargada.",
+      });
+      if (!proceed) {
+        try {
+          localStorage.setItem(IDLE_UPDATE_DECLINED_KEY, String(Date.now()));
+        } catch {}
+        reportClientEvent("update", "offer-when-idle-declined", "Se pospone la actualización", {}, "info");
+        toast("Actualización pospuesta. Puedes hacerla desde Opciones → Actualizar programa.", "info", "Actualizar programa");
+        return "declined";
+      }
+      persistRuntimeCartSnapshot({ force: true });
+      reportClientEvent("update", "offer-when-idle-accepted", `Reinicio para actualizar a ${targetVersion || "?"}`, {}, "info");
+      const relaunch = await updaterApi.relaunchForUpdate();
+      if (!relaunch?.ok) {
+        showMessageModal("Actualizar programa", String(relaunch?.message || "No se pudo reiniciar el programa."));
+        return "relaunch-failed";
+      }
+      return "relaunching";
+    } finally {
+      manualUpdateActionInFlight = false;
+    }
+  } catch (e) {
+    console.warn("[UPDATE-IDLE] fallo (no critico):", e?.message || e);
+    return "error";
+  } finally {
+    __idleUpdateBusy = false;
+  }
+}
+window.__autoUpdateWhenIdleTick = autoUpdateWhenIdleTick;
+setInterval(() => {
+  autoUpdateWhenIdleTick().catch(() => {});
+}, IDLE_UPDATE_TICK_MS);
 
 async function startManualUpdateFlowFromOptions() {
   if (manualUpdateActionInFlight) {

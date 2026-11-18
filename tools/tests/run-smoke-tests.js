@@ -11894,6 +11894,20 @@ if (
   else fail("Falta la oferta de actualizar al reanudar (renderer.js offerUpdateAfterResume) -- revisar el cambio de 2026-11-18");
 }
 
+// Actualizar tras un rato sin usar el TPV (2026-11-18): descarga lista + sin trabajo en marcha + 10 min (caja cerrada) o 30 (abierta).
+{
+  const okI =
+    renderer.includes("async function autoUpdateWhenIdleTick(opts = {}) {") &&
+    renderer.includes("const IDLE_UPDATE_AFTER_MS_CAJA_CLOSED = 10 * 60 * 1000;") &&
+    renderer.includes("const IDLE_UPDATE_AFTER_MS_CAJA_OPEN = 30 * 60 * 1000;") &&
+    renderer.includes('if (!status?.ready) return "not-ready";') &&
+    renderer.includes('if (resumeHasWorkInProgress()) return "work-in-progress";') &&
+    renderer.includes('if (now - triedAt < IDLE_UPDATE_TRIED_GAP_MS) return "tried-recently";') &&
+    renderer.includes("}, IDLE_UPDATE_TICK_MS);");
+  if (okI) ok("Actualizar tras un rato sin usar el TPV: solo con la descarga lista, sin trabajo en marcha y tras 10 min (caja cerrada) o 30 (caja abierta); no insiste en 2 h ni tras posponer");
+  else fail("Falta la actualizacion por inactividad (renderer.js autoUpdateWhenIdleTick) -- revisar el cambio de 2026-11-18");
+}
+
 // Cierre de caja y comanda (2026-11-17, Los Argentinos con P80Plus-USL): lo mismo que el ticket -- nada de opacity < 1 en
 // las plantillas termicas, el gris se imprime como puntitos y parece que falta tinta.
 {
@@ -12413,7 +12427,7 @@ mustContain(renderer, "  offerUpdateAfterCashClose().catch(() => {});\r\n}\r\n\r
 mustContain(renderer, "if (pendingSales > 0 || loadParkedSyncQueue().length > 0) return;", "No se ofrece actualizar con ventas o aparcados sin enviar");
 mustContain(renderer, "backgroundUpdateSettings?.offerOnCashClose === false", "La oferta de actualizar se puede apagar en Opciones");
 mustContain(renderer, "offerOnCashClose: src.offerOnCashClose !== false,", "La oferta de actualizar al cerrar la caja viene activada por defecto");
-mustContain(renderer, 'OPT_PV.T("Ofrecer actualizar al cerrar la caja", "updateOfferOnCloseToggle"),', "El resumen de Opciones lista el ajuste de ofrecer actualizar");
+mustContain(renderer, 'OPT_PV.T("Actualizar solo cuando no hay nada en marcha", "updateOfferOnCloseToggle"),', "El resumen de Opciones lista el ajuste de ofrecer actualizar");
 mustContain(index, 'id="updateOfferOnCloseToggle"', "Opciones tiene el interruptor de ofrecer actualizar al cerrar la caja");
 mustContain(main, 'logUpdateEventRemote("launch-blocked-second-instance");', "Un segundo arranque bloqueado deja constancia en el servidor");
 mustContain(main, "El TPV ya está abierto o terminando de actualizarse.", "Un segundo arranque bloqueado explica por que no abre en vez de cerrarse en silencio");

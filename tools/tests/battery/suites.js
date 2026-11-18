@@ -68,6 +68,11 @@ const SUITES = [
     args: ["tools/tests/run-update-on-resume.js"], timeoutMs: 150000,
   },
   {
+    id: "actualizar-si-inactivo", area: B, level: "standard", title: "Actualizar solo tras un rato sin usar el TPV",
+    what: "Abre el TPV en un perfil aislado, sin red, con un actualizador falso y el reloj adelantado, y comprueba que con la versión nueva ya descargada solo se ofrece actualizar tras 10 minutos sin tocar la pantalla con la caja cerrada (30 con la caja abierta), que no actúa con carrito, cobro, otras ventanas, sin conexión, sin descarga lista o si se desactiva en Opciones, que no insiste en 2 horas tras un intento ni en 3 horas tras posponer, y que aceptar reinicia una sola vez. No toca la demo.",
+    args: ["tools/tests/run-update-when-idle.js"], timeoutMs: 150000,
+  },
+  {
     id: "e2e-tpv", area: B, level: "standard", title: "Venta completa en TPV normal (demo)",
     what: "Con el TPV real: añadir productos, descuentos y precios, aparcar, recuperar, editar y borrar un pedido, abrir el cobro, imprimir el ticket y cambiar opciones.",
     args: ["tools/tests/run-e2e-demo.js"], timeoutMs: 600000,
