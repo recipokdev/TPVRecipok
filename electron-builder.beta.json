@@ -52,6 +52,7 @@
   },
   "extraResources": [
     { "from": "build/channel-beta.json", "to": "channel.json" },
-    { "from": "assets/open-drawer.exe", "to": "assets/open-drawer.exe" }
+    { "from": "assets/open-drawer.exe", "to": "assets/open-drawer.exe" },
+    { "from": "assets/open-drawer-lite.exe", "to": "assets/open-drawer-lite.exe" }
   ]
 }

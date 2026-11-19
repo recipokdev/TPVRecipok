@@ -8,6 +8,16 @@
       "changes": []
     },
     {
+      "version": "0.2.68",
+      "date": "2026-11-19",
+      "title": "Release 0.2.68",
+      "changes": [
+        "NUEVO: red de seguridad para las actualizaciones. Si una instalación se interrumpe (un antivirus, un apagado a mitad…) el equipo podía quedarse SIN programa: el icono del escritorio en blanco y el TPV ni en el buscador (caso de Ben_Trempat, 18 de noviembre), y como ya no había programa, nada podía avisar ni arreglarlo. Ahora, antes de instalar, el TPV guarda una copia del instalador en un sitio seguro y lanza un vigilante independiente del programa que lo arregla todo EN SILENCIO, sin que la persona se entere: detecta el fallo en segundos (no en minutos), lo cuenta a nuestro servidor con datos del equipo, y abre el programa o lo reinstala solo (hasta 3 veces, con pausas por si un antivirus estaba analizando el instalador, y quitando antes los restos de procesos que bloquean la instalación). Solo si nada funciona deja a la vista un icono «REPARAR TPV Recipok» (y reapunta el icono en blanco al instalador) y abre el instalador con un aviso para que se termine a mano; el icono se quita solo cuando el TPV nuevo se ve.",
+        "ARREGLO: el cajón podía dejar de abrir de golpe con un aviso genérico («No se pudo abrir el cajón») sin que el TPV supiera explicar por qué ni nosotros verlo (Los Argentinos, 19 de noviembre: tras una actualización, con la impresora en perfecto estado). Lo abre un programa auxiliar de 64 MB sin firmar que un antivirus puede bloquear o poner en cuarentena, y en ese caso el TPV se rompía sin dar pista. Ahora usa primero un programa auxiliar diminuto (unos KB, sin descomprimirse al arrancar, mucho menos sospechoso) y, si ese no se puede ejecutar, prueba el de siempre. Si ninguno se puede ejecutar, el aviso lo dice con claridad («el programa que lo abre no se puede ejecutar, puede estar bloqueado por el antivirus») y el error técnico llega a nuestro servidor para poder verlo sin entrar en el equipo.",
+        "NUEVO: más datos de cada instalación en nuestro servidor para entender cualquier fallo: quién pidió la actualización (arranque, oferta al cerrar caja o al reanudar, inactividad o el botón «Actualizar programa», que antes no dejaba rastro), el antivirus del equipo, la versión de Windows y el instalador. Y se anota cada vez que el TPV tiene que recrear o reparar su acceso directo del escritorio o del menú Inicio."
+      ]
+    },
+    {
       "version": "0.2.67",
       "date": "2026-11-18",
       "title": "Release 0.2.67",

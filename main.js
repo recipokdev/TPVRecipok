@@ -4,11 +4,17 @@ const { autoUpdater } = require("electron-updater");
 const { execFile, spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const crypto = require("crypto");
 const { globalShortcut } = require("electron");
 const https = require("https");
 const dns = require("dns");
 const { ScaleManager } = require("./js/tpv/scale/scale-manager");
+// Red de seguridad de las instalaciones (vigilante PowerShell, instalador de reparacion, antivirus): ver install_watchdog.js
+const installWatchdog = require("./install_watchdog");
+// Apertura del cajon en Windows: cadena de programas auxiliares (diminuto + el de siempre): ver drawer_helpers.js
+const drawerHelpers = require("./drawer_helpers");
+const { openDrawerViaHelpers } = drawerHelpers;
 
 // Feedback real (pruebas de desarrollo, 2026-09-15): pararlo con Ctrl+C
 // (npm start) mataba el proceso en seco, sin pasar por el cierre normal de
@@ -284,6 +290,14 @@ function ensureOneShortcut(shortcutPath, exePath, { createIfMissing }) {
     console.log(
       `[shortcut] ${exists ? "reparado" : "creado"}: ${shortcutPath} -> ${exePath}`,
     );
+    // Que quede constancia en el servidor: un acceso que hay que recrear/reparar suele ser consecuencia de una instalacion rara
+    // (Ben_Trempat, 2026-11-18: el icono quedo como un cuadrado en blanco tras una instalacion que no se completo).
+    try {
+      logUpdater(`acceso directo ${exists ? "reparado" : "creado"}: ${shortcutPath}`);
+      logUpdateEventRemote(exists ? "shortcut-repaired" : "shortcut-created", {
+        where: /Start Menu/i.test(shortcutPath) ? "inicio" : "escritorio",
+      });
+    } catch (_) {}
   } catch (e) {
     console.warn("[shortcut] no se pudo verificar/reparar:", e?.message || e);
   }
@@ -867,6 +881,7 @@ function createWindow() {
         mainWin.minimize();
       } catch (_) {}
 
+      notifyPostUpdateSplashReady(); // modo segundo plano (pruebas): tambien avisa de que ya se ve
       return;
     }
 
@@ -987,7 +1002,7 @@ async function runUpdateCheckOncePreCash() {
 
         // instalar (tu comportamiento actual)
         try {
-          logUpdater("instalando (pre-caja):", JSON.stringify(describeInstallContext()));
+          logUpdater("instalando (pre-caja):", JSON.stringify({ ...describeInstallContext(), ...describeInstallExtras() }));
           spawnPostUpdateSplash();
           quitAndInstallWhenSplashVisible();
         } catch {}
@@ -1593,6 +1608,96 @@ function quitAndInstallWhenSplashVisible(maxWaitMs = 6000) {
   setTimeout(tick, 300);
 }
 
+// ===== Red de seguridad de la instalacion (ver install_watchdog.js) =====
+// Caso real (Ben_Trempat, 2026-11-18): el instalador silencioso quito la version vieja y no llego a poner la nueva; el equipo se quedo SIN
+// programa (icono en blanco, ni en el buscador de aplicaciones) y, al no haber programa, nada podia avisar ni arreglarlo. Antes de instalar:
+//  1) copia del instalador fuera de la carpeta que electron-updater vacia;
+//  2) vigilante PowerShell independiente que ARREGLA EL FALLO EN SILENCIO: si la version nueva no se ve (detecta el fallo en segundos, no en
+//     minutos), lo cuenta al servidor, reabre el programa o reinstala (hasta 3 veces, con pausas, quitando antes los restos que bloquean).
+//     Solo si nada funciona deja a la vista el icono «REPARAR TPV Recipok» (y reapunta el icono en blanco) y abre el instalador con ventanas.
+//     El icono REPARAR se quita solo en cuanto la version nueva se ve.
+const REPAIR_SHORTCUT_NAME = "REPARAR TPV Recipok.lnk";
+
+// Ganchos SOLO para la prueba tools/tests/run-install-safetynet.js (no existen en uso normal): TPV_TEST_INSTALL_SAFETYNET deja correr esto
+// aunque sea instancia de prueba, TPV_TEST_DESKTOP_DIR evita tocar el escritorio real y TPV_TEST_WATCHDOG_TIMES acorta los tiempos.
+const SAFETYNET_TEST_HOOKS = String(process.env.TPV_TEST_INSTALL_SAFETYNET || "") === "1";
+
+function installSafetyNetDisabled() {
+  if (process.platform !== "win32" || !app.isPackaged) return true;
+  return (IS_E2E || IS_MULTI_INSTANCE) && !SAFETYNET_TEST_HOOKS;
+}
+
+function repairShortcutPath() {
+  return path.join(SAFETYNET_TEST_HOOKS && process.env.TPV_TEST_DESKTOP_DIR ? process.env.TPV_TEST_DESKTOP_DIR : app.getPath("desktop"), REPAIR_SHORTCUT_NAME);
+}
+
+// Con el vigilante en marcha el icono REPARAR NO se pone a la vista: la persona no debe enterarse de nada si el vigilante lo arregla solo
+// (lo crea el propio vigilante si agota los reintentos). Solo lo crea el TPV si no se ha podido lanzar el vigilante.
+function createRepairIcon(target) {
+  try {
+    shell.writeShortcutLink(repairShortcutPath(), "create", {
+      target,
+      cwd: path.dirname(target),
+      description: "Reinstalar el TPV Recipok (usar solo si el TPV no abre)",
+      icon: target,
+      iconIndex: 0,
+    });
+  } catch (e) {
+    logUpdater(`no se pudo crear el icono REPARAR: ${e?.message || e}`);
+  }
+}
+
+function startInstallSafetyNet() {
+  if (installSafetyNetDisabled()) return; // nunca en pruebas ni en desarrollo
+  try {
+    const cacheDir = installWatchdog.getUpdaterCacheDir(process.resourcesPath);
+    const pending = installWatchdog.findPendingInstaller(cacheDir);
+    const keep = pending ? installWatchdog.keepRepairInstaller(cacheDir, pending) : { ok: false, error: "sin-instalador-descargado" };
+    logUpdater(
+      `red de seguridad: instalador ${pending ? path.basename(pending) : "?"}, copia de reparacion ${keep.ok ? `${keep.method} ${keep.sizeMb} MB` : `NO (${keep.error})`}`,
+    );
+    const { baseUrl } = getCompanyFromCfgForMain();
+    const { url, apiKey } = readTpvSyncConfig();
+    const wd = installWatchdog.startInstallWatchdog({
+      cacheDir,
+      exePath: process.execPath,
+      installerPath: pending,
+      repairInstallerPath: keep.ok ? keep.path : "",
+      markerFile: postUpdateSplashMarkerPath(),
+      logFile: updaterLogFile(),
+      fromVersion: app.getVersion(),
+      targetVersion: installWatchdog.versionFromInstallerName(pending),
+      url,
+      apiKey,
+      slug: getSlugFromBaseUrl(baseUrl),
+      shortcutName: `${shortcutBaseName()}.lnk`,
+      repairShortcutName: REPAIR_SHORTCUT_NAME,
+      ...(SAFETYNET_TEST_HOOKS
+        ? { desktopDir: process.env.TPV_TEST_DESKTOP_DIR, noDialog: true, ...JSON.parse(process.env.TPV_TEST_WATCHDOG_TIMES || "{}") }
+        : {}),
+    });
+    logUpdater(wd.ok ? `vigilante de instalacion lanzado (pid ${wd.pid})` : `vigilante de instalacion NO lanzado: ${wd.error}`);
+    if (!wd.ok) {
+      logUpdateEventRemote("install-watchdog-unavailable", { error: wd.error });
+      // Sin vigilante no hay quien arregle un fallo: aqui si se deja ya el icono REPARAR a la vista, como unica red de seguridad.
+      if (keep.ok) createRepairIcon(keep.path);
+    }
+  } catch (e) {
+    logUpdater(`red de seguridad de la instalacion fallo: ${e?.message || e}`);
+  }
+}
+
+// La version nueva ya se ve: la instalacion salio bien, el icono REPARAR y la copia del instalador sobran.
+function cleanupInstallSafetyNetAfterReady() {
+  if (installSafetyNetDisabled()) return;
+  try {
+    fs.rmSync(repairShortcutPath(), { force: true });
+  } catch (_) {}
+  try {
+    installWatchdog.removeRepairInstaller(installWatchdog.getUpdaterCacheDir(process.resourcesPath));
+  } catch (_) {}
+}
+
 // Llamar justo antes de quitAndInstall(): lanza un proceso independiente
 // (mismo ejecutable, con un flag especial) que sobrevive a que esta app se
 // cierre, y que se queda mostrando "Instalando..." hasta que la nueva version
@@ -1610,6 +1715,9 @@ function spawnPostUpdateSplash() {
     try {
       fs.unlinkSync(postUpdateSplashShownPath());
     } catch (_) {}
+
+    // Red de seguridad FUERA de la app (vigilante + instalador de reparacion + icono REPARAR): ver startInstallSafetyNet.
+    startInstallSafetyNet();
 
     // La ventanita usa su propia carpeta de datos: se le pasa la ruta del registro real.
     const logArg = `--updater-log=${updaterLogFile()}`;
@@ -1661,6 +1769,7 @@ function notifyPostUpdateSplashReady() {
   try {
     fs.writeFileSync(postUpdateSplashMarkerPath(), String(Date.now()));
   } catch (_) {}
+  cleanupInstallSafetyNetAfterReady();
 }
 
 // Cuerpo completo del proceso "--post-update-splash": no hace nada del
@@ -1892,6 +2001,52 @@ function describeInstallContext() {
     free = `${Math.round((st.bavail * st.bsize) / 1048576)} MB`;
   } catch (_) {}
   return { freeTempMb: free, uptimeMin: Math.round(process.uptime() / 60), exe: process.execPath };
+}
+
+// Datos extra para el aviso de "instalando": con ellos se ve si un fallo coincide con un antivirus, con una version de Windows
+// o con quien pidio la actualizacion (arranque, oferta de cierre de caja/reanudar/inactividad o boton «Actualizar»).
+// Todo sale de cache o de cosas baratas: nunca debe retrasar el momento de instalar.
+function describeInstallExtras() {
+  const out = {};
+  try {
+    out.os = `${os.release()} ${os.arch()}`;
+    out.installDir = path.dirname(process.execPath);
+  } catch (_) {}
+  try {
+    const av = readCfg().avProducts;
+    if (av && Array.isArray(av.list)) out.av = av.list.join(" | ").slice(0, 160) || "ninguno-registrado";
+  } catch (_) {}
+  try {
+    const rr = readCfg().relaunchReason;
+    if (rr && Date.now() - Number(rr.at || 0) < 10 * 60 * 1000) out.trigger = String(rr.reason || "").slice(0, 40);
+  } catch (_) {}
+  if (!out.trigger) out.trigger = "arranque";
+  try {
+    const cacheDir = installWatchdog.getUpdaterCacheDir(process.resourcesPath);
+    const inst = installWatchdog.findPendingInstaller(cacheDir);
+    if (inst) {
+      out.installerFile = path.basename(inst);
+      out.installerMb = Math.round(fs.statSync(inst).size / 1048576);
+    }
+  } catch (_) {}
+  return out;
+}
+
+// Los antivirus instalados casi nunca cambian: se consulta en segundo plano una vez por semana y se guarda en la configuracion.
+function refreshAntivirusCacheInBackground() {
+  if (process.platform !== "win32" || !app.isPackaged || IS_E2E || IS_MULTI_INSTANCE) return;
+  try {
+    const cur = readCfg().avProducts;
+    if (cur && Number(cur.at) && Date.now() - Number(cur.at) < 7 * 24 * 3600 * 1000) return;
+  } catch (_) {}
+  setTimeout(() => {
+    installWatchdog
+      .queryAntivirus()
+      .then((list) => {
+        try { writeCfg({ avProducts: { list, at: Date.now() } }); } catch (_) {}
+      })
+      .catch(() => {});
+  }, 45000);
 }
 
 
@@ -2688,8 +2843,8 @@ async function runAutoUpdateGate() {
         appIsInstallingUpdate = true;
         appInstallingSince = Date.now();
         const installCtx = describeInstallContext();
-        logUpdater("instalando (gate):", JSON.stringify(installCtx));
-        logUpdateEventRemote("update-gate-installing", { freeTempMb: installCtx.freeTempMb, uptimeMin: installCtx.uptimeMin });
+        logUpdater("instalando (gate):", JSON.stringify({ ...installCtx, ...describeInstallExtras() }));
+        logUpdateEventRemote("update-gate-installing", { freeTempMb: installCtx.freeTempMb, uptimeMin: installCtx.uptimeMin, ...describeInstallExtras() });
         splashSet("Instalando actualización…", 100);
         spawnPostUpdateSplash();
         quitAndInstallWhenSplashVisible();
@@ -3379,6 +3534,7 @@ app.whenReady().then(async () => {
   installPowerWatch();
   logUpdater(`arranque: version ${app.getVersion()}, pid ${process.pid}`);
   verifyPreviousInstallOutcome();
+  refreshAntivirusCacheInBackground();
 
   bootstrapCurrentUserFromCfg();
   cleanOldAutoStartIfWrong();
@@ -3507,37 +3663,9 @@ ipcMain.handle("tpv:openCashDrawer", async (_event, { deviceName }) => {
   if (process.platform === "win32") {
     if (!deviceName) return { ok: false, error: "Falta deviceName" };
 
-    const exePath = app.isPackaged
-      ? path.join(process.resourcesPath, "assets", "open-drawer.exe")
-      : path.join(__dirname, "assets", "open-drawer.exe");
-
-    if (!fs.existsSync(exePath)) {
-      return { ok: false, error: `No existe open-drawer.exe en: ${exePath}` };
-    }
-
-    const runPin = (pin) =>
-      new Promise((resolve) => {
-        execFile(
-          exePath,
-          [deviceName, String(pin)],
-          { windowsHide: true },
-          (err, stdout, stderr) => {
-            if (err) {
-              resolve({
-                ok: false,
-                pin,
-                error: (stderr || err.message || String(err)).trim(),
-              });
-            } else {
-              resolve({ ok: true, pin, out: (stdout || "").trim() });
-            }
-          },
-        );
-      });
-
-    let r = await runPin(0);
-    if (!r.ok) r = await runPin(1);
-    return r;
+    // Cadena de dos programas auxiliares equivalentes (el diminuto primero, el de 64 MB como plan B): ver drawer_helpers.js
+    const assetsDir = app.isPackaged ? path.join(process.resourcesPath, "assets") : path.join(__dirname, "assets");
+    return await openDrawerViaHelpers(deviceName, drawerHelpers.defaultHelpers(assetsDir));
   }
 
   if (process.platform === "linux") {
@@ -3744,8 +3872,13 @@ ipcMain.handle("updater:checkManual", async () => {
   }
 });
 
-ipcMain.handle("updater:relaunchForUpdate", async () => {
+ipcMain.handle("updater:relaunchForUpdate", async (_event, reason) => {
   try {
+    // Quien pidio el reinicio (oferta al cerrar caja, al reanudar, por inactividad, boton «Actualizar»): el arranque que sigue lo
+    // incluye en el aviso "update-gate-installing" para poder diagnosticar instalaciones raras.
+    try {
+      writeCfg({ relaunchReason: { reason: String(reason || "desconocido").slice(0, 40), at: Date.now() } });
+    } catch (_) {}
     forceRelaunchForUpdate = true;
     appIsInstallingUpdate = true;
     appInstallingSince = Date.now();

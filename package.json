@@ -1,6 +1,6 @@
 {
   "name": "tpvrecipok",
-  "version": "0.2.67",
+  "version": "0.2.68",
   "description": "",
   "main": "main.js",
   "scripts": {
@@ -113,6 +113,10 @@
         {
           "from": "assets/open-drawer.exe",
           "to": "assets/open-drawer.exe"
+        },
+        {
+          "from": "assets/open-drawer-lite.exe",
+          "to": "assets/open-drawer-lite.exe"
         }
       ]
     },

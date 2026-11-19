@@ -37176,7 +37176,7 @@ async function offerUpdateAfterCashClose() {
       }
       persistRuntimeCartSnapshot({ force: true });
       reportClientEvent("update", "offer-after-cash-close-accepted", `Reinicio para actualizar a ${targetVersion || "?"}`, {}, "info");
-      const relaunch = await updaterApi.relaunchForUpdate();
+      const relaunch = await updaterApi.relaunchForUpdate("oferta-cierre-caja");
       if (!relaunch?.ok) {
         showMessageModal("Actualizar programa", String(relaunch?.message || "No se pudo reiniciar el programa."));
       }
@@ -37270,7 +37270,7 @@ async function offerUpdateAfterResume(opts = {}) {
       }
       persistRuntimeCartSnapshot({ force: true });
       reportClientEvent("update", "offer-after-resume-accepted", `Reinicio para actualizar a ${targetVersion || "?"}`, {}, "info");
-      const relaunch = await updaterApi.relaunchForUpdate();
+      const relaunch = await updaterApi.relaunchForUpdate("oferta-al-reanudar");
       if (!relaunch?.ok) {
         showMessageModal("Actualizar programa", String(relaunch?.message || "No se pudo reiniciar el programa."));
         return "relaunch-failed";
@@ -37391,7 +37391,7 @@ async function autoUpdateWhenIdleTick(opts = {}) {
       }
       persistRuntimeCartSnapshot({ force: true });
       reportClientEvent("update", "offer-when-idle-accepted", `Reinicio para actualizar a ${targetVersion || "?"}`, {}, "info");
-      const relaunch = await updaterApi.relaunchForUpdate();
+      const relaunch = await updaterApi.relaunchForUpdate("inactividad");
       if (!relaunch?.ok) {
         showMessageModal("Actualizar programa", String(relaunch?.message || "No se pudo reiniciar el programa."));
         return "relaunch-failed";
@@ -37506,7 +37506,7 @@ async function startManualUpdateFlowFromOptions() {
 
       persistRuntimeCartSnapshot({ force: true });
 
-      const relaunchSim = await updaterApi.relaunchForUpdate();
+      const relaunchSim = await updaterApi.relaunchForUpdate("boton-simulado");
       if (!relaunchSim?.ok) {
         showMessageModal(
           "Actualizar programa (simulación)",
@@ -37532,7 +37532,10 @@ async function startManualUpdateFlowFromOptions() {
     // Reutilizamos la misma persistencia ante cierre inesperado.
     persistRuntimeCartSnapshot({ force: true });
 
-    const relaunch = await updaterApi.relaunchForUpdate();
+    // Antes este reinicio no dejaba ningun rastro en el servidor (Ben_Trempat, 2026-11-18: una instalacion que no se completo y no
+    // se sabia quien la habia pedido).
+    try { reportClientEvent("update", "manual-update-accepted", "Reinicio para actualizar desde el boton «Actualizar programa»", {}, "info"); } catch (_) {}
+    const relaunch = await updaterApi.relaunchForUpdate("boton-actualizar");
     if (!relaunch?.ok) {
       showMessageModal(
         "Actualizar programa",
@@ -63545,6 +63548,10 @@ function friendlyDrawerErrorMessage(rawError) {
   ) {
     return "No se pudo abrir el cajón: no responde. Comprueba que esté conectado y encendido.";
   }
+  // El programa auxiliar ni siquiera se pudo ejecutar (falta, bloqueado -p. ej. por el antivirus-, tiempo agotado...): no es la impresora.
+  if (/No existe open-drawer|spawn|EPERM|EACCES|EBUSY|UNKNOWN|ENOENT|tiempo agotado|Command failed|sin programa auxiliar/i.test(msg)) {
+    return "No se pudo abrir el cajón: el programa que lo abre no se puede ejecutar (puede estar bloqueado por el antivirus). Avisa al soporte de Recipok.";
+  }
   return "No se pudo abrir el cajón.";
 }
 
@@ -63572,7 +63579,13 @@ async function openDrawerNow({ source = "MAIN" } = {}) {
       // al cajero/cliente -- se queda en consola para quien investigue, y el
       // toast muestra un aviso mas concreto segun en que punto fallo.
       console.warn("No se pudo abrir el cajón:", res?.error || "error");
-      toast(friendlyDrawerErrorMessage(res?.error), "err", "Cajón");
+      const drawerMsg = friendlyDrawerErrorMessage(res?.error);
+      toast(drawerMsg, "err", "Cajón");
+      // Antes el error tecnico solo se quedaba en la consola de ese equipo (Los Argentinos, 2026-11-19: no habia forma de saber por que
+      // fallaba sin entrar en el ordenador). Ahora llega a nuestro servidor (se agrupa: como mucho 1 aviso cada 5 minutos por mensaje).
+      try {
+        reportClientEvent("print", "drawer-open-failed", drawerMsg, { raw: String(res?.error || "sin detalle").slice(0, 400), printer: String(printerName).slice(0, 80), source: String(source) }, "warn");
+      } catch {}
       return false;
     }
 
@@ -63600,7 +63613,11 @@ async function openDrawerNow({ source = "MAIN" } = {}) {
     return true;
   } catch (e) {
     console.warn("Error abriendo cajón:", e?.message || e);
-    toast(friendlyDrawerErrorMessage(e?.message), "err", "Cajón");
+    const drawerMsg = friendlyDrawerErrorMessage(e?.message);
+    toast(drawerMsg, "err", "Cajón");
+    try {
+      reportClientEvent("print", "drawer-open-failed", drawerMsg, { raw: String(e?.message || e || "sin detalle").slice(0, 400), source: String(source), exception: true }, "warn");
+    } catch {}
     return false;
   }
 }

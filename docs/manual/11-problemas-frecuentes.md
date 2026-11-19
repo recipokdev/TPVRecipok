@@ -77,6 +77,7 @@ Otro terminal (o la tablet de un camarero) modificó la mesa. Revisa el pedido: 
 Las impresoras térmicas solo imprimen negro o blanco: un logo de color o un texto en gris lo convierten en puntitos. En **Opciones → Impresora** comprueba que **Logo en blanco y negro nítido** está activado (lo está por defecto) y actualiza el TPV a la última versión, que imprime el cierre de caja y la comanda en negro sólido. Si el papel sale muy claro en general, sube la densidad de impresión desde la utilidad del fabricante de la impresora.
 
 ### El cajón no se abre
+Si al pulsar «Abrir cajón» sale **«No se pudo abrir el cajón: el programa que lo abre no se puede ejecutar (puede estar bloqueado por el antivirus)»**, no es la impresora ni el cajón: el antivirus del equipo ha bloqueado el programa auxiliar del TPV. Avisa al soporte de Recipok (el aviso llega también a nuestro servidor) y, mientras tanto, abre el cajón con su llave.
 - Comprueba que está conectado a la impresora de tickets.
 - Prueba **Abrir cajón manualmente** (**Opciones → Caja**).
 - Si solo falla en pagos con tarjeta, revisa **Abrir cajón con todos los pagos**: si está desactivado, el cajón solo se abre con efectivo.
@@ -115,6 +116,9 @@ Cuando hay una versión nueva ya descargada, el TPV se ofrece a reiniciarse **so
 
 ### El TPV no se abre después de actualizar
 Mientras se instala una versión nueva aparece una ventanita **«Instalando TPV Recipok…»**. En equipos lentos puede tardar **más de un minuto**: **no abras el TPV otra vez**, se abrirá solo al terminar. Si pasados unos minutos la ventanita avisa de que no se ha podido terminar, abre el TPV con su icono o reinicia el ordenador. Si aun así no abre, avisa al soporte de Recipok: el TPV guarda un registro de cada actualización que nos ayuda a ver qué ha pasado.
+
+### El icono del TPV está en blanco o el programa ha desaparecido
+Si una actualización se interrumpe (un antivirus, un apagón, el ordenador apagado a mitad), el programa puede quedarse sin instalar: el icono del escritorio se ve como un **cuadrado en blanco** y el TPV no sale en el buscador de aplicaciones. El TPV vigila cada instalación y, si no se completa, **lo arregla solo y sin avisar** (reabre el programa o vuelve a instalarlo, hasta tres veces): normalmente ni te enteras. **Solo si no lo consigue** deja en el escritorio un icono **«REPARAR TPV Recipok»** y abre el instalador con un aviso. Si ves ese icono (o el icono en blanco ahora reinstala), púlsalo y, cuando salga el instalador, pulsa **Siguiente** hasta terminar. No se pierde ningún dato: tienes todo en el servidor. Si no ves ninguno de los dos, o falla, avisa al soporte de Recipok: la instalación deja constancia en nuestro servidor.
 
 ### La ventana del TPV se queda en blanco o no responde
 El TPV vigila su propia ventana: si se cae o deja de responder, **se recarga sola** (como mucho dos veces cada diez minutos). Espera unos segundos. Si se repite varias veces, reinicia el TPV y avisa al soporte.

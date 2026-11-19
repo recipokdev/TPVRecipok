@@ -5629,7 +5629,7 @@ console.log(
 
 {
   const occurrences = (
-    renderer.match(/toast\(friendlyDrawerErrorMessage\(/g) || []
+    renderer.match(/const drawerMsg = friendlyDrawerErrorMessage\(/g) || []
   ).length;
   if (occurrences === 2) {
     ok(
@@ -11925,6 +11925,57 @@ if (
   else fail("Falta el logo en blanco y negro para termicas (renderer.js getCompanyLogoForThermal en ticket y cierre, index.html thermalLogoToggle) -- revisar el cambio de 2026-11-18");
 }
 
+// Red de seguridad de la instalacion (2026-11-19, Ben_Trempat: instalacion silenciosa que no se completo y dejo el equipo SIN programa).
+{
+  const wdPath = path.join(root, "install_watchdog.js");
+  const wd = fs.existsSync(wdPath) ? fs.readFileSync(wdPath, "utf8") : "";
+  const okS =
+    wd.includes("function startInstallWatchdog(opts) {") &&
+    wd.includes("function keepRepairInstaller(cacheDir, installerPath) {") &&
+    wd.includes("function queryAntivirus() {") &&
+    wd.includes("install-watchdog-failed") && wd.includes("install-watchdog-recovered") && wd.includes("install-watchdog-gave-up") &&
+    wd.includes("install-watchdog-shortcut-retargeted") &&
+    wd.includes("'sin-tpv-abierto'") && wd.includes("'programa-borrado'") && wd.includes("function KillLeftovers {") && // detecta el fallo en segundos y lo arregla en silencio
+    main.includes("function createRepairIcon(target) {") && main.includes("if (keep.ok) createRepairIcon(keep.path);") && // el icono REPARAR solo si no hay vigilante
+    wd.includes('"cmd.exe"') && // lanzamiento por "cmd /c start": ni detached (powershell sale al instante) ni job de libuv (muere con el TPV)
+    main.includes('const installWatchdog = require("./install_watchdog");') &&
+    main.includes("function startInstallSafetyNet() {") &&
+    main.includes("function cleanupInstallSafetyNetAfterReady() {") &&
+    main.includes("function describeInstallExtras() {") &&
+    main.includes("function refreshAntivirusCacheInBackground() {") &&
+    main.split("startInstallSafetyNet();").length - 1 === 1 && // se lanza ANTES de la ventanita, dentro de spawnPostUpdateSplash
+    main.includes("...describeInstallExtras() });") && // el aviso update-gate-installing lleva los datos extra
+    main.includes('logUpdateEventRemote(exists ? "shortcut-repaired" : "shortcut-created"') &&
+    main.includes('ipcMain.handle("updater:relaunchForUpdate", async (_event, reason) => {') &&
+    preload.includes('relaunchForUpdate: (reason) => ipcRenderer.invoke("updater:relaunchForUpdate", reason),') &&
+    renderer.includes('relaunchForUpdate("oferta-cierre-caja")') && renderer.includes('relaunchForUpdate("oferta-al-reanudar")') &&
+    renderer.includes('relaunchForUpdate("inactividad")') && renderer.includes('relaunchForUpdate("boton-actualizar")') &&
+    renderer.includes('"manual-update-accepted"');
+  if (okS) ok("Red de seguridad de la instalacion: copia del instalador + vigilante independiente que arregla el fallo en silencio (deteccion en segundos, reintentos, icono REPARAR solo como ultimo recurso) + datos extra (quien lo pidio, antivirus, Windows) + aviso al recrear accesos directos");
+  else fail("Falta la red de seguridad de la instalacion (install_watchdog.js, main.js startInstallSafetyNet/describeInstallExtras, renderer.js motivos de relaunchForUpdate) -- revisar el cambio de 2026-11-19");
+}
+
+// Cajon (2026-11-19, Los Argentinos: dejo de abrir tras una actualizacion con el aviso generico): programa auxiliar diminuto + plan B + aviso al servidor.
+{
+  const dhPath = path.join(root, "drawer_helpers.js");
+  const dh = fs.existsSync(dhPath) ? fs.readFileSync(dhPath, "utf8") : "";
+  const okD =
+    dh.includes("async function openDrawerViaHelpers(deviceName, helpers) {") &&
+    dh.includes('open-drawer-lite.exe') && dh.includes('open-drawer.exe') &&
+    dh.includes("} catch (e) {") && dh.includes("resolve({ ok: false, pin, error: String((e && (e.message || e.code)) || e).trim() });") && // execFile lanza en el acto con un .exe inservible: se captura
+    main.includes('const drawerHelpers = require("./drawer_helpers");') &&
+    main.includes("return await openDrawerViaHelpers(deviceName, drawerHelpers.defaultHelpers(assetsDir));") &&
+    fs.existsSync(path.join(root, "assets", "open-drawer-lite.exe")) && fs.statSync(path.join(root, "assets", "open-drawer-lite.exe")).size < 100 * 1024 &&
+    fs.existsSync(path.join(root, "tools", "open-drawer-lite", "Program.cs")) &&
+    fs.readFileSync(path.join(root, "package.json"), "utf8").includes('"to": "assets/open-drawer-lite.exe"') &&
+    fs.readFileSync(path.join(root, "electron-builder.stable.json"), "utf8").includes("assets/open-drawer-lite.exe") &&
+    fs.readFileSync(path.join(root, "electron-builder.beta.json"), "utf8").includes("assets/open-drawer-lite.exe") &&
+    renderer.includes("no se puede ejecutar (puede estar bloqueado por el antivirus)") &&
+    renderer.split('reportClientEvent("print", "drawer-open-failed"').length - 1 === 2;
+  if (okD) ok("Cajon: programa auxiliar diminuto primero y el de siempre como plan B (empaquetados los dos), un .exe inservible ya no rompe la llamada, aviso claro al cajero y error tecnico al servidor");
+  else fail("Falta el programa auxiliar diminuto del cajon / su plan B (drawer_helpers.js, assets/open-drawer-lite.exe, main.js, package.json y electron-builder.*.json, renderer.js) -- revisar el cambio de 2026-11-19");
+}
+
 // Comanda confirmada sobre una referencia vieja (2026-11-18, prueba conjunta con la app de camareros): el sello y el seq tambien a la copia viva.
 {
   const okV =
@@ -12486,7 +12537,7 @@ mustContain(main, "  installUpdaterFileLogger();\r\n  installPowerWatch();\r\n  
 mustContain(main, "const logArg = `--updater-log=${updaterLogFile()}`;", "La ventanita de instalando recibe la ruta del registro real");
 mustContain(main, "splashLog(\"180 s sin que la nueva version se vea: se da por no terminada\");", "La ventanita de instalando deja su rastro en el registro");
 mustContain(main, "logTail: readUpdaterLogTail(20),", "Una instalacion no aplicada manda al servidor las ultimas lineas del registro");
-mustContain(main, "logUpdater(\"instalando (gate):\", JSON.stringify(installCtx));", "Antes de instalar se anota el contexto (espacio libre, tiempo abierto)");
+mustContain(main, "logUpdater(\"instalando (gate):\", JSON.stringify({ ...installCtx, ...describeInstallExtras() }));", "Antes de instalar se anota el contexto (espacio libre, tiempo abierto, quien lo pidio, antivirus, Windows, instalador)");
 
 // Salud de la ventana principal y catalogo vacio (Los Argentinos, 4-nov: pantalla sin articulos)
 mustContain(main, 'wc.on("render-process-gone", (_e, details) => {', "Se vigila la caida del proceso de dibujo de la ventana principal");

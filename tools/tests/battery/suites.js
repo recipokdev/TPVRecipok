@@ -73,6 +73,21 @@ const SUITES = [
     args: ["tools/tests/run-update-when-idle.js"], timeoutMs: 150000,
   },
   {
+    id: "cajon-programa-auxiliar", area: B, level: "standard", title: "Apertura del cajón: programa auxiliar diminuto y plan B",
+    what: "Comprueba que el programa auxiliar nuevo del cajón (unos KB, en lugar de 64 MB) se comporta igual que el de siempre (mismos mensajes y códigos de salida, también contra una impresora de pruebas con puerto a fichero que se crea y se borra) y la cadena de intentos que usa el TPV: responde el pequeño, si falta o está roto se prueba el de siempre, si no se puede ejecutar ninguno el error trae el detalle de los dos y no rompe la llamada (antes un ejecutable bloqueado lanzaba una excepción). Con el TPV abierto, sin red, comprueba los avisos que ve el cajero (impresora que no responde, programa bloqueado por el antivirus, error genérico) y que el fallo se avisa a nuestro servidor. Nunca toca una impresora real ni la demo.",
+    args: ["tools/tests/run-drawer-helper.js"], timeoutMs: 300000,
+  },
+  {
+    id: "vigilante-instalacion", area: B, level: "standard", title: "Vigilante de instalaciones (piezas y casos de fallo)",
+    what: "Sin abrir el TPV: lanza el vigilante de instalación (PowerShell) con instaladores falsos y un servidor de avisos local, y comprueba once casos: que detecta el fallo en segundos y no en minutos, que se recupera al segundo intento sin que aparezca ningún icono a la vista, instalación correcta (no avisa de nada y borra la clave), sin programa y con reinstalación que funciona, reinstalación que siempre falla (abre el instalador con ventanas y reapunta el icono en blanco del escritorio al instalador), programa presente pero sin abrir (lo abre), programa abierto pero sin mostrarse (no toca nada), instalador lento, sin instalador guardado, dos vigilantes a la vez y que el vigilante sigue vivo aunque se cierre el programa que lo lanzó (también con rutas con espacios). Comprueba además la copia del instalador de reparación y la lectura de la carpeta de descargas. No toca la demo.",
+    args: ["tools/tests/run-install-watchdog.js"], timeoutMs: 400000,
+  },
+  {
+    id: "seguridad-instalacion", area: B, level: "full", title: "Red de seguridad de la instalación, con un TPV empaquetado",
+    what: "Monta un TPV empaquetado de pruebas y un falso servidor de actualizaciones que ofrece una versión 9.9.9 cuyo instalador no instala nada (el fallo de Ben_Trempat), y comprueba que antes de cerrarse el TPV deja en el registro quién pidió la actualización, la versión de Windows y el instalador, guarda la copia de reparación, crea el icono REPARAR en un escritorio de pruebas y lanza el vigilante, que detecta que la versión nueva no avisa; y que cuando un TPV nuevo se ve con normalidad el icono y la copia se quitan solos. Necesita internet. No toca la demo, el escritorio real ni la carpeta de descargas real.",
+    args: ["tools/tests/run-install-safetynet.js"], timeoutMs: 330000,
+  },
+  {
     id: "logo-termico", area: B, level: "standard", title: "Logo en blanco y negro puro para impresoras térmicas",
     what: "Abre el TPV en un perfil aislado, sin red, y con imágenes generadas por la propia prueba comprueba que una caligrafía de color (como la de Los Argentinos) se convierte en negro y blanco puros del tamaño exacto de impresión (8 puntos por mm), que una foto o un degradado se deja como estaba, que lo transparente sale blanco, que el interruptor de Opciones lo apaga y que si la imagen no se puede leer no falla. No toca la demo.",
     args: ["tools/tests/run-thermal-logo.js"], timeoutMs: 150000,
