@@ -4,18 +4,33 @@ Desde **Opciones** (el engranaje ⚙ de la cabecera del carrito) se adapta el TP
 
 ## 1. Cómo funciona la ventana de Opciones
 
-@fig img/opciones-ventana.png | crop=600,60,720,900 | marks=1:874,97;2:1060,97;3:949,157;4:630,247;5:700,277;6:735,386;7:700,925;8:1235,925 | Ventana de Opciones.
+@fig img/opciones-ventana.png | crop=600,60,720,900 | marks=1:874,97;2:1060,97;3:800,157;4:730,203;5:631,284;6:700,313;7:736,423;8:701,925;9:1236,925 | Ventana de Opciones.
 
 1. **Tutoriales.** Abre los tutoriales interactivos del TPV.
 2. **P1 y P2.** Cambian entre modo día y modo noche en la pantalla 1 (la del cajero) y en la pantalla 2 (la del cliente).
 3. **Buscador.** Escribe lo que buscas («stock», «impresora», «cajón»…) y verás solo las opciones relacionadas.
-4. **Secciones.** Las opciones están agrupadas en *Venta*, *Cobro y caja*, *Equipo y pantalla* y *Programa*. Pulsa el título de una sección para desplegarla.
-5. **Resumen de cada sección.** Los botones bajo el título muestran el estado actual de los ajustes (✓ verde = activado) y puedes pulsarlos para ir directamente a ese ajuste.
-6. **ADMIN.** Las secciones con esta marca solo las ve un usuario administrador.
-7. **Actualizar Programa** y **Salir del Programa**, abajo.
-8. **Cerrar Opciones.**
+4. **Pestañas de acceso rápido.** *Todas* (lo normal), *★ Favoritas* y *🕘 Recientes*. Pulsa una para ver al momento tus opciones favoritas o las últimas que has cambiado; pulsa la misma otra vez (o *Todas*) para cerrarla.
+5. **Secciones.** Las opciones están agrupadas en *Venta*, *Cobro y caja*, *Equipo y pantalla* y *Programa*. Pulsa el título de una sección para desplegarla.
+6. **Resumen de cada sección.** Los botones bajo el título muestran el estado actual de los ajustes (✓ verde = activado) y puedes pulsarlos para ir directamente a ese ajuste.
+7. **ADMIN.** Las secciones con esta marca solo las ve un usuario administrador.
+8. **Actualizar Programa** y **Salir del Programa**, abajo.
+9. **Cerrar Opciones.**
 
 Los botones de resumen también pueden mostrar otros estados: **gris** (desactivado), **azul** (el valor actual de un ajuste) y **ámbar con ⚠** (algo requiere atención, por ejemplo «Sin impresora de tickets»). Al pulsar uno, la sección se abre y se resalta el ajuste. El buscador tiene una **✕** para borrarlo.
+
+**Favoritas.** Cada opción tiene una estrella (☆) junto a su nombre. Púlsala y esa opción pasa a la pestaña **★ Favoritas** de arriba de Opciones (hasta 12 por terminal; la pestaña muestra cuántas tienes). Los **interruptores** se activan y desactivan directamente desde esa pestaña, sin buscarlos; el resto de opciones (listas, valores y botones) te llevan a su sitio con un toque, sin ejecutar nada por ti. Para quitar una favorita, pulsa su ✕ en la pestaña o su ★ en la fila. Si una favorita está en una sección que no puedes ver (por ejemplo, de administrador), no aparece. Mientras buscas, las pestañas se ocultan y los resultados llevan su propia estrella. El TPV recuerda la última pestaña que dejaste abierta; si prefieres tener Opciones lo más despejado posible, déjalo en *Todas*.
+
+**Últimos cambios.** Pulsa la pestaña **🕘 Recientes** (solo aparece cuando has cambiado algo) para ver las opciones que has tocado hace poco, con su estado (activada o desactivada) y la hora. Cada opción aparece una sola vez: si la vuelves a cambiar, sube arriba y actualiza su hora. Se guardan las últimas 8, solo en este terminal, y se apuntan al cerrar Opciones (si activas y desactivas una opción en la misma visita, no cuenta). Pulsa una entrada para ir directo a esa opción y cambiarla de nuevo. No se guardan valores personales, como el cliente por defecto.
+
+**Buscador mejorado.** Al pulsar el buscador **vacío** salen tus **últimas 5 búsquedas**: púlsalas para repetirlas, o **Borrar** para quitarlas. Una búsqueda se apunta cuando eliges un resultado (pulsas algo de una fila encontrada) o pulsas Intro; no mientras escribes. Además el buscador entiende **palabras parecidas**: «monedero» encuentra «Abrir cajón», «ticket» encuentra las opciones de la impresora, «balanza» las de la báscula… Cuando amplía la búsqueda lo dice debajo («También se ha buscado: cajon»).
+
+**Volver donde lo dejaste.** Si cierras Opciones y las vuelves a abrir en **menos de 10 minutos**, la lista vuelve al punto donde estabas (los grupos abiertos o cerrados se recuerdan siempre). Pasado ese tiempo, o si cerraste con una búsqueda escrita, empieza arriba como siempre.
+
+**Opciones nuevas.** Las opciones que llegan con una versión nueva llevan una marca naranja **NUEVO** en su fila y en el título de su grupo (así sabes dónde mirar aunque el grupo esté cerrado), y un puntito naranja en su botón de resumen. La marca desaparece sola a los **14 días**, o antes si la pulsas o si cambias esa opción. Solo se marcan las de las últimas versiones, nunca las antiguas.
+
+**Ver solo lo cambiado.** El botón **Cambiadas (N)**, junto al buscador, indica cuántas opciones están distintas de una instalación nueva. Púlsalo y verás **solo esas opciones**, cada una con su valor de fábrica («de fábrica: activada»), para que sepas cómo estaba antes y puedas volver a ponerlo. Se puede combinar con el buscador. No cuentan las opciones que dependen de cada negocio (la impresora, la tarifa, la moneda, el cliente por defecto, el puerto de la báscula…) ni las de secciones que no puedes ver. El modo pantalla completa (kiosco) viene apagado en una instalación nueva, así que si lo usas aparecerá como cambiado. Al cerrar Opciones, el filtro se apaga.
+
+**Ayuda «?» en cada opción.** Junto al nombre de las opciones que más confunden (unas 35, desde «Desagrupar líneas» hasta la escala de la interfaz) hay un botón **?**. Púlsalo y se abre debajo una explicación corta, en lenguaje llano, de para qué sirve; púlsalo otra vez para cerrarla. No cambia la opción. Esas explicaciones son las mismas de este manual.
 
 Con la sesión iniciada puedes ver y cambiar las Opciones **aunque la caja esté cerrada** (por ejemplo, para salir del modo pantalla completa).
 
@@ -130,6 +145,18 @@ Controla qué se ve en la barra inferior: **Mostrar barra completa**, **terminal
 - **Frecuencia de comprobación.** Cada cuánto se comprueba. **Comprobar ahora** lo hace en el momento.
 - **Changelog.** Consulta las novedades de cada versión.
 - **Actualizar Programa.** Instala la versión nueva cuando está disponible.
+
+### Enviar diagnóstico a soporte
+Si algo falla (el cajón, la impresora, una actualización…) y el soporte de Recipok te lo pide, pulsa **Enviar diagnóstico**. El TPV manda a Recipok los datos técnicos de este equipo (versión del programa y de Windows, antivirus, impresoras y su estado, espacio libre, las últimas líneas del registro del actualizador y los últimos avisos del TPV) para que se pueda ver qué pasa sin entrar en el equipo. **No incluye ventas, clientes ni tu nombre de usuario de Windows.** Además, el TPV manda una vez por semana una foto técnica parecida de forma automática.
+
+### Copiar opciones a otro terminal (solo administradores)
+Si ya tienes un terminal a tu gusto y quieres dejar otro igual, no hace falta repasar las opciones una a una.
+1. En el terminal que ya está bien, abre **Programa → Copiar opciones a otro terminal** y pulsa **Exportar**. Elige dónde guardar el archivo (por ejemplo, un pendrive).
+2. En el otro terminal, pulsa **Importar** y elige ese archivo.
+3. El TPV te enseña la lista de lo que va a cambiar («Opción: antes → después»). Si te parece bien, pulsa **Aplicar**; si no, **Cancelar** y no se toca nada.
+4. Si te arrepientes, pulsa **Deshacer última importación** (disponible durante 24 horas). Solo se devuelve lo que sigue como lo importaste: lo que cambiaste a mano después se respeta.
+
+**Qué se copia:** los interruptores y modos del carrito, los productos y el stock, los avisos, la comanda automática, la barra de información y los descuentos rápidos. **Qué no se copia nunca:** impresoras, báscula, empresa, usuarios y claves, modo kiosco, inicio con el PC, escala, teclado en pantalla, pantalla del cliente, moneda, tarifas, cliente por defecto ni las opciones de actualización: son propias de cada equipo. Si el archivo trae opciones que ese terminal no usa (por ejemplo las de Mesas sin tener Mesas), se saltan.
 
 ### Para pruebas
 - **Entorno de pruebas.** Simula cobros, aparcados e impresión sin enviar datos reales. Al salir, se restaura el estado anterior. Úsalo para practicar sin riesgo.

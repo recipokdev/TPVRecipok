@@ -77,6 +77,7 @@ Otro terminal (o la tablet de un camarero) modificó la mesa. Revisa el pedido: 
 Las impresoras térmicas solo imprimen negro o blanco: un logo de color o un texto en gris lo convierten en puntitos. En **Opciones → Impresora** comprueba que **Logo en blanco y negro nítido** está activado (lo está por defecto) y actualiza el TPV a la última versión, que imprime el cierre de caja y la comanda en negro sólido. Si el papel sale muy claro en general, sube la densidad de impresión desde la utilidad del fabricante de la impresora.
 
 ### El cajón no se abre
+Si falla, ve a **Opciones → Actualización automática → Enviar diagnóstico**: así Recipok recibe los datos técnicos del equipo (qué programa auxiliar se probó, el estado de la impresora, el antivirus…) y puede ayudarte sin entrar en él.
 Si al pulsar «Abrir cajón» sale **«No se pudo abrir el cajón: el programa que lo abre no se puede ejecutar (puede estar bloqueado por el antivirus)»**, no es la impresora ni el cajón: el antivirus del equipo ha bloqueado el programa auxiliar del TPV. Avisa al soporte de Recipok (el aviso llega también a nuestro servidor) y, mientras tanto, abre el cajón con su llave.
 - Comprueba que está conectado a la impresora de tickets.
 - Prueba **Abrir cajón manualmente** (**Opciones → Caja**).

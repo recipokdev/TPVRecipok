@@ -1147,8 +1147,24 @@ function sanitizeClientEventDetail(detail) {
 // (30 cada 10 min) para no gastar el de los avisos de fallos ni ser tapado por ellos.
 let __clientTrailWindow = { start: 0, n: 0 };
 
+// Ultimos avisos del TPV (solo en memoria, sin datos de ventas): se adjuntan al pulsar «Enviar diagnostico a soporte».
+const __clientEventRing = [];
+function recentClientEventsForDiag() {
+  return __clientEventRing.slice(-10);
+}
+function pushClientEventRing(cat, cod, msg) {
+  try {
+    const d = new Date();
+    const hh = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    __clientEventRing.push(`${hh} ${cat}/${cod}: ${String(msg || "").slice(0, 120)}`);
+    if (__clientEventRing.length > 30) __clientEventRing.shift();
+  } catch {}
+}
+
 function reportClientEvent(category, code, message, detail, severity, opts) {
   try {
+    // Va al anillo de diagnostico ANTES de cualquier salida anticipada (sin conexion, sin servidor...): asi refleja lo que paso aunque no se pudiera enviar.
+    pushClientEventRing(String(category || "other").toLowerCase(), String(code || "unknown").slice(0, 80), String(message || "").slice(0, 300));
     if (TPV_STATE?.offline) return;
     if (typeof isSafeTrainingModeEnabled === "function" && isSafeTrainingModeEnabled()) return;
     const slug = String(getCurrentSlugForReservations() || "").trim();
@@ -34109,8 +34125,9 @@ const OPTS_ACC_KEY = "ui.optionsAccordion"; // TPV_CFG
 let optionsAccordionBound = false;
 
 async function loadOptionsAccordionState() {
-  // default: caja abierto
-  let state = { caja: true };
+  // Por defecto TODOS los grupos cerrados (Sergi, 2026-11-19: con varios abiertos a la vez era un lio). Se ve igualmente el estado de cada
+  // grupo en sus etiquetas de resumen. Lo que cada terminal ya tenga guardado (grupos que abrio o cerro) se respeta.
+  let state = {};
 
   try {
     if (window.TPV_CFG) {
@@ -34203,6 +34220,11 @@ const OPT_PREVIEW_DEFS = {
     ),
     OPT_PV.A("Comprobar ahora", "updateNoticeCheckNowBtn"),
     OPT_PV.A("Ver changelog", "updateNoticeChangelogBtn"),
+    OPT_PV.A("Enviar diagnóstico a soporte", "optionsSendDiagBtn"),
+  ],
+  copiar: [
+    OPT_PV.A("Exportar opciones", "optionsExportBtn"),
+    OPT_PV.A("Importar opciones", "optionsImportBtn"),
   ],
   caja: [
     OPT_PV.T("Abrir cajón con todos los pagos", "openDrawerAlwaysToggle"),
@@ -34388,6 +34410,7 @@ function renderOptionsPreviews() {
       chip.className = `opt-pv is-${r.state}`;
       chip.dataset.optTarget = def.id;
       chip.title = "Ir a esta opción";
+      if (optIsNew(def.id)) chip.classList.add("is-new");
       chip.textContent =
         (r.state === "on" ? "✓ " : r.state === "warn" ? "⚠ " : r.state === "action" ? "▸ " : "") +
         r.text;
@@ -34398,6 +34421,223 @@ function renderOptionsPreviews() {
     box.classList.add("is-chips");
     box.replaceChildren(frag);
   });
+  try {
+    injectOptionFavStars();
+    syncOptionFavStars();
+    injectOptionHelp();
+    decorateOptionsNew();
+    renderOptionsQuickAccess();
+    updateOptionsChangedButton();
+  } catch {}
+}
+
+// ===== Acceso rapido de Opciones: favoritas (2026-11-19, peticion de Sergi) =====
+// Una estrella (☆/★) en cada opcion de OPT_PREVIEW_DEFS y, arriba de Opciones, el bloque «Acceso rapido» con las favoritas de ESTE terminal:
+// los interruptores se cambian desde el propio bloque (sin saltar) y el resto de opciones (listas, valores, botones) te llevan a su fila.
+// Los botones NO se ejecutan desde aqui (algunos restablecen cosas): solo te llevan a ellos. Nunca se muestra una favorita a la que este
+// usuario no tendria acceso en Opciones (apartados de administrador, de Mesas o de modulos que la empresa no tiene).
+const OPT_FAV_KEY = "ui.optionsFavorites"; // TPV_CFG (por terminal)
+const OPT_FAV_LS_KEY = "tpv_opts_fav";
+const OPT_FAV_MAX = 12;
+let __optFavorites = [];
+let __optDefIndex = null;
+
+function optDefIndex() {
+  if (!__optDefIndex) {
+    __optDefIndex = new Map();
+    Object.entries(OPT_PREVIEW_DEFS).forEach(([secKey, defs]) => {
+      defs.forEach((def) => {
+        if (!__optDefIndex.has(def.id)) __optDefIndex.set(def.id, { def, secKey });
+      });
+    });
+  }
+  return __optDefIndex;
+}
+
+async function loadOptionsFavorites() {
+  let list = [];
+  try {
+    if (window.TPV_CFG) {
+      const v = await window.TPV_CFG.get(OPT_FAV_KEY);
+      if (Array.isArray(v)) list = v;
+    }
+  } catch {}
+  if (!list.length) {
+    try {
+      const ls = JSON.parse(localStorage.getItem(OPT_FAV_LS_KEY) || "null");
+      if (Array.isArray(ls)) list = ls;
+    } catch {}
+  }
+  const idx = optDefIndex();
+  const seen = new Set();
+  // ids que ya no existen (opcion quitada en una version) se descartan solos
+  __optFavorites = list
+    .map(String)
+    .filter((id) => idx.has(id) && !seen.has(id) && seen.add(id))
+    .slice(0, OPT_FAV_MAX);
+  return __optFavorites;
+}
+
+async function saveOptionsFavorites() {
+  try {
+    if (window.TPV_CFG) await window.TPV_CFG.set(OPT_FAV_KEY, __optFavorites.slice());
+  } catch {}
+  try {
+    localStorage.setItem(OPT_FAV_LS_KEY, JSON.stringify(__optFavorites));
+  } catch {}
+}
+
+// ¿Puede este usuario ver y usar esta opcion ahora mismo? (mismas reglas que el propio apartado de Opciones)
+function optionAccessibleForQuick(id) {
+  const el = document.getElementById(id);
+  if (!el) return false;
+  const sec = el.closest(".opt-sec");
+  if (!sec || sec.style.display === "none") return false;
+  if (sec.hasAttribute("data-admin-only") && !window.TPV_STATE?.isAdmin) return false;
+  if (el.closest("[hidden]") || optPvIsGatedOff(el)) return false;
+  const row = el.closest(".opt-row");
+  if (row && (row.hidden || row.style.display === "none" || row.classList.contains("hidden"))) return false;
+  return true;
+}
+
+// Pone la estrella en la fila de cada opcion del catalogo (una por fila, solo si falta: no toca el DOM de nuevo si ya esta).
+function injectOptionFavStars() {
+  const done = new Set();
+  optDefIndex().forEach((_info, id) => {
+    const el = document.getElementById(id);
+    const row = el?.closest?.(".opt-row");
+    if (!el || !row || done.has(row)) return;
+    done.add(row);
+    if (row.querySelector(".opt-fav")) return;
+    let host = row.querySelector(".opt-row-title") || row.querySelector(".opt-row-txt") || row;
+    if (host.closest("label")) host = row; // un boton dentro de un <label> activaria su control
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "opt-fav";
+    btn.dataset.favId = id;
+    host.appendChild(btn);
+  });
+}
+
+function syncOptionFavStars() {
+  const fav = new Set(__optFavorites);
+  document.querySelectorAll("#optionsAccordion .opt-fav[data-fav-id]").forEach((b) => {
+    const on = fav.has(b.dataset.favId);
+    b.classList.toggle("is-fav", on);
+    const t = on ? "Quitar de favoritas" : "Añadir a favoritas";
+    b.title = t;
+    b.setAttribute("aria-label", t);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+
+function renderOptionsQuickAccess() {
+  const box = document.getElementById("optionsFavList");
+  if (!box) return;
+  const idx = optDefIndex();
+  const frag = document.createDocumentFragment();
+  let shown = 0;
+  __optFavorites.forEach((id) => {
+    const info = idx.get(id);
+    if (!info || !optionAccessibleForQuick(id)) return;
+    let r = null;
+    try {
+      r = computeOptPreviewItem(info.def);
+    } catch {}
+    if (!r) return;
+    const isToggle = info.def.kind === "toggle";
+    const wrap = document.createElement("span");
+    wrap.className = "opt-fav-chip";
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = `opt-pv is-${r.state}`;
+    chip.dataset.favAct = isToggle ? "toggle" : "jump";
+    chip.dataset.favId = id;
+    chip.title = isToggle ? "Pulsa para activar o desactivar" : "Ir a esta opción";
+    chip.textContent =
+      (r.state === "on" ? "✓ " : r.state === "warn" ? "⚠ " : r.state === "action" ? "▸ " : "") + r.text;
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "opt-fav-remove";
+    rm.dataset.favRemove = id;
+    rm.title = "Quitar de favoritas";
+    rm.setAttribute("aria-label", "Quitar de favoritas");
+    rm.textContent = "✕";
+    wrap.append(chip, rm);
+    frag.appendChild(wrap);
+    shown++;
+  });
+  box.replaceChildren(frag);
+  document.getElementById("optionsFavHint")?.classList.toggle("hidden", shown > 0);
+  const favN = document.getElementById("optionsFavCount");
+  if (favN) favN.textContent = shown ? `(${shown})` : "";
+  renderOptionsHistory();
+}
+
+// ----- Pestañas del acceso rapido (rediseño compacto, 2026-11-19): Todas / ★ Favoritas / 🕘 Recientes -----
+// Solo una abierta a la vez; «Todas» (ninguna abierta) deja solo la tira de pestañas, una linea. Pulsar la pestaña abierta la cierra. Se recuerda
+// la ultima elegida en este equipo (localStorage). La logica de favoritas e historial no cambia: solo donde se enseñan.
+const OPT_QTAB_LS_KEY = "tpv_opts_qtab";
+let optFavOpen = false;
+let __optQuickTabRestored = false;
+
+function optQuickActiveTab() {
+  const histN = __optHistory.filter((h) => optDefIndex().has(h.id) && optionAccessibleForQuick(h.id)).length;
+  if (optHistOpen && histN > 0) return "hist";
+  if (optFavOpen) return "fav";
+  return "all";
+}
+
+function renderOptionsQuickTabs() {
+  const tab = optQuickActiveTab();
+  document.querySelectorAll("#optionsQuick .opt-qtab[data-qtab]").forEach((btn) => {
+    const on = btn.dataset.qtab === tab;
+    btn.classList.toggle("is-active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  document.getElementById("optionsFavPane")?.classList.toggle("hidden", tab !== "fav");
+  return tab;
+}
+
+function setOptionsQuickTab(tab) {
+  const t = tab === "fav" || tab === "hist" ? tab : "all";
+  optFavOpen = t === "fav";
+  optHistOpen = t === "hist";
+  renderOptionsHistory(); // repinta tambien las pestañas
+  try {
+    localStorage.setItem(OPT_QTAB_LS_KEY, t);
+  } catch {}
+}
+
+function restoreOptionsQuickTabOnce() {
+  if (__optQuickTabRestored) return;
+  __optQuickTabRestored = true;
+  let t = "all";
+  try {
+    t = localStorage.getItem(OPT_QTAB_LS_KEY) || "all";
+  } catch {}
+  if (t === "fav" || t === "hist") {
+    optFavOpen = t === "fav";
+    optHistOpen = t === "hist";
+    renderOptionsHistory();
+  }
+}
+
+async function toggleOptionFavorite(id) {
+  if (!optDefIndex().has(id)) return;
+  const i = __optFavorites.indexOf(id);
+  if (i >= 0) {
+    __optFavorites.splice(i, 1);
+  } else {
+    if (__optFavorites.length >= OPT_FAV_MAX) {
+      toast(`Como máximo ${OPT_FAV_MAX} favoritas: quita alguna antes.`, "warn", "Opciones");
+      return;
+    }
+    __optFavorites.push(id);
+  }
+  syncOptionFavStars();
+  renderOptionsQuickAccess();
+  await saveOptionsFavorites();
 }
 
 // ===== Rastro de cambios en Opciones (2026-11-09) =====
@@ -34438,19 +34678,147 @@ function markOptionsAuditBaseline() {
   }
 }
 
+// Opciones que han cambiado de verdad (neto) entre la foto inicial y ahora: activar y volver a desactivar no cuenta. Lo usan el rastro al
+// servidor y el historial local de «Ultimos cambios».
+function computeOptionsChangesSince(before) {
+  const out = [];
+  const after = snapshotOptionsForAudit();
+  after.forEach((a, id) => {
+    const b = before.get(id);
+    if (!b || b.v === a.v) return;
+    out.push({ id, label: a.label, before: b.v, after: a.v });
+  });
+  return out;
+}
+
+// ----- Historial de «Ultimos cambios» de Opciones (2026-11-19, peticion de Sergi) -----
+// Que opciones se tocaron (no que se eligio dentro de una lista): una entrada por opcion, la ultima que se toca sube arriba y actualiza su hora
+// (no se repite), maximo 8. Se apunta al CERRAR Opciones con los cambios netos (los mismos que el rastro al servidor). Pulsar una entrada te lleva
+// a esa opcion. De los interruptores se guarda si quedaron activados o desactivados; del resto solo que cambiaron (y nunca el valor del cliente
+// por defecto, que es un dato personal). Solo en este terminal; no sale del equipo.
+const OPT_HIST_KEY = "ui.optionsHistory"; // TPV_CFG (por terminal)
+const OPT_HIST_LS_KEY = "tpv_opts_hist";
+const OPT_HIST_MAX = 8;
+let __optHistory = []; // [{ id, at, v }] con v: "on" | "off" | "" (el mas reciente primero)
+let optHistOpen = false;
+
+async function loadOptionsHistory() {
+  let list = [];
+  try {
+    if (window.TPV_CFG) {
+      const v = await window.TPV_CFG.get(OPT_HIST_KEY);
+      if (Array.isArray(v)) list = v;
+    }
+  } catch {}
+  if (!list.length) {
+    try {
+      const ls = JSON.parse(localStorage.getItem(OPT_HIST_LS_KEY) || "null");
+      if (Array.isArray(ls)) list = ls;
+    } catch {}
+  }
+  const idx = optDefIndex();
+  const seen = new Set();
+  // ids que ya no existen en el catalogo (opcion quitada en una version) se descartan solos
+  __optHistory = list
+    .filter((h) => h && typeof h.id === "string" && idx.has(h.id) && !seen.has(h.id) && seen.add(h.id))
+    .map((h) => ({ id: h.id, at: Number(h.at) || 0, v: h.v === "on" || h.v === "off" ? h.v : "" }))
+    .slice(0, OPT_HIST_MAX);
+  return __optHistory;
+}
+
+async function saveOptionsHistory() {
+  try {
+    if (window.TPV_CFG) await window.TPV_CFG.set(OPT_HIST_KEY, __optHistory.slice());
+  } catch {}
+  try {
+    localStorage.setItem(OPT_HIST_LS_KEY, JSON.stringify(__optHistory));
+  } catch {}
+}
+
+function recordOptionsHistory(changes) {
+  if (!Array.isArray(changes) || !changes.length) return;
+  const idx = optDefIndex();
+  const now = Date.now();
+  changes.forEach((c) => {
+    const info = idx.get(c.id);
+    if (!info || OPT_AUDIT_IGNORE_IDS.has(c.id)) return;
+    if (OPT_SINCE[c.id] && __optNewState.seen[c.id] !== 0) {
+      __optNewState.seen[c.id] = 0; // ya la ha tocado: deja de ser «nueva»
+      saveOptionsNewState().catch(() => {});
+    }
+    const v = info.def.kind === "toggle" ? (c.after === "sí" ? "on" : "off") : "";
+    __optHistory = __optHistory.filter((h) => h.id !== c.id); // si ya estaba, no se repite: sube arriba y se actualiza
+    __optHistory.unshift({ id: c.id, at: now, v });
+  });
+  __optHistory = __optHistory.slice(0, OPT_HIST_MAX);
+  renderOptionsHistory();
+  saveOptionsHistory().catch(() => {});
+}
+
+function fmtOptHistWhen(at) {
+  const d = new Date(at);
+  const now = new Date();
+  const hhmm = d.toTimeString().slice(0, 5);
+  if (d.toDateString() === now.toDateString()) return `hoy ${hhmm}`;
+  const ayer = new Date(now);
+  ayer.setDate(now.getDate() - 1);
+  if (d.toDateString() === ayer.toDateString()) return `ayer ${hhmm}`;
+  return `${d.getDate()}/${d.getMonth() + 1} ${hhmm}`;
+}
+
+function renderOptionsHistory() {
+  const wrap = document.getElementById("optionsHistWrap");
+  const list = document.getElementById("optionsHistList");
+  if (!wrap || !list) return;
+  const idx = optDefIndex();
+  // una entrada de una opcion a la que este usuario no tiene acceso no se muestra (se conserva guardada)
+  const rows = __optHistory.filter((h) => idx.has(h.id) && optionAccessibleForQuick(h.id));
+  wrap.classList.toggle("hidden", rows.length === 0);
+  const count = document.getElementById("optionsHistCount");
+  if (count) count.textContent = rows.length ? `(${rows.length})` : "";
+  wrap.classList.toggle("is-open", optHistOpen);
+  const histTab = document.getElementById("optionsHistToggle");
+  if (histTab) {
+    histTab.classList.toggle("hidden", rows.length === 0); // sin cambios recientes no hay pestaña
+    histTab.setAttribute("aria-expanded", optHistOpen && rows.length > 0 ? "true" : "false");
+  }
+  list.classList.toggle("hidden", !optHistOpen || rows.length === 0);
+  const frag = document.createDocumentFragment();
+  rows.forEach((h) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "opt-hist-item";
+    btn.dataset.histId = h.id;
+    btn.title = "Ir a esta opción";
+    const name = document.createElement("span");
+    name.className = "opt-hist-name";
+    name.textContent = idx.get(h.id).def.label;
+    const st = document.createElement("span");
+    st.className = `opt-hist-state ${h.v === "on" ? "is-on" : h.v === "off" ? "is-off" : "is-chg"}`;
+    st.textContent = h.v === "on" ? "activada" : h.v === "off" ? "desactivada" : "cambiada";
+    const when = document.createElement("span");
+    when.className = "opt-hist-when";
+    when.textContent = fmtOptHistWhen(h.at);
+    btn.append(name, st, when);
+    frag.appendChild(btn);
+  });
+  list.replaceChildren(frag);
+  renderOptionsQuickTabs();
+}
+
 function reportOptionsChangesOnClose() {
   const before = __optAuditSnapshot;
   __optAuditSnapshot = null;
   if (!before) return;
   try {
-    const after = snapshotOptionsForAudit();
-    const changes = [];
-    after.forEach((a, id) => {
-      const b = before.get(id);
-      if (!b || b.v === a.v) return;
-      changes.push(OPT_AUDIT_NO_VALUE_IDS.has(id) ? `${a.label}: cambiada` : `${a.label}: ${b.v} → ${a.v}`);
-    });
-    if (!changes.length) return;
+    const list = computeOptionsChangesSince(before);
+    if (!list.length) return;
+    try {
+      recordOptionsHistory(list);
+    } catch {
+      /* el historial local nunca debe impedir el rastro al servidor */
+    }
+    const changes = list.map((c) => (OPT_AUDIT_NO_VALUE_IDS.has(c.id) ? `${c.label}: cambiada` : `${c.label}: ${c.before} → ${c.after}`));
     reportClientEvent(
       "other",
       "options-changed",
@@ -34541,6 +34909,141 @@ const normalizeOptSearch = (s) =>
     .replace(/\s+/g, " ")
     .trim();
 
+// ----- Buscador de Opciones: palabras parecidas y busquedas recientes (2026-11-19, peticion de Sergi) -----
+// Palabras parecidas: buscar «monedero» encuentra «cajon», «ticket» encuentra «impresora»... Grupos escritos SIN tildes (el buscador las ignora).
+// Solo se amplia una busqueda de UNA palabra de 3 o mas letras (las frases se buscan tal cual) y, si se esta escribiendo (>= 4 letras), tambien
+// el comienzo de un termino («impres» -> impresora). Cuando se ha ampliado, se avisa debajo del buscador.
+const OPT_SEARCH_SYNONYMS = [
+  ["impresora", "impresoras", "ticket", "tickets", "imprimir", "impresion", "papel", "termica", "recibo"],
+  ["cajon", "monedero"],
+  ["bascula", "balanza", "peso", "pesar"],
+  ["pantalla", "monitor", "display", "resolucion"],
+  ["kiosco", "kiosk", "pantalla completa"],
+  ["stock", "existencias", "inventario"],
+  ["precio", "precios", "tarifa", "tarifas", "pvp", "importe"],
+  ["descuento", "descuentos", "rebaja", "oferta"],
+  ["familia", "familias", "categoria", "categorias"],
+  ["producto", "productos", "articulo", "articulos"],
+  ["actualizar", "actualizacion", "version", "novedades"],
+  ["mesa", "mesas", "camarero", "camareros", "comanda", "comandas", "cocina"],
+  ["teclado", "tactil"],
+  ["letra", "fuente", "texto", "tipografia"],
+  ["correo", "email", "mail", "factura"],
+  ["diagnostico", "soporte", "ayuda", "problema", "averia"],
+  ["inicio", "arrancar", "encender", "autoinicio"],
+  ["alergeno", "alergenos", "alergia"],
+  ["escala", "zoom", "tamano", "ampliar"],
+  ["cierre", "cerrar", "arqueo"],
+  ["cobrar", "cobro", "pago", "pagar"],
+];
+
+// Terminos por los que se busca: la propia busqueda (normalizada) y, si procede, las palabras parecidas.
+function optSearchTerms(q) {
+  const out = [q];
+  if (!q || q.length < 3 || q.includes(" ")) return out;
+  OPT_SEARCH_SYNONYMS.forEach((group) => {
+    if (group.some((t) => t === q || (q.length >= 4 && t.startsWith(q)))) {
+      group.forEach((t) => {
+        if (!out.includes(t)) out.push(t);
+      });
+    }
+  });
+  return out;
+}
+
+// Busquedas recientes: las ultimas 5 (una por busqueda, sin repetir aunque cambien mayusculas o tildes). Se apuntan al ELEGIR un resultado
+// (pulsar algo de una fila encontrada) o al pulsar Intro con resultados; no al escribir cada letra. Salen al pulsar el buscador vacio.
+const OPT_SEARCH_HIST_KEY = "ui.optionsSearchHistory"; // TPV_CFG (por terminal)
+const OPT_SEARCH_HIST_LS_KEY = "tpv_opts_search";
+const OPT_SEARCH_HIST_MAX = 5;
+let __optSearchHistory = [];
+let optSearchRecentOpen = false;
+
+async function loadOptionsSearchHistory() {
+  let list = [];
+  try {
+    if (window.TPV_CFG) {
+      const v = await window.TPV_CFG.get(OPT_SEARCH_HIST_KEY);
+      if (Array.isArray(v)) list = v;
+    }
+  } catch {}
+  if (!list.length) {
+    try {
+      const ls = JSON.parse(localStorage.getItem(OPT_SEARCH_HIST_LS_KEY) || "null");
+      if (Array.isArray(ls)) list = ls;
+    } catch {}
+  }
+  const seen = new Set();
+  __optSearchHistory = list
+    .map((x) => String(x == null ? "" : x).trim().replace(/\s+/g, " ").slice(0, 40))
+    .filter((t) => {
+      const n = normalizeOptSearch(t);
+      return n.length >= 2 && !seen.has(n) && seen.add(n);
+    })
+    .slice(0, OPT_SEARCH_HIST_MAX);
+  return __optSearchHistory;
+}
+
+async function saveOptionsSearchHistory() {
+  try {
+    if (window.TPV_CFG) await window.TPV_CFG.set(OPT_SEARCH_HIST_KEY, __optSearchHistory.slice());
+  } catch {}
+  try {
+    localStorage.setItem(OPT_SEARCH_HIST_LS_KEY, JSON.stringify(__optSearchHistory));
+  } catch {}
+}
+
+function recordOptionsSearch(raw) {
+  const t = String(raw == null ? "" : raw).trim().replace(/\s+/g, " ").slice(0, 40);
+  const n = normalizeOptSearch(t);
+  if (n.length < 2) return;
+  __optSearchHistory = __optSearchHistory.filter((x) => normalizeOptSearch(x) !== n); // sin repetir: sube arriba con el texto mas reciente
+  __optSearchHistory.unshift(t);
+  __optSearchHistory = __optSearchHistory.slice(0, OPT_SEARCH_HIST_MAX);
+  renderOptionsSearchRecent();
+  saveOptionsSearchHistory().catch(() => {});
+}
+
+function renderOptionsSearchRecent() {
+  const box = document.getElementById("optionsSearchRecent");
+  const input = document.getElementById("optionsSearchInput");
+  if (!box) return;
+  const show = optSearchRecentOpen && __optSearchHistory.length > 0 && !String(input?.value || "").trim();
+  box.classList.toggle("hidden", !show);
+  if (!show) return;
+  const frag = document.createDocumentFragment();
+  const lab = document.createElement("span");
+  lab.className = "opt-recent-label";
+  lab.textContent = "Recientes:";
+  frag.appendChild(lab);
+  __optSearchHistory.forEach((t) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "opt-recent-chip";
+    b.dataset.recentQ = t;
+    b.textContent = t;
+    frag.appendChild(b);
+  });
+  const clr = document.createElement("button");
+  clr.type = "button";
+  clr.className = "opt-recent-clear";
+  clr.dataset.recentClear = "1";
+  clr.title = "Borrar las búsquedas recientes";
+  clr.textContent = "Borrar";
+  frag.appendChild(clr);
+  box.replaceChildren(frag);
+}
+
+function showOptionsSearchRecent() {
+  optSearchRecentOpen = true;
+  renderOptionsSearchRecent();
+}
+
+function hideOptionsSearchRecent() {
+  optSearchRecentOpen = false;
+  renderOptionsSearchRecent();
+}
+
 let optSearchSavedOpen = null;
 
 function clearOptionsSearchMarks() {
@@ -34550,6 +35053,7 @@ function clearOptionsSearchMarks() {
     if (!el.classList.contains("opt-group-title")) el.classList.remove("opt-search-hide");
   });
   document.getElementById("optionsSearchEmpty")?.classList.add("hidden");
+  document.getElementById("optionsSearchNote")?.classList.add("hidden");
 }
 
 function applyOptionsSearch() {
@@ -34557,11 +35061,24 @@ function applyOptionsSearch() {
   const input = document.getElementById("optionsSearchInput");
   if (!acc || !input) return;
   const q = normalizeOptSearch(input.value);
+  const terms = optSearchTerms(q);
   document.getElementById("optionsSearchClear")?.classList.toggle("hidden", !q);
   const secs = [...acc.querySelectorAll(".opt-sec")];
+  // filtro «Cambiadas»: solo las filas de opciones que no estan como de fabrica (y que este usuario puede ver); se combina con la busqueda
+  const active = !!q || optChangedOnly;
+  const changedRows = new Set();
+  if (optChangedOnly) {
+    optDefIndex().forEach((_info, id) => {
+      if (OPT_STD[id] !== undefined && optionAccessibleForQuick(id) && optIsChanged(id)) {
+        const r = document.getElementById(id)?.closest(".opt-row");
+        if (r) changedRows.add(r);
+      }
+    });
+  }
 
   clearOptionsSearchMarks();
-  if (!q) {
+  if (!active) {
+    decorateStdNotes(false);
     if (optSearchSavedOpen) {
       secs.forEach((sec) => {
         const key = sec.getAttribute("data-sec");
@@ -34582,7 +35099,8 @@ function applyOptionsSearch() {
   let anyVisible = false;
   secs.forEach((sec) => {
     if (sec.style.display === "none") return;
-    const titleMatch = normalizeOptSearch(sec.querySelector(".opt-sec-h")?.textContent).includes(q);
+    const secTitleText = normalizeOptSearch(sec.querySelector(".opt-sec-h")?.textContent);
+    const titleMatch = terms.some((t) => secTitleText.includes(t));
     let secHasMatch = false;
     sec.querySelectorAll(".opt-sec-b").forEach((body) => {
       // Una "unidad" = una fila + lo que cuelga de ella hasta la siguiente fila o titulo de subgrupo.
@@ -34612,7 +35130,9 @@ function applyOptionsSearch() {
             })
             .join(" "),
         );
-        u.match = !u.hidden && (titleMatch || text.includes(q));
+        const qMatch = !q || titleMatch || terms.some((t) => text.includes(t));
+        const chMatch = !optChangedOnly || u.els.some((el) => changedRows.has(el));
+        u.match = !u.hidden && qMatch && chMatch;
         if (u.match) secHasMatch = true;
         else u.els.forEach((el) => el.classList.add("opt-search-hide"));
       });
@@ -34623,7 +35143,7 @@ function applyOptionsSearch() {
         }
       });
     });
-    const secVisible = titleMatch || secHasMatch;
+    const secVisible = secHasMatch || (!!q && titleMatch && !optChangedOnly);
     sec.classList.toggle("opt-search-hide", !secVisible);
     if (secVisible) {
       sec.dataset.open = "1";
@@ -34631,7 +35151,23 @@ function applyOptionsSearch() {
     }
   });
   syncOptionsGroupTitles();
-  document.getElementById("optionsSearchEmpty")?.classList.toggle("hidden", anyVisible);
+  const emptyEl = document.getElementById("optionsSearchEmpty");
+  if (emptyEl) {
+    emptyEl.textContent = optChangedOnly
+      ? q
+        ? "Ninguna opción cambiada coincide con la búsqueda."
+        : "Todo está como de fábrica: no has cambiado ninguna opción."
+      : "Ninguna opción coincide con la búsqueda.";
+  }
+  emptyEl?.classList.toggle("hidden", anyVisible);
+  decorateStdNotes(optChangedOnly);
+  // si se han buscado tambien palabras parecidas, se dice (para que no extrañe ver «Cajon» al buscar «monedero»)
+  const note = document.getElementById("optionsSearchNote");
+  const extra = terms.slice(1);
+  if (note) {
+    note.textContent = extra.length && anyVisible ? `También se ha buscado: ${extra.slice(0, 4).join(", ")}` : "";
+    note.classList.toggle("hidden", !(extra.length && anyVisible));
+  }
 }
 
 // Deja el buscador vacio y todo visible (al abrir/cerrar Opciones).
@@ -34641,6 +35177,11 @@ function resetOptionsSearch() {
   optSearchSavedOpen = null;
   clearOptionsSearchMarks();
   document.getElementById("optionsSearchClear")?.classList.add("hidden");
+  optSearchRecentOpen = false;
+  renderOptionsSearchRecent();
+  optChangedOnly = false;
+  decorateStdNotes(false);
+  updateOptionsChangedButton();
   syncOptionsGroupTitles();
 }
 
@@ -34662,16 +35203,29 @@ function bindOptionsAccordionOnce() {
   // bascula...). Lo que cambia dentro del propio resumen se ignora (evita bucles).
   const searchInput = document.getElementById("optionsSearchInput");
   if (searchInput) {
-    searchInput.addEventListener("input", applyOptionsSearch);
+    searchInput.addEventListener("input", () => {
+      applyOptionsSearch();
+      // al escribir se esconden las sugerencias; si se vacia el cuadro vuelven
+      if (searchInput.value.trim()) hideOptionsSearchRecent();
+      else showOptionsSearchRecent();
+    });
+    searchInput.addEventListener("focus", () => {
+      if (!searchInput.value.trim()) showOptionsSearchRecent();
+    });
     searchInput.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && searchInput.value) {
         e.stopPropagation();
         searchInput.value = "";
         applyOptionsSearch();
+        showOptionsSearchRecent();
+      } else if (e.key === "Enter" && searchInput.value.trim()) {
+        // Intro con resultados: se apunta la busqueda
+        if (document.getElementById("optionsSearchEmpty")?.classList.contains("hidden")) recordOptionsSearch(searchInput.value);
       }
     });
     // Pantalla tactil: el teclado en pantalla (respeta el interruptor de Opciones -> Pantalla).
     searchInput.addEventListener("click", () => {
+      if (!searchInput.value.trim()) showOptionsSearchRecent();
       if (typeof openQwertyForInput === "function") openQwertyForInput(searchInput, "text");
     });
   }
@@ -34689,13 +35243,96 @@ function bindOptionsAccordionOnce() {
     new MutationObserver((muts) => {
       const outside = muts.some((m) => {
         const node = m.target?.nodeType === 1 ? m.target : m.target?.parentElement;
-        return !node?.closest?.(".opt-sec-preview");
+        return !node?.closest?.(".opt-sec-preview, .opt-quick");
       });
       if (outside) scheduleRenderOptionsPreviews();
     }).observe(accEl, { subtree: true, childList: true, characterData: true });
   }
 
   document.addEventListener("click", async (e) => {
+    // Busquedas recientes: pulsar una la repite; «Borrar» las quita todas.
+    const recentChip = e.target.closest("#optionsSearchRecent [data-recent-q]");
+    if (recentChip) {
+      const inp = document.getElementById("optionsSearchInput");
+      if (inp) {
+        inp.value = recentChip.dataset.recentQ;
+        hideOptionsSearchRecent();
+        applyOptionsSearch();
+        inp.focus();
+      }
+      return;
+    }
+    if (e.target.closest("#optionsSearchRecent [data-recent-clear]")) {
+      __optSearchHistory = [];
+      saveOptionsSearchHistory().catch(() => {});
+      hideOptionsSearchRecent();
+      return;
+    }
+    if (e.target.closest("#optionsChangedBtn")) {
+      setOptionsChangedOnly(!optChangedOnly);
+      return;
+    }
+    // Elegir un resultado de la busqueda (pulsar algo de una fila encontrada) apunta la busqueda en las recientes.
+    const accEl2 = document.getElementById("optionsAccordion");
+    if (accEl2?.classList.contains("opt-searching") && e.target.closest("#optionsAccordion .opt-row")) {
+      recordOptionsSearch(document.getElementById("optionsSearchInput")?.value);
+    }
+    // Pulsar fuera del buscador cierra las sugerencias.
+    if (optSearchRecentOpen && !e.target.closest(".opt-search, #optionsSearchRecent")) hideOptionsSearchRecent();
+    // Favoritas: estrella de una fila, quitar del bloque y pulsar una favorita.
+    const favStar = e.target.closest("#optionsAccordion .opt-fav[data-fav-id]");
+    if (favStar) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleOptionFavorite(favStar.dataset.favId).catch(() => {});
+      return;
+    }
+    const helpBtn = e.target.closest("#optionsAccordion .opt-help[data-help-id]");
+    if (helpBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleOptionHelp(helpBtn.dataset.helpId);
+      return;
+    }
+    const newPill = e.target.closest("#optionsAccordion .opt-new[data-new-id]");
+    if (newPill) {
+      e.stopPropagation();
+      dismissOptionNew(newPill.dataset.newId);
+      return;
+    }
+    if (e.target.closest("#optionsHistToggle")) {
+      setOptionsQuickTab(optHistOpen ? "all" : "hist");
+      return;
+    }
+    if (e.target.closest("#optionsFavToggle")) {
+      setOptionsQuickTab(optFavOpen ? "all" : "fav");
+      return;
+    }
+    if (e.target.closest("#optionsTabAll")) {
+      setOptionsQuickTab("all");
+      return;
+    }
+    const histItem = e.target.closest("#optionsAccordion [data-hist-id]");
+    if (histItem) {
+      jumpToOption(histItem.dataset.histId).catch(() => {});
+      return;
+    }
+    const favRm = e.target.closest("#optionsAccordion [data-fav-remove]");
+    if (favRm) {
+      toggleOptionFavorite(favRm.dataset.favRemove).catch(() => {});
+      return;
+    }
+    const favChip = e.target.closest("#optionsAccordion [data-fav-act]");
+    if (favChip) {
+      const id = favChip.dataset.favId;
+      const ctl = document.getElementById(id);
+      if (favChip.dataset.favAct === "toggle" && ctl && !ctl.disabled) {
+        ctl.click(); // el propio interruptor: sus avisos, su guardado y su resumen funcionan igual que desde su fila
+      } else {
+        jumpToOption(id).catch(() => {});
+      }
+      return;
+    }
     const pv = e.target.closest("#optionsAccordion .opt-pv[data-opt-target]");
     if (pv) {
       jumpToOption(pv.dataset.optTarget).catch(() => {});
@@ -34731,6 +35368,327 @@ function bindOptionsAccordionOnce() {
     const state = await loadOptionsAccordionState();
     state[key] = !isOpen;
     await saveOptionsAccordionState(state);
+  });
+}
+
+// ===== Enviar diagnostico a soporte (2026-11-19) =====
+// Un toque manda a nuestro servidor la «foto» del equipo (version, Windows, antivirus, impresoras y su estado, programas auxiliares del
+// cajon, espacio libre...), las ultimas lineas del registro del actualizador y los ultimos avisos del TPV. Sin ventas ni datos de clientes.
+let sendDiagBound = false;
+async function sendDiagnosticToSupport() {
+  const btn = document.getElementById("optionsSendDiagBtn");
+  if (!btn || btn.disabled) return;
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Enviando…";
+  try {
+    if (!window.TPV_DIAG?.send) throw new Error("sin-api");
+    const res = await window.TPV_DIAG.send({ events: recentClientEventsForDiag() });
+    if (res?.ok) toast("Diagnóstico enviado a soporte ✅", "ok", "Diagnóstico");
+    else if (res?.reason === "sin-servidor" || res?.reason === "sin-red" || res?.reason === "tiempo-agotado")
+      toast("No se pudo enviar: comprueba la conexión a internet.", "err", "Diagnóstico");
+    else toast("No se pudo enviar el diagnóstico. Inténtalo de nuevo en un momento.", "err", "Diagnóstico");
+  } catch {
+    toast("No se pudo enviar el diagnóstico.", "err", "Diagnóstico");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+function bindSendDiagnosticOnce() {
+  if (sendDiagBound) return;
+  sendDiagBound = true;
+  document.getElementById("optionsSendDiagBtn")?.addEventListener("click", () => {
+    sendDiagnosticToSupport().catch(() => {});
+  });
+}
+
+// ===== Copiar opciones a otro terminal (paso 9, 2026-11-19) =====
+// Exporta a un archivo SOLO las preferencias de la lista blanca de abajo y las importa en otro terminal: se compara con lo que hay, se enseña
+// «Opcion: antes → despues», se pide confirmacion y se aplica cambiando el control y lanzando su propio «change» (asi cada opcion se guarda
+// por su camino de siempre, sin tocar el almacenamiento a mano). Se puede deshacer (solo lo que sigue valiendo lo importado).
+// Fuera de la lista (A PROPOSITO): impresoras, bascula/puertos, empresa, usuario/PIN, terminal, kiosco, autoinicio, escala, teclado en pantalla,
+// pantalla del cliente, moneda, tarifas, cliente por defecto, modos de edicion, listas de familias y opciones de actualizacion.
+// Para añadir una opcion nueva: comprobar que se guarda al lanzar «change» (tools/tests/run-options-quick-access.js lo vigila) y ponerla aqui.
+const OPT_COPY_KIND = "tpv-recipok-options";
+const OPT_COPY_VERSION = 1;
+const OPT_COPY_UNDO_LS_KEY = "tpv_opts_copy_undo";
+const OPT_COPY_UNDO_MAX_AGE_MS = 24 * 3600 * 1000;
+const OPT_COPY_IDS = [
+  "groupLinesToggle", "cartDiscountToolsToggle", "cartWidthControlsToggle", "splitTpvToggle",
+  "autoPrintTicketOnParkToggle", "autoPrintToggle", "allowCloseWithParkedToggle",
+  "printCajaAutoLogToggle", "printCajaDrawerLogsToggle", "thermalLogoToggle",
+  "productStockToggle", "productStockEditToggle", "productAddonsEnabledToggle", "productsIncludeUnmanagedToggle",
+  "parkStockWarningToggle", "askStockBulkDeletePendingToggle", "familiesFirstModeToggle",
+  "productDisplayFieldModeSelect", "productSortModeSelect", "parkedCustomerResetModeSelect",
+  "autoComandaOnSaveToggle", "autoComandaDelayInput", "comandaGroupFamiliesToggle", "comandaCompactToggle",
+  "infoBarVisibleToggle", "infoBarShowTerminalToggle", "infoBarShowAgentToggle", "infoBarShowUserToggle", "infoBarShowCashToggle",
+];
+const OPT_COPY_DISCOUNT_KEY = "discountQuickPcts"; // los 5 campos de descuentos rapidos viajan juntos (se guardan con su boton)
+let __optCopyUndo = null;
+
+function optCopyDiscountSlots() {
+  const out = [];
+  for (let i = 0; i < DISCOUNT_QUICK_PERCENTS_MAX; i++) {
+    out.push(sanitizeDiscountQuickPercentSlot(document.getElementById(`discountQuickPct${i + 1}`)?.value));
+  }
+  return out;
+}
+
+function optCopyDiscountText(slots) {
+  const act = (slots || []).filter((x) => x != null && x !== "");
+  return act.length ? act.map((x) => `${x}%`).join(", ") : "(ninguno)";
+}
+
+function optCopyControlValue(el) {
+  if (el.type === "checkbox") return !!el.checked;
+  return String(el.value ?? "");
+}
+
+function optCopyValueText(el, v) {
+  if (el.type === "checkbox") return v ? "sí" : "no";
+  if (el.tagName === "SELECT") {
+    const o = [...el.options].find((x) => x.value === v);
+    return o ? String(o.textContent || "").trim() : String(v);
+  }
+  return el.id === "autoComandaDelayInput" ? `${v} s` : String(v);
+}
+
+function optCopyLabel(id) {
+  const info = optDefIndex().get(id === OPT_COPY_DISCOUNT_KEY ? "discountQuickPct1" : id);
+  return info?.def?.label || id;
+}
+
+// Lo que se guardaria en el archivo ahora mismo (solo opciones que este usuario ve y usa)
+function optCopyBuildExport() {
+  const values = {};
+  OPT_COPY_IDS.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el || !optionAccessibleForQuick(id)) return;
+    values[id] = optCopyControlValue(el);
+  });
+  const out = {
+    kind: OPT_COPY_KIND,
+    version: OPT_COPY_VERSION,
+    exportedAt: new Date().toISOString(),
+    appVersion: String(document.getElementById("appVersion")?.textContent || "").trim().replace(/^v/i, ""),
+    values,
+  };
+  if (optionAccessibleForQuick("discountQuickPct1")) out[OPT_COPY_DISCOUNT_KEY] = optCopyDiscountSlots();
+  return out;
+}
+
+// Valida el archivo y calcula que cambiaria. No toca nada. Devuelve { error } o { changes, same, skipped, unknown }.
+function optCopyPlanImport(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data) || data.kind !== OPT_COPY_KIND) return { error: "no-es-de-opciones" };
+  if (!Number.isFinite(Number(data.version)) || Number(data.version) > OPT_COPY_VERSION) return { error: "version-nueva" };
+  const vals = data.values;
+  if (!vals || typeof vals !== "object" || Array.isArray(vals)) return { error: "sin-valores" };
+  const changes = [];
+  let same = 0;
+  let skipped = 0; // la opcion existe pero aqui no se ve/usa o el valor del archivo no vale
+  const known = new Set(OPT_COPY_IDS);
+  let unknown = 0;
+  Object.keys(vals).forEach((id) => {
+    if (!known.has(id)) unknown++;
+  });
+  OPT_COPY_IDS.forEach((id) => {
+    if (!Object.prototype.hasOwnProperty.call(vals, id)) return;
+    const el = document.getElementById(id);
+    if (!el || !optionAccessibleForQuick(id)) {
+      skipped++;
+      return;
+    }
+    const raw = vals[id];
+    let next;
+    if (el.type === "checkbox") {
+      if (typeof raw !== "boolean") return void skipped++;
+      next = raw;
+    } else if (el.tagName === "SELECT") {
+      if (typeof raw !== "string" || ![...el.options].some((o) => o.value === raw && !o.disabled)) return void skipped++;
+      next = raw;
+    } else {
+      const n = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
+      if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > 3600) return void skipped++;
+      next = String(n);
+    }
+    const cur = optCopyControlValue(el);
+    if (cur === next) return void same++;
+    changes.push({ id, label: optCopyLabel(id), before: cur, after: next, beforeText: optCopyValueText(el, cur), afterText: optCopyValueText(el, next) });
+  });
+  if (Object.prototype.hasOwnProperty.call(data, OPT_COPY_DISCOUNT_KEY)) {
+    const raw = data[OPT_COPY_DISCOUNT_KEY];
+    if (!optionAccessibleForQuick("discountQuickPct1") || !Array.isArray(raw)) {
+      skipped++;
+    } else {
+      const next = Array.from({ length: DISCOUNT_QUICK_PERCENTS_MAX }, (_, i) => sanitizeDiscountQuickPercentSlot(raw[i]));
+      const cur = optCopyDiscountSlots();
+      if (JSON.stringify(cur) === JSON.stringify(next)) same++;
+      else
+        changes.push({ id: OPT_COPY_DISCOUNT_KEY, label: optCopyLabel(OPT_COPY_DISCOUNT_KEY), before: cur, after: next, beforeText: optCopyDiscountText(cur), afterText: optCopyDiscountText(next) });
+    }
+  }
+  return { changes, same, skipped, unknown };
+}
+
+const optCopySleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Pone cada valor cambiando el control y lanzando su «change» (el mismo camino que si lo tocara una persona).
+async function optCopyApplyValues(items) {
+  for (const c of items) {
+    if (c.id === OPT_COPY_DISCOUNT_KEY) {
+      fillDiscountQuickPercentInputs(c.after);
+      await saveDiscountQuickPercentsSetting();
+      continue;
+    }
+    const el = document.getElementById(c.id);
+    if (!el) continue;
+    if (el.type === "checkbox") el.checked = !!c.after;
+    else el.value = String(c.after);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    await optCopySleep(40);
+  }
+}
+
+function optCopySaveUndo(changes) {
+  __optCopyUndo = { at: Date.now(), changes: changes.map((c) => ({ id: c.id, before: c.before, after: c.after })) };
+  try {
+    localStorage.setItem(OPT_COPY_UNDO_LS_KEY, JSON.stringify(__optCopyUndo));
+  } catch {}
+  refreshOptionsImportUndoBtn();
+}
+
+function optCopyLoadUndo() {
+  if (!__optCopyUndo) {
+    try {
+      const v = JSON.parse(localStorage.getItem(OPT_COPY_UNDO_LS_KEY) || "null");
+      if (v && Array.isArray(v.changes)) __optCopyUndo = v;
+    } catch {}
+  }
+  if (__optCopyUndo && Date.now() - Number(__optCopyUndo.at || 0) > OPT_COPY_UNDO_MAX_AGE_MS) optCopyClearUndo();
+  return __optCopyUndo;
+}
+
+function optCopyClearUndo() {
+  __optCopyUndo = null;
+  try {
+    localStorage.removeItem(OPT_COPY_UNDO_LS_KEY);
+  } catch {}
+}
+
+function refreshOptionsImportUndoBtn() {
+  const btn = document.getElementById("optionsImportUndoBtn");
+  if (btn) btn.classList.toggle("hidden", !optCopyLoadUndo());
+}
+
+// Deshace la ultima importacion: solo las opciones que siguen valiendo lo que se importo (si despues se cambio a mano, se respeta).
+async function optCopyUndoLastImport() {
+  const u = optCopyLoadUndo();
+  if (!u) return { reverted: 0, kept: 0 };
+  const items = [];
+  let kept = 0;
+  u.changes.forEach((c) => {
+    if (c.id === OPT_COPY_DISCOUNT_KEY) {
+      if (JSON.stringify(optCopyDiscountSlots()) === JSON.stringify(c.after)) items.push({ id: c.id, after: c.before });
+      else kept++;
+      return;
+    }
+    const el = document.getElementById(c.id);
+    if (el && optCopyControlValue(el) === c.after) items.push({ id: c.id, after: c.before });
+    else kept++;
+  });
+  await optCopyApplyValues(items);
+  optCopyClearUndo();
+  refreshOptionsImportUndoBtn();
+  return { reverted: items.length, kept };
+}
+
+async function exportOptionsToFile() {
+  const btn = document.getElementById("optionsExportBtn");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    if (!window.TPV_OPTCOPY?.exportFile) throw new Error("sin-api");
+    const payload = optCopyBuildExport();
+    const res = await window.TPV_OPTCOPY.exportFile(payload);
+    if (res?.ok) toast(`Opciones exportadas (${Object.keys(payload.values).length + (payload[OPT_COPY_DISCOUNT_KEY] ? 1 : 0)}) ✅`, "ok", "Opciones");
+    else if (!res?.canceled) toast("No se pudo guardar el archivo de opciones.", "err", "Opciones");
+  } catch {
+    toast("No se pudo exportar las opciones.", "err", "Opciones");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Con el archivo ya leido: valida, enseña los cambios, pide confirmacion y aplica. Devuelve { applied } (nº de opciones cambiadas) o { reason }.
+async function optCopyRunImport(data) {
+  const plan = optCopyPlanImport(data);
+  if (plan.error === "version-nueva") {
+    toast("Ese archivo es de una versión más nueva del TPV. Actualiza este terminal y vuelve a probar.", "err", "Opciones");
+    return { reason: plan.error };
+  }
+  if (plan.error) {
+    toast("Ese archivo no es de opciones del TPV.", "err", "Opciones");
+    return { reason: plan.error };
+  }
+  if (!plan.changes.length) {
+    toast(plan.same ? "Este terminal ya tiene esas mismas opciones: no hay nada que cambiar." : "El archivo no trae ninguna opción que se pueda aplicar aquí.", "info", "Opciones");
+    return { reason: "nada-que-cambiar" };
+  }
+  const rows = plan.changes
+    .map((c) => `<li><b>${escapeHtmlForModal(c.label)}</b>: ${escapeHtmlForModal(c.beforeText)} → <b>${escapeHtmlForModal(c.afterText)}</b></li>`)
+    .join("");
+  const nota = plan.skipped ? `<p style="margin-top:8px;opacity:.75">${plan.skipped} opción(es) del archivo no se aplican en este terminal.</p>` : "";
+  const ok = await confirmModal(
+    "Importar opciones",
+    `<p>Se van a cambiar <b>${plan.changes.length}</b> opción(es) de este terminal:</p><ul style="margin:8px 0 0 18px;text-align:left">${rows}</ul>${nota}<p style="margin-top:8px;opacity:.75">Después podrás deshacerlo.</p>`,
+    { isHtml: true, okButtonText: "Aplicar" },
+  );
+  if (!ok) return { reason: "cancelado" };
+  optCopySaveUndo(plan.changes);
+  await optCopyApplyValues(plan.changes.map((c) => ({ id: c.id, after: c.after })));
+  toast(`Opciones importadas (${plan.changes.length}) ✅`, "ok", "Opciones");
+  return { applied: plan.changes.length };
+}
+
+async function importOptionsFromFile() {
+  const btn = document.getElementById("optionsImportBtn");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    if (!window.TPV_OPTCOPY?.importFile) throw new Error("sin-api");
+    const res = await window.TPV_OPTCOPY.importFile();
+    if (!res?.ok) {
+      if (!res?.canceled) toast("No se pudo leer el archivo. Elige un archivo de opciones exportado desde el TPV.", "err", "Opciones");
+      return;
+    }
+    await optCopyRunImport(res.data);
+  } catch {
+    toast("No se pudo importar las opciones.", "err", "Opciones");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+let optCopyBound = false;
+function bindOptionsCopyOnce() {
+  refreshOptionsImportUndoBtn();
+  if (optCopyBound) return;
+  optCopyBound = true;
+  document.getElementById("optionsExportBtn")?.addEventListener("click", () => {
+    exportOptionsToFile().catch(() => {});
+  });
+  document.getElementById("optionsImportBtn")?.addEventListener("click", () => {
+    importOptionsFromFile().catch(() => {});
+  });
+  document.getElementById("optionsImportUndoBtn")?.addEventListener("click", async () => {
+    try {
+      const r = await optCopyUndoLastImport();
+      toast(r.kept ? `Deshecho (${r.reverted}). ${r.kept} se dejan como están porque las cambiaste después.` : `Importación deshecha (${r.reverted}).`, "ok", "Opciones");
+    } catch {
+      toast("No se pudo deshacer.", "err", "Opciones");
+    }
   });
 }
 
@@ -34781,6 +35739,410 @@ function bindAutostartToggleOnce() {
       console.error("[OPTIONS] autostart set error:", e);
     }
   });
+}
+
+// ----- Valores estandar de fabrica y filtro «Cambiadas» (2026-11-19, peticion de Sergi) -----
+// Para ver de un vistazo que opciones se han cambiado respecto a una instalacion nueva (util al cliente y a nosotros por telefono). Valores sacados
+// de un TPV nuevo con los cargadores de Opciones ejecutados; la excepcion es el modo kiosco: una instalacion NUEVA lo deja apagado a proposito
+// (los TPV antiguos lo tienen encendido y saldran como «cambiados», que es correcto). Toda opcion del catalogo (interruptor, valor o lista) debe
+// estar en OPT_STD o en OPT_STD_NONE (una prueba lo exige: al añadir una opcion nueva hay que decidir cual es su estandar).
+//   interruptor -> true/false · valor -> el value del control · lista -> numero de elementos
+const OPT_STD = {
+  updateNoticeEnabledToggle: true, // Avisos de versión nueva
+  updateOfferOnCloseToggle: true, // Actualizar solo cuando no hay nada en marcha
+  updateNoticeIntervalSelect: "3600000", // Comprobar
+  openDrawerAlwaysToggle: false, // Abrir cajón con todos los pagos
+  thermalLogoToggle: true, // Logo en blanco y negro nítido
+  autoPrintToggle: true, // Imprimir al cobrar
+  scaleChargeUnitSelect: "g", // Cobrar en
+  scaleConsumeModeSelect: "continuous", // Modo
+  groupLinesToggle: true, // Desagrupar líneas
+  cartDiscountToolsToggle: false, // Descuentos manuales
+  autoPrintTicketOnParkToggle: false, // Imprimir ticket al guardar
+  splitTpvToggle: false, // Dividir cuenta en TPV normal
+  cartWidthControlsToggle: false, // Alargar carrito
+  parkedCustomerResetModeSelect: "previous", // Al salir de un aparcado
+  tariffMinCosteToggle: false, // No vender bajo coste
+  tariffMaxPvpToggle: false, // No vender sobre PVP
+  autoComandaOnSaveToggle: false, // Comanda automática
+  autoComandaDelayInput: "60", // Espera
+  comandaGroupFamiliesToggle: true, // Comanda agrupada por familias
+  comandaCompactToggle: false, // Comanda compacta
+  mesasDinersFamilyList: 0, // Familias por comensales
+  mesasComandaFamilyList: 0, // Familias para comanda
+  productDisplayFieldModeSelect: "both", // Texto en la tarjeta
+  priceEditModeToggle: false, // Modo edición de precio
+  productStockToggle: false, // Mostrar stock
+  productsStockOnlyToggle: false, // Solo con stock
+  productsIncludeUnmanagedToggle: true, // Incluir sin stock
+  productStockEditToggle: false, // Editar stock
+  productAddonsEnabledToggle: false, // Añadidos de producto
+  parkStockWarningToggle: true, // Aviso de stock al aparcar
+  askStockBulkDeletePendingToggle: true, // Preguntar en borrado masivo
+  productTileResizeModeToggle: false, // Redimensionar productos
+  productSortModeSelect: "manual", // Orden
+  productReorderModeToggle: false, // Reordenar por arrastre
+  familiesFirstModeToggle: false, // Familias primero
+  allowCloseWithParkedToggle: false, // Cerrar con aparcados
+  printCajaAutoLogToggle: true, // Registro de avisos en el cierre
+  printCajaDrawerLogsToggle: true, // Aperturas de cajón en el cierre
+  infoBarVisibleToggle: true, // Barra visible
+  infoBarShowTerminalToggle: true, // Terminal
+  infoBarShowAgentToggle: true, // Agente
+  infoBarShowUserToggle: true, // Usuario
+  infoBarShowCashToggle: true, // Caja
+  agentAdminPinModeToggle: false, // PIN de administrador por agente
+  familyButtonResizeModeToggle: false, // Redimensionar familias
+  kioskToggle: false, // Modo kiosk
+  uiZoomSelect: "auto", // Escala
+  customerDisplayToggle: false, // Pantalla de cliente
+  virtualKeyboardToggle: true, // Teclado en pantalla
+  autostartToggle: true, // Iniciar el TPV al encender el PC
+};
+// Sin estandar: dependen del cliente, del equipo o del servidor (no entran en el filtro).
+const OPT_STD_NONE = new Set(["scalePortSelect", "terminalDefaultCustomerSelect", "encargosEnabledToggle", "tariffSelect", "currencySelect"]);
+let optChangedOnly = false;
+
+function optIsChanged(id) {
+  const std = OPT_STD[id];
+  if (std === undefined) return false;
+  const info = optDefIndex().get(id);
+  const el = document.getElementById(id);
+  if (!info || !el) return false;
+  const kind = info.def.kind;
+  if (kind === "toggle") return !!el.checked !== !!std;
+  if (kind === "value") {
+    if (el.value === "") return false; // control aun sin cargar: no se da por cambiado
+    return String(el.value) !== String(std);
+  }
+  if (kind === "count") return el.querySelectorAll(info.def.selector).length !== Number(std);
+  return false;
+}
+
+function countChangedOptions() {
+  let n = 0;
+  optDefIndex().forEach((_info, id) => {
+    if (OPT_STD[id] !== undefined && optionAccessibleForQuick(id) && optIsChanged(id)) n++;
+  });
+  return n;
+}
+
+// Como se dice el valor de fabrica de una opcion (para «de fábrica: …»).
+function optStdLabel(id) {
+  const std = OPT_STD[id];
+  const info = optDefIndex().get(id);
+  const el = document.getElementById(id);
+  if (!info) return String(std);
+  if (info.def.kind === "toggle") return std ? "activada" : "desactivada";
+  if (info.def.kind === "count") return Number(std) === 0 ? "vacía" : String(std);
+  const opt = el && el.options ? [...el.options].find((o) => o.value === String(std)) : null;
+  const txt = opt ? String(opt.textContent || "").replace(/\s*\([^)]*\)\s*$/, "").trim() : "";
+  return txt || String(std);
+}
+
+function updateOptionsChangedButton() {
+  const btn = document.getElementById("optionsChangedBtn");
+  if (!btn) return;
+  btn.textContent = `Cambiadas (${countChangedOptions()})`;
+  btn.classList.toggle("is-on", optChangedOnly);
+  btn.setAttribute("aria-pressed", optChangedOnly ? "true" : "false");
+}
+
+// En el filtro, cada opcion cambiada dice cual es su valor de fabrica (por CSS ::after con el atributo: no ensucia el texto de la busqueda).
+function decorateStdNotes(on) {
+  document.querySelectorAll("#optionsAccordion .opt-row-title[data-std]").forEach((n) => n.removeAttribute("data-std"));
+  if (!on) return;
+  optDefIndex().forEach((_info, id) => {
+    if (OPT_STD[id] === undefined || !optionAccessibleForQuick(id) || !optIsChanged(id)) return;
+    const title = document.getElementById(id)?.closest(".opt-row")?.querySelector(".opt-row-title");
+    if (title) title.setAttribute("data-std", `de fábrica: ${optStdLabel(id)}`);
+  });
+}
+
+function setOptionsChangedOnly(on) {
+  optChangedOnly = !!on;
+  updateOptionsChangedButton();
+  applyOptionsSearch();
+}
+
+// ----- Ayuda «?» en las opciones que mas confunden (2026-11-19, peticion de Sergi) -----
+// Un boton «?» junto al nombre de la opcion abre, dentro de su propia fila, una explicacion corta en lenguaje llano (sin jerga). Los textos salen del
+// manual (docs/manual/10-opciones.md): si se cambia el comportamiento de una opcion, cambiar aqui su frase. Al añadir una opcion nueva que pueda
+// confundir, añadir su ayuda aqui (una prueba comprueba que cada id existe en el catalogo y que los textos son frases cortas).
+const OPT_HELP = {
+  groupLinesToggle: "Activada: cada toque sobre un producto crea una línea nueva en el carrito, aunque ya lo tengas (verás el producto repetido). Desactivada: las unidades se suman en una sola línea (por ejemplo, 3 × Café).",
+  cartDiscountToolsToggle: "Muestra los botones de descuento en el carrito: uno para una línea y otro para todo el carrito. Si pones los dos, el de la línea manda sobre el general.",
+  autoPrintTicketOnParkToggle: "Al aparcar o actualizar un pedido, el ticket se imprime al instante, sin pulsar ningún botón. Sirve en Modo Mesas y en el TPV normal.",
+  splitTpvToggle: "Muestra el botón «Dividir» junto al total para repartir la cuenta por artículos o a partes iguales y cobrar cada parte por separado. Pensado para el TPV normal (por ejemplo, «para llevar»); en Modo Mesas se puede usar también.",
+  cartWidthControlsToggle: "Muestra un asa junto al carrito que puedes arrastrar para hacerlo más ancho.",
+  terminalDefaultCustomerSelect: "El cliente que se usa en las ventas si no eliges otro. Se guarda en FacturaScripts para este TPV.",
+  parkedCustomerResetModeSelect: "Cuando terminas de aparcar o cobrar un ticket que tenía un cliente distinto del habitual, indica a qué cliente vuelve el selector para la siguiente venta.",
+  discountQuickPct1: "Son los botones de porcentaje del teclado de descuento (de una línea o del carrito entero). Deja un campo en blanco para no mostrar ese botón; como máximo hay 5.",
+  currencySelect: "En qué moneda se muestran los importes y se cuenta la caja. «Automática» usa la divisa de tu FacturaScripts, así que normalmente no hay que tocarla. Al cambiarla, el TPV pide reiniciar.",
+  priceEditModeToggle: "Muestra un lápiz ✎ en cada producto para cambiar su precio (con IVA) y su prioridad desde el propio TPV. Solo para administradores.",
+  productStockToggle: "Muestra el número de stock en la esquina inferior izquierda de cada producto.",
+  productsStockOnlyToggle: "Oculta los productos que no tienen stock disponible.",
+  productsIncludeUnmanagedToggle: "Muestra también los productos que no llevan control de stock.",
+  productStockEditToggle: "Muestra un lápiz ✎ junto al stock para corregirlo desde el TPV. Solo para administradores.",
+  parkStockWarningToggle: "Avisa al aparcar si la cantidad supera el stock disponible. Desactívala si no trabajas con stock.",
+  askStockBulkDeletePendingToggle: "Al borrar los aparcados sin cobrar, pregunta si son pedidos reales (se devuelve el stock) o duplicados (no se toca). Si la desactivas, siempre se tratan como pedidos reales.",
+  productAddonsEnabledToggle: "Activa los añadidos en cada producto (por ejemplo «+leche» o «+azúcar»), tanto en Modo Mesas como en el TPV normal.",
+  familiesFirstModeToggle: "En vez de ver todos los productos de golpe, la pantalla muestra solo botones grandes de familia; al elegir una se ven sus productos, con un botón para volver. Pensado para catálogos grandes.",
+  productTileResizeModeToggle: "Muestra asas sobre cada producto para cambiar su tamaño y el de la letra del nombre. Afecta a todos los productos; los botones «Restablecer…» devuelven los valores recomendados.",
+  productReorderModeToggle: "Permite cambiar el orden de los productos arrastrándolos con el dedo o el ratón.",
+  familyButtonResizeModeToggle: "Igual que con los productos: muestra asas para ajustar el tamaño de letra de los botones de familia. «Restablecer tamaño de familias» vuelve a lo recomendado.",
+  allowCloseWithParkedToggle: "Si hay pedidos aparcados, deja cerrar la caja pidiendo una confirmación. Los pedidos se conservan.",
+  printCajaAutoLogToggle: "Al cerrar la caja, imprime también un listado de avisos (aperturas de cajón, productos quitados…). Desactívala si solo quieres el resumen de ventas.",
+  printCajaDrawerLogsToggle: "Dentro de ese listado de avisos, quita solo las líneas de «abrió cajón», que suelen ser las más numerosas.",
+  agentAdminPinModeToggle: "Desactivada, cualquier agente puede ver las Opciones de administrador con un usuario administrador. Activada, además se pide el PIN al elegir un agente marcado como administrador: más seguro, pero un paso más al cambiar de agente.",
+  kioskToggle: "El programa ocupa toda la pantalla. Si lo desactivas, puedes minimizarlo y usar el equipo como un ordenador normal. En una instalación nueva arranca apagado.",
+  uiZoomSelect: "«Automático» reduce letra, iconos y botones según la resolución para que quepa todo en pantallas pequeñas (nunca los agranda). Si la letra se ve pequeña, súbela a mano a 110, 125 o 150 %; si no cabe todo, bájala a 90, 80 o 70 %.",
+  customerDisplayToggle: "Actívala solo si el equipo tiene una segunda pantalla para el cliente; en «Pantalla a usar» eliges cuál.",
+  virtualKeyboardToggle: "Muestra el teclado táctil al tocar un campo de texto. Desactívala si el TPV tiene teclado físico.",
+  autostartToggle: "El TPV se abre solo al encender el ordenador. Recomendado solo en equipos dedicados a TPV.",
+  updateOfferOnCloseToggle: "Cuando hay una versión nueva ya descargada, el TPV se ofrece a reiniciarse solo cuando no hay nada en marcha: al cerrar la caja, al despertar el equipo o tras un rato sin usarlo. Muestra una cuenta atrás que puedes cancelar.",
+  scaleChargeUnitSelect: "En qué unidad se añade el peso al carrito. Por ejemplo, si lees 0,170 kg y cobras en gramos, se añade 170.",
+  scaleConsumeModeSelect: "«Continuo» es más rápido. «Consumo único» evita reutilizar el mismo peso en dos productos seguidos.",
+  autoComandaOnSaveToggle: "Al guardar el pedido de una mesa, la comanda se envía sola a cocina.",
+  autoComandaDelayInput: "Con la comanda automática, los segundos que pasan desde el último cambio hasta que se envía.",
+  comandaGroupFamiliesToggle: "En el papel de cocina, cada familia aparece una sola vez con sus productos debajo.",
+  comandaCompactToggle: "Ahorra papel: mesa, agente, fecha y hora van en una sola línea, sin cabecera de columnas y sin observaciones cuando están vacías.",
+};
+
+// Pone el boton «?» junto al nombre de cada opcion con ayuda (una por fila, solo si falta). Va despues de la estrella: estrella, «?», «Nuevo».
+function injectOptionHelp() {
+  Object.keys(OPT_HELP).forEach((id) => {
+    const el = document.getElementById(id);
+    const row = el?.closest?.(".opt-row");
+    if (!el || !row || row.querySelector(".opt-help")) return;
+    let host = row.querySelector(".opt-row-title") || row.querySelector(".opt-row-txt") || row;
+    if (host.closest("label")) host = row; // un boton dentro de un <label> activaria su control
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "opt-help";
+    btn.dataset.helpId = id;
+    btn.title = "¿Para qué sirve?";
+    btn.setAttribute("aria-label", "¿Para qué sirve?");
+    btn.setAttribute("aria-expanded", "false");
+    host.appendChild(btn);
+  });
+}
+
+// Abre o cierra la explicacion dentro de la propia fila (no cambia el orden de las filas ni la busqueda: el texto de ayuda no se busca).
+function toggleOptionHelp(id) {
+  const row = document.getElementById(id)?.closest?.(".opt-row");
+  if (!row || !OPT_HELP[id]) return;
+  const btn = row.querySelector(".opt-help");
+  let box = row.querySelector(".opt-help-box");
+  if (box) {
+    box.remove();
+    btn?.setAttribute("aria-expanded", "false");
+    return;
+  }
+  box = document.createElement("div");
+  box.className = "opt-help-box";
+  box.textContent = OPT_HELP[id];
+  (row.querySelector(".opt-row-txt") || row).appendChild(box);
+  btn?.setAttribute("aria-expanded", "true");
+}
+
+// ----- Marca «Nuevo» en las opciones que llegan con cada version (2026-11-19, peticion de Sergi) -----
+// Para que los clientes descubran lo que va saliendo sin leer el changelog. OPT_SINCE dice en que version aparecio cada opcion reciente (sacado de
+// las etiquetas de git; al añadir una opcion nueva al catalogo, añadir aqui su version). Una opcion es «nueva» en un terminal si:
+//   - llego despues de la ultima version con la que se miraron las Opciones en ese terminal (o de OPT_NEW_BASELINE si nunca se habia hecho), y
+//   - no tiene mas de OPT_NEW_MAX_PATCHES versiones de antiguedad, y
+//   - no se ha descartado (pulsando «Nuevo») ni se ha cambiado, y han pasado menos de OPT_NEW_DAYS dias desde que se enseño por primera vez.
+// Sale en la propia fila, en la cabecera del grupo (los grupos arrancan cerrados: asi se sabe donde mirar) y como un puntito en su etiqueta de
+// resumen. Estado por terminal: { lastVersion, seen: { id: instante | 0 (descartada) } }.
+const OPT_SINCE = {
+  optionsSendDiagBtn: "0.2.69",
+  optionsExportBtn: "0.2.69",
+  optionsImportBtn: "0.2.69",
+  thermalLogoToggle: "0.2.67",
+  splitTpvToggle: "0.2.63",
+  updateOfferOnCloseToggle: "0.2.58",
+  encargosEnabledToggle: "0.2.58",
+  currencySelect: "0.2.56",
+  optionsEmailConfigBtn: "0.2.53",
+  comandaCompactToggle: "0.2.52",
+  comandaGroupFamiliesToggle: "0.2.51",
+  optionsResetCompanyBtn: "0.2.51",
+  autoComandaDelayInput: "0.2.49",
+  allergensManageBtn: "0.2.41",
+};
+const OPT_NEW_KEY = "ui.optionsNew"; // TPV_CFG (por terminal)
+const OPT_NEW_LS_KEY = "tpv_opts_new";
+const OPT_NEW_DAYS = 14;
+const OPT_NEW_MAX_PATCHES = 6;
+const OPT_NEW_BASELINE = "0.2.62";
+let __optNewState = { lastVersion: "", seen: {} };
+
+function optVerNum(v) {
+  const p = String(v || "").replace(/^v/i, "").split(".");
+  return (Number(p[0]) || 0) * 1e6 + (Number(p[1]) || 0) * 1e3 + (Number(p[2]) || 0);
+}
+
+function optCurrentVersion() {
+  try {
+    return String(document.getElementById("appVersion")?.textContent || "").trim().replace(/^v/i, "");
+  } catch {
+    return "";
+  }
+}
+
+async function loadOptionsNewState() {
+  let st = null;
+  try {
+    if (window.TPV_CFG) {
+      const v = await window.TPV_CFG.get(OPT_NEW_KEY);
+      if (v && typeof v === "object") st = v;
+    }
+  } catch {}
+  if (!st) {
+    try {
+      const ls = JSON.parse(localStorage.getItem(OPT_NEW_LS_KEY) || "null");
+      if (ls && typeof ls === "object") st = ls;
+    } catch {}
+  }
+  const seen = {};
+  if (st && st.seen && typeof st.seen === "object") {
+    Object.keys(st.seen).forEach((id) => {
+      if (OPT_SINCE[id] && Number.isFinite(Number(st.seen[id]))) seen[id] = Number(st.seen[id]); // ids que ya no estan se descartan solos
+    });
+  }
+  __optNewState = { lastVersion: st && typeof st.lastVersion === "string" ? st.lastVersion : "", seen };
+  return __optNewState;
+}
+
+async function saveOptionsNewState() {
+  try {
+    if (window.TPV_CFG) await window.TPV_CFG.set(OPT_NEW_KEY, { lastVersion: __optNewState.lastVersion, seen: { ...__optNewState.seen } });
+  } catch {}
+  try {
+    localStorage.setItem(OPT_NEW_LS_KEY, JSON.stringify(__optNewState));
+  } catch {}
+}
+
+function optIsNew(id, now = Date.now()) {
+  const since = OPT_SINCE[id];
+  if (!since) return false;
+  const mark = __optNewState.seen[id];
+  if (mark === 0) return false; // descartada
+  if (mark) return now - mark < OPT_NEW_DAYS * 86400000; // ya enseñada: 14 dias desde la primera vez
+  const s = optVerNum(since);
+  const last = optVerNum(__optNewState.lastVersion || OPT_NEW_BASELINE);
+  if (s <= last) return false;
+  const cur = optVerNum(optCurrentVersion());
+  if (cur && cur - s > OPT_NEW_MAX_PATCHES) return false;
+  return true;
+}
+
+// Con Opciones a la vista: las nuevas que aun no tenian fecha la reciben (empieza a contar su plazo) y se recuerda con que version se miraron.
+function stampNewOptions() {
+  const now = Date.now();
+  let changed = false;
+  Object.keys(OPT_SINCE).forEach((id) => {
+    if (__optNewState.seen[id] === undefined && optIsNew(id, now)) {
+      __optNewState.seen[id] = now;
+      changed = true;
+    }
+  });
+  const cur = optCurrentVersion();
+  if (cur && __optNewState.lastVersion !== cur) {
+    __optNewState.lastVersion = cur;
+    changed = true;
+  }
+  if (changed) saveOptionsNewState().catch(() => {});
+}
+
+function dismissOptionNew(id) {
+  if (!OPT_SINCE[id] || __optNewState.seen[id] === 0) return;
+  __optNewState.seen[id] = 0;
+  saveOptionsNewState().catch(() => {});
+  try {
+    decorateOptionsNew();
+    renderOptionsPreviews();
+  } catch {}
+}
+
+// Pinta (o quita) las marcas «Nuevo» de las filas y de las cabeceras de grupo. Idempotente: si ya esta como debe, no toca el DOM.
+function decorateOptionsNew() {
+  if (!optionsOverlay?.classList.contains("hidden")) stampNewOptions();
+  const idx = optDefIndex();
+  const secNew = new Set();
+  Object.keys(OPT_SINCE).forEach((id) => {
+    const el = document.getElementById(id);
+    const row = el?.closest?.(".opt-row");
+    const show = !!el && !!row && idx.has(id) && optionAccessibleForQuick(id) && optIsNew(id);
+    if (!row) return;
+    const host = row.querySelector(".opt-row-title") || row.querySelector(".opt-row-txt") || row;
+    let pill = [...host.querySelectorAll(".opt-new")].find((p) => p.dataset.newId === id);
+    if (show && !pill) {
+      pill = document.createElement("button");
+      pill.type = "button";
+      pill.className = "opt-new";
+      pill.dataset.newId = id;
+      pill.title = "Opción nueva: púlsalo para quitar la marca";
+      pill.textContent = "Nuevo";
+      host.appendChild(pill);
+    } else if (!show && pill) {
+      pill.remove();
+    }
+    if (show) secNew.add(idx.get(id).secKey);
+  });
+  document.querySelectorAll("#optionsAccordion .opt-sec[data-sec]").forEach((sec) => {
+    const h = sec.querySelector(".opt-sec-h > span");
+    if (!h) return;
+    const mark = h.querySelector(".opt-new-sec");
+    const want = secNew.has(sec.dataset.sec);
+    if (want && !mark) {
+      const sp = document.createElement("span");
+      sp.className = "opt-new-sec";
+      sp.textContent = "Nuevo";
+      h.appendChild(sp);
+    } else if (!want && mark) {
+      mark.remove();
+    }
+  });
+}
+
+// ----- Recordar donde te quedaste en Opciones (2026-11-19, peticion de Sergi) -----
+// Al reabrir Opciones en menos de 10 minutos se vuelve a la posicion de la lista donde se dejo (los grupos abiertos ya se recuerdan siempre).
+// Pasado ese tiempo, o si se cerro con una busqueda activa (la lista estaba filtrada y esa posicion no sirve), se empieza arriba como siempre:
+// volver a un punto antiguo despista. Solo en memoria: no sobrevive a reiniciar el TPV.
+const OPT_SCROLL_REMEMBER_MS = 10 * 60 * 1000;
+let __optLastScroll = null; // { top, at }
+
+function rememberOptionsScroll() {
+  try {
+    const acc = document.getElementById("optionsAccordion");
+    if (!acc || optionsOverlay?.classList.contains("hidden")) return;
+    if (acc.classList.contains("opt-searching")) {
+      __optLastScroll = null;
+      return;
+    }
+    __optLastScroll = acc.scrollTop > 8 ? { top: acc.scrollTop, at: Date.now() } : null;
+  } catch {}
+}
+
+function restoreOptionsScrollIfRecent() {
+  try {
+    const acc = document.getElementById("optionsAccordion");
+    const s = __optLastScroll;
+    if (!acc || !s || Date.now() - s.at > OPT_SCROLL_REMEMBER_MS) {
+      __optLastScroll = null;
+      return false;
+    }
+    // se baja a la posicion guardada ya y otra vez un instante despues (por si la lista aun se estaba pintando con los grupos abiertos).
+    // Con temporizadores y no con requestAnimationFrame: con la ventana en segundo plano el navegador pausa los fotogramas.
+    acc.scrollTop = s.top;
+    setTimeout(() => {
+      acc.scrollTop = s.top;
+    }, 120);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function openOptions() {
@@ -34906,6 +36268,8 @@ async function openOptions() {
   bindCartWidthControlsToggleOnce();
   bindCartWidthDragHandleOnce();
   bindAutostartToggleOnce();
+  bindSendDiagnosticOnce();
+  bindOptionsCopyOnce();
   window.TPV_ENCARGOS?.bindToggleOnce?.();
   bindOptionsAccordionOnce();
 
@@ -34956,9 +36320,14 @@ async function openOptions() {
     loadCartWidthControlsToggle(),
     loadAutostartToggle(),
     window.TPV_ENCARGOS?.loadEnabled?.(),
+    loadOptionsFavorites(),
+    loadOptionsHistory(),
+    loadOptionsSearchHistory(),
+    loadOptionsNewState(),
   ]);
 
   applyAdminOnlyUI?.();
+  restoreOptionsQuickTabOnce(); // la pestaña (Todas / Favoritas / Recientes) que se dejo la ultima vez
   refreshOptionsUI?.();
   refreshPriceEditToggleUI?.();
   bindPriceEditToggleOnce?.();
@@ -34986,10 +36355,12 @@ async function openOptions() {
   syncOptionsPreviewItemStates();
   renderOptionsPreviews();
   markOptionsAuditBaseline();
+  restoreOptionsScrollIfRecent();
 }
 
 function closeOptions() {
   reportOptionsChangesOnClose();
+  rememberOptionsScroll(); // antes de ocultar: oculta, la lista no tiene posicion
   optionsOverlay?.classList.add("hidden");
   resetOptionsSearch();
 }
@@ -63555,6 +64926,40 @@ function friendlyDrawerErrorMessage(rawError) {
   return "No se pudo abrir el cajón.";
 }
 
+// Tope de avisos de fallo de cajon: como mucho 8 al dia por terminal (un cajon roto todo el dia no debe llenar el servidor; el cajero ve el aviso igual).
+function drawerFailReportAllowed() {
+  try {
+    const day = new Date().toISOString().slice(0, 10);
+    const raw = JSON.parse(localStorage.getItem("tpv_drawer_fail_reports") || "{}");
+    const n = raw.day === day ? Number(raw.n) || 0 : 0;
+    if (n >= 8) return false;
+    localStorage.setItem("tpv_drawer_fail_reports", JSON.stringify({ day, n: n + 1 }));
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+// Detalle tecnico compacto del fallo: que programa auxiliar se probo y que dijo cada uno, cuanto tardo, el estado de la impresora para Windows
+// y desde donde se pulso. OJO: reportClientEvent pasa el detalle por sanitizeClientEventDetail, que recorta CADA texto a 120 caracteres y admite
+// 8 claves como mucho; por eso el resumen de los programas auxiliares (hasta 360) va troceado en sum1..sum3 y el resto en una sola linea `info`.
+function drawerDiagDetail(res, printerName, source) {
+  const one = (s, n) => String(s == null ? "" : s).replace(/\s+/g, " ").trim().slice(0, n);
+  const ms = Number(res?.ms) || 0;
+  const out = {
+    raw: one(res?.error || "sin detalle", 120),
+    info: one(`via ${res?.via || "-"} · ${ms}ms · impresora ${res?.printerStatus || "?"} · ${source || "?"}`, 120),
+    printer: one(printerName, 60),
+    ms,
+  };
+  const sum = one(res?.summary, 360);
+  for (let i = 0; i < 3; i++) {
+    const part = sum.slice(i * 120, (i + 1) * 120);
+    if (part) out[`sum${i + 1}`] = part;
+  }
+  return out;
+}
+
 /*Abrir Cajon*/
 async function openDrawerNow({ source = "MAIN" } = {}) {
   try {
@@ -63584,7 +64989,7 @@ async function openDrawerNow({ source = "MAIN" } = {}) {
       // Antes el error tecnico solo se quedaba en la consola de ese equipo (Los Argentinos, 2026-11-19: no habia forma de saber por que
       // fallaba sin entrar en el ordenador). Ahora llega a nuestro servidor (se agrupa: como mucho 1 aviso cada 5 minutos por mensaje).
       try {
-        reportClientEvent("print", "drawer-open-failed", drawerMsg, { raw: String(res?.error || "sin detalle").slice(0, 400), printer: String(printerName).slice(0, 80), source: String(source) }, "warn");
+        if (drawerFailReportAllowed()) reportClientEvent("print", "drawer-open-failed", drawerMsg, drawerDiagDetail(res, printerName, source), "warn");
       } catch {}
       return false;
     }

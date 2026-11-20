@@ -113,6 +113,18 @@ contextBridge.exposeInMainWorld("TPV_SYS", {
   getVersion: () => ipcRenderer.invoke("app:getVersion"),
 });
 
+// Diagnostico remoto: foto del equipo + envio a soporte (boton «Enviar diagnostico» de Opciones)
+contextBridge.exposeInMainWorld("TPV_DIAG", {
+  collect: () => ipcRenderer.invoke("diag:collect"),
+  send: (extra) => ipcRenderer.invoke("diag:send", extra),
+});
+
+// Copiar opciones entre terminales: cuadros de «guardar»/«abrir» archivo de Windows (la validacion la hace el renderer)
+contextBridge.exposeInMainWorld("TPV_OPTCOPY", {
+  exportFile: (payload) => ipcRenderer.invoke("optcopy:export", payload),
+  importFile: () => ipcRenderer.invoke("optcopy:import"),
+});
+
 contextBridge.exposeInMainWorld("TPV_UPDATER", {
   checkNow: () => ipcRenderer.invoke("updater:checkManual"),
   relaunchForUpdate: (reason) => ipcRenderer.invoke("updater:relaunchForUpdate", reason),

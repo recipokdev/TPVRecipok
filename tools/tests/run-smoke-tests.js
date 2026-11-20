@@ -11955,6 +11955,206 @@ if (
   else fail("Falta la red de seguridad de la instalacion (install_watchdog.js, main.js startInstallSafetyNet/describeInstallExtras, renderer.js motivos de relaunchForUpdate) -- revisar el cambio de 2026-11-19");
 }
 
+// Opciones (2026-11-19, peticion de Sergi): grupos cerrados por defecto.
+{
+  const okO = renderer.includes("async function loadOptionsAccordionState() {") &&
+    renderer.split(/\r?\n/).some((l, i, a) => l.trim() === "let state = {};" && String(a[i - 1] || "").includes("se respeta"));
+  if (okO) ok("Opciones: en un TPV nuevo todos los grupos salen cerrados (el estado por defecto esta vacio)");
+  else fail("Opciones: el estado por defecto de los grupos deberia estar vacio (renderer.js loadOptionsAccordionState) -- revisar el cambio de 2026-11-19");
+}
+
+// Diagnostico remoto (2026-11-19, Los Argentinos: el cajon dejo de abrir y no habia forma de saber por que sin entrar en el equipo).
+{
+  const dgPath = path.join(root, "diagnostics.js");
+  const dg = fs.existsSync(dgPath) ? fs.readFileSync(dgPath, "utf8") : "";
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const okG =
+    dg.includes("function buildSnapshot(i) {") && dg.includes("function sanitizeText(s) {") && dg.includes("const SNAPSHOT_EVERY_MS = 7 * 24 * 3600 * 1000;") &&
+    main.includes('const diagnostics = require("./diagnostics");') &&
+    main.includes("function postUpdateEvent(event, extra = {}, timeoutMs = 4000) {") &&
+    main.includes("async function collectDiagSnapshot(reason) {") &&
+    main.includes('const res = await postUpdateEvent("diag-snapshot", snap, 9000);') &&
+    main.includes('ipcMain.handle("diag:send", async (_event, extra) => {') &&
+    main.includes('process.on("uncaughtExceptionMonitor", (err, origin) => {') && // solo OBSERVA: no cambia lo que hace Electron ante un error
+    !main.includes('process.on("uncaughtException",') &&
+    main.includes("setTimeout(() => maybeSendDiagSnapshot(\"arranque\"), 45000);") &&
+    main.includes("drawerRes.printerStatus = ") &&
+    main.includes("if (!drawerRes.ok && mainWin && !mainWin.isDestroyed()) {") && // un cajon que abre bien NO espera a la consulta de la impresora
+    main.includes("if (res && res.ok) writeCfg({ diagSnapshot:") && // la foto semanal solo se da por enviada si el servidor la recibio
+    renderer.includes("out[`sum${i + 1}`] = part;") && // el resumen va troceado: el servidor recorta cada texto a 120 caracteres
+    preload.includes('contextBridge.exposeInMainWorld("TPV_DIAG", {') &&
+    renderer.includes("function drawerFailReportAllowed() {") && renderer.includes("function drawerDiagDetail(res, printerName, source) {") &&
+    renderer.includes("function recentClientEventsForDiag() {") && renderer.includes("async function sendDiagnosticToSupport() {") &&
+    renderer.includes('OPT_PV.A("Enviar diagnóstico a soporte", "optionsSendDiagBtn"),') &&
+    html.includes('id="optionsSendDiagBtn"') &&
+    fs.readFileSync(path.join(root, "drawer_helpers.js"), "utf8").includes("function summarizeAttempts(attempts) {") &&
+    fs.existsSync(path.join(root, "tools", "ops", "client_diag.php"));
+  if (okG) ok("Diagnostico remoto: foto del equipo semanal, boton «Enviar diagnostico a soporte», detalle del cajon, errores del proceso principal (solo observados) y visor del servidor");
+  else fail("Falta el diagnostico remoto (diagnostics.js, main.js collectDiagSnapshot/diag:send, preload.js TPV_DIAG, renderer.js boton y detalle del cajon, tools/ops/client_diag.php) -- revisar el cambio de 2026-11-19");
+}
+
+// Opciones: rediseño compacto en pestañas (Todas / Favoritas / Recientes).
+{
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const css = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+  const okT =
+    html.includes('id="optionsTabAll"') && html.includes('id="optionsFavToggle"') && html.includes('id="optionsHistToggle"') && html.includes('id="optionsFavPane"') &&
+    renderer.includes("function setOptionsQuickTab(tab) {") && renderer.includes("function renderOptionsQuickTabs() {") &&
+    renderer.includes("function restoreOptionsQuickTabOnce() {") && renderer.includes("restoreOptionsQuickTabOnce();") &&
+    renderer.includes('const OPT_QTAB_LS_KEY = "tpv_opts_qtab";') &&
+    renderer.includes('setOptionsQuickTab(optHistOpen ? "all" : "hist");') &&
+    css.includes(".opt-qtab.is-active") && css.includes(".opt-hist:not(.is-open)");
+  if (okT) ok("Opciones: acceso rapido en pestañas (Todas / Favoritas / Recientes), una sola abierta, se recuerda la ultima");
+  else fail("Faltan las pestañas del acceso rapido de Opciones (index.html #optionsTabAll/#optionsFavToggle/#optionsHistToggle, renderer.js setOptionsQuickTab, styles.css .opt-qtab) -- revisar el rediseño de 2026-11-19");
+}
+
+// Opciones: copiar opciones a otro terminal (paso 9, 2026-11-19, peticion de Sergi).
+{
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const okC =
+    renderer.includes('const OPT_COPY_KIND = "tpv-recipok-options";') &&
+    renderer.includes("const OPT_COPY_IDS = [") &&
+    renderer.includes("function optCopyPlanImport(data) {") &&
+    renderer.includes("async function optCopyApplyValues(items) {") &&
+    renderer.includes('el.dispatchEvent(new Event("change", { bubbles: true }));') && // se aplica por el camino normal de cada opcion
+    renderer.includes("async function optCopyUndoLastImport() {") &&
+    renderer.includes("const OPT_COPY_UNDO_MAX_AGE_MS = 24 * 3600 * 1000;") &&
+    renderer.includes("function bindOptionsCopyOnce() {") && renderer.includes("  bindOptionsCopyOnce();") &&
+    renderer.includes('OPT_PV.A("Exportar opciones", "optionsExportBtn"),') &&
+    // lo que NUNCA se copia entre terminales
+    !/const OPT_COPY_IDS = \[[^\]]*(Printer|printerName|scalePort|kiosk|autostart|virtualKeyboard|customerDisplay|updateNotice|updateOfferOnClose|PinMode|safeTraining)/.test(renderer) &&
+    html.includes('data-sec="copiar" data-admin-only') && html.includes('id="optionsExportBtn"') && html.includes('id="optionsImportBtn"') && html.includes('id="optionsImportUndoBtn"') &&
+    main.includes('ipcMain.handle("optcopy:export", async (event, payload) => {') &&
+    main.includes('ipcMain.handle("optcopy:import", async (event) => {') &&
+    main.includes("const OPTIONS_COPY_MAX_BYTES = 200 * 1024;") &&
+    preload.includes('contextBridge.exposeInMainWorld("TPV_OPTCOPY", {');
+  if (okC) ok("Opciones: copiar a otro terminal (lista blanca sin impresoras/bascula/kiosco/actualizacion, confirmacion con antes → despues, deshacer, archivo hasta 200 KB por el proceso principal)");
+  else fail("Falta la copia de opciones entre terminales (renderer.js OPT_COPY_*, index.html seccion «copiar», main.js optcopy:*, preload.js TPV_OPTCOPY) -- revisar el paso 9 de 2026-11-19");
+}
+
+// Opciones: favoritas y acceso rapido (2026-11-19, peticion de Sergi).
+{
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const css = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+  const okF =
+    renderer.includes("const OPT_FAV_KEY = \"ui.optionsFavorites\";") &&
+    renderer.includes("const OPT_FAV_MAX = 12;") &&
+    renderer.includes("function optionAccessibleForQuick(id) {") &&
+    renderer.includes('if (sec.hasAttribute("data-admin-only") && !window.TPV_STATE?.isAdmin) return false;') &&
+    renderer.includes("function renderOptionsQuickAccess() {") &&
+    renderer.includes("injectOptionFavStars();") &&
+    renderer.includes("loadOptionsFavorites(),") &&
+    renderer.includes('return !node?.closest?.(".opt-sec-preview, .opt-quick");') && // sin esto el bloque se repintaria sin parar
+    renderer.includes("ctl.click(); // el propio interruptor") &&
+    html.includes('id="optionsQuick"') && html.includes('id="optionsFavList"') && html.includes('id="optionsFavHint"') &&
+    css.includes(".opt-fav::before") && css.includes(".opt-acc.opt-searching .opt-quick");
+  if (okF) ok("Opciones: favoritas con estrella por opcion y bloque «Favoritas» arriba (interruptores desde el bloque, solo lo accesible, maximo 12, oculto al buscar)");
+  else fail("Faltan las favoritas de Opciones (renderer.js OPT_FAV_*, index.html #optionsQuick, styles.css .opt-fav) -- revisar el cambio de 2026-11-19");
+}
+
+// Opciones: historial de ultimos cambios (2026-11-19, peticion de Sergi).
+{
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const css = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+  const okH =
+    renderer.includes("function computeOptionsChangesSince(before) {") &&
+    renderer.includes("const OPT_HIST_MAX = 8;") &&
+    renderer.includes("function recordOptionsHistory(changes) {") &&
+    renderer.includes("function renderOptionsHistory() {") &&
+    renderer.includes("__optHistory = __optHistory.filter((h) => h.id !== c.id);") && // una entrada por opcion: sube arriba, no se repite
+    renderer.includes("recordOptionsHistory(list);") &&
+    renderer.includes("loadOptionsHistory(),") &&
+    renderer.includes("OPT_AUDIT_IGNORE_IDS.has(c.id)") &&
+    html.includes('id="optionsHistWrap"') && html.includes('id="optionsHistToggle"') && html.includes('id="optionsHistList"') &&
+    css.includes(".opt-hist-item");
+  if (okH) ok("Opciones: historial de «Ultimos cambios» (cambios netos al cerrar, una entrada por opcion, maximo 8, plegable, pulsar lleva a la opcion)");
+  else fail("Falta el historial de ultimos cambios de Opciones (renderer.js OPT_HIST_*, index.html #optionsHistWrap, styles.css .opt-hist) -- revisar el cambio de 2026-11-19");
+}
+
+// Opciones: buscador con palabras parecidas y busquedas recientes (2026-11-19, peticion de Sergi).
+{
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const css = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+  const okB =
+    renderer.includes("const OPT_SEARCH_SYNONYMS = [") &&
+    renderer.includes("function optSearchTerms(q) {") &&
+    renderer.includes("const terms = optSearchTerms(q);") &&
+    renderer.includes("terms.some((t) => text.includes(t))") &&
+    renderer.includes("const OPT_SEARCH_HIST_MAX = 5;") &&
+    renderer.includes("function recordOptionsSearch(raw) {") &&
+    renderer.includes("function renderOptionsSearchRecent() {") &&
+    renderer.includes("loadOptionsSearchHistory(),") &&
+    html.includes('id="optionsSearchRecent"') && html.includes('id="optionsSearchNote"') &&
+    css.includes(".opt-recent-chip");
+  if (okB) ok("Opciones: el buscador entiende palabras parecidas («monedero» -> cajon) y recuerda las ultimas 5 busquedas (al elegir un resultado o pulsar Intro)");
+  else fail("Falta el buscador mejorado de Opciones (renderer.js OPT_SEARCH_SYNONYMS/optSearchTerms/recordOptionsSearch, index.html #optionsSearchRecent, styles.css .opt-recent-chip) -- revisar el cambio de 2026-11-19");
+}
+
+// Opciones: recordar donde te quedaste (2026-11-19, peticion de Sergi).
+{
+  const okS =
+    renderer.includes("const OPT_SCROLL_REMEMBER_MS = 10 * 60 * 1000;") &&
+    renderer.includes("function rememberOptionsScroll() {") &&
+    renderer.includes("function restoreOptionsScrollIfRecent() {") &&
+    renderer.includes("restoreOptionsScrollIfRecent();") &&
+    renderer.includes("rememberOptionsScroll(); // antes de ocultar") &&
+    !renderer.slice(renderer.indexOf("function restoreOptionsScrollIfRecent() {"), renderer.indexOf("function restoreOptionsScrollIfRecent() {") + 900).includes("requestAnimationFrame("); // con la ventana en 2o plano los fotogramas se pausan
+  if (okS) ok("Opciones: al reabrirlas en menos de 10 minutos vuelven al punto de la lista donde se dejaron (con temporizadores, no con fotogramas)");
+  else fail("Falta recordar la posicion de Opciones (renderer.js rememberOptionsScroll/restoreOptionsScrollIfRecent, llamadas en closeOptions y openOptions) -- revisar el cambio de 2026-11-19");
+}
+
+// Opciones: marca «Nuevo» (2026-11-19, peticion de Sergi).
+{
+  const css = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+  const okN =
+    renderer.includes("const OPT_SINCE = {") &&
+    renderer.includes("const OPT_NEW_DAYS = 14;") &&
+    renderer.includes("function optIsNew(id, now = Date.now()) {") &&
+    renderer.includes("function decorateOptionsNew() {") &&
+    renderer.includes("function stampNewOptions() {") &&
+    renderer.includes("decorateOptionsNew();") &&
+    renderer.includes('if (optIsNew(def.id)) chip.classList.add("is-new");') &&
+    renderer.includes("loadOptionsNewState(),") &&
+    css.includes(".opt-new-sec") && css.includes(".opt-pv.is-new::after") &&
+    // toda opcion de OPT_SINCE debe existir en el catalogo de Opciones (si se renombra o se quita, que no quede una marca huerfana)
+    [...renderer.matchAll(/^  ([A-Za-z0-9_]+): "0\.2\.\d+",$/gm)].map((m) => m[1]).every((id) => renderer.includes(`"${id}"`) && renderer.includes(`id="${id}"`) === false ? renderer.includes(`, "${id}"`) : true);
+  if (okN) ok("Opciones: marca «Nuevo» en las opciones recientes (fila, grupo y puntito; caduca a los 14 dias; se descarta al pulsarla o cambiar la opcion)");
+  else fail("Falta la marca «Nuevo» de Opciones (renderer.js OPT_SINCE/optIsNew/decorateOptionsNew, styles.css .opt-new) -- revisar el cambio de 2026-11-19");
+}
+
+// Opciones: valores de fabrica y filtro «Cambiadas» (2026-11-19, peticion de Sergi).
+{
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const css = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+  const okC =
+    renderer.includes("const OPT_STD = {") &&
+    renderer.includes("const OPT_STD_NONE = new Set([") &&
+    renderer.includes("  kioskToggle: false, // Modo kiosk") && // una instalacion NUEVA deja el kiosco apagado (isKioskMode)
+    renderer.includes("function optIsChanged(id) {") &&
+    renderer.includes("function countChangedOptions() {") &&
+    renderer.includes("const chMatch = !optChangedOnly || u.els.some((el) => changedRows.has(el));") &&
+    renderer.includes("decorateStdNotes(optChangedOnly);") &&
+    renderer.includes("optChangedOnly = false;\n  decorateStdNotes(false);".replace(/\n/g, renderer.includes("\r\n") ? "\r\n" : "\n")) &&
+    html.includes('id="optionsChangedBtn"') &&
+    css.includes(".opt-row-title[data-std]::after");
+  if (okC) ok("Opciones: valores de fabrica (OPT_STD) y filtro «Cambiadas (N)» junto al buscador, con el valor de fabrica de cada opcion cambiada");
+  else fail("Falta el filtro «Cambiadas» de Opciones (renderer.js OPT_STD/optIsChanged/applyOptionsSearch, index.html #optionsChangedBtn, styles.css .opt-changed-btn) -- revisar el cambio de 2026-11-19");
+}
+
+// Opciones: ayuda «?» (2026-11-19, peticion de Sergi).
+{
+  const css = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+  const okA =
+    renderer.includes("const OPT_HELP = {") &&
+    renderer.includes("function injectOptionHelp() {") &&
+    renderer.includes("function toggleOptionHelp(id) {") &&
+    renderer.includes("injectOptionHelp();") &&
+    renderer.includes('const helpBtn = e.target.closest("#optionsAccordion .opt-help[data-help-id]");') &&
+    css.includes(".opt-help::before") && css.includes(".opt-help-box");
+  if (okA) ok("Opciones: ayuda «?» junto al nombre de las opciones que mas confunden (explicacion dentro de la propia fila, textos del manual)");
+  else fail("Falta la ayuda «?» de Opciones (renderer.js OPT_HELP/injectOptionHelp/toggleOptionHelp, styles.css .opt-help) -- revisar el cambio de 2026-11-19");
+}
+
 // Cajon (2026-11-19, Los Argentinos: dejo de abrir tras una actualizacion con el aviso generico): programa auxiliar diminuto + plan B + aviso al servidor.
 {
   const dhPath = path.join(root, "drawer_helpers.js");
@@ -11964,7 +12164,7 @@ if (
     dh.includes('open-drawer-lite.exe') && dh.includes('open-drawer.exe') &&
     dh.includes("} catch (e) {") && dh.includes("resolve({ ok: false, pin, error: String((e && (e.message || e.code)) || e).trim() });") && // execFile lanza en el acto con un .exe inservible: se captura
     main.includes('const drawerHelpers = require("./drawer_helpers");') &&
-    main.includes("return await openDrawerViaHelpers(deviceName, drawerHelpers.defaultHelpers(assetsDir));") &&
+    main.includes("const drawerRes = await openDrawerViaHelpers(deviceName, drawerHelpers.defaultHelpers(assetsDir));") &&
     fs.existsSync(path.join(root, "assets", "open-drawer-lite.exe")) && fs.statSync(path.join(root, "assets", "open-drawer-lite.exe")).size < 100 * 1024 &&
     fs.existsSync(path.join(root, "tools", "open-drawer-lite", "Program.cs")) &&
     fs.readFileSync(path.join(root, "package.json"), "utf8").includes('"to": "assets/open-drawer-lite.exe"') &&

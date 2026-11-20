@@ -14,6 +14,8 @@ const { ScaleManager } = require("./js/tpv/scale/scale-manager");
 const installWatchdog = require("./install_watchdog");
 // Apertura del cajon en Windows: cadena de programas auxiliares (diminuto + el de siempre): ver drawer_helpers.js
 const drawerHelpers = require("./drawer_helpers");
+// Diagnostico remoto (foto del equipo, boton «Enviar diagnostico», errores del proceso principal): ver diagnostics.js
+const diagnostics = require("./diagnostics");
 const { openDrawerViaHelpers } = drawerHelpers;
 
 // Feedback real (pruebas de desarrollo, 2026-09-15): pararlo con Ctrl+C
@@ -2003,6 +2005,177 @@ function describeInstallContext() {
   return { freeTempMb: free, uptimeMin: Math.round(process.uptime() / 60), exe: process.execPath };
 }
 
+// ===== Diagnostico remoto (2026-11-19): foto del equipo, boton «Enviar diagnostico» y errores del proceso principal =====
+// Ver diagnostics.js (limites del servidor y privacidad). Nada de esto toca ventas ni datos de clientes.
+// Contadores del cajon DESDE EL ARRANQUE del TPV (en memoria): salen en la foto, asi no hace falta un aviso por cada apertura buena.
+const drawerStats = { ok: 0, fail: 0, lastVia: "", lastMs: 0, lastOkAt: 0, lastFailAt: 0, lastStatus: "" };
+function drawerStatsText() {
+  if (!drawerStats.ok && !drawerStats.fail) return "";
+  const hhmm = (t) => (t ? new Date(t).toTimeString().slice(0, 5) : "-");
+  return `ok ${drawerStats.ok} (ult ${hhmm(drawerStats.lastOkAt)}) · fallos ${drawerStats.fail} (ult ${hhmm(drawerStats.lastFailAt)}) · via ${drawerStats.lastVia || "?"} ${drawerStats.lastMs}ms · impresora ${drawerStats.lastStatus || "?"}`;
+}
+
+function assetsDirForDiag() {
+  return app.isPackaged ? path.join(process.resourcesPath, "assets") : path.join(__dirname, "assets");
+}
+
+async function collectDiagSnapshot(reason) {
+  let printers = [];
+  try {
+    if (mainWin && !mainWin.isDestroyed()) {
+      const list = await Promise.race([
+        mainWin.webContents.getPrintersAsync(),
+        new Promise((r) => setTimeout(() => r([]), 3000)),
+      ]);
+      printers = (list || []).map((p) => ({ name: p.name, state: diagnostics.decodePrinterStatus(p.status) }));
+    }
+  } catch (_) {}
+  let diskFree = NaN;
+  let tempFree = NaN;
+  try {
+    const st = fs.statfsSync(path.parse(process.execPath).root || "C:\\");
+    diskFree = st.bavail * st.bsize;
+  } catch (_) {}
+  try {
+    const st = fs.statfsSync(app.getPath("temp"));
+    tempFree = st.bavail * st.bsize;
+  } catch (_) {}
+  let displays = [];
+  try {
+    displays = screen.getAllDisplays().map((d) => ({ w: d.size.width, h: d.size.height, scale: d.scaleFactor }));
+  } catch (_) {}
+  let av = null;
+  try {
+    const a = readCfg().avProducts;
+    if (a && Array.isArray(a.list)) av = a.list;
+  } catch (_) {}
+  let kiosk = false;
+  try { kiosk = !!isKioskMode(); } catch (_) {}
+  return diagnostics.buildSnapshot({
+    reason,
+    appVersion: app.getVersion(),
+    electron: process.versions.electron,
+    packaged: app.isPackaged,
+    drawer: drawerStatsText(),
+    os: `${os.release()} ${os.arch()}`,
+    uptimeSec: os.uptime(),
+    totalMem: os.totalmem(),
+    freeMem: os.freemem(),
+    diskFree,
+    tempFree,
+    displays,
+    kiosk,
+    av,
+    printers,
+    helpers: diagnostics.describeHelperFiles(assetsDirForDiag(), ["open-drawer-lite.exe", "open-drawer.exe"]),
+    installDir: path.dirname(process.execPath),
+    locale: app.getLocale(),
+    tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  });
+}
+
+// Foto automatica: una vez por semana y al cambiar de version (no en pruebas ni en desarrollo).
+function maybeSendDiagSnapshot(reason = "arranque") {
+  try {
+    if (!app.isPackaged || IS_E2E || IS_MULTI_INSTANCE) return;
+    const prev = readCfg().diagSnapshot;
+    if (!diagnostics.shouldSendSnapshot(prev, Date.now(), app.getVersion())) return;
+    collectDiagSnapshot(reason)
+      .then(async (snap) => {
+        // Solo se da por enviada si el servidor la recibio: un TPV que arranca sin internet debe reintentarlo en el siguiente arranque.
+        const res = await postUpdateEvent("diag-snapshot", snap, 9000);
+        if (res && res.ok) writeCfg({ diagSnapshot: { at: Date.now(), version: app.getVersion() } });
+      })
+      .catch(() => {});
+  } catch (_) {}
+}
+
+ipcMain.handle("diag:collect", async () => {
+  try {
+    return { ok: true, snapshot: await collectDiagSnapshot("manual"), log: diagnostics.tailLines(updaterLogFile(), 20) };
+  } catch (e) {
+    return { ok: false, reason: String((e && e.message) || e).slice(0, 120) };
+  }
+});
+
+// Boton «Enviar diagnostico a soporte»: la foto + las ultimas lineas del registro del actualizador + los ultimos avisos del TPV.
+ipcMain.handle("diag:send", async (_event, extra) => {
+  try {
+    const snap = await collectDiagSnapshot("manual");
+    const events = (Array.isArray(extra?.events) ? extra.events : [])
+      .slice(-10)
+      .map((l) => diagnostics.clip(diagnostics.sanitizeText(l), 230));
+    const res = await postUpdateEvent(
+      "diag-report",
+      { ...snap, log: diagnostics.tailLines(updaterLogFile(), 18), events },
+      9000,
+    );
+    return res;
+  } catch (e) {
+    return { ok: false, reason: String((e && e.message) || e).slice(0, 120) };
+  }
+});
+
+// ===== Copiar opciones entre terminales (paso 9) =====
+// Solo lee/escribe el archivo que elige la persona en el cuadro de Windows; la validacion de lo que contiene la hace el renderer.
+const OPTIONS_COPY_MAX_BYTES = 200 * 1024;
+ipcMain.handle("optcopy:export", async (event, payload) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender) || undefined;
+    const stamp = new Date().toISOString().slice(0, 10);
+    const res = await dialog.showSaveDialog(win, {
+      title: "Exportar opciones del TPV",
+      defaultPath: path.join(app.getPath("documents"), `opciones-tpv-${stamp}.json`),
+      filters: [{ name: "Opciones del TPV", extensions: ["json"] }],
+    });
+    if (res.canceled || !res.filePath) return { ok: false, canceled: true };
+    const text = JSON.stringify(payload, null, 2);
+    if (text.length > OPTIONS_COPY_MAX_BYTES) return { ok: false, reason: "demasiado-grande" };
+    fs.writeFileSync(res.filePath, text, "utf8");
+    return { ok: true, path: res.filePath };
+  } catch (e) {
+    return { ok: false, reason: String((e && e.message) || e).slice(0, 120) };
+  }
+});
+
+ipcMain.handle("optcopy:import", async (event) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender) || undefined;
+    const res = await dialog.showOpenDialog(win, {
+      title: "Importar opciones del TPV",
+      defaultPath: app.getPath("documents"),
+      properties: ["openFile"],
+      filters: [{ name: "Opciones del TPV", extensions: ["json"] }],
+    });
+    if (res.canceled || !res.filePaths?.[0]) return { ok: false, canceled: true };
+    const file = res.filePaths[0];
+    const st = fs.statSync(file);
+    if (!st.isFile() || st.size > OPTIONS_COPY_MAX_BYTES) return { ok: false, reason: "archivo-no-valido" };
+    let data;
+    try {
+      data = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch (_) {
+      return { ok: false, reason: "no-es-json" };
+    }
+    return { ok: true, data, name: path.basename(file) };
+  } catch (e) {
+    return { ok: false, reason: String((e && e.message) || e).slice(0, 120) };
+  }
+});
+
+// Errores del proceso principal: SOLO se observan (el monitor no cambia lo que hace Electron al fallar) y se avisa con limite de frecuencia.
+const mainErrorThrottle = diagnostics.makeThrottle(5, 10 * 60 * 1000);
+const mainErrorDayThrottle = diagnostics.makeThrottle(10, 24 * 3600 * 1000); // y como mucho 10 al dia
+try {
+  process.on("uncaughtExceptionMonitor", (err, origin) => {
+    try {
+      const info = diagnostics.summarizeError(err, origin);
+      logUpdater(`ERROR proceso principal (${info.origin}): ${info.name}: ${info.message}`);
+      if (mainErrorThrottle() && mainErrorDayThrottle()) logUpdateEventRemote("main-error", info);
+    } catch (_) {}
+  });
+} catch (_) {}
+
 // Datos extra para el aviso de "instalando": con ellos se ve si un fallo coincide con un antivirus, con una version de Windows
 // o con quien pidio la actualizacion (arranque, oferta de cierre de caja/reanudar/inactividad o boton «Actualizar»).
 // Todo sale de cache o de cosas baratas: nunca debe retrasar el momento de instalar.
@@ -2085,41 +2258,56 @@ function getSlugFromBaseUrl(baseUrl) {
 // rastro consultable en remoto de en que fase se habia quedado. Nunca debe
 // retrasar ni romper el flujo real de actualizacion: fire-and-forget, nunca
 // lanza, timeout corto.
-function logUpdateEventRemote(event, extra = {}) {
-  try {
-    const { baseUrl } = getCompanyFromCfgForMain();
-    const slug = getSlugFromBaseUrl(baseUrl);
-    if (!slug) return;
+// Igual que logUpdateEventRemote pero devolviendo el resultado ({ ok, status? , reason? }), para el boton «Enviar diagnostico».
+function postUpdateEvent(event, extra = {}, timeoutMs = 4000) {
+  return new Promise((resolve) => {
+    try {
+      const { baseUrl } = getCompanyFromCfgForMain();
+      const slug = getSlugFromBaseUrl(baseUrl);
+      if (!slug) return resolve({ ok: false, reason: "sin-servidor" });
 
-    const { url, apiKey } = readTpvSyncConfig();
-    if (!url || !apiKey) return;
+      const { url, apiKey } = readTpvSyncConfig();
+      if (!url || !apiKey) return resolve({ ok: false, reason: "sin-servidor" });
 
-    const u = new URL(`${url}?action=log-update-event`);
-    const body = JSON.stringify({
-      slug,
-      event: String(event || ""),
-      currentVersion: app.getVersion(),
-      ...extra,
-    });
+      const u = new URL(`${url}?action=log-update-event`);
+      const body = JSON.stringify({
+        slug,
+        event: String(event || ""),
+        currentVersion: app.getVersion(),
+        ...extra,
+      });
 
-    const req = https.request(
-      {
-        method: "POST",
-        hostname: u.hostname,
-        path: u.pathname + (u.search || ""),
-        headers: {
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(body),
-          "X-TPV-API-KEY": apiKey,
+      const req = https.request(
+        {
+          method: "POST",
+          hostname: u.hostname,
+          path: u.pathname + (u.search || ""),
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(body),
+            "X-TPV-API-KEY": apiKey,
+          },
+          timeout: timeoutMs,
         },
-        timeout: 4000,
-      },
-      (res) => res.resume(),
-    );
-    req.on("timeout", () => req.destroy());
-    req.on("error", () => {});
-    req.end(body);
-  } catch {}
+        (res) => {
+          res.resume();
+          resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode });
+        },
+      );
+      req.on("timeout", () => {
+        req.destroy();
+        resolve({ ok: false, reason: "tiempo-agotado" });
+      });
+      req.on("error", () => resolve({ ok: false, reason: "sin-red" }));
+      req.end(body);
+    } catch {
+      resolve({ ok: false, reason: "error" });
+    }
+  });
+}
+
+function logUpdateEventRemote(event, extra = {}) {
+  postUpdateEvent(event, extra).catch(() => {});
 }
 
 function sleep(ms) {
@@ -3563,6 +3751,7 @@ app.whenReady().then(async () => {
   });
 
   ensureAppShortcuts(); // verifica/repara acceso directo escritorio + Inicio
+  setTimeout(() => maybeSendDiagSnapshot("arranque"), 45000);
   startScaleReconnectMonitor();
   startPreCashUpdateRetries();
 
@@ -3665,7 +3854,26 @@ ipcMain.handle("tpv:openCashDrawer", async (_event, { deviceName }) => {
 
     // Cadena de dos programas auxiliares equivalentes (el diminuto primero, el de 64 MB como plan B): ver drawer_helpers.js
     const assetsDir = app.isPackaged ? path.join(process.resourcesPath, "assets") : path.join(__dirname, "assets");
-    return await openDrawerViaHelpers(deviceName, drawerHelpers.defaultHelpers(assetsDir));
+    const drawerRes = await openDrawerViaHelpers(deviceName, drawerHelpers.defaultHelpers(assetsDir));
+    // Estado de la impresora para Windows (sin conexion, sin papel...): solo hace falta cuando FALLA la apertura, asi que un cajon que abre bien
+    // no espera nunca a esta consulta (puede tardar si la cola de impresion va lenta). Nunca debe retrasar ni romper nada.
+    try {
+      if (!drawerRes.ok && mainWin && !mainWin.isDestroyed()) {
+        const list = await Promise.race([
+          mainWin.webContents.getPrintersAsync(),
+          new Promise((r) => setTimeout(() => r([]), 1500)),
+        ]);
+        const p = (list || []).find((x) => x.name === deviceName);
+        drawerRes.printerStatus = p ? diagnostics.decodePrinterStatus(p.status) : "no-instalada";
+      }
+    } catch (_) {}
+    try {
+      if (drawerRes.ok) { drawerStats.ok += 1; drawerStats.lastOkAt = Date.now(); } else { drawerStats.fail += 1; drawerStats.lastFailAt = Date.now(); }
+      drawerStats.lastVia = String(drawerRes.via || "");
+      drawerStats.lastMs = Number(drawerRes.ms) || 0;
+      if (drawerRes.printerStatus) drawerStats.lastStatus = String(drawerRes.printerStatus);
+    } catch (_) {}
+    return drawerRes;
   }
 
   if (process.platform === "linux") {

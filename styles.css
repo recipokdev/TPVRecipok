@@ -12519,3 +12519,428 @@ body.theme-dark .email-config-qrtext code {
   font-size: 14px;
   font-weight: 700;
 }
+
+/* Opciones: acceso rapido y favoritas (2026-11-19). Rediseño compacto: pestañas Todas / Favoritas / Recientes. */
+.opt-quick {
+  margin: 6px 0 2px;
+}
+.opt-acc.opt-searching .opt-quick {
+  display: none;
+}
+.options-readonly .opt-quick {
+  display: none;
+}
+.opt-qtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid #e2e5ea;
+}
+body.theme-dark .opt-qtabs {
+  border-bottom-color: #374151;
+}
+.opt-qtab {
+  appearance: none;
+  margin-bottom: -1px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 10px 10px 0 0;
+  background: transparent;
+  color: #6b7280;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.opt-qtab:hover {
+  background: #f1f5f9;
+  color: #111827;
+}
+.opt-qtab.is-active {
+  background: #f8fafc;
+  border-color: #e2e5ea;
+  color: #b45309;
+}
+.opt-qtab[data-qtab="all"].is-active {
+  color: #111827;
+}
+.opt-qtab-n {
+  font-weight: 600;
+  opacity: 0.8;
+}
+body.theme-dark .opt-qtab {
+  color: #9aa4b2;
+}
+body.theme-dark .opt-qtab:hover {
+  background: #111827;
+  color: #e5e7eb;
+}
+body.theme-dark .opt-qtab.is-active {
+  background: #0b1220;
+  border-color: #374151;
+  color: #fbbf24;
+}
+body.theme-dark .opt-qtab[data-qtab="all"].is-active {
+  color: #e5e7eb;
+}
+.opt-qpane,
+.opt-hist.is-open {
+  padding: 8px 10px 10px;
+  border: 1px solid #e2e5ea;
+  border-top: none;
+  border-radius: 0 0 12px 12px;
+  background: #f8fafc;
+}
+body.theme-dark .opt-qpane,
+body.theme-dark .opt-hist.is-open {
+  background: #0b1220;
+  border-color: #374151;
+}
+.opt-hist:not(.is-open) {
+  display: none;
+}
+.opt-quick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+}
+.opt-quick-chips:empty {
+  display: none;
+}
+.opt-quick-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #6b7280;
+}
+.opt-fav-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.opt-fav-chip .opt-pv {
+  font-size: 13px;
+  padding: 7px 12px;
+}
+.opt-fav-remove {
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #9aa4b2;
+  font-size: 11px;
+  line-height: 22px;
+  cursor: pointer;
+}
+.opt-fav-remove:hover {
+  background: #e5e7eb;
+  color: #374151;
+}
+body.theme-dark .opt-fav-remove:hover {
+  background: #374151;
+  color: #e5e7eb;
+}
+.opt-fav {
+  appearance: none;
+  width: 30px;
+  height: 30px;
+  margin: -4px 0 -4px 4px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #9aa4b2;
+  font-size: 19px;
+  line-height: 30px;
+  text-align: center;
+  vertical-align: middle;
+  cursor: pointer;
+}
+.opt-fav::before {
+  content: "☆";
+}
+.opt-fav.is-fav {
+  color: #f59e0b;
+}
+.opt-fav.is-fav::before {
+  content: "★";
+}
+.opt-fav:hover {
+  background: rgba(245, 158, 11, 0.16);
+}
+
+/* Opciones: historial de ultimos cambios (2026-11-19): ahora es la pestaña «Recientes» (ver .opt-qtab). */
+.opt-hist-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.opt-hist-item {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #ffffff;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.opt-hist-item:hover {
+  border-color: #9aa4b2;
+  filter: brightness(0.97);
+}
+body.theme-dark .opt-hist-item {
+  background: #111827;
+  border-color: #374151;
+}
+.opt-hist-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.opt-hist-state {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #eaf1ff;
+  color: #1d4ed8;
+}
+.opt-hist-state.is-on {
+  background: #e8f7ee;
+  color: #15803d;
+}
+.opt-hist-state.is-off {
+  background: #f1f5f9;
+  color: #64748b;
+}
+body.theme-dark .opt-hist-state.is-on {
+  background: #0f2a1a;
+  color: #4ade80;
+}
+body.theme-dark .opt-hist-state.is-off {
+  background: #1f2937;
+  color: #9aa4b2;
+}
+body.theme-dark .opt-hist-state.is-chg {
+  background: #13233f;
+  color: #93c5fd;
+}
+.opt-hist-when {
+  flex: none;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+/* Opciones: busquedas recientes y aviso de palabras parecidas (2026-11-19). */
+.opt-search-recent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 6px;
+}
+.opt-recent-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #6b7280;
+}
+.opt-recent-chip {
+  appearance: none;
+  padding: 4px 11px;
+  border: 1px solid #e2e5ea;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #374151;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.opt-recent-chip:hover {
+  border-color: #9aa4b2;
+  filter: brightness(0.97);
+}
+body.theme-dark .opt-recent-chip {
+  background: #111827;
+  border-color: #374151;
+  color: #e5e7eb;
+}
+.opt-recent-clear {
+  appearance: none;
+  padding: 4px 6px;
+  border: none;
+  background: transparent;
+  color: #6b7280;
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.opt-search-note {
+  margin: 0 2px 6px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* Opciones: marca «Nuevo» (2026-11-19). */
+.opt-new {
+  appearance: none;
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border: none;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #b45309;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+  cursor: pointer;
+}
+.opt-new:hover {
+  filter: brightness(0.95);
+}
+.opt-new-sec {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #b45309;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+body.theme-dark .opt-new,
+body.theme-dark .opt-new-sec {
+  background: #3a2a0c;
+  color: #fbbf24;
+}
+.opt-pv.is-new::after {
+  content: " ●";
+  color: #f59e0b;
+  font-size: 9px;
+}
+
+/* Opciones: filtro «Cambiadas» y valor de fabrica (2026-11-19). */
+.opt-changed-btn {
+  appearance: none;
+  flex: none;
+  min-width: 112px;
+  padding: 8px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #374151;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  cursor: pointer;
+}
+.opt-changed-btn:hover {
+  border-color: #9aa4b2;
+}
+.opt-changed-btn.is-on {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #ffffff;
+}
+body.theme-dark .opt-changed-btn {
+  background: #111827;
+  border-color: #374151;
+  color: #e5e7eb;
+}
+body.theme-dark .opt-changed-btn.is-on {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+}
+/* la X de borrar la busqueda va dentro del cuadro de texto, no encima del boton */
+.opt-search .opt-search-clear {
+  right: 130px;
+}
+.opt-row-title[data-std]::after {
+  content: attr(data-std);
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #eaf1ff;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+body.theme-dark .opt-row-title[data-std]::after {
+  background: #13233f;
+  color: #93c5fd;
+}
+
+/* Opciones: ayuda «?» (2026-11-19). */
+.opt-help {
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  margin: -2px 0 -2px 4px;
+  padding: 0;
+  border: 1px solid #b6bdc9;
+  border-radius: 50%;
+  background: transparent;
+  color: #6b7280;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 20px;
+  text-align: center;
+  vertical-align: middle;
+  cursor: pointer;
+}
+.opt-help::before {
+  content: "?";
+}
+.opt-help:hover {
+  border-color: #1d4ed8;
+  color: #1d4ed8;
+}
+.opt-help[aria-expanded="true"] {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #ffffff;
+}
+body.theme-dark .opt-help {
+  border-color: #4b5563;
+  color: #9aa4b2;
+}
+.opt-help-box {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #eef4ff;
+  color: #1e3a8a;
+  font-size: 12px;
+  line-height: 1.4;
+}
+body.theme-dark .opt-help-box {
+  background: #13233f;
+  color: #bfdbfe;
+}

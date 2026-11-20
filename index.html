@@ -2564,8 +2564,33 @@
               spellcheck="false"
             />
             <button type="button" id="optionsSearchClear" class="opt-search-clear hidden" title="Borrar la búsqueda" aria-label="Borrar la búsqueda">✕</button>
+            <button type="button" id="optionsChangedBtn" class="opt-changed-btn" aria-pressed="false" title="Ver solo las opciones que has cambiado respecto a una instalación nueva">Cambiadas</button>
           </div>
+          <div id="optionsSearchRecent" class="opt-search-recent hidden"></div>
+          <div id="optionsSearchNote" class="opt-search-note hidden"></div>
           <div id="optionsSearchEmpty" class="opt-search-empty hidden">Ninguna opción coincide con la búsqueda.</div>
+
+          <!-- Acceso rápido en pestañas (rediseño compacto): Todas / ★ Favoritas / 🕘 Recientes. «Todas» = solo la tira de pestañas (una línea). -->
+          <div id="optionsQuick" class="opt-quick">
+            <div class="opt-qtabs" role="tablist" aria-label="Acceso rápido">
+              <button type="button" id="optionsTabAll" class="opt-qtab is-active" role="tab" aria-selected="true" data-qtab="all">Todas</button>
+              <button type="button" id="optionsFavToggle" class="opt-qtab" role="tab" aria-selected="false" data-qtab="fav" title="Tus opciones favoritas, a un toque">
+                <span>★ Favoritas</span> <span id="optionsFavCount" class="opt-qtab-n"></span>
+              </button>
+              <button type="button" id="optionsHistToggle" class="opt-qtab hidden" role="tab" aria-selected="false" data-qtab="hist" aria-expanded="false" title="Las últimas opciones que has cambiado">
+                <span>🕘 Recientes</span> <span id="optionsHistCount" class="opt-qtab-n"></span>
+              </button>
+            </div>
+            <div id="optionsFavPane" class="opt-qpane hidden">
+              <div id="optionsFavList" class="opt-quick-chips"></div>
+              <div id="optionsFavHint" class="opt-quick-hint">
+                Pulsa la ☆ de cualquier opción para tenerla aquí, a un toque.
+              </div>
+            </div>
+            <div id="optionsHistWrap" class="opt-hist hidden">
+              <div id="optionsHistList" class="opt-hist-list hidden"></div>
+            </div>
+          </div>
 
           <div class="opt-group-title">Venta</div>
           <!-- CARRITO -->
@@ -4688,6 +4713,71 @@
                     class="small-btn"
                   >
                     Ver changelog
+                  </button>
+                </div>
+              </div>
+
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Enviar diagnóstico a soporte</div>
+                  <div class="opt-row-sub">
+                    Si algo falla (el cajón, la impresora, una actualización…),
+                    envía a Recipok los datos técnicos de este equipo para que
+                    podamos verlo sin entrar en él. No incluye ventas ni datos
+                    de clientes.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <button
+                    type="button"
+                    id="optionsSendDiagBtn"
+                    class="small-btn"
+                  >
+                    Enviar diagnóstico
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- COPIAR OPCIONES ENTRE TERMINALES (paso 9) -->
+          <section class="opt-sec" data-sec="copiar" data-admin-only>
+            <button type="button" class="opt-sec-h">
+              <span>Copiar opciones a otro terminal</span>
+              <span class="opt-sec-chev">▾</span>
+            </button>
+            <div class="opt-sec-preview">Exportar e importar las preferencias de este terminal</div>
+            <div class="opt-sec-b">
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Exportar mis opciones</div>
+                  <div class="opt-row-sub">
+                    Guarda en un archivo las preferencias de este terminal
+                    (interruptores, modos y descuentos rápidos) para llevarlas a
+                    otro. No incluye impresoras, báscula, usuarios, claves ni la
+                    empresa.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <button type="button" id="optionsExportBtn" class="small-btn">
+                    Exportar
+                  </button>
+                </div>
+              </div>
+              <div class="opt-row">
+                <div class="opt-row-txt">
+                  <div class="opt-row-title">Importar opciones de otro terminal</div>
+                  <div class="opt-row-sub">
+                    Elige un archivo exportado. Verás qué va a cambiar antes de
+                    aplicarlo y podrás deshacerlo.
+                  </div>
+                </div>
+                <div class="opt-row-actions">
+                  <button type="button" id="optionsImportBtn" class="small-btn">
+                    Importar
+                  </button>
+                  <button type="button" id="optionsImportUndoBtn" class="small-btn hidden">
+                    Deshacer última importación
                   </button>
                 </div>
               </div>

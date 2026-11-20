@@ -22,7 +22,9 @@ function defaultHelpers(assetsDir) {
 }
 
 function runPin(helper, deviceName, pin) {
-  return new Promise((resolve) => {
+  const t0 = Date.now();
+  return new Promise((resolveRaw) => {
+    const resolve = (r) => resolveRaw({ ...r, ms: Date.now() - t0 });
     // OJO: con un ejecutable inservible (bloqueado, danado, sustituido por el antivirus...) execFile LANZA la excepcion en el acto
     // ("spawn UNKNOWN"/"EPERM") en lugar de llamar al callback; el codigo anterior no lo cubria y rompia toda la llamada.
     try {
@@ -33,7 +35,7 @@ function runPin(helper, deviceName, pin) {
         (err, stdout, stderr) => {
           if (err) {
             const why = err.killed ? `tiempo agotado (${helper.timeout || 15000} ms)` : "";
-            resolve({ ok: false, pin, error: (stderr || why || err.message || String(err)).trim() });
+            resolve({ ok: false, pin, error: (stderr || why || err.message || String(err)).trim(), code: err.code != null ? String(err.code) : "" });
           } else {
             resolve({ ok: true, pin, out: (stdout || "").trim() });
           }
@@ -45,21 +47,44 @@ function runPin(helper, deviceName, pin) {
   });
 }
 
-// Devuelve { ok, pin, out?, error?, via? }. `via` = programa que dio la respuesta definitiva.
+// Resumen corto de lo que paso con cada programa auxiliar, para el aviso al servidor (el servidor recorta cada texto a 240 caracteres):
+// «lite[5632B]: 0 ERR 41ms OpenPrinter failed (1801) / 1 ERR 38ms ... | net8[67524164B]: FALTA».
+function summarizeAttempts(attempts) {
+  return attempts
+    .map((a) => {
+      if (!a.exists) return `${a.helper}: FALTA`;
+      const parts = a.pins.map((p) => `${p.pin} ${p.ok ? "OK" : "ERR"} ${p.ms}ms${p.ok ? "" : " " + String(p.error || "").replace(/\s+/g, " ").slice(0, 60)}`);
+      return `${a.helper}[${a.size}B]: ${parts.join(" / ")}`;
+    })
+    .join(" | ")
+    .slice(0, 400);
+}
+
+// Devuelve { ok, pin, out?, error?, via?, ms, attempts, summary }. `via` = programa que dio la respuesta definitiva.
 async function openDrawerViaHelpers(deviceName, helpers) {
+  const t0 = Date.now();
   const problems = [];
+  const attempts = [];
+  const done = (r) => ({ ...r, ms: Date.now() - t0, attempts, summary: summarizeAttempts(attempts) });
   for (const helper of helpers) {
-    if (!fs.existsSync(helper.file)) {
+    const att = { helper: helper.name, exists: fs.existsSync(helper.file), size: 0, pins: [] };
+    attempts.push(att);
+    if (!att.exists) {
       problems.push(`${helper.name}: No existe ${path.basename(helper.file)} en: ${path.dirname(helper.file)}`);
       continue;
     }
+    try { att.size = fs.statSync(helper.file).size; } catch (_) {}
     let r = await runPin(helper, deviceName, 0);
-    if (!r.ok) r = await runPin(helper, deviceName, 1);
-    if (r.ok) return { ...r, via: helper.name };
-    if (PRINTER_LEVEL_ERROR.test(r.error)) return { ...r, via: helper.name }; // el programa funciona; es la impresora / Windows
+    att.pins.push({ pin: 0, ok: r.ok, ms: r.ms, error: r.ok ? "" : String(r.error || "").slice(0, 120) });
+    if (!r.ok) {
+      r = await runPin(helper, deviceName, 1);
+      att.pins.push({ pin: 1, ok: r.ok, ms: r.ms, error: r.ok ? "" : String(r.error || "").slice(0, 120) });
+    }
+    if (r.ok) return done({ ...r, via: helper.name });
+    if (PRINTER_LEVEL_ERROR.test(r.error)) return done({ ...r, via: helper.name }); // el programa funciona; es la impresora / Windows
     problems.push(`${helper.name}: ${String(r.error).slice(0, 200)}`);
   }
-  return { ok: false, error: problems.join(" | ") || "sin programa auxiliar para abrir el cajón" };
+  return done({ ok: false, error: problems.join(" | ") || "sin programa auxiliar para abrir el cajón" });
 }
 
-module.exports = { defaultHelpers, openDrawerViaHelpers, PRINTER_LEVEL_ERROR };
+module.exports = { defaultHelpers, openDrawerViaHelpers, summarizeAttempts, PRINTER_LEVEL_ERROR };
