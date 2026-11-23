@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.70",
+      "date": "2026-11-23",
+      "title": "Release 0.2.70",
       "changes": [
         "MEJORA: el filtro «Cambiadas» de Opciones pasa a llamarse «Distintas de fábrica» y deja de estar pegado al buscador (parecía parte de la búsqueda): ahora es la cuarta pestaña de la tira «Todas · ★ Favoritas · 🕘 Recientes · ✎ Distintas de fábrica (N)». Al pulsarla, una línea visible dice qué se está viendo y respecto a qué («solo las opciones distintas de una instalación nueva; debajo de cada una verás su valor de fábrica; pulsa la pestaña otra vez para verlas todas»). Es exclusiva con las otras pestañas, se puede combinar con el buscador y se apaga al cerrar Opciones.",
         "MEJORA: las ayudas «?» de Opciones solo salen donde aclaran algo. La mayoría (31 de 37) repetían casi con las mismas palabras lo que ya decía la propia opción justo encima, así que se han quitado; quedan en las opciones cuyo texto no basta: «Desagrupar líneas», «Descuentos manuales», «Modo kiosco», «Cliente por defecto» e «Incluir sin stock». Una prueba nueva impide que vuelva a haber ayudas que repitan su fila.",
