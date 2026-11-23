@@ -5,7 +5,10 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "ARREGLO: Modo Mesas, primer arranque de un TPV nuevo (por ejemplo, al añadir un terminal a un negocio que ya tiene su plano de mesas): el panel de la izquierda decía «Sin mesa / Sin sala / No hay más mesas en esta sala» aunque el selector de arriba ya mostraba M1, y las mesas solo aparecían tras pasar por «Mapa de Salas». Ahora el TPV adopta desde el primer momento la mesa que enseña el selector, y el panel y el carrito quedan en esa mesa.",
+        "MEJORA: Modo Mesas con la caja cerrada. Se puede entrar y mirar el plano, y el administrador sigue pudiendo diseñar salas, pero ya no se puede operar: arriba sale el aviso «Caja cerrada · abre la caja para trabajar con las mesas», y quedan inertes el selector de sala y mesa, el cambio rápido de mesa, el panel lateral (cambiar de mesa, personas, reserva, pedidos) y el abrir o liberar mesas desde el plano. Motivo: con la caja cerrada el TPV no refresca los pedidos del servidor y el plano podía enseñar como libre una mesa que tenía un pedido (por ejemplo, de la app de camareros). Al abrir la caja todo vuelve a funcionar."
+      ]
     },
     {
       "version": "0.2.70",

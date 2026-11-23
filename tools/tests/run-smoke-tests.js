@@ -11333,6 +11333,36 @@ if (
   fail("Falta el control de consultas de invoice-email-status (renderer.js getInvoiceEmailStatus: en vuelo + espera tras fallo)");
 }
 
+console.log("\n[SMOKE] Checking 2026-11-23 Modo Mesas en perfil nuevo: la mesa que ensena el desplegable se adopta en el estado\n");
+if (
+  renderer.includes("let adoptedDefaultTable = false;") &&
+  renderer.includes("!(storedSelectedUid && getMesasRoomAndTableByUid(state, storedSelectedUid))") &&
+  /state\.selectedTableId = selectedUid;\s+state\.activeRoomId = activeRoomId;\s+saveMesasTablesStateForInline\(state\);\s+adoptedDefaultTable = true;/.test(renderer) &&
+  /if \(adoptedDefaultTable\) \{[\s\S]{0,260}syncTpvCartWithSelectedMesa\(\{ preferLinkedTicketOnEmptyDraft: true \}\)/.test(renderer)
+) {
+  ok("Modo Mesas, primer arranque de un perfil nuevo: si el estado no tiene mesa seleccionada, renderMesasTransContextBar adopta la que ya muestra el desplegable (antes el panel izquierdo decia «Sin mesa / Sin sala / No hay mas mesas» hasta pasar por Mapa de Salas) y sincroniza el carrito con ella");
+} else {
+  fail("Falta adoptar la mesa por defecto en renderMesasTransContextBar (renderer.js adoptedDefaultTable)");
+}
+
+console.log("\n[SMOKE] Checking 2026-11-23 Modo Mesas con la caja cerrada: se puede entrar y mirar, no operar\n");
+if (
+  renderer.includes("function mesasOperationsBlockedByClosedCaja() {") &&
+  renderer.includes('document.body.classList.toggle("mesas-caja-cerrada", closed);') &&
+  /updateOpenCajaPrompt\(cashOpen, hasLogin\);\s+refreshMesasCajaClosedUi\?\.\(\);/.test(renderer) &&
+  /data\.type === "tpv:mesas-open-table"\) \{[\s\S]{0,200}mesasOperationsBlockedByClosedCaja\(\)/.test(renderer) &&
+  /data\.type === "tpv:mesas-release-table"\) \{[\s\S]{0,200}mesasOperationsBlockedByClosedCaja\(\)/.test(renderer) &&
+  /#mesasContextRoomSelect, #mesasContextTableSelect/.test(renderer) &&
+  index.includes('id="mesasCajaClosedNotice"') &&
+  /body\.mesas-caja-cerrada #mesasTransSidebar/.test(styles) &&
+  !/body\.mesas-caja-cerrada[^{]*#mesasInlineTabDiseno/.test(styles) &&
+  !/body\.mesas-caja-cerrada[^{]*#mesasInlineCloseBtn/.test(styles)
+) {
+  ok("Modo Mesas con la caja cerrada: aviso visible, selector de sala/mesa, cambio rapido y panel lateral inertes (CSS + guardas de teclado), el plano no abre ni libera mesas (mensajes tpv:mesas-open-table y release-table) y se refresca al abrir o cerrar la caja; 'Diseñar Salas' y la X de salir siguen activos");
+} else {
+  fail("Falta el bloqueo de Modo Mesas con la caja cerrada (renderer.js mesasOperationsBlockedByClosedCaja / refreshMesasCajaClosedUi, index.html, styles.css)");
+}
+
 console.log("\n[SMOKE] Checking 2026-10-27 registro de eventos de cliente en el servidor\n");
 if (
   renderer.includes("function reportClientEvent(category, code, message, detail, severity, opts) {") &&

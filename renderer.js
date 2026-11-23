@@ -13505,6 +13505,23 @@ function renderMesasTransContextBar() {
   }
   MESAS_CONTEXT_SELECTED_UID = selectedUid;
 
+  // Perfil nuevo / primer arranque (2026-11-23): el desplegable ya ensenaba la primera mesa (M1) pero el estado
+  // seguia sin mesa seleccionada, y el panel de la izquierda leia el estado: «Sin mesa / Sin sala / No hay mas mesas
+  // en esta sala» hasta pasar por Mapa de Salas (que si selecciona una). Se adopta la mesa que muestra el desplegable.
+  let adoptedDefaultTable = false;
+  const storedSelectedUid = String(state?.selectedTableId || "");
+  if (
+    selectedUid &&
+    MESAS_INLINE_ACTIVE &&
+    MESAS_INLINE_VIEW === "transacciones" &&
+    !(storedSelectedUid && getMesasRoomAndTableByUid(state, storedSelectedUid))
+  ) {
+    state.selectedTableId = selectedUid;
+    state.activeRoomId = activeRoomId;
+    saveMesasTablesStateForInline(state);
+    adoptedDefaultTable = true;
+  }
+
   tables.forEach((table) => {
     const tableId = String(table?.id || "");
     const uid = `${activeRoomId}::${tableId}`;
@@ -13558,6 +13575,14 @@ function renderMesasTransContextBar() {
 
   mesasContextRoomSelect.disabled = false;
   refreshMesasTransSidebar();
+  if (adoptedDefaultTable) {
+    // El carrito tambien debe corresponder a la mesa adoptada (si ya tiene pedido de otro terminal, cargarlo).
+    setTimeout(() => {
+      try {
+        syncTpvCartWithSelectedMesa({ preferLinkedTicketOnEmptyDraft: true });
+      } catch (_) {}
+    }, 0);
+  }
 }
 
 function updateMesasSelectionFromContext(
@@ -13750,7 +13775,55 @@ function refreshMesasInlineTabsUI() {
   if (tabDiseno) {
     tabDiseno.classList.toggle("is-active", MESAS_INLINE_VIEW === "diseno");
   }
+  refreshMesasCajaClosedUi();
 }
+
+// Modo Mesas con la caja cerrada (2026-11-23): se puede entrar y mirar, y el administrador sigue pudiendo
+// diseñar salas, pero no se puede operar (seleccionar o cambiar de mesa, personas, reserva, abrir o liberar mesas
+// desde el plano): con la caja cerrada el TPV no refresca los pedidos del servidor y el plano podria enseñar como
+// libre una mesa que tiene un pedido (por ejemplo, de la app de camareros).
+function mesasOperationsBlockedByClosedCaja() {
+  return !!MESAS_INLINE_ACTIVE && !cashSession?.open;
+}
+
+let __mesasClosedCajaToastAt = 0;
+function toastMesasNeedOpenCaja() {
+  const now = Date.now();
+  if (now - __mesasClosedCajaToastAt < 2500) return;
+  __mesasClosedCajaToastAt = now;
+  toast("Abre la caja para trabajar con las mesas.", "warn", "Mesas");
+}
+
+function refreshMesasCajaClosedUi() {
+  const closed = mesasOperationsBlockedByClosedCaja();
+  document.body.classList.toggle("mesas-caja-cerrada", closed);
+  const notice = document.getElementById("mesasCajaClosedNotice");
+  if (notice) notice.classList.toggle("hidden", !closed);
+}
+
+// Red de seguridad para el teclado (el CSS ya quita el raton): se cortan en captura los cambios y clics operativos.
+document.addEventListener(
+  "change",
+  (event) => {
+    if (!mesasOperationsBlockedByClosedCaja()) return;
+    if (!event.target?.closest?.("#mesasContextRoomSelect, #mesasContextTableSelect")) return;
+    event.stopImmediatePropagation();
+    toastMesasNeedOpenCaja();
+    renderMesasTransContextBar?.();
+  },
+  true,
+);
+document.addEventListener(
+  "click",
+  (event) => {
+    if (!mesasOperationsBlockedByClosedCaja()) return;
+    if (!event.target?.closest?.("#mesasTransSidebar, #mesasContextQuickSwitch")) return;
+    event.stopImmediatePropagation();
+    event.preventDefault();
+    toastMesasNeedOpenCaja();
+  },
+  true,
+);
 
 function applyMesasInlineActionLabels() {
   const parkedListBtn = document.getElementById("parkedListBtn");
@@ -14233,6 +14306,10 @@ function bindMesasInlineEventsOnce() {
     if (data.type === "tpv:mesas-release-table") {
       const uid = String(data?.uid || "").trim();
       if (!uid) return;
+      if (mesasOperationsBlockedByClosedCaja()) {
+        toastMesasNeedOpenCaja();
+        return;
+      }
       (async () => {
         try {
           const mesasState = loadMesasTablesStateForInline();
@@ -14278,6 +14355,10 @@ function bindMesasInlineEventsOnce() {
     if (data.type === "tpv:mesas-open-table") {
       const uid = String(data?.uid || "").trim();
       if (!uid) return;
+      if (mesasOperationsBlockedByClosedCaja()) {
+        toastMesasNeedOpenCaja();
+        return;
+      }
 
       const sourceView = String(data?.sourceView || "")
         .trim()
@@ -14930,6 +15011,7 @@ function syncCashClosedUiState() {
   }
 
   updateOpenCajaPrompt(cashOpen, hasLogin);
+  refreshMesasCajaClosedUi?.();
 }
 
 // Instalacion real 2026-09-18: al arrancar un TPV nuevo por primera vez, con

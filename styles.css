@@ -12910,3 +12910,28 @@ body.theme-dark .opt-help-box {
   background: #13233f;
   color: #bfdbfe;
 }
+
+/* Modo Mesas con la caja cerrada (2026-11-23): se puede entrar y mirar (y el administrador sigue pudiendo diseñar
+   salas), pero nada operativo: el plano de pedidos no se refresca con la caja cerrada y alguien podria fiarse de el. */
+.mesas-caja-notice {
+  margin: 4px 0 6px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  background: #fff4dc;
+  border: 1px solid #f1d28a;
+  color: #8a5a00;
+  font-size: 13px;
+  font-weight: 600;
+}
+body.mesas-caja-cerrada #mesasContextRoomSelect,
+body.mesas-caja-cerrada #mesasContextTableSelect,
+body.mesas-caja-cerrada #mesasContextQuickSwitch,
+body.mesas-caja-cerrada #mesasTransSidebar {
+  pointer-events: none;
+  opacity: 0.55;
+}
+body.theme-dark .mesas-caja-notice {
+  background: #3b2f10;
+  border-color: #6b5420;
+  color: #f5d98a;
+}
