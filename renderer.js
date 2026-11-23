@@ -61189,6 +61189,11 @@ async function apiUploadFileToFs(blob, filename, opts = {}) {
   }
 }
 
+// La bandera la define android-bridge.js antes de cargar este archivo (platform: "android").
+function isAndroidShell() {
+  return window.TPV_ENV?.platform === "android";
+}
+
 async function openNewProductModal() {
   if (!isAdminUser()) {
     toast?.("Solo administradores.", "warn", "Productos");
@@ -61408,8 +61413,7 @@ async function openNewProductModal() {
     };
     imgPick.addEventListener("click", () => imgFile.click());
     imgClear.addEventListener("click", clearImage);
-    imgFile.addEventListener("change", () => {
-      const f = imgFile.files && imgFile.files[0];
+    const useImageFile = (f) => {
       if (!f) return;
       if (!/^image\//i.test(f.type || "")) {
         clearImage();
@@ -61424,9 +61428,31 @@ async function openNewProductModal() {
       imgPreview.classList.remove("hidden");
       imgClear.classList.remove("hidden");
       imgPick.textContent = "Cambiar imagen…";
-    });
+    };
+    imgFile.addEventListener("change", () => useImageFile(imgFile.files && imgFile.files[0]));
     imgWrap.appendChild(imgPreview);
     imgWrap.appendChild(imgPick);
+    // Android (2026-11-23): segundo boton con la camara. El contenedor (Capacitor) abre la app de camara del sistema cuando
+    // el input lleva capture y accept incluye "image/*" literal; sin permiso CAMERA en el manifiesto (con el permiso declarado
+    // saldria un dialogo y, si se deniega, el input devuelve vacio). Si no hay app de camara cae al selector normal.
+    if (isAndroidShell()) {
+      const camFile = document.createElement("input");
+      camFile.type = "file";
+      camFile.accept = "image/*";
+      camFile.setAttribute("capture", "environment");
+      camFile.style.display = "none";
+      camFile.addEventListener("change", () => useImageFile(camFile.files && camFile.files[0]));
+      const camBtn = document.createElement("button");
+      camBtn.type = "button";
+      camBtn.className = "np-numbtn";
+      camBtn.textContent = "Hacer foto";
+      camBtn.addEventListener("click", () => {
+        camFile.value = "";
+        camFile.click();
+      });
+      imgWrap.appendChild(camBtn);
+      imgWrap.appendChild(camFile);
+    }
     imgWrap.appendChild(imgClear);
     imgWrap.appendChild(imgFile);
     addField("Imagen", imgWrap, "Opcional. Sale en la tarjeta del producto; se reduce y se guarda en FacturaScripts.");

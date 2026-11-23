@@ -11376,6 +11376,10 @@ if (
   renderer.includes('apiWrite("stocks", "POST", { codalmacen: wh, idproducto, referencia: finalRef, cantidad: form.stock })') &&
   renderer.includes("const ambiguous = !e?.apiStatus;") &&
   renderer.includes("async function apiUploadFileToFs(blob, filename, opts = {}) {") &&
+  renderer.includes('return window.TPV_ENV?.platform === "android";') &&
+  renderer.includes('camFile.setAttribute("capture", "environment");') &&
+  renderer.includes('camFile.accept = "image/*";') &&
+  !renderer.includes('android.permission.CAMERA') &&
   renderer.includes('fd.append("files[0]", blob, filename);') &&
   renderer.includes('/uploadFiles`;') &&
   renderer.includes('apiWrite("productoimagenes", "POST", { idproducto, referencia: finalRef, idfile: uploadedId, orden: 1 })') &&
@@ -11383,7 +11387,7 @@ if (
   renderer.includes('apiWrite(`attachedfiles/${uploadedId}`, "DELETE")') &&
   /\.new-product-modal/.test(styles)
 ) {
-  ok("Nuevo producto (Opciones -> Productos, solo admin): POST productos con el precio SIN IVA (grossToNet), referencia opcional (vacia = la siguiente de FacturaScripts), codigo de barras en la variante, imagen (se convierte a JPEG de 800 px y se sube con uploadFiles + productoimagenes; si falla el vinculo se borra el archivo subido), stock inicial en el almacen del terminal, avisos de referencia/barras repetidos y, si no hay respuesta del servidor, no deja reintentar a ciegas (evita duplicar)");
+  ok("Nuevo producto (Opciones -> Productos, solo admin): POST productos con el precio SIN IVA (grossToNet), referencia opcional (vacia = la siguiente de FacturaScripts), codigo de barras en la variante, imagen (en Android tambien 'Hacer foto' con input capture=environment y accept image/* literal, sin permiso CAMERA; se convierte a JPEG de 800 px y se sube con uploadFiles + productoimagenes; si falla el vinculo se borra el archivo subido), stock inicial en el almacen del terminal, avisos de referencia/barras repetidos y, si no hay respuesta del servidor, no deja reintentar a ciegas (evita duplicar)");
 } else {
   fail("Falta el alta de producto desde Opciones (renderer.js openNewProductModal / index.html newProductCreateBtn / styles.css)");
 }
