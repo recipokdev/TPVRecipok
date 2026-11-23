@@ -9,6 +9,8 @@ El Modo Mesas está pensado para bares y restaurantes: cada mesa tiene su propio
 
 El panel tiene tres pestañas: **Transacciones** (atender la mesa), **Mapa de Salas** (ver todas las mesas) y **Diseñar Salas** (cambiar la distribución).
 
+> **Con la caja cerrada** puedes entrar en el Modo Mesas y mirar el plano, y el administrador puede seguir diseñando salas, pero no se puede trabajar con las mesas: arriba sale el aviso «Caja cerrada · abre la caja para trabajar con las mesas» y quedan sin función los selectores de sala y mesa, el cambio rápido de mesa, el panel lateral y el abrir o liberar mesas desde el plano. Al abrir la caja todo vuelve a funcionar. Así nadie se fía de un plano que, sin caja, no se refresca.
+
 > **Dos zonas separadas.** El Modo Mesas y el TPV normal **no comparten sus pedidos aparcados**: cada uno tiene los suyos. Los pedidos de las mesas solo se ven (en el botón **Pedidos**) dentro del Modo Mesas, y los aparcados del TPV normal solo se ven fuera de él. Los productos y el stock sí son los mismos para los dos.
 
 > Cada modo **recuerda su carrito**: al pasar de uno a otro, o si se reinicia el programa, el TPV vuelve a dejarte lo que tenías abierto en ese modo y los pedidos aparcados tal como estaban.

@@ -46,6 +46,12 @@ En **Opciones → Terminales** puedes elegir qué familias se ven en cada termin
 ### Qué texto muestra cada tarjeta
 En **Texto en la tarjeta de producto** eliges si se muestra la descripción del producto, la referencia, o ambas.
 
+### Crear y editar productos desde el TPV (solo administradores)
+
+- **Crear.** Opciones → Productos → **Nuevo producto**. Se piden el nombre y el precio con IVA; el IVA, la familia, el código de barras, la referencia, la imagen y el stock inicial son opcionales. Si dejas la referencia vacía, FacturaScripts pone la siguiente. El producto se crea en FacturaScripts y aparece en todos los terminales.
+- **Editar.** Con **Modo edición de precio y prioridad** activado, el lápiz ✎ del producto abre el cambio rápido de precio; el botón **Editar producto…** de esa ventana abre el formulario completo (nombre, precio con IVA, IVA, familia, código de barras e imagen). La referencia no se puede cambiar y el stock se cambia con «Editar stock». Los productos con variantes se editan en FacturaScripts.
+- **Imagen.** Se elige un archivo del equipo (en Android, además, se puede hacer una foto con la cámara). El TPV la reduce antes de guardarla en FacturaScripts.
+
 ### Productos con variantes
 Si un producto tiene **varias variantes** (por ejemplo, distintos tamaños o sabores), cada variante sale como una **tarjeta propia**: arriba el nombre de la variante (su referencia) y debajo el del producto. Cada una se vende con su propio precio, y en el ticket, la factura y la comanda sale el nombre de la variante que se vendió. El stock que se muestra es el del producto. Un producto con una sola variante se comporta como cualquier otro.
 
