@@ -61194,38 +61194,99 @@ function isAndroidShell() {
   return window.TPV_ENV?.platform === "android";
 }
 
-async function openNewProductModal() {
+function openNewProductModal() {
+  return openProductFormModal({});
+}
+
+// Mismo formulario para crear (opts vacio) y para editar (opts.product = la tarjeta del producto). Al editar se lee el
+// producto FRESCO de FacturaScripts (no la copia del TPV), solo se envian los campos que cambian (asi no se pisa lo
+// que otra persona haya tocado en otro campo), la referencia no se puede cambiar y el stock se sigue cambiando con el
+// flujo "Editar stock". Los productos con varias variantes no se editan aqui.
+async function openProductFormModal(opts = {}) {
+  const isEdit = !!opts.product;
   if (!isAdminUser()) {
     toast?.("Solo administradores.", "warn", "Productos");
     return;
   }
   if (TPV_STATE?.offline) {
-    toast?.("Sin conexión con el servidor: ahora no se pueden crear productos.", "warn", "Productos");
+    toast?.(`Sin conexión con el servidor: ahora no se pueden ${isEdit ? "editar" : "crear"} productos.`, "warn", "Productos");
     return;
   }
   const taxCodes = Object.keys(taxRatesByCode || {});
   if (!taxCodes.length) {
     showMessageModal(
-      "Nuevo producto",
+      isEdit ? "Editar producto" : "Nuevo producto",
       "No se han podido cargar los impuestos de FacturaScripts. Espera unos segundos y vuelve a intentarlo.",
     );
     return;
   }
 
+  let orig = null;
+  let existingImageUrl = "";
+  if (isEdit) {
+    const variantsMsg =
+      "Este producto tiene variantes (por ejemplo, tallas o tamaños): edítalo en FacturaScripts. Con el lápiz ✎ sí puedes cambiar su precio y su prioridad.";
+    const p0 = opts.product;
+    const baseId = Number(p0?.baseProductId || p0?.id || 0);
+    const sameBase = (Array.isArray(products) ? products : []).filter((x) => Number(x?.baseProductId || x?.id || 0) === baseId);
+    if (!baseId || sameBase.length > 1) {
+      showMessageModal("Editar producto", variantsMsg);
+      return;
+    }
+    try {
+      const [prodRows, varRows, imgRows] = await Promise.all([
+        fetchApiResourceWithParams("productos", { "filter[idproducto]": baseId, limit: 1 }),
+        fetchApiResourceWithParams("variantes", { "filter[idproducto]": baseId, limit: 5 }),
+        fetchApiResourceWithParams("productoimagenes", { "filter[idproducto]": baseId, limit: 5 }).catch(() => []),
+      ]);
+      const prod = Array.isArray(prodRows) ? prodRows[0] : null;
+      const vars = Array.isArray(varRows) ? varRows : [];
+      if (!prod || !vars.length) throw new Error("producto no encontrado");
+      if (vars.length > 1) {
+        showMessageModal("Editar producto", variantsMsg);
+        return;
+      }
+      const img = (Array.isArray(imgRows) ? imgRows : []).sort((a, b) => Number(a?.orden || 0) - Number(b?.orden || 0))[0] || null;
+      orig = { idproducto: baseId, prod, variant: vars[0], image: img };
+      const path = String(img?.["download-permanent"] || img?.download || "");
+      if (path) {
+        const fileBase = String(window.RECIPOK_API?.baseUrl || "").replace(/\/+$/, "").replace(/\/api\/[^/]+$/i, "");
+        existingImageUrl = `${fileBase}/${path.replace(/^\/+/, "")}`;
+      }
+    } catch (e) {
+      toast?.("No se pudo leer el producto de FacturaScripts. Inténtalo de nuevo.", "warn", "Productos");
+      return;
+    }
+  }
+
   return new Promise((resolve) => {
     document.body.classList.add("modal-locked");
 
-    const form = {
-      name: "",
-      priceGross: null,
-      tax: newProductDefaultTaxCode(),
-      family: "",
-      barcode: "",
-      reference: "",
-      control: newProductDefaultControlStock(),
-      stock: 0,
-      imageFile: null,
-    };
+    const origRate = isEdit ? Number(taxRatesByCode[String(orig.prod.codimpuesto || "")] ?? 0) : 0;
+    const form = isEdit
+      ? {
+          name: String(orig.prod.descripcion || ""),
+          priceGross: round2(Number(orig.prod.precio || 0) * (1 + origRate / 100)),
+          tax: String(orig.prod.codimpuesto || "") || newProductDefaultTaxCode(),
+          family: String(orig.prod.codfamilia || ""),
+          barcode: String(orig.variant.codbarras || ""),
+          reference: String(orig.prod.referencia || ""),
+          control: true,
+          stock: 0,
+          imageFile: null,
+        }
+      : {
+          name: "",
+          priceGross: null,
+          tax: newProductDefaultTaxCode(),
+          family: "",
+          barcode: "",
+          reference: "",
+          control: newProductDefaultControlStock(),
+          stock: 0,
+          imageFile: null,
+        };
+    let removeImage = false;
     let imagePreviewUrl = "";
     let saving = false;
 
@@ -61238,7 +61299,7 @@ async function openNewProductModal() {
     head.className = "pack-modal-head";
     const hTitle = document.createElement("div");
     hTitle.className = "pack-modal-title";
-    hTitle.textContent = "Nuevo producto";
+    hTitle.textContent = isEdit ? "Editar producto" : "Nuevo producto";
     const xBtn = document.createElement("button");
     xBtn.type = "button";
     xBtn.className = "pack-modal-x";
@@ -61307,6 +61368,7 @@ async function openNewProductModal() {
     }
 
     const nameInput = textInput("Ej.: Café con leche", "name", 120);
+    nameInput.value = form.name;
     addField("Nombre *", nameInput, "", "np-span2");
 
     const netHint = document.createElement("div");
@@ -61341,10 +61403,11 @@ async function openNewProductModal() {
     );
     const priceRow = addField("Precio con IVA *", priceBtn);
     priceRow.appendChild(netHint);
+    refreshNetHint();
 
     const taxSel = document.createElement("select");
     taxSel.className = "np-input";
-    taxCodes.forEach((code) => {
+    (taxCodes.includes(form.tax) ? taxCodes : [form.tax, ...taxCodes]).forEach((code) => {
       const opt = document.createElement("option");
       opt.value = code;
       opt.textContent = `${code} (${Number(taxRatesByCode[code] ?? 0)} %)`;
@@ -61369,19 +61432,31 @@ async function openNewProductModal() {
       opt.textContent = f.label;
       famSel.appendChild(opt);
     });
+    if (form.family && ![...famSel.options].some((o) => o.value === form.family)) {
+      const cur = document.createElement("option");
+      cur.value = form.family;
+      cur.textContent = form.family;
+      famSel.appendChild(cur);
+    }
+    famSel.value = form.family;
     famSel.addEventListener("change", () => {
       form.family = famSel.value;
     });
     addField("Familia", famSel, "Sin familia no sale en ninguna familia de la pantalla de venta.");
 
     const barcodeInput = textInput("Opcional (también vale con el lector)", "barcode", 60);
+    barcodeInput.value = form.barcode;
     addField("Código de barras", barcodeInput);
 
     const refInput = textInput("Automática", "reference", 30);
+    refInput.value = form.reference;
+    if (isEdit) refInput.disabled = true;
     addField(
       "Referencia",
       refInput,
-      "Vacía: FacturaScripts pone la siguiente. Máx. 30 caracteres, sin repetir.",
+      isEdit
+        ? "La referencia no se puede cambiar desde aquí."
+        : "Vacía: FacturaScripts pone la siguiente. Máx. 30 caracteres, sin repetir.",
     );
 
     const imgWrap = document.createElement("div");
@@ -61401,6 +61476,14 @@ async function openNewProductModal() {
     imgClear.type = "button";
     imgClear.className = "np-numbtn hidden";
     imgClear.textContent = "Quitar";
+    const showExistingImageIfAny = () => {
+      if (existingImageUrl && !removeImage) {
+        imgPreview.src = existingImageUrl;
+        imgPreview.classList.remove("hidden");
+        imgClear.classList.remove("hidden");
+        imgPick.textContent = "Cambiar imagen…";
+      }
+    };
     const clearImage = () => {
       form.imageFile = null;
       imgFile.value = "";
@@ -61410,9 +61493,13 @@ async function openNewProductModal() {
       imgPreview.removeAttribute("src");
       imgClear.classList.add("hidden");
       imgPick.textContent = "Elegir imagen…";
+      showExistingImageIfAny();
     };
     imgPick.addEventListener("click", () => imgFile.click());
-    imgClear.addEventListener("click", clearImage);
+    imgClear.addEventListener("click", () => {
+      removeImage = !!existingImageUrl;
+      clearImage();
+    });
     const useImageFile = (f) => {
       if (!f) return;
       if (!/^image\//i.test(f.type || "")) {
@@ -61422,6 +61509,7 @@ async function openNewProductModal() {
       }
       errBox.textContent = "";
       form.imageFile = f;
+      removeImage = false;
       if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
       imagePreviewUrl = URL.createObjectURL(f);
       imgPreview.src = imagePreviewUrl;
@@ -61455,6 +61543,7 @@ async function openNewProductModal() {
     }
     imgWrap.appendChild(imgClear);
     imgWrap.appendChild(imgFile);
+    showExistingImageIfAny();
     addField("Imagen", imgWrap, "Opcional. Sale en la tarjeta del producto; se reduce y se guarda en FacturaScripts.", "np-span2 np-img");
 
     const stockWrap = document.createElement("div");
@@ -61492,7 +61581,7 @@ async function openNewProductModal() {
     stockWrap.appendChild(ctrlLabel);
     stockWrap.appendChild(stockBtn);
     const wh = getCurrentWarehouseCode();
-    addField(
+    if (!isEdit) addField(
       "Stock",
       stockWrap,
       wh
@@ -61516,7 +61605,8 @@ async function openNewProductModal() {
     const saveBtn = document.createElement("button");
     saveBtn.type = "button";
     saveBtn.className = "pack-btn pack-btn-ok";
-    saveBtn.textContent = "Crear producto";
+    const saveLabel = isEdit ? "Guardar cambios" : "Crear producto";
+    saveBtn.textContent = saveLabel;
     actions.appendChild(cancelBtn);
     actions.appendChild(saveBtn);
 
@@ -61524,9 +61614,132 @@ async function openNewProductModal() {
       errBox.textContent = msg || "";
     };
 
+    const submitEdit = async () => {
+      const name = String(form.name || "").trim();
+      const barcode = String(form.barcode || "").trim();
+      if (!name) return setError("Escribe el nombre del producto.");
+      if (form.priceGross == null) return setError("Indica el precio con IVA.");
+      const origBarcode = String(orig.variant.codbarras || "");
+      if (barcode && barcode !== origBarcode) {
+        const owner = typeof BARCODE_LOCAL_PRODUCT_BY_CODE?.get === "function" ? BARCODE_LOCAL_PRODUCT_BY_CODE.get(barcode) : undefined;
+        if (owner !== undefined && Number(owner) !== orig.idproducto) {
+          return setError("Ese código de barras ya lo tiene otro producto.");
+        }
+      }
+      const rate = Number(taxRatesByCode[form.tax] ?? 0);
+      const newNet = grossToNet(form.priceGross, rate);
+      const changes = {};
+      if (name !== String(orig.prod.descripcion || "")) changes.descripcion = name;
+      if (form.tax !== String(orig.prod.codimpuesto || "")) changes.codimpuesto = form.tax;
+      if (Math.abs(newNet - Number(orig.prod.precio || 0)) > 0.0000005) changes.precio = newNet;
+      // FacturaScripts no acepta "" para quitar la familia: hay que mandar el texto "null".
+      if (form.family !== String(orig.prod.codfamilia || "")) changes.codfamilia = form.family || "null";
+      const barcodeChanged = barcode !== origBarcode;
+      const imageChanged = !!form.imageFile || (removeImage && !!orig.image);
+      if (!Object.keys(changes).length && !barcodeChanged && !imageChanged) {
+        close();
+        toast?.("No has cambiado nada.", "ok", "Productos");
+        return;
+      }
+
+      saving = true;
+      saveBtn.disabled = true;
+      cancelBtn.disabled = true;
+      saveBtn.textContent = "Guardando…";
+      const unlock = () => {
+        saving = false;
+        saveBtn.disabled = false;
+        cancelBtn.disabled = false;
+        saveBtn.textContent = saveLabel;
+      };
+      const warnings = [];
+      if (Object.keys(changes).length) {
+        try {
+          await apiWrite(`productos/${orig.idproducto}`, "PUT", changes, { timeoutMs: 25000 });
+        } catch (e) {
+          unlock();
+          setError(
+            e?.apiStatus
+              ? "FacturaScripts no pudo guardar los cambios. Revisa los datos e inténtalo de nuevo."
+              : "No hubo respuesta del servidor: no se sabe si se guardaron los cambios. Cierra esta ventana y vuelve a abrir el producto para comprobarlo.",
+          );
+          reportClientEvent("productos", "product-edit-failed", String(e?.message || e).slice(0, 160), { idproducto: orig.idproducto, status: e?.apiStatus || 0 }, "warn");
+          return;
+        }
+      }
+      // Solo el producto cambia su precio con PUT productos: la variante se queda con el precio viejo y, si alguien guarda
+      // luego la variante en FacturaScripts, el precio del producto volveria al viejo. Se deja igual que el producto.
+      const variantPatch = {};
+      if (changes.precio !== undefined) variantPatch.precio = newNet;
+      if (barcodeChanged) variantPatch.codbarras = barcode;
+      if (Object.keys(variantPatch).length) {
+        try {
+          await apiWrite(`variantes/${Number(orig.variant.idvariante)}`, "PUT", variantPatch);
+        } catch (e) {
+          warnings.push(barcodeChanged ? "no se pudo guardar el precio de la variante o el código de barras" : "no se pudo actualizar el precio de la variante");
+        }
+      }
+      if (imageChanged) {
+        let uploadedId = 0;
+        try {
+          if (form.imageFile) {
+            const blob = await newProductImageToJpegBlob(form.imageFile);
+            const up = await apiUploadFileToFs(blob, `producto-${orig.idproducto}-${Date.now()}.jpg`);
+            uploadedId = Number(up.idfile || 0);
+            await apiWrite("productoimagenes", "POST", { idproducto: orig.idproducto, referencia: String(orig.prod.referencia || ""), idfile: uploadedId, orden: 1 });
+          }
+          if (orig.image?.id) {
+            try {
+              await apiWrite(`productoimagenes/${Number(orig.image.id)}`, "DELETE");
+              if (orig.image.idfile) await apiWrite(`attachedfiles/${Number(orig.image.idfile)}`, "DELETE");
+            } catch (_) {
+              warnings.push("la imagen anterior no se pudo quitar");
+            }
+          }
+        } catch (e) {
+          warnings.push("no se pudo guardar la imagen");
+          if (uploadedId) {
+            try {
+              await apiWrite(`attachedfiles/${uploadedId}`, "DELETE");
+            } catch (_) {}
+          }
+        }
+      }
+
+      const changed = Object.keys(changes).map((k) => (k === "descripcion" ? "nombre" : k === "precio" ? "precio" : k === "codimpuesto" ? "iva" : "familia"));
+      if (barcodeChanged) changed.push("codigo de barras");
+      if (imageChanged) changed.push(form.imageFile ? "imagen cambiada" : "imagen quitada");
+      reportClientEvent(
+        "productos",
+        "product-edited",
+        `Producto editado: ${orig.prod.referencia} · ${changed.join(", ")}`,
+        {
+          idproducto: orig.idproducto,
+          referencia: String(orig.prod.referencia || ""),
+          cambios: changed.join(","),
+          ...(changes.descripcion !== undefined ? { nombreAntes: String(orig.prod.descripcion || "").slice(0, 40), nombreDespues: name.slice(0, 40) } : {}),
+          ...(changes.precio !== undefined ? { precioConIvaAntes: round2(Number(orig.prod.precio || 0) * (1 + origRate / 100)), precioConIvaDespues: form.priceGross } : {}),
+          avisos: warnings.length,
+        },
+        "warn",
+      );
+
+      close();
+      if (warnings.length) {
+        showMessageModal(
+          "Producto guardado",
+          `Se guardaron los cambios de «${name}», pero ${warnings.join(" y ")}. Puedes completarlo desde FacturaScripts.`,
+        );
+      } else {
+        toast?.(`Producto «${name}» actualizado ✅`, "ok", "Productos");
+      }
+      await loadDataFromApi({ refresh: true, silentRetry: true }).catch(() => {});
+    };
+
     saveBtn.onclick = async () => {
       if (saving) return;
       setError("");
+      if (isEdit) return submitEdit();
       const name = String(form.name || "").trim();
       const ref = String(form.reference || "").trim();
       const barcode = String(form.barcode || "").trim();
@@ -61564,7 +61777,7 @@ async function openNewProductModal() {
         saving = false;
         saveBtn.disabled = false;
         cancelBtn.disabled = false;
-        saveBtn.textContent = "Crear producto";
+        saveBtn.textContent = saveLabel;
         const ambiguous = !e?.apiStatus;
         if (ambiguous) {
           setError("No se pudo confirmar si el producto se ha creado (sin respuesta del servidor). Antes de reintentar, mira en la lista de productos si ya está, para no duplicarlo.");
@@ -68481,6 +68694,16 @@ function openPriceEditForProduct(p) {
   document
     .getElementById("priceEditCancelBtn")
     ?.addEventListener("click", close, { once: true });
+
+  // Edicion completa del producto (nombre, IVA, familia, codigo de barras, imagen): el lapiz sigue siendo el cambio rapido
+  // de precio y prioridad; desde aqui se abre el formulario completo.
+  const fullBtn = document.getElementById("priceEditFullBtn");
+  if (fullBtn) {
+    fullBtn.onclick = () => {
+      document.getElementById("priceEditOverlay")?.classList.add("hidden");
+      openProductFormModal({ product: p });
+    };
+  }
 
   const saveBtn = document.getElementById("priceEditSaveBtn");
   if (saveBtn) {

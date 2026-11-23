@@ -11368,7 +11368,7 @@ if (
   index.includes('id="newProductCreateBtn"') &&
   renderer.includes('OPT_PV.A("Nuevo producto", "newProductCreateBtn")') &&
   renderer.includes("bindNewProductButtonOnce();") &&
-  /async function openNewProductModal\(\) \{\s+if \(!isAdminUser\(\)\) \{/.test(renderer) &&
+  /async function openProductFormModal\(opts = \{\}\) \{\s+const isEdit = !!opts\.product;\s+if \(!isAdminUser\(\)\) \{/.test(renderer) &&
   renderer.includes('apiWrite("productos", "POST", payload, { timeoutMs: 25000 })') &&
   renderer.includes("precio: grossToNet(form.priceGross, rate),") &&
   renderer.includes("if (ref) payload.referencia = ref;") &&
@@ -11390,6 +11390,26 @@ if (
   ok("Nuevo producto (Opciones -> Productos, solo admin): POST productos con el precio SIN IVA (grossToNet), referencia opcional (vacia = la siguiente de FacturaScripts), codigo de barras en la variante, imagen (en Android tambien 'Hacer foto' con input capture=environment y accept image/* literal, sin permiso CAMERA; se convierte a JPEG de 800 px y se sube con uploadFiles + productoimagenes; si falla el vinculo se borra el archivo subido), stock inicial en el almacen del terminal, avisos de referencia/barras repetidos y, si no hay respuesta del servidor, no deja reintentar a ciegas (evita duplicar)");
 } else {
   fail("Falta el alta de producto desde Opciones (renderer.js openNewProductModal / index.html newProductCreateBtn / styles.css)");
+}
+
+console.log("\n[SMOKE] Checking 2026-11-23 Editar producto (formulario completo desde el lapiz de precio)\n");
+if (
+  index.includes('id="priceEditFullBtn"') &&
+  renderer.includes("async function openProductFormModal(opts = {}) {") &&
+  renderer.includes("return openProductFormModal({});") &&
+  renderer.includes("openProductFormModal({ product: p });") &&
+  renderer.includes('fetchApiResourceWithParams("productoimagenes", { "filter[idproducto]": baseId, limit: 5 })') &&
+  renderer.includes('if (form.family !== String(orig.prod.codfamilia || "")) changes.codfamilia = form.family || "null";') &&
+  renderer.includes('apiWrite(`productos/${orig.idproducto}`, "PUT", changes, { timeoutMs: 25000 })') &&
+  renderer.includes('apiWrite(`variantes/${Number(orig.variant.idvariante)}`, "PUT", variantPatch)') &&
+  renderer.includes('apiWrite(`productoimagenes/${Number(orig.image.id)}`, "DELETE")') &&
+  renderer.includes("if (isEdit) refInput.disabled = true;") &&
+  renderer.includes("if (!isEdit) addField(") &&
+  renderer.includes('"product-edited"')
+) {
+  ok("Editar producto: el lapiz de precio tiene 'Editar producto…' que abre el mismo formulario con los datos FRESCOS de FacturaScripts; solo se envian los campos cambiados (PUT productos), el precio se deja igual en la variante, la familia se quita con 'null' (FS no admite ''), la imagen se cambia o se quita (alta nueva + borrado de la anterior y su archivo), la referencia queda bloqueada, sin stock, y los productos con varias variantes se rechazan; cada edicion queda en el registro de avisos");
+} else {
+  fail("Falta la edicion completa de producto (renderer.js openProductFormModal / index.html priceEditFullBtn)");
 }
 
 console.log("\n[SMOKE] Checking 2026-10-27 registro de eventos de cliente en el servidor\n");
