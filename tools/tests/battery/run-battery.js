@@ -8,6 +8,8 @@
 //   npm run battery            = standard: + TPV real en perfil aislado (~10 min)
 //   npm run battery:full       + TPV reales contra la demo, con 2 TPV (~40 min; escribe datos de prueba en la demo)
 //   node tools/tests/battery/run-battery.js --only=encargos-2tpv,smoke     (solo esas)
+//   npm run battery:full:bateria   = full contra la tienda interna zz_bateria_tpv (perfiles propios; deja limpia la demo de Sergi)
+//   --store=<slug>                 cualquier otra tienda de pruebas (por defecto demo); ver tools/tests/test-store.js
 //   node tools/tests/battery/run-battery.js --list                          (ver la lista)
 //
 // Las pruebas "demo" abren TPV reales con los perfiles tpvrecipok-2tpv-real-1/2 (sesion ya iniciada; NUNCA escribe PIN) y
@@ -23,6 +25,10 @@ const LEVELS = ["quick", "standard", "full"];
 const argv = process.argv.slice(2);
 const arg = (name, def = "") => { const a = argv.find((x) => x.startsWith(`--${name}=`)); return a ? a.slice(name.length + 3) : def; };
 const level = arg("level", "standard");
+// Tienda de las pruebas «demo»: --store=zz_bateria_tpv las lleva a la tienda interna de la batería (con sus propios perfiles y sin tocar la
+// demo de Sergi). Por defecto, la demo de siempre. Se pasa a las pruebas por la variable TPV_TEST_STORE (ver tools/tests/test-store.js).
+process.env.TPV_TEST_STORE = arg("store", process.env.TPV_TEST_STORE || "demo");
+const TEST_STORE = require("../test-store");
 const only = arg("only", "").split(",").map((s) => s.trim()).filter(Boolean);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const stripAnsi = (s) => String(s).replace(/\x1b\[[0-9;]*m/g, "");
@@ -59,8 +65,8 @@ const meta = {
 // ---- requisitos de las pruebas con la demo (si faltan, se omiten y se dice en el informe) ----
 async function demoPrereqs() {
   const problems = [];
-  for (const p of ["tpvrecipok-2tpv-real-1", "tpvrecipok-2tpv-real-2"]) {
-    if (!fs.existsSync(path.join(os.tmpdir(), p))) problems.push(`falta el perfil de pruebas ${p} (hay que abrir el TPV una vez con sesión iniciada: npm run test:2tpv)`);
+  for (const p of [TEST_STORE.P1, TEST_STORE.P2]) {
+    if (!fs.existsSync(path.join(os.tmpdir(), p))) problems.push(`falta el perfil de pruebas ${p} (hay que abrir el TPV una vez con sesión iniciada en la tienda ${TEST_STORE.STORE}: ${TEST_STORE.IS_DEMO ? "npm run test:2tpv" : "TPV_TEST_STORE=" + TEST_STORE.STORE + " npm run test:2tpv"})`);
   }
   try {
     const r = await fetch("https://plus.recipok.com/", { method: "HEAD", signal: AbortSignal.timeout(8000) });
@@ -75,7 +81,7 @@ function cleanupDemo(when) {
   const NL = String.fromCharCode(10);
   try {
     const php = fs.readFileSync(path.join(__dirname, "cleanup-demo.php"));
-    const out = execSync("ssh -o BatchMode=yes -o ConnectTimeout=10 recipok-plesk /opt/plesk/php/8.3/bin/php", { input: php, encoding: "utf8", timeout: 120000 });
+    const out = execSync(`ssh -o BatchMode=yes -o ConnectTimeout=10 recipok-plesk TPV_TEST_STORE=${TEST_STORE.STORE} /opt/plesk/php/8.3/bin/php`, { input: php, encoding: "utf8", timeout: 120000 });
     return "limpieza de la demo " + when + ": " + out.trim().split(NL).join("; ");
   } catch (e) {
     return "limpieza de la demo " + when + ": NO se pudo (" + String(e.message).split(NL)[0].slice(0, 100) + "); si una prueba de Encargos falla, borra a mano los encargos «TEST2TPV…» de la demo";

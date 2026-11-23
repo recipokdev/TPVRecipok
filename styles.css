@@ -12524,7 +12524,7 @@ body.theme-dark .email-config-qrtext code {
 .opt-quick {
   margin: 6px 0 2px;
 }
-.opt-acc.opt-searching .opt-quick {
+.opt-acc.opt-searching:not(.opt-changed-on) .opt-quick {
   display: none;
 }
 .options-readonly .opt-quick {
@@ -12599,6 +12599,9 @@ body.theme-dark .opt-hist.is-open {
 }
 .opt-hist:not(.is-open) {
   display: none;
+}
+.opt-changed-note {
+  margin-top: 6px;
 }
 .opt-quick-chips {
   display: flex;
@@ -12841,44 +12844,7 @@ body.theme-dark .opt-new-sec {
   font-size: 9px;
 }
 
-/* Opciones: filtro «Cambiadas» y valor de fabrica (2026-11-19). */
-.opt-changed-btn {
-  appearance: none;
-  flex: none;
-  min-width: 112px;
-  padding: 8px 10px;
-  border: 1px solid #d1d5db;
-  border-radius: 10px;
-  background: #ffffff;
-  color: #374151;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 700;
-  text-align: center;
-  cursor: pointer;
-}
-.opt-changed-btn:hover {
-  border-color: #9aa4b2;
-}
-.opt-changed-btn.is-on {
-  background: #1d4ed8;
-  border-color: #1d4ed8;
-  color: #ffffff;
-}
-body.theme-dark .opt-changed-btn {
-  background: #111827;
-  border-color: #374151;
-  color: #e5e7eb;
-}
-body.theme-dark .opt-changed-btn.is-on {
-  background: #2563eb;
-  border-color: #2563eb;
-  color: #ffffff;
-}
-/* la X de borrar la busqueda va dentro del cuadro de texto, no encima del boton */
-.opt-search .opt-search-clear {
-  right: 130px;
-}
+/* Opciones: valor de fabrica junto a cada opcion cuando se ve «Distintas de fábrica» (2026-11-19; el filtro es una pestaña, ver .opt-qtab). */
 .opt-row-title[data-std]::after {
   content: attr(data-std);
   display: inline-block;

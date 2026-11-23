@@ -13,7 +13,7 @@ const fs = require("fs");
 const os = require("os");
 const { _electron: electron } = require("playwright");
 const ROOT = path.resolve(__dirname, "..", "..");
-const PROFILE = path.join(os.tmpdir(), "tpvrecipok-2tpv-real-1");
+const PROFILE = path.join(os.tmpdir(), require("./test-store").P1);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const kills = [];
 const log = (...a) => console.log(new Date().toISOString().slice(14, 23), ...a);

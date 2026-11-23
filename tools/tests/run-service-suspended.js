@@ -39,7 +39,7 @@ const server = https.createServer({ key: fs.readFileSync(path.join(FIX, "mock-ap
   try {
     await new Promise((r) => server.listen(0, "127.0.0.1", r));
     const mockBase = `https://127.0.0.1:${server.address().port}/demo/api/3`;
-    const env = { ...process.env, TPV_MULTI_INSTANCE: "1", TPV_USER_DATA: path.join(os.tmpdir(), "tpvrecipok-2tpv-real-1"), TPV_TEST_LABEL: "A" };
+    const env = { ...process.env, TPV_MULTI_INSTANCE: "1", TPV_USER_DATA: path.join(os.tmpdir(), require("./test-store").P1), TPV_TEST_LABEL: "A" };
     delete env.TPV_E2E; delete env.TPV_E2E_USER_DATA; delete env.TPV_MODE;
     app = await electron.launch({ args: [ROOT, "--ignore-certificate-errors"], cwd: ROOT, env });
     const pid = app.process().pid;

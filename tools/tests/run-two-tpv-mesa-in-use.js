@@ -47,8 +47,8 @@ function buildChecks(out) {
   const out = {};
   let A, B;
   try {
-    A = await launch("tpvrecipok-2tpv-real-1", "A");
-    B = await launch("tpvrecipok-2tpv-real-2", "B");
+    A = await launch(require("./test-store").P1, "A");
+    B = await launch(require("./test-store").P2, "B");
     await sleep(8000);
     for (const X of [A, B]) await X.win.evaluate(async () => { await setMesasInlineModeEnabled(true, { persist: false }); setMesasInlineView("transacciones", { persist: false }); });
     const notice = (X) => X.win.evaluate(() => { const el = document.getElementById("mesaInUseNotice"); return el && !el.classList.contains("hidden") ? el.textContent : ""; });

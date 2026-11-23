@@ -2564,7 +2564,6 @@
               spellcheck="false"
             />
             <button type="button" id="optionsSearchClear" class="opt-search-clear hidden" title="Borrar la búsqueda" aria-label="Borrar la búsqueda">✕</button>
-            <button type="button" id="optionsChangedBtn" class="opt-changed-btn" aria-pressed="false" title="Ver solo las opciones que has cambiado respecto a una instalación nueva">Cambiadas</button>
           </div>
           <div id="optionsSearchRecent" class="opt-search-recent hidden"></div>
           <div id="optionsSearchNote" class="opt-search-note hidden"></div>
@@ -2580,7 +2579,11 @@
               <button type="button" id="optionsHistToggle" class="opt-qtab hidden" role="tab" aria-selected="false" data-qtab="hist" aria-expanded="false" title="Las últimas opciones que has cambiado">
                 <span>🕘 Recientes</span> <span id="optionsHistCount" class="opt-qtab-n"></span>
               </button>
+              <button type="button" id="optionsChangedBtn" class="opt-qtab" role="tab" aria-selected="false" aria-pressed="false" data-qtab="changed" title="Muestra solo las opciones cuyo valor es distinto del que trae una instalación nueva">
+                <span>✎ Distintas de fábrica</span> <span id="optionsChangedCount" class="opt-qtab-n"></span>
+              </button>
             </div>
+            <div id="optionsChangedNote" class="opt-search-note opt-changed-note hidden"></div>
             <div id="optionsFavPane" class="opt-qpane hidden">
               <div id="optionsFavList" class="opt-quick-chips"></div>
               <div id="optionsFavHint" class="opt-quick-hint">

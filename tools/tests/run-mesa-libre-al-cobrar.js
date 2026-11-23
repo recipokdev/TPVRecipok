@@ -101,8 +101,8 @@ function buildChecks(out) {
   const out = {};
   let A, B;
   try {
-    A = await launch("tpvrecipok-2tpv-real-1", "A");
-    B = await launch("tpvrecipok-2tpv-real-2", "B");
+    A = await launch(require("./test-store").P1, "A");
+    B = await launch(require("./test-store").P2, "B");
     await sleep(8000);
     const prep = (X) => X.win.evaluate(async (TABLE) => {
       await setMesasInlineModeEnabled(true, { persist: false }); setMesasInlineView("transacciones", { persist: false });

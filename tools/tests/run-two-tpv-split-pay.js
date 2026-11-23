@@ -107,7 +107,7 @@ function buildChecks(out) {
   const out = { noOps: NO_OPS };
   let A, B; const prods = [];
   try {
-    A = await launch("tpvrecipok-2tpv-real-1", "A");
+    A = await launch(require("./test-store").P1, "A");
     await sleep(8000);
     const prep = (X) => X.win.evaluate(async ([NO_OPS]) => {
       await setMesasInlineModeEnabled(true, { persist: false });
@@ -186,7 +186,7 @@ function buildChecks(out) {
     const BASE = out.A_pedido?.name || "@@";
 
     // Ahora arranca B (con el pedido ya guardado en el servidor) y abre la misma mesa: ve el pedido original
-    B = await launch("tpvrecipok-2tpv-real-2", "B");
+    B = await launch(require("./test-store").P2, "B");
     await sleep(8000);
     out.estado.push(await prep(B));
     if (!out.estado[1].login || !out.estado[1].cajaAbierta) throw new Error("B sin sesion o sin caja abierta: " + JSON.stringify(out.estado[1]));

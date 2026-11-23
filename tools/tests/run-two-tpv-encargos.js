@@ -39,8 +39,8 @@ async function launch(dirName, label) {
   const hard = setTimeout(() => { console.error("HARD TIMEOUT"); kills.forEach((k) => k()); process.exit(1); }, 900000);
   let A, B;
   try {
-    A = await launch("tpvrecipok-2tpv-real-1", "TPV 1");
-    B = await launch("tpvrecipok-2tpv-real-2", "TPV 2");
+    A = await launch(require("./test-store").P1, "TPV 1");
+    B = await launch(require("./test-store").P2, "TPV 2");
     const a = A.win, b = B.win;
     const setup = (w) => w.evaluate(async () => {
       window.ensurePrinterSelectedForPrint = async () => ""; window.openDrawerNow = async () => true;
@@ -62,7 +62,7 @@ async function launch(dirName, label) {
     const msgText = async (w, ms = 15000) => { try { await w.waitForFunction(() => !!document.querySelector("#msgOverlay:not(.hidden)"), null, { timeout: ms }); } catch { return ""; } return w.evaluate(() => document.getElementById("msgText").innerText.replace(/\s+/g, " ")); };
     const badge = (w) => w.evaluate(() => document.getElementById("encargosCountBadge").textContent);
     const create = async (w, name, adv, method) => {
-      await w.evaluate(async () => { cart = []; renderCart(); for (const id of [489, 543]) await addToCart(products.find((x) => x.id === id), 2); renderCart(); });
+      await w.evaluate(async () => { cart = []; renderCart(); for (const ref of ["Varios 4", "226"]) await addToCart(products.find((x) => String(x.referencia) === ref), 2); renderCart(); });
       await w.evaluate(() => document.getElementById("passToEncargoBtn").click());
       // esperar a que el asistente este abierto (abrirlo espera al agente, la tarifa y las formas de pago: con un sleep fijo,
       // a veces se pulsaba "Siguiente" antes y el asistente abria en el paso 1 -> los botones de pago nunca salian)

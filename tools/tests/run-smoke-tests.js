@@ -11321,6 +11321,18 @@ if (
   fail("Falta el aviso de correo no configurado en Enviar factura (renderer.js getInvoiceEmailStatus / sendInvoiceEmailForTicket, styles.css)");
 }
 
+console.log("\n[SMOKE] Checking 2026-11-23 consulta de correo de facturas: una sola en vuelo + espera tras fallo\n");
+if (
+  renderer.includes("let __invoiceEmailStatusInflight = null;") &&
+  renderer.includes("if (__invoiceEmailStatusInflight) return __invoiceEmailStatusInflight;") &&
+  renderer.includes("now - __invoiceEmailStatusFailedAt < 60 * 1000") &&
+  renderer.includes("__invoiceEmailStatusFailedAt = Date.now();")
+) {
+  ok("getInvoiceEmailStatus comparte UNA consulta en vuelo y no repite tras un fallo hasta pasado 1 minuto (la lista de Tickets la llama por fila; antes saturaba el limite de 30/min del servidor con 429)");
+} else {
+  fail("Falta el control de consultas de invoice-email-status (renderer.js getInvoiceEmailStatus: en vuelo + espera tras fallo)");
+}
+
 console.log("\n[SMOKE] Checking 2026-10-27 registro de eventos de cliente en el servidor\n");
 if (
   renderer.includes("function reportClientEvent(category, code, message, detail, severity, opts) {") &&
@@ -11993,6 +12005,29 @@ if (
   else fail("Falta el diagnostico remoto (diagnostics.js, main.js collectDiagSnapshot/diag:send, preload.js TPV_DIAG, renderer.js boton y detalle del cajon, tools/ops/client_diag.php) -- revisar el cambio de 2026-11-19");
 }
 
+// Bateria: tienda de pruebas configurable (--store / TPV_TEST_STORE, por defecto demo), para no ensuciar la demo de Sergi.
+{
+  const { execFileSync } = require("child_process");
+  const testsDir = path.join(root, "tools", "tests");
+  const prof = (store) => {
+    const env = { ...process.env }; delete env.TPV_TEST_STORE; if (store) env.TPV_TEST_STORE = store;
+    return execFileSync(process.execPath, ["-e", 'const t=require("./test-store");process.stdout.write([t.STORE,t.P1,t.P2,t.IS_DEMO].join("|"))'], { cwd: testsDir, env, encoding: "utf8" });
+  };
+  let badRejected = false;
+  try { prof("x;rm -rf"); } catch (_) { badRejected = true; }
+  const noFixed = fs.readdirSync(testsDir).filter((f) => /^run-.*\.js$/.test(f)).every((f) => !/["'`]tpvrecipok-2tpv-real-[12]["'`]/.test(fs.readFileSync(path.join(testsDir, f), "utf8")));
+  const runner = fs.readFileSync(path.join(testsDir, "battery", "run-battery.js"), "utf8");
+  const cleanup = fs.readFileSync(path.join(testsDir, "battery", "cleanup-demo.php"), "utf8");
+  const okB =
+    prof("") === "demo|tpvrecipok-2tpv-real-1|tpvrecipok-2tpv-real-2|true" && // por defecto NADA cambia
+    prof("zz_bateria_tpv") === "zz_bateria_tpv|tpvrecipok-2tpv-zz_bateria_tpv-1|tpvrecipok-2tpv-zz_bateria_tpv-2|false" && badRejected && noFixed &&
+    runner.includes('process.env.TPV_TEST_STORE = arg("store"') && runner.includes("TPV_TEST_STORE=${TEST_STORE.STORE}") &&
+    cleanup.includes("getenv('TPV_TEST_STORE')") && !/slug = 'demo'/.test(cleanup) &&
+    fs.readFileSync(path.join(root, "package.json"), "utf8").includes('"battery:full:bateria"');
+  if (okB) ok("Batería: tienda de pruebas configurable (por defecto demo sin cambios; zz_bateria_tpv con perfiles propios; nombre no válido rechazado; ninguna prueba con perfil fijo; la limpieza respeta la tienda)");
+  else fail("Falla la tienda de pruebas configurable de la batería (tools/tests/test-store.js, run-battery.js --store, cleanup-demo.php, perfiles fijos en alguna prueba) -- revisar el cambio de 2026-11-20");
+}
+
 // Opciones: rediseño compacto en pestañas (Todas / Favoritas / Recientes).
 {
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
@@ -12006,6 +12041,21 @@ if (
     css.includes(".opt-qtab.is-active") && css.includes(".opt-hist:not(.is-open)");
   if (okT) ok("Opciones: acceso rapido en pestañas (Todas / Favoritas / Recientes), una sola abierta, se recuerda la ultima");
   else fail("Faltan las pestañas del acceso rapido de Opciones (index.html #optionsTabAll/#optionsFavToggle/#optionsHistToggle, renderer.js setOptionsQuickTab, styles.css .opt-qtab) -- revisar el rediseño de 2026-11-19");
+}
+
+// Opciones: «Distintas de fábrica» es una pestaña (no un boton pegado al buscador) y las ayudas «?» no repiten la fila (2026-11-20).
+{
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const css = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+  const okD =
+    html.includes('<button type="button" id="optionsChangedBtn" class="opt-qtab"') && html.includes('data-qtab="changed"') && html.includes('id="optionsChangedNote"') && html.includes('id="optionsChangedCount"') &&
+    !/class="opt-search"[^]*?id="optionsChangedBtn"[^]*?id="optionsSearchClear"/.test(html.slice(html.indexOf('class="opt-search"'), html.indexOf('class="opt-search"') + 900)) &&
+    renderer.includes('if (optChangedOnly) return "changed";') && renderer.includes('setOptionsQuickTab(optChangedOnly ? "all" : "changed");') &&
+    renderer.includes("Solo las opciones distintas de una instalación nueva.") && !renderer.includes("`Cambiadas (${countChangedOptions()})`") &&
+    css.includes(".opt-acc.opt-searching:not(.opt-changed-on) .opt-quick") && !css.includes(".opt-changed-btn") &&
+    renderer.includes("CRITERIO (2026-11-20): una ayuda SOLO existe si aclara algo que el texto que ya trae la fila NO dice");
+  if (okD) ok("Opciones: «Distintas de fábrica» es una pestaña con su línea explicativa (no un botón junto al buscador) y las ayudas «?» solo existen si aclaran algo");
+  else fail("Falla la pestaña «Distintas de fábrica» o el criterio de las ayudas «?» (index.html #optionsChangedBtn en la tira, renderer.js optQuickActiveTab/updateOptionsChangedButton, styles.css) -- revisar el cambio de 2026-11-20");
 }
 
 // Opciones: copiar opciones a otro terminal (paso 9, 2026-11-19, peticion de Sergi).
@@ -12047,7 +12097,7 @@ if (
     renderer.includes('return !node?.closest?.(".opt-sec-preview, .opt-quick");') && // sin esto el bloque se repintaria sin parar
     renderer.includes("ctl.click(); // el propio interruptor") &&
     html.includes('id="optionsQuick"') && html.includes('id="optionsFavList"') && html.includes('id="optionsFavHint"') &&
-    css.includes(".opt-fav::before") && css.includes(".opt-acc.opt-searching .opt-quick");
+    css.includes(".opt-fav::before") && css.includes(".opt-acc.opt-searching:not(.opt-changed-on) .opt-quick");
   if (okF) ok("Opciones: favoritas con estrella por opcion y bloque «Favoritas» arriba (interruptores desde el bloque, solo lo accesible, maximo 12, oculto al buscar)");
   else fail("Faltan las favoritas de Opciones (renderer.js OPT_FAV_*, index.html #optionsQuick, styles.css .opt-fav) -- revisar el cambio de 2026-11-19");
 }

@@ -126,8 +126,8 @@ function buildChecks(out) {
   const out = { noOps: NO_OPS, soloA: SOLO_A, adds: ADDS };
   let A, B; const prods = [];
   try {
-    A = await launch("tpvrecipok-2tpv-real-1", "A");
-    if (!SOLO_A) B = await launch("tpvrecipok-2tpv-real-2", "B");
+    A = await launch(require("./test-store").P1, "A");
+    if (!SOLO_A) B = await launch(require("./test-store").P2, "B");
     await sleep(8000);
     out.estado = [await prep(A)];
     if (B) out.estado.push(await prep(B));

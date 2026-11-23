@@ -34582,6 +34582,7 @@ let optFavOpen = false;
 let __optQuickTabRestored = false;
 
 function optQuickActiveTab() {
+  if (optChangedOnly) return "changed"; // «Distintas de fábrica»: es una pestaña más, exclusiva con las demás
   const histN = __optHistory.filter((h) => optDefIndex().has(h.id) && optionAccessibleForQuick(h.id)).length;
   if (optHistOpen && histN > 0) return "hist";
   if (optFavOpen) return "fav";
@@ -34600,13 +34601,22 @@ function renderOptionsQuickTabs() {
 }
 
 function setOptionsQuickTab(tab) {
-  const t = tab === "fav" || tab === "hist" ? tab : "all";
+  const t = tab === "fav" || tab === "hist" || tab === "changed" ? tab : "all";
+  const wasChanged = optChangedOnly;
   optFavOpen = t === "fav";
   optHistOpen = t === "hist";
+  optChangedOnly = t === "changed";
   renderOptionsHistory(); // repinta tambien las pestañas
-  try {
-    localStorage.setItem(OPT_QTAB_LS_KEY, t);
-  } catch {}
+  if (wasChanged !== optChangedOnly) {
+    updateOptionsChangedButton();
+    applyOptionsSearch(); // enseña o quita el filtro de la lista
+  }
+  // «Distintas de fábrica» no se recuerda (se apaga al cerrar Opciones): solo Todas / Favoritas / Recientes
+  if (t !== "changed") {
+    try {
+      localStorage.setItem(OPT_QTAB_LS_KEY, t);
+    } catch {}
+  }
 }
 
 function restoreOptionsQuickTabOnce() {
@@ -35182,6 +35192,7 @@ function resetOptionsSearch() {
   optChangedOnly = false;
   decorateStdNotes(false);
   updateOptionsChangedButton();
+  renderOptionsQuickTabs();
   syncOptionsGroupTitles();
 }
 
@@ -35269,7 +35280,7 @@ function bindOptionsAccordionOnce() {
       return;
     }
     if (e.target.closest("#optionsChangedBtn")) {
-      setOptionsChangedOnly(!optChangedOnly);
+      setOptionsQuickTab(optChangedOnly ? "all" : "changed");
       return;
     }
     // Elegir un resultado de la busqueda (pulsar algo de una fila encontrada) apunta la busqueda en las recientes.
@@ -35843,9 +35854,18 @@ function optStdLabel(id) {
 function updateOptionsChangedButton() {
   const btn = document.getElementById("optionsChangedBtn");
   if (!btn) return;
-  btn.textContent = `Cambiadas (${countChangedOptions()})`;
-  btn.classList.toggle("is-on", optChangedOnly);
+  const n = document.getElementById("optionsChangedCount");
+  if (n) n.textContent = `(${countChangedOptions()})`;
   btn.setAttribute("aria-pressed", optChangedOnly ? "true" : "false");
+  // Mientras el filtro esta activo se dice QUE se esta viendo y respecto a que (si no, «cambiadas» no dice respecto a que).
+  const note = document.getElementById("optionsChangedNote");
+  if (note) {
+    note.textContent = optChangedOnly
+      ? "Solo las opciones distintas de una instalación nueva. Debajo de cada una verás su valor de fábrica. Pulsa la pestaña otra vez para verlas todas."
+      : "";
+    note.classList.toggle("hidden", !optChangedOnly);
+  }
+  document.getElementById("optionsAccordion")?.classList.toggle("opt-changed-on", optChangedOnly);
 }
 
 // En el filtro, cada opcion cambiada dice cual es su valor de fabrica (por CSS ::after con el atributo: no ensucia el texto de la busqueda).
@@ -35860,53 +35880,21 @@ function decorateStdNotes(on) {
 }
 
 function setOptionsChangedOnly(on) {
-  optChangedOnly = !!on;
-  updateOptionsChangedButton();
-  applyOptionsSearch();
+  setOptionsQuickTab(on ? "changed" : "all");
 }
 
 // ----- Ayuda «?» en las opciones que mas confunden (2026-11-19, peticion de Sergi) -----
-// Un boton «?» junto al nombre de la opcion abre, dentro de su propia fila, una explicacion corta en lenguaje llano (sin jerga). Los textos salen del
+// Un boton «?» junto al nombre de la opcion abre, dentro de su propia fila, una explicacion corta en lenguaje llano (sin jerga).
+// CRITERIO (2026-11-20): una ayuda SOLO existe si aclara algo que el texto que ya trae la fila NO dice; si lo repite, sobra (la prueba de
+// run-options-quick-access.js lo vigila: ninguna ayuda puede estar cubierta en mas de un 60 % por el subtitulo de su fila). Los textos salen del
 // manual (docs/manual/10-opciones.md): si se cambia el comportamiento de una opcion, cambiar aqui su frase. Al añadir una opcion nueva que pueda
 // confundir, añadir su ayuda aqui (una prueba comprueba que cada id existe en el catalogo y que los textos son frases cortas).
 const OPT_HELP = {
   groupLinesToggle: "Activada: cada toque sobre un producto crea una línea nueva en el carrito, aunque ya lo tengas (verás el producto repetido). Desactivada: las unidades se suman en una sola línea (por ejemplo, 3 × Café).",
   cartDiscountToolsToggle: "Muestra los botones de descuento en el carrito: uno para una línea y otro para todo el carrito. Si pones los dos, el de la línea manda sobre el general.",
-  autoPrintTicketOnParkToggle: "Al aparcar o actualizar un pedido, el ticket se imprime al instante, sin pulsar ningún botón. Sirve en Modo Mesas y en el TPV normal.",
-  splitTpvToggle: "Muestra el botón «Dividir» junto al total para repartir la cuenta por artículos o a partes iguales y cobrar cada parte por separado. Pensado para el TPV normal (por ejemplo, «para llevar»); en Modo Mesas se puede usar también.",
-  cartWidthControlsToggle: "Muestra un asa junto al carrito que puedes arrastrar para hacerlo más ancho.",
-  terminalDefaultCustomerSelect: "El cliente que se usa en las ventas si no eliges otro. Se guarda en FacturaScripts para este TPV.",
-  parkedCustomerResetModeSelect: "Cuando terminas de aparcar o cobrar un ticket que tenía un cliente distinto del habitual, indica a qué cliente vuelve el selector para la siguiente venta.",
-  discountQuickPct1: "Son los botones de porcentaje del teclado de descuento (de una línea o del carrito entero). Deja un campo en blanco para no mostrar ese botón; como máximo hay 5.",
-  currencySelect: "En qué moneda se muestran los importes y se cuenta la caja. «Automática» usa la divisa de tu FacturaScripts, así que normalmente no hay que tocarla. Al cambiarla, el TPV pide reiniciar.",
-  priceEditModeToggle: "Muestra un lápiz ✎ en cada producto para cambiar su precio (con IVA) y su prioridad desde el propio TPV. Solo para administradores.",
-  productStockToggle: "Muestra el número de stock en la esquina inferior izquierda de cada producto.",
-  productsStockOnlyToggle: "Oculta los productos que no tienen stock disponible.",
+  terminalDefaultCustomerSelect: "El cliente que se usa en las ventas si no eliges otro.",
   productsIncludeUnmanagedToggle: "Muestra también los productos que no llevan control de stock.",
-  productStockEditToggle: "Muestra un lápiz ✎ junto al stock para corregirlo desde el TPV. Solo para administradores.",
-  parkStockWarningToggle: "Avisa al aparcar si la cantidad supera el stock disponible. Desactívala si no trabajas con stock.",
-  askStockBulkDeletePendingToggle: "Al borrar los aparcados sin cobrar, pregunta si son pedidos reales (se devuelve el stock) o duplicados (no se toca). Si la desactivas, siempre se tratan como pedidos reales.",
-  productAddonsEnabledToggle: "Activa los añadidos en cada producto (por ejemplo «+leche» o «+azúcar»), tanto en Modo Mesas como en el TPV normal.",
-  familiesFirstModeToggle: "En vez de ver todos los productos de golpe, la pantalla muestra solo botones grandes de familia; al elegir una se ven sus productos, con un botón para volver. Pensado para catálogos grandes.",
-  productTileResizeModeToggle: "Muestra asas sobre cada producto para cambiar su tamaño y el de la letra del nombre. Afecta a todos los productos; los botones «Restablecer…» devuelven los valores recomendados.",
-  productReorderModeToggle: "Permite cambiar el orden de los productos arrastrándolos con el dedo o el ratón.",
-  familyButtonResizeModeToggle: "Igual que con los productos: muestra asas para ajustar el tamaño de letra de los botones de familia. «Restablecer tamaño de familias» vuelve a lo recomendado.",
-  allowCloseWithParkedToggle: "Si hay pedidos aparcados, deja cerrar la caja pidiendo una confirmación. Los pedidos se conservan.",
-  printCajaAutoLogToggle: "Al cerrar la caja, imprime también un listado de avisos (aperturas de cajón, productos quitados…). Desactívala si solo quieres el resumen de ventas.",
-  printCajaDrawerLogsToggle: "Dentro de ese listado de avisos, quita solo las líneas de «abrió cajón», que suelen ser las más numerosas.",
-  agentAdminPinModeToggle: "Desactivada, cualquier agente puede ver las Opciones de administrador con un usuario administrador. Activada, además se pide el PIN al elegir un agente marcado como administrador: más seguro, pero un paso más al cambiar de agente.",
   kioskToggle: "El programa ocupa toda la pantalla. Si lo desactivas, puedes minimizarlo y usar el equipo como un ordenador normal. En una instalación nueva arranca apagado.",
-  uiZoomSelect: "«Automático» reduce letra, iconos y botones según la resolución para que quepa todo en pantallas pequeñas (nunca los agranda). Si la letra se ve pequeña, súbela a mano a 110, 125 o 150 %; si no cabe todo, bájala a 90, 80 o 70 %.",
-  customerDisplayToggle: "Actívala solo si el equipo tiene una segunda pantalla para el cliente; en «Pantalla a usar» eliges cuál.",
-  virtualKeyboardToggle: "Muestra el teclado táctil al tocar un campo de texto. Desactívala si el TPV tiene teclado físico.",
-  autostartToggle: "El TPV se abre solo al encender el ordenador. Recomendado solo en equipos dedicados a TPV.",
-  updateOfferOnCloseToggle: "Cuando hay una versión nueva ya descargada, el TPV se ofrece a reiniciarse solo cuando no hay nada en marcha: al cerrar la caja, al despertar el equipo o tras un rato sin usarlo. Muestra una cuenta atrás que puedes cancelar.",
-  scaleChargeUnitSelect: "En qué unidad se añade el peso al carrito. Por ejemplo, si lees 0,170 kg y cobras en gramos, se añade 170.",
-  scaleConsumeModeSelect: "«Continuo» es más rápido. «Consumo único» evita reutilizar el mismo peso en dos productos seguidos.",
-  autoComandaOnSaveToggle: "Al guardar el pedido de una mesa, la comanda se envía sola a cocina.",
-  autoComandaDelayInput: "Con la comanda automática, los segundos que pasan desde el último cambio hasta que se envía.",
-  comandaGroupFamiliesToggle: "En el papel de cocina, cada familia aparece una sola vez con sus productos debajo.",
-  comandaCompactToggle: "Ahorra papel: mesa, agente, fecha y hora van en una sola línea, sin cabecera de columnas y sin observaciones cuando están vacías.",
 };
 
 // Pone el boton «?» junto al nombre de cada opcion con ayuda (una por fila, solo si falta). Va despues de la estrella: estrella, «?», «Nuevo».
@@ -40961,27 +40949,45 @@ function applyInvoiceEmailStatusToButtons() {
   });
 }
 
+// Una sola consulta en vuelo y, si falla (red, 429, servidor), se espera 60 s antes de repetirla (2026-11-23):
+// la lista de Tickets llama a esto UNA VEZ POR FILA mientras el estado es null; con 50-100 filas salian 50-100
+// peticiones a la vez, el servidor corta a 30/min (429) y, como el fallo no se recordaba, cada repintado volvia
+// a disparar otras tantas (Los Argentinos, 93 respuestas 429 en una hora).
+let __invoiceEmailStatusInflight = null;
+let __invoiceEmailStatusFailedAt = 0;
+
 async function getInvoiceEmailStatus(force = false) {
   const now = Date.now();
   if (!force && __invoiceEmailStatus.configured !== null && now - __invoiceEmailStatus.at < 10 * 60 * 1000) {
     return __invoiceEmailStatus.configured;
   }
-  try {
-    const slug = String(getCurrentSlugForReservations() || "").trim();
-    if (!slug || TPV_STATE?.offline) return __invoiceEmailStatus.configured;
-    const res = await fetchWithTimeout(
-      `${TPV_SYNC_API_URL}?action=invoice-email-status&slug=${encodeURIComponent(slug)}`,
-      { method: "GET", headers: { Accept: "application/json", "X-TPV-API-KEY": getTpvSyncApiKey() } },
-      8000,
-    );
-    const data = res.ok ? await res.json().catch(() => null) : null;
-    if (data?.ok && typeof data.configured === "boolean") {
-      __invoiceEmailStatus = { configured: data.configured, at: now };
-      applyInvoiceEmailStatusToButtons();
-      return data.configured;
-    }
-  } catch {}
-  return null;
+  if (__invoiceEmailStatusInflight) return __invoiceEmailStatusInflight;
+  if (!force && __invoiceEmailStatusFailedAt && now - __invoiceEmailStatusFailedAt < 60 * 1000) {
+    return __invoiceEmailStatus.configured;
+  }
+  __invoiceEmailStatusInflight = (async () => {
+    try {
+      const slug = String(getCurrentSlugForReservations() || "").trim();
+      if (!slug || TPV_STATE?.offline) return __invoiceEmailStatus.configured;
+      const res = await fetchWithTimeout(
+        `${TPV_SYNC_API_URL}?action=invoice-email-status&slug=${encodeURIComponent(slug)}`,
+        { method: "GET", headers: { Accept: "application/json", "X-TPV-API-KEY": getTpvSyncApiKey() } },
+        8000,
+      );
+      const data = res.ok ? await res.json().catch(() => null) : null;
+      if (data?.ok && typeof data.configured === "boolean") {
+        __invoiceEmailStatus = { configured: data.configured, at: Date.now() };
+        __invoiceEmailStatusFailedAt = 0;
+        applyInvoiceEmailStatusToButtons();
+        return data.configured;
+      }
+    } catch {}
+    __invoiceEmailStatusFailedAt = Date.now();
+    return null;
+  })().finally(() => {
+    __invoiceEmailStatusInflight = null;
+  });
+  return __invoiceEmailStatusInflight;
 }
 
 // ===== Modal "Configurar correo de facturas" (2026-10-26) =====

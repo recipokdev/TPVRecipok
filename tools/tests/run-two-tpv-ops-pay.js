@@ -82,8 +82,8 @@ function buildChecks(out) {
   const out = {};
   let A, B, prod = null; const created = [];
   try {
-    A = await launch("tpvrecipok-2tpv-real-1", "A");
-    B = await launch("tpvrecipok-2tpv-real-2", "B");
+    A = await launch(require("./test-store").P1, "A");
+    B = await launch(require("./test-store").P2, "B");
     await sleep(8000);
     const prep = (X) => X.win.evaluate(async () => {
       await setMesasInlineModeEnabled(false, { persist: false });

@@ -658,14 +658,16 @@ function check(label, cond, extra) {
       const btn = document.getElementById("optionsChangedBtn");
       const vacio = document.getElementById("optionsSearchEmpty");
       const filasVisibles = [...document.querySelectorAll("#optionsAccordion .opt-sec:not(.opt-search-hide) .opt-row:not(.opt-search-hide)")].filter((r) => r.closest(".opt-sec").style.display !== "none").length; // las secciones ocultas por el servidor (Encargos) no cuentan
-      const res = { antes, texto: btn.textContent, activo: btn.classList.contains("is-on"), pressed: btn.getAttribute("aria-pressed"), mensaje: vacio.textContent, mensajeVisible: !vacio.classList.contains("hidden"), filasVisibles, quickOculto: getComputedStyle(document.getElementById("optionsQuick")).display === "none" };
+      const nota = document.getElementById("optionsChangedNote");
+      const res = { antes, texto: document.getElementById("optionsChangedCount").textContent, activo: btn.classList.contains("is-active"), pressed: btn.getAttribute("aria-pressed"), mensaje: vacio.textContent, mensajeVisible: !vacio.classList.contains("hidden"), filasVisibles, pestanasVisibles: getComputedStyle(document.getElementById("optionsQuick")).display !== "none", notaVisible: !nota.classList.contains("hidden") && getComputedStyle(nota).display !== "none", notaTexto: nota.textContent, panelFavOculto: document.getElementById("optionsFavPane").classList.contains("hidden"), activas: [...document.querySelectorAll("#optionsQuick .opt-qtab.is-active")].map((x) => x.dataset.qtab) };
       setOptionsChangedOnly(false);
-      res.tras = { vacioOculto: document.getElementById("optionsSearchEmpty").classList.contains("hidden"), buscando: document.getElementById("optionsAccordion").classList.contains("opt-searching"), activo: btn.classList.contains("is-on"), quick: getComputedStyle(document.getElementById("optionsQuick")).display !== "none" };
+      res.tras = { vacioOculto: document.getElementById("optionsSearchEmpty").classList.contains("hidden"), buscando: document.getElementById("optionsAccordion").classList.contains("opt-searching"), activo: btn.classList.contains("is-active"), quick: getComputedStyle(document.getElementById("optionsQuick")).display !== "none", notaOculta: document.getElementById("optionsChangedNote").classList.contains("hidden"), activas: [...document.querySelectorAll("#optionsQuick .opt-qtab.is-active")].map((x) => x.dataset.qtab) };
       return res;
     });
-    check("Con todo como de fabrica el boton dice «Cambiadas (0)»", r.antes === 0 && r.texto === "Cambiadas (0)", JSON.stringify(r));
-    check("... al pulsarlo se enciende, no queda ninguna fila y avisa «Todo está como de fábrica»; el bloque de acceso rapido se oculta", r.activo && r.pressed === "true" && r.filasVisibles === 0 && r.mensajeVisible && /como de fábrica/.test(r.mensaje) && r.quickOculto, JSON.stringify(r));
-    check("... y al volver a pulsarlo todo vuelve a su sitio", r.tras.vacioOculto && !r.tras.buscando && !r.tras.activo && r.tras.quick, JSON.stringify(r.tras));
+    check("Con todo como de fabrica la pestaña dice «Distintas de fábrica (0)»", r.antes === 0 && r.texto === "(0)", JSON.stringify(r));
+    check("... al pulsarla se enciende (es la ÚNICA pestaña activa), no queda ninguna fila y avisa «Todo está como de fábrica»; las pestañas siguen a la vista para poder apagarla", r.activo && r.pressed === "true" && JSON.stringify(r.activas) === '["changed"]' && r.filasVisibles === 0 && r.mensajeVisible && /como de fábrica/.test(r.mensaje) && r.pestanasVisibles && r.panelFavOculto, JSON.stringify(r));
+    check("... y mientras está activa una línea visible dice QUÉ se está viendo y respecto a qué («distintas de una instalación nueva», valor de fábrica, cómo salir)", r.notaVisible && /distintas de una instalación nueva/.test(r.notaTexto) && /valor de fábrica/.test(r.notaTexto) && /otra vez/.test(r.notaTexto), r.notaTexto);
+    check("... y al volver a pulsarla todo vuelve a su sitio (vuelve «Todas», la línea desaparece)", r.tras.vacioOculto && !r.tras.buscando && !r.tras.activo && r.tras.quick && r.tras.notaOculta && JSON.stringify(r.tras.activas) === '["all"]', JSON.stringify(r.tras));
 
     r = await ev(async () => {
       window.__aEstandar();
@@ -684,7 +686,7 @@ function check(label, cond, extra) {
       setOptionsChangedOnly(true);
       const visible = (id) => { const row = document.getElementById(id).closest(".opt-row"); const sec = row.closest(".opt-sec"); return !row.classList.contains("opt-search-hide") && !sec.classList.contains("opt-search-hide") && sec.style.display !== "none"; };
       const res = {
-        n, boton: document.getElementById("optionsChangedBtn").textContent, kiosco, vacioNoCuenta,
+        n, boton: document.getElementById("optionsChangedCount").textContent, kiosco, vacioNoCuenta,
         logo: visible("thermalLogoToggle"), intervalo: visible("updateNoticeIntervalSelect"),
         sinCambio: visible("groupLinesToggle"), encargos: visible("encargosEnabledToggle"), precio: visible("priceEditModeToggle"),
         notaLogo: document.getElementById("thermalLogoToggle").closest(".opt-row").querySelector(".opt-row-title").getAttribute("data-std"),
@@ -696,7 +698,7 @@ function check(label, cond, extra) {
       window.TPV_STATE.isAdmin = eraAdmin;
       return res;
     });
-    check("La cuenta solo incluye lo cambiado respecto a fabrica y que este usuario puede ver (2): no cuentan las opciones sin estandar ni las de administrador", r.n === 2 && r.boton === "Cambiadas (2)", JSON.stringify(r));
+    check("La cuenta solo incluye lo cambiado respecto a fabrica y que este usuario puede ver (2): no cuentan las opciones sin estandar ni las de administrador", r.n === 2 && r.boton === "(2)", JSON.stringify(r));
     check("El modo kiosco tiene como valor de fabrica «apagado» (una instalacion nueva lo deja apagado): encendido cuenta como cambiado", r.kiosco === true, JSON.stringify(r));
     check("Un control sin cargar (valor vacio) no se da por cambiado", r.vacioNoCuenta === false, JSON.stringify(r));
     check("El filtro enseña solo las filas cambiadas (y sus grupos); oculta las que estan como de fabrica, las sin estandar y las de administrador", r.logo && r.intervalo && !r.sinCambio && !r.encargos && !r.precio && r.seccionCarritoOculta, JSON.stringify(r));
@@ -728,7 +730,7 @@ function check(label, cond, extra) {
       document.getElementById("optionsOverlay").classList.remove("hidden");
       setOptionsChangedOnly(true);
       closeOptions();
-      const res = { filtro: optChangedOnly, boton: document.getElementById("optionsChangedBtn").classList.contains("is-on"), notas: document.querySelectorAll("#optionsAccordion .opt-row-title[data-std]").length };
+      const res = { filtro: optChangedOnly, boton: document.getElementById("optionsChangedBtn").classList.contains("is-active"), notas: document.querySelectorAll("#optionsAccordion .opt-row-title[data-std]").length };
       window.__aEstandar();
       return res;
     });
@@ -743,7 +745,26 @@ function check(label, cond, extra) {
       const malTexto = ids.filter((id) => { const t = OPT_HELP[id]; return typeof t !== "string" || t.trim().length < 20 || t.length > 320 || !/[.»)]$/.test(t) || /  /.test(t); });
       return { n: ids.length, sinCatalogo, sinFila, malTexto, repetidos: textos.length - new Set(textos).size };
     });
-    check("Cada ayuda es de una opcion que existe en el catalogo y en pantalla, y son frases cortas (20-320 caracteres) sin repetir", r.n >= 30 && r.sinCatalogo.length === 0 && r.sinFila.length === 0 && r.malTexto.length === 0 && r.repetidos === 0, JSON.stringify(r));
+    check("Cada ayuda es de una opcion que existe en el catalogo y en pantalla, y son frases cortas (20-320 caracteres) sin repetir", r.n >= 4 && r.sinCatalogo.length === 0 && r.sinFila.length === 0 && r.malTexto.length === 0 && r.repetidos === 0, JSON.stringify(r));
+
+    // Una ayuda solo vale si aclara algo que la fila NO dice ya: si el subtitulo de la fila ya contiene (casi) las mismas palabras, sobra el «?».
+    r = await ev(() => {
+      const stop = new Set("de la el los las un una unos unas y o a en que se es al del por con para su sus lo le les si no mas como cuando esta este esto".split(" "));
+      const words = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/\p{M}/gu, "").replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((w) => w.length > 2 && !stop.has(w)).map((w) => w.slice(0, 5));
+      const out = Object.keys(OPT_HELP).map((id) => {
+        const row = document.getElementById(id)?.closest(".opt-row");
+        const sub = new Set(words(row?.querySelector(".opt-row-sub")?.textContent));
+        const hw = [...new Set(words(OPT_HELP[id]))];
+        return { id, cubierta: hw.length ? Math.round((hw.filter((w) => sub.has(w)).length / hw.length) * 100) : 0 };
+      });
+      // el propio detector: la ayuda que tenia «Teclado en pantalla» (repetia su fila) tiene que salir como redundante
+      const rowKb = document.getElementById("virtualKeyboardToggle")?.closest(".opt-row");
+      const subKb = new Set(words(rowKb?.querySelector(".opt-row-sub")?.textContent));
+      const hwKb = [...new Set(words("Muestra el teclado táctil al tocar un campo de texto. Desactívala si el TPV tiene teclado físico."))];
+      const detecta = hwKb.length ? Math.round((hwKb.filter((w) => subKb.has(w)).length / hwKb.length) * 100) : 0;
+      return { max: Math.max(...out.map((x) => x.cubierta)), redundantes: out.filter((x) => x.cubierta > 60), detectaLaAntigua: detecta };
+    });
+    check("Ninguna ayuda «?» repite lo que ya dice su fila: cada una tiene como mucho un 60 % de sus palabras ya en el subtitulo (si no, sobra); y el detector SÍ marca como redundante la ayuda antigua del teclado", r.redundantes.length === 0 && r.detectaLaAntigua > 60, JSON.stringify(r));
 
     r = await ev(async () => {
       document.getElementById("optionsOverlay").classList.remove("hidden");
@@ -759,7 +780,7 @@ function check(label, cond, extra) {
     check("El «?» va junto al nombre y no mete texto en el titulo (la busqueda no se ensucia: su signo sale por CSS)", r.enTitulo >= r.botones * 0.8 && r.conTexto === 0, JSON.stringify(r));
 
     r = await ev(async () => {
-      const id = "askStockBulkDeletePendingToggle";
+      const id = "groupLinesToggle";
       const ctl = document.getElementById(id);
       const row = ctl.closest(".opt-row");
       const btn = row.querySelector(".opt-help");
@@ -957,11 +978,11 @@ function check(label, cond, extra) {
       return { act, favPane: vis("optionsFavPane"), histList: vis("optionsHistList"), histWrap: vis("optionsHistWrap"), histTab: vis("optionsHistToggle"), favN: document.getElementById("optionsFavCount").textContent, histN: document.getElementById("optionsHistCount").textContent, alto: Math.round(q.height), sel: [...document.querySelectorAll("#optionsQuick .opt-qtab")].map((x) => x.getAttribute("aria-selected")) };
     });
     let t = await tabs();
-    check("Pestañas: al abrir solo hay una linea («Todas» activa), sin favoritas ni recientes desplegadas (alto del bloque <= 45 px)", JSON.stringify(t.act) === '["all"]' && !t.favPane && !t.histList && t.alto <= 45 && t.sel.join() === "true,false,false", JSON.stringify(t));
+    check("Pestañas: al abrir solo hay una linea («Todas» activa), sin favoritas ni recientes desplegadas (alto del bloque <= 45 px)", JSON.stringify(t.act) === '["all"]' && !t.favPane && !t.histList && t.alto <= 45 && t.sel.join() === "true,false,false,false", JSON.stringify(t));
     check("Pestañas: cada pestaña lleva su cuenta («Favoritas (2)», «Recientes (2)»)", t.favN === "(2)" && t.histN === "(2)" && t.histTab, JSON.stringify(t));
     await ev(() => document.getElementById("optionsFavToggle").click());
     t = await tabs();
-    check("Pestañas: pulsar «Favoritas» enseña sus chips y marca solo esa pestaña", JSON.stringify(t.act) === '["fav"]' && t.favPane && !t.histList && t.sel.join() === "false,true,false", JSON.stringify(t));
+    check("Pestañas: pulsar «Favoritas» enseña sus chips y marca solo esa pestaña", JSON.stringify(t.act) === '["fav"]' && t.favPane && !t.histList && t.sel.join() === "false,true,false,false", JSON.stringify(t));
     await ev(() => document.getElementById("optionsHistToggle").click());
     t = await tabs();
     check("Pestañas: pulsar «Recientes» cierra Favoritas y enseña la lista (solo una abierta a la vez)", JSON.stringify(t.act) === '["hist"]' && !t.favPane && t.histList && t.histWrap, JSON.stringify(t));
@@ -1001,6 +1022,37 @@ function check(label, cond, extra) {
       return { buscando, tras };
     });
     check("Pestañas: mientras se busca el bloque se oculta entero y al borrar la busqueda vuelve igual", r.buscando === "none" && r.tras !== "none", JSON.stringify(r));
+
+    // ---------------- «Distintas de fábrica» como cuarta pestaña ----------------
+    r = await ev(async () => {
+      const act = () => [...document.querySelectorAll("#optionsQuick .opt-qtab.is-active")].map((x) => x.dataset.qtab);
+      const vis = (id) => { const e = document.getElementById(id); return !!e && !e.classList.contains("hidden") && getComputedStyle(e).display !== "none"; };
+      const res = {};
+      setOptionsQuickTab("all");
+      res.fueraDelBuscador = !document.querySelector(".opt-search #optionsChangedBtn"); // ya no esta pegada al buscador
+      res.enLaTira = !!document.querySelector("#optionsQuick .opt-qtabs #optionsChangedBtn");
+      document.getElementById("optionsChangedBtn").click();
+      res.alPulsar = { act: act(), filtro: optChangedOnly, nota: vis("optionsChangedNote"), pestanas: vis("optionsQuick") };
+      document.getElementById("optionsFavToggle").click(); // otra pestaña: el filtro se apaga (son exclusivas)
+      res.alPulsarFav = { act: act(), filtro: optChangedOnly, nota: vis("optionsChangedNote"), favPane: vis("optionsFavPane") };
+      document.getElementById("optionsChangedBtn").click();
+      const input = document.getElementById("optionsSearchInput");
+      input.value = "stock"; input.dispatchEvent(new Event("input", { bubbles: true })); // buscando CON el filtro encendido: la tira sigue visible para poder apagarlo
+      res.buscandoConFiltro = { pestanas: vis("optionsQuick"), act: act(), nota: vis("optionsChangedNote") };
+      document.getElementById("optionsChangedBtn").click(); // se apaga desde la propia pestaña aun buscando
+      res.apagadoBuscando = { filtro: optChangedOnly, act: act(), pestanas: vis("optionsQuick") };
+      input.value = ""; input.dispatchEvent(new Event("input", { bubbles: true }));
+      document.getElementById("optionsChangedBtn").click();
+      closeOptions(); // al cerrar Opciones se apaga y no se recuerda para la proxima vez
+      res.tras = { filtro: optChangedOnly, guardada: localStorage.getItem("tpv_opts_qtab"), nota: vis("optionsChangedNote") };
+      document.getElementById("optionsOverlay").classList.remove("hidden");
+      setOptionsQuickTab("all");
+      return res;
+    });
+    check("«Distintas de fábrica» ya no está pegada al buscador: es la cuarta pestaña de la tira (Todas · Favoritas · Recientes · Distintas de fábrica)", r.fueraDelBuscador && r.enLaTira, JSON.stringify(r));
+    check("Al pulsarla es la única pestaña activa y sale la línea explicativa; al pulsar otra pestaña el filtro se apaga (son exclusivas)", JSON.stringify(r.alPulsar.act) === '["changed"]' && r.alPulsar.filtro && r.alPulsar.nota && r.alPulsar.pestanas && JSON.stringify(r.alPulsarFav.act) === '["fav"]' && !r.alPulsarFav.filtro && !r.alPulsarFav.nota && r.alPulsarFav.favPane, JSON.stringify(r));
+    check("Buscando con el filtro encendido la tira sigue visible (se puede apagar desde ahí) y, apagado, la tira vuelve a ocultarse al buscar como siempre", r.buscandoConFiltro.pestanas && JSON.stringify(r.buscandoConFiltro.act) === '["changed"]' && r.buscandoConFiltro.nota && !r.apagadoBuscando.filtro && JSON.stringify(r.apagadoBuscando.act) === '["all"]' && !r.apagadoBuscando.pestanas, JSON.stringify(r));
+    check("Al cerrar Opciones el filtro se apaga, la línea desaparece y «Distintas de fábrica» no se recuerda para la próxima vez", !r.tras.filtro && !r.tras.nota && r.tras.guardada !== "changed", JSON.stringify(r.tras));
 
     // Camino real por el proceso principal (los cuadros de «guardar»/«abrir» de Windows se sustituyen por rutas fijas)
     const fileOk = path.join(os.tmpdir(), `opciones-test-${Date.now()}.json`);

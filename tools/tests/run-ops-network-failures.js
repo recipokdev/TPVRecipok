@@ -58,7 +58,7 @@ function buildChecks(out) {
   const out = {};
   let A, tid = null;
   try {
-    A = await launch("tpvrecipok-2tpv-real-1", "A");
+    A = await launch(require("./test-store").P1, "A");
     await sleep(8000);
     if (NOOPS) await A.win.evaluate(() => { localStorage.setItem("tpv_parkedOpsDisabled", "1"); });
     out.modo = await A.win.evaluate(async (NAME) => {

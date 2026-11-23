@@ -38,8 +38,8 @@ async function launch(dirName, label) {
   const hard = setTimeout(() => { console.error("HARD TIMEOUT"); kills.forEach((k) => k()); process.exit(1); }, 900000);
   let A, B;
   try {
-    A = await launch("tpvrecipok-2tpv-real-1", "TPV 1");
-    B = await launch("tpvrecipok-2tpv-real-2", "TPV 2");
+    A = await launch(require("./test-store").P1, "TPV 1");
+    B = await launch(require("./test-store").P2, "TPV 2");
     const a = A.win, b = B.win;
     const setup = (w) => w.evaluate(async () => {
       window.ensurePrinterSelectedForPrint = async () => ""; window.openDrawerNow = async () => true;
@@ -64,7 +64,7 @@ async function launch(dirName, label) {
     await sleep(2500);
 
     const create = async (w, name) => {
-      await w.evaluate(async () => { cart = []; renderCart(); for (const id of [489, 543]) await addToCart(products.find((x) => x.id === id), 2); renderCart(); });
+      await w.evaluate(async () => { cart = []; renderCart(); for (const ref of ["Varios 4", "226"]) await addToCart(products.find((x) => String(x.referencia) === ref), 2); renderCart(); });
       await w.evaluate(() => document.getElementById("passToEncargoBtn").click());
       await w.waitForFunction(() => !document.getElementById("encargoWizardOverlay").classList.contains("hidden"), null, { timeout: 30000 }); await sleep(300);
       await w.evaluate((n) => { document.getElementById("encName").value = n; document.querySelector('#encDayChips [data-day="tomorrow"]').click(); }, name);
@@ -87,7 +87,7 @@ async function launch(dirName, label) {
     }, name);
     const startEdit = async (w, name) => { await openList(w); await openDetail(w, name); // el demo compartido puede dejar un aparcado abierto que se recarga solo en el carrito: se suelta justo antes de pulsar
       await w.evaluate(() => { cart = []; setCurrentParkedTicketIndex(null); renderCart(); document.getElementById("encDetEditBtn").click(); }); await sleep(2500); };
-    const addOne = (w) => w.evaluate(async () => { await addToCart(products.find((x) => x.id === 489), 1); renderCart(); return cart.length; });
+    const addOne = (w) => w.evaluate(async () => { await addToCart(products.find((x) => String(x.referencia) === "Varios 4"), 1); renderCart(); return cart.length; });
     const waitOutcome = async (w) => {
       try {
       await w.waitForFunction(() => !document.getElementById("encargoResultOverlay").classList.contains("hidden") || !!document.querySelector("#encWizError:not(.hidden)"), null, { timeout: 60000 });

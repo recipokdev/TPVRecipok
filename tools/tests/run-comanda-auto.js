@@ -65,7 +65,7 @@ function buildChecks(out) {
   const out = {};
   let win = null, app = null;
   try {
-    const env = { ...process.env, TPV_MULTI_INSTANCE: "1", TPV_USER_DATA: path.join(os.tmpdir(), "tpvrecipok-2tpv-real-1"), TPV_TEST_LABEL: "A" };
+    const env = { ...process.env, TPV_MULTI_INSTANCE: "1", TPV_USER_DATA: path.join(os.tmpdir(), require("./test-store").P1), TPV_TEST_LABEL: "A" };
     delete env.TPV_E2E; delete env.TPV_E2E_USER_DATA; delete env.TPV_MODE;
     app = process.env.TPV_EXE
       ? await electron.launch({ executablePath: process.env.TPV_EXE, args: [], env })

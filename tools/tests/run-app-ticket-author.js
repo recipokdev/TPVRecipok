@@ -104,8 +104,8 @@ function buildChecks(out) {
   const out = {};
   let A, B;
   try {
-    A = await launch("tpvrecipok-2tpv-real-1", "A");
-    B = await launch("tpvrecipok-2tpv-real-2", "B");
+    A = await launch(require("./test-store").P1, "A");
+    B = await launch(require("./test-store").P2, "B");
     await sleep(8000);
     const prep = (X) => X.win.evaluate(async (TABLE) => {
       await setMesasInlineModeEnabled(true, { persist: false }); setMesasInlineView("transacciones", { persist: false });
@@ -127,13 +127,14 @@ function buildChecks(out) {
     const cfgSrc = require("fs").readFileSync(path.join(ROOT, "config.js"), "utf8");
     const apiKey = (cfgSrc.match(/tpvApiKey:\s*"([^"]+)"/) || [])[1];
     const API = (cfgSrc.match(/https:\/\/plus\.recipok\.com\/tpv\/api\/index\.php/) || [])[0];
+    const SLUG = await A.win.evaluate(() => getCurrentSlugForReservations()); // la tienda del TPV (demo o la de la bateria): nunca una fija
     const prods = await A.win.evaluate(() => { const f = (n) => products.find((p) => String(p.name || "").startsWith(n)); const m = (p) => ({ idproducto: p.id, referencia: p.ref || p.referencia || p.name, descripcion: p.name, name: p.name, price: Number(p.price), codimpuesto: p.codimpuesto || null }); const seen = new Set(); const a = []; for (const p of products.filter((x) => Number(x.price) > 0 && !x.variants && !isOfferPackProductById(getProductBaseId(x)) && !(getProductAddonsForProduct(x) || []).length && !productHasDerivedStockMarker(x))) { const k = String(p.name).slice(0, 8); if (!seen.has(k)) { seen.add(k); a.push(p); } if (a.length >= 2) break; } return [m(a[0]), m(a[1])]; });
     out.nombres = prods.map((p) => String(p.name).slice(0, 8));
     const TICKET = "camarero-ZZauthor-" + Date.now();
     const mk = (p, q) => ({ ...p, cantidad: q, qty: q, pvpunitario: p.price, grossPrice: p.price, taxRate: 21, _lineId: "L" + Math.random().toString(36).slice(2, 12), sentBatchAt: new Date().toISOString() });
     const items = [mk(prods[0], 1), mk(prods[1], 2)];
     const total = items.reduce((s, l) => s + l.price * l.qty, 0);
-    const body = { slug: "demo", cajaId: "camarero-app-demo", ticketId: TICKET, ticketName: "Sala 1 · M3", obs: "", clientName: "Cliente", codcliente: "1", total, items,
+    const body = { slug: SLUG, cajaId: "camarero-app-demo", ticketId: TICKET, ticketName: "Sala 1 · M3", obs: "", clientName: "Cliente", codcliente: "1", total, items,
       terminalId: "camarero-app-demo", terminalName: "App camareros", userName: "Cintia", agentName: "Cintia", agentCode: "6", sessionId: "app-zzauthor-1",
       parkingMode: "mesas", modoMesas: 1, modeMesas: 1, mesaUid: TABLE, mesaRoomId: "tut-room-1", mesaRoomName: "Sala 1", mesaTableId: "m3", mesaTableName: "M3",
       codalmacen: "ALG", paid: false, docType: "ticket", pedidoStatus: "pendiente" };
@@ -144,7 +145,7 @@ function buildChecks(out) {
     await sleep(30000);
     for (const X of [A, B]) await X.win.evaluate(async () => { await refreshRemoteParkedReservationsOnly(); });
     await sleep(2500);
-    const lst = await (await fetch(API + "?action=list-parked-reservations&slug=demo&codalmacen=ALG", { headers: { "X-TPV-API-KEY": apiKey } })).json();
+    const lst = await (await fetch(API + "?action=list-parked-reservations&slug=" + encodeURIComponent(SLUG) + "&codalmacen=ALG", { headers: { "X-TPV-API-KEY": apiKey } })).json();
     const srv = (lst.data || []).find((t) => String(t.ticketId || t.id) === TICKET);
     out.servidor = srv ? { userName: srv.userName, total: srv.total, lineas: (srv.items || []).map((l) => ({ n: String(l.name).slice(0, 8), q: l.qty, sentBy: l.sentBy || null, sentPart: l.sentPart || null })) } : "(no esta)";
     // Captura opcional de la mesa abierta en A (TPV_SHOT_DIR=carpeta) para ver como queda en pantalla

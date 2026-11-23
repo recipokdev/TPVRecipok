@@ -19,7 +19,8 @@ const kills = [];
 const log = (...a) => console.log(new Date().toISOString().slice(14, 23), ...a);
 const results = [];
 const check = (name, ok, extra = "") => { results.push([name, !!ok]); console.log(`${ok ? "[OK]  " : "[FAIL]"} ${name}${extra ? " -> " + extra : ""}`); };
-const BASE_VARIANT = 367, ADDON_PRODUCT = 599, NAME = "TEST2TPV variantes";
+// Productos por REFERENCIA (los ids cambian de una tienda a otra): «Fartón» (con la variante «3x1 Fartones», cod. 211) y el 233 «Gluten Free» (con el añadido «azucar» a 0,10).
+const BASE_REF = "Fartón", ADDON_REF = "233", NAME = "TEST2TPV variantes";
 
 async function launch(dirName, label) {
   const env = { ...process.env, TPV_MULTI_INSTANCE: "1", TPV_USER_DATA: path.join(os.tmpdir(), dirName), TPV_TEST_LABEL: label };
@@ -43,7 +44,7 @@ async function launch(dirName, label) {
   const hard = setTimeout(() => { console.error("HARD TIMEOUT"); kills.forEach((k) => k()); process.exit(1); }, 420000);
   let A;
   try {
-    A = await launch("tpvrecipok-2tpv-real-1", "TPV 1");
+    A = await launch(require("./test-store").P1, "TPV 1");
     const a = A.win;
     log("setup:", JSON.stringify(await a.evaluate(async () => {
       await setMesasInlineModeEnabled(false, { persist: false });
@@ -59,15 +60,18 @@ async function launch(dirName, label) {
     await sleep(2500);
 
     // ---------- productos de la prueba ----------
-    const prep = await a.evaluate(async ([BASE, ADDONP]) => {
+    const prep = await a.evaluate(async ([BASE_REF, ADDON_REF]) => {
+      const BASE = getProductBaseId(products.find((p) => String(p.referencia) === BASE_REF) || {});
+      const ADDONP = getProductBaseId(products.find((p) => String(p.referencia) === ADDON_REF) || {});
       const tiles = products.filter((p) => getProductBaseId(p) === BASE).map((p) => ({ id: p.id, ref: p.referencia, name: p.name, stock: p.stockfis, primary: !!p.isPrimaryVariant }));
       const ap = products.find((p) => getProductBaseId(p) === ADDONP);
       const addons = ap ? getProductAddonsForProduct(ap).filter((x) => /azucar/i.test(x.nombre)) : [];
-      return { tiles, addon: addons[0] || null, addonProduct: ap ? { id: ap.id, name: ap.name, price: ap.price } : null };
-    }, [BASE_VARIANT, ADDON_PRODUCT]);
+      return { baseId: BASE, addonBaseId: ADDONP, tiles, addon: addons[0] || null, addonProduct: ap ? { id: ap.id, name: ap.name, price: ap.price } : null };
+    }, [BASE_REF, ADDON_REF]);
+    const BASE_ID = prep.baseId;
     log("tiles", JSON.stringify(prep));
     const vTiles = prep.tiles;
-    if (vTiles.length < 2 || !prep.addon) throw new Error("La demo no tiene los productos esperados (variantes del 367 y añadido azucar del 599)");
+    if (vTiles.length < 2 || !prep.addon) throw new Error("La tienda no tiene los productos esperados (variantes de «Fartón» y añadido azucar del 233 «Gluten Free»)");
     const sold = vTiles.find((t) => String(t.ref) === "211") || vTiles[1];
     const sibling = vTiles.find((t) => t !== sold);
     log(`variante vendida: ${sold.name} (ref ${sold.ref}) | hermana: ${sibling.name} (ref ${sibling.ref})`);
@@ -93,7 +97,7 @@ async function launch(dirName, label) {
       if (line) line.addons = [{ id: addon.id, nombre: addon.nombre, precio: Number(addon.precio) }];
       renderCart();
       return { lineas: cart.map((l) => ({ name: l.name, ref: l.referencia, qty: l.qty, addons: (l.addons || []).map((x) => x.nombre + ":" + x.precio) })), total: round2(getCartTotal(cart)) };
-    }, [sold.id, ADDON_PRODUCT, prep.addon]);
+    }, [sold.id, prep.addonBaseId, prep.addon]);
     log("carrito:", JSON.stringify(cartInfo));
     await a.evaluate(() => document.getElementById("passToEncargoBtn").click());
     await a.waitForFunction(() => !document.getElementById("encargoWizardOverlay").classList.contains("hidden"), null, { timeout: 30000 }); await sleep(300);
@@ -133,13 +137,13 @@ async function launch(dirName, label) {
         vendida: { real: ps.stockfis, visible: getVisibleStockForProduct(ps) },
         hermana: { real: pb.stockfis, visible: getVisibleStockForProduct(pb) },
       };
-    }, [sold.id, sibling.id, BASE_VARIANT]);
+    }, [sold.id, sibling.id, BASE_ID]);
     log("reservas:", JSON.stringify(rv));
     check("V2 la reserva descuenta 1 unidad (la del encargo) del stock visible de la variante vendida", rv.vendida.real === null || rv.vendida.visible === rv.vendida.real - 1, JSON.stringify(rv.vendida));
     check("V2 la variante hermana muestra el mismo stock del producto (también descuenta la reserva, una sola vez)", rv.hermana.real === null || rv.hermana.visible === rv.hermana.real - 1, JSON.stringify(rv.hermana));
 
     // ---------- S1: otra tienda no ve el encargo ni su reserva ----------
-    const scope = await a.evaluate(async (NAME) => {
+    const scope = await a.evaluate(async ([NAME, BASE_ID]) => {
       const out = {};
       const orig = currentTerminal.codalmacen;
       out.origen = orig;
@@ -152,13 +156,13 @@ async function launch(dirName, label) {
       try {
         out.enOtraTienda = await list();
         await window.TPV_ENCARGOS.refreshCount();
-        out.reservaOtraTienda = window.TPV_ENCARGOS.getReservedQty(367);
+        out.reservaOtraTienda = window.TPV_ENCARGOS.getReservedQty(BASE_ID);
       } finally { currentTerminal.codalmacen = orig; }
       await window.TPV_ENCARGOS.refreshCount();
       out.enOrigenDespues = await list();
-      out.reservaOrigen = window.TPV_ENCARGOS.getReservedQty(367);
+      out.reservaOrigen = window.TPV_ENCARGOS.getReservedQty(BASE_ID);
       return out;
-    }, NAME);
+    }, [NAME, BASE_ID]);
     log("tiendas:", JSON.stringify(scope));
     check("S1 el encargo se ve en su tienda (ALG)", scope.enOrigen === 1, JSON.stringify(scope));
     check("S1 desde OTRA tienda (TDA2) no se ve el encargo", scope.enOtraTienda === 0, `ve ${scope.enOtraTienda}`);

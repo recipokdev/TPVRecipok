@@ -85,7 +85,7 @@ async function abrirCaja(X, out, clave) {
   const out = {};
   let A = null, B = null, cerrada = false, reabierta = false;
   try {
-    A = await launch("tpvrecipok-2tpv-real-1", "A");
+    A = await launch(require("./test-store").P1, "A");
     await sleep(8000);
     out.antes = await A.win.evaluate(async () => ({ open: !!cashSession?.open, caja: getCajaIdSafe(), login: hasActiveLoginSession(), aparcados: getPendingParkedTicketsGlobal(parkedTickets).length, agente: currentAgent?.name || null }));
     if (!out.antes.open || !out.antes.login) throw new Error("Hace falta sesion y caja abierta en el perfil 1: " + JSON.stringify(out.antes));
@@ -125,7 +125,7 @@ async function abrirCaja(X, out, clave) {
     });
 
     // 6) un segundo TPV se engancha a la caja nueva
-    B = await launch("tpvrecipok-2tpv-real-2", "B");
+    B = await launch(require("./test-store").P2, "B");
     await sleep(9000);
     out.segundo_tpv = await B.win.evaluate(() => ({ abierta: !!cashSession?.open, caja: getCajaIdSafe(), login: hasActiveLoginSession() }));
   } catch (e) {

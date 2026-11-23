@@ -80,8 +80,8 @@ function buildChecks(out) {
   const NAME_A = "ZZ race A " + Date.now(), NAME_B = "ZZ race B " + Date.now();
   let prodId = 0, s0 = null;
   try {
-    A = await launch("tpvrecipok-2tpv-real-1", "A");
-    B = await launch("tpvrecipok-2tpv-real-2", "B");
+    A = await launch(require("./test-store").P1, "A");
+    B = await launch(require("./test-store").P2, "B");
     await sleep(8000);
 
     const prep = (X, control) => X.win.evaluate(async (control) => {

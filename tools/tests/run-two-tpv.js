@@ -29,8 +29,8 @@ const electronPath = require("electron"); // ruta al ejecutable de electron
 const ROOT = path.resolve(__dirname, "..", "..");
 
 const instances = [
-  { label: "TPV 1", color: "\x1b[36m", dir: "tpvrecipok-2tpv-real-1" }, // cian
-  { label: "TPV 2", color: "\x1b[35m", dir: "tpvrecipok-2tpv-real-2" }, // magenta
+  { label: "TPV 1", color: "\x1b[36m", dir: require("./test-store").P1 }, // cian
+  { label: "TPV 2", color: "\x1b[35m", dir: require("./test-store").P2 }, // magenta
 ];
 
 const children = [];

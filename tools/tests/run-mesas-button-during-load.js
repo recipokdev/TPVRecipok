@@ -14,7 +14,7 @@ let kill = () => {};
   const hard = setTimeout(() => { console.log("HARD TIMEOUT"); kill(); process.exit(1); }, 150000);
   const out = {};
   try {
-    const env = { ...process.env, TPV_MULTI_INSTANCE: "1", TPV_USER_DATA: path.join(os.tmpdir(), "tpvrecipok-2tpv-real-1"), TPV_TEST_LABEL: "A" };
+    const env = { ...process.env, TPV_MULTI_INSTANCE: "1", TPV_USER_DATA: path.join(os.tmpdir(), require("./test-store").P1), TPV_TEST_LABEL: "A" };
     delete env.TPV_E2E; delete env.TPV_E2E_USER_DATA; delete env.TPV_MODE;
     const app = await electron.launch({ args: [ROOT], cwd: ROOT, env });
     const pid = app.process().pid;
