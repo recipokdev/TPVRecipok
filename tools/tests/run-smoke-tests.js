@@ -11405,9 +11405,11 @@ if (
   renderer.includes('apiWrite(`productoimagenes/${Number(orig.image.id)}`, "DELETE")') &&
   renderer.includes("if (isEdit) refInput.disabled = true;") &&
   renderer.includes("if (!isEdit) addField(") &&
-  renderer.includes('"product-edited"')
+  renderer.includes('"product-edited"') &&
+  renderer.includes("async function syncSingleVariantPriceNet(idproducto, precioNet) {") &&
+  /await apiUpdateProductoPrecioNet\(baseId, newNet\);[\s\S]{0,400}await syncSingleVariantPriceNet\(baseId, newNet\);/.test(renderer)
 ) {
-  ok("Editar producto: el lapiz de precio tiene 'Editar producto…' que abre el mismo formulario con los datos FRESCOS de FacturaScripts; solo se envian los campos cambiados (PUT productos), el precio se deja igual en la variante, la familia se quita con 'null' (FS no admite ''), la imagen se cambia o se quita (alta nueva + borrado de la anterior y su archivo), la referencia queda bloqueada, sin stock, y los productos con varias variantes se rechazan; cada edicion queda en el registro de avisos");
+  ok("Editar producto: el lapiz de precio tiene 'Editar producto…' que abre el mismo formulario con los datos FRESCOS de FacturaScripts; solo se envian los campos cambiados (PUT productos), el precio se deja igual en la variante, la familia se quita con 'null' (FS no admite ''), la imagen se cambia o se quita (alta nueva + borrado de la anterior y su archivo), la referencia queda bloqueada, sin stock, y los productos con varias variantes se rechazan; el lapiz rapido tambien iguala la variante unica (syncSingleVariantPriceNet); cada edicion queda en el registro de avisos");
 } else {
   fail("Falta la edicion completa de producto (renderer.js openProductFormModal / index.html priceEditFullBtn)");
 }

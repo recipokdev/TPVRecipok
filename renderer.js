@@ -68815,7 +68815,16 @@ async function confirmAndSaveProductPrice() {
     if (p.isVariant) {
       await apiUpdateVariantePrecioNet(p.id, newNet);
     } else {
-      await apiUpdateProductoPrecioNet(p.baseProductId || p.id, newNet);
+      const baseId = Number(p.baseProductId || p.id || 0);
+      await apiUpdateProductoPrecioNet(baseId, newNet);
+      // PUT productos NO propaga el precio a la variante (2026-11-23): se quedaba con el precio viejo y, si alguien guardaba
+      // la variante en FacturaScripts, el precio del producto volvia al viejo. Con una unica variante se deja igual.
+      try {
+        await syncSingleVariantPriceNet(baseId, newNet);
+      } catch (e) {
+        console.warn("No se pudo igualar el precio de la variante:", e?.message || e);
+        reportClientEvent("productos", "variant-price-sync-failed", String(e?.message || e).slice(0, 160), { idproducto: baseId }, "warn");
+      }
     }
 
     await setProductManualOrderPriorityForProduct(
@@ -68943,6 +68952,16 @@ async function apiUpdateProductoPrecioNet(idproducto, precioNet) {
   } catch {
     return await apiWrite(`productos/${id}`, "PUT", payload);
   }
+}
+
+// Si el producto tiene UNA sola variante, le pone el mismo precio neto que al producto (ver el comentario donde se llama).
+async function syncSingleVariantPriceNet(idproducto, precioNet) {
+  const vars = await fetchApiResourceWithParams("variantes", { "filter[idproducto]": Number(idproducto), limit: 5 });
+  const list = Array.isArray(vars) ? vars : [];
+  if (list.length !== 1) return false;
+  if (Math.abs(Number(list[0].precio || 0) - Number(precioNet)) < 0.0000005) return true;
+  await apiUpdateVariantePrecioNet(list[0].idvariante, precioNet);
+  return true;
 }
 
 async function apiUpdateVariantePrecioNet(idvariante, precioNet) {
