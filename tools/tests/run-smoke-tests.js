@@ -11363,6 +11363,31 @@ if (
   fail("Falta el bloqueo de Modo Mesas con la caja cerrada (renderer.js mesasOperationsBlockedByClosedCaja / refreshMesasCajaClosedUi, index.html, styles.css)");
 }
 
+console.log("\n[SMOKE] Checking 2026-11-23 Nuevo producto (Opciones -> Productos): alta en FacturaScripts\n");
+if (
+  index.includes('id="newProductCreateBtn"') &&
+  renderer.includes('OPT_PV.A("Nuevo producto", "newProductCreateBtn")') &&
+  renderer.includes("bindNewProductButtonOnce();") &&
+  /async function openNewProductModal\(\) \{\s+if \(!isAdminUser\(\)\) \{/.test(renderer) &&
+  renderer.includes('apiWrite("productos", "POST", payload, { timeoutMs: 25000 })') &&
+  renderer.includes("precio: grossToNet(form.priceGross, rate),") &&
+  renderer.includes("if (ref) payload.referencia = ref;") &&
+  renderer.includes('apiWrite(`variantes/${Number(v.idvariante)}`, "PUT", { codbarras: barcode })') &&
+  renderer.includes('apiWrite("stocks", "POST", { codalmacen: wh, idproducto, referencia: finalRef, cantidad: form.stock })') &&
+  renderer.includes("const ambiguous = !e?.apiStatus;") &&
+  renderer.includes("async function apiUploadFileToFs(blob, filename, opts = {}) {") &&
+  renderer.includes('fd.append("files[0]", blob, filename);') &&
+  renderer.includes('/uploadFiles`;') &&
+  renderer.includes('apiWrite("productoimagenes", "POST", { idproducto, referencia: finalRef, idfile: uploadedId, orden: 1 })') &&
+  renderer.includes('canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("No se pudo convertir la imagen"))), "image/jpeg", 0.85);') &&
+  renderer.includes('apiWrite(`attachedfiles/${uploadedId}`, "DELETE")') &&
+  /\.new-product-modal/.test(styles)
+) {
+  ok("Nuevo producto (Opciones -> Productos, solo admin): POST productos con el precio SIN IVA (grossToNet), referencia opcional (vacia = la siguiente de FacturaScripts), codigo de barras en la variante, imagen (se convierte a JPEG de 800 px y se sube con uploadFiles + productoimagenes; si falla el vinculo se borra el archivo subido), stock inicial en el almacen del terminal, avisos de referencia/barras repetidos y, si no hay respuesta del servidor, no deja reintentar a ciegas (evita duplicar)");
+} else {
+  fail("Falta el alta de producto desde Opciones (renderer.js openNewProductModal / index.html newProductCreateBtn / styles.css)");
+}
+
 console.log("\n[SMOKE] Checking 2026-10-27 registro de eventos de cliente en el servidor\n");
 if (
   renderer.includes("function reportClientEvent(category, code, message, detail, severity, opts) {") &&

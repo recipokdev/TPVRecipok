@@ -12935,3 +12935,21 @@ body.theme-dark .mesas-caja-notice {
   border-color: #6b5420;
   color: #f5d98a;
 }
+
+/* Nuevo producto (Opciones -> Productos) */
+.new-product-modal { max-width: 560px; width: min(560px, 94vw); }
+.new-product-modal .pack-modal-body { display: flex; flex-direction: column; gap: 12px; max-height: 70vh; }
+.np-field { display: flex; flex-direction: column; gap: 4px; }
+.np-label { font-weight: 800; font-size: 13px; color: #1f2d4d; }
+.np-input { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #c9d7ee; border-radius: 10px; font-size: 15px; background: #fff; }
+.np-numbtn { text-align: left; padding: 10px 12px; border: 1px solid #c9d7ee; border-radius: 10px; font-size: 15px; background: #fff; cursor: pointer; }
+.np-hint { font-size: 12px; color: #5b6b8c; }
+.np-stockrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.np-check { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+.np-error { min-height: 18px; color: #b3261e; font-weight: 700; font-size: 13px; }
+body.theme-dark .np-label { color: #e5edff; }
+body.theme-dark .np-input, body.theme-dark .np-numbtn { background: #1f2937; border-color: #374151; color: #e5edff; }
+body.theme-dark .np-hint { color: #9fb0d0; }
+.np-imgrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.np-imgpreview { width: 64px; height: 64px; object-fit: cover; border-radius: 10px; border: 1px solid #c9d7ee; }
+.np-imgpreview.hidden { display: none; }

@@ -34402,6 +34402,7 @@ const OPT_PREVIEW_DEFS = {
     OPT_PV.A("Restablecer prioridades", "productManualOrderResetBtn"),
     OPT_PV.A("Restablecer tamaño de productos", "productTileSizeResetBtn"),
     OPT_PV.A("Restablecer tamaño de letra", "productNameFontSizeResetBtn"),
+    OPT_PV.A("Nuevo producto", "newProductCreateBtn"),
     OPT_PV.A("Producto medio/cuarto (stock derivado)", "derivedStockFractionConfigBtn"),
     OPT_PV.A("Alérgenos", "allergensManageBtn"),
   ],
@@ -36334,6 +36335,7 @@ async function openOptions() {
   bindProductTileSizeResetButtonOnce();
   bindProductNameFontSizeResetButtonOnce();
   bindDerivedStockFractionButtonOnce();
+  bindNewProductButtonOnce();
   bindAllergensManageButtonOnce();
   bindCartWidthControlsToggleOnce();
   bindCartWidthDragHandleOnce();
@@ -61068,6 +61070,563 @@ async function openDerivedStockFractionConfigModal() {
     modal.appendChild(body);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
+  });
+}
+
+// ===== Nuevo producto (2026-11-23) =====
+// Alta de un producto en FacturaScripts desde Opciones -> Productos (solo administradores), imitando lo que hace
+// FacturaScripts: POST productos crea el producto Y su variante (con el mismo precio y referencia); si no se manda
+// referencia, FacturaScripts pone sola el siguiente numero (mayor referencia numerica + 1); la referencia tiene
+// maximo 30 caracteres y no puede repetirse. El precio que guarda FacturaScripts es SIN IVA: el formulario pide el
+// precio con IVA (como se ve en la tarjeta) y lo convierte con grossToNet().
+let newProductBtnBound = false;
+
+function newProductDefaultTaxCode() {
+  const counts = new Map();
+  (Array.isArray(products) ? products : []).forEach((p) => {
+    const c = String(p?.codimpuesto || "").trim();
+    if (c && Object.prototype.hasOwnProperty.call(taxRatesByCode || {}, c)) {
+      counts.set(c, (counts.get(c) || 0) + 1);
+    }
+  });
+  let best = "";
+  let bestN = 0;
+  counts.forEach((n, c) => {
+    if (n > bestN) {
+      best = c;
+      bestN = n;
+    }
+  });
+  return best || Object.keys(taxRatesByCode || {})[0] || "";
+}
+
+function newProductDefaultControlStock() {
+  const list = Array.isArray(products) ? products : [];
+  if (!list.length) return false;
+  const managed = list.filter((p) => p?.stockManaged).length;
+  return managed * 2 >= list.length;
+}
+
+function newProductFamilyOptions() {
+  const list = Array.isArray(categories) ? categories : [];
+  const byParent = new Map();
+  list.forEach((c) => {
+    const k = c?.parentId ? String(c.parentId) : "";
+    if (!byParent.has(k)) byParent.set(k, []);
+    byParent.get(k).push(c);
+  });
+  const out = [];
+  const seen = new Set();
+  const walk = (parent, depth) => {
+    (byParent.get(parent) || []).forEach((c) => {
+      if (seen.has(c.id)) return;
+      seen.add(c.id);
+      out.push({ id: c.id, label: `${depth ? "  ".repeat(depth) + "↳ " : ""}${c.name}` });
+      walk(String(c.id), depth + 1);
+    });
+  };
+  walk("", 0);
+  list.forEach((c) => {
+    if (!seen.has(c.id)) out.push({ id: c.id, label: c.name });
+  });
+  return out;
+}
+
+function newProductErrorMessage(err) {
+  const body = String(err?.apiBody || err?.message || "");
+  if (/duplicad/i.test(body)) return "Ya existe un producto con esa referencia. Cámbiala o déjala vacía para que se asigne sola.";
+  if (/entre 1 y 30/i.test(body)) return "La referencia no puede tener más de 30 caracteres.";
+  if (err?.apiStatus === 401 || err?.apiStatus === 403) return "FacturaScripts no deja crear productos con esta clave.";
+  return "FacturaScripts no pudo crear el producto. Revisa los datos e inténtalo de nuevo.";
+}
+
+// Imagen del producto: FacturaScripts guarda el archivo con POST uploadFiles (multipart, campo files[0]) y despues se
+// vincula al producto con POST productoimagenes {idproducto, referencia, idfile, orden}. Solo admite como imagen lo que
+// FacturaScripts detecta como jpeg/png/gif/webp: se convierte SIEMPRE a JPEG (fondo blanco, lado maximo 800 px) antes
+// de subirla, asi cualquier foto del movil o del PC vale y pesa poco.
+async function newProductImageToJpegBlob(file, maxSide = 800) {
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+  const w = Math.max(1, Math.round(bmp.width * scale));
+  const h = Math.max(1, Math.round(bmp.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(bmp, 0, 0, w, h);
+  if (typeof bmp.close === "function") bmp.close();
+  return await new Promise((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("No se pudo convertir la imagen"))), "image/jpeg", 0.85);
+  });
+}
+
+async function apiUploadFileToFs(blob, filename, opts = {}) {
+  const cfg = window.RECIPOK_API || {};
+  if (!cfg.baseUrl || !cfg.apiKey) throw new Error("Config API no definida");
+  const url = `${cfg.baseUrl.replace(/\/+$/, "")}/uploadFiles`;
+  const fd = new FormData();
+  fd.append("files[0]", blob, filename);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Number(opts.timeoutMs || 40000));
+  try {
+    const res = await fetch(url, { method: "POST", headers: { Accept: "application/json", Token: cfg.apiKey }, body: fd, signal: controller.signal });
+    const text = await res.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch (_) {}
+    const f = data?.files?.[0];
+    if (!res.ok || !f?.idfile) {
+      const err = new Error(`HTTP ${res.status} subiendo imagen`);
+      err.apiStatus = res.status;
+      throw err;
+    }
+    return f;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function openNewProductModal() {
+  if (!isAdminUser()) {
+    toast?.("Solo administradores.", "warn", "Productos");
+    return;
+  }
+  if (TPV_STATE?.offline) {
+    toast?.("Sin conexión con el servidor: ahora no se pueden crear productos.", "warn", "Productos");
+    return;
+  }
+  const taxCodes = Object.keys(taxRatesByCode || {});
+  if (!taxCodes.length) {
+    showMessageModal(
+      "Nuevo producto",
+      "No se han podido cargar los impuestos de FacturaScripts. Espera unos segundos y vuelve a intentarlo.",
+    );
+    return;
+  }
+
+  return new Promise((resolve) => {
+    document.body.classList.add("modal-locked");
+
+    const form = {
+      name: "",
+      priceGross: null,
+      tax: newProductDefaultTaxCode(),
+      family: "",
+      barcode: "",
+      reference: "",
+      control: newProductDefaultControlStock(),
+      stock: 0,
+      imageFile: null,
+    };
+    let imagePreviewUrl = "";
+    let saving = false;
+
+    const overlay = document.createElement("div");
+    overlay.className = "pack-modal-overlay";
+    const modal = document.createElement("div");
+    modal.className = "pack-modal new-product-modal";
+
+    const head = document.createElement("div");
+    head.className = "pack-modal-head";
+    const hTitle = document.createElement("div");
+    hTitle.className = "pack-modal-title";
+    hTitle.textContent = "Nuevo producto";
+    const xBtn = document.createElement("button");
+    xBtn.type = "button";
+    xBtn.className = "pack-modal-x";
+    xBtn.textContent = "✕";
+    head.appendChild(hTitle);
+    head.appendChild(xBtn);
+
+    const body = document.createElement("div");
+    body.className = "pack-modal-body";
+
+    function close() {
+      if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
+      overlay.remove();
+      document.body.classList.remove("modal-locked");
+      resolve();
+    }
+    xBtn.onclick = () => {
+      if (!saving) close();
+    };
+
+    function addField(labelText, control, hintText = "") {
+      const row = document.createElement("div");
+      row.className = "np-field";
+      const lab = document.createElement("label");
+      lab.className = "np-label";
+      lab.textContent = labelText;
+      row.appendChild(lab);
+      row.appendChild(control);
+      if (hintText) {
+        const hint = document.createElement("div");
+        hint.className = "np-hint";
+        hint.textContent = hintText;
+        row.appendChild(hint);
+      }
+      body.appendChild(row);
+      return row;
+    }
+
+    function textInput(placeholder, key, maxLen) {
+      const inp = document.createElement("input");
+      inp.type = "text";
+      inp.className = "addons-item-input np-input";
+      inp.placeholder = placeholder;
+      inp.maxLength = maxLen;
+      inp.addEventListener("click", () => openQwertyForInput(inp, "text"));
+      inp.addEventListener("input", () => {
+        form[key] = inp.value;
+      });
+      inp.addEventListener("change", () => {
+        form[key] = inp.value;
+      });
+      return inp;
+    }
+
+    function numberButton(getText, onPick) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "np-numbtn";
+      const refresh = () => {
+        btn.textContent = getText();
+      };
+      btn.addEventListener("click", () => onPick(refresh));
+      refresh();
+      btn.refresh = refresh;
+      return btn;
+    }
+
+    const nameInput = textInput("Ej.: Café con leche", "name", 120);
+    addField("Nombre *", nameInput);
+
+    const netHint = document.createElement("div");
+    netHint.className = "np-hint";
+    const refreshNetHint = () => {
+      const rate = Number(taxRatesByCode[form.tax] ?? 0);
+      netHint.textContent =
+        form.priceGross == null
+          ? ""
+          : `Sin IVA: ${eur(grossToNet(form.priceGross, rate))} (se guarda así en FacturaScripts)`;
+    };
+    const priceBtn = numberButton(
+      () => (form.priceGross == null ? "Toca para escribir el precio" : eur(form.priceGross)),
+      (refresh) => {
+        openNumPad(
+          form.priceGross == null ? "" : String(form.priceGross),
+          (val, meta = {}) => {
+            const phase = String(meta?.phase || "");
+            if (phase === "preview" || phase === "cancel") return;
+            const n = Math.round((Number(val || 0) + Number.EPSILON) * 100) / 100;
+            form.priceGross = Number.isFinite(n) && n >= 0 ? n : null;
+            refresh();
+            refreshNetHint();
+          },
+          "Precio con IVA",
+          "price",
+          null,
+          null,
+          { showPricePreview: false },
+        );
+      },
+    );
+    const priceRow = addField("Precio con IVA *", priceBtn);
+    priceRow.appendChild(netHint);
+
+    const taxSel = document.createElement("select");
+    taxSel.className = "np-input";
+    taxCodes.forEach((code) => {
+      const opt = document.createElement("option");
+      opt.value = code;
+      opt.textContent = `${code} (${Number(taxRatesByCode[code] ?? 0)} %)`;
+      taxSel.appendChild(opt);
+    });
+    taxSel.value = form.tax;
+    taxSel.addEventListener("change", () => {
+      form.tax = taxSel.value;
+      refreshNetHint();
+    });
+    addField("IVA", taxSel);
+
+    const famSel = document.createElement("select");
+    famSel.className = "np-input";
+    const famNone = document.createElement("option");
+    famNone.value = "";
+    famNone.textContent = "Sin familia";
+    famSel.appendChild(famNone);
+    newProductFamilyOptions().forEach((f) => {
+      const opt = document.createElement("option");
+      opt.value = String(f.id);
+      opt.textContent = f.label;
+      famSel.appendChild(opt);
+    });
+    famSel.addEventListener("change", () => {
+      form.family = famSel.value;
+    });
+    addField("Familia", famSel, "Sin familia no saldrá dentro de ninguna familia en la pantalla de venta.");
+
+    const barcodeInput = textInput("Opcional (también vale con el lector)", "barcode", 60);
+    addField("Código de barras", barcodeInput);
+
+    const refInput = textInput("Automática", "reference", 30);
+    addField(
+      "Referencia",
+      refInput,
+      "Déjala vacía y FacturaScripts pondrá la siguiente. Máximo 30 caracteres; no puede repetirse.",
+    );
+
+    const imgWrap = document.createElement("div");
+    imgWrap.className = "np-imgrow";
+    const imgPreview = document.createElement("img");
+    imgPreview.className = "np-imgpreview hidden";
+    imgPreview.alt = "";
+    const imgFile = document.createElement("input");
+    imgFile.type = "file";
+    imgFile.accept = "image/*";
+    imgFile.style.display = "none";
+    const imgPick = document.createElement("button");
+    imgPick.type = "button";
+    imgPick.className = "np-numbtn";
+    imgPick.textContent = "Elegir imagen…";
+    const imgClear = document.createElement("button");
+    imgClear.type = "button";
+    imgClear.className = "np-numbtn hidden";
+    imgClear.textContent = "Quitar";
+    const clearImage = () => {
+      form.imageFile = null;
+      imgFile.value = "";
+      if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
+      imagePreviewUrl = "";
+      imgPreview.classList.add("hidden");
+      imgPreview.removeAttribute("src");
+      imgClear.classList.add("hidden");
+      imgPick.textContent = "Elegir imagen…";
+    };
+    imgPick.addEventListener("click", () => imgFile.click());
+    imgClear.addEventListener("click", clearImage);
+    imgFile.addEventListener("change", () => {
+      const f = imgFile.files && imgFile.files[0];
+      if (!f) return;
+      if (!/^image\//i.test(f.type || "")) {
+        clearImage();
+        errBox.textContent = "Ese archivo no es una imagen.";
+        return;
+      }
+      errBox.textContent = "";
+      form.imageFile = f;
+      if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
+      imagePreviewUrl = URL.createObjectURL(f);
+      imgPreview.src = imagePreviewUrl;
+      imgPreview.classList.remove("hidden");
+      imgClear.classList.remove("hidden");
+      imgPick.textContent = "Cambiar imagen…";
+    });
+    imgWrap.appendChild(imgPreview);
+    imgWrap.appendChild(imgPick);
+    imgWrap.appendChild(imgClear);
+    imgWrap.appendChild(imgFile);
+    addField("Imagen", imgWrap, "Opcional. Sale en la tarjeta del producto; se reduce y se guarda en FacturaScripts.");
+
+    const stockWrap = document.createElement("div");
+    stockWrap.className = "np-stockrow";
+    const ctrlLabel = document.createElement("label");
+    ctrlLabel.className = "np-check";
+    const ctrl = document.createElement("input");
+    ctrl.type = "checkbox";
+    ctrl.checked = !!form.control;
+    ctrlLabel.appendChild(ctrl);
+    ctrlLabel.appendChild(document.createTextNode(" Controlar el stock de este producto"));
+    const stockBtn = numberButton(
+      () => `Stock inicial: ${form.stock}`,
+      (refresh) => {
+        openNumPad(
+          String(form.stock || ""),
+          (val, meta = {}) => {
+            const phase = String(meta?.phase || "");
+            if (phase === "preview" || phase === "cancel") return;
+            const n = Math.round((Number(val || 0) + Number.EPSILON) * 1000) / 1000;
+            form.stock = Number.isFinite(n) && n > 0 ? n : 0;
+            refresh();
+          },
+          "Stock inicial",
+          "stock",
+        );
+      },
+    );
+    const syncStockUi = () => {
+      form.control = ctrl.checked;
+      stockBtn.style.display = ctrl.checked ? "" : "none";
+    };
+    ctrl.addEventListener("change", syncStockUi);
+    syncStockUi();
+    stockWrap.appendChild(ctrlLabel);
+    stockWrap.appendChild(stockBtn);
+    const wh = getCurrentWarehouseCode();
+    addField(
+      "Stock",
+      stockWrap,
+      wh
+        ? `El stock inicial se anota en el almacén ${wh}. Sin controlar el stock, el producto se vende siempre.`
+        : "Sin controlar el stock, el producto se vende siempre.",
+    );
+
+    const errBox = document.createElement("div");
+    errBox.className = "np-error";
+    body.appendChild(errBox);
+
+    const actions = document.createElement("div");
+    actions.className = "pack-modal-actions";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "pack-btn pack-btn-cancel";
+    cancelBtn.textContent = "Cancelar";
+    cancelBtn.onclick = () => {
+      if (!saving) close();
+    };
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.className = "pack-btn pack-btn-ok";
+    saveBtn.textContent = "Crear producto";
+    actions.appendChild(cancelBtn);
+    actions.appendChild(saveBtn);
+
+    const setError = (msg) => {
+      errBox.textContent = msg || "";
+    };
+
+    saveBtn.onclick = async () => {
+      if (saving) return;
+      setError("");
+      const name = String(form.name || "").trim();
+      const ref = String(form.reference || "").trim();
+      const barcode = String(form.barcode || "").trim();
+      if (!name) return setError("Escribe el nombre del producto.");
+      if (form.priceGross == null) return setError("Indica el precio con IVA.");
+      if (ref.length > 30) return setError("La referencia no puede tener más de 30 caracteres.");
+      if (ref && (Array.isArray(products) ? products : []).some((p) => String(p?.referencia || "").toLowerCase() === ref.toLowerCase())) {
+        return setError("Ya existe un producto con esa referencia. Cámbiala o déjala vacía.");
+      }
+      if (barcode && typeof BARCODE_LOCAL_PRODUCT_BY_CODE?.has === "function" && BARCODE_LOCAL_PRODUCT_BY_CODE.has(barcode)) {
+        return setError("Ese código de barras ya lo tiene otro producto.");
+      }
+
+      const rate = Number(taxRatesByCode[form.tax] ?? 0);
+      const payload = {
+        descripcion: name,
+        precio: grossToNet(form.priceGross, rate),
+        codimpuesto: form.tax,
+        sevende: 1,
+        secompra: 1,
+        publico: 0,
+        nostock: form.control ? 0 : 1,
+      };
+      if (form.family) payload.codfamilia = form.family;
+      if (ref) payload.referencia = ref;
+
+      saving = true;
+      saveBtn.disabled = true;
+      cancelBtn.disabled = true;
+      saveBtn.textContent = "Creando…";
+      let created = null;
+      try {
+        created = await apiWrite("productos", "POST", payload, { timeoutMs: 25000 });
+      } catch (e) {
+        saving = false;
+        saveBtn.disabled = false;
+        cancelBtn.disabled = false;
+        saveBtn.textContent = "Crear producto";
+        const ambiguous = !e?.apiStatus;
+        if (ambiguous) {
+          setError("No se pudo confirmar si el producto se ha creado (sin respuesta del servidor). Antes de reintentar, mira en la lista de productos si ya está, para no duplicarlo.");
+          loadDataFromApi({ refresh: true, silentRetry: true }).catch(() => {});
+        } else {
+          setError(newProductErrorMessage(e));
+        }
+        reportClientEvent("productos", "product-create-failed", String(e?.message || e).slice(0, 160), { status: e?.apiStatus || 0 }, "warn");
+        return;
+      }
+
+      const data = created?.data || {};
+      const idproducto = Number(data.idproducto || 0);
+      const finalRef = String(data.referencia || ref || "").trim();
+      const warnings = [];
+
+      if (barcode && idproducto) {
+        try {
+          const vars = await fetchApiResourceWithParams("variantes", { "filter[idproducto]": idproducto, limit: 5 });
+          const list = Array.isArray(vars) ? vars : [];
+          const v = list.find((x) => String(x?.referencia || "") === finalRef) || list[0];
+          if (!v?.idvariante) throw new Error("sin variante");
+          await apiWrite(`variantes/${Number(v.idvariante)}`, "PUT", { codbarras: barcode });
+        } catch (e) {
+          warnings.push("no se pudo guardar el código de barras");
+        }
+      }
+      if (form.control && form.stock > 0 && idproducto) {
+        try {
+          if (!wh) throw new Error("sin almacén");
+          await apiWrite("stocks", "POST", { codalmacen: wh, idproducto, referencia: finalRef, cantidad: form.stock });
+        } catch (e) {
+          warnings.push("no se pudo anotar el stock inicial");
+        }
+      }
+
+      if (form.imageFile && idproducto) {
+        let uploadedId = 0;
+        try {
+          const blob = await newProductImageToJpegBlob(form.imageFile);
+          const up = await apiUploadFileToFs(blob, `producto-${idproducto}.jpg`);
+          uploadedId = Number(up.idfile || 0);
+          await apiWrite("productoimagenes", "POST", { idproducto, referencia: finalRef, idfile: uploadedId, orden: 1 });
+        } catch (e) {
+          warnings.push("no se pudo guardar la imagen");
+          if (uploadedId) {
+            try {
+              await apiWrite(`attachedfiles/${uploadedId}`, "DELETE");
+            } catch (_) {}
+          }
+        }
+      }
+
+      reportClientEvent(
+        "productos",
+        "product-created",
+        `Producto creado: ${finalRef} · ${name}`,
+        { idproducto, referencia: finalRef, precioConIva: form.priceGross, iva: form.tax, familia: form.family || "", conBarras: !!barcode, conImagen: !!form.imageFile, stock: form.control ? form.stock : "sin control", avisos: warnings.length },
+        "warn",
+      );
+
+      close();
+      if (warnings.length) {
+        showMessageModal(
+          "Producto creado",
+          `Se creó «${name}» (referencia ${finalRef}), pero ${warnings.join(" y ")}. Puedes completarlo desde FacturaScripts.`,
+        );
+      } else {
+        toast?.(`Producto «${name}» creado (referencia ${finalRef}) ✅`, "ok", "Productos");
+      }
+      await loadDataFromApi({ refresh: true, silentRetry: true }).catch(() => {});
+    };
+
+    modal.appendChild(head);
+    modal.appendChild(body);
+    modal.appendChild(actions);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+  });
+}
+
+function bindNewProductButtonOnce() {
+  if (newProductBtnBound) return;
+  newProductBtnBound = true;
+  const btn = document.getElementById("newProductCreateBtn");
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    openNewProductModal();
   });
 }
 
