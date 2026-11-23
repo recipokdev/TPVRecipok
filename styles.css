@@ -12937,11 +12937,14 @@ body.theme-dark .mesas-caja-notice {
 }
 
 /* Nuevo producto (Opciones -> Productos) */
-.new-product-modal { max-width: 560px; width: min(560px, 94vw); }
-.new-product-modal .pack-modal-body { display: flex; flex-direction: column; gap: 12px; max-height: 70vh; }
+.new-product-modal { max-width: 780px; width: min(780px, 96vw); }
+.new-product-modal .pack-modal-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px 16px; max-height: 74vh; align-content: start; align-items: start; }
+.new-product-modal .np-span2 { grid-column: 1 / -1; }
+.new-product-modal .np-img { order: 9; }
+.new-product-modal .np-error { order: 10; min-height: 0; }
 .np-field { display: flex; flex-direction: column; gap: 4px; }
 .np-label { font-weight: 800; font-size: 13px; color: #1f2d4d; }
-.np-input { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #c9d7ee; border-radius: 10px; font-size: 15px; background: #fff; }
+.np-input { width: 100%; flex: 0 0 auto; height: 42px; box-sizing: border-box; padding: 10px 12px; border: 1px solid #c9d7ee; border-radius: 10px; font-size: 15px; background: #fff; }
 .np-numbtn { text-align: left; padding: 10px 12px; border: 1px solid #c9d7ee; border-radius: 10px; font-size: 15px; background: #fff; cursor: pointer; }
 .np-hint { font-size: 12px; color: #5b6b8c; }
 .np-stockrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
@@ -12951,5 +12954,5 @@ body.theme-dark .np-label { color: #e5edff; }
 body.theme-dark .np-input, body.theme-dark .np-numbtn { background: #1f2937; border-color: #374151; color: #e5edff; }
 body.theme-dark .np-hint { color: #9fb0d0; }
 .np-imgrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.np-imgpreview { width: 64px; height: 64px; object-fit: cover; border-radius: 10px; border: 1px solid #c9d7ee; }
+.np-imgpreview { width: 72px; height: 72px; object-fit: cover; border-radius: 10px; border: 1px solid #c9d7ee; }
 .np-imgpreview.hidden { display: none; }

@@ -61259,9 +61259,9 @@ async function openNewProductModal() {
       if (!saving) close();
     };
 
-    function addField(labelText, control, hintText = "") {
+    function addField(labelText, control, hintText = "", extraClass = "") {
       const row = document.createElement("div");
-      row.className = "np-field";
+      row.className = extraClass ? `np-field ${extraClass}` : "np-field";
       const lab = document.createElement("label");
       lab.className = "np-label";
       lab.textContent = labelText;
@@ -61307,7 +61307,7 @@ async function openNewProductModal() {
     }
 
     const nameInput = textInput("Ej.: Café con leche", "name", 120);
-    addField("Nombre *", nameInput);
+    addField("Nombre *", nameInput, "", "np-span2");
 
     const netHint = document.createElement("div");
     netHint.className = "np-hint";
@@ -61372,7 +61372,7 @@ async function openNewProductModal() {
     famSel.addEventListener("change", () => {
       form.family = famSel.value;
     });
-    addField("Familia", famSel, "Sin familia no saldrá dentro de ninguna familia en la pantalla de venta.");
+    addField("Familia", famSel, "Sin familia no sale en ninguna familia de la pantalla de venta.");
 
     const barcodeInput = textInput("Opcional (también vale con el lector)", "barcode", 60);
     addField("Código de barras", barcodeInput);
@@ -61381,7 +61381,7 @@ async function openNewProductModal() {
     addField(
       "Referencia",
       refInput,
-      "Déjala vacía y FacturaScripts pondrá la siguiente. Máximo 30 caracteres; no puede repetirse.",
+      "Vacía: FacturaScripts pone la siguiente. Máx. 30 caracteres, sin repetir.",
     );
 
     const imgWrap = document.createElement("div");
@@ -61455,7 +61455,7 @@ async function openNewProductModal() {
     }
     imgWrap.appendChild(imgClear);
     imgWrap.appendChild(imgFile);
-    addField("Imagen", imgWrap, "Opcional. Sale en la tarjeta del producto; se reduce y se guarda en FacturaScripts.");
+    addField("Imagen", imgWrap, "Opcional. Sale en la tarjeta del producto; se reduce y se guarda en FacturaScripts.", "np-span2 np-img");
 
     const stockWrap = document.createElement("div");
     stockWrap.className = "np-stockrow";
@@ -61465,7 +61465,7 @@ async function openNewProductModal() {
     ctrl.type = "checkbox";
     ctrl.checked = !!form.control;
     ctrlLabel.appendChild(ctrl);
-    ctrlLabel.appendChild(document.createTextNode(" Controlar el stock de este producto"));
+    ctrlLabel.appendChild(document.createTextNode(" Controlar stock"));
     const stockBtn = numberButton(
       () => `Stock inicial: ${form.stock}`,
       (refresh) => {
@@ -61496,12 +61496,12 @@ async function openNewProductModal() {
       "Stock",
       stockWrap,
       wh
-        ? `El stock inicial se anota en el almacén ${wh}. Sin controlar el stock, el producto se vende siempre.`
-        : "Sin controlar el stock, el producto se vende siempre.",
+        ? `Stock inicial en el almacén ${wh}. Sin controlar, se vende siempre.`
+        : "Sin controlar el stock, se vende siempre.",
     );
 
     const errBox = document.createElement("div");
-    errBox.className = "np-error";
+    errBox.className = "np-error np-span2";
     body.appendChild(errBox);
 
     const actions = document.createElement("div");
