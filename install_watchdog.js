@@ -146,7 +146,9 @@ $maxRetries = NumOr $ctx.maxRetries 3
 $retryPauseSec = NumOr $ctx.retryPauseSec 30
 $relaunchWaitSec = NumOr $ctx.relaunchWaitSec 60
 $earlyMinSec = NumOr $ctx.earlyMinSec 12
-$settleSec = NumOr $ctx.settleSec 25
+# Margen sin ningun TPV abierto, con el instalador ya terminado, antes de darlo por fallido. 25 s daba falsas alarmas (24-nov-2026,
+# Ben_Trempat y Zoen): el TPV nuevo abrio solo entre 130 y 160 s despues de lanzar la instalacion (escaneo del antivirus, disco lento).
+$settleSec = NumOr $ctx.settleSec 180
 $missingNeeded = NumOr $ctx.missingStreak 3
 $exeName = [IO.Path]::GetFileName([string]$ctx.exePath)
 $installerName = ''

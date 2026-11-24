@@ -12028,6 +12028,7 @@ if (
     wd.includes("function queryAntivirus() {") &&
     wd.includes("install-watchdog-failed") && wd.includes("install-watchdog-recovered") && wd.includes("install-watchdog-gave-up") &&
     wd.includes("install-watchdog-shortcut-retargeted") &&
+    wd.includes("$settleSec = NumOr $ctx.settleSec 180") && // margen de 3 min antes de dar por fallida una instalacion (con 25 s daba falsas alarmas el 24-nov-2026)
     wd.includes("'sin-tpv-abierto'") && wd.includes("'programa-borrado'") && wd.includes("function KillLeftovers {") && // detecta el fallo en segundos y lo arregla en silencio
     main.includes("function createRepairIcon(target) {") && main.includes("if (keep.ok) createRepairIcon(keep.path);") && // el icono REPARAR solo si no hay vigilante
     wd.includes('"cmd.exe"') && // lanzamiento por "cmd /c start": ni detached (powershell sale al instante) ni job de libuv (muere con el TPV)
