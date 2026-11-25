@@ -5,7 +5,10 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "ARREGLO: Actualizaciones bloqueadas por Windows. Algunos equipos (sobre todo con un Windows 11 reciente) bloquean al principio el instalador de una versión nueva con el aviso «Una directiva de Control de aplicaciones bloqueó este archivo». Antes el TPV volvía a intentar la instalación en cada arranque y se veía una y otra vez la pantalla de «Instalando…» durante minutos, incluso en pleno servicio. Ahora, si una instalación falla, el TPV se abre con la versión de siempre y no vuelve a intentar esa misma actualización hasta pasadas 3 horas, tiempo suficiente para que Windows deje de bloquearla.",
+        "MEJORA: Menos falsas alarmas al actualizar. Si el TPV nuevo tarda en abrirse después de instalarse (por el antivirus o por un ordenador lento), ya no se da la instalación por fallida a los 40 segundos ni se vuelve a abrir la versión antigua mientras la nueva todavía se está terminando de instalar."
+      ]
     },
     {
       "version": "0.2.71",
