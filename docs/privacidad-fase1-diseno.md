@@ -32,7 +32,7 @@ puede intentar muy pocas veces».
 
 ## 4. El servicio nuevo: `resolve-company`
 
-`POST /tpv/api/index.php?action=resolve-company` con cuerpo JSON `{"email": "..."}` y la cabecera `X-TPV-API-KEY` de siempre.
+`POST /tpv/api/resolve_company.php` (fichero propio, ver §12; en el diseño inicial era `index.php?action=resolve-company`) con cuerpo JSON `{"email": "..."}` y la cabecera `X-TPV-API-KEY` de siempre.
 El email va en el cuerpo y **no en la URL** (para que no quede en los logs de acceso).
 
 | Respuesta | Cuándo |
@@ -129,3 +129,31 @@ debe ser un string JSON). **Las 648 peticiones eran de sus emuladores**, no de u
 - **Condición para la fase 2:** la APK **no tiene puerta de actualización obligatoria ni aviso de «servicio desactivado»**; si se
   cierra `clients.json`, las APK viejas **no podrán activar ni entrar**. Acordado: ellos sacan una APK/AAB nueva con
   `resolve-company` cuando el renderer esté en `main`, y **avisamos antes de quitar el respaldo** para que repartan la APK nueva.
+
+## 12. Servidor implementado y desplegado (25-nov-2026)
+
+- **Dos ficheros NUEVOS** en `tpv/api/` (ningún cliente los llama aún; `index.php` no se ha tocado): `resolve_company.php` (entrada) y
+  `lib/resolve_company.php` (lógica pura). Mismo patrón que `camareros.php`: si fallan, no afectan a nada de lo que usan los clientes.
+  URL final: `POST https://plus.recipok.com/tpv/api/resolve_company.php`.
+- **Pruebas:** 27 comprobaciones por línea de comandos en el servidor con configuración falsa (activo con mayúsculas y espacios, `+`
+  exacto, baja sin clave, unknown con hash, email inválido, cliente sin clave, límites de 10 desconocidos / 20 por email / 60 por IP,
+  apiKey y email jamás en auditoría ni limitador, una sola anotación por IP y ventana, IP real) y la ruta de base de datos de
+  producción con un cubo de prueba que se borra. En vivo: 401 sin clave, 405 con GET, 400 con email inválido, `active` para la tienda
+  de pruebas, `unknown`, y **429 con `Retry-After` a partir del décimo desconocido aunque cada petición lleve una `CF-Connecting-IP`
+  distinta**. `health.sh` sigue igual. Las pruebas dejaron en el registro de auditoría 10 `resolve-company-unknown` y 1
+  `resolve-company-rate-limited` de la IP de la oficina; los contadores de prueba se borraron.
+- **IP del cliente:** se usa `REMOTE_ADDR` (o `X-Real-IP`, que sobrescribe el proxy). Comprobado con una sonda que `X-Forwarded-For` y
+  `CF-Connecting-IP` **pasan tal cual lo que envíe el cliente**.
+
+### Hallazgos colaterales (no tocados, pendientes de OK)
+1. **`getRequestIp()` se puede falsear** (mira primero `CF-Connecting-IP`; el servidor no está detrás de Cloudflare). Afecta a los
+   límites cuyo sujeto es la IP: **el del código de emparejamiento de camareros** (`redeem-pairing-code`, 20 intentos / 10 min por IP,
+   código de 6 dígitos y 10 min de vida) y los de `customer_orders` y presencia/eventos (`slug|IP`). **No afecta al freno de PIN de
+   administrador**, cuyo sujeto es `slug|agente`. Arreglo: preferir `REMOTE_ADDR` en `index.php` y `lib/camareros_helpers.php` (misma IP
+   para el tráfico legítimo, así que sin cambios para los clientes). Conviene hacerlo de noche y con Sergi, porque toca `index.php`.
+2. **`tpv_login.php` no tiene limitador de intentos.** Combinado con `tpv_users.php` (que da los nombres de usuario de un email), un PIN
+   de 4 dígitos se podría probar sin freno. Protege la pantalla del TPV, no los datos (la API usa la clave compartida), pero conviene
+   añadir un límite por `slug|usuario` como el del PIN de agente.
+
+### Siguiente paso
+La parte del TPV (`renderer.js`, §5) con sus pruebas en la batería; no se publica hasta que Sergi lo diga.
