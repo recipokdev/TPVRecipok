@@ -12880,6 +12880,8 @@ mustContain(fs.readFileSync(path.join(root, "js", "tpv", "ui", "customer_selecto
 mustContain(fs.readFileSync(path.join(root, "preload.js"), "utf8"), "hostId: TPV_HOST_ID,", "El TPV de escritorio envia un identificador estable del equipo (location.hostname va vacio con file://) para reconocer sesiones huerfanas");
 mustContain(renderer, "function getPresenceHostId() {", "La presencia de terminales usa el identificador del equipo (hash), nunca el nombre del PC");
 mustContain(renderer, 'logFeatureWarn("PRESENCE", "multi-tpv-activos", {', "Cada vez que sale el aviso «Hay N TPV activos» se registra en el servidor el detalle de las sesiones (Lumi, 25-nov-2026)");
+mustContain(renderer, '<div class="cart-line-controls">', "En el carrito el contador de cantidad y el precio van juntos en un bloque que baja debajo del nombre, y el nombre usa todo el ancho de la linea (Lumi, 25-nov-2026)");
+mustContain(fs.readFileSync(path.join(root, "styles.css"), "utf8"), ".cart-line-controls {", "Bloque de controles de la linea del carrito (cantidad + precio) que envuelve en vez de desbordar");
 mustContain(renderer, "async function resolveCompanyRemote(email) {", "Fase 1 de privacidad: el TPV pregunta por UN email (resolve_company.php) en vez de descargar clients.json entero");
 mustContain(renderer, "if (res.status === 404) return resolveCompanyFromLegacyClientsJson(e);", "Respaldo transitorio al clients.json de siempre si el servidor aun no tiene el servicio nuevo (se quita en la fase 2)");
 mustContain(renderer, "__resolveCompanyBlockedUntil = Date.now() + retry * 1000;", "Tras un 429 se respeta Retry-After y no se reintenta en bucle");

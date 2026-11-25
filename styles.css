@@ -2829,7 +2829,10 @@ body.cart-width-dragging .cart-width-drag-handle {
 }
 
 .cart-line-name {
-  flex: 1;
+  /* El ancho base es el del contenido (2026-11-25): un nombre largo no cabe junto a los controles, ocupa la fila entera y los controles
+     bajan debajo; uno corto sigue en la misma fila si hay sitio. Antes `flex: 1` (base 0) dejaba al nombre solo con lo que sobraba
+     al lado del contador. */
+  flex: 1 1 auto;
   /* Ancho minimo del nombre (2026-11-25, Lumi: con precios largos, cantidades decimales o descuento la columna del nombre se encogia a 0 y
      el texto salia letra a letra en vertical): si no cabe, los controles bajan a una segunda linea de la misma tarjeta. */
   min-width: 90px;
@@ -2950,6 +2953,17 @@ body.theme-dark .cart-line-kitchen-note {
 .line-price-btn.has-cart-tariff .cart-price-old {
   font-size: 11px;
   margin-right: 0;
+}
+
+/* Contador de cantidad + precio + borrar, juntos: bajan a la segunda fila de la linea como un solo bloque (el nombre queda arriba a todo
+   el ancho) y, si ni asi caben (cantidad y precio muy largos), el precio baja a una tercera fila en vez de salirse de la tarjeta. */
+.cart-line-controls {
+  flex: 1 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 8px;
 }
 
 /* Cantidad */

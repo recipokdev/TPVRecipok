@@ -140,9 +140,9 @@ let kill = () => {};
       // El carrito de Lumi mide ~300 px (clamp(300px,29vw,356px) en pantallas de ~1000 px): se fija ese ancho para que no dependa de la ventana.
       const ancho = document.createElement("style"); ancho.id = "__ancho"; ancho.textContent = ".cart-card{width:300px!important;min-width:300px!important;max-width:300px!important;flex:0 0 300px!important}"; document.head.appendChild(ancho);
       cart[0].name = "Hamburguesa especial de la casa con queso"; cart[0].qty = 12.375; cart[0].price = 1234.5; cart[0].grossPrice = 1358.0; renderCart(); await sleep(500);
-      const medir = () => { const el = document.querySelector(".cart-line .cart-line-name"); const line = document.querySelector(".cart-line"); return { nombre: el ? Math.round(el.getBoundingClientRect().width) : -1, fila: line ? Math.round(line.getBoundingClientRect().width) : -1, alto: el ? Math.round(el.getBoundingClientRect().height) : -1, carrito: Math.round((document.querySelector(".cart-card")?.getBoundingClientRect().width) || 0) }; };
+      const medir = () => { const el = document.querySelector(".cart-line .cart-line-name"); const line = document.querySelector(".cart-line"); return { nombre: el ? Math.round(el.getBoundingClientRect().width) : -1, fila: line ? Math.round(line.getBoundingClientRect().width) : -1, alto: el ? Math.round(el.getBoundingClientRect().height) : -1, controlesDebajo: (() => { const q = document.querySelector(".cart-line .qty-controls"); return !!(el && q && q.getBoundingClientRect().top >= el.getBoundingClientRect().bottom - 1); })(), carrito: Math.round((document.querySelector(".cart-card")?.getBoundingClientRect().width) || 0) }; };
       const r = { conArreglo: medir() };
-      const st = document.createElement("style"); st.id = "__viejo"; st.textContent = ".cart-line-name{min-width:0!important}.cart-line{flex-wrap:nowrap!important}"; document.head.appendChild(st);
+      const st = document.createElement("style"); st.id = "__viejo"; st.textContent = ".cart-line-name{flex:1 1 0%!important;min-width:0!important}.cart-line{flex-wrap:nowrap!important}.cart-line-controls{display:contents!important}"; document.head.appendChild(st);
       await sleep(300); r.reglasAntiguas = medir(); st.remove();
       await sleep(300); r.otraVez = medir();
       document.getElementById("__ancho")?.remove();
@@ -176,7 +176,7 @@ let kill = () => {};
       ok("4) Clientes: dirección, código postal, ciudad y email se completan desde el contacto de facturación (idcontactofact)", c5.direccion === "Calle Mayor 3" && c5.codpostal === "08001" && c5.ciudad === "Barcelona" && c5.email === "contacto@x.es", c5),
       ok("4) Sin contacto de facturación se usa el primer contacto del cliente; y lo que el cliente ya tenía propio no se pisa", c9.direccion === "Otra 1" && c9.codpostal === "28001" && c9.email === "propio@x.es", c9),
       ok("4) Un cliente sin contactos queda como estaba y si falla la petición de contactos se sigue sin ellos (no rompe la lista)", !c11.direccion && t4.total === 3 && t4.sinContactos === 1, { c11, total: t4.total, sinContactos: t4.sinContactos }),
-      ok("5) Texto del carrito: con importe largo y cantidad decimal, el nombre conserva un ancho mínimo (≥ 80 px) o ocupa su propia línea", t5.conArreglo && t5.conArreglo.nombre >= 80, t5.conArreglo),
+      ok("5) Texto del carrito: con importe largo y cantidad decimal, el nombre ocupa su propia línea a todo el ancho (≥ 80 px) y el contador y el precio quedan debajo", t5.conArreglo && t5.conArreglo.nombre >= 80 && t5.conArreglo.controlesDebajo === true, t5.conArreglo),
       ok("5) Control: con las reglas ANTIGUAS el nombre se encoge (< 60 px); si no se reproduce, esta prueba no demostraría nada", t5.reglasAntiguas && t5.reglasAntiguas.nombre < 60, t5.reglasAntiguas),
       ok("5) Al quitar las reglas antiguas vuelve a quedar bien", t5.otraVez && t5.otraVez.nombre >= 80, t5.otraVez),
       ok("Al terminar las mesas de prueba quedan limpias", Array.isArray(out.limpio) && out.limpio.length === 0, out.limpio),

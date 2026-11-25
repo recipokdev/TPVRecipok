@@ -17707,6 +17707,7 @@ function renderCart() {
         <div class="cart-line-unit">${splitView ? splitView.qtyText : fmtQty(item.qty)} x ${unitTxt}${splitView ? ` ÷ ${splitView.parts}` : ""}</div>
       </div>
 
+      <div class="cart-line-controls">
       <div class="qty-controls">
         <button class="qty-btn" data-action="minus" data-lineid="${item._lineId}">-</button>
         <button type="button" class="qty-display qty-display-btn qty-btn" data-action="edit" data-lineid="${item._lineId}">
@@ -17725,6 +17726,7 @@ function renderCart() {
             : ""
         }
         <button class="line-delete-btn" data-lineid="${item._lineId}">✕</button>
+      </div>
       </div>
     `;
 
