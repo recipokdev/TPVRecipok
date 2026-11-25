@@ -10,6 +10,8 @@
 //   S4 el servidor de la empresa no responde: contador y boton igualmente, sin abrir solo; al pulsarlo abre.
 //   S5 hay version nueva pero una instalacion de ella FALLO hace poco (Windows la bloqueo, sabor_100x100 24-nov-2026): se abre con la version
 //      actual sin intentar instalar de nuevo en cada arranque (freno de 3 h); con otra version distinta si se intentaria.
+//   S6 el servidor pone a ESTE cliente en pausa de actualizaciones (update_hold.php, pensado para el caso Sabor): hay version nueva pero se abre
+//      con la actual sin pedir ni instalar nada. S7 (control): sin pausa, con la misma version nueva, SI intenta instalar.
 // Necesita internet (la puerta comprueba github.com antes de buscar). Nunca toca la demo ni los perfiles de prueba.
 // Uso: node tools/tests/run-update-gate.js
 const http = require("http"), path = require("path"), fs = require("fs"), os = require("os");
@@ -43,12 +45,12 @@ const LATEST = `version: ${PKG.version}\nfiles:\n  - url: TPV-Recipok-Setup-${PK
 const NEWER = PKG.version.replace(/(\d+)$/, (m) => String(Number(m) + 1));
 const LATEST_NEW = `version: ${NEWER}\nfiles:\n  - url: TPV-Recipok-Setup-${NEWER}.exe\n    sha512: AAAA\n    size: 1\npath: TPV-Recipok-Setup-${NEWER}.exe\nsha512: AAAA\nreleaseDate: '2026-11-12T00:00:00.000Z'\n`;
 
-async function escenario(nombre, { feed, apiCaida = false, cfg = null, accion }) {
+async function escenario(nombre, { feed, apiCaida = false, cfg = null, env: extraEnv = null, accion }) {
   const ud = path.join(os.tmpdir(), `tpvrecipok-gate-${nombre}-${Date.now()}`);
   fs.mkdirSync(ud, { recursive: true });
   const cfgObj = { ...(apiCaida ? { "company.baseUrl": "https://127.0.0.1:8598/api/3", "company.apiKey": "x", "company.email": "prueba@test.local" } : {}), ...(cfg || {}) };
   if (Object.keys(cfgObj).length) fs.writeFileSync(path.join(ud, "tpv-config.json"), JSON.stringify(cfgObj));
-  const env = { ...process.env, TPV_MULTI_INSTANCE: "1", TPV_USER_DATA: ud, TPV_RUN_BACKGROUND: "1" };
+  const env = { ...process.env, TPV_MULTI_INSTANCE: "1", TPV_USER_DATA: ud, TPV_RUN_BACKGROUND: "1", ...(extraEnv || {}) };
   delete env.TPV_E2E; delete env.TPV_E2E_USER_DATA; delete env.TPV_MODE;
   const t0 = Date.now();
   const T = () => (Date.now() - t0) / 1000;
@@ -86,8 +88,16 @@ async function escenario(nombre, { feed, apiCaida = false, cfg = null, accion })
   const out = {};
   let modoFeed = "504";
   let feedDesde = 0;
+  let modoHold = false;
   const srv = http.createServer((req, res) => {
     out.peticiones = (out.peticiones || 0) + 1;
+    if (/\/update_hold\.php/.test(req.url)) {
+      out.holdPeticiones = (out.holdPeticiones || 0) + 1;
+      out.holdSlug = (req.url.match(/slug=([^&]+)/) || [])[1] || "";
+      out.holdClave = String(req.headers["x-tpv-api-key"] || "").length > 0;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify(modoHold ? { ok: true, hold: true, reason: "prueba", scope: "slug" } : { ok: true, hold: false }));
+    }
     const sirve = modoFeed === "ok" || (modoFeed === "vuelve" && Date.now() >= feedDesde);
     if (modoFeed === "nueva" && /latest\.yml(\?|$)/i.test(req.url)) { res.writeHead(200, { "Content-Type": "text/yaml" }); return res.end(LATEST_NEW); }
     if (modoFeed === "nueva") { out.pidioInstalador = out.pidioInstalador || /\.exe/i.test(req.url); res.writeHead(404); return res.end("x"); }
@@ -136,6 +146,21 @@ async function escenario(nombre, { feed, apiCaida = false, cfg = null, accion })
       o.segundos_hasta_abrir_solo = await abreDespues(40);
     } });
     out.S5.pidioInstalador = out.pidioInstalador;
+
+    // S6: el servidor pone a este cliente en pausa -> se abre con la actual sin pedir el instalador
+    modoFeed = "nueva"; modoHold = true; out.pidioInstalador = false; out.holdPeticiones = 0;
+    const HOLD_ENV = { TPV_TEST_UPDATE_HOLD_URL: `http://127.0.0.1:${srv.address().port}/update_hold.php`, TPV_TEST_UPDATE_HOLD_SLUG: "zz_hold_prueba" };
+    out.S6 = await escenario("s6", { env: HOLD_ENV, accion: async ({ o, abreDespues }) => {
+      o.segundos_hasta_abrir_solo = await abreDespues(40);
+    } });
+    out.S6.pidioInstalador = out.pidioInstalador; out.S6.holdPeticiones = out.holdPeticiones; out.S6.holdSlug = out.holdSlug; out.S6.holdClave = out.holdClave;
+
+    // S7 (control): sin pausa y con la misma version nueva el TPV SI intenta instalar (si no, S6 no probaria nada)
+    modoHold = false; out.pidioInstalador = false;
+    out.S7 = await escenario("s7", { env: HOLD_ENV, accion: async ({ o, T, esperarHasta }) => {
+      for (let i = 0; i < 60 && !out.pidioInstalador; i++) await new Promise((r) => setTimeout(r, 500));
+      o.pidioInstalador = out.pidioInstalador;
+    } });
   } catch (e) {
     out.ERROR = String(e && e.message || e).slice(0, 300);
   } finally {
@@ -170,5 +195,10 @@ function buildChecks(out) {
   ok("S5 (instalacion fallida hace poco de la version nueva): el TPV se abre solo con la version actual, sin quedarse instalando", typeof s5.segundos_hasta_abrir_solo === "number" && s5.segundos_hasta_abrir_solo <= 30, s5.segundos_hasta_abrir_solo);
   ok("S5: ni siquiera pide el instalador (no se descarga de nuevo)", s5.pidioInstalador === false, s5.pidioInstalador);
   ok("S5: lo deja anotado en el registro (instalacion fallida hace poco ... se reintenta mas tarde)", (s5.log || []).some((x) => /fallida hace poco/.test(x)), s5.log);
+  const s6 = out.S6 || {}, s7 = out.S7 || {};
+  ok("S6 (cliente en pausa de actualizaciones): hay version nueva pero el TPV se abre solo con la actual", typeof s6.segundos_hasta_abrir_solo === "number" && s6.segundos_hasta_abrir_solo <= 30, s6.segundos_hasta_abrir_solo);
+  ok("S6: no pide el instalador (no descarga nada mientras dura la pausa)", s6.pidioInstalador === false, s6.pidioInstalador);
+  ok("S6: pregunto al servidor por SU cliente, con la clave compartida, y lo dejo anotado en el registro", s6.holdPeticiones >= 1 && s6.holdSlug === "zz_hold_prueba" && s6.holdClave === true && (s6.log || []).some((x) => /en pausa para este cliente/.test(x)), { n: s6.holdPeticiones, slug: s6.holdSlug, clave: s6.holdClave, log: s6.log });
+  ok("S7 (control): sin pausa, con la misma version nueva, SI intenta descargar el instalador", s7.pidioInstalador === true, s7.pidioInstalador);
   return c;
 }

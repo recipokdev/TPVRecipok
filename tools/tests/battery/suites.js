@@ -124,8 +124,8 @@ const SUITES = [
   },
   {
     id: "puerta-actualizacion", area: B, level: "full", title: "Arranque con GitHub caído o sin respuesta del servidor de la empresa",
-    what: "Arranca un TPV empaquetado de pruebas contra un «GitHub» falso: con un 504 sale el aviso con contador y el botón «Entrar ahora» a los 10 s, no se abre solo con la versión vieja y al pulsar abre en segundos; si GitHub vuelve, se abre solo; sin novedades abre directo; y con el servidor de la empresa caído también hay contador y botón. No toca la demo ni los accesos directos del equipo. Necesita internet.",
-    args: ["tools/tests/run-update-gate.js"], timeoutMs: 480000,
+    what: "Arranca un TPV empaquetado de pruebas contra un «GitHub» falso: con un 504 sale el aviso con contador y el botón «Entrar ahora» a los 10 s, no se abre solo con la versión vieja y al pulsar abre en segundos; si GitHub vuelve, se abre solo; sin novedades abre directo; y con el servidor de la empresa caído también hay contador y botón. Si una instalación de la versión nueva falló hace poco, abre con la actual sin volver a intentarlo en cada arranque; y si el servidor pone a ese cliente en «pausa de actualizaciones», abre con la actual sin pedir ni instalar nada (y, como control, sin pausa sí intenta instalar). No toca la demo ni los accesos directos del equipo. Necesita internet.",
+    args: ["tools/tests/run-update-gate.js"], timeoutMs: 600000,
   },
   {
     id: "e2e-mesas", area: C, level: "standard", title: "Modo Mesas: abrir, cambiar de mesa y cerrar",

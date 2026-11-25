@@ -57,6 +57,22 @@ function describeHelperFiles(assetsDir, names) {
 const gb = (n) => (Number.isFinite(n) && n >= 0 ? Math.round((n / 1073741824) * 10) / 10 : null);
 
 // «Foto» del equipo. Entrada: datos ya recogidos (la recogida con Electron vive en main.js). Pocas claves (el servidor admite 25 por nivel).
+// Estado del Control inteligente de aplicaciones (Smart App Control) de Windows 11, a partir de la salida de
+// `reg query HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy /v VerifiedAndReputablePolicyState`:
+// 1 = activo (bloquea lo que no esta firmado ni conocido), 2 = en evaluacion (todavia no bloquea), 0 = desactivado.
+// Sin esa clave (Windows 10, o un Windows 11 sin el control) = "no-disponible". 25-nov-2026: bloqueaba el instalador en Sabor.
+function parseSmartAppControlState(text) {
+  const t = String(text || "");
+  if (!/VerifiedAndReputablePolicyState/i.test(t)) return "no-disponible";
+  const m = t.match(/REG_DWORD\s+0x([0-9a-f]+)/i);
+  if (!m) return "desconocido";
+  const v = parseInt(m[1], 16);
+  if (v === 1) return "activo";
+  if (v === 2) return "evaluacion";
+  if (v === 0) return "desactivado";
+  return `desconocido-${v}`;
+}
+
 function buildSnapshot(i) {
   return {
     reason: clip(i.reason || "arranque", 40),
@@ -72,6 +88,7 @@ function buildSnapshot(i) {
     displays: clip((i.displays || []).slice(0, 4).map((d) => `${d.w}x${d.h}@${d.scale}`).join(" | "), 120),
     kiosk: !!i.kiosk,
     av: clip(Array.isArray(i.av) ? i.av.join(" | ") || "ninguno-registrado" : "?", 160),
+    smartAppControl: clip(i.smartAppControl || "?", 24),
     printers: clip(
       (i.printers || []).slice(0, 8).map((p) => `${clip(p.name, 40)}[${clip(p.state, 30)}]`).join(" | ") || "(ninguna)",
       MAX_TEXT,
@@ -155,6 +172,7 @@ module.exports = {
   decodePrinterStatus,
   describeHelperFiles,
   buildSnapshot,
+  parseSmartAppControlState,
   shouldSendSnapshot,
   makeThrottle,
   tailLines,

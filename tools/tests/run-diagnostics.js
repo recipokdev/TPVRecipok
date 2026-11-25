@@ -42,16 +42,23 @@ function serverLimitsOk(obj) {
   const snap = dg.buildSnapshot({
     reason: "arranque", appVersion: "0.2.69", electron: "39.2.5", packaged: true, os: "10.0.19045 x64", uptimeSec: 7200, totalMem: 8 * 1073741824, freeMem: 3.2 * 1073741824,
     diskFree: 40 * 1073741824, tempFree: 38 * 1073741824, displays: [{ w: 1920, h: 1080, scale: 1 }, { w: 1920, h: 1080, scale: 1 }], kiosk: true,
-    av: ["Windows Defender"], printers: Array.from({ length: 12 }, (_, k) => ({ name: `Impresora ${k} ${big}`, state: "ok" })),
+    av: ["Windows Defender"], smartAppControl: "activo", printers: Array.from({ length: 12 }, (_, k) => ({ name: `Impresora ${k} ${big}`, state: "ok" })),
     helpers: [{ name: "open-drawer-lite.exe", exists: true, size: 5632, day: "2026-11-19" }, { name: "open-drawer.exe", exists: false }],
     installDir: "C:\\Users\\Maria Lopez\\AppData\\Local\\Programs\\tpvrecipok", locale: "es", tz: "Europe/Madrid", drawer: big,
   });
-  check("La foto cumple los limites del servidor (textos <= 240 y <= 25 claves) aunque los datos sean enormes", serverLimitsOk(snap) && Object.keys(snap).length <= 18, `${Object.keys(snap).length} claves`);
+  check("La foto cumple los limites del servidor (textos <= 240 y <= 25 claves) aunque los datos sean enormes", serverLimitsOk(snap) && Object.keys(snap).length <= 19, `${Object.keys(snap).length} claves`); // 19 con smartAppControl; el informe del boton llega a 24 de las 25 que admite el servidor: una de margen
   const reportShape = { ...snap, log: Array.from({ length: 18 }, () => "l".repeat(230)), events: Array.from({ length: 10 }, () => "e".repeat(230)), slug: "x", currentVersion: "0.2.69", requestIp: "1.2.3.4" };
   check("El informe del boton (foto + registro + avisos + campos del servidor) tambien cabe: <= 25 claves y textos <= 240", serverLimitsOk(reportShape) && Object.keys(reportShape).length <= 25, `${Object.keys(reportShape).length} claves`);
   check("La foto pesa poco (menos de 3 KB)", JSON.stringify(snap).length < 3000, String(JSON.stringify(snap).length));
   check("La foto no lleva el nombre de usuario de Windows (la ruta de instalacion va saneada)", !/Maria|Lopez/.test(JSON.stringify(snap)) && /<usuario>/.test(snap.installDir), snap.installDir);
   check("Resume impresoras (maximo 8), programas auxiliares (FALTA si no estan), pantallas y memoria", /open-drawer-lite\.exe 5632B 2026-11-19/.test(snap.helpers) && /open-drawer\.exe FALTA/.test(snap.helpers) && snap.displays === "1920x1080@1 | 1920x1080@1" && snap.ramGb === 8 && snap.diskFreeGb === 40, JSON.stringify(snap).slice(0, 400));
+  // Estado del Control inteligente de aplicaciones (Smart App Control, 25-nov-2026: bloqueaba el instalador en Sabor)
+  const sac = (t) => dg.parseSmartAppControlState(t);
+  const k = "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\CI\\Policy\r\n    VerifiedAndReputablePolicyState    REG_DWORD    ";
+  check("Control inteligente: 0x1 = activo, 0x2 = evaluacion, 0x0 = desactivado", sac(k + "0x1") === "activo" && sac(k + "0x2") === "evaluacion" && sac(k + "0x0") === "desactivado", [sac(k + "0x1"), sac(k + "0x2"), sac(k + "0x0")].join(","));
+  check("Control inteligente: sin la clave (Windows 10, o texto de error del sistema) o sin salida = no-disponible", sac("ERROR: El sistema no ha podido encontrar la clave o el valor del Registro especificados.") === "no-disponible" && sac("") === "no-disponible" && sac(null) === "no-disponible");
+  check("Control inteligente: un valor raro no se confunde con ninguno de los tres", sac(k + "0x5") === "desconocido-5" && sac("VerifiedAndReputablePolicyState basura") === "desconocido");
+  check("La foto lleva el estado del Control inteligente y, si no se sabe, ?", snap.smartAppControl === "activo" && dg.buildSnapshot({}).smartAppControl === "?", `${snap.smartAppControl} / ${dg.buildSnapshot({}).smartAppControl}`);
   const snapEmpty = dg.buildSnapshot({});
   check("Con datos que faltan no falla ni inventa nada (sin impresoras: (ninguna); sin antivirus consultado: ?)", snapEmpty.printers === "(ninguna)" && snapEmpty.av === "?" && snapEmpty.appVersion === "", JSON.stringify(snapEmpty).slice(0, 300));
 

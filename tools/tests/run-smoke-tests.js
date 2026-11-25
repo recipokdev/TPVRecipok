@@ -12861,6 +12861,14 @@ mustContain(main, "El TPV ya está abierto o terminando de actualizarse.", "Un s
 mustContain(main, "if (appIsInstallingUpdate && Date.now() - appInstallingSince < 90_000) return;", "Durante una instalacion atascada el icono deja de ignorarse pasados 90 s");
 mustContain(main, "function verifyPreviousInstallOutcome() {", "El siguiente arranque comprueba si la instalacion anterior se aplico");
 mustContain(main, 'logUpdateEventRemote("update-install-not-applied"', "Una instalacion que no se aplico queda registrada en el servidor");
+mustContain(main, "async function fetchUpdateHoldFromServer() {", "Pausa remota de actualizaciones por cliente (update_hold.php): el TPV pregunta al servidor y, si esta en pausa, no instala ni descarga");
+mustContain(main, "if (policy.heldByServer) return true;", "La pausa remota entra por isTargetVersionBlocked: arranque, boton «Actualizar», descarga en segundo plano y ofertas la respetan todas");
+mustContain(main, "const policy = await loadUpdatePolicyBase(channel);", "La pausa remota se suma a la politica de versiones bloqueadas");
+mustContain(main, 'logUpdateEventRemote("update-gate-held-by-server"', "El arranque anota en el servidor que se abrio con la version actual por una pausa remota");
+mustContain(main, "if (!slug || !holdUrl || (!apiKey && !testUrl)) return none;", "La pausa remota falla ABIERTO: sin empresa, sin clave o sin respuesta del servidor se sigue como siempre");
+mustContain(main, "refreshSmartAppControlStateInBackground();", "El estado del Control inteligente de Windows se lee en cada arranque (solo lectura, en segundo plano)");
+mustContain(main, "if (sac) out.smartAppControl = sac;", "El aviso de «instalando» lleva el estado del Control inteligente (Sabor, 25-nov-2026)");
+mustContain(fs.readFileSync(path.join(root, "diagnostics.js"), "utf8"), "function parseSmartAppControlState(text) {", "La foto de diagnostico incluye el estado del Control inteligente de aplicaciones de Windows");
 mustContain(renderer, "async function resolveCompanyRemote(email) {", "Fase 1 de privacidad: el TPV pregunta por UN email (resolve_company.php) en vez de descargar clients.json entero");
 mustContain(renderer, "if (res.status === 404) return resolveCompanyFromLegacyClientsJson(e);", "Respaldo transitorio al clients.json de siempre si el servidor aun no tiene el servicio nuevo (se quita en la fase 2)");
 mustContain(renderer, "__resolveCompanyBlockedUntil = Date.now() + retry * 1000;", "Tras un 429 se respeta Retry-After y no se reintenta en bucle");

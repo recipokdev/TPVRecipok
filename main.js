@@ -2094,6 +2094,7 @@ async function collectDiagSnapshot(reason) {
     displays,
     kiosk,
     av,
+    smartAppControl: readSmartAppControlStateCached() || "?",
     printers,
     helpers: diagnostics.describeHelperFiles(assetsDirForDiag(), ["open-drawer-lite.exe", "open-drawer.exe"]),
     installDir: path.dirname(process.execPath),
@@ -2214,6 +2215,10 @@ function describeInstallExtras() {
     out.installDir = path.dirname(process.execPath);
   } catch (_) {}
   try {
+    const sac = readSmartAppControlStateCached();
+    if (sac) out.smartAppControl = sac;
+  } catch (_) {}
+  try {
     const av = readCfg().avProducts;
     if (av && Array.isArray(av.list)) out.av = av.list.join(" | ").slice(0, 160) || "ninguno-registrado";
   } catch (_) {}
@@ -2231,6 +2236,34 @@ function describeInstallExtras() {
     }
   } catch (_) {}
   return out;
+}
+
+// Estado del Control inteligente de aplicaciones de Windows 11 (Smart App Control; 25-nov-2026 bloqueaba el instalador en Sabor por no
+// estar firmado). Solo LECTURA de una clave del registro, en segundo plano y en cada arranque (no retrasa nada); se guarda en la
+// configuracion para el aviso "instalando" y la foto de diagnostico. Valores: activo | evaluacion | desactivado | no-disponible.
+function refreshSmartAppControlStateInBackground() {
+  if (process.platform !== "win32" || !app.isPackaged || IS_E2E || IS_MULTI_INSTANCE) return;
+  try {
+    execFile(
+      "reg.exe",
+      ["query", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\CI\\Policy", "/v", "VerifiedAndReputablePolicyState"],
+      { windowsHide: true, timeout: 5000 },
+      (err, stdout) => {
+        try {
+          writeCfg({ sacState: { state: diagnostics.parseSmartAppControlState(String(stdout || "")), at: Date.now() } });
+        } catch (_) {}
+      },
+    );
+  } catch (_) {}
+}
+
+function readSmartAppControlStateCached() {
+  try {
+    const st = readCfg().sacState;
+    return st && typeof st.state === "string" ? st.state : "";
+  } catch (_) {
+    return "";
+  }
 }
 
 // Los antivirus instalados casi nunca cambian: se consulta en segundo plano una vez por semana y se guarda en la configuracion.
@@ -2452,7 +2485,57 @@ function normalizeUpdatePolicy(raw, channel) {
   };
 }
 
+// ===== Pausa remota de actualizaciones por cliente (2026-11-25; caso Sabor: Windows bloqueaba el instalador y el TPV no podia abrir) =====
+// Al buscar actualizaciones el TPV pregunta a update_hold.php (servidor, tools/update_hold.php) si su cliente esta en pausa. Si lo esta, no
+// instala ni descarga nada (arranque, boton «Actualizar», descarga en segundo plano y ofertas pasan todas por isTargetVersionBlocked).
+// FALLA ABIERTO: si no hay empresa configurada, el servidor no contesta o responde algo raro, se sigue como siempre (nunca puede dejar a
+// nadie sin actualizar ni sin TPV). Se recuerda 60 s solo cuando el servidor contesto bien.
+let __updateHoldCache = null;
+async function fetchUpdateHoldFromServer() {
+  const none = { hold: false };
+  try {
+    if (__updateHoldCache && Date.now() - __updateHoldCache.at < 60_000) return __updateHoldCache.value;
+    // Ganchos SOLO para pruebas (instancia de pruebas): direccion y cliente alternativos.
+    const testUrl = IS_MULTI_INSTANCE ? String(process.env.TPV_TEST_UPDATE_HOLD_URL || "") : "";
+    const testSlug = IS_MULTI_INSTANCE ? String(process.env.TPV_TEST_UPDATE_HOLD_SLUG || "") : "";
+    const { baseUrl } = getCompanyFromCfgForMain();
+    const slug = testSlug || getSlugFromBaseUrl(baseUrl);
+    const { url: syncUrl, apiKey } = readTpvSyncConfig();
+    const holdUrl = testUrl || String(syncUrl || "").replace(/index\.php(\?.*)?$/i, "update_hold.php");
+    if (!slug || !holdUrl || (!apiKey && !testUrl)) return none;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    try {
+      const res = await fetch(`${holdUrl}${holdUrl.includes("?") ? "&" : "?"}slug=${encodeURIComponent(slug)}`, {
+        headers: { Accept: "application/json", "X-TPV-API-KEY": apiKey },
+        signal: controller.signal,
+      });
+      if (!res.ok) return none;
+      const j = await res.json().catch(() => null);
+      const value = j && j.ok === true && j.hold === true ? { hold: true, reason: String(j.reason || "").slice(0, 120) } : none;
+      __updateHoldCache = { at: Date.now(), value };
+      return value;
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (_) {
+    return none;
+  }
+}
+
 async function loadUpdatePolicy(channel) {
+  const policy = await loadUpdatePolicyBase(channel);
+  try {
+    const hold = await fetchUpdateHoldFromServer();
+    if (hold && hold.hold) {
+      policy.heldByServer = true;
+      policy.heldReason = hold.reason || "";
+    }
+  } catch (_) {}
+  return policy;
+}
+
+async function loadUpdatePolicyBase(channel) {
   const channelCfg = readChannelConfig();
   const policyUrl =
     String(channelCfg.updatePolicyUrl || "").trim() ||
@@ -2490,6 +2573,8 @@ function shouldAllowDowngrade(policy, currentVersion) {
 
 function isTargetVersionBlocked(policy, targetVersion) {
   if (!policy) return false;
+  // Pausa remota de actualizaciones de este cliente (ver fetchUpdateHoldFromServer): ninguna version se instala mientras dure.
+  if (policy.heldByServer) return true;
   const target = String(targetVersion || "").trim();
   if (!target) return false;
   return policy.blockUpdateToVersions.includes(target);
@@ -3024,16 +3109,22 @@ async function runAutoUpdateGate() {
       autoUpdater.once("update-available", (info) => {
         const targetVersion = String(info?.version || "").trim();
         if (isTargetVersionBlocked(policy, targetVersion)) {
-          splashSet(
-            `Version ${targetVersion} bloqueada por seguridad. Abriendo TPV...`,
-            30,
-          );
-          logUpdater(
-            `[POLICY] blocked update startup: ${currentVersion} -> ${targetVersion}`,
-          );
-          logUpdateEventRemote("update-gate-blocked-by-policy", {
-            targetVersion,
-          });
+          if (policy?.heldByServer) {
+            splashSet("Actualizaciones en pausa para este equipo. Abriendo TPV...", 30);
+            logUpdater(`[GATE] actualizaciones en pausa para este cliente (${policy.heldReason || "sin motivo"}): se abre con ${currentVersion}`);
+            logUpdateEventRemote("update-gate-held-by-server", { targetVersion, reason: policy.heldReason || "" });
+          } else {
+            splashSet(
+              `Version ${targetVersion} bloqueada por seguridad. Abriendo TPV...`,
+              30,
+            );
+            logUpdater(
+              `[POLICY] blocked update startup: ${currentVersion} -> ${targetVersion}`,
+            );
+            logUpdateEventRemote("update-gate-blocked-by-policy", {
+              targetVersion,
+            });
+          }
           return done({
             ok: true,
             updatedOrReady: true,
@@ -3758,6 +3849,7 @@ app.whenReady().then(async () => {
   logUpdater(`arranque: version ${app.getVersion()}, pid ${process.pid}`);
   verifyPreviousInstallOutcome();
   refreshAntivirusCacheInBackground();
+  refreshSmartAppControlStateInBackground();
 
   bootstrapCurrentUserFromCfg();
   cleanOldAutoStartIfWrong();
