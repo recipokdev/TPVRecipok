@@ -106,3 +106,26 @@ compartida) y que ningún flujo suyo necesita el fichero descargable ni distingu
 - Para otra fase: que `tpv/api` compruebe también `active` en `ensureClientExists` (hoy un cliente de baja con clave válida seguiría
   pasando esa comprobación).
 - Tras la fase 2, **confirmar con quien mantiene el backend de Recipok** (`82.165.207.161`) que no depende del fichero.
+
+## 11. Revisión de la app de camareros y del port Android (25-nov-2026)
+
+**App de camareros:** no usa `clients.json`, ni emails, ni `resolve-company`; el slug sale solo del emparejamiento por código. **No le
+afecta ni la fase 1 ni la 2.** Sin objeciones. Aportan dos cosas importantes:
+- **La clave compartida `X-TPV-API-KEY` va compilada en la app, y Sergi va a subir la app a Google Play (AAB 1.2.29).** Cuando esté
+  publicada, cualquiera podrá bajar el APK y sacar esa clave. Como `resolve-company` exige esa cabecera, **la clave no protege nada**:
+  la protección real es solo «conocer el email exacto + límites de frecuencia». **Sube la prioridad de la fase 3** (código de activación
+  de un solo uso). Por eso no se promete más de lo que da esta fase (ver §7).
+- La app manda esa clave también en la URL del WebSocket del relé (`?key=…&slug=…`), que puede quedar en los logs de acceso: apuntado
+  para la fase 3.
+- Si en la fase 2 se **rota la clave compartida** (no solo las claves de FacturaScripts), las apps instaladas dejan de funcionar hasta
+  actualizar; habrá que **aceptar dos claves a la vez** durante la transición y avisar antes. Rotar solo las `apiKey` de FacturaScripts
+  por cliente no les afecta.
+
+**Port Android:** `renderer.js` va **empaquetado dentro de la APK** (no se carga de ningún sitio) y no existe aún el endpoint de
+actualización por internet, así que **el cambio solo llega a una tablet cuando se instala una APK nueva** (3-4 pasos manuales suyos:
+fusionar `main` en su rama, `npm run sync`, `publish-android.js`, y `bundlePlay` para Google Play). Las llamadas actuales a
+`tpv/api` con la cabecera propia ya funcionan con CapacitorHttp, así que el POST JSON de `resolve-company` viaja igual (el cuerpo
+debe ser un string JSON). **Las 648 peticiones eran de sus emuladores**, no de una tablet real; APK repartidas, pocas y todas internas.
+- **Condición para la fase 2:** la APK **no tiene puerta de actualización obligatoria ni aviso de «servicio desactivado»**; si se
+  cierra `clients.json`, las APK viejas **no podrán activar ni entrar**. Acordado: ellos sacan una APK/AAB nueva con
+  `resolve-company` cuando el renderer esté en `main`, y **avisamos antes de quitar el respaldo** para que repartan la APK nueva.
