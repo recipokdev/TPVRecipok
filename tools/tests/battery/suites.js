@@ -255,6 +255,11 @@ const SUITES = [
     args: ["tools/tests/run-service-suspended.js"], timeoutMs: 260000,
   },
   {
+    id: "empresa-por-email", area: A, level: "standard", title: "Activación y arranque: el TPV pregunta por UN email en vez de descargar la lista de clientes",
+    what: "Fase 1 de privacidad. Contra un servidor falso local (sin red ni demo) se comprueba que el TPV pregunta por su email con una sola petición (con la clave compartida y el email en el cuerpo, no en la dirección) y entiende las tres respuestas: activo (con su clave), de baja y desconocido. Si el servidor responde «demasiadas peticiones» respeta el tiempo de espera y no insiste; si el servidor aún no tiene el servicio nuevo cae al fichero de siempre; y los fallos del servidor se tratan como falta de conexión. En el arranque comprueba que con la empresa guardada hace una sola petición y refresca la clave, bloquea una cuenta de baja, conserva lo guardado si el email ya no existe o no hay conexión sin pedir el email por error, y que la primera activación avisa «Email no encontrado» y vuelve a preguntar. También la autocuración de claves.",
+    args: ["tools/tests/run-resolve-company.js"], timeoutMs: 200000,
+  },
+  {
     id: "mesas-boton-al-cargar", area: C, level: "full", demo: true, title: "Pulsar Mesas mientras el TPV todavía está cargando",
     what: "Se pulsa el botón de Mesas justo al arrancar, antes de que termine la carga: el TPV lo recuerda, avisa «entrará en Modo Mesas al terminar» y entra solo en Modo Mesas cuando acaba de cargar (antes no hacía nada y sin aviso).",
     args: ["tools/tests/run-mesas-button-during-load.js"], timeoutMs: 200000,

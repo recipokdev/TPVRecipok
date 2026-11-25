@@ -963,11 +963,10 @@ async function tryAdoptNewServiceKey() {
   try {
     const email = normalizeEmail(localStorage.getItem("tpv_companyEmail") || "");
     if (!email) return "same";
-    const data = await fetchClientsJson();
-    const client = (Array.isArray(data?.clients) ? data.clients : []).find((c) => normalizeEmail(c?.email) === email);
-    if (!client) return "same";
-    if (client.active === false) return "inactive";
-    const newKey = String(client.apiKey || "").trim();
+    const lookup = await resolveCompanyRemote(email);
+    if (lookup.status === "unknown") return "same";
+    if (lookup.status === "inactive") return "inactive";
+    const newKey = String(lookup.apiKey || "").trim();
     const curKey = String(window.RECIPOK_API?.apiKey || "").trim();
     if (!newKey || newKey === curKey) return "same";
     if ((await probeServiceKey(newKey)) !== "ok") return "same";
@@ -57486,26 +57485,115 @@ async function fetchClientsJson() {
   return await res.json();
 }
 
-async function resolveCompanyByEmail(email) {
+// ---- Resolver la empresa a partir del email (fase 1 de privacidad, 2026-11-25) ----
+// Antes el TPV descargaba clients.json ENTERO (con las claves de todos los clientes) para encontrar su email. Ahora pregunta por UN solo
+// email a resolve_company.php, que devuelve solo esa entrada: { status: "active" | "inactive" | "unknown", slug, apiKey }.
+// Respaldo transitorio: si el servidor aun no tiene ese servicio (HTTP 404) se usa el clients.json de siempre (se quita en la fase 2).
+// Tras un 429 se respeta Retry-After: mientras dura no se hace ninguna peticion (sin bucles de reintento).
+let __resolveCompanyBlockedUntil = 0;
+
+function getResolveCompanyApiUrl() {
+  const fromCfg = String(window.TPV_CONFIG?.tpvResolveCompanyApiUrl || "").trim();
+  if (fromCfg) return fromCfg;
+  return TPV_SYNC_API_URL.replace(/index\.php$/, "resolve_company.php");
+}
+
+async function resolveCompanyFromLegacyClientsJson(email) {
+  const data = await fetchClientsJson();
+  const e = normalizeEmail(email);
+  const client = (data.clients || []).find((c) => normalizeEmail(c.email) === e);
+  if (!client) return { status: "unknown" };
+  if (client.active === false) return { status: "inactive" };
+  const slug = String(client.slug || "").trim();
+  const apiKey = String(client.apiKey || "").trim();
+  if (!slug || !apiKey) return { status: "unknown" };
+  return { status: "active", slug, apiKey };
+}
+
+async function resolveCompanyRemote(email) {
   const e = normalizeEmail(email);
   if (!e) throw new Error("Email vacío");
 
-  const data = await fetchClientsJson();
-  const client = (data.clients || []).find(
-    (c) => normalizeEmail(c.email) === e,
-  );
+  const waitMs = __resolveCompanyBlockedUntil - Date.now();
+  if (waitMs > 0) {
+    const err = new Error(`Demasiadas peticiones (429): espera ${Math.ceil(waitMs / 1000)} s antes de volver a comprobar el email`);
+    err.rateLimited = true;
+    throw err;
+  }
 
-  if (!client) throw new Error("Cuenta no encontrada");
-  if (client.active === false) throw new Error("Cuenta desactivada");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  let res;
+  try {
+    res = await fetch(getResolveCompanyApiUrl(), {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json", "X-TPV-API-KEY": getTpvSyncApiKey() },
+      body: JSON.stringify({ email: e }),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err?.name === "AbortError") throw new Error("Timeout comprobando el email de la empresa");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 
-  const slug = client.slug;
-  const apiKey = client.apiKey;
+  if (res.status === 404) return resolveCompanyFromLegacyClientsJson(e); // servidor sin el servicio nuevo
+  if (res.status === 429) {
+    let retry = Number(res.headers?.get?.("Retry-After") || 0);
+    const body429 = await res.json().catch(() => null);
+    if (!(retry > 0)) retry = Number(body429?.retryAfterSec || 0);
+    retry = Math.min(Math.max(retry > 0 ? retry : 60, 5), 3600);
+    __resolveCompanyBlockedUntil = Date.now() + retry * 1000;
+    const err = new Error(`Demasiadas peticiones (429): reintenta en ${retry} s`);
+    err.rateLimited = true;
+    throw err;
+  }
+  if (res.status === 401) throw new Error("No autorizado al comprobar el email de la empresa");
+  if (!res.ok) throw new Error(`Respuesta no válida del servidor al comprobar el email de la empresa (HTTP ${res.status})`);
 
-  if (!slug) throw new Error("clients.json: falta slug");
-  if (!apiKey) throw new Error("clients.json: falta apiKey");
+  const data = await res.json().catch(() => null);
+  const status = String(data?.status || "");
+  if (!data || data.ok !== true || !["active", "inactive", "unknown"].includes(status)) {
+    throw new Error("Respuesta no válida del servidor al comprobar el email de la empresa");
+  }
+  if (status !== "active") return { status };
+  const slug = String(data.slug || "").trim();
+  const apiKey = String(data.apiKey || "").trim();
+  if (!slug || !apiKey) throw new Error("Respuesta no válida del servidor al comprobar el email de la empresa");
+  return { status, slug, apiKey };
+}
 
-  const baseUrl = `https://plus.recipok.com/${slug}/api/3`;
-  return { email: e, baseUrl, apiKey };
+// Traduce el resultado de resolveCompanyRemote a lo que usaba el TPV ({ email, baseUrl, apiKey }) con los mismos errores de siempre.
+function resolvedFromLookup(email, lookup) {
+  if (!lookup || lookup.status === "unknown") throw new Error("Cuenta no encontrada");
+  if (lookup.status === "inactive") throw new Error("Cuenta desactivada");
+  return { email: normalizeEmail(email), baseUrl: `https://plus.recipok.com/${lookup.slug}/api/3`, apiKey: lookup.apiKey };
+}
+
+async function resolveCompanyByEmail(email) {
+  const e = normalizeEmail(email);
+  if (!e) throw new Error("Email vacío");
+  return resolvedFromLookup(e, await resolveCompanyRemote(e));
+}
+
+// "Hay conexion con el servidor de Recipok": sustituye a "se pudo descargar clients.json" cuando todavia no hay email que consultar.
+async function probeCompanyServiceReachable() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  try {
+    const res = await fetch(String(window.TPV_CONFIG?.tpvCompanyProbeUrl || "").trim() || `${TPV_SYNC_API_URL}?action=health`, {
+      headers: { Accept: "application/json", "X-TPV-API-KEY": getTpvSyncApiKey() },
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    return res.status < 500;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function validateBaseUrlOrThrow(baseUrl, apiKey) {
@@ -57971,28 +58059,34 @@ async function bootstrapCompany() {
     } catch {}
   };
 
-  let clientsData = null;
+  // Fase 1 de privacidad: ya no se descarga la lista de clientes; se pregunta por el email guardado (UNA peticion por arranque,
+  // antes eran dos descargas). Sin email guardado solo se comprueba que el servidor responde.
+  let savedLookup = null; // resultado para el email guardado ({status, slug, apiKey}) o null si no se pudo consultar
+  let serviceReachable = false; // antes: "se pudo descargar clients.json"
 
   try {
-    clientsData = await fetchClientsJson();
+    if (saved.email) {
+      savedLookup = await resolveCompanyRemote(saved.email);
+      serviceReachable = true;
+    } else {
+      serviceReachable = await probeCompanyServiceReachable();
+    }
   } catch (e) {
-    console.warn("No se pudo cargar clients.json:", e);
-    clientsData = null;
+    console.warn("No se pudo comprobar la empresa en el servidor:", e);
+    savedLookup = null;
+    serviceReachable = false;
   }
 
+  // Misma forma que antes: null si el email guardado no existe, {active:false} si esta de baja.
   const findClientByEmail = (email) => {
-    if (!clientsData || !Array.isArray(clientsData.clients)) return null;
-
-    const e = normalizeEmail(email);
-
-    return (
-      clientsData.clients.find((c) => normalizeEmail(c.email) === e) || null
-    );
+    if (!savedLookup || normalizeEmail(email) !== normalizeEmail(saved.email)) return null;
+    if (savedLookup.status === "unknown") return null;
+    return { active: savedLookup.status !== "inactive" };
   };
 
   const askAndResolve = async () => {
     // Si no hay conexión o estamos recuperando, NO pedir email
-    if (TPV_STATE?.apiRecovering || !clientsData) {
+    if (TPV_STATE?.apiRecovering || !serviceReachable) {
       showReconnectIfAvailable(
         "No hay conexión con Recipok. Espera por favor, reconectando...",
       );
@@ -58008,14 +58102,27 @@ async function bootstrapCompany() {
         return null;
       }
 
-      const client = findClientByEmail(email);
+      let lookup;
+      try {
+        lookup = await resolveCompanyRemote(email);
+      } catch (e) {
+        if (isConnectivityLikeError(e)) {
+          setActivationRecovering(
+            "Se perdió la conexión mientras validábamos el email. Espera por favor, reconectando...",
+            email,
+          );
+          return null;
+        }
 
-      if (!client) {
+        throw e;
+      }
+
+      if (lookup.status === "unknown") {
         alert("Email no encontrado.");
         continue;
       }
 
-      if (client.active === false) {
+      if (lookup.status === "inactive") {
         TPV_STATE.locked = true;
         TPV_STATE.offline = false;
         updateCashButtonLabel();
@@ -58028,20 +58135,7 @@ async function bootstrapCompany() {
         return null;
       }
 
-      try {
-        const resolved = await resolveCompanyByEmail(email);
-        return { ...resolved, email };
-      } catch (e) {
-        if (isConnectivityLikeError(e)) {
-          setActivationRecovering(
-            "Se perdió la conexión mientras validábamos el email. Espera por favor, reconectando...",
-            email,
-          );
-          return null;
-        }
-
-        throw e;
-      }
+      return { ...resolvedFromLookup(email, lookup), email };
     }
   };
 
@@ -58057,7 +58151,7 @@ async function bootstrapCompany() {
 
     // Si estamos sin conexión o aún recuperando, no repidas email.
     // Ya tenemos empresa vinculada.
-    if (TPV_STATE?.offline || TPV_STATE?.apiRecovering || !clientsData) {
+    if (TPV_STATE?.offline || TPV_STATE?.apiRecovering || !serviceReachable) {
       showReconnectIfAvailable(
         "No hay conexión con Recipok. Espera por favor, reconectando...",
       );
@@ -58085,7 +58179,7 @@ async function bootstrapCompany() {
     }
 
     try {
-      const resolved = await resolveCompanyByEmail(saved.email);
+      const resolved = resolvedFromLookup(saved.email, savedLookup);
 
       await persistCompanyCfg(resolved);
       applyResolved(resolved);
@@ -58132,7 +58226,7 @@ async function bootstrapCompany() {
   // =================================================
   if (saved.hasEmail && !saved.isComplete) {
     // Si no hay conexión, no podemos resolver nada todavía
-    if (TPV_STATE?.apiRecovering || !clientsData) {
+    if (TPV_STATE?.apiRecovering || !serviceReachable) {
       showReconnectIfAvailable(
         "No hay conexión con Recipok. Espera por favor, reconectando...",
       );
@@ -58151,7 +58245,7 @@ async function bootstrapCompany() {
     }
 
     try {
-      const resolved = await resolveCompanyByEmail(saved.email);
+      const resolved = resolvedFromLookup(saved.email, savedLookup);
 
       await persistCompanyCfg(resolved);
       applyResolved(resolved);
@@ -58198,7 +58292,7 @@ async function bootstrapCompany() {
   // =================================================
   // 3) NO HAY NADA GUARDADO
   // =================================================
-  if (TPV_STATE?.apiRecovering || !clientsData) {
+  if (TPV_STATE?.apiRecovering || !serviceReachable) {
     showReconnectIfAvailable(
       "No hay conexión con Recipok. Espera por favor, reconectando...",
     );

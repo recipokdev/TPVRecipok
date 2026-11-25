@@ -12861,6 +12861,14 @@ mustContain(main, "El TPV ya está abierto o terminando de actualizarse.", "Un s
 mustContain(main, "if (appIsInstallingUpdate && Date.now() - appInstallingSince < 90_000) return;", "Durante una instalacion atascada el icono deja de ignorarse pasados 90 s");
 mustContain(main, "function verifyPreviousInstallOutcome() {", "El siguiente arranque comprueba si la instalacion anterior se aplico");
 mustContain(main, 'logUpdateEventRemote("update-install-not-applied"', "Una instalacion que no se aplico queda registrada en el servidor");
+mustContain(renderer, "async function resolveCompanyRemote(email) {", "Fase 1 de privacidad: el TPV pregunta por UN email (resolve_company.php) en vez de descargar clients.json entero");
+mustContain(renderer, "if (res.status === 404) return resolveCompanyFromLegacyClientsJson(e);", "Respaldo transitorio al clients.json de siempre si el servidor aun no tiene el servicio nuevo (se quita en la fase 2)");
+mustContain(renderer, "__resolveCompanyBlockedUntil = Date.now() + retry * 1000;", "Tras un 429 se respeta Retry-After y no se reintenta en bucle");
+mustContain(renderer, "body: JSON.stringify({ email: e }),", "El email va en el cuerpo del POST, no en la URL (no queda en los logs de acceso)");
+mustContain(renderer, "savedLookup = await resolveCompanyRemote(saved.email);", "El arranque con empresa guardada hace UNA sola peticion (antes dos descargas de clients.json)");
+if (/await fetchClientsJson\(\)/.test(renderer.slice(renderer.indexOf("async function bootstrapCompany()"), renderer.indexOf("async function fetchFacturaClienteById")))) {
+  throw new Error("bootstrapCompany vuelve a descargar clients.json entero (fase 1 de privacidad)");
+}
 mustContain(renderer, 'restoreBootSnapshotIntoRuntime("loadDataFromApi-error", { error:', "Al restaurar la copia local por un error al cargar datos, el aviso lleva el mensaje del error (sin causa no se podia diagnosticar, Lumi 24-nov-2026)");
 mustContain(main, "const MAX_WAIT_MS = 180000;", "La ventanita de instalando no desaparece a los 30 s dejando el escritorio vacio");
 mustContain(main, "No abras el TPV otra vez: se abrirá solo cuando termine.", "La ventanita de instalando avisa de que no hay que volver a abrir el TPV si tarda");

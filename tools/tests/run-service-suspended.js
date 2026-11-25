@@ -55,9 +55,9 @@ const server = https.createServer({ key: fs.readFileSync(path.join(FIX, "mock-ap
     // Guardar lo real, apuntar la API al servidor simulado y simular clients.json (todo en memoria de la pagina).
     out.inicio = await win.evaluate((mockBase) => {
       window.__orig = { email: String(localStorage.getItem("tpv_companyEmail") || ""), baseUrl: String(window.RECIPOK_API.baseUrl), apiKey: String(window.RECIPOK_API.apiKey) };
-      window.__realFetchClients = fetchClientsJson;
+      window.__realResolveRemote = resolveCompanyRemote;
       window.__realLoadData = loadDataFromApi;
-      window.__setClients = (apiKey) => { fetchClientsJson = async () => ({ clients: [{ email: window.__orig.email, slug: "demo", apiKey, active: true }] }); };
+      window.__setClients = (apiKey) => { resolveCompanyRemote = async () => ({ status: "active", slug: "demo", apiKey }); }; // fase 1 de privacidad: el TPV pregunta por su email (antes descargaba clients.json)
       loadDataFromApi = async () => {}; // al reanudar no se recarga el catalogo contra el servidor simulado
       window.__offlineBefore = localStorage.getItem("tpv_offlineTickets_v1");
       const suspendido0 = __serviceSuspended, aviso0 = !document.getElementById("serviceSuspendedOverlay")?.classList.contains("hidden");
@@ -115,7 +115,7 @@ const server = https.createServer({ key: fs.readFileSync(path.join(FIX, "mock-ap
     // dejar el perfil exactamente como estaba (direccion y clave reales, tambien las guardadas)
     try {
       out.restaurado = await win.evaluate(async () => {
-        if (window.__realFetchClients) fetchClientsJson = window.__realFetchClients;
+        if (window.__realResolveRemote) resolveCompanyRemote = window.__realResolveRemote;
         if (window.__realLoadData) loadDataFromApi = window.__realLoadData;
         __serviceSuspended = false;
         document.getElementById("serviceSuspendedOverlay")?.classList.add("hidden");
