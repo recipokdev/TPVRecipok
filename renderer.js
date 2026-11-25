@@ -9043,11 +9043,48 @@ function normalizeClientPrintEntry(src) {
 function upsertCustomerPrintCache(src) {
   const entry = normalizeClientPrintEntry(src);
   if (!entry) return;
-  customerPrintCache[entry.codcliente] = {
-    ...(customerPrintCache[entry.codcliente] || {}),
-    ...entry,
-  };
+  const previous = customerPrintCache[entry.codcliente] || {};
+  // Un dato que llega VACIO no pisa uno bueno que ya estaba guardado (2026-11-25, Lumi: la direccion no esta en la ficha `clientes` de
+  // FacturaScripts y, si fallaba la peticion del contacto, la cache perdia la que ya tenia).
+  for (const k of ["cifnif", "direccion", "codpostal", "ciudad"]) {
+    if (!entry[k] && previous[k]) entry[k] = previous[k];
+  }
+  customerPrintCache[entry.codcliente] = { ...previous, ...entry };
   saveCustomerPrintCache();
+}
+
+// En FacturaScripts la direccion del cliente NO esta en `clientes` sino en su contacto de facturacion (`contactos`): con la ficha sola, las
+// facturas y tickets salian con «Direccion: (sin informar)» (Lumi, 25-nov-2026). Si el cliente ya trae direccion se devuelve tal cual y si
+// falla la peticion del contacto se sigue sin ella (nunca rompe la impresion).
+async function completeClienteAddressFromContactos(cli) {
+  if (!cli || typeof cli !== "object") return cli;
+  if (String(cli.direccion || "").trim()) return cli;
+  const cod = String(cli.codcliente || "").trim();
+  if (!cod) return cli;
+  try {
+    const rows = await fetchApiResourceWithParams("contactos", {
+      limit: 50,
+      "filter[codcliente]": cod,
+    });
+    const list = Array.isArray(rows) ? rows : [];
+    if (!list.length) return cli;
+    const idFact = Number(cli.idcontactofact || 0);
+    const c =
+      (idFact > 0 && list.find((x) => Number(x?.idcontacto) === idFact)) ||
+      list.find((x) => String(x?.direccion || "").trim()) ||
+      list[0];
+    if (!c) return cli;
+    const pick = (k) => String(cli[k] || "").trim() || String(c[k] || "").trim();
+    return {
+      ...cli,
+      direccion: pick("direccion"),
+      codpostal: pick("codpostal"),
+      ciudad: pick("ciudad"),
+      provincia: pick("provincia"),
+    };
+  } catch {
+    return cli;
+  }
 }
 
 function getCustomerPrintCacheByCod(codcliente) {
@@ -9065,9 +9102,15 @@ async function refreshCustomerPrintCacheByCod(codcliente) {
       limit: 1,
       "filter[codcliente]": cod,
     });
-    const cli = Array.isArray(rows) && rows.length ? rows[0] : null;
+    let cli = Array.isArray(rows) && rows.length ? rows[0] : null;
     if (cli) {
+      cli = await completeClienteAddressFromContactos(cli);
       upsertCustomerPrintCache(cli);
+      // Si el contacto no respondio y la ficha viene sin direccion, se devuelve la que ya estaba guardada (la cache no la pierde).
+      const guardado = getCustomerPrintCacheByCod(cod) || {};
+      for (const k of ["direccion", "codpostal", "ciudad"]) {
+        if (!String(cli[k] || "").trim() && guardado[k]) cli = { ...cli, [k]: guardado[k] };
+      }
       return cli;
     }
   } catch {}
@@ -41991,7 +42034,9 @@ async function fetchClienteByCodcliente(codcliente) {
       limit: 1,
       "filter[codcliente]": cod,
     });
-    return Array.isArray(rows) && rows.length ? rows[0] : null;
+    return Array.isArray(rows) && rows.length
+      ? await completeClienteAddressFromContactos(rows[0])
+      : null;
   } catch {
     return null;
   }

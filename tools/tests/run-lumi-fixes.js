@@ -149,6 +149,38 @@ let kill = () => {};
       return r;
     });
 
+    // ---------- 6) factura/ticket: la direccion del cliente sale del contacto (en `clientes` de FS no esta) y no se pierde si falla la peticion
+    out.t6 = await win.evaluate(async () => {
+      const COD = "ZZTEST6";
+      const realFetch = fetchApiResourceWithParams;
+      const llamadas = [];
+      const r = {};
+      try {
+        let contactosCaido = false;
+        fetchApiResourceWithParams = async (recurso, params) => {
+          llamadas.push(recurso);
+          if (recurso === "contactos") { if (contactosCaido) throw new Error("caido"); return [{ idcontacto: 3, codcliente: COD, direccion: "Otra calle 9", codpostal: "00000", ciudad: "Nada" }, { idcontacto: 7, codcliente: COD, direccion: "Calle Mayor 3", codpostal: "08001", ciudad: "Barcelona", provincia: "Barcelona" }]; }
+          return [{ codcliente: COD, nombre: "Cliente Seis", razonsocial: "Cliente Seis SL", cifnif: "B6666", idcontactofact: 7 }];
+        };
+        delete customerPrintCache[COD];
+        r.refresco = await refreshCustomerPrintCacheByCod(COD);
+        r.cache = { ...(getCustomerPrintCacheByCod(COD) || {}) };
+        r.facturaDatos = await getInvoiceCustomerBillingInfo({ codcliente: COD, clientName: "x" });
+        r.ficha = await fetchClienteByCodcliente(COD);
+        // la peticion del contacto falla: se sigue y la cache conserva la direccion buena
+        contactosCaido = true;
+        r.refrescoCaido = await refreshCustomerPrintCacheByCod(COD);
+        r.cacheTrasCaida = { ...(getCustomerPrintCacheByCod(COD) || {}) };
+        r.facturaTrasCaida = await getInvoiceCustomerBillingInfo({ codcliente: COD, clientName: "x" });
+        // un cliente que YA trae direccion no pide contactos
+        const antes = llamadas.length;
+        const propio = await completeClienteAddressFromContactos({ codcliente: COD, direccion: "Propia 1", codpostal: "1", ciudad: "C" });
+        r.propio = { direccion: propio.direccion, pidioContactos: llamadas.length > antes };
+      } catch (e) { r.error = String(e && e.message || e); }
+      finally { fetchApiResourceWithParams = realFetch; delete customerPrintCache[COD]; saveCustomerPrintCache(); }
+      return r;
+    });
+
     // ---------- limpieza
     await win.evaluate(async () => { await window.__clean(); });
     out.limpio = await win.evaluate(() => __loc());
@@ -159,7 +191,7 @@ let kill = () => {};
     try { await Promise.race([app.evaluate(({ session }) => session.defaultSession.flushStorageData()), sleep(4000)]); } catch {}
     console.log(JSON.stringify(out, null, 1));
     const ok = (name, cond, extra) => [name, !!cond, extra === undefined ? "" : typeof extra === "string" ? extra : JSON.stringify(extra)];
-    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {};
+    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {};
     const c5 = t4.c5 || {}, c9 = t4.c9 || {}, c11 = t4.c11 || {};
     const verdict = require("./battery/verdict.js").emitVerdict([
       ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || ""),
@@ -179,6 +211,8 @@ let kill = () => {};
       ok("5) Texto del carrito: con importe largo y cantidad decimal, el nombre ocupa su propia línea a todo el ancho (≥ 80 px) y el contador y el precio quedan debajo", t5.conArreglo && t5.conArreglo.nombre >= 80 && t5.conArreglo.controlesDebajo === true, t5.conArreglo),
       ok("5) Control: con las reglas ANTIGUAS el nombre se encoge (< 60 px); si no se reproduce, esta prueba no demostraría nada", t5.reglasAntiguas && t5.reglasAntiguas.nombre < 60, t5.reglasAntiguas),
       ok("5) Al quitar las reglas antiguas vuelve a quedar bien", t5.otraVez && t5.otraVez.nombre >= 80, t5.otraVez),
+      ok("6) Factura/ticket: la dirección, CP y ciudad del cliente salen del contacto de facturación (antes «(sin informar)») y el NIF se mantiene", !t6.error && (t6.refresco || {}).direccion === "Calle Mayor 3" && (t6.cache || {}).direccion === "Calle Mayor 3" && (t6.cache || {}).codpostal === "08001" && (t6.cache || {}).cifnif === "B6666" && (t6.facturaDatos || {}).clientAddress === "Calle Mayor 3 08001 Barcelona" && (t6.facturaDatos || {}).clientFiscalId === "B6666" && (t6.ficha || {}).direccion === "Calle Mayor 3", t6),
+      ok("6) Si falla la petición del contacto no se rompe la impresión ni se pierde la dirección que ya estaba guardada; y un cliente con dirección propia no pide contactos", !t6.error && (t6.cacheTrasCaida || {}).direccion === "Calle Mayor 3" && (t6.facturaTrasCaida || {}).clientAddress === "Calle Mayor 3 08001 Barcelona" && (t6.propio || {}).direccion === "Propia 1" && (t6.propio || {}).pidioContactos === false, { cacheTrasCaida: t6.cacheTrasCaida, facturaTrasCaida: t6.facturaTrasCaida, propio: t6.propio }),
       ok("Al terminar las mesas de prueba quedan limpias", Array.isArray(out.limpio) && out.limpio.length === 0, out.limpio),
     ]);
     clearTimeout(hard); kill();
