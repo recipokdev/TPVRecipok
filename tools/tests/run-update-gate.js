@@ -8,6 +8,8 @@
 //   S2 GitHub se cae y vuelve: sin pulsar nada, al volver se abre solo y el boton desaparece.
 //   S3 todo bien y sin version nueva: abre solo, sin boton.
 //   S4 el servidor de la empresa no responde: contador y boton igualmente, sin abrir solo; al pulsarlo abre.
+//   S5 hay version nueva pero una instalacion de ella FALLO hace poco (Windows la bloqueo, sabor_100x100 24-nov-2026): se abre con la version
+//      actual sin intentar instalar de nuevo en cada arranque (freno de 3 h); con otra version distinta si se intentaria.
 // Necesita internet (la puerta comprueba github.com antes de buscar). Nunca toca la demo ni los perfiles de prueba.
 // Uso: node tools/tests/run-update-gate.js
 const http = require("http"), path = require("path"), fs = require("fs"), os = require("os");
@@ -38,10 +40,14 @@ function prepararPaquete(port) {
 
 const LATEST = `version: ${PKG.version}\nfiles:\n  - url: TPV-Recipok-Setup-${PKG.version}.exe\n    sha512: AAAA\n    size: 1\npath: TPV-Recipok-Setup-${PKG.version}.exe\nsha512: AAAA\nreleaseDate: '2026-11-12T00:00:00.000Z'\n`;
 
-async function escenario(nombre, { feed, apiCaida = false, accion }) {
+const NEWER = PKG.version.replace(/(\d+)$/, (m) => String(Number(m) + 1));
+const LATEST_NEW = `version: ${NEWER}\nfiles:\n  - url: TPV-Recipok-Setup-${NEWER}.exe\n    sha512: AAAA\n    size: 1\npath: TPV-Recipok-Setup-${NEWER}.exe\nsha512: AAAA\nreleaseDate: '2026-11-12T00:00:00.000Z'\n`;
+
+async function escenario(nombre, { feed, apiCaida = false, cfg = null, accion }) {
   const ud = path.join(os.tmpdir(), `tpvrecipok-gate-${nombre}-${Date.now()}`);
   fs.mkdirSync(ud, { recursive: true });
-  if (apiCaida) fs.writeFileSync(path.join(ud, "tpv-config.json"), JSON.stringify({ "company.baseUrl": "https://127.0.0.1:8598/api/3", "company.apiKey": "x", "company.email": "prueba@test.local" }));
+  const cfgObj = { ...(apiCaida ? { "company.baseUrl": "https://127.0.0.1:8598/api/3", "company.apiKey": "x", "company.email": "prueba@test.local" } : {}), ...(cfg || {}) };
+  if (Object.keys(cfgObj).length) fs.writeFileSync(path.join(ud, "tpv-config.json"), JSON.stringify(cfgObj));
   const env = { ...process.env, TPV_MULTI_INSTANCE: "1", TPV_USER_DATA: ud, TPV_RUN_BACKGROUND: "1" };
   delete env.TPV_E2E; delete env.TPV_E2E_USER_DATA; delete env.TPV_MODE;
   const t0 = Date.now();
@@ -83,6 +89,8 @@ async function escenario(nombre, { feed, apiCaida = false, accion }) {
   const srv = http.createServer((req, res) => {
     out.peticiones = (out.peticiones || 0) + 1;
     const sirve = modoFeed === "ok" || (modoFeed === "vuelve" && Date.now() >= feedDesde);
+    if (modoFeed === "nueva" && /latest\.yml(\?|$)/i.test(req.url)) { res.writeHead(200, { "Content-Type": "text/yaml" }); return res.end(LATEST_NEW); }
+    if (modoFeed === "nueva") { out.pidioInstalador = out.pidioInstalador || /\.exe/i.test(req.url); res.writeHead(404); return res.end("x"); }
     if (sirve && /latest\.yml(\?|$)/i.test(req.url)) { res.writeHead(200, { "Content-Type": "text/yaml" }); return res.end(LATEST); }
     res.writeHead(sirve ? 404 : 504); res.end("x");
   });
@@ -121,6 +129,13 @@ async function escenario(nombre, { feed, apiCaida = false, accion }) {
       await esperarHasta(24); o.t24_abierta = await principalAbierta();
       if (splash()) { await splash().click("#enter").catch(() => {}); o.segundos_tras_click = await abreDespues(20); }
     } });
+
+    // S5: hay version nueva, pero una instalacion de ELLA fallo hace poco -> se abre con la actual sin reintentar
+    modoFeed = "nueva"; out.pidioInstalador = false;
+    out.S5 = await escenario("s5", { cfg: { installFailure: { from: PKG.version, target: NEWER, at: Date.now() - 60000 } }, accion: async ({ o, abreDespues }) => {
+      o.segundos_hasta_abrir_solo = await abreDespues(40);
+    } });
+    out.S5.pidioInstalador = out.pidioInstalador;
   } catch (e) {
     out.ERROR = String(e && e.message || e).slice(0, 300);
   } finally {
@@ -151,5 +166,9 @@ function buildChecks(out) {
   const s4 = out.S4 || {};
   ok("S4 (el servidor de la empresa no responde): al principio sin botón y a los 10 s aparece «Entrar ahora» con contador", s4.t5 && !visible(s4.t5) && s4.t14 && visible(s4.t14) && /\d+:\d{2}/.test(s4.t14.texto || ""), { t5: s4.t5, t14: s4.t14 });
   ok("S4: sin pulsar NO se abre solo, y al pulsar «Entrar ahora» se abre el TPV", s4.t24_abierta === false && typeof s4.segundos_tras_click === "number" && s4.segundos_tras_click <= 15, { abierta: s4.t24_abierta, click: s4.segundos_tras_click });
+  const s5 = out.S5 || {};
+  ok("S5 (instalacion fallida hace poco de la version nueva): el TPV se abre solo con la version actual, sin quedarse instalando", typeof s5.segundos_hasta_abrir_solo === "number" && s5.segundos_hasta_abrir_solo <= 30, s5.segundos_hasta_abrir_solo);
+  ok("S5: ni siquiera pide el instalador (no se descarga de nuevo)", s5.pidioInstalador === false, s5.pidioInstalador);
+  ok("S5: lo deja anotado en el registro (instalacion fallida hace poco ... se reintenta mas tarde)", (s5.log || []).some((x) => /fallida hace poco/.test(x)), s5.log);
   return c;
 }

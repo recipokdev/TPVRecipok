@@ -1707,7 +1707,12 @@ function cleanupInstallSafetyNetAfterReady() {
 function spawnPostUpdateSplash() {
   // Se anota que se lanza una instalacion: en el siguiente arranque se comprueba si de verdad se aplico.
   try {
-    writeCfg({ pendingInstall: { from: app.getVersion(), at: Date.now() } });
+    let target = "";
+    try {
+      const pend = installWatchdog.findPendingInstaller(installWatchdog.getUpdaterCacheDir(process.resourcesPath));
+      target = pend ? installWatchdog.versionFromInstallerName(pend) : "";
+    } catch {}
+    writeCfg({ pendingInstall: { from: app.getVersion(), at: Date.now(), target } });
   } catch {}
   if (process.platform !== "win32") return;
   try {
@@ -1740,6 +1745,27 @@ function spawnPostUpdateSplash() {
   }
 }
 
+// Freno por fallo de instalacion (2026-11-25, sabor_100x100): Windows bloqueaba el instalador nuevo ("Una directiva de Control de
+// aplicaciones bloqueo este archivo") y el TPV, que reintenta la instalacion en CADA arranque, enseno 4 veces seguidas la pantalla de
+// "Instalando..." (9 minutos) en plena cena. Tras un fallo se sigue trabajando con la version actual y NO se reintenta esa misma version
+// en el arranque hasta pasadas unas horas (el bloqueo de reputacion de Windows suele levantarse solo; el 23-nov le paso lo mismo y a los
+// ~10 min se instalo bien). Otra version distinta, o pasado el plazo, se intenta con normalidad.
+const INSTALL_FAILURE_COOLDOWN_MS = 3 * 60 * 60 * 1000;
+function isInstallCooldownActive(targetVersion) {
+  try {
+    const f = readCfg().installFailure;
+    if (!f || typeof f !== "object") return false;
+    if (String(f.from || "") !== app.getVersion()) return false; // ya es otra version instalada: no aplica
+    const ft = String(f.target || "").trim();
+    const tv = String(targetVersion || "").trim();
+    if (ft && tv && ft !== tv) return false; // otra version distinta: se intenta
+    const age = Date.now() - Number(f.at || 0);
+    return age >= 0 && age < INSTALL_FAILURE_COOLDOWN_MS;
+  } catch {
+    return false;
+  }
+}
+
 // Primer arranque tras lanzar una instalacion (ver spawnPostUpdateSplash): si la version cambio, se aplico; si sigue
 // siendo la misma, la instalacion fallo en silencio (instalador SILENCIOSO, sin ningun aviso) y el cajero solo ve que
 // "el TPV desaparece y no vuelve". Solo observacional: deja constancia en el servidor, no cambia nada.
@@ -1752,9 +1778,11 @@ function verifyPreviousInstallOutcome() {
     const from = String(pending.from || "");
     if (from && from !== app.getVersion()) {
       logUpdater(`instalacion anterior APLICADA: ${from} -> ${app.getVersion()} (${secs}s hasta volver a abrir)`);
+      if (readCfg().installFailure) writeCfg({ installFailure: null });
       logUpdateEventRemote("update-install-ok", { fromVersion: from, secondsToReopen: secs });
     } else {
       logUpdater(`instalacion anterior NO APLICADA: sigue en ${app.getVersion()} (${secs}s desde el intento)`);
+      writeCfg({ installFailure: { from, target: String(pending.target || ""), at: Date.now() } });
       logUpdateEventRemote("update-install-not-applied", {
         fromVersion: from,
         secondsSinceAttempt: secs,
@@ -3013,6 +3041,13 @@ async function runAutoUpdateGate() {
             blockedByPolicy: true,
             targetVersion,
           });
+        }
+
+        if (isInstallCooldownActive(targetVersion)) {
+          splashSet(`Abriendo TPV (la instalacion de ${targetVersion} fallo hace poco; se reintentara mas tarde)...`, 30);
+          logUpdater(`[GATE] instalacion de ${targetVersion} fallida hace poco: se abre con ${currentVersion} y se reintenta mas tarde`);
+          logUpdateEventRemote("update-gate-skipped-after-failed-install", { targetVersion });
+          return done({ ok: true, updatedOrReady: true, updated: false, targetVersion, installCooldown: true });
         }
 
         updateFoundSeen = true;

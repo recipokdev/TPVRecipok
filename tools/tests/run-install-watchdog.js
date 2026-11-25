@@ -56,7 +56,7 @@ function runWatchdog(c, extra = {}) {
   const r = wd.startInstallWatchdog({
     cacheDir: c.cache, exePath: c.exe, installerPath: fs.existsSync(c.installer) ? c.installer : "", markerFile: c.marker, logFile: c.log,
     fromVersion: "9.9.8", targetVersion: "9.9.9", url: `http://127.0.0.1:${server.address().port}/index.php`, apiKey: "clave-de-prueba", slug: "prueba",
-    pollSec: 1, waitSec: 4, slowExtraSec: 8, retryWaitSec: 4, relaunchWaitSec: 4, maxRetries: 2, earlyMinSec: 1, settleSec: 3, retryPauseSec: 0,
+    pollSec: 1, waitSec: 4, slowExtraSec: 8, retryWaitSec: 4, relaunchWaitSec: 4, maxRetries: 2, earlyMinSec: 1, settleSec: 3, settleSeenSec: 3, retryPauseSec: 0,
     desktopDir: path.join(c.d, "desktop"), noDialog: true, directSpawn: true, mutexName: "Local\\TPVRecipokWatchdogTest-" + path.basename(c.d), ...extra,
   });
   if (!r.ok) throw new Error("no arranca el vigilante: " + r.error);
@@ -164,12 +164,38 @@ const TIMEOUT = (p, ms) => Promise.race([p, sleep(ms).then(() => "TIMEOUT")]);
     {
       const c = mkCase("s4");
       fs.writeFileSync(c.exe, `@echo off\r\necho x> "${c.marker}"\r\n`);
-      const w = runWatchdog(c);
+      const w = runWatchdog(c, { settleSeenSec: 14 });
       const code = await TIMEOUT(w.done, 60000);
       check("S4: el programa esta pero no se abrio -> lo abre y sale con 0", code === 0, String(code));
       check("S4: avisa failed y relaunched(ok)", JSON.stringify(w.events()) === JSON.stringify(["install-watchdog-failed", "install-watchdog-relaunched"]) && w.bodies()[1].ok === true, JSON.stringify(w.events()));
       check("S4: no llega a reinstalar", !w.events().includes("install-watchdog-retry"));
       check("S4: detecta el fallo porque no hay ningun TPV abierto tras terminar el instalador", w.bodies()[0] && w.bodies()[0].detectedBy === "sin-tpv-abierto", JSON.stringify(w.bodies()[0]));
+    }
+
+    // ---- S4b: el instalador nunca se vio (lo bloqueo Windows): se actua rapido, sin esperar el margen largo ----
+    {
+      const c = mkCase("s4b");
+      fs.writeFileSync(c.exe, `@echo off\r\necho x> "${c.marker}"\r\n`);
+      const w = runWatchdog(c, { settleSeenSec: 14 });
+      await TIMEOUT(w.done, 60000);
+      const b0 = w.bodies()[0] || {};
+      check("S4b: instalador nunca visto -> detecta pronto (no espera el margen largo de 14 s)", b0.detectedBy === "sin-tpv-abierto" && b0.secondsWaited < 14, JSON.stringify(b0));
+    }
+
+    // ---- S12: el instalador SI se vio trabajando y desaparecio: se espera el margen largo antes de dar el fallo ----
+    {
+      const c = mkCase("s12");
+      fs.writeFileSync(c.exe, `@echo off\r\necho x> "${c.marker}"\r\n`);
+      const instReal = path.join(c.d, "pending", "TPV-Recipok-Setup-9.9.9.exe");
+      fs.copyFileSync(PING, instReal);
+      const inst = spawn(instReal, ["-n", "5", "127.0.0.1"], { stdio: "ignore", windowsHide: true });
+      await sleep(400);
+      const w = runWatchdog(c, { installerPath: instReal, settleSeenSec: 14, waitSec: 90 });
+      await TIMEOUT(w.done, 90000);
+      try { inst.kill(); } catch {}
+      const b0 = w.bodies()[0] || {};
+      check("S12: instalador visto y desaparecido -> espera el margen largo (>= 14 s) antes de avisar", b0.detectedBy === "sin-tpv-abierto" && b0.secondsWaited >= 14, JSON.stringify(b0));
+      check("S12: ... y despues abre el TPV de siempre", JSON.stringify(w.events()) === JSON.stringify(["install-watchdog-failed", "install-watchdog-relaunched"]), JSON.stringify(w.events()));
     }
 
     // ---- S5 programa abierto pero sin mostrarse ----

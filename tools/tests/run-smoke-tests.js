@@ -12028,11 +12028,15 @@ if (
     wd.includes("function queryAntivirus() {") &&
     wd.includes("install-watchdog-failed") && wd.includes("install-watchdog-recovered") && wd.includes("install-watchdog-gave-up") &&
     wd.includes("install-watchdog-shortcut-retargeted") &&
-    wd.includes("$settleSec = NumOr $ctx.settleSec 180") && // margen de 3 min antes de dar por fallida una instalacion (con 25 s daba falsas alarmas el 24-nov-2026)
+    wd.includes("$settleSec = NumOr $ctx.settleSec 25") && wd.includes("$settleSeenSec = NumOr $ctx.settleSeenSec 180") && wd.includes("if ($lastInstSeen -ge 0) { $needIdle = $settleSeenSec }") && // margen largo SOLO si el instalador se vio trabajando (falsas alarmas del 24-nov-2026); si nunca arranco (Windows lo bloqueo) se actua pronto
     wd.includes("'sin-tpv-abierto'") && wd.includes("'programa-borrado'") && wd.includes("function KillLeftovers {") && // detecta el fallo en segundos y lo arregla en silencio
     main.includes("function createRepairIcon(target) {") && main.includes("if (keep.ok) createRepairIcon(keep.path);") && // el icono REPARAR solo si no hay vigilante
     wd.includes('"cmd.exe"') && // lanzamiento por "cmd /c start": ni detached (powershell sale al instante) ni job de libuv (muere con el TPV)
     main.includes('const installWatchdog = require("./install_watchdog");') &&
+    main.includes("function isInstallCooldownActive(targetVersion) {") && main.includes("const INSTALL_FAILURE_COOLDOWN_MS = 3 * 60 * 60 * 1000;") && // freno: tras un fallo de instalacion no se reintenta esa version en cada arranque (sabor_100x100, 24-nov-2026)
+    main.includes("update-gate-skipped-after-failed-install") && main.includes("writeCfg({ installFailure: { from, target: String(pending.target || \"\"), at: Date.now() } });") &&
+    main.includes("writeCfg({ pendingInstall: { from: app.getVersion(), at: Date.now(), target } });") &&
+    main.indexOf("if (isInstallCooldownActive(targetVersion)) {") > main.indexOf("function isInstallCooldownActive(targetVersion) {") &&
     main.includes("function startInstallSafetyNet() {") &&
     main.includes("function cleanupInstallSafetyNetAfterReady() {") &&
     main.includes("function describeInstallExtras() {") &&

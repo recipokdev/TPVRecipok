@@ -60,11 +60,18 @@ const shortcutTarget = (lnk) => spawnSync("powershell.exe", ["-NoProfile", "-Com
   });
   await new Promise((r) => srv.listen(0, "127.0.0.1", r));
   prepararPaquete(srv.address().port);
-  const TIMES = JSON.stringify({ pollSec: 1, waitSec: 32, retryWaitSec: 4, relaunchWaitSec: 4, maxRetries: 1, earlyMinSec: 1, settleSec: 3, retryPauseSec: 0 });
+  const TIMES = JSON.stringify({ pollSec: 1, waitSec: 32, retryWaitSec: 4, relaunchWaitSec: 4, maxRetries: 1, earlyMinSec: 1, settleSec: 3, settleSeenSec: 3, retryPauseSec: 0 });
   const lanza = (ud, desk) => {
     const env = { ...process.env, TPV_MULTI_INSTANCE: "1", TPV_USER_DATA: ud, TPV_RUN_BACKGROUND: "1", TPV_TEST_INSTALL_SAFETYNET: "1", TPV_TEST_DESKTOP_DIR: desk, TPV_TEST_WATCHDOG_TIMES: TIMES };
     delete env.TPV_E2E; delete env.TPV_E2E_USER_DATA; delete env.TPV_MODE;
     return spawn(EXE, [], { env, stdio: "ignore", windowsHide: false });
+  };
+  // Al acabar un escenario el vigilante (o el TPV de prueba) aun puede tener ficheros abiertos unos segundos: se reintenta el borrado y,
+  // si aun asi no se puede, se deja la carpeta temporal (limpiar NO es lo que se prueba, y fallaba al azar con EPERM, 25-nov-2026).
+  const rmRetry = (p) => {
+    for (let i = 0; i < 12; i++) {
+      try { fs.rmSync(p, { recursive: true, force: true }); return; } catch { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000); }
+    }
   };
   const readLog = (ud) => { try { return fs.readFileSync(path.join(ud, "updater.log"), "utf8"); } catch { return ""; } };
   try {
@@ -95,8 +102,8 @@ const shortcutTarget = (lnk) => spawnSync("powershell.exe", ["-NoProfile", "-Com
       check("S1: NO deja el icono REPARAR a la vista mientras el vigilante intenta arreglarlo (la persona no se entera)", !fs.existsSync(lnk), lnk);
       check("S1: lanza el vigilante de instalacion ANTES de cerrar el TPV", /vigilante de instalacion lanzado \(pid \d+\)/.test(log), log.slice(-800));
       check("S1: el vigilante arranca, vigila y detecta el fallo EN SEGUNDOS (sin esperar al limite de tiempo)", /\[watchdog\] vigilando la instalacion/.test(log) && /\[watchdog\] SIN confirmar a los \d+ s \((sin-tpv-abierto|programa-borrado)\)/.test(log), log.slice(-900));
-      fs.rmSync(ud, { recursive: true, force: true });
-      fs.rmSync(desk, { recursive: true, force: true });
+      rmRetry(ud);
+      rmRetry(desk);
     }
 
     // ---------------- S2: el TPV nuevo se ve con normalidad -> limpia el icono REPARAR ----------------
@@ -118,8 +125,8 @@ const shortcutTarget = (lnk) => spawnSync("powershell.exe", ["-NoProfile", "-Com
       }
       matarRestos();
       check("S2: en cuanto el TPV nuevo se ve, el icono REPARAR y la copia del instalador se quitan solos", gone, `lnk=${fs.existsSync(lnk)} repair=${fs.existsSync(repair)}\n${readLog(ud).slice(-500)}`);
-      fs.rmSync(ud, { recursive: true, force: true });
-      fs.rmSync(desk, { recursive: true, force: true });
+      rmRetry(ud);
+      rmRetry(desk);
     }
   } catch (e) {
     failN++; console.log("[FAIL] error: " + (e && e.stack || e));

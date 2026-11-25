@@ -146,9 +146,13 @@ $maxRetries = NumOr $ctx.maxRetries 3
 $retryPauseSec = NumOr $ctx.retryPauseSec 30
 $relaunchWaitSec = NumOr $ctx.relaunchWaitSec 60
 $earlyMinSec = NumOr $ctx.earlyMinSec 12
-# Margen sin ningun TPV abierto, con el instalador ya terminado, antes de darlo por fallido. 25 s daba falsas alarmas (24-nov-2026,
-# Ben_Trempat y Zoen): el TPV nuevo abrio solo entre 130 y 160 s despues de lanzar la instalacion (escaneo del antivirus, disco lento).
-$settleSec = NumOr $ctx.settleSec 180
+# Margen sin ningun TPV abierto, con el instalador ya terminado, antes de darlo por fallido:
+#  - settleSec (25 s): el instalador NUNCA se vio en marcha. Windows lo bloqueo al lanzarlo (sabor_100x100, 24-nov-2026: 'Una directiva de
+#    Control de aplicaciones bloqueo este archivo'); no hay nada que esperar y cuanto antes se abra el TPV de siempre, mejor.
+#  - settleSeenSec (180 s): el instalador SI se vio trabajando y luego desaparecio. El TPV nuevo puede tardar en abrir (escaneo del
+#    antivirus, disco lento): en Ben_Trempat y Zoen (24-nov-2026) abrio solo entre 130 y 160 s despues de lanzar la instalacion.
+$settleSec = NumOr $ctx.settleSec 25
+$settleSeenSec = NumOr $ctx.settleSeenSec 180
 $missingNeeded = NumOr $ctx.missingStreak 3
 $exeName = [IO.Path]::GetFileName([string]$ctx.exePath)
 $installerName = ''
@@ -250,7 +254,9 @@ while ($true) {
     if ($missingStreak -ge $missingNeeded) { $detectedBy = 'programa-borrado'; break }
     $idle = $el
     if ($lastInstSeen -ge 0) { $idle = $el - $lastInstSeen }
-    if ($exeNow -and ($idle -ge $settleSec) -and (-not (AppRunning))) { $detectedBy = 'sin-tpv-abierto'; break }
+    $needIdle = $settleSec
+    if ($lastInstSeen -ge 0) { $needIdle = $settleSeenSec }
+    if ($exeNow -and ($idle -ge $needIdle) -and (-not (AppRunning))) { $detectedBy = 'sin-tpv-abierto'; break }
   }
   if ($el -ge $waitSec) {
     if ($instNow -and ($el -lt ($waitSec + $slowExtraSec))) {
@@ -362,7 +368,7 @@ function startInstallWatchdog(opts) {
     fs.writeFileSync(script, "\ufeff" + WATCHDOG_SCRIPT, "utf8");
     const ctx = {};
     for (const k of ["exePath", "installerPath", "repairInstallerPath", "markerFile", "logFile", "fromVersion", "targetVersion", "url", "apiKey", "slug",
-      "pollSec", "waitSec", "slowExtraSec", "retryWaitSec", "maxRetries", "retryPauseSec", "relaunchWaitSec", "earlyMinSec", "settleSec", "missingStreak",
+      "pollSec", "waitSec", "slowExtraSec", "retryWaitSec", "maxRetries", "retryPauseSec", "relaunchWaitSec", "earlyMinSec", "settleSec", "settleSeenSec", "missingStreak",
       "desktopDir", "shortcutName", "repairShortcutName", "noDialog", "mutexName", "keepCtx"]) {
       if (opts[k] !== undefined) ctx[k] = opts[k];
     }
