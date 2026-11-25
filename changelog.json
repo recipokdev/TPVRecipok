@@ -5,7 +5,15 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "ARREGLO: Modo Mesas, dividir la cuenta. Si dejabas una división sin acabar y ibas a otra mesa libre desde el plano, el TPV volvía a cargar una parte de la división anterior una y otra vez, con el aviso «Reanudado cobro dividido», y no se podía salir. Ahora la división solo se reanuda al volver a su mesa.",
+        "ARREGLO: Modo Mesas, cambiar de mesa con la cuenta dividida. Antes solo viajaba una de las partes y las demás se quedaban en la mesa de origen. Ahora viajan todas las partes sin cobrar, y si la mesa de destino ya tiene pedido y se fusionan, también se unen todas.",
+        "MEJORA: fusionar dos mesas ocupadas es mucho más rápido. La pantalla se actualiza al instante y el guardado y el ajuste de stock terminan en segundo plano, sin hacerte esperar.",
+        "ARREGLO: en el carrito, el nombre de algunos productos salía en vertical, letra por letra, cuando la línea llevaba un importe largo, una cantidad con decimales o un descuento. Ahora el nombre conserva siempre un ancho mínimo y los botones bajan a una segunda línea si no caben.",
+        "ARREGLO: el importe de cada mesa en el plano de mesas no siempre coincidía con el del carrito (no tenía en cuenta descuentos, precios cambiados a mano ni añadidos con precio). Ahora el plano enseña el mismo total que el carrito.",
+        "ARREGLO: los datos del cliente (dirección, código postal y ciudad) salían vacíos en el TPV aunque estuvieran en FacturaScripts, porque allí se guardan en el contacto de facturación. Ahora el TPV los lee de ahí.",
+        "MEJORA: el aviso «Hay N TPV activos en esta terminal» reconoce ahora mejor las sesiones del mismo ordenador, para evitar avisos falsos, por ejemplo después de reiniciar el programa."
+      ]
     },
     {
       "version": "0.2.72",
