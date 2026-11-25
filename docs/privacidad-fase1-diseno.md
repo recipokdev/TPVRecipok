@@ -93,3 +93,16 @@ fase 3, es un código de activación de un solo uso generado desde el CRM en lug
 2. ¿Valen los **límites propuestos** (60/10 min por IP, 20/10 min por email, 10 desconocidos/hora)?
 3. ¿Dejamos el **código de activación** para la fase 3 (recomendado) o lo metemos ya?
 4. ¿Les paso este documento al **CRM, a la app de camareros y al port Android** para que lo revisen antes de implementar?
+
+## 10. Revisión del CRM (25-nov-2026) y cómo se recoge
+
+El CRM confirma que **no lee `clients.json` por web** (solo `list-clients`, `create-client`, `update-client`… por `tpv/api`, con la clave
+compartida) y que ningún flujo suyo necesita el fichero descargable ni distingue `inactive` de `unknown`. Observaciones aceptadas:
+- `resolve-company` lee `clients.json` desde disco y **la `apiKey` de la respuesta no se escribe nunca** en ningún registro
+  (`audit_log`, `tpv_audit.log`, logs de errores).
+- **El TPV debe respetar `Retry-After`** tras un 429 (no reintentar en bucle).
+- **El email se compara exacto**, normalizado igual que `tpv_login.php` (minúsculas y sin espacios, nada más). Los emails con
+  `+` (`sergi+bateria@…`) son distintos entre sí y no se recortan.
+- Para otra fase: que `tpv/api` compruebe también `active` en `ensureClientExists` (hoy un cliente de baja con clave válida seguiría
+  pasando esa comprobación).
+- Tras la fase 2, **confirmar con quien mantiene el backend de Recipok** (`82.165.207.161`) que no depende del fichero.
