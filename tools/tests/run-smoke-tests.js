@@ -12877,6 +12877,9 @@ mustContain(renderer, "__pendingParkedStockSyncTailByTicketId.set(String(targetT
 mustContain(fs.readFileSync(path.join(root, "styles.css"), "utf8"), "min-width: 90px;", "El nombre de la linea del carrito tiene ancho minimo (si no, con importes largos salia letra a letra en vertical)");
 mustContain(fs.readFileSync(path.join(root, "mesas", "mesas.js"), "utf8"), "const total = Number.isFinite(stored) && stored > 0 ? stored : computeTicketTotalFromItems(ticket?.items);", "El importe del plano de mesas es el total guardado del pedido, el mismo que ve el carrito");
 mustContain(fs.readFileSync(path.join(root, "js", "tpv", "ui", "customer_selector", "customer_selector.js"), "utf8"), "/contactos?limit=0", "La direccion, CP y ciudad del cliente se completan desde el contacto de facturacion de FacturaScripts");
+mustContain(fs.readFileSync(path.join(root, "preload.js"), "utf8"), "hostId: TPV_HOST_ID,", "El TPV de escritorio envia un identificador estable del equipo (location.hostname va vacio con file://) para reconocer sesiones huerfanas");
+mustContain(renderer, "function getPresenceHostId() {", "La presencia de terminales usa el identificador del equipo (hash), nunca el nombre del PC");
+mustContain(renderer, 'logFeatureWarn("PRESENCE", "multi-tpv-activos", {', "Cada vez que sale el aviso «Hay N TPV activos» se registra en el servidor el detalle de las sesiones (Lumi, 25-nov-2026)");
 mustContain(renderer, "async function resolveCompanyRemote(email) {", "Fase 1 de privacidad: el TPV pregunta por UN email (resolve_company.php) en vez de descargar clients.json entero");
 mustContain(renderer, "if (res.status === 404) return resolveCompanyFromLegacyClientsJson(e);", "Respaldo transitorio al clients.json de siempre si el servidor aun no tiene el servicio nuevo (se quita en la fase 2)");
 mustContain(renderer, "__resolveCompanyBlockedUntil = Date.now() + retry * 1000;", "Tras un 429 se respeta Retry-After y no se reintenta en bucle");

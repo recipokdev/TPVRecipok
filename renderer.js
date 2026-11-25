@@ -10356,7 +10356,7 @@ async function apiUpsertTerminalPresenceRemote() {
     tpvId: String(currentTerminal?.id || "").trim(),
     terminalName: String(currentTerminal?.name || "").trim(),
     userName: String(currentAgent?.name || currentAgent?.nick || "").trim(),
-    host: String(location?.hostname || "").trim(),
+    host: getPresenceHostId(),
     appVersion: appVersionText,
     // Almacen (tienda) del terminal: la app de camareros cuenta solo los TPV de SU almacen.
     codalmacen: String(getCurrentWarehouseCode() || "").trim(),
@@ -11097,6 +11097,15 @@ window.addEventListener("beforeunload", () => {
   } catch {}
 });
 
+// Identificador del equipo para la presencia (ver preload.js TPV_ENV.hostId); en la APK de Android no existe y se usa el hostname como antes.
+function getPresenceHostId() {
+  try {
+    const h = String(window.TPV_ENV?.hostId || "").trim();
+    if (h) return h;
+  } catch (_) {}
+  return String(location?.hostname || "").trim();
+}
+
 async function checkTerminalPresenceOnce({ notify = true } = {}) {
   if (TPV_STATE?.offline || TPV_STATE?.locked) return null;
   if (!cashSession?.open) return null;
@@ -11120,9 +11129,7 @@ async function checkTerminalPresenceOnce({ notify = true } = {}) {
     const entries = Array.isArray(data?.entries) ? data.entries : [];
     const ownSessionId = String(ensureTerminalPresenceSessionId() || "").trim();
     const ownTerminalId = String(currentTerminal?.id || "").trim();
-    const ownHost = String(location?.hostname || "")
-      .trim()
-      .toLowerCase();
+    const ownHost = getPresenceHostId().toLowerCase();
     const ownUser = String(currentAgent?.name || currentAgent?.nick || "")
       .trim()
       .toLowerCase();
@@ -11186,6 +11193,23 @@ async function checkTerminalPresenceOnce({ notify = true } = {}) {
       const changed = sig !== __terminalPresenceLastSig;
 
       if (changed && visibleCount > 1) {
+        // Deja en el servidor el detalle de que sesiones se ven (2026-11-25: un aviso real de Lumi no se pudo investigar porque el servidor solo
+        // anota altas y bajas de sesion, no lo que ve cada TPV). Solo cuando el aviso CAMBIA, asi que sale poco.
+        try {
+          logFeatureWarn("PRESENCE", "multi-tpv-activos", {
+            visibleCount,
+            position,
+            own: ownSessionId.slice(0, 8),
+            entries: visibleEntries.slice(0, 4).map((e) => ({
+              s: String(e?.sessionId || "").slice(0, 8),
+              u: String(e?.userName || "").slice(0, 12),
+              v: String(e?.appVersion || ""),
+              h: String(e?.host || "").slice(0, 8),
+              t: String(e?.terminalId ?? e?.tpvId ?? ""),
+              age: Math.max(0, Math.round((Date.now() - Date.parse(String(e?.heartbeatAt || ""))) / 1000)) || 0,
+            })),
+          });
+        } catch (_) {}
         const ordinal = formatPresenceOrdinalEs(position || 1);
         toast(
           `Hay ${visibleCount} TPV activos en esta terminal. Eres el ${ordinal}.`,

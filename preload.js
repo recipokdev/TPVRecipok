@@ -146,7 +146,16 @@ contextBridge.exposeInMainWorld("TPV_SETUP", {
     ipcRenderer.invoke("setup:testPosPrinter", { queueName }),
 });
 
+// Identificador estable del EQUIPO (hash corto del nombre del PC, nunca el nombre): la presencia de terminales lo usa para reconocer que dos sesiones
+// son del mismo ordenador. `location.hostname` va siempre vacio en la version de escritorio (file://) y por eso el filtro de sesiones huerfanas
+// nunca funcionaba (2026-11-25, aviso falso «Hay 2 TPV activos» en Lumi).
+let TPV_HOST_ID = "";
+try {
+  TPV_HOST_ID = require("crypto").createHash("sha256").update(String(require("os").hostname() || "")).digest("hex").slice(0, 12);
+} catch (_) {}
+
 contextBridge.exposeInMainWorld("TPV_ENV", {
+  hostId: TPV_HOST_ID,
   platform: process.platform, // "linux" / "win32"
   defaultApp: !!process.defaultApp,
   e2e: TPV_E2E_MODE,
