@@ -155,5 +155,19 @@ debe ser un string JSON). **Las 648 peticiones eran de sus emuladores**, no de u
    de 4 dígitos se podría probar sin freno. Protege la pantalla del TPV, no los datos (la API usa la clave compartida), pero conviene
    añadir un límite por `slug|usuario` como el del PIN de agente.
 
+## 13. Parte del TPV implementada (25-nov-2026, commit local 3787c2b, SIN publicar)
+
+- `renderer.js`: `resolveCompanyRemote(email)` (POST a `resolve_company.php`, email en el cuerpo, `X-TPV-API-KEY`), `resolvedFromLookup`,
+  `probeCompanyServiceReachable` y el arranque (`bootstrapCompany`), `resolveCompanyByEmail` y `tryAdoptNewServiceKey` reescritos sobre
+  ellas. **El arranque con empresa guardada hace una sola petición** (antes dos descargas) y sigue refrescando la clave. Los mensajes y
+  los comportamientos de siempre se conservan. `fetchClientsJson` solo queda para el respaldo (404 = servidor sin el servicio).
+- **Pruebas:** `run-resolve-company.js` (26 comprobaciones, en la batería estándar: la petición, las tres respuestas, 429 con
+  `Retry-After` de cabecera y de cuerpo sin insistir, 404 → respaldo, 401/500/JSON roto/red caída, y el arranque en 11 situaciones,
+  la activación y la autocuración); `run-service-suspended.js` adaptada (15/15 contra la tienda de la batería); 6 comprobaciones de
+  humo; batería estándar 20/20 (1.811 comprobaciones) con arranques reales ya contra el servicio desplegado.
+- CORS: no hace falta nada (Electron desde `file://` ya llama así a `index.php`; comprobado con una prueba desde la página real).
+- **Para publicarlo:** va en la próxima versión normal. Hasta que `main` esté en el remoto, el port Android **no** puede recogerlo.
+  Cuando se publique: avisar a «Android TPV port exploration» para que saque APK y AAB.
+
 ### Siguiente paso
-La parte del TPV (`renderer.js`, §5) con sus pruebas en la batería; no se publica hasta que Sergi lo diga.
+Publicar una versión con esto (decide Sergi) y esperar a que actualicen todos los clientes antes de la fase 2.
