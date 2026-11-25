@@ -451,6 +451,32 @@
       const data = await this._fetchJson(url);
       if (!Array.isArray(data)) return [];
 
+      // En FacturaScripts reciente la direccion, el codigo postal y la ciudad NO estan en `clientes` sino en `contactos` (el contacto de
+      // facturacion, idcontactofact): la lista de clientes no los devuelve y el TPV los mostraba vacios aunque FS los tuviera (2026-11-25, Lumi).
+      // Se piden una vez y se completan los campos que falten. Si falla, se sigue sin ellos como hasta ahora.
+      try {
+        const contactos = await this._fetchJson(`${baseUrl}/contactos?limit=0`);
+        if (Array.isArray(contactos) && contactos.length) {
+          const byId = new Map();
+          const firstByClient = new Map();
+          contactos.forEach((k) => {
+            byId.set(String(k?.idcontacto ?? ""), k);
+            const cc = String(k?.codcliente || "");
+            if (cc && !firstByClient.has(cc)) firstByClient.set(cc, k);
+          });
+          data.forEach((cli) => {
+            const k = byId.get(String(cli?.idcontactofact ?? "")) || firstByClient.get(String(cli?.codcliente || ""));
+            if (!k) return;
+            ["direccion", "codpostal", "ciudad", "provincia", "apartado"].forEach((f) => {
+              if (!String(cli[f] ?? "").trim() && String(k[f] ?? "").trim()) cli[f] = k[f];
+            });
+            ["email", "telefono1", "telefono2"].forEach((f) => {
+              if (!String(cli[f] ?? "").trim() && String(k[f] ?? "").trim()) cli[f] = k[f];
+            });
+          });
+        }
+      } catch (_) {}
+
       const list = data
         .filter((customer) => !customer?.debaja)
         .map((customer) => this._normalizeCustomer(customer));

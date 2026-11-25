@@ -9750,7 +9750,8 @@ console.log("\n[SMOKE] Checking 2026-10-12 stock: el ajuste no se aplica si el g
 }
 {
   const idx = renderer.indexOf("async function mergeMesaPendingTickets(sourceUid, targetUid) {");
-  const endIdx = idx >= 0 ? renderer.indexOf("markParkedTicketAsDeleted(sourceTicket);", idx) : -1;
+  // Hasta el final de la funcion (la red de la fusion va ahora en segundo plano, despues del borrado local: 25-nov-2026, Lumi).
+  const endIdx = idx >= 0 ? renderer.indexOf("function refreshMesasTransSidebar() {", idx) : -1;
   const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
   if (
     scoped.includes("let targetSaveConfirmed = false;") &&
@@ -12869,6 +12870,13 @@ mustContain(main, "if (!slug || !holdUrl || (!apiKey && !testUrl)) return none;"
 mustContain(main, "refreshSmartAppControlStateInBackground();", "El estado del Control inteligente de Windows se lee en cada arranque (solo lectura, en segundo plano)");
 mustContain(main, "if (sac) out.smartAppControl = sac;", "El aviso de «instalando» lleva el estado del Control inteligente (Sabor, 25-nov-2026)");
 mustContain(fs.readFileSync(path.join(root, "diagnostics.js"), "utf8"), "function parseSmartAppControlState(text) {", "La foto de diagnostico incluye el estado del Control inteligente de aplicaciones de Windows");
+mustContain(renderer, 'if (selectedUid && selectedUid !== state.mesaUid) return false;', "Una division sin acabar solo se reanuda en SU mesa: en una mesa libre no se recarga la parte antigua (Lumi, 25-nov-2026)");
+mustContain(renderer, "function getUnpaidSplitSiblingsInMesa(ticket, mesaUid) {", "Mover o fusionar una mesa con la cuenta dividida lleva TODAS las partes sin cobrar");
+mustContain(renderer, "const mergeBackground = (async () => {", "Fusionar mesas actualiza la pantalla al momento y la red (guardar, stock, borrar el origen) sigue en segundo plano");
+mustContain(renderer, "__pendingParkedStockSyncTailByTicketId.set(String(targetTicket.id || \"\"), mergeBackground.catch(() => {}));", "Cobrar o dividir el pedido fusionado espera a que acabe la red en segundo plano de la fusion");
+mustContain(fs.readFileSync(path.join(root, "styles.css"), "utf8"), "min-width: 90px;", "El nombre de la linea del carrito tiene ancho minimo (si no, con importes largos salia letra a letra en vertical)");
+mustContain(fs.readFileSync(path.join(root, "mesas", "mesas.js"), "utf8"), "const total = Number.isFinite(stored) && stored > 0 ? stored : computeTicketTotalFromItems(ticket?.items);", "El importe del plano de mesas es el total guardado del pedido, el mismo que ve el carrito");
+mustContain(fs.readFileSync(path.join(root, "js", "tpv", "ui", "customer_selector", "customer_selector.js"), "utf8"), "/contactos?limit=0", "La direccion, CP y ciudad del cliente se completan desde el contacto de facturacion de FacturaScripts");
 mustContain(renderer, "async function resolveCompanyRemote(email) {", "Fase 1 de privacidad: el TPV pregunta por UN email (resolve_company.php) en vez de descargar clients.json entero");
 mustContain(renderer, "if (res.status === 404) return resolveCompanyFromLegacyClientsJson(e);", "Respaldo transitorio al clients.json de siempre si el servidor aun no tiene el servicio nuevo (se quita en la fase 2)");
 mustContain(renderer, "__resolveCompanyBlockedUntil = Date.now() + retry * 1000;", "Tras un 429 se respeta Retry-After y no se reintenta en bucle");

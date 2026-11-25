@@ -2812,6 +2812,7 @@ body.cart-width-dragging .cart-width-drag-handle {
 
 .cart-line {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -2829,6 +2830,9 @@ body.cart-width-dragging .cart-width-drag-handle {
 
 .cart-line-name {
   flex: 1;
+  /* Ancho minimo del nombre (2026-11-25, Lumi: con precios largos, cantidades decimales o descuento la columna del nombre se encogia a 0 y
+     el texto salia letra a letra en vertical): si no cabe, los controles bajan a una segunda linea de la misma tarjeta. */
+  min-width: 90px;
   font-weight: 500;
   color: #1f2a4d;
   padding-right: 4px;

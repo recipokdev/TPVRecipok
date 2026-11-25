@@ -295,6 +295,11 @@ const SUITES = [
     args: ["tools/tests/run-split-tpv-normal.js", "--mesas", "--no-ops"], timeoutMs: 400000,
   },
   {
+    id: "mesas-lumi-dividir-mover-fusionar", area: D, level: "full", demo: true, title: "Lumi: dividir, ir a una mesa libre, mover y fusionar mesas, datos del cliente y texto del carrito",
+    what: "Reproduce los fallos que dio Lumi el 25-nov-2026. Divide una cuenta en Mesas y, con la división sin acabar, va a una mesa libre: el carrito debe quedar vacío y sin el aviso «Reanudado cobro dividido» (antes no se podía salir); al volver a la mesa se reanuda. Mueve la mesa con la cuenta dividida: viajan las dos partes. Fusiona esa mesa con otra ocupada con el stock de FacturaScripts lento (3 s por operación): la pantalla responde al momento, y al acabar la red en segundo plano la copia local y el servidor coinciden. Comprueba que la dirección, el código postal y la ciudad del cliente se completan desde el contacto de facturación, y que con un importe largo el nombre del producto en el carrito no se encoge hasta salir en vertical (con una prueba de control con las reglas antiguas).",
+    args: ["tools/tests/run-lumi-fixes.js"], timeoutMs: 450000,
+  },
+  {
     id: "dividir-mesas-unificar", area: D, level: "full", demo: true, title: "Dividir y deshacer la división en Mesas",
     what: "Divide, deshace y cobra entero en Modo Mesas; el stock cuadra.",
     args: ["tools/tests/run-split-tpv-normal.js", "--mesas", "--no-ops", "--merge"], timeoutMs: 400000,

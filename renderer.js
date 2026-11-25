@@ -12972,6 +12972,22 @@ function toggleSelectedMesaReservation(explicitValue = null) {
   return setSelectedMesaReservationEnabled(nextEnabled);
 }
 
+// Partes SIN cobrar de la misma division que `ticket` que estan en la mesa `mesaUid` (2026-11-25, Lumi: al mover o fusionar una mesa con la
+// cuenta dividida solo viajaba la parte enlazada a la mesa y las demas se quedaban en la de origen).
+function getUnpaidSplitSiblingsInMesa(ticket, mesaUid) {
+  const gid = String(getTicketSplitMeta(ticket)?.groupId || "").trim();
+  if (!gid) return [];
+  const uid = String(mesaUid || "").trim();
+  return (Array.isArray(parkedTickets) ? parkedTickets : []).filter(
+    (t) =>
+      t !== ticket &&
+      !t?.paid &&
+      !t?.closingInProgress &&
+      String(t?.mesaUid || "").trim() === uid &&
+      String(getTicketSplitMeta(t)?.groupId || "").trim() === gid,
+  );
+}
+
 function moveMesaPendingTicket(sourceUid, targetUid) {
   const fromUid = String(sourceUid || "").trim();
   const toUid = String(targetUid || "").trim();
@@ -13045,7 +13061,7 @@ function moveMesaPendingTicket(sourceUid, targetUid) {
   mesasState.tableStates[fromUid] = "libre";
 
   const targetScope = getMesasRoomAndTableByUid(mesasState, toUid);
-  applyMesaScopeToTicket(sourceTicket, {
+  const scopeForTarget = {
     uid: toUid,
     roomId: String(targetScope?.room?.id || ""),
     tableId: String(targetScope?.table?.id || ""),
@@ -13055,7 +13071,22 @@ function moveMesaPendingTicket(sourceUid, targetUid) {
     tableName: String(
       targetScope?.table?.name || targetScope?.table?.id || "",
     ).trim(),
+  };
+  applyMesaScopeToTicket(sourceTicket, scopeForTarget);
+  // Cuenta dividida: las demas partes sin cobrar viajan con la enlazada (antes se quedaban en la mesa de origen).
+  const movedSiblings = getUnpaidSplitSiblingsInMesa(sourceTicket, fromUid);
+  movedSiblings.forEach((sib) => {
+    applyMesaScopeToTicket(sib, scopeForTarget);
+    sib.localRevisionAt = Date.now();
+    sib.updatedAt = new Date();
   });
+  try {
+    const splitState = loadSplitSessionState();
+    const splitGid = String(getTicketSplitMeta(sourceTicket)?.groupId || "").trim();
+    if (splitState && splitGid && splitState.groupId === splitGid && splitState.mesaUid === fromUid) {
+      saveSplitSessionState({ ...splitState, mesaUid: toUid });
+    }
+  } catch (_) {}
 
   mesasState.selectedTableId = toUid;
   saveMesasTablesStateForInline(mesasState);
@@ -13069,14 +13100,16 @@ function moveMesaPendingTicket(sourceUid, targetUid) {
   sourceTicket.updatedAt = new Date();
   saveParkedTicketsCache();
   void (async () => {
-    try {
-      await apiSaveParkedReservation(sourceTicket);
-    } catch (e) {
-      if (e?.staleParkedWrite) {
-        handleStaleParkedWriteConflict(sourceTicket, e);
-      } else {
-        enqueueParkedSyncOperation("upsert", sourceTicket);
-        console.warn("No se pudo guardar el cambio de mesa en remoto:", e?.message || e);
+    for (const movedTicket of [sourceTicket, ...movedSiblings]) {
+      try {
+        await apiSaveParkedReservation(movedTicket);
+      } catch (e) {
+        if (e?.staleParkedWrite) {
+          handleStaleParkedWriteConflict(movedTicket, e);
+        } else {
+          enqueueParkedSyncOperation("upsert", movedTicket);
+          console.warn("No se pudo guardar el cambio de mesa en remoto:", e?.message || e);
+        }
       }
     }
   })();
@@ -13123,12 +13156,18 @@ async function mergeMesaPendingTickets(sourceUid, targetUid) {
     return false;
   }
 
+  // Cuenta dividida en la mesa de origen: TODAS sus partes sin cobrar se fusionan (antes solo la enlazada y el resto se quedaba suelto).
+  const sourceSiblings = getUnpaidSplitSiblingsInMesa(sourceTicket, fromUid).filter(
+    (t) => t !== targetTicket && String(t?.id || "") !== String(targetTicket?.id || ""),
+  );
+  const allSourceTickets = [sourceTicket, ...sourceSiblings];
+
   const prevTargetItems = Array.isArray(targetTicket.items)
     ? targetTicket.items.map((it) => ({ ...it }))
     : [];
-  const sourceItemsCloned = (
-    Array.isArray(sourceTicket.items) ? sourceTicket.items : []
-  ).map((it) => ({ ...it, _lineId: makeLineId() }));
+  const sourceItemsCloned = allSourceTickets.flatMap((tk) =>
+    (Array.isArray(tk.items) ? tk.items : []).map((it) => ({ ...it, _lineId: makeLineId() })),
+  );
   const mergedItems = [...prevTargetItems, ...sourceItemsCloned];
 
   const reservedDelta = buildReservedQtyDeltaMap(mergedItems, prevTargetItems);
@@ -13145,65 +13184,21 @@ async function mergeMesaPendingTickets(sourceUid, targetUid) {
   targetTicket.comandaAutoPrintFailedAt = null;
   targetTicket.comandaAutoPrintFailedError = null;
 
-  // Real de cliente (Asador el Gallo, 2026-10-12): el ajuste de stock de la
-  // fusion solo se aplica AHORA (en vez de antes, incondicionalmente) si el
-  // guardado del ticket destino se confirma con exito de verdad -- si falla
-  // y se encola, el ajuste viaja pegado a ese reintento (ver
-  // enqueueParkedSyncOperation) y solo se aplica si ese reintento triunfa.
-  let targetSaveConfirmed = false;
-  try {
-    await apiSaveParkedReservation(targetTicket);
-    targetSaveConfirmed = true;
-  } catch (e) {
-    if (e?.staleParkedWrite) {
-      handleStaleParkedWriteConflict(targetTicket, e);
-    } else {
-      enqueueParkedSyncOperation(
-        "upsert",
-        targetTicket,
-        reservedDelta.size > 0
-          ? { deltaMap: reservedDelta, reason: "fusionar mesas" }
-          : null,
-      );
-      console.warn("No se pudo guardar la mesa destino tras fusionar:", e?.message || e);
-    }
-  }
-
-  if (targetSaveConfirmed && reservedDelta.size > 0) {
-    try {
-      await syncReservedStockDeltaToFS(reservedDelta, "fusionar mesas", targetTicket.id);
-    } catch (e) {
-      enqueueStockDeltaSync(e?.failedDeltaMap || reservedDelta, "fusionar mesas", targetTicket.id);
-      console.warn("No se pudo sincronizar stock al fusionar mesas:", e?.message || e);
-    }
-  }
-
-  // Ahora sí liberamos la mesa origen por completo (su pedido ya vive en el
-  // destino) -- mismo patron que deleteParkedTicketByIndex, sin sus dialogos
-  // de confirmacion propios (la fusion ya tuvo su propia confirmacion).
-  markParkedTicketAsDeleted(sourceTicket);
+  // ---- LOCAL primero (2026-11-25, Lumi: «fusionar mesas ocupadas tarda mucho»): antes la pantalla esperaba a TRES operaciones de red seguidas
+  // (guardar el destino, ajustar el stock en FacturaScripts y liberar el stock del origen; con muchas lineas y FS lento son segundos). Ahora la
+  // mesa de origen queda libre y el destino ya muestra todo AL MOMENTO, y la red sigue en segundo plano con el mismo orden y las mismas garantias.
   const sourceReleaseDelta = buildReservedQtyDeltaMap([], sourceItemsCloned);
-  if (sourceReleaseDelta.size > 0) {
-    try {
-      await syncReservedStockDeltaToFS(sourceReleaseDelta, "fusionar mesas (origen)", sourceTicket.id);
-    } catch (e) {
-      enqueueStockDeltaSync(e?.failedDeltaMap || sourceReleaseDelta, "fusionar mesas (origen)", sourceTicket.id);
-      console.warn("No se pudo liberar el stock de la mesa origen al fusionar:", e?.message || e);
-    }
-  }
-
-  const sourceIdx = parkedTickets.indexOf(sourceTicket);
-  if (sourceIdx >= 0) parkedTickets.splice(sourceIdx, 1);
-  unlinkMesaTicketByTicketId(sourceTicket?.id || null, sourceTicket);
-
-  void (async () => {
-    try {
-      await apiDeleteParkedReservation(sourceTicket);
-    } catch (e) {
-      enqueueParkedSyncOperation("delete", sourceTicket);
-      console.warn("No se pudo borrar en remoto la mesa origen tras fusionar:", e?.message || e);
-    }
-  })();
+  const splitGroupOfSource = String(getTicketSplitMeta(sourceTicket)?.groupId || "").trim();
+  allSourceTickets.forEach((tk) => {
+    markParkedTicketAsDeleted(tk);
+    const idx = parkedTickets.indexOf(tk);
+    if (idx >= 0) parkedTickets.splice(idx, 1);
+    unlinkMesaTicketByTicketId(tk?.id || null, tk);
+  });
+  try {
+    const splitState = loadSplitSessionState();
+    if (splitState && splitGroupOfSource && splitState.groupId === splitGroupOfSource) clearSplitSessionState();
+  } catch (_) {}
 
   saveParkedTicketsCache();
 
@@ -13211,6 +13206,60 @@ async function mergeMesaPendingTickets(sourceUid, targetUid) {
   refreshedState.selectedTableId = toUid;
   saveMesasTablesStateForInline(refreshedState);
   syncTpvCartWithSelectedMesa({ preferLinkedTicketOnEmptyDraft: true });
+
+  const mergeBackground = (async () => {
+    // Real de cliente (Asador el Gallo, 2026-10-12): el ajuste de stock de la fusion solo se aplica si el guardado del ticket destino se
+    // confirma con exito de verdad -- si falla y se encola, el ajuste viaja pegado a ese reintento (ver enqueueParkedSyncOperation).
+    let targetSaveConfirmed = false;
+    try {
+      await apiSaveParkedReservation(targetTicket);
+      targetSaveConfirmed = true;
+    } catch (e) {
+      if (e?.staleParkedWrite) {
+        handleStaleParkedWriteConflict(targetTicket, e);
+      } else {
+        enqueueParkedSyncOperation(
+          "upsert",
+          targetTicket,
+          reservedDelta.size > 0
+            ? { deltaMap: reservedDelta, reason: "fusionar mesas" }
+            : null,
+        );
+        console.warn("No se pudo guardar la mesa destino tras fusionar:", e?.message || e);
+      }
+    }
+
+    if (targetSaveConfirmed && reservedDelta.size > 0) {
+      try {
+        await syncReservedStockDeltaToFS(reservedDelta, "fusionar mesas", targetTicket.id);
+      } catch (e) {
+        enqueueStockDeltaSync(e?.failedDeltaMap || reservedDelta, "fusionar mesas", targetTicket.id);
+        console.warn("No se pudo sincronizar stock al fusionar mesas:", e?.message || e);
+      }
+    }
+
+    if (sourceReleaseDelta.size > 0) {
+      try {
+        await syncReservedStockDeltaToFS(sourceReleaseDelta, "fusionar mesas (origen)", sourceTicket.id);
+      } catch (e) {
+        enqueueStockDeltaSync(e?.failedDeltaMap || sourceReleaseDelta, "fusionar mesas (origen)", sourceTicket.id);
+        console.warn("No se pudo liberar el stock de la mesa origen al fusionar:", e?.message || e);
+      }
+    }
+
+    for (const tk of allSourceTickets) {
+      try {
+        await apiDeleteParkedReservation(tk);
+      } catch (e) {
+        enqueueParkedSyncOperation("delete", tk);
+        console.warn("No se pudo borrar en remoto la mesa origen tras fusionar:", e?.message || e);
+      }
+    }
+  })();
+  // Cobrar o dividir ese pedido espera (hasta 5 s) a que termine esta tarea en segundo plano: ver waitForPendingParkedStockSyncTail.
+  try {
+    __pendingParkedStockSyncTailByTicketId.set(String(targetTicket.id || ""), mergeBackground.catch(() => {}));
+  } catch (_) {}
 
   return true;
 }
@@ -50588,6 +50637,13 @@ function tryResumePendingSplitSession(opts = {}) {
   const state = loadSplitSessionState();
   if (!state) return false;
   if (!inMesasView && state.mesaUid) return false;
+  // Solo se reanuda en la MESA de la division (2026-11-25, Lumi: con una division sin acabar en M3, al ir a una mesa libre el TPV recargaba
+  // la parte de M3 una y otra vez, con el aviso «Reanudado cobro dividido», y el cajero no podia salir). En otra mesa no se toca nada (la
+  // division sigue guardada); al volver a la mesa de la division se reanuda como siempre.
+  if (inMesasView && state.mesaUid) {
+    const selectedUid = String(getSelectedMesaUidForInline() || "").trim();
+    if (selectedUid && selectedUid !== state.mesaUid) return false;
+  }
 
   const idx = findPendingSplitTicketIndex(state.groupId, state.nextPart);
   if (idx < 0) return false;

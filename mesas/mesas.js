@@ -2182,9 +2182,12 @@ function getTableStatus(uid) {
 
   // Un ticket activo siempre implica mesa ocupada.
   if (ticket) {
-    const computed = computeTicketTotalFromItems(ticket?.items);
-    const fallback = Number(ticket?.total || 0) || 0;
-    const total = computed > 0 ? computed : fallback;
+    // El importe que ve el cajero en el plano debe ser EL MISMO que en el carrito y en el selector de mesas: el total guardado en el pedido
+    // (lo calcula quien guarda con la logica completa: descuentos, precio manual, añadidos con precio...). Antes se recalculaba aqui con una
+    // formula simplificada que los ignora y por eso difería hasta el siguiente guardado (2026-11-25, Lumi). Solo si no hay total guardado
+    // se recalcula como respaldo.
+    const stored = Number(ticket?.total);
+    const total = Number.isFinite(stored) && stored > 0 ? stored : computeTicketTotalFromItems(ticket?.items);
     return { code: "ocupada", label: "Ocupada", total };
   }
 
