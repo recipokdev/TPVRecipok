@@ -97,7 +97,14 @@ const shortcutTarget = (lnk) => spawnSync("powershell.exe", ["-NoProfile", "-Com
       check("S1: registra el instalador (nombre y tamano) y la carpeta de instalacion", ctx.installerFile === "TPV-Recipok-Setup-9.9.9.exe" && typeof ctx.installerMb === "number" && !!ctx.installDir, gate);
       check("S1: guarda la copia de reparacion del instalador (enlace o copia)", /red de seguridad: instalador TPV-Recipok-Setup-9\.9\.9\.exe, copia de reparacion (enlace|copia)/.test(log), log.slice(-800));
       const repair = path.join(UPDATER_DIR, "repair", "TPV-Recipok-Reparar.exe");
-      check("S1: la copia esta fuera de la carpeta pending y es identica al instalador", fs.existsSync(repair) && fs.statSync(repair).size === installerBuf.length);
+      // Se espera unos segundos a que el estado se estabilice: dentro de la bateria larga el vigilante o el TPV de prueba pueden estar tocando el
+      // fichero justo en el instante de mirarlo (fallaba al azar, 25-nov-2026, y suelto pasa siempre).
+      let copiaOk = false;
+      for (let i = 0; i < 20 && !copiaOk; i++) {
+        try { copiaOk = fs.existsSync(repair) && fs.statSync(repair).size === installerBuf.length; } catch { copiaOk = false; }
+        if (!copiaOk) await new Promise((r) => setTimeout(r, 500));
+      }
+      check("S1: la copia esta fuera de la carpeta pending y es identica al instalador", copiaOk);
       const lnk = path.join(desk, "REPARAR TPV Recipok.lnk");
       check("S1: NO deja el icono REPARAR a la vista mientras el vigilante intenta arreglarlo (la persona no se entera)", !fs.existsSync(lnk), lnk);
       check("S1: lanza el vigilante de instalacion ANTES de cerrar el TPV", /vigilante de instalacion lanzado \(pid \d+\)/.test(log), log.slice(-800));
