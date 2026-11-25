@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.73",
+      "date": "2026-11-25",
+      "title": "Release 0.2.73",
       "changes": [
         "ARREGLO: Modo Mesas, dividir la cuenta. Si dejabas una división sin acabar y ibas a otra mesa libre desde el plano, el TPV volvía a cargar una parte de la división anterior una y otra vez, con el aviso «Reanudado cobro dividido», y no se podía salir. Ahora la división solo se reanuda al volver a su mesa.",
         "ARREGLO: Modo Mesas, cambiar de mesa con la cuenta dividida. Antes solo viajaba una de las partes y las demás se quedaban en la mesa de origen. Ahora viajan todas las partes sin cobrar, y si la mesa de destino ya tiene pedido y se fusionan, también se unen todas.",
