@@ -32674,7 +32674,7 @@ async function loadDataFromApiImpl(opts = {}) {
   } catch (err) {
     console.error("Error llamando a la API de Recipok:", err);
 
-    const restored = restoreBootSnapshotIntoRuntime("loadDataFromApi-error");
+    const restored = restoreBootSnapshotIntoRuntime("loadDataFromApi-error", { error: String((err && err.message) || err || "").slice(0, 200) });
     if (restored) {
       setStatusText("Offline (cache local)");
       TPV_STATE.offline = true;
@@ -67646,7 +67646,7 @@ function loadBootSnapshot() {
   }
 }
 
-function restoreBootSnapshotIntoRuntime(reason = "") {
+function restoreBootSnapshotIntoRuntime(reason = "", extra = null) {
   const snap = loadBootSnapshot();
   if (!snap) return false;
 
@@ -67685,6 +67685,7 @@ function restoreBootSnapshotIntoRuntime(reason = "") {
     products: products.length,
     categories: categories.length,
     terminals: terminals.length,
+    ...(extra && typeof extra === "object" ? extra : {}), // p. ej. el mensaje del error que obligo a restaurar (Lumi 24-nov-2026: sin causa no se podia diagnosticar)
   });
 
   return true;

@@ -12861,6 +12861,7 @@ mustContain(main, "El TPV ya está abierto o terminando de actualizarse.", "Un s
 mustContain(main, "if (appIsInstallingUpdate && Date.now() - appInstallingSince < 90_000) return;", "Durante una instalacion atascada el icono deja de ignorarse pasados 90 s");
 mustContain(main, "function verifyPreviousInstallOutcome() {", "El siguiente arranque comprueba si la instalacion anterior se aplico");
 mustContain(main, 'logUpdateEventRemote("update-install-not-applied"', "Una instalacion que no se aplico queda registrada en el servidor");
+mustContain(renderer, 'restoreBootSnapshotIntoRuntime("loadDataFromApi-error", { error:', "Al restaurar la copia local por un error al cargar datos, el aviso lleva el mensaje del error (sin causa no se podia diagnosticar, Lumi 24-nov-2026)");
 mustContain(main, "const MAX_WAIT_MS = 180000;", "La ventanita de instalando no desaparece a los 30 s dejando el escritorio vacio");
 mustContain(main, "No abras el TPV otra vez: se abrirá solo cuando termine.", "La ventanita de instalando avisa de que no hay que volver a abrir el TPV si tarda");
 mustContain(main, "No se ha podido terminar la actualización", "La ventanita de instalando explica que hacer si la instalacion no termina");
