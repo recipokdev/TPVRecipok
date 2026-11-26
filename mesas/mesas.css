@@ -2327,3 +2327,31 @@ body.theme-dark .mesa-state-dot.ocupada {
   border-color: rgba(251, 191, 36, 0.9);
   color: #fde68a;
 }
+
+/* Boton «⋯» permanente de opciones en la esquina de cada mesa del plano (2026-11-26) */
+.gestion-obj.table .gestion-opt-btn {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: #1f2937;
+  color: #fff;
+  font-size: 22px;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.4);
+  z-index: 3;
+}
+
+.gestion-obj.table .gestion-opt-btn:hover,
+.gestion-obj.table .gestion-opt-btn:active {
+  background: #111827;
+}

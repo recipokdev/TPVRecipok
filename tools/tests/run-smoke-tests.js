@@ -12885,6 +12885,7 @@ mustContain(fs.readFileSync(path.join(root, "styles.css"), "utf8"), ".cart-line-
 mustContain(renderer, 'if (data.type === "tpv:mesas-move-table") {', "El TPV atiende la peticion «Mover / fusionar» que manda el plano de mesas (Lumi usa el plano mucho mas que el carrito, 26-nov-2026)");
 mustContain(renderer, "{ keepSelection: true }", "Mover/fusionar desde el plano no cambia la mesa seleccionada ni el carrito cargado (salvo que sea la de origen o la de destino)");
 mustContain(mesasJs, "function handleMapMoveTargetClick(targetUid) {", "El plano de mesas permite elegir origen y destino para mover o fusionar");
+mustContain(mesasJs, 'optBtn.className = "gestion-opt-btn";', "Cada mesa del plano lleva un boton «⋯» siempre visible que abre su ficha (mantener pulsado no lo descubre casi nadie)");
 mustContain(mesasJs, 'data-table-act="move"', "La ficha de una mesa ocupada del plano tiene el boton «Mover / fusionar»");
 mustContain(fs.readFileSync("mesas/mesas.html", "utf8"), 'id="mapMoveBanner"', "El plano muestra un aviso mientras se elige la mesa de destino");
 mustContain(renderer, "const isResplit = !!currentSplitMeta;", "Un ticket ya dividido se puede volver a dividir (se subdivide esa parte y las nuevas se añaden al final del grupo): antes daba «Este ticket ya esta dividido» (Lumi, 26-nov-2026)");

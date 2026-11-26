@@ -250,6 +250,26 @@ let kill = () => {};
       if (!frame) throw new Error("No se encontro el plano de mesas (iframe)");
       const refrescarPlano = async () => { await frame.evaluate(() => { window.postMessage({ type: "tpv:mesas-state-changed" }, "*"); }); await sleep(900); };
       await refrescarPlano();
+      // por el boton «⋯» visible de la mesa (sin mantener pulsado): ficha -> «Mover / fusionar» -> aviso de mover
+      out.t8.viaBoton = await frame.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const nodos = document.querySelectorAll(".gestion-obj.table");
+        const conBoton = document.querySelectorAll(".gestion-obj.table .gestion-opt-btn").length;
+        const btn = document.querySelector('.gestion-obj.table[data-table-uid="tut-room-1::m1"] .gestion-opt-btn');
+        const r = { mesas: nodos.length, conBoton, ancho: btn ? Math.round(btn.getBoundingClientRect().width) : 0 };
+        if (!btn) return r;
+        btn.click(); await sleep(300);
+        r.fichaAbierta = !!document.querySelector(".gestion-tooltip");
+        const mover = document.querySelector('.gestion-tooltip [data-table-act="move"]');
+        r.hayMover = !!mover;
+        if (mover) { mover.click(); await sleep(300); }
+        const b = document.getElementById("mapMoveBanner");
+        r.avisoMover = !!b && !b.classList.contains("hidden");
+        r.sinBotonesEnMover = document.querySelectorAll(".gestion-obj.table .gestion-opt-btn").length === 0;
+        cancelMapMove(); await sleep(300);
+        r.botonesVuelven = document.querySelectorAll(".gestion-obj.table .gestion-opt-btn").length === conBoton;
+        return r;
+      });
       out.t8.eligiendo = await frame.evaluate(() => {
         startMapMove("tut-room-1::m1");
         const b = document.getElementById("mapMoveBanner");
@@ -313,6 +333,7 @@ let kill = () => {};
       ok("7) Las partes que ya existían conservan su número y solo cambian el total (2/2 pasa a 2/3); todas del mismo grupo; se queda cargada la 1/3 y la división en curso lleva total 3", !t7.error && (t7.totalesAlmacenados || []).length === 3 && (t7.totalesAlmacenados || []).every((t) => t.total === 3 && t.grupo === (t7.totalesAlmacenados || [])[0].grupo) && /\(1\/3\)\s*$/.test(String(t7.cargado2 || "")) && (t7.sesion || {}).totalParts === 3, { cargado2: t7.cargado2, totalesAlmacenados: t7.totalesAlmacenados, sesion: t7.sesion }),
       ok("7) «Revertir división» sigue funcionando con las 3 partes: queda un solo pedido con las mismas unidades y el mismo total", !t7.error && (t7.unificado || {}).n === 1 && (t7.unificado || {}).u === (t7.antes || {}).u && Math.abs((t7.unificado || {}).total - (t7.antes || {}).total) < 0.02 && !/\(\d+\/\d+\)/.test(String((t7.unificado || {}).nombre || "")), t7.unificado),
       ok("8) Plano: «Mover / fusionar» pone el aviso arriba, marca la mesa de origen y deja el resto como posible destino; «Cancelar» lo quita y no cambia nada", !t8.error && (t8.eligiendo || {}).banner === true && /Moviendo la mesa/.test((t8.eligiendo || {}).texto || "") && (t8.eligiendo || {}).origen === 1 && (t8.eligiendo || {}).destinos >= 1 && (t8.cancelado || {}).banner === false && (t8.cancelado || {}).origen === 0 && JSON.stringify(t8.sinCambios) === JSON.stringify(["m1", "m2"]), { eligiendo: t8.eligiendo, cancelado: t8.cancelado, sinCambios: t8.sinCambios, error: t8.error }),
+      ok("8) Plano: cada mesa lleva un botón «⋯» visible (≥ 36 px) que abre su ficha sin mantener pulsado; desde ahí se llega a «Mover / fusionar», el aviso aparece sin botones y al cancelar vuelven", !t8.error && (t8.viaBoton || {}).conBoton === (t8.viaBoton || {}).mesas && (t8.viaBoton || {}).mesas >= 3 && (t8.viaBoton || {}).ancho >= 36 && (t8.viaBoton || {}).fichaAbierta === true && (t8.viaBoton || {}).hayMover === true && (t8.viaBoton || {}).avisoMover === true && (t8.viaBoton || {}).sinBotonesEnMover === true && (t8.viaBoton || {}).botonesVuelven === true, t8.viaBoton),
       ok("8) Plano: mover a una mesa LIBRE lleva el pedido a la nueva mesa, deja la de origen libre y NO cambia la mesa seleccionada en el TPV", !t8.error && ((t8.tras_mover || {}).loc || []).map((t) => t.mesa).sort().join() === "m2,m3" && ((t8.tras_mover || {}).sel || "") === ((t8.prep || {}).sel || "x"), { prep: t8.prep && { sel: t8.prep.sel, u: t8.prep.u }, tras_mover: t8.tras_mover }),
       ok("8) Plano: fusionar con una mesa OCUPADA pide confirmación con los totales y deja UNA sola mesa con las mismas unidades y el mismo total", !t8.error && ((t8.tras_fusion || {}).loc || []).length === 1 && (((t8.tras_fusion || {}).loc || [])[0] || {}).mesa === "m2" && (((t8.tras_fusion || {}).loc || [])[0] || {}).u === (t8.prep || {}).u && Math.abs((((t8.tras_fusion || {}).loc || [])[0] || {}).total - (t8.prep || {}).total) < 0.02 && ((t8.tras_fusion || {}).confirmaciones || []).some((c) => /^Fusionar mesas: Se juntará la mesa .* con la mesa /.test(c)), t8.tras_fusion),
       ok("Al terminar las mesas de prueba quedan limpias", Array.isArray(out.limpio) && out.limpio.length === 0, out.limpio),

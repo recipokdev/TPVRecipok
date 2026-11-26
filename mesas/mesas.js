@@ -2975,6 +2975,27 @@ function renderMapCards() {
         }
         handlePrimaryTableClick(uid, st.code, stageKey);
       });
+
+      // Boton «⋯» SIEMPRE visible en la esquina de la mesa (2026-11-26): abre la misma ficha que mantener pulsada la mesa, que mucha gente no
+      // descubre. No se pinta mientras se elige la mesa de destino de un movimiento.
+      if (!mapMoveSourceUid) {
+        const optBtn = document.createElement("button");
+        optBtn.type = "button";
+        optBtn.className = "gestion-opt-btn";
+        optBtn.textContent = "\u22EF";
+        optBtn.title = "Opciones de la mesa";
+        optBtn.setAttribute("aria-label", "Opciones de la mesa");
+        optBtn.addEventListener("pointerdown", (event) => event.stopPropagation());
+        optBtn.addEventListener("click", (event) => {
+          event.stopPropagation();
+          if (activeMapTooltipEl && activeMapTooltipUid === String(uid || "").trim()) {
+            closeMapTooltip();
+            return;
+          }
+          showTip();
+        });
+        node.appendChild(optBtn);
+      }
     } else {
       const cls = String(obj.cls || "").trim();
       const isWall = cls === "structure-muro";
