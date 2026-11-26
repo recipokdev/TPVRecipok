@@ -18992,9 +18992,54 @@ window.TPV_UI?.onGuard?.(async ({ title, text }) => {
 
 // ===== [09] Feedback UI: toasts =====
 
+// Politica de avisos (2026-11-26, Sergi: «un aviso para todo es redundante: si no hay error ya sé que ha funcionado»):
+//  - Los avisos de ÉXITO de acciones cuyo resultado ya se ve en pantalla (dividir, mover/fusionar mesas, guardar/borrar un pedido, los
+//    interruptores de Opciones) NO se muestran. Los errores, los avisos y lo que pasa fuera de la pantalla (cobros, impresión, envíos, sincronización
+//    con otros terminales) siguen igual.
+//  - Un aviso idéntico al que ya está en pantalla no se repite (se renueva su tiempo) y nunca hay más de 3 a la vez.
+const TOAST_QUIET_OK_TITLES = new Set(["Pedidos", "Aparcados", "Mesas", "Dividir"]);
+const TOAST_KEEP_OK_RE = /^(Sync|Incidencias)/i;
+const TOAST_QUIET_INFO_RE = [/^Siguiente parte lista/i, /^Reanudado cobro dividido/i, /^Cambio de mesa cancelado/i];
+const TOAST_KEEP_OPTIONS_RE = /importad|deshech|importaci/i;
+const TOAST_MAX_VISIBLE = 3;
+const __toastLive = new Map();
+
+function shouldSilenceToast(message, type, title) {
+  const msg = String(message || "");
+  const ttl = String(title || "");
+  if (type === "ok") {
+    if (TOAST_QUIET_OK_TITLES.has(ttl) && !TOAST_KEEP_OK_RE.test(msg)) return true;
+    if (ttl === "Opciones" && !TOAST_KEEP_OPTIONS_RE.test(msg)) return true;
+  }
+  if (type === "info") {
+    if (ttl === "Opciones") return true;
+    if (TOAST_QUIET_INFO_RE.some((re) => re.test(msg))) return true;
+  }
+  return false;
+}
+
 function toast(message, type = "info", title = "") {
   const container = document.getElementById("toastContainer");
   if (!container) return;
+  if (shouldSilenceToast(message, type, title)) return;
+
+  const ttl = type === "err" ? 4500 : 2800;
+  const key = `${type}|${title}|${message}`;
+
+  const prevLive = __toastLive.get(key);
+  if (prevLive && prevLive.el.isConnected) {
+    clearTimeout(prevLive.timer);
+    prevLive.timer = setTimeout(prevLive.hide, ttl);
+    return;
+  }
+
+  // Tope de avisos a la vez: se retira primero el mas antiguo que no sea un error.
+  const shown = Array.from(container.children);
+  while (shown.length >= TOAST_MAX_VISIBLE) {
+    const idx = shown.findIndex((n) => !n.classList.contains("err"));
+    const victim = shown.splice(idx >= 0 ? idx : 0, 1)[0];
+    victim.remove();
+  }
 
   const el = document.createElement("div");
   el.className = `toast ${type}`;
@@ -19008,11 +19053,16 @@ function toast(message, type = "info", title = "") {
 
   requestAnimationFrame(() => el.classList.add("show"));
 
-  const ttl = type === "err" ? 4500 : 2800;
-  setTimeout(() => {
+  const live = { el, timer: null, hide: null };
+  live.hide = () => {
     el.classList.remove("show");
-    setTimeout(() => el.remove(), 200);
-  }, ttl);
+    setTimeout(() => {
+      el.remove();
+      if (__toastLive.get(key) === live) __toastLive.delete(key);
+    }, 200);
+  };
+  live.timer = setTimeout(live.hide, ttl);
+  __toastLive.set(key, live);
 }
 
 // ===== [09] Entrada UI: teclado numerico =====

@@ -369,6 +369,36 @@ let kill = () => {};
     } catch (e) { out.t10.error = String(e && e.message || e).slice(0, 300); }
     finally { await win.evaluate(async () => { try { setMesasInlineView("transacciones", { persist: false }); } catch (e) {} }); }
 
+    // ---------- 11) avisos: los de «exito» redundantes no salen; los demas si; un aviso repetido no se apila y nunca hay mas de 3 a la vez
+    out.t11 = await win.evaluate(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const c = document.getElementById("toastContainer");
+      const limpiar = async () => { c.innerHTML = ""; __toastLive.clear(); await sleep(50); };
+      const n = () => c.children.length;
+      const r = {};
+      await limpiar();
+      toast("Ticket dividido en 2 partes.", "ok", "Dividir"); toast("Mesas fusionadas en M2 (Sala 1).", "ok", "Mesas"); toast("Pedido de mesa eliminado.", "ok", "Pedidos"); toast("Pedido actualizado ✅", "ok", "Aparcados");
+      toast("Auto-impresión activada ✅", "info", "Opciones"); toast("Siguiente parte lista: 2/2.", "info", "Dividir"); toast("Reanudado cobro dividido: parte 1/2.", "info", "Dividir");
+      r.silenciados = n();
+      await limpiar();
+      toast("Venta cobrada ✅ (Efectivo - A-1)", "ok", "Cobrar"); r.cobro = n();
+      await limpiar(); toast("Sync completada.", "ok", "Aparcados"); r.sync = n();
+      await limpiar(); toast("Opciones importadas (3) ✅", "ok", "Opciones"); r.importadas = n();
+      await limpiar(); toast("No se pudo guardar.", "err", "Pedidos"); r.error = n();
+      await limpiar(); toast("Esta mesa se actualizó desde otro terminal mientras estaba abierta.", "info", "Mesas"); r.otroTerminal = n();
+      await limpiar();
+      for (let i = 0; i < 4; i++) toast("Esta mesa se actualizó desde otro terminal mientras estaba abierta.", "info", "Mesas");
+      r.repetido = n();
+      await limpiar();
+      for (let i = 0; i < 6; i++) toast("Aviso distinto " + i, "warn", "Prueba");
+      r.tope = n();
+      await limpiar();
+      toast("A", "err", "Prueba"); toast("B", "warn", "Prueba"); toast("C", "warn", "Prueba"); toast("D", "warn", "Prueba");
+      r.conErrorTope = { n: n(), hayError: !!c.querySelector(".toast.err") };
+      await limpiar();
+      return r;
+    });
+
     // ---------- limpieza
     await win.evaluate(async () => { await window.__clean(); });
     out.limpio = await win.evaluate(() => __loc());
@@ -379,7 +409,7 @@ let kill = () => {};
     try { await Promise.race([app.evaluate(({ session }) => session.defaultSession.flushStorageData()), sleep(4000)]); } catch {}
     console.log(JSON.stringify(out, null, 1));
     const ok = (name, cond, extra) => [name, !!cond, extra === undefined ? "" : typeof extra === "string" ? extra : JSON.stringify(extra)];
-    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {}, t7 = out.t7 || {}, t8 = out.t8 || {}, t9 = out.t9 || {}, t10 = out.t10 || {};
+    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {}, t7 = out.t7 || {}, t8 = out.t8 || {}, t9 = out.t9 || {}, t10 = out.t10 || {}, t11 = out.t11 || {};
     const c5 = t4.c5 || {}, c9 = t4.c9 || {}, c11 = t4.c11 || {};
     const verdict = require("./battery/verdict.js").emitVerdict([
       ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || ""),
@@ -413,6 +443,9 @@ let kill = () => {};
       ok("9) En el TPV ninguna parte de la cuenta dividida vuelve un instante a la mesa de origen al refrescar desde el servidor", !t9.error && (t9.host || []).length >= 2 && !(t9.host || []).slice(1).some((r) => /@m3/.test(r)), t9.host),
       ok("9) Con la ficha de una mesa abierta, un cambio hecho mientras tanto se aplica al cerrarla (antes el plano se quedaba desfasado)", !t9.error && (t9.conFichaAbierta || {}).ficha === true && (t9.alCerrarFicha || {}).m3 === "state-ocupada" && (t9.alCerrarFicha || {}).m2 === "state-libre", { conFichaAbierta: t9.conFichaAbierta, alCerrarFicha: t9.alCerrarFicha }),
       ok("10) Mover una cuenta sin dividir 6 veces seguidas (ida y vuelta) deja SIEMPRE el pedido en la mesa de destino (antes se deshacia solo cuando el guardado chocaba con otro)", !t10.error && (t10.vueltas || []).length === 6 && (t10.vueltas || []).every((v) => v.ok === true && v.loc.length === 1 && v.loc[0] === v.hasta), t10),
+      ok("11) Avisos: los de éxito redundantes (dividir, mover/fusionar, guardar/borrar pedido, interruptores de Opciones) no salen", (t11.silenciados) === 0, t11),
+      ok("11) Avisos: los de cobro, sincronización manual, importación de opciones, errores y cambios hechos desde otro terminal SÍ salen", t11.cobro === 1 && t11.sync === 1 && t11.importadas === 1 && t11.error === 1 && t11.otroTerminal === 1, t11),
+      ok("11) Avisos: uno idéntico repetido 4 veces sale UNA vez, nunca hay más de 3 a la vez y un error no se retira por el tope si hay otros", t11.repetido === 1 && t11.tope === 3 && (t11.conErrorTope || {}).n === 3 && (t11.conErrorTope || {}).hayError === true, t11),
       ok("Al terminar las mesas de prueba quedan limpias", Array.isArray(out.limpio) && out.limpio.length === 0, out.limpio),
     ]);
     clearTimeout(hard); kill();

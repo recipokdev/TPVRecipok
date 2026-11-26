@@ -83,6 +83,9 @@ function buildChecks(out) {
       await setMesasInlineModeEnabled(true, { persist: false });
       setMesasInlineView("transacciones", { persist: false });
       window.__saved = { on: localStorage.getItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY), delay: localStorage.getItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY) };
+      // Si el perfil ya traia EXACTAMENTE lo que pone esta prueba (activada y 8 s) es residuo de una ejecucion anterior cortada: no se "restaura" eso
+      // (se perpetuaba y dejaba la comanda automatica activada a 8 s en el perfil de pruebas, 26-nov-2026), se vuelve a lo de fabrica (apagada, 60 s).
+      if (window.__saved.on === "1" && window.__saved.delay === "8") window.__saved = { on: null, delay: null };
       localStorage.setItem(OPTIONS_AUTO_COMANDA_ON_SAVE_KEY, "1");
       localStorage.setItem(OPTIONS_AUTO_COMANDA_DELAY_SEC_KEY, "8");
       window.__prints = [];
