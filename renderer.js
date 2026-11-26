@@ -51724,6 +51724,29 @@ function validateSplitItemsMatrix() {
   return { ok: true };
 }
 
+// Al dividir, las lineas que SE QUEDAN en el pedido original (la parte 1) siguen siendo las mismas lineas: conservan su _lineId (solo cambia la cantidad).
+// Antes recibian un id nuevo y otro TPV que habia subido la cantidad de esa linea justo antes de enterarse de la division ya no la encontraba en el
+// servidor y su cambio se perdia (1 unidad perdida en ~la mitad de las pruebas de «Dividir con 2 TPV», 26-nov-2026). Las partes NUEVAS llevan ids nuevos.
+function inheritSplitLineIds(keptLines, sourceLines) {
+  const keyOf = (l) =>
+    JSON.stringify({
+      id: getProductBaseId(l) || String(l?.id || ""),
+      name: String(l?.name || l?.descripcion || ""),
+      price: Number(l?.price || 0) || 0,
+      grossPrice: Number(l?.grossPrice || 0) || 0,
+      taxRate: Number(l?.taxRate || 0) || 0,
+      codimpuesto: String(l?.codimpuesto || ""),
+    });
+  const pool = (Array.isArray(sourceLines) ? sourceLines : []).map((l) => ({ l, key: keyOf(l), used: false }));
+  return (Array.isArray(keptLines) ? keptLines : []).map((line) => {
+    const key = keyOf(line);
+    const hit = pool.find((p) => !p.used && p.key === key && p.l?._lineId);
+    if (!hit) return line;
+    hit.used = true;
+    return { ...line, _lineId: hit.l._lineId };
+  });
+}
+
 function buildSplitLinesByPartFromItemsMatrix() {
   const visible = getVisibleSplitSourceLines();
   const parts = resolveSplitPartsCount();
@@ -52784,11 +52807,14 @@ async function confirmSplitTicket() {
     splitTickets.push(splitTicket);
   }
 
-  const loadedShareLines = isSplitItemsMode()
-    ? Array.isArray(activePartsData[0]?.lines)
-      ? activePartsData[0].lines
-      : []
-    : equalShares[0];
+  const loadedShareLines = inheritSplitLineIds(
+    isSplitItemsMode()
+      ? Array.isArray(activePartsData[0]?.lines)
+        ? activePartsData[0].lines
+        : []
+      : equalShares[0],
+    sourceLines,
+  );
   loaded.items = loadedShareLines;
   loaded.total = getCartTotal(loadedShareLines);
   loaded.name = `${nameBase} (${loadedPartNo}/${finalSplitTotal})`;
