@@ -2281,3 +2281,49 @@ body.theme-dark .mesa-state-dot.ocupada {
     grid-template-columns: 1fr;
   }
 }
+
+/* «Mover / fusionar» desde el plano (2026-11-26): aviso fijo arriba mientras se elige la mesa de destino */
+.map-move-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 8px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #fff7e0;
+  border: 2px solid #f59e0b;
+  color: #5b3b00;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.map-move-banner.hidden {
+  display: none;
+}
+
+.map-move-cancel {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 0 16px;
+  border: 1px solid #b45309;
+  border-radius: 10px;
+  background: #fff;
+  color: #92400e;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.gestion-obj.table.is-move-source {
+  outline: 5px solid #f59e0b;
+  outline-offset: 3px;
+}
+
+.gestion-obj.table.is-move-target {
+  cursor: copy;
+}
+
+.gestion-tip-btn.is-move {
+  border-color: rgba(251, 191, 36, 0.9);
+  color: #fde68a;
+}

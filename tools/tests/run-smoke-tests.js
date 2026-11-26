@@ -9267,7 +9267,7 @@ console.log("\n[SMOKE] Checking 2026-10-06 Modo Mesas: fusionar 2 mesas en una s
 
 mustContain(
   renderer,
-  "async function mergeMesaPendingTickets(sourceUid, targetUid) {",
+  "async function mergeMesaPendingTickets(sourceUid, targetUid, opts = {}) {",
   "Segunda idea de la investigacion de otros TPV (Glop permite fusionar mesas como flujo de primera clase): combinar 2 mesas YA ocupadas en una sola cuenta, distinto de moveMesaPendingTicket (que solo mueve un pedido a una mesa VACIA, y se niega si la mesa destino ya tiene pedido). Diseño confirmado con Sergi: la mesa origen queda libre de inmediato, se entra desde el mismo boton 'Cambiar de mesa', y todo lo ya impreso a cocina (de cualquiera de las 2) pasa a pendiente en la mesa combinada -- mas seguro que intentar conservar el estado de impresion producto a producto",
 );
 mustContain(
@@ -9749,7 +9749,7 @@ console.log("\n[SMOKE] Checking 2026-10-12 stock: el ajuste no se aplica si el g
   }
 }
 {
-  const idx = renderer.indexOf("async function mergeMesaPendingTickets(sourceUid, targetUid) {");
+  const idx = renderer.indexOf("async function mergeMesaPendingTickets(sourceUid, targetUid, opts = {}) {");
   // Hasta el final de la funcion (la red de la fusion va ahora en segundo plano, despues del borrado local: 25-nov-2026, Lumi).
   const endIdx = idx >= 0 ? renderer.indexOf("function refreshMesasTransSidebar() {", idx) : -1;
   const scoped = idx >= 0 && endIdx >= 0 ? renderer.slice(idx, endIdx) : "";
@@ -12882,6 +12882,11 @@ mustContain(renderer, "function getPresenceHostId() {", "La presencia de termina
 mustContain(renderer, 'logFeatureWarn("PRESENCE", "multi-tpv-activos", {', "Cada vez que sale el aviso «Hay N TPV activos» se registra en el servidor el detalle de las sesiones (Lumi, 25-nov-2026)");
 mustContain(renderer, '<div class="cart-line-controls">', "En el carrito el contador de cantidad y el precio van juntos en un bloque que baja debajo del nombre, y el nombre usa todo el ancho de la linea (Lumi, 25-nov-2026)");
 mustContain(fs.readFileSync(path.join(root, "styles.css"), "utf8"), ".cart-line-controls {", "Bloque de controles de la linea del carrito (cantidad + precio) que envuelve en vez de desbordar");
+mustContain(renderer, 'if (data.type === "tpv:mesas-move-table") {', "El TPV atiende la peticion «Mover / fusionar» que manda el plano de mesas (Lumi usa el plano mucho mas que el carrito, 26-nov-2026)");
+mustContain(renderer, "{ keepSelection: true }", "Mover/fusionar desde el plano no cambia la mesa seleccionada ni el carrito cargado (salvo que sea la de origen o la de destino)");
+mustContain(mesasJs, "function handleMapMoveTargetClick(targetUid) {", "El plano de mesas permite elegir origen y destino para mover o fusionar");
+mustContain(mesasJs, 'data-table-act="move"', "La ficha de una mesa ocupada del plano tiene el boton «Mover / fusionar»");
+mustContain(fs.readFileSync("mesas/mesas.html", "utf8"), 'id="mapMoveBanner"', "El plano muestra un aviso mientras se elige la mesa de destino");
 mustContain(renderer, "const isResplit = !!currentSplitMeta;", "Un ticket ya dividido se puede volver a dividir (se subdivide esa parte y las nuevas se añaden al final del grupo): antes daba «Este ticket ya esta dividido» (Lumi, 26-nov-2026)");
 mustContain(renderer, "for (const sibling of resplitUpdatedSiblings) {", "Al redividir se actualiza el total de las demas partes del grupo (si no, al cobrar la ultima de las antiguas se daria la division por completada con partes nuevas pendientes)");
 mustContain(renderer, "async function completeClienteAddressFromContactos(cli) {", "La direccion del cliente en facturas y tickets se completa desde su contacto de facturacion (en FS no esta en `clientes`): antes salia «(sin informar)» (Lumi, 25-nov-2026)");

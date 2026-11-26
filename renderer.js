@@ -13055,7 +13055,7 @@ function getUnpaidSplitSiblingsInMesa(ticket, mesaUid) {
   );
 }
 
-function moveMesaPendingTicket(sourceUid, targetUid) {
+function moveMesaPendingTicket(sourceUid, targetUid, opts = {}) {
   const fromUid = String(sourceUid || "").trim();
   const toUid = String(targetUid || "").trim();
   if (!fromUid || !toUid || fromUid === toUid) return false;
@@ -13155,9 +13155,13 @@ function moveMesaPendingTicket(sourceUid, targetUid) {
     }
   } catch (_) {}
 
-  mesasState.selectedTableId = toUid;
+  // Desde el plano (opts.keepSelection) la mesa seleccionada y el carrito cargado NO cambian, salvo que sean justo la de origen o la de destino.
+  const keepSelection =
+    opts?.keepSelection === true &&
+    ![fromUid, toUid].includes(String(mesasState.selectedTableId || "").trim());
+  if (!keepSelection) mesasState.selectedTableId = toUid;
   saveMesasTablesStateForInline(mesasState);
-  syncTpvCartWithSelectedMesa({ preferLinkedTicketOnEmptyDraft: true });
+  if (!keepSelection) syncTpvCartWithSelectedMesa({ preferLinkedTicketOnEmptyDraft: true });
 
   // Antes el cambio de mesa solo quedaba en la copia local y en el plano compartido: el pedido
   // guardado en el servidor seguia diciendo "mesa origen" hasta que se editara por otra razon, asi
@@ -13199,7 +13203,7 @@ function moveMesaPendingTicket(sourceUid, targetUid) {
 //   impresion producto a producto: nunca se olvida avisar a cocina de algo
 //   de verdad nuevo, aunque pueda reimprimir algo que ya se habia mandado
 //   por separado (molestia menor y recuperable).
-async function mergeMesaPendingTickets(sourceUid, targetUid) {
+async function mergeMesaPendingTickets(sourceUid, targetUid, opts = {}) {
   const fromUid = String(sourceUid || "").trim();
   const toUid = String(targetUid || "").trim();
   if (!fromUid || !toUid || fromUid === toUid) return false;
@@ -13270,9 +13274,14 @@ async function mergeMesaPendingTickets(sourceUid, targetUid) {
   saveParkedTicketsCache();
 
   const refreshedState = loadMesasTablesStateForInline();
-  refreshedState.selectedTableId = toUid;
+  // Desde el plano (opts.keepSelection) no se cambia la mesa seleccionada salvo que sea la de origen o la de destino (el carrito cargado
+  // de esas dos SI hay que recargarlo: si no, un autoguardado con el carrito antiguo pisaria lo fusionado).
+  const keepSelection =
+    opts?.keepSelection === true &&
+    ![fromUid, toUid].includes(String(refreshedState.selectedTableId || "").trim());
+  if (!keepSelection) refreshedState.selectedTableId = toUid;
   saveMesasTablesStateForInline(refreshedState);
-  syncTpvCartWithSelectedMesa({ preferLinkedTicketOnEmptyDraft: true });
+  if (!keepSelection) syncTpvCartWithSelectedMesa({ preferLinkedTicketOnEmptyDraft: true });
 
   const mergeBackground = (async () => {
     // Real de cliente (Asador el Gallo, 2026-10-12): el ajuste de stock de la fusion solo se aplica si el guardado del ticket destino se
@@ -14462,6 +14471,82 @@ function bindMesasInlineEventsOnce() {
           toast("Mesa liberada.", "ok", "Mesas");
         } catch (e) {
           console.warn("No se pudo liberar la mesa:", e?.message || e);
+        }
+      })();
+      return;
+    }
+
+    // «Mover / fusionar» desde el plano de mesas (2026-11-26, Lumi): el plano solo elige origen y destino y lo pide aqui, que es quien guarda.
+    if (data.type === "tpv:mesas-move-table") {
+      const sourceUid = String(data?.sourceUid || "").trim();
+      const targetUid = String(data?.targetUid || "").trim();
+      if (!sourceUid || !targetUid || sourceUid === targetUid) return;
+      if (mesasOperationsBlockedByClosedCaja()) {
+        toastMesasNeedOpenCaja();
+        return;
+      }
+      (async () => {
+        try {
+          flushLoadedParkedTicketChangesSync();
+          const st = loadMesasTablesStateForInline();
+          const nameOf = (uid) => {
+            const linked = getMesasRoomAndTableByUid(st, uid);
+            const t = String(linked?.table?.name || linked?.table?.id || "mesa").trim();
+            const r = String(linked?.room?.name || "").trim();
+            return r ? `${t} (${r})` : t;
+          };
+          const srcTicket = getMesasPendingTicketByUid(st, sourceUid);
+          if (!srcTicket) {
+            toast("Esa mesa ya no tiene ningún pedido para mover.", "warn", "Mesas");
+            return;
+          }
+          const dstTicket = getMesasPendingTicketByUid(st, targetUid);
+          const srcName = nameOf(sourceUid);
+          const dstName = nameOf(targetUid);
+          if (dstTicket) {
+            if (getUnpaidSplitSiblingsInMesa(dstTicket, targetUid).length) {
+              toast(
+                `La mesa ${dstName} tiene la cuenta dividida: cóbrala o júntala antes de fusionar otra mesa en ella.`,
+                "warn",
+                "Mesas",
+              );
+              return;
+            }
+            const srcTotal = [srcTicket, ...getUnpaidSplitSiblingsInMesa(srcTicket, sourceUid)].reduce(
+              (sum, t) => sum + (Number(getMesasTicketTotal(t)) || 0),
+              0,
+            );
+            const dstTotal = Number(getMesasTicketTotal(dstTicket)) || 0;
+            const ok = await confirmModal(
+              "Fusionar mesas",
+              `Se juntará la mesa ${srcName} (${eur(srcTotal)}) con la mesa ${dstName} (${eur(dstTotal)}) en una sola cuenta de ${eur(srcTotal + dstTotal)}. La mesa ${srcName} quedará libre.`,
+              { dialogClassName: "wide-dialog" },
+            );
+            if (!ok) return;
+            const merged = await mergeMesaPendingTickets(sourceUid, targetUid, { keepSelection: true });
+            if (merged) {
+              refreshMesasTransSidebar?.();
+              renderCart();
+              toast(`Mesas fusionadas en ${dstName}.`, "ok", "Mesas");
+            }
+            return;
+          }
+          if (getMesaQuickStatusMeta(st, targetUid).kind === "reservada") {
+            const ok = await confirmModal(
+              "Mesa reservada",
+              `La mesa ${dstName} está reservada. Si mueves aquí la cuenta de ${srcName}, la reserva se pierde. ¿Continuar?`,
+              { dialogClassName: "wide-dialog" },
+            );
+            if (!ok) return;
+          }
+          if (moveMesaPendingTicket(sourceUid, targetUid, { keepSelection: true })) {
+            refreshMesasTransSidebar?.();
+            renderCart();
+            toast(`Cuenta movida de ${srcName} a ${dstName}.`, "ok", "Mesas");
+          }
+        } catch (e) {
+          console.warn("No se pudo mover/fusionar la mesa desde el plano:", e?.message || e);
+          toast("No se pudo mover la mesa. Inténtalo de nuevo.", "err", "Mesas");
         }
       })();
       return;

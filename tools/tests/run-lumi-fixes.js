@@ -5,7 +5,8 @@
 //   4) los clientes no traian direccion/CP/ciudad (en FacturaScripts reciente viven en `contactos`, no en `clientes`);
 //   5) el nombre del producto en el carrito salia en vertical (letra por letra) cuando la fila llevaba mucho importe/cantidad;
 //   6) la direccion del cliente en facturas/tickets salia «(sin informar)» (hay que leerla del contacto de facturacion);
-//   7) un ticket ya dividido no se podia volver a dividir («usa Partes = 1 para unificar primero»): ahora se subdivide esa parte.
+//   7) un ticket ya dividido no se podia volver a dividir («usa Partes = 1 para unificar primero»): ahora se subdivide esa parte;
+//   8) mover / fusionar mesas DESDE EL PLANO (antes solo desde el carrito): elegir origen y destino en el plano, sin cambiar la mesa seleccionada.
 // Un solo TPV real contra la tienda de pruebas (perfil persistente con sesion ya iniciada; nunca se escribe PIN). Deja las mesas M1-M4 limpias.
 // Uso: node tools/tests/run-lumi-fixes.js [--store=zz_bateria_tpv]
 process.env.TPV_RUN_BACKGROUND = "1";
@@ -225,6 +226,56 @@ let kill = () => {};
       return r;
     });
 
+    // ---------- 8) plano de mesas: «Mover / fusionar» (elegir origen y luego destino en el propio plano)
+    out.t8 = {};
+    try {
+      out.t8.prep = await win.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        await window.__clean();
+        __sel("tut-room-1::m1"); await sleep(800); addToCart(__prods[0]); addToCart(__prods[1]); await sleep(6000);
+        __sel("tut-room-1::m2"); await sleep(800); addToCart(__prods[2]); addToCart(__prods[3]); await sleep(6000);
+        window.__confirmReal = confirmModal; window.__confirmCalls = [];
+        confirmModal = async (t, x) => { window.__confirmCalls.push(String(t) + ": " + String(x)); return true; };
+        const suma = (k) => Math.round(window.__loc().reduce((a, t) => a + t[k], 0) * 1000) / 1000;
+        const r = { antes: window.__loc(), u: suma("u"), total: suma("total"), sel: loadMesasTablesStateForInline().selectedTableId };
+        setMesasInlineView("mapa", { persist: false }); await sleep(3500);
+        return r;
+      });
+      let frame = null;
+      for (let i = 0; i < 60 && !frame; i++) {
+        frame = win.frames().find((f) => f.url().includes("mesas.html")) || null;
+        if (frame && !(await frame.evaluate(() => typeof startMapMove === "function" && !!document.querySelector(".gestion-obj.table")).catch(() => false))) frame = null;
+        if (!frame) await sleep(500);
+      }
+      if (!frame) throw new Error("No se encontro el plano de mesas (iframe)");
+      const refrescarPlano = async () => { await frame.evaluate(() => { window.postMessage({ type: "tpv:mesas-state-changed" }, "*"); }); await sleep(900); };
+      await refrescarPlano();
+      out.t8.eligiendo = await frame.evaluate(() => {
+        startMapMove("tut-room-1::m1");
+        const b = document.getElementById("mapMoveBanner");
+        return { banner: !!b && !b.classList.contains("hidden"), texto: String(document.getElementById("mapMoveBannerText")?.textContent || ""), origen: document.querySelectorAll(".gestion-obj.table.is-move-source").length, destinos: document.querySelectorAll(".gestion-obj.table.is-move-target").length };
+      });
+      out.t8.cancelado = await frame.evaluate(() => {
+        cancelMapMove();
+        const b = document.getElementById("mapMoveBanner");
+        return { banner: !!b && !b.classList.contains("hidden"), origen: document.querySelectorAll(".gestion-obj.table.is-move-source").length };
+      });
+      out.t8.sinCambios = await win.evaluate(() => window.__loc().map((t) => t.mesa).sort());
+      // mover m1 -> m3 (libre)
+      out.t8.avisosAntesDeMover = await win.evaluate(() => { const a = window.__toasts.slice(); window.__toasts.length = 0; return a; });
+      await frame.evaluate(() => { startMapMove("tut-room-1::m1"); handleMapMoveTargetClick("tut-room-1::m3"); });
+      await sleep(3500);
+      out.t8.tras_mover = await win.evaluate(() => ({ loc: window.__loc(), sel: loadMesasTablesStateForInline().selectedTableId, avisos: window.__toasts.slice() }));
+      await refrescarPlano();
+      // fusionar m3 -> m2 (ocupada), con confirmacion
+      await frame.evaluate(() => { startMapMove("tut-room-1::m3"); handleMapMoveTargetClick("tut-room-1::m2"); });
+      await sleep(4500);
+      out.t8.tras_fusion = await win.evaluate(() => ({ loc: window.__loc(), sel: loadMesasTablesStateForInline().selectedTableId, confirmaciones: window.__confirmCalls.slice(), cart: window.__cart() }));
+    } catch (e) { out.t8.error = String(e && e.message || e).slice(0, 300); }
+    finally {
+      await win.evaluate(async () => { try { if (window.__confirmReal) confirmModal = window.__confirmReal; setMesasInlineView("transacciones", { persist: false }); } catch (e) {} });
+    }
+
     // ---------- limpieza
     await win.evaluate(async () => { await window.__clean(); });
     out.limpio = await win.evaluate(() => __loc());
@@ -235,7 +286,7 @@ let kill = () => {};
     try { await Promise.race([app.evaluate(({ session }) => session.defaultSession.flushStorageData()), sleep(4000)]); } catch {}
     console.log(JSON.stringify(out, null, 1));
     const ok = (name, cond, extra) => [name, !!cond, extra === undefined ? "" : typeof extra === "string" ? extra : JSON.stringify(extra)];
-    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {}, t7 = out.t7 || {};
+    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {}, t7 = out.t7 || {}, t8 = out.t8 || {};
     const c5 = t4.c5 || {}, c9 = t4.c9 || {}, c11 = t4.c11 || {};
     const verdict = require("./battery/verdict.js").emitVerdict([
       ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || ""),
@@ -261,6 +312,9 @@ let kill = () => {};
       ok("7) Redividir no pierde ni inventa nada: mismas unidades y mismo total que antes de dividir, y las 3 partes siguen en la mesa", !t7.error && (t7.despues || {}).u === (t7.antes || {}).u && Math.abs((t7.despues || {}).total - (t7.antes || {}).total) < 0.02 && (t7.tras2 || []).every((t) => t.mesa === "m4"), { antes: t7.antes, despues: t7.despues }),
       ok("7) Las partes que ya existían conservan su número y solo cambian el total (2/2 pasa a 2/3); todas del mismo grupo; se queda cargada la 1/3 y la división en curso lleva total 3", !t7.error && (t7.totalesAlmacenados || []).length === 3 && (t7.totalesAlmacenados || []).every((t) => t.total === 3 && t.grupo === (t7.totalesAlmacenados || [])[0].grupo) && /\(1\/3\)\s*$/.test(String(t7.cargado2 || "")) && (t7.sesion || {}).totalParts === 3, { cargado2: t7.cargado2, totalesAlmacenados: t7.totalesAlmacenados, sesion: t7.sesion }),
       ok("7) «Revertir división» sigue funcionando con las 3 partes: queda un solo pedido con las mismas unidades y el mismo total", !t7.error && (t7.unificado || {}).n === 1 && (t7.unificado || {}).u === (t7.antes || {}).u && Math.abs((t7.unificado || {}).total - (t7.antes || {}).total) < 0.02 && !/\(\d+\/\d+\)/.test(String((t7.unificado || {}).nombre || "")), t7.unificado),
+      ok("8) Plano: «Mover / fusionar» pone el aviso arriba, marca la mesa de origen y deja el resto como posible destino; «Cancelar» lo quita y no cambia nada", !t8.error && (t8.eligiendo || {}).banner === true && /Moviendo la mesa/.test((t8.eligiendo || {}).texto || "") && (t8.eligiendo || {}).origen === 1 && (t8.eligiendo || {}).destinos >= 1 && (t8.cancelado || {}).banner === false && (t8.cancelado || {}).origen === 0 && JSON.stringify(t8.sinCambios) === JSON.stringify(["m1", "m2"]), { eligiendo: t8.eligiendo, cancelado: t8.cancelado, sinCambios: t8.sinCambios, error: t8.error }),
+      ok("8) Plano: mover a una mesa LIBRE lleva el pedido a la nueva mesa, deja la de origen libre y NO cambia la mesa seleccionada en el TPV", !t8.error && ((t8.tras_mover || {}).loc || []).map((t) => t.mesa).sort().join() === "m2,m3" && ((t8.tras_mover || {}).sel || "") === ((t8.prep || {}).sel || "x"), { prep: t8.prep && { sel: t8.prep.sel, u: t8.prep.u }, tras_mover: t8.tras_mover }),
+      ok("8) Plano: fusionar con una mesa OCUPADA pide confirmación con los totales y deja UNA sola mesa con las mismas unidades y el mismo total", !t8.error && ((t8.tras_fusion || {}).loc || []).length === 1 && (((t8.tras_fusion || {}).loc || [])[0] || {}).mesa === "m2" && (((t8.tras_fusion || {}).loc || [])[0] || {}).u === (t8.prep || {}).u && Math.abs((((t8.tras_fusion || {}).loc || [])[0] || {}).total - (t8.prep || {}).total) < 0.02 && ((t8.tras_fusion || {}).confirmaciones || []).some((c) => /^Fusionar mesas: Se juntará la mesa .* con la mesa /.test(c)), t8.tras_fusion),
       ok("Al terminar las mesas de prueba quedan limpias", Array.isArray(out.limpio) && out.limpio.length === 0, out.limpio),
     ]);
     clearTimeout(hard); kill();

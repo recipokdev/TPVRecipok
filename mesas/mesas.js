@@ -122,6 +122,9 @@ let mesasRemoteEventsBound = false;
 let mesasRemoteQueueDrainInFlight = false;
 let activeMapTooltipEl = null;
 let activeMapTooltipUid = "";
+// «Mover / fusionar» desde el plano (2026-11-26, Lumi usa el plano mucho mas que el carrito): mesa ORIGEN elegida; el siguiente toque en otra
+// mesa la elige de DESTINO (libre = mover, ocupada = fusionar con confirmacion) y se lo pide al TPV anfitrion, que es quien guarda.
+let mapMoveSourceUid = "";
 let mapTooltipCloseGuardUntil = 0;
 let designUndoByRoom = {};
 let designRedoByRoom = {};
@@ -634,6 +637,58 @@ function closeMapTooltip() {
   if (activeMapTooltipEl) activeMapTooltipEl.remove();
   activeMapTooltipEl = null;
   activeMapTooltipUid = "";
+}
+
+function refreshMapMoveBanner() {
+  const el = document.getElementById("mapMoveBanner");
+  if (!el) return;
+  if (!mapMoveSourceUid) {
+    el.classList.add("hidden");
+    return;
+  }
+  const info = findTableByUid(mapMoveSourceUid);
+  const label = info ? formatTableDisplay(info.room, info.table) : "la mesa";
+  const total = getTableStatus(mapMoveSourceUid).total;
+  const textEl = document.getElementById("mapMoveBannerText");
+  if (textEl) {
+    textEl.textContent = `Moviendo la mesa ${label}${total > 0 ? ` (${eur(total)})` : ""}: toca la mesa de destino. Libre = mover; ocupada = fusionar. Puedes cambiar de sala arriba.`;
+  }
+  el.classList.remove("hidden");
+}
+
+function startMapMove(uid) {
+  if (!MESAS_EMBED_MODE || !getMappedTicketForTable(uid)) return;
+  closeMapTooltip();
+  mapMoveSourceUid = String(uid || "").trim();
+  refreshMapMoveBanner();
+  renderMapCards();
+}
+
+function cancelMapMove() {
+  if (!mapMoveSourceUid) return;
+  mapMoveSourceUid = "";
+  refreshMapMoveBanner();
+  renderMapCards();
+}
+
+function handleMapMoveTargetClick(targetUid) {
+  const sourceUid = mapMoveSourceUid;
+  if (!sourceUid) return;
+  if (String(targetUid || "").trim() === sourceUid) {
+    cancelMapMove();
+    return;
+  }
+  mapMoveSourceUid = "";
+  refreshMapMoveBanner();
+  if (MESAS_EMBED_MODE && window.parent && window.parent !== window) {
+    try {
+      window.parent.postMessage(
+        { type: "tpv:mesas-move-table", sourceUid, targetUid: String(targetUid || "").trim() },
+        "*",
+      );
+    } catch {}
+  }
+  renderMapCards();
 }
 
 function nextTableNameForRoom(room) {
@@ -2492,6 +2547,7 @@ function switchView(viewName) {
   if (state.activeView !== "transacciones") {
     setQuickReturnView("");
   }
+  if (state.activeView !== "mapa") mapMoveSourceUid = "";
 
   saveState();
 
@@ -2547,6 +2603,7 @@ function renderMapCards() {
   if (!room) return;
 
   mesaCards.classList.add("gestion-canvas");
+  refreshMapMoveBanner();
   syncRoomDesignWithTables(room.id);
   const objects = getRoomDesignObjects(room.id);
 
@@ -2703,6 +2760,13 @@ function renderMapCards() {
     const cashActions = "";
 
     let phaseActions = "";
+    if (statusCode === "ocupada" && MESAS_EMBED_MODE && ticket) {
+      rows.push(`<div class="gestion-tip-group-title">Cambiar de sitio</div>`);
+      rows.push(
+        `<div class="gestion-tip-actions"><button type="button" class="gestion-tip-btn is-move" data-table-act="move" data-table-uid="${uid}">Mover / fusionar</button></div>`,
+      );
+    }
+
     if (statusCode === "ocupada") {
       phaseActions = ["sin-pedir", "pedido", "entregado"]
         .filter(
@@ -2794,6 +2858,9 @@ function renderMapCards() {
       const stageKey = getTableServiceStageKey(uid, ticket, st.code);
       node.classList.add(`state-${st.code}`);
       if (stageKey) node.classList.add(`phase-${stageKey}`);
+      if (mapMoveSourceUid) {
+        node.classList.add(uid === mapMoveSourceUid ? "is-move-source" : "is-move-target");
+      }
 
       const agentRingColor = getAgentRingColor(ticket?.agentCode);
       if (agentRingColor) {
@@ -2878,6 +2945,7 @@ function renderMapCards() {
 
       node.addEventListener("pointerdown", (event) => {
         if (event.button !== 0) return;
+        if (mapMoveSourceUid) return; // eligiendo destino: sin ficha emergente
         suppressClick = false;
         clearTimeout(longPressTimer);
         longPressTimer = setTimeout(() => {
@@ -2901,6 +2969,10 @@ function renderMapCards() {
           return;
         }
         hideTip();
+        if (mapMoveSourceUid) {
+          handleMapMoveTargetClick(uid);
+          return;
+        }
         handlePrimaryTableClick(uid, st.code, stageKey);
       });
     } else {
@@ -4695,6 +4767,7 @@ function bindEvents() {
   }
 
   bindClick("createFirstRoomBtn", () => switchView("diseno"));
+  bindClick("mapMoveCancelBtn", cancelMapMove);
   bindClick("designAddRoomBtn", addRoom);
   bindClick("designRenameRoomBtn", renameActiveRoom);
   bindClick("designDeleteRoomBtn", deleteActiveRoom);
@@ -4720,6 +4793,10 @@ function bindEvents() {
         returnView: "mapa",
         preferredAction: "open",
       });
+      return;
+    }
+    if (action === "move") {
+      startMapMove(uid);
       return;
     }
     if (action === "charge") {

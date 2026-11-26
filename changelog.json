@@ -6,6 +6,7 @@
       "date": "",
       "title": "",
       "changes": [
+        "NUEVO: mover o fusionar mesas desde el plano de mesas, sin entrar en el carrito. Mantén pulsada una mesa ocupada y en su ficha pulsa «Mover / fusionar»: arriba aparece un aviso, tocas la mesa de destino (puedes cambiar de sala) y, si está libre, la cuenta se mueve; si está ocupada, el TPV enseña los dos totales y pide confirmación antes de juntarlas. «Cancelar» (o volver a tocar la misma mesa) lo deja todo como estaba. Moverlas desde el plano no cambia la mesa que tengas abierta en el carrito.",
         "NUEVO: volver a dividir una cuenta ya dividida. Antes, si una cuenta estaba dividida en 2 partes y alguien quería dividir su parte otra vez, el TPV decía «Este ticket ya está dividido, usa Partes = 1 para unificar primero». Ahora, en una parte ya dividida, el botón dice «Dividir esta parte»: se queda con su número y las partes nuevas se añaden al final (si divides la 1/2 en dos, quedan 1/3, 2/3 y 3/3). Las demás partes, incluidas las ya cobradas, no cambian de número. «Revertir división» (Partes = 1) sigue juntándolo todo en un único ticket."
       ]
     },
