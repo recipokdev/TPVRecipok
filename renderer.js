@@ -45682,7 +45682,10 @@ function syncParkedTicketsFromRemote(list) {
       // visto 2 de cada 3 veces). Si el servidor no ha cambiado ese pedido desde la ultima vez que lo vimos y lo local es reciente, lo local gana
       // sin mirar relojes.
       const prevRemoteTs = Number(prev?.__remoteUpdatedTs || 0) || 0;
+      // Solo para pedidos de MODO MESAS (donde se mueven de mesa): en el TPV normal esta regla hacia que, al cobrar la parte 1 de una cuenta dividida,
+      // la parte 2 no se abriera sola (fallo intermitente, 26-nov-2026), asi que alli se sigue comparando como siempre.
       const localEditNotYetSeenByServer =
+        String(prev?.parkingMode || "").trim().toLowerCase() === PARKED_MODE_MESAS &&
         localRevIsRecent && prevRemoteTs > 0 && remoteTs > 0 && remoteTs <= prevRemoteTs;
       const shouldPreferLocalSnapshot =
         !forceRemoteMerge &&
@@ -45705,7 +45708,15 @@ function syncParkedTicketsFromRemote(list) {
         // La mesa y los datos de la division tambien son de la copia local mas reciente (2026-11-26, Lumi/Sergi): antes `{...prev, ...ticket}` dejaba
         // la mesa de la copia VIEJA del servidor y, tras mover una cuenta dividida, una parte volvia un instante a la mesa de origen (dos mesas con
         // el mismo importe) hasta que terminaba de guardarse la siguiente.
-        for (const k of ["mesaUid", "mesaRoomId", "mesaRoomName", "mesaTableId", "mesaTableName", "splitGroupId", "splitPart", "splitTotal"]) {
+        // La mesa solo se conserva si el servidor TAMBIEN conoce una (un cambio de mesa de verdad). Un pedido del TPV normal no tiene mesa en el servidor:
+        // conservar ahi una mesa antigua de la copia local lo trataba como pedido de mesa y la parte 2 de una cuenta dividida ya no se abria sola al
+        // cobrar la parte 1 (fallo intermitente de «Dividir cuenta en TPV normal», 26-nov-2026).
+        const remoteKnowsMesa = String(ticket?.mesaUid || "").trim() !== "";
+        const isMesasTicket = String(prev?.parkingMode || "").trim().toLowerCase() === PARKED_MODE_MESAS;
+        const keepFields = remoteKnowsMesa && isMesasTicket
+          ? ["mesaUid", "mesaRoomId", "mesaRoomName", "mesaTableId", "mesaTableName", "splitGroupId", "splitPart", "splitTotal"]
+          : ["splitGroupId", "splitPart", "splitTotal"];
+        for (const k of keepFields) {
           if (prev && prev[k] !== undefined) merged[k] = prev[k];
         }
         merged.localRevisionAt = localRevTs || Date.now();
