@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.74",
+      "date": "2026-11-26",
+      "title": "Release 0.2.74",
       "changes": [
         "MEJORA: menos carga sobre FacturaScripts. La comprobación de conexión que hace el TPV cada pocos segundos pedía una factura a FacturaScripts cada 5 segundos en cada TPV (miles de peticiones al día, con la tabla más grande). Ahora pide una tabla pequeña, cada 10 segundos si todo va bien (cada 5 si hay dudas, y una vez por minuto con la ventana del TPV oculta), y se sigue detectando un corte en pocos segundos.",
         "ARREGLO: dividir una cuenta mientras otro TPV tiene la misma mesa abierta. Si el otro TPV subía la cantidad de un producto justo antes de enterarse de la división, esa unidad podía perderse (en torno a la mitad de las veces en la prueba con 2 TPV). Ahora las líneas que se quedan en el pedido original conservan su identidad al dividir y el cambio del otro TPV se aplica.",
