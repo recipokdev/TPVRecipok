@@ -13302,6 +13302,96 @@ async function askMoveScopeForSplitMesa(sourceUid) {
   return null;
 }
 
+// «Preparar cuentas separadas» (2026-11-26, peticion de Lumi/Sergi): una mesa LIBRE se divide en N cuentas vacias (1/N ... N/N) ANTES de que se sienten los
+// clientes, sin productos ni cobro; luego se abre cada cuenta y se le añaden sus productos. Son las mismas «partes» de una cuenta dividida (mismo grupo),
+// asi que flechas, cobro y todo lo demas funcionan igual. Devuelve las cuentas creadas, o null si no se pudo.
+async function prepareSplitMesa(mesaUid, count) {
+  const uid = String(mesaUid || "").trim();
+  const n = Math.floor(Number(count) || 0);
+  if (!uid || n < 2 || n > 12) return null;
+  if (!MESAS_INLINE_ACTIVE) return null;
+
+  const mesasState = loadMesasTablesStateForInline();
+  if (!mesasState || typeof mesasState !== "object") return null;
+  if (getMesasPendingTicketByUid(mesasState, uid)) {
+    toast("La mesa ya tiene un pedido: no se puede preparar.", "warn", "Mesas");
+    return null;
+  }
+  const linked = getMesasRoomAndTableByUid(mesasState, uid);
+  if (!linked?.table) return null;
+  const scope = {
+    uid,
+    roomId: String(linked.room?.id || ""),
+    tableId: String(linked.table?.id || ""),
+    roomName: String(linked.room?.name || linked.room?.id || "").trim(),
+    tableName: String(linked.table?.name || linked.table?.id || "").trim(),
+  };
+
+  const groupId = makeSplitGroupId();
+  const firstId = getNextSuggestedParkTicketId();
+  const baseName = `Ticket #${firstId}`;
+  const slug = String(getCurrentSlugForReservations() || "").trim();
+  const cajaId = String(getCajaIdSafe?.() || currentTerminal?.id || "").trim();
+  const created = [];
+  for (let i = 1; i <= n; i += 1) {
+    const ticket = {
+      id: firstId + (i - 1),
+      slug,
+      cajaId,
+      createdAt: new Date(),
+      updatedAt: null,
+      localRevisionAt: Date.now(),
+      items: [],
+      total: 0,
+      clientName: "Cliente",
+      name: `${baseName} (${i}/${n})`,
+      obs: "",
+      splitGroupId: groupId,
+      splitPart: i,
+      splitTotal: n,
+      parkingMode: PARKED_MODE_MESAS,
+      mesaAlerts: [],
+      paid: false,
+      paidAt: null,
+      paidTicketCode: null,
+      paidTicketId: null,
+      fs: null,
+      mesaUid: null,
+      mesaRoomId: null,
+      mesaRoomName: null,
+      mesaTableId: null,
+      mesaTableName: null,
+    };
+    applyMesaScopeToTicket(ticket, scope);
+    created.push(ticket);
+  }
+  parkedTickets.push(...created);
+  saveParkedTicketsCache();
+
+  const st = loadMesasTablesStateForInline();
+  st.tableTicketMap = st.tableTicketMap && typeof st.tableTicketMap === "object" ? st.tableTicketMap : {};
+  st.tableStates = st.tableStates && typeof st.tableStates === "object" ? st.tableStates : {};
+  st.tableMeta = st.tableMeta && typeof st.tableMeta === "object" ? st.tableMeta : {};
+  st.tableTicketMap[uid] = String(created[0].id);
+  st.tableStates[uid] = "ocupada";
+  st.tableMeta[uid] = { ...(st.tableMeta[uid] || {}), serviceStage: "sin-pedir" };
+  saveMesasTablesStateForInline(st);
+
+  void (async () => {
+    for (const t of created) {
+      try {
+        await apiSaveParkedReservation(t);
+      } catch (e) {
+        enqueueParkedSyncOperation("upsert", t);
+        console.warn("No se pudo guardar una cuenta preparada en remoto:", e?.message || e);
+      }
+    }
+  })();
+
+  updateParkedCountBadge?.();
+  return created;
+}
+
 // Peticion de Sergi (2026-10-06), tras investigar otros TPV (Glop permite
 // fusionar mesas como flujo de primera clase, no un workaround) -- combinar
 // 2 mesas YA ocupadas en una sola cuenta. Distinto de moveMesaPendingTicket
@@ -14695,6 +14785,41 @@ function bindMesasInlineEventsOnce() {
           toast("No se pudo mover la mesa. Inténtalo de nuevo.", "err", "Mesas");
         }
       })();
+      return;
+    }
+
+    // «Preparar cuentas separadas» desde la ficha de una mesa libre del plano: pregunta cuantas y crea las cuentas vacias.
+    if (data.type === "tpv:mesas-prepare-split") {
+      const uid = String(data?.uid || "").trim();
+      if (!uid) return;
+      if (mesasOperationsBlockedByClosedCaja()) {
+        toastMesasNeedOpenCaja();
+        return;
+      }
+      openNumPad(
+        "2",
+        (nextValue, meta = {}) => {
+          if (meta.phase !== "confirm") return;
+          const n = Math.floor(Number(String(nextValue).replace(",", ".")));
+          if (!Number.isFinite(n) || n < 2 || n > 12) {
+            toast("Elige entre 2 y 12 cuentas.", "warn", "Mesas");
+            return;
+          }
+          prepareSplitMesa(uid, n)
+            .then((created) => {
+              if (created) {
+                refreshMesasTransSidebar?.();
+                renderMesasTransContextBar?.();
+              }
+            })
+            .catch((e) => {
+              console.warn("No se pudo preparar la mesa:", e?.message || e);
+              toast("No se pudo preparar la mesa. Inténtalo de nuevo.", "err", "Mesas");
+            });
+        },
+        "Cuentas separadas",
+        "qty",
+      );
       return;
     }
 

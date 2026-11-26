@@ -2789,6 +2789,13 @@ function renderMapCards() {
     const cashActions = "";
 
     let phaseActions = "";
+    if (statusCode === "libre" && MESAS_EMBED_MODE) {
+      rows.push(`<div class="gestion-tip-group-title">Preparar mesa</div>`);
+      rows.push(
+        `<div class="gestion-tip-actions"><button type="button" class="gestion-tip-btn is-move" data-table-act="prepare-split" data-table-uid="${uid}">Preparar cuentas separadas</button></div>`,
+      );
+    }
+
     if (statusCode === "ocupada" && MESAS_EMBED_MODE && ticket) {
       rows.push(`<div class="gestion-tip-group-title">Cambiar de sitio</div>`);
       rows.push(
@@ -4853,6 +4860,16 @@ function bindEvents() {
     }
     if (action === "move") {
       startMapMove(uid);
+      return;
+    }
+    if (action === "prepare-split") {
+      // «Preparar cuentas separadas» (2026-11-26): el TPV pregunta cuantas y crea las cuentas vacias de la mesa libre.
+      closeMapTooltip();
+      if (MESAS_EMBED_MODE && window.parent && window.parent !== window) {
+        try {
+          window.parent.postMessage({ type: "tpv:mesas-prepare-split", uid }, "*");
+        } catch {}
+      }
       return;
     }
     if (action === "charge") {

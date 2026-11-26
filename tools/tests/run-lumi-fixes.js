@@ -475,6 +475,64 @@ let kill = () => {};
       }, p2b.id);
     } catch (e) { out.t12.error = String(e && e.message || e).slice(0, 300); }
 
+    // ---------- 13) «Preparar cuentas separadas»: una mesa LIBRE se divide en N cuentas vacias antes de que se sienten
+    out.t13 = {};
+    try {
+      out.t13.prep = await win.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        await window.__clean();
+        const realPad = openNumPad; let preguntado = null;
+        openNumPad = (v, cb, titulo) => { preguntado = { v, titulo }; cb("3", { phase: "confirm" }); };
+        setMesasInlineView("mapa", { persist: false }); await sleep(2500);
+        window.postMessage({ type: "tpv:mesas-prepare-split", uid: "tut-room-1::m4" }, "*");
+        await sleep(2500);
+        openNumPad = realPad;
+        const st = loadMesasTablesStateForInline();
+        return { preguntado, tickets: window.__mine().map((t) => ({ id: String(t.id), name: String(t.name), mesa: String(t.mesaUid).slice(-2), n: (t.items || []).length, part: t.splitPart, tot: t.splitTotal, grupo: String(t.splitGroupId || "").slice(0, 6) })), enlace: String((st.tableTicketMap || {})["tut-room-1::m4"] || ""), estado: (st.tableStates || {})["tut-room-1::m4"] };
+      });
+      let frame13 = null;
+      for (let i = 0; i < 60 && !frame13; i++) {
+        frame13 = win.frames().find((f) => f.url().includes("mesas.html")) || null;
+        if (frame13 && !(await frame13.evaluate(() => typeof startMapMove === "function" && !!document.querySelector(".gestion-obj.table")).catch(() => false))) frame13 = null;
+        if (!frame13) await sleep(500);
+      }
+      if (!frame13) throw new Error("No se encontro el plano de mesas (iframe)");
+      await frame13.evaluate(() => { window.postMessage({ type: "tpv:mesas-state-changed" }, "*"); }); await sleep(1500);
+      out.t13.plano = await frame13.evaluate(() => { const n = document.querySelector('.gestion-obj.table[data-table-uid="tut-room-1::m4"]'); return { clase: n ? (n.className.match(/state-\w+/) || [""])[0] : "-", partes: (n && n.querySelector(".gestion-parts") || {}).textContent || "" }; });
+      // el boton de la ficha de una mesa libre
+      out.t13.boton = await frame13.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const b = document.querySelector('.gestion-obj.table[data-table-uid="tut-room-1::m3"] .gestion-opt-btn'); if (!b) return { b: false };
+        b.click(); await sleep(300);
+        const act = document.querySelector('.gestion-tooltip [data-table-act="prepare-split"]');
+        const r = { b: true, hayPreparar: !!act };
+        closeMapTooltip(); return r;
+      });
+      // sobreviven a un refresco desde el servidor y estan en el servidor
+      out.t13.servidor = await win.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        await refreshRemoteParkedReservationsOnly(); await sleep(2500);
+        const locales = window.__mine().filter((t) => String(t.mesaUid).endsWith("m4")).length;
+        const resp = await fetch(`${TPV_SYNC_API_URL}?action=list-parked-reservations&slug=${encodeURIComponent(getCurrentSlugForReservations())}&codalmacen=${encodeURIComponent(getCurrentWarehouseCode())}`, { headers: { "X-TPV-API-KEY": getTpvSyncApiKey() }, cache: "no-store" });
+        const j = await resp.json();
+        const rem = (Array.isArray(j?.data) ? j.data : []).filter((x) => !x.paid && String(x.mesaUid || "").endsWith("m4")).map((x) => ({ name: String(x.name || ""), n: (x.items || []).length }));
+        return { locales, remotas: rem };
+      });
+      // se abre la mesa: carga la cuenta 1, se le añade un producto y las flechas llevan a la 2
+      out.t13.abrir = await win.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        setMesasInlineView("transacciones", { persist: false }); await sleep(800);
+        __sel("tut-room-1::m4"); await sleep(1500);
+        const cargada = String(getCurrentLoadedParkedTicket()?.name || "");
+        addToCart(__prods[0]); await sleep(3000);
+        const t1 = getCurrentLoadedParkedTicket();
+        const nav = getCurrentSplitNavigationState(t1);
+        const lineas = window.__mine().filter((t) => String(t.mesaUid).endsWith("m4")).map((t) => String(t.name).slice(-5) + ":" + (t.items || []).length).sort();
+        return { cargada, nav: { prev: nav.prevIndex, next: nav.nextIndex }, lineas };
+      });
+    } catch (e) { out.t13.error = String(e && e.message || e).slice(0, 300); }
+    finally { await win.evaluate(async () => { try { setMesasInlineView("transacciones", { persist: false }); } catch (e) {} }); }
+
     // ---------- limpieza
     await win.evaluate(async () => { await window.__clean(); });
     out.limpio = await win.evaluate(() => __loc());
@@ -485,7 +543,7 @@ let kill = () => {};
     try { await Promise.race([app.evaluate(({ session }) => session.defaultSession.flushStorageData()), sleep(4000)]); } catch {}
     console.log(JSON.stringify(out, null, 1));
     const ok = (name, cond, extra) => [name, !!cond, extra === undefined ? "" : typeof extra === "string" ? extra : JSON.stringify(extra)];
-    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {}, t7 = out.t7 || {}, t8 = out.t8 || {}, t9 = out.t9 || {}, t10 = out.t10 || {}, t11 = out.t11 || {}, t12 = out.t12 || {};
+    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {}, t7 = out.t7 || {}, t8 = out.t8 || {}, t9 = out.t9 || {}, t10 = out.t10 || {}, t11 = out.t11 || {}, t12 = out.t12 || {}, t13 = out.t13 || {};
     const c5 = t4.c5 || {}, c9 = t4.c9 || {}, c11 = t4.c11 || {};
     const verdict = require("./battery/verdict.js").emitVerdict([
       ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || ""),
@@ -528,6 +586,10 @@ let kill = () => {};
       ok("12) Con la cuenta repartida entre dos mesas, las flechas del carrito no saltan a la parte de la OTRA mesa (el grupo tiene 2 partes pero cada mesa solo ve la suya)", !t12.error && (t12.s1_mover || {}).grupoEntero === 2 && (t12.s1_mover || {}).soloM3 === 1 && ((t12.s1_mover || {}).navP1 || {}).prev < 0 && ((t12.s1_mover || {}).navP1 || {}).next < 0 && ((t12.s1_mover || {}).navP2 || {}).prev < 0 && ((t12.s1_mover || {}).navP2 || {}).next < 0, t12.s1_mover),
       ok("12) Revertir la división desde M3 solo une lo de M3: la parte de M2 no se toca", !t12.error && (t12.s1_revertir || {}).error === "" && ((t12.s1_revertir || {}).loc || []).some((l) => /^m2:.*\(2\/2\)$/.test(l)) && ((t12.s1_revertir || {}).loc || []).some((l) => /^m3:/.test(l)), t12.s1_revertir),
       ok("12) Fusionar SOLO una parte con otra mesa ocupada: la mesa de origen sigue ocupada con la parte que se queda y no se pierden unidades ni importe", !t12.error && (t12.s2 || {}).ok === true && (t12.s2 || {}).estadoM3 === "ocupada" && /\(1\/2\)$/.test(String((t12.s2 || {}).enM3 || "")) && ((t12.s2 || {}).despues || {}).u === ((t12.s2 || {}).antes || {}).u && Math.abs(((t12.s2 || {}).despues || {}).total - ((t12.s2 || {}).antes || {}).total) < 0.02, t12.s2),
+      ok("13) Preparar cuentas separadas: pregunta cuantas y crea 3 cuentas vacías (1/3, 2/3 y 3/3) del mismo grupo en la mesa libre, que pasa a ocupada y enlaza con la 1/3", !t13.error && (t13.prep || {}).preguntado && (t13.prep.tickets || []).length === 3 && JSON.stringify(t13.prep.tickets.map((x) => x.name.slice(-5)).sort()) === JSON.stringify(["(1/3)", "(2/3)", "(3/3)"]) && t13.prep.tickets.every((x) => x.mesa === "m4" && x.n === 0 && x.tot === 3 && x.grupo === t13.prep.tickets[0].grupo) && t13.prep.estado === "ocupada" && t13.prep.enlace === (t13.prep.tickets.find((x) => x.part === 1) || {}).id, t13.prep),
+      ok("13) Preparar cuentas separadas: el plano enseña la mesa ocupada con la etiqueta «3 partes» y la ficha de una mesa LIBRE trae el botón «Preparar cuentas separadas»", !t13.error && (t13.plano || {}).clase === "state-ocupada" && (t13.plano || {}).partes === "3 partes" && (t13.boton || {}).hayPreparar === true, { plano: t13.plano, boton: t13.boton }),
+      ok("13) Las cuentas preparadas (vacías) no se pierden: sobreviven a un refresco desde el servidor y están guardadas en el servidor", !t13.error && (t13.servidor || {}).locales === 3 && ((t13.servidor || {}).remotas || []).length === 3, t13.servidor),
+      ok("13) Al abrir la mesa se carga la cuenta 1/3, se le añade un producto sin tocar las demás, y las flechas llevan a las otras cuentas de la misma mesa", !t13.error && /\(1\/3\)$/.test((t13.abrir || {}).cargada || "") && JSON.stringify(((t13.abrir || {}).lineas || [])) === JSON.stringify(["(1/3):1", "(2/3):0", "(3/3):0"]) && ((t13.abrir || {}).nav || {}).next >= 0, t13.abrir),
       ok("Al terminar las mesas de prueba quedan limpias", Array.isArray(out.limpio) && out.limpio.length === 0, out.limpio),
     ]);
     clearTimeout(hard); kill();
