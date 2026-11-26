@@ -327,6 +327,7 @@ let kill = () => {};
         const f = () => { const g = (u) => { const n = document.querySelector('.gestion-obj.table[data-table-uid="tut-room-1::' + u + '"]'); return n ? (n.className.match(/state-\w+/) || [""])[0] : "-"; }; const cur = "m3=" + g("m3") + " m2=" + g("m2"); if (cur !== last) { window.__rec.push([Math.round(performance.now() - window.__recT0), cur]); last = cur; } window.__recRaf = requestAnimationFrame(f); };
         f();
       });
+      out.t9.etiqueta = await frame9.evaluate(() => { const n = document.querySelector('.gestion-obj.table[data-table-uid="tut-room-1::m3"]'); return { total: (n && n.querySelector(".gestion-total") || {}).textContent || "", partes: (n && n.querySelector(".gestion-parts") || {}).textContent || "" }; });
       await win.evaluate(() => { window.__hrec = []; let last = ""; const f = () => { const cur = window.__mine().map((t) => String(t.name).slice(-5) + "@" + String(t.mesaUid).slice(-2)).join(" "); if (cur !== last) { window.__hrec.push(cur); last = cur; } window.__hRaf = requestAnimationFrame(f); }; f(); });
       await win.evaluate(() => { window.__moved = moveMesaPendingTicket("tut-room-1::m3", "tut-room-1::m2"); });
       await sleep(7000);
@@ -378,11 +379,14 @@ let kill = () => {};
       const r = {};
       await limpiar();
       toast("Ticket dividido en 2 partes.", "ok", "Dividir"); toast("Mesas fusionadas en M2 (Sala 1).", "ok", "Mesas"); toast("Pedido de mesa eliminado.", "ok", "Pedidos"); toast("Pedido actualizado ✅", "ok", "Aparcados");
+      toast("Alérgeno añadido.", "ok", "Alérgenos"); toast("Tamaño de letra restablecido.", "ok", "Productos"); toast("Familia añadida a reglas de comanda.", "ok", "Comandas");
       toast("Auto-impresión activada ✅", "info", "Opciones"); toast("Siguiente parte lista: 2/2.", "info", "Dividir"); toast("Reanudado cobro dividido: parte 1/2.", "info", "Dividir");
       r.silenciados = n();
       await limpiar();
       toast("Venta cobrada ✅ (Efectivo - A-1)", "ok", "Cobrar"); r.cobro = n();
       await limpiar(); toast("Sync completada.", "ok", "Aparcados"); r.sync = n();
+      await limpiar(); toast("Stock actualizado correctamente.", "ok", "Stock"); r.stock = n();
+      await limpiar(); toast("Precio base actualizado correctamente ✅", "ok", "Productos"); r.precio = n();
       await limpiar(); toast("Opciones importadas (3) ✅", "ok", "Opciones"); r.importadas = n();
       await limpiar(); toast("No se pudo guardar.", "err", "Pedidos"); r.error = n();
       await limpiar(); toast("Esta mesa se actualizó desde otro terminal mientras estaba abierta.", "info", "Mesas"); r.otroTerminal = n();
@@ -440,11 +444,12 @@ let kill = () => {};
       ok("8) Plano: mover a una mesa LIBRE lleva el pedido a la nueva mesa, deja la de origen libre y NO cambia la mesa seleccionada en el TPV", !t8.error && ((t8.tras_mover || {}).loc || []).map((t) => t.mesa).sort().join() === "m2,m3" && ((t8.tras_mover || {}).sel || "") === ((t8.prep || {}).sel || "x"), { prep: t8.prep && { sel: t8.prep.sel, u: t8.prep.u }, tras_mover: t8.tras_mover }),
       ok("8) Plano: fusionar con una mesa OCUPADA pide confirmación con los totales y deja UNA sola mesa con las mismas unidades y el mismo total", !t8.error && ((t8.tras_fusion || {}).loc || []).length === 1 && (((t8.tras_fusion || {}).loc || [])[0] || {}).mesa === "m2" && (((t8.tras_fusion || {}).loc || [])[0] || {}).u === (t8.prep || {}).u && Math.abs((((t8.tras_fusion || {}).loc || [])[0] || {}).total - (t8.prep || {}).total) < 0.02 && ((t8.tras_fusion || {}).confirmaciones || []).some((c) => /^Fusionar mesas: Se juntará la mesa .* con la mesa /.test(c)), t8.tras_fusion),
       ok("9) Plano: tras mover una cuenta dividida la mesa de origen se ve libre y la de destino ocupada, y NUNCA vuelve a verse la de origen ocupada (antes quedaban dos mesas con el mismo importe)", !t9.error && (t9.mapa || []).length >= 2 && (t9.mapa || []).slice(-1)[0][1] === "m3=state-libre m2=state-ocupada" && !(t9.mapa || []).slice(1).some((r) => /m3=state-ocupada/.test(r[1])), t9.mapa),
+      ok("9) Plano: una mesa con la cuenta dividida enseña la SUMA de las partes y la etiqueta «2 partes» (antes solo el importe de una parte)", !t9.error && (t9.etiqueta || {}).partes === "2 partes" && Math.abs(Number(String((t9.etiqueta || {}).total || "").replace(/[^0-9,]/g, "").replace(",", ".")) - ((t9.prep || []).reduce((a, t) => a + t.total, 0))) < 0.02, { etiqueta: t9.etiqueta, partes: (t9.prep || []).map((t) => t.total) }),
       ok("9) En el TPV ninguna parte de la cuenta dividida vuelve un instante a la mesa de origen al refrescar desde el servidor", !t9.error && (t9.host || []).length >= 2 && !(t9.host || []).slice(1).some((r) => /@m3/.test(r)), t9.host),
       ok("9) Con la ficha de una mesa abierta, un cambio hecho mientras tanto se aplica al cerrarla (antes el plano se quedaba desfasado)", !t9.error && (t9.conFichaAbierta || {}).ficha === true && (t9.alCerrarFicha || {}).m3 === "state-ocupada" && (t9.alCerrarFicha || {}).m2 === "state-libre", { conFichaAbierta: t9.conFichaAbierta, alCerrarFicha: t9.alCerrarFicha }),
       ok("10) Mover una cuenta sin dividir 6 veces seguidas (ida y vuelta) deja SIEMPRE el pedido en la mesa de destino (antes se deshacia solo cuando el guardado chocaba con otro)", !t10.error && (t10.vueltas || []).length === 6 && (t10.vueltas || []).every((v) => v.ok === true && v.loc.length === 1 && v.loc[0] === v.hasta), t10),
       ok("11) Avisos: los de éxito redundantes (dividir, mover/fusionar, guardar/borrar pedido, interruptores de Opciones) no salen", (t11.silenciados) === 0, t11),
-      ok("11) Avisos: los de cobro, sincronización manual, importación de opciones, errores y cambios hechos desde otro terminal SÍ salen", t11.cobro === 1 && t11.sync === 1 && t11.importadas === 1 && t11.error === 1 && t11.otroTerminal === 1, t11),
+      ok("11) Avisos: los de cobro, sincronización manual, importación de opciones, errores y cambios hechos desde otro terminal SÍ salen", t11.cobro === 1 && t11.sync === 1 && t11.stock === 1 && t11.precio === 1 && t11.importadas === 1 && t11.error === 1 && t11.otroTerminal === 1, t11),
       ok("11) Avisos: uno idéntico repetido 4 veces sale UNA vez, nunca hay más de 3 a la vez y un error no se retira por el tope si hay otros", t11.repetido === 1 && t11.tope === 3 && (t11.conErrorTope || {}).n === 3 && (t11.conErrorTope || {}).hayError === true, t11),
       ok("Al terminar las mesas de prueba quedan limpias", Array.isArray(out.limpio) && out.limpio.length === 0, out.limpio),
     ]);

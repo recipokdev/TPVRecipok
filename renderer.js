@@ -19001,6 +19001,12 @@ const TOAST_QUIET_OK_TITLES = new Set(["Pedidos", "Aparcados", "Mesas", "Dividir
 const TOAST_KEEP_OK_RE = /^(Sync|Incidencias)/i;
 const TOAST_QUIET_INFO_RE = [/^Siguiente parte lista/i, /^Reanudado cobro dividido/i, /^Cambio de mesa cancelado/i];
 const TOAST_KEEP_OPTIONS_RE = /importad|deshech|importaci/i;
+// Confirmaciones de Opciones/administracion que cambian algo que ya se ve en pantalla (una lista que crece, un tamaño que cambia al momento).
+const TOAST_QUIET_OK_ADMIN_RE = [
+  /^Familia añadida a reglas de (comensales|comanda)\./i,
+  /^Tamaño de (productos|letra|letra de familias) restablecido\./i,
+  /^Alérgeno (añadido|renombrado|eliminado)\./i,
+];
 const TOAST_MAX_VISIBLE = 3;
 const __toastLive = new Map();
 
@@ -19010,6 +19016,7 @@ function shouldSilenceToast(message, type, title) {
   if (type === "ok") {
     if (TOAST_QUIET_OK_TITLES.has(ttl) && !TOAST_KEEP_OK_RE.test(msg)) return true;
     if (ttl === "Opciones" && !TOAST_KEEP_OPTIONS_RE.test(msg)) return true;
+    if (TOAST_QUIET_OK_ADMIN_RE.some((re) => re.test(msg))) return true;
   }
   if (type === "info") {
     if (ttl === "Opciones") return true;

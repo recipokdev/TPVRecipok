@@ -2258,9 +2258,21 @@ function getTableStatus(uid) {
     // (lo calcula quien guarda con la logica completa: descuentos, precio manual, añadidos con precio...). Antes se recalculaba aqui con una
     // formula simplificada que los ignora y por eso difería hasta el siguiente guardado (2026-11-25, Lumi). Solo si no hay total guardado
     // se recalcula como respaldo.
-    const stored = Number(ticket?.total);
-    const total = Number.isFinite(stored) && stored > 0 ? stored : computeTicketTotalFromItems(ticket?.items);
-    return { code: "ocupada", label: "Ocupada", total };
+    const totalOf = (t) => {
+      const stored = Number(t?.total);
+      return Number.isFinite(stored) && stored > 0 ? stored : computeTicketTotalFromItems(t?.items);
+    };
+    // Cuenta DIVIDIDA (o varios pedidos en la misma mesa): la mesa debe la SUMA de todas las partes sin cobrar, no solo la del pedido enlazado (2026-11-26:
+    // el plano enseñaba solo una parte, p. ej. 7,70 € cuando la mesa debia 12,62 €). `partsLabel` avisa de que es una suma («2 partes»).
+    const uidKey = String(uid || "").trim();
+    const sameMesa = (Array.isArray(parkedTickets) ? parkedTickets : []).filter(
+      (t) => t && !t.paid && String(t.mesaUid || "").trim() === uidKey,
+    );
+    const group = sameMesa.some((t) => t === ticket || String(t.id) === String(ticket.id)) ? sameMesa : [ticket, ...sameMesa];
+    const total = group.reduce((sum, t) => sum + totalOf(t), 0);
+    const isSplit = group.length > 1 && group.every((t) => String(t?.splitGroupId || "").trim());
+    const partsLabel = group.length > 1 ? `${group.length} ${isSplit ? "partes" : "pedidos"}` : "";
+    return { code: "ocupada", label: "Ocupada", total, parts: group.length > 1 ? group.length : 0, partsLabel };
   }
 
   if (manualState === "reservada")
@@ -2933,6 +2945,7 @@ function renderMapCards() {
       node.innerHTML = `
         <span class="gestion-name">${obj.label || "Mesa"}</span>
         ${totalText ? `<span class="gestion-total">${totalText}</span>` : ""}
+        ${st.partsLabel ? `<span class="gestion-parts" title="El importe es la suma de todas las partes sin cobrar de la mesa">${st.partsLabel}</span>` : ""}
         ${badgeText ? `<span class="${badgeClass}">${badgeText}</span>` : ""}
         ${hasAutoPrintFailure ? `<span class="gestion-badge warn" title="No se pudo imprimir la comanda automáticamente">⚠ Comanda</span>` : ""}
         ${hasPendingComanda ? `<span class="${pendingBadgeClass}" title="${pendingBadgeTitle}">🖨 Sin enviar</span>` : ""}
