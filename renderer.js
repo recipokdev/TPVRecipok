@@ -51850,6 +51850,13 @@ function refreshSplitTicketActionUi() {
     return;
   }
 
+  if (hasSplit) {
+    splitTicketConfirmBtn.textContent = "Dividir esta parte";
+    splitTicketConfirmBtn.title =
+      "Dividir solo esta parte en más partes; las demás partes no cambian";
+    return;
+  }
+
   splitTicketConfirmBtn.textContent = "Generar división";
   splitTicketConfirmBtn.title = "Crear tickets divididos";
 }
@@ -51873,9 +51880,8 @@ function openSplitTicketModal() {
   }
 
   const splitMeta = getTicketSplitMeta(loaded);
-  splitTicketPartsCount = splitMeta
-    ? Math.max(1, Number(splitMeta.total || 1))
-    : 2;
+  // Ticket ya dividido: arranca en 2 = subdividir ESTA parte en 2 (1 = revertir la division entera).
+  splitTicketPartsCount = 2;
   if (splitTicketPartsInput) {
     splitTicketPartsInput.min = splitMeta ? "1" : "2";
     splitTicketPartsInput.max = "12";
@@ -52191,13 +52197,10 @@ async function confirmSplitTicket() {
     return;
   }
 
-  if (currentSplitMeta) {
-    if (splitTicketError) {
-      splitTicketError.textContent =
-        "Este ticket ya está dividido. Usa Partes = 1 para unificar primero.";
-    }
-    return;
-  }
+  // Redividir (2026-11-26, Lumi): antes un ticket ya dividido NO se podia volver a dividir («usa Partes = 1 para unificar primero»). Ahora se
+  // SUBDIVIDE esa parte: se queda con su numero y las nuevas se añaden al final del mismo grupo (1/2 + dividir la 1 en 2 -> 1/3, 2/3 y 3/3);
+  // las partes que ya existian (incluidas las cobradas) no cambian de numero y solo se actualiza el total. Parts = 1 sigue revirtiendo.
+  const isResplit = !!currentSplitMeta;
 
   const sourceLines = Array.isArray(cart) ? cart.map((it) => ({ ...it })) : [];
   if (!sourceLines.length) {
@@ -52248,11 +52251,41 @@ async function confirmSplitTicket() {
   const sourceName = String(
     loaded?.name || `Ticket #${loadedDisplayNo || ""}`,
   ).trim();
-  const splitGroupId = makeSplitGroupId();
+  const splitGroupId = isResplit ? String(currentSplitMeta.groupId) : makeSplitGroupId();
   const mesaScope = isTpvTicketSplitContext() ? null : getSelectedMesaScopeContext();
   const splitTickets = [];
 
+  // Al redividir: las demas partes del grupo (para actualizarles el total) y el numero mas alto ya usado (cobradas incluidas).
+  const resplitSiblings = isResplit
+    ? (Array.isArray(parkedTickets) ? parkedTickets : []).filter((t) => {
+        if (!t || t === loaded || String(t?.id || "") === String(loaded?.id || "")) return false;
+        const m = getTicketSplitMeta(t);
+        return !!m && String(m.groupId || "") === splitGroupId;
+      })
+    : [];
+  const existingMaxPart = isResplit
+    ? Math.max(
+        Number(currentSplitMeta.total) || 0,
+        Number(currentSplitMeta.part) || 0,
+        ...resplitSiblings.map((t) => {
+          const m = getTicketSplitMeta(t);
+          return Math.max(Number(m?.part) || 0, Number(m?.total) || 0);
+        }),
+      )
+    : 0;
+  const finalSplitTotal = isResplit
+    ? existingMaxPart + (targetSplitParts - 1)
+    : targetSplitParts;
+  const loadedPartNo = isResplit ? Number(currentSplitMeta.part) || 1 : 1;
+  const nameBase = isResplit
+    ? stripSplitSuffixFromTicketName(loaded?.name) || sourceName
+    : sourceName;
+  const cleanObsForParts = isResplit
+    ? String(parseSplitInfoFromObs(loaded?.obs)?.cleanObs || loaded?.obs || "").trim()
+    : loaded?.obs;
+
   for (let i = 2; i <= targetSplitParts; i += 1) {
+    const partNo = isResplit ? existingMaxPart + (i - 1) : i;
     const nextId = getNextSuggestedParkTicketId() + (i - 2);
     const ticketLines = isSplitItemsMode()
       ? Array.isArray(activePartsData[i - 1]?.lines)
@@ -52271,15 +52304,15 @@ async function confirmSplitTicket() {
       items: ticketLines,
       total: getCartTotal(ticketLines),
       clientName: String(loaded?.clientName || "Cliente").trim() || "Cliente",
-      name: `${sourceName} (${i}/${targetSplitParts})`,
-      obs: encodeSplitInfoInObs(loaded?.obs, {
+      name: `${nameBase} (${partNo}/${finalSplitTotal})`,
+      obs: encodeSplitInfoInObs(cleanObsForParts, {
         groupId: splitGroupId,
-        part: i,
-        total: targetSplitParts,
+        part: partNo,
+        total: finalSplitTotal,
       }),
       splitGroupId,
-      splitPart: i,
-      splitTotal: targetSplitParts,
+      splitPart: partNo,
+      splitTotal: finalSplitTotal,
       parkingMode: inferTicketParkingMode(loaded),
       mesaAlerts: normalizeMesaTicketAlerts(loaded?.mesaAlerts),
       paid: false,
@@ -52304,22 +52337,38 @@ async function confirmSplitTicket() {
     : equalShares[0];
   loaded.items = loadedShareLines;
   loaded.total = getCartTotal(loadedShareLines);
-  loaded.name = `${sourceName} (1/${targetSplitParts})`;
-  loaded.obs = encodeSplitInfoInObs(loaded?.obs, {
+  loaded.name = `${nameBase} (${loadedPartNo}/${finalSplitTotal})`;
+  loaded.obs = encodeSplitInfoInObs(cleanObsForParts, {
     groupId: splitGroupId,
-    part: 1,
-    total: targetSplitParts,
+    part: loadedPartNo,
+    total: finalSplitTotal,
   });
   loaded.splitGroupId = splitGroupId;
-  loaded.splitPart = 1;
-  loaded.splitTotal = targetSplitParts;
+  loaded.splitPart = loadedPartNo;
+  loaded.splitTotal = finalSplitTotal;
   loaded.updatedAt = new Date();
   loaded.localRevisionAt = Date.now();
 
+  // Las otras partes sin cobrar del grupo conservan su numero y solo cambian el total («2/2» -> «2/3»): si no, al cobrar la ultima de las
+  // antiguas el TPV daria la division por completada con partes nuevas aun pendientes.
+  const resplitUpdatedSiblings = [];
+  resplitSiblings.forEach((t) => {
+    if (t?.paid) return;
+    const m = getTicketSplitMeta(t);
+    if (!m) return;
+    t.splitGroupId = splitGroupId;
+    t.splitPart = Number(m.part) || 1;
+    t.splitTotal = finalSplitTotal;
+    t.name = `${stripSplitSuffixFromTicketName(t?.name) || nameBase} (${t.splitPart}/${finalSplitTotal})`;
+    t.updatedAt = new Date();
+    t.localRevisionAt = Date.now();
+    resplitUpdatedSiblings.push(t);
+  });
+
   saveSplitSessionState({
     groupId: splitGroupId,
-    nextPart: 1,
-    totalParts: targetSplitParts,
+    nextPart: loadedPartNo,
+    totalParts: finalSplitTotal,
     mesaUid: String(mesaScope?.uid || "").trim() || null,
   });
 
@@ -52349,6 +52398,15 @@ async function confirmSplitTicket() {
     } catch (e) {
       enqueueParkedSyncOperation("upsert", splitTicket);
       console.warn("No se pudo sincronizar ticket dividido:", e?.message || e);
+    }
+  }
+
+  for (const sibling of resplitUpdatedSiblings) {
+    try {
+      await apiSaveParkedReservation(sibling);
+    } catch (e) {
+      enqueueParkedSyncOperation("upsert", sibling);
+      console.warn("No se pudo sincronizar el total de una parte al redividir:", e?.message || e);
     }
   }
 
@@ -52393,7 +52451,13 @@ async function confirmSplitTicket() {
   refreshRemoteParkedReservationsOnly().catch(() => {});
 
   closeSplitTicketModal();
-  toast(`Ticket dividido en ${targetSplitParts} partes.`, "ok", "Dividir");
+  toast(
+    isResplit
+      ? `Parte ${loadedPartNo} dividida en ${targetSplitParts}: ahora son ${finalSplitTotal} partes.`
+      : `Ticket dividido en ${targetSplitParts} partes.`,
+    "ok",
+    "Dividir",
+  );
 }
 
 function normalizeTicketComandaState(raw) {

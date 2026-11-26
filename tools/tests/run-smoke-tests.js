@@ -12842,7 +12842,7 @@ mustContain(renderer, "  if (loaded?.closingInProgress) return; // se esta cobra
     fail("index.html: faltan splitFromCartBtn o splitTpvToggle");
   }
   const iCart = renderer.indexOf("cart = loadedShareLines.map((it) => ({ ...it }));");
-  const iToast = renderer.indexOf("toast(`Ticket dividido en ${targetSplitParts} partes.`");
+  const iToast = renderer.indexOf(": `Ticket dividido en ${targetSplitParts} partes.`"); // (el aviso final, ya con la rama de redividir)
   const refreshCall = "refreshRemoteParkedReservationsOnly().catch(() => {});";
   const iRefresh = renderer.lastIndexOf(refreshCall, iToast);
   if (iCart > 0 && iToast > iCart && iRefresh > iCart) {
@@ -12882,6 +12882,8 @@ mustContain(renderer, "function getPresenceHostId() {", "La presencia de termina
 mustContain(renderer, 'logFeatureWarn("PRESENCE", "multi-tpv-activos", {', "Cada vez que sale el aviso «Hay N TPV activos» se registra en el servidor el detalle de las sesiones (Lumi, 25-nov-2026)");
 mustContain(renderer, '<div class="cart-line-controls">', "En el carrito el contador de cantidad y el precio van juntos en un bloque que baja debajo del nombre, y el nombre usa todo el ancho de la linea (Lumi, 25-nov-2026)");
 mustContain(fs.readFileSync(path.join(root, "styles.css"), "utf8"), ".cart-line-controls {", "Bloque de controles de la linea del carrito (cantidad + precio) que envuelve en vez de desbordar");
+mustContain(renderer, "const isResplit = !!currentSplitMeta;", "Un ticket ya dividido se puede volver a dividir (se subdivide esa parte y las nuevas se añaden al final del grupo): antes daba «Este ticket ya esta dividido» (Lumi, 26-nov-2026)");
+mustContain(renderer, "for (const sibling of resplitUpdatedSiblings) {", "Al redividir se actualiza el total de las demas partes del grupo (si no, al cobrar la ultima de las antiguas se daria la division por completada con partes nuevas pendientes)");
 mustContain(renderer, "async function completeClienteAddressFromContactos(cli) {", "La direccion del cliente en facturas y tickets se completa desde su contacto de facturacion (en FS no esta en `clientes`): antes salia «(sin informar)» (Lumi, 25-nov-2026)");
 mustContain(renderer, "cli = await completeClienteAddressFromContactos(cli);", "La cache de datos de impresion del cliente (usada al emitir la factura) lleva la direccion del contacto");
 mustContain(renderer, "? await completeClienteAddressFromContactos(rows[0])", "El enriquecimiento del cliente al reimprimir una factura general tambien lleva la direccion del contacto");

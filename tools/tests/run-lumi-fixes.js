@@ -3,7 +3,9 @@
 //   2) mover una mesa con la cuenta dividida llevaba solo UNA parte (la otra se quedaba en la mesa de origen);
 //   3) fusionar mesas ocupadas esperaba a tres operaciones de red seguidas (tardaba segundos) y no fusionaba las partes de una cuenta dividida;
 //   4) los clientes no traian direccion/CP/ciudad (en FacturaScripts reciente viven en `contactos`, no en `clientes`);
-//   5) el nombre del producto en el carrito salia en vertical (letra por letra) cuando la fila llevaba mucho importe/cantidad.
+//   5) el nombre del producto en el carrito salia en vertical (letra por letra) cuando la fila llevaba mucho importe/cantidad;
+//   6) la direccion del cliente en facturas/tickets salia «(sin informar)» (hay que leerla del contacto de facturacion);
+//   7) un ticket ya dividido no se podia volver a dividir («usa Partes = 1 para unificar primero»): ahora se subdivide esa parte.
 // Un solo TPV real contra la tienda de pruebas (perfil persistente con sesion ya iniciada; nunca se escribe PIN). Deja las mesas M1-M4 limpias.
 // Uso: node tools/tests/run-lumi-fixes.js [--store=zz_bateria_tpv]
 process.env.TPV_RUN_BACKGROUND = "1";
@@ -181,6 +183,48 @@ let kill = () => {};
       return r;
     });
 
+    // ---------- 7) redividir: dividir en 2 y luego dividir la parte 1 en 2 -> 3 partes (1/3, 2/3, 3/3) en la misma mesa, mismas unidades y mismo total
+    out.t7 = await win.evaluate(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const r = {};
+      try {
+        await window.__clean();
+        __sel("tut-room-1::m4"); await sleep(800);
+        addToCart(__prods[0]); addToCart(__prods[1]); addToCart(__prods[0]); addToCart(__prods[2]); await sleep(6000);
+        const suma = (k) => Math.round(window.__loc().reduce((a, t) => a + t[k], 0) * 1000) / 1000;
+        r.antes = { n: window.__loc().length, u: suma("u"), total: suma("total") };
+        const dividir = async (matriz, partes) => {
+          document.getElementById("parkedSplitBtn").click();
+          for (let i = 0; i < 40 && document.getElementById("splitTicketOverlay").classList.contains("hidden"); i++) await sleep(300);
+          const sel = document.getElementById("splitTicketModeSelect"); sel.value = "items"; sel.dispatchEvent(new Event("change"));
+          splitTicketPartsCount = partes; if (splitTicketPartsInput) splitTicketPartsInput.value = String(partes); splitTicketMode = "items";
+          initSplitItemsMatrixFromCurrentCart();
+          splitTicketItemsMatrix = matriz(cart);
+          const errAntes = splitTicketError ? splitTicketError.textContent : "";
+          await confirmSplitTicket(); await sleep(2500);
+          return { error: splitTicketError ? splitTicketError.textContent : "", errAntes };
+        };
+        r.d1 = await dividir((c) => c.map((l, i) => (i % 2 === 0 ? [Number(l.qty), 0] : [0, Number(l.qty)])), 2);
+        r.tras1 = window.__loc();
+        r.cargado1 = getCurrentLoadedParkedTicket()?.name || null;
+        // ahora el cargado es la parte 1/2 (2 lineas): se divide ESA parte en 2, una linea a cada nueva parte
+        r.lineasParte1 = cart.map((l) => String(l.name).slice(0, 8) + ":" + l.qty);
+        r.d2 = await dividir((c) => c.map((l, i) => (i === 0 ? [Number(l.qty), 0] : [0, Number(l.qty)])), 2);
+        r.tras2 = window.__loc();
+        r.cargado2 = getCurrentLoadedParkedTicket()?.name || null;
+        r.totalesAlmacenados = window.__mine().map((t) => ({ name: String(t.name), part: t.splitPart, total: t.splitTotal, grupo: String(t.splitGroupId || "").slice(0, 6) }));
+        try { r.sesion = JSON.parse(localStorage.getItem(SPLIT_SESSION_STATE_KEY) || "null"); } catch {}
+        r.despues = { n: window.__loc().length, u: suma("u"), total: suma("total") };
+        // «Revertir division» sigue funcionando con las 3 partes
+        document.getElementById("parkedSplitBtn").click();
+        for (let i = 0; i < 40 && document.getElementById("splitTicketOverlay").classList.contains("hidden"); i++) await sleep(300);
+        splitTicketPartsCount = 1; if (splitTicketPartsInput) splitTicketPartsInput.value = "1";
+        await confirmSplitTicket(); await sleep(2500);
+        r.unificado = { n: window.__loc().length, u: suma("u"), total: suma("total"), nombre: window.__loc()[0] && window.__loc()[0].nombre };
+      } catch (e) { r.error = String(e && e.message || e); }
+      return r;
+    });
+
     // ---------- limpieza
     await win.evaluate(async () => { await window.__clean(); });
     out.limpio = await win.evaluate(() => __loc());
@@ -191,7 +235,7 @@ let kill = () => {};
     try { await Promise.race([app.evaluate(({ session }) => session.defaultSession.flushStorageData()), sleep(4000)]); } catch {}
     console.log(JSON.stringify(out, null, 1));
     const ok = (name, cond, extra) => [name, !!cond, extra === undefined ? "" : typeof extra === "string" ? extra : JSON.stringify(extra)];
-    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {};
+    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {}, t7 = out.t7 || {};
     const c5 = t4.c5 || {}, c9 = t4.c9 || {}, c11 = t4.c11 || {};
     const verdict = require("./battery/verdict.js").emitVerdict([
       ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || ""),
@@ -213,6 +257,10 @@ let kill = () => {};
       ok("5) Al quitar las reglas antiguas vuelve a quedar bien", t5.otraVez && t5.otraVez.nombre >= 80, t5.otraVez),
       ok("6) Factura/ticket: la dirección, CP y ciudad del cliente salen del contacto de facturación (antes «(sin informar)») y el NIF se mantiene", !t6.error && (t6.refresco || {}).direccion === "Calle Mayor 3" && (t6.cache || {}).direccion === "Calle Mayor 3" && (t6.cache || {}).codpostal === "08001" && (t6.cache || {}).cifnif === "B6666" && (t6.facturaDatos || {}).clientAddress === "Calle Mayor 3 08001 Barcelona" && (t6.facturaDatos || {}).clientFiscalId === "B6666" && (t6.ficha || {}).direccion === "Calle Mayor 3", t6),
       ok("6) Si falla la petición del contacto no se rompe la impresión ni se pierde la dirección que ya estaba guardada; y un cliente con dirección propia no pide contactos", !t6.error && (t6.cacheTrasCaida || {}).direccion === "Calle Mayor 3" && (t6.facturaTrasCaida || {}).clientAddress === "Calle Mayor 3 08001 Barcelona" && (t6.propio || {}).direccion === "Propia 1" && (t6.propio || {}).pidioContactos === false, { cacheTrasCaida: t6.cacheTrasCaida, facturaTrasCaida: t6.facturaTrasCaida, propio: t6.propio }),
+      ok("7) Redividir: dividir la parte 1/2 en 2 deja 3 partes en la misma mesa, numeradas 1/3, 2/3 y 3/3 (antes: «Este ticket ya está dividido»)", !t7.error && (t7.tras1 || []).length === 2 && (t7.tras2 || []).length === 3 && JSON.stringify((t7.tras2 || []).map((t) => (/\((\d)\/(\d)\)\s*$/.exec(t.nombre) || [])[0]).sort()) === JSON.stringify(["(1/3)", "(2/3)", "(3/3)"]) && !/dividido/i.test((t7.d2 || {}).error || ""), { d2: t7.d2, tras2: t7.tras2, error: t7.error }),
+      ok("7) Redividir no pierde ni inventa nada: mismas unidades y mismo total que antes de dividir, y las 3 partes siguen en la mesa", !t7.error && (t7.despues || {}).u === (t7.antes || {}).u && Math.abs((t7.despues || {}).total - (t7.antes || {}).total) < 0.02 && (t7.tras2 || []).every((t) => t.mesa === "m4"), { antes: t7.antes, despues: t7.despues }),
+      ok("7) Las partes que ya existían conservan su número y solo cambian el total (2/2 pasa a 2/3); todas del mismo grupo; se queda cargada la 1/3 y la división en curso lleva total 3", !t7.error && (t7.totalesAlmacenados || []).length === 3 && (t7.totalesAlmacenados || []).every((t) => t.total === 3 && t.grupo === (t7.totalesAlmacenados || [])[0].grupo) && /\(1\/3\)\s*$/.test(String(t7.cargado2 || "")) && (t7.sesion || {}).totalParts === 3, { cargado2: t7.cargado2, totalesAlmacenados: t7.totalesAlmacenados, sesion: t7.sesion }),
+      ok("7) «Revertir división» sigue funcionando con las 3 partes: queda un solo pedido con las mismas unidades y el mismo total", !t7.error && (t7.unificado || {}).n === 1 && (t7.unificado || {}).u === (t7.antes || {}).u && Math.abs((t7.unificado || {}).total - (t7.antes || {}).total) < 0.02 && !/\(\d+\/\d+\)/.test(String((t7.unificado || {}).nombre || "")), t7.unificado),
       ok("Al terminar las mesas de prueba quedan limpias", Array.isArray(out.limpio) && out.limpio.length === 0, out.limpio),
     ]);
     clearTimeout(hard); kill();
