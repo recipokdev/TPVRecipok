@@ -344,6 +344,31 @@ let kill = () => {};
       await win.evaluate(async () => { try { setMesasInlineView("transacciones", { persist: false }); } catch (e) {} });
     }
 
+    // ---------- 10) mover una cuenta SIN dividir justo despues de tocarla: el cambio de mesa no se deshace solo (antes, 2 de cada 6 veces el guardado chocaba con otro y se revertia)
+    out.t10 = { vueltas: [] };
+    try {
+      await win.evaluate(async () => { await window.__clean(); });
+      const prep10 = await win.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        __sel("tut-room-1::m3"); await sleep(800);
+        addToCart(__prods[0]); addToCart(__prods[1]); await sleep(6000);
+        setMesasInlineView("mapa", { persist: false }); await sleep(3000);
+        return window.__loc();
+      });
+      out.t10.prep = prep10;
+      for (let i = 0; i < 6; i++) {
+        const desde = i % 2 === 0 ? "m3" : "m2", hasta = i % 2 === 0 ? "m2" : "m3";
+        const r = await win.evaluate(async ([d, h]) => {
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          const ok = moveMesaPendingTicket("tut-room-1::" + d, "tut-room-1::" + h, { keepSelection: true });
+          await sleep(3000);
+          return { ok, loc: window.__loc().map((t) => t.mesa) };
+        }, [desde, hasta]);
+        out.t10.vueltas.push({ desde, hasta, ...r });
+      }
+    } catch (e) { out.t10.error = String(e && e.message || e).slice(0, 300); }
+    finally { await win.evaluate(async () => { try { setMesasInlineView("transacciones", { persist: false }); } catch (e) {} }); }
+
     // ---------- limpieza
     await win.evaluate(async () => { await window.__clean(); });
     out.limpio = await win.evaluate(() => __loc());
@@ -354,7 +379,7 @@ let kill = () => {};
     try { await Promise.race([app.evaluate(({ session }) => session.defaultSession.flushStorageData()), sleep(4000)]); } catch {}
     console.log(JSON.stringify(out, null, 1));
     const ok = (name, cond, extra) => [name, !!cond, extra === undefined ? "" : typeof extra === "string" ? extra : JSON.stringify(extra)];
-    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {}, t7 = out.t7 || {}, t8 = out.t8 || {}, t9 = out.t9 || {};
+    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {}, t7 = out.t7 || {}, t8 = out.t8 || {}, t9 = out.t9 || {}, t10 = out.t10 || {};
     const c5 = t4.c5 || {}, c9 = t4.c9 || {}, c11 = t4.c11 || {};
     const verdict = require("./battery/verdict.js").emitVerdict([
       ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || ""),
@@ -387,6 +412,7 @@ let kill = () => {};
       ok("9) Plano: tras mover una cuenta dividida la mesa de origen se ve libre y la de destino ocupada, y NUNCA vuelve a verse la de origen ocupada (antes quedaban dos mesas con el mismo importe)", !t9.error && (t9.mapa || []).length >= 2 && (t9.mapa || []).slice(-1)[0][1] === "m3=state-libre m2=state-ocupada" && !(t9.mapa || []).slice(1).some((r) => /m3=state-ocupada/.test(r[1])), t9.mapa),
       ok("9) En el TPV ninguna parte de la cuenta dividida vuelve un instante a la mesa de origen al refrescar desde el servidor", !t9.error && (t9.host || []).length >= 2 && !(t9.host || []).slice(1).some((r) => /@m3/.test(r)), t9.host),
       ok("9) Con la ficha de una mesa abierta, un cambio hecho mientras tanto se aplica al cerrarla (antes el plano se quedaba desfasado)", !t9.error && (t9.conFichaAbierta || {}).ficha === true && (t9.alCerrarFicha || {}).m3 === "state-ocupada" && (t9.alCerrarFicha || {}).m2 === "state-libre", { conFichaAbierta: t9.conFichaAbierta, alCerrarFicha: t9.alCerrarFicha }),
+      ok("10) Mover una cuenta sin dividir 6 veces seguidas (ida y vuelta) deja SIEMPRE el pedido en la mesa de destino (antes se deshacia solo cuando el guardado chocaba con otro)", !t10.error && (t10.vueltas || []).length === 6 && (t10.vueltas || []).every((v) => v.ok === true && v.loc.length === 1 && v.loc[0] === v.hasta), t10),
       ok("Al terminar las mesas de prueba quedan limpias", Array.isArray(out.limpio) && out.limpio.length === 0, out.limpio),
     ]);
     clearTimeout(hard); kill();

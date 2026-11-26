@@ -13055,6 +13055,37 @@ function getUnpaidSplitSiblingsInMesa(ticket, mesaUid) {
   );
 }
 
+// Guarda un pedido que acaba de CAMBIAR DE MESA. Si el servidor lo rechaza por bloqueo optimista (otro guardado, p. ej. el autoguardado del carrito,
+// llego un instante antes), el camino normal da la razon al servidor y el cambio de mesa se DESHACIA solo (2026-11-26: pasaba 2 de cada 6 veces al
+// mover una mesa justo despues de tocarla). Aqui se vuelve a leer el servidor y se reintenta UNA vez con la mesa nueva puesta encima.
+async function apiSaveMovedParkedTicket(ticket) {
+  try {
+    return await apiSaveParkedReservation(ticket);
+  } catch (e) {
+    if (!e?.staleParkedWrite) throw e;
+    const mesaFields = ["mesaUid", "mesaRoomId", "mesaRoomName", "mesaTableId", "mesaTableName"];
+    const wanted = {};
+    mesaFields.forEach((k) => {
+      wanted[k] = ticket?.[k];
+    });
+    try {
+      await refreshRemoteParkedReservationsOnly?.();
+    } catch (_) {}
+    const keys = new Set(getParkedTicketSyncKeyVariants(ticket));
+    const live =
+      (Array.isArray(parkedTickets) ? parkedTickets : []).find((t) =>
+        getParkedTicketSyncKeyVariants(t).some((k) => keys.has(k)),
+      ) || ticket;
+    mesaFields.forEach((k) => {
+      live[k] = wanted[k];
+    });
+    live.localRevisionAt = Date.now();
+    live.updatedAt = new Date();
+    saveParkedTicketsCache();
+    return await apiSaveParkedReservation(live);
+  }
+}
+
 function moveMesaPendingTicket(sourceUid, targetUid, opts = {}) {
   const fromUid = String(sourceUid || "").trim();
   const toUid = String(targetUid || "").trim();
@@ -13179,7 +13210,7 @@ function moveMesaPendingTicket(sourceUid, targetUid, opts = {}) {
   void (async () => {
     for (const movedTicket of [sourceTicket, ...movedSiblings]) {
       try {
-        await apiSaveParkedReservation(movedTicket);
+        await apiSaveMovedParkedTicket(movedTicket);
       } catch (e) {
         if (e?.staleParkedWrite) {
           handleStaleParkedWriteConflict(movedTicket, e);
@@ -45589,12 +45620,20 @@ function syncParkedTicketsFromRemote(list) {
       const forceRemoteMerge =
         Number(prev?.__remoteWinsNextSync || 0) > 0 &&
         Date.now() - Number(prev.__remoteWinsNextSync) <= 60000;
+      // Reloj: `prevTs >= remoteTs` compara la hora de ESTE equipo con la del SERVIDOR; si el servidor va adelantado unas decimas (o segundos),
+      // un cambio local recien hecho (p. ej. mover una cuenta de mesa) perdia contra la copia vieja del servidor y se DESHACIA solo (2026-11-26,
+      // visto 2 de cada 3 veces). Si el servidor no ha cambiado ese pedido desde la ultima vez que lo vimos y lo local es reciente, lo local gana
+      // sin mirar relojes.
+      const prevRemoteTs = Number(prev?.__remoteUpdatedTs || 0) || 0;
+      const localEditNotYetSeenByServer =
+        localRevIsRecent && prevRemoteTs > 0 && remoteTs > 0 && remoteTs <= prevRemoteTs;
       const shouldPreferLocalSnapshot =
         !forceRemoteMerge &&
         prev &&
         prevItems.length &&
-        (prevTs >= remoteTs || (localRevIsRecent && remoteTs <= 0));
+        (prevTs >= remoteTs || (localRevIsRecent && remoteTs <= 0) || localEditNotYetSeenByServer);
       delete merged.__remoteWinsNextSync;
+      if (remoteTs > 0) merged.__remoteUpdatedTs = remoteTs;
 
       if (shouldPreferLocalSnapshot) {
         merged.items = prevItems.map((it) => ({ ...it }));
