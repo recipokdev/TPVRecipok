@@ -125,6 +125,9 @@ let activeMapTooltipUid = "";
 // «Mover / fusionar» desde el plano (2026-11-26, Lumi usa el plano mucho mas que el carrito): mesa ORIGEN elegida; el siguiente toque en otra
 // mesa la elige de DESTINO (libre = mover, ocupada = fusionar con confirmacion) y se lo pide al TPV anfitrion, que es quien guarda.
 let mapMoveSourceUid = "";
+// Actualizaciones del estado que llegaron con la ficha de una mesa abierta (se ignoraban y el plano se quedaba desfasado): se aplican al cerrarla.
+let mapReloadDeferred = false;
+let mapReloadFromStorageFn = null;
 let mapTooltipCloseGuardUntil = 0;
 let designUndoByRoom = {};
 let designRedoByRoom = {};
@@ -637,6 +640,14 @@ function closeMapTooltip() {
   if (activeMapTooltipEl) activeMapTooltipEl.remove();
   activeMapTooltipEl = null;
   activeMapTooltipUid = "";
+  if (mapReloadDeferred && typeof mapReloadFromStorageFn === "function") {
+    mapReloadDeferred = false;
+    setTimeout(() => {
+      try {
+        mapReloadFromStorageFn();
+      } catch {}
+    }, 0);
+  }
 }
 
 function refreshMapMoveBanner() {
@@ -2175,7 +2186,13 @@ function getMappedTicketForTable(uid) {
     const direct =
       parkedTickets.find((t) => String(t.id) === String(ticketId) && !t.paid) ||
       null;
-    if (direct) return direct;
+    // El PEDIDO manda (2026-11-26, Lumi/Sergi: tras mover o dividir, la mesa de origen seguia mostrando el importe antiguo y quedaban dos mesas
+    // con el mismo precio): el enlace mesa->pedido que guarda el estado puede quedarse desfasado (una copia vieja del servidor lo devuelve al
+    // refrescar). Si el pedido ya dice que esta en OTRA mesa, ese enlace se ignora y la mesa se deduce de los pedidos.
+    if (direct) {
+      const realUid = resolveTicketMesaUidLocal(direct);
+      if (!realUid || realUid === String(uid || "").trim()) return direct;
+    }
   }
 
   return (
@@ -4722,7 +4739,10 @@ function bindEvents() {
   const reloadStateFromStorage = () => {
     if (isTutorialPauseActive()) return;
     if (isVirtualKeyboardOpen()) return;
-    if (activeMapTooltipEl && state.activeView === "mapa") return;
+    if (activeMapTooltipEl && state.activeView === "mapa") {
+      mapReloadDeferred = true;
+      return;
+    }
     if (state.activeView === "diseno" && dragState) return;
 
     const currentView = state.activeView;
@@ -4738,6 +4758,8 @@ function bindEvents() {
     loadCartFromSelectedTable();
     renderEverything();
   };
+
+  mapReloadFromStorageFn = reloadStateFromStorage;
 
   tabs.forEach((tab) => {
     tab.addEventListener("click", () => switchView(tab.dataset.view));

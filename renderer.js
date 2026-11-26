@@ -13155,6 +13155,12 @@ function moveMesaPendingTicket(sourceUid, targetUid, opts = {}) {
     }
   } catch (_) {}
 
+  // Primero se guardan los PEDIDOS (ya con su mesa nueva) y despues el estado de mesas: el plano deduce la mesa de los pedidos y, al reves, vio un
+  // instante la mesa de origen aun ocupada por una parte (2026-11-26).
+  sourceTicket.localRevisionAt = Date.now();
+  sourceTicket.updatedAt = new Date();
+  saveParkedTicketsCache();
+
   // Desde el plano (opts.keepSelection) la mesa seleccionada y el carrito cargado NO cambian, salvo que sean justo la de origen o la de destino.
   const keepSelection =
     opts?.keepSelection === true &&
@@ -45599,6 +45605,12 @@ function syncParkedTicketsFromRemote(list) {
         if (prev?.obs != null) merged.obs = String(prev.obs || "");
         if (prev?.clientName != null) {
           merged.clientName = String(prev.clientName || "");
+        }
+        // La mesa y los datos de la division tambien son de la copia local mas reciente (2026-11-26, Lumi/Sergi): antes `{...prev, ...ticket}` dejaba
+        // la mesa de la copia VIEJA del servidor y, tras mover una cuenta dividida, una parte volvia un instante a la mesa de origen (dos mesas con
+        // el mismo importe) hasta que terminaba de guardarse la siguiente.
+        for (const k of ["mesaUid", "mesaRoomId", "mesaRoomName", "mesaTableId", "mesaTableName", "splitGroupId", "splitPart", "splitTotal"]) {
+          if (prev && prev[k] !== undefined) merged[k] = prev[k];
         }
         merged.localRevisionAt = localRevTs || Date.now();
       }

@@ -12885,6 +12885,10 @@ mustContain(fs.readFileSync(path.join(root, "styles.css"), "utf8"), ".cart-line-
 mustContain(renderer, 'if (data.type === "tpv:mesas-move-table") {', "El TPV atiende la peticion «Mover / fusionar» que manda el plano de mesas (Lumi usa el plano mucho mas que el carrito, 26-nov-2026)");
 mustContain(renderer, "{ keepSelection: true }", "Mover/fusionar desde el plano no cambia la mesa seleccionada ni el carrito cargado (salvo que sea la de origen o la de destino)");
 mustContain(mesasJs, "function handleMapMoveTargetClick(targetUid) {", "El plano de mesas permite elegir origen y destino para mover o fusionar");
+mustContain(renderer, 'for (const k of ["mesaUid", "mesaRoomId", "mesaRoomName", "mesaTableId", "mesaTableName", "splitGroupId", "splitPart", "splitTotal"]) {', "Al refrescar desde el servidor, si la copia local es mas reciente se conserva TAMBIEN su mesa y los datos de la division (antes una parte volvia un instante a la mesa de origen tras mover)");
+mustContain(mesasJs, "if (!realUid || realUid === String(uid || \"\").trim()) return direct;", "El plano deduce la mesa de los PEDIDOS: un enlace mesa->pedido desfasado (el pedido ya esta en otra mesa) se ignora, para que tras mover o dividir no queden dos mesas con el mismo importe (Lumi/Sergi, 26-nov-2026)");
+mustContain(mesasJs, "mapReloadDeferred = true;", "Con la ficha de una mesa abierta, las actualizaciones que llegan no se pierden: se aplican al cerrarla");
+mustContain(renderer, "// Primero se guardan los PEDIDOS (ya con su mesa nueva) y despues el estado de mesas", "Mover una mesa guarda primero los pedidos y despues el estado de mesas (el plano no ve un instante la mesa de origen aun ocupada)");
 mustContain(mesasJs, 'optBtn.className = "gestion-opt-btn";', "Cada mesa del plano lleva un boton «⋯» siempre visible que abre su ficha (mantener pulsado no lo descubre casi nadie)");
 mustContain(mesasJs, 'data-table-act="move"', "La ficha de una mesa ocupada del plano tiene el boton «Mover / fusionar»");
 mustContain(fs.readFileSync("mesas/mesas.html", "utf8"), 'id="mapMoveBanner"', "El plano muestra un aviso mientras se elige la mesa de destino");

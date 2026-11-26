@@ -296,6 +296,54 @@ let kill = () => {};
       await win.evaluate(async () => { try { if (window.__confirmReal) confirmModal = window.__confirmReal; setMesasInlineView("transacciones", { persist: false }); } catch (e) {} });
     }
 
+    // ---------- 9) plano: tras mover una cuenta DIVIDIDA no queda ningun instante la mesa de origen ocupada, ni dos mesas con el mismo importe; y con la ficha abierta no se pierden actualizaciones
+    out.t9 = {};
+    try {
+      out.t9.prep = await win.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        await window.__clean();
+        __sel("tut-room-1::m3"); await sleep(800);
+        addToCart(__prods[0]); addToCart(__prods[1]); addToCart(__prods[0]); addToCart(__prods[2]); await sleep(6000);
+        document.getElementById("parkedSplitBtn").click();
+        for (let i = 0; i < 40 && document.getElementById("splitTicketOverlay").classList.contains("hidden"); i++) await sleep(300);
+        const sel = document.getElementById("splitTicketModeSelect"); sel.value = "items"; sel.dispatchEvent(new Event("change"));
+        splitTicketPartsCount = 2; if (splitTicketPartsInput) splitTicketPartsInput.value = "2"; splitTicketMode = "items";
+        initSplitItemsMatrixFromCurrentCart();
+        splitTicketItemsMatrix = cart.map((l, i) => (i % 2 === 0 ? [Number(l.qty), 0] : [0, Number(l.qty)]));
+        await confirmSplitTicket(); await sleep(2500);
+        setMesasInlineView("mapa", { persist: false }); await sleep(3500);
+        return window.__loc();
+      });
+      let frame9 = null;
+      for (let i = 0; i < 60 && !frame9; i++) {
+        frame9 = win.frames().find((f) => f.url().includes("mesas.html")) || null;
+        if (frame9 && !(await frame9.evaluate(() => typeof startMapMove === "function" && !!document.querySelector(".gestion-obj.table")).catch(() => false))) frame9 = null;
+        if (!frame9) await sleep(500);
+      }
+      if (!frame9) throw new Error("No se encontro el plano de mesas (iframe)");
+      await frame9.evaluate(() => { window.postMessage({ type: "tpv:mesas-state-changed" }, "*"); }); await sleep(1200);
+      await frame9.evaluate(() => {
+        window.__rec = []; window.__recT0 = performance.now(); let last = "";
+        const f = () => { const g = (u) => { const n = document.querySelector('.gestion-obj.table[data-table-uid="tut-room-1::' + u + '"]'); return n ? (n.className.match(/state-\w+/) || [""])[0] : "-"; }; const cur = "m3=" + g("m3") + " m2=" + g("m2"); if (cur !== last) { window.__rec.push([Math.round(performance.now() - window.__recT0), cur]); last = cur; } window.__recRaf = requestAnimationFrame(f); };
+        f();
+      });
+      await win.evaluate(() => { window.__hrec = []; let last = ""; const f = () => { const cur = window.__mine().map((t) => String(t.name).slice(-5) + "@" + String(t.mesaUid).slice(-2)).join(" "); if (cur !== last) { window.__hrec.push(cur); last = cur; } window.__hRaf = requestAnimationFrame(f); }; f(); });
+      await win.evaluate(() => { window.__moved = moveMesaPendingTicket("tut-room-1::m3", "tut-room-1::m2"); });
+      await sleep(7000);
+      out.t9.mapa = await frame9.evaluate(() => { cancelAnimationFrame(window.__recRaf); return window.__rec; });
+      out.t9.host = await win.evaluate(() => { cancelAnimationFrame(window.__hRaf); return window.__hrec; });
+      // con la ficha de la mesa M2 abierta, la cuenta se mueve a M3 desde el TPV: al cerrar la ficha el plano debe ponerse al dia
+      await frame9.evaluate(async () => { const sleep = (ms) => new Promise((r) => setTimeout(r, ms)); document.querySelector('.gestion-obj.table[data-table-uid="tut-room-1::m2"] .gestion-opt-btn').click(); await sleep(300); });
+      await win.evaluate(() => { window.__moved2 = moveMesaPendingTicket("tut-room-1::m2", "tut-room-1::m3"); });
+      await sleep(1200);
+      out.t9.conFichaAbierta = await frame9.evaluate(() => ({ ficha: !!document.querySelector(".gestion-tooltip"), m3: (document.querySelector('.gestion-obj.table[data-table-uid="tut-room-1::m3"]').className.match(/state-\w+/) || [""])[0] }));
+      await frame9.evaluate(async () => { closeMapTooltip(); await new Promise((r) => setTimeout(r, 900)); });
+      out.t9.alCerrarFicha = await frame9.evaluate(() => ({ m3: (document.querySelector('.gestion-obj.table[data-table-uid="tut-room-1::m3"]').className.match(/state-\w+/) || [""])[0], m2: (document.querySelector('.gestion-obj.table[data-table-uid="tut-room-1::m2"]').className.match(/state-\w+/) || [""])[0] }));
+    } catch (e) { out.t9.error = String(e && e.message || e).slice(0, 300); }
+    finally {
+      await win.evaluate(async () => { try { setMesasInlineView("transacciones", { persist: false }); } catch (e) {} });
+    }
+
     // ---------- limpieza
     await win.evaluate(async () => { await window.__clean(); });
     out.limpio = await win.evaluate(() => __loc());
@@ -306,7 +354,7 @@ let kill = () => {};
     try { await Promise.race([app.evaluate(({ session }) => session.defaultSession.flushStorageData()), sleep(4000)]); } catch {}
     console.log(JSON.stringify(out, null, 1));
     const ok = (name, cond, extra) => [name, !!cond, extra === undefined ? "" : typeof extra === "string" ? extra : JSON.stringify(extra)];
-    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {}, t7 = out.t7 || {}, t8 = out.t8 || {};
+    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {}, t7 = out.t7 || {}, t8 = out.t8 || {}, t9 = out.t9 || {};
     const c5 = t4.c5 || {}, c9 = t4.c9 || {}, c11 = t4.c11 || {};
     const verdict = require("./battery/verdict.js").emitVerdict([
       ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || ""),
@@ -336,6 +384,9 @@ let kill = () => {};
       ok("8) Plano: cada mesa lleva un botón «⋯» visible (≥ 36 px) que abre su ficha sin mantener pulsado; desde ahí se llega a «Mover / fusionar», el aviso aparece sin botones y al cancelar vuelven", !t8.error && (t8.viaBoton || {}).conBoton === (t8.viaBoton || {}).mesas && (t8.viaBoton || {}).mesas >= 3 && (t8.viaBoton || {}).ancho >= 36 && (t8.viaBoton || {}).fichaAbierta === true && (t8.viaBoton || {}).hayMover === true && (t8.viaBoton || {}).avisoMover === true && (t8.viaBoton || {}).sinBotonesEnMover === true && (t8.viaBoton || {}).botonesVuelven === true, t8.viaBoton),
       ok("8) Plano: mover a una mesa LIBRE lleva el pedido a la nueva mesa, deja la de origen libre y NO cambia la mesa seleccionada en el TPV", !t8.error && ((t8.tras_mover || {}).loc || []).map((t) => t.mesa).sort().join() === "m2,m3" && ((t8.tras_mover || {}).sel || "") === ((t8.prep || {}).sel || "x"), { prep: t8.prep && { sel: t8.prep.sel, u: t8.prep.u }, tras_mover: t8.tras_mover }),
       ok("8) Plano: fusionar con una mesa OCUPADA pide confirmación con los totales y deja UNA sola mesa con las mismas unidades y el mismo total", !t8.error && ((t8.tras_fusion || {}).loc || []).length === 1 && (((t8.tras_fusion || {}).loc || [])[0] || {}).mesa === "m2" && (((t8.tras_fusion || {}).loc || [])[0] || {}).u === (t8.prep || {}).u && Math.abs((((t8.tras_fusion || {}).loc || [])[0] || {}).total - (t8.prep || {}).total) < 0.02 && ((t8.tras_fusion || {}).confirmaciones || []).some((c) => /^Fusionar mesas: Se juntará la mesa .* con la mesa /.test(c)), t8.tras_fusion),
+      ok("9) Plano: tras mover una cuenta dividida la mesa de origen se ve libre y la de destino ocupada, y NUNCA vuelve a verse la de origen ocupada (antes quedaban dos mesas con el mismo importe)", !t9.error && (t9.mapa || []).length >= 2 && (t9.mapa || []).slice(-1)[0][1] === "m3=state-libre m2=state-ocupada" && !(t9.mapa || []).slice(1).some((r) => /m3=state-ocupada/.test(r[1])), t9.mapa),
+      ok("9) En el TPV ninguna parte de la cuenta dividida vuelve un instante a la mesa de origen al refrescar desde el servidor", !t9.error && (t9.host || []).length >= 2 && !(t9.host || []).slice(1).some((r) => /@m3/.test(r)), t9.host),
+      ok("9) Con la ficha de una mesa abierta, un cambio hecho mientras tanto se aplica al cerrarla (antes el plano se quedaba desfasado)", !t9.error && (t9.conFichaAbierta || {}).ficha === true && (t9.alCerrarFicha || {}).m3 === "state-ocupada" && (t9.alCerrarFicha || {}).m2 === "state-libre", { conFichaAbierta: t9.conFichaAbierta, alCerrarFicha: t9.alCerrarFicha }),
       ok("Al terminar las mesas de prueba quedan limpias", Array.isArray(out.limpio) && out.limpio.length === 0, out.limpio),
     ]);
     clearTimeout(hard); kill();
