@@ -2356,13 +2356,21 @@ body.theme-dark .mesa-state-dot.ocupada {
   background: #111827;
 }
 
-/* Etiqueta «N partes» bajo el importe de una mesa con la cuenta dividida (2026-11-26) */
+/* Etiqueta «N partes» de una mesa con la cuenta dividida (2026-11-26): FUERA del circulo, en la esquina superior izquierda (como el boton «⋯» de la
+   derecha), para no apretar las filas de dentro (nombre, importe, hora y «Sin enviar»). */
 .gestion-obj.table .gestion-parts {
+  position: absolute;
+  top: -10px;
+  left: -10px;
+  z-index: 3;
   font-size: 11px;
   font-weight: 800;
   line-height: 1;
-  padding: 2px 7px;
+  padding: 5px 8px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.88);
-  color: #7c2d12;
+  border: 2px solid #fff;
+  background: #7c2d12;
+  color: #fff;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.4);
 }
