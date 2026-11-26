@@ -13113,7 +13113,23 @@ function moveMesaPendingTicket(sourceUid, targetUid, opts = {}) {
     mesasState.tableMeta = {};
   }
 
-  const sourceTicket = getMesasPendingTicketByUid(mesasState, fromUid);
+  // «Mover solo esta parte» (opts.onlyTicketId, 2026-11-26): una cuenta dividida puede repartirse entre dos mesas. Solo es un movimiento PARCIAL si en la mesa
+  // de origen se queda al menos otra parte; si era la unica, se mueve como siempre.
+  let sourceTicket = getMesasPendingTicketByUid(mesasState, fromUid);
+  let remainingInOrigin = [];
+  const onlyId = String(opts?.onlyTicketId || "").trim();
+  if (onlyId) {
+    const chosen = (Array.isArray(parkedTickets) ? parkedTickets : []).find(
+      (t) => t && !t.paid && String(t.id) === onlyId && String(t.mesaUid || "").trim() === fromUid,
+    );
+    if (!chosen) {
+      toast("Esa parte de la cuenta ya no esta en la mesa.", "warn", "Mesas");
+      return false;
+    }
+    sourceTicket = chosen;
+    remainingInOrigin = getUnpaidSplitSiblingsInMesa(chosen, fromUid);
+  }
+  const partialMove = remainingInOrigin.length > 0;
   if (!sourceTicket) {
     toast("No hay pedido pendiente en la mesa seleccionada.", "warn", "Mesas");
     return false;
@@ -13129,12 +13145,19 @@ function moveMesaPendingTicket(sourceUid, targetUid, opts = {}) {
   if (!sourceTicketId) return false;
 
   mesasState.tableTicketMap[toUid] = sourceTicketId;
-  delete mesasState.tableTicketMap[fromUid];
+  if (partialMove) {
+    // La mesa de origen sigue ocupada: si estaba enlazada a la parte que se va, pasa a la que se queda.
+    if (String(mesasState.tableTicketMap[fromUid] || "") === sourceTicketId) {
+      mesasState.tableTicketMap[fromUid] = String(remainingInOrigin[0]?.id || "");
+    }
+  } else {
+    delete mesasState.tableTicketMap[fromUid];
+  }
 
   const sourceDraft = Array.isArray(mesasState?.draftCartByTable?.[fromUid])
     ? mesasState.draftCartByTable[fromUid]
     : null;
-  if (sourceDraft) {
+  if (sourceDraft && !partialMove) {
     mesasState.draftCartByTable[toUid] = sourceDraft.map((it) => ({ ...it }));
     delete mesasState.draftCartByTable[fromUid];
   }
@@ -13147,16 +13170,18 @@ function moveMesaPendingTicket(sourceUid, targetUid, opts = {}) {
   mesasState.tableMeta[toUid] = {
     ...sourceMeta,
   };
-  mesasState.tableMeta[fromUid] = {
-    ...(mesasState.tableMeta[fromUid] || {}),
-    serviceStage: "",
-  };
+  if (!partialMove) {
+    mesasState.tableMeta[fromUid] = {
+      ...(mesasState.tableMeta[fromUid] || {}),
+      serviceStage: "",
+    };
+  }
 
   const sourceState = String(mesasState?.tableStates?.[fromUid] || "")
     .trim()
     .toLowerCase();
   mesasState.tableStates[toUid] = sourceState || "ocupada";
-  mesasState.tableStates[fromUid] = "libre";
+  mesasState.tableStates[fromUid] = partialMove ? "ocupada" : "libre";
 
   const targetScope = getMesasRoomAndTableByUid(mesasState, toUid);
   const scopeForTarget = {
@@ -13172,7 +13197,7 @@ function moveMesaPendingTicket(sourceUid, targetUid, opts = {}) {
   };
   applyMesaScopeToTicket(sourceTicket, scopeForTarget);
   // Cuenta dividida: las demas partes sin cobrar viajan con la enlazada (antes se quedaban en la mesa de origen).
-  const movedSiblings = getUnpaidSplitSiblingsInMesa(sourceTicket, fromUid);
+  const movedSiblings = partialMove ? [] : getUnpaidSplitSiblingsInMesa(sourceTicket, fromUid);
   movedSiblings.forEach((sib) => {
     applyMesaScopeToTicket(sib, scopeForTarget);
     sib.localRevisionAt = Date.now();
@@ -13181,7 +13206,7 @@ function moveMesaPendingTicket(sourceUid, targetUid, opts = {}) {
   try {
     const splitState = loadSplitSessionState();
     const splitGid = String(getTicketSplitMeta(sourceTicket)?.groupId || "").trim();
-    if (splitState && splitGid && splitState.groupId === splitGid && splitState.mesaUid === fromUid) {
+    if (!partialMove && splitState && splitGid && splitState.groupId === splitGid && splitState.mesaUid === fromUid) {
       saveSplitSessionState({ ...splitState, mesaUid: toUid });
     }
   } catch (_) {}
@@ -13225,6 +13250,58 @@ function moveMesaPendingTicket(sourceUid, targetUid, opts = {}) {
   return true;
 }
 
+// «Mover solo esta parte» (2026-11-26): si la mesa tiene la cuenta dividida en varias partes sin cobrar, pregunta si se mueve TODA la cuenta o SOLO UNA
+// parte (y cual). Devuelve `{}` (toda la cuenta), `{ onlyTicketId }` (una parte) o `null` si se cancela. Sin cuenta dividida no pregunta nada.
+async function askMoveScopeForSplitMesa(sourceUid) {
+  const uid = String(sourceUid || "").trim();
+  const here = (Array.isArray(parkedTickets) ? parkedTickets : []).filter(
+    (t) => t && !t.paid && String(t.mesaUid || "").trim() === uid && getTicketSplitMeta(t),
+  );
+  const groups = new Map();
+  here.forEach((t) => {
+    const g = String(getTicketSplitMeta(t).groupId || "");
+    groups.set(g, [...(groups.get(g) || []), t]);
+  });
+  const parts = [...groups.values()].find((list) => list.length >= 2) || null;
+  if (!parts) return {};
+  parts.sort((a, b) => Number(getTicketSplitMeta(a).part || 0) - Number(getTicketSplitMeta(b).part || 0));
+
+  const choice = await confirmModal(
+    "Cuenta dividida",
+    `Esta mesa tiene la cuenta dividida en ${parts.length} partes sin cobrar. ¿Qué quieres mover?`,
+    { okButtonText: "Toda la cuenta", middleButtonText: "Solo una parte", middleButtonResult: "part", dialogClassName: "wide-dialog" },
+  );
+  if (choice === "part") {
+    const options = parts
+      .map((t, i) => {
+        const m = getTicketSplitMeta(t);
+        return `<button type="button" class="btn" data-pick-part="${i}" style="display:block;width:100%;margin:6px 0;padding:12px;font-size:16px;font-weight:800;">Parte ${m.part}/${m.total} · ${eur(Number(getMesasTicketTotal(t)) || 0)}</button>`;
+      })
+      .join("");
+    let pickedIdx = -1;
+    const pending = confirmModal("¿Qué parte?", `<div id="pickPartList">${options}</div>`, {
+      isHtml: true,
+      hideCancel: true,
+      okButtonText: "Cancelar",
+      dialogClassName: "wide-dialog",
+    });
+    setTimeout(() => {
+      const list = document.getElementById("pickPartList");
+      list?.addEventListener("click", (ev) => {
+        const b = ev.target?.closest?.("[data-pick-part]");
+        if (!b) return;
+        pickedIdx = Number(b.getAttribute("data-pick-part"));
+        document.getElementById("msgOkBtn")?.click();
+      });
+    }, 0);
+    await pending;
+    if (pickedIdx < 0) return null;
+    return { onlyTicketId: String(parts[pickedIdx]?.id || "") };
+  }
+  if (choice) return {};
+  return null;
+}
+
 // Peticion de Sergi (2026-10-06), tras investigar otros TPV (Glop permite
 // fusionar mesas como flujo de primera clase, no un workaround) -- combinar
 // 2 mesas YA ocupadas en una sola cuenta. Distinto de moveMesaPendingTicket
@@ -13248,8 +13325,16 @@ async function mergeMesaPendingTickets(sourceUid, targetUid, opts = {}) {
   const mesasState = loadMesasTablesStateForInline();
   if (!mesasState || typeof mesasState !== "object") return false;
 
-  const sourceTicket = getMesasPendingTicketByUid(mesasState, fromUid);
+  let sourceTicket = getMesasPendingTicketByUid(mesasState, fromUid);
   const targetTicket = getMesasPendingTicketByUid(mesasState, toUid);
+  // «Fusionar solo esta parte» (opts.onlyTicketId, 2026-11-26): solo esa parte de la cuenta dividida se junta con la otra mesa.
+  const mergeOnlyId = String(opts?.onlyTicketId || "").trim();
+  if (mergeOnlyId) {
+    const chosen = (Array.isArray(parkedTickets) ? parkedTickets : []).find(
+      (t) => t && !t.paid && String(t.id) === mergeOnlyId && String(t.mesaUid || "").trim() === fromUid,
+    );
+    if (chosen) sourceTicket = chosen;
+  }
   if (!sourceTicket || !targetTicket) {
     toast("No se pudo fusionar: falta el pedido de alguna de las 2 mesas.", "warn", "Mesas");
     return false;
@@ -13265,10 +13350,16 @@ async function mergeMesaPendingTickets(sourceUid, targetUid, opts = {}) {
   }
 
   // Cuenta dividida en la mesa de origen: TODAS sus partes sin cobrar se fusionan (antes solo la enlazada y el resto se quedaba suelto).
-  const sourceSiblings = getUnpaidSplitSiblingsInMesa(sourceTicket, fromUid).filter(
-    (t) => t !== targetTicket && String(t?.id || "") !== String(targetTicket?.id || ""),
-  );
+  const sourceSiblings = mergeOnlyId
+    ? []
+    : getUnpaidSplitSiblingsInMesa(sourceTicket, fromUid).filter(
+        (t) => t !== targetTicket && String(t?.id || "") !== String(targetTicket?.id || ""),
+      );
   const allSourceTickets = [sourceTicket, ...sourceSiblings];
+  // Si solo se fusiona una parte y en la mesa de origen quedan otras, esa mesa NO queda libre.
+  const remainingAfterMerge = mergeOnlyId
+    ? getUnpaidSplitSiblingsInMesa(sourceTicket, fromUid).filter((t) => t !== targetTicket)
+    : [];
 
   const prevTargetItems = Array.isArray(targetTicket.items)
     ? targetTicket.items.map((it) => ({ ...it }))
@@ -13311,6 +13402,13 @@ async function mergeMesaPendingTickets(sourceUid, targetUid, opts = {}) {
   saveParkedTicketsCache();
 
   const refreshedState = loadMesasTablesStateForInline();
+  if (remainingAfterMerge.length) {
+    // unlinkMesaTicketByTicketId dejo la mesa de origen libre: se vuelve a enlazar con la parte que se queda.
+    refreshedState.tableTicketMap = refreshedState.tableTicketMap || {};
+    refreshedState.tableStates = refreshedState.tableStates || {};
+    refreshedState.tableTicketMap[fromUid] = String(remainingAfterMerge[0]?.id || "");
+    refreshedState.tableStates[fromUid] = "ocupada";
+  }
   // Desde el plano (opts.keepSelection) no se cambia la mesa seleccionada salvo que sea la de origen o la de destino (el carrito cargado
   // de esas dos SI hay que recargarlo: si no, un autoguardado con el carrito antiguo pisaria lo fusionado).
   const keepSelection =
@@ -14416,6 +14514,12 @@ function bindMesasInlineEventsOnce() {
 
       if (MESAS_TRANS_TABLE_MOVE_SOURCE_UID) {
         const sourceUid = MESAS_TRANS_TABLE_MOVE_SOURCE_UID;
+        const moveScope = await askMoveScopeForSplitMesa(sourceUid);
+        if (moveScope === null) {
+          MESAS_TRANS_TABLE_MOVE_SOURCE_UID = "";
+          refreshMesasTransSidebar();
+          return;
+        }
         // Si la mesa destino YA tiene su propio pedido, moveMesaPendingTicket
         // se niega (para no pisarlo) -- en vez de bloquear sin mas,
         // ofrecemos fusionar las 2 en una sola cuenta.
@@ -14432,7 +14536,7 @@ function bindMesasInlineEventsOnce() {
           );
           if (!ok) return;
 
-          const merged = await mergeMesaPendingTickets(sourceUid, uid);
+          const merged = await mergeMesaPendingTickets(sourceUid, uid, moveScope);
           if (merged) {
             MESAS_TRANS_TABLE_MOVE_SOURCE_UID = "";
             renderMesasTransContextBar();
@@ -14442,7 +14546,7 @@ function bindMesasInlineEventsOnce() {
           return;
         }
 
-        const moved = moveMesaPendingTicket(sourceUid, uid);
+        const moved = moveMesaPendingTicket(sourceUid, uid, moveScope);
         if (moved) {
           MESAS_TRANS_TABLE_MOVE_SOURCE_UID = "";
           renderMesasTransContextBar();
@@ -14540,6 +14644,8 @@ function bindMesasInlineEventsOnce() {
           const dstTicket = getMesasPendingTicketByUid(st, targetUid);
           const srcName = nameOf(sourceUid);
           const dstName = nameOf(targetUid);
+          const moveScope = await askMoveScopeForSplitMesa(sourceUid);
+          if (moveScope === null) return;
           if (dstTicket) {
             if (getUnpaidSplitSiblingsInMesa(dstTicket, targetUid).length) {
               toast(
@@ -14549,7 +14655,10 @@ function bindMesasInlineEventsOnce() {
               );
               return;
             }
-            const srcTotal = [srcTicket, ...getUnpaidSplitSiblingsInMesa(srcTicket, sourceUid)].reduce(
+            const srcPartTicket = moveScope.onlyTicketId
+              ? (Array.isArray(parkedTickets) ? parkedTickets : []).find((t) => String(t?.id) === moveScope.onlyTicketId) || srcTicket
+              : srcTicket;
+            const srcTotal = (moveScope.onlyTicketId ? [srcPartTicket] : [srcTicket, ...getUnpaidSplitSiblingsInMesa(srcTicket, sourceUid)]).reduce(
               (sum, t) => sum + (Number(getMesasTicketTotal(t)) || 0),
               0,
             );
@@ -14560,7 +14669,7 @@ function bindMesasInlineEventsOnce() {
               { dialogClassName: "wide-dialog" },
             );
             if (!ok) return;
-            const merged = await mergeMesaPendingTickets(sourceUid, targetUid, { keepSelection: true });
+            const merged = await mergeMesaPendingTickets(sourceUid, targetUid, { keepSelection: true, ...moveScope });
             if (merged) {
               refreshMesasTransSidebar?.();
               renderCart();
@@ -14576,7 +14685,7 @@ function bindMesasInlineEventsOnce() {
             );
             if (!ok) return;
           }
-          if (moveMesaPendingTicket(sourceUid, targetUid, { keepSelection: true })) {
+          if (moveMesaPendingTicket(sourceUid, targetUid, { keepSelection: true, ...moveScope })) {
             refreshMesasTransSidebar?.();
             renderCart();
             toast(`Cuenta movida de ${srcName} a ${dstName}.`, "ok", "Mesas");
@@ -25619,7 +25728,15 @@ async function markParkedTicketAsPaidByIndex(
   }
 
   if (splitMeta) {
-    const nextPart = Number(splitMeta.part || 0) + 1;
+    // La siguiente parte es la siguiente SIN COBRAR de esta misma mesa (una cuenta dividida puede estar repartida entre dos mesas).
+    const payMesaUid = String(ticket?.mesaUid || "").trim();
+    const pendingHere = getSplitGroupTicketsOrdered(splitMeta.groupId, payMesaUid)
+      .map((e) => Number(e.meta?.part || 0))
+      .filter((p) => p > 0 && p !== Number(splitMeta.part || 0));
+    const afterThis = pendingHere.filter((p) => p > Number(splitMeta.part || 0));
+    const nextPart = pendingHere.length
+      ? Math.min(...(afterThis.length ? afterThis : pendingHere))
+      : Number(splitMeta.total || 0) + 1;
     const totalParts = Number(splitMeta.total || 0) || 0;
 
     toast(
@@ -25628,7 +25745,7 @@ async function markParkedTicketAsPaidByIndex(
       "Dividir",
     );
 
-    if (nextPart > Number(splitMeta.total || 0)) {
+    if (!pendingHere.length) {
       clearSplitSessionState();
       toast(
         "Division completada. Volviendo al mapa de mesas.",
@@ -33759,7 +33876,7 @@ function closePostPayModal() {
     const splitState = loadSplitSessionState();
     const hasPendingSplitPart =
       !!splitState &&
-      findPendingSplitTicketIndex(splitState.groupId, splitState.nextPart) >= 0;
+      findPendingSplitTicketIndex(splitState.groupId, splitState.nextPart, splitState.mesaUid) >= 0;
 
     setMesasInlineView(hasPendingSplitPart ? "transacciones" : "mapa", {
       persist: false,
@@ -50781,9 +50898,11 @@ function shouldSkipSplitIncidentLog(ticketLike) {
   return !!getTicketSplitMeta(ticketLike);
 }
 
-function getSplitGroupTicketsOrdered(groupId) {
+function getSplitGroupTicketsOrdered(groupId, mesaUid = "") {
   const gid = String(groupId || "").trim();
   if (!gid) return [];
+  // Una cuenta dividida puede estar repartida entre dos mesas («mover solo esta parte»): con `mesaUid` solo cuentan las partes de ESA mesa.
+  const mesaFilter = String(mesaUid || "").trim();
 
   return (Array.isArray(parkedTickets) ? parkedTickets : [])
     .map((ticket, idx) => ({
@@ -50795,7 +50914,8 @@ function getSplitGroupTicketsOrdered(groupId) {
       (entry) =>
         !entry.ticket?.paid &&
         entry.meta &&
-        String(entry.meta.groupId || "") === gid,
+        String(entry.meta.groupId || "") === gid &&
+        (!mesaFilter || String(entry.ticket?.mesaUid || "").trim() === mesaFilter),
     )
     .sort((a, b) => Number(a.meta.part || 0) - Number(b.meta.part || 0));
 }
@@ -50806,7 +50926,7 @@ function getCurrentSplitNavigationState(ticket) {
     return { enabled: false, prevIndex: -1, nextIndex: -1 };
   }
 
-  const ordered = getSplitGroupTicketsOrdered(meta.groupId);
+  const ordered = getSplitGroupTicketsOrdered(meta.groupId, String(ticket?.mesaUid || "").trim());
   if (!ordered.length) {
     return { enabled: false, prevIndex: -1, nextIndex: -1 };
   }
@@ -50880,10 +51000,11 @@ function clearSplitSessionState() {
   } catch {}
 }
 
-function findPendingSplitTicketIndex(groupId, part) {
+function findPendingSplitTicketIndex(groupId, part, mesaUid = "") {
   const gid = String(groupId || "").trim();
   const wanted = Number(part || 0) || 0;
   if (!gid || wanted <= 0) return -1;
+  const mesaFilter = String(mesaUid || "").trim();
 
   return (Array.isArray(parkedTickets) ? parkedTickets : []).findIndex((t) => {
     if (t?.paid) return false;
@@ -50892,6 +51013,7 @@ function findPendingSplitTicketIndex(groupId, part) {
     // con el piloto de operaciones el autoguardado la daba por modificada y creaba un pedido DUPLICADO de esa
     // parte, dejaba la parte 2 sin abrir y reservas de stock sueltas (investigado 2026-11-10).
     if (t?.closingInProgress) return false;
+    if (mesaFilter && String(t?.mesaUid || "").trim() !== mesaFilter) return false;
     const meta = getTicketSplitMeta(t);
     return (
       meta &&
@@ -50920,7 +51042,7 @@ function tryResumePendingSplitSession(opts = {}) {
     if (selectedUid && selectedUid !== state.mesaUid) return false;
   }
 
-  const idx = findPendingSplitTicketIndex(state.groupId, state.nextPart);
+  const idx = findPendingSplitTicketIndex(state.groupId, state.nextPart, state.mesaUid);
   if (idx < 0) return false;
 
   SPLIT_RESUME_IN_FLIGHT = true;
@@ -52253,13 +52375,16 @@ async function confirmSplitTicket() {
       return;
     }
 
+    const loadedMesaForUnify = String(loaded?.mesaUid || "").trim();
     const sameGroupEntries = (Array.isArray(parkedTickets) ? parkedTickets : [])
       .map((ticket, idx) => ({ ticket, idx, meta: getTicketSplitMeta(ticket) }))
       .filter(
         (entry) =>
           entry.meta &&
           String(entry.meta.groupId || "") ===
-            String(currentSplitMeta.groupId || ""),
+            String(currentSplitMeta.groupId || "") &&
+          // solo las partes de ESTA mesa (la cuenta puede estar repartida entre dos mesas)
+          String(entry.ticket?.mesaUid || "").trim() === loadedMesaForUnify,
       );
 
     if (!sameGroupEntries.length) {

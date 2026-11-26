@@ -403,6 +403,78 @@ let kill = () => {};
       return r;
     });
 
+    // ---------- 12) mover SOLO UNA PARTE de una cuenta dividida a otra mesa (la cuenta queda repartida entre dos mesas)
+    out.t12 = {};
+    try {
+      const dividirM3 = async () => win.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        await window.__clean();
+        __sel("tut-room-1::m3"); await sleep(800);
+        addToCart(__prods[0]); addToCart(__prods[1]); addToCart(__prods[0]); addToCart(__prods[2]); await sleep(6000);
+        document.getElementById("parkedSplitBtn").click();
+        for (let i = 0; i < 40 && document.getElementById("splitTicketOverlay").classList.contains("hidden"); i++) await sleep(300);
+        const sel = document.getElementById("splitTicketModeSelect"); sel.value = "items"; sel.dispatchEvent(new Event("change"));
+        splitTicketPartsCount = 2; if (splitTicketPartsInput) splitTicketPartsInput.value = "2"; splitTicketMode = "items";
+        initSplitItemsMatrixFromCurrentCart();
+        splitTicketItemsMatrix = cart.map((l, i) => (i % 2 === 0 ? [Number(l.qty), 0] : [0, Number(l.qty)]));
+        await confirmSplitTicket(); await sleep(2500);
+        const partes = window.__mine().map((t) => ({ id: String(t.id), name: String(t.name), mesa: String(t.mesaUid).slice(-2), part: t.splitPart, total: Number(t.total) }));
+        return { partes };
+      });
+      const s1 = await dividirM3();
+      out.t12.s1_antes = s1;
+      const part2 = s1.partes.find((p) => p.part === 2);
+      out.t12.s1_pregunta = await win.evaluate(async (id2) => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const real = confirmModal; let n = 0;
+        confirmModal = (t, x, o) => { n++; if (n === 1) return Promise.resolve("part"); return real(t, x, o); };
+        const p = askMoveScopeForSplitMesa("tut-room-1::m3");
+        await sleep(500);
+        const hay = document.querySelectorAll("#pickPartList [data-pick-part]").length;
+        const botones = Array.from(document.querySelectorAll("#pickPartList [data-pick-part]")).map((b) => b.textContent.trim());
+        const b2 = document.querySelector('#pickPartList [data-pick-part="1"]'); if (b2) b2.click();
+        const r = await p; confirmModal = real;
+        return { r, hay, botones, esperado: id2 };
+      }, part2.id);
+      out.t12.s1_mover = await win.evaluate(async (id2) => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const ok = moveMesaPendingTicket("tut-room-1::m3", "tut-room-1::m2", { keepSelection: true, onlyTicketId: id2 });
+        await sleep(3000);
+        const st = loadMesasTablesStateForInline();
+        const p1 = window.__mine().find((t) => t.splitPart === 1), p2 = window.__mine().find((t) => t.splitPart === 2);
+        const nav1 = getCurrentSplitNavigationState(p1), nav2 = getCurrentSplitNavigationState(p2);
+        return {
+          ok, loc: window.__loc().map((t) => t.mesa + ":" + String(t.nombre).slice(-5)).sort(),
+          enlaceM3: String((st.tableTicketMap || {})["tut-room-1::m3"] || ""), enlaceM2: String((st.tableTicketMap || {})["tut-room-1::m2"] || ""),
+          idP1: String(p1.id), idP2: String(p2.id), estadoM3: (st.tableStates || {})["tut-room-1::m3"],
+          navP1: { prev: nav1.prevIndex, next: nav1.nextIndex }, navP2: { prev: nav2.prevIndex, next: nav2.nextIndex },
+          grupoEntero: getSplitGroupTicketsOrdered(p1.splitGroupId).length, soloM3: getSplitGroupTicketsOrdered(p1.splitGroupId, "tut-room-1::m3").length,
+        };
+      }, part2.id);
+      out.t12.s1_revertir = await win.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        __sel("tut-room-1::m3"); await sleep(1500);
+        document.getElementById("parkedSplitBtn").click();
+        for (let i = 0; i < 40 && document.getElementById("splitTicketOverlay").classList.contains("hidden"); i++) await sleep(300);
+        splitTicketPartsCount = 1; if (splitTicketPartsInput) splitTicketPartsInput.value = "1";
+        await confirmSplitTicket(); await sleep(2500);
+        return { error: splitTicketError ? splitTicketError.textContent : "", loc: window.__loc().map((t) => t.mesa + ":" + String(t.nombre).slice(-6)).sort() };
+      });
+      const s2 = await dividirM3();
+      const p2b = s2.partes.find((p) => p.part === 2);
+      out.t12.s2 = await win.evaluate(async (id2) => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        __sel("tut-room-1::m1"); await sleep(800); addToCart(__prods[3]); addToCart(__prods[4]); await sleep(6000);
+        const suma = (k, d) => Math.round(window.__loc().reduce((a, t) => a + t[k], 0) * d) / d;
+        const antes = { u: suma("u", 1000), total: suma("total", 100) };
+        const ok = await mergeMesaPendingTickets("tut-room-1::m3", "tut-room-1::m1", { keepSelection: true, onlyTicketId: id2 });
+        await sleep(3500);
+        const st = loadMesasTablesStateForInline();
+        const despues = { u: suma("u", 1000), total: suma("total", 100) };
+        return { ok, antes, despues, loc: window.__loc().map((t) => t.mesa + ":" + t.n).sort(), estadoM3: (st.tableStates || {})["tut-room-1::m3"], enM3: (getMesasPendingTicketByUid(st, "tut-room-1::m3") || {}).name || null };
+      }, p2b.id);
+    } catch (e) { out.t12.error = String(e && e.message || e).slice(0, 300); }
+
     // ---------- limpieza
     await win.evaluate(async () => { await window.__clean(); });
     out.limpio = await win.evaluate(() => __loc());
@@ -413,7 +485,7 @@ let kill = () => {};
     try { await Promise.race([app.evaluate(({ session }) => session.defaultSession.flushStorageData()), sleep(4000)]); } catch {}
     console.log(JSON.stringify(out, null, 1));
     const ok = (name, cond, extra) => [name, !!cond, extra === undefined ? "" : typeof extra === "string" ? extra : JSON.stringify(extra)];
-    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {}, t7 = out.t7 || {}, t8 = out.t8 || {}, t9 = out.t9 || {}, t10 = out.t10 || {}, t11 = out.t11 || {};
+    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {}, t7 = out.t7 || {}, t8 = out.t8 || {}, t9 = out.t9 || {}, t10 = out.t10 || {}, t11 = out.t11 || {}, t12 = out.t12 || {};
     const c5 = t4.c5 || {}, c9 = t4.c9 || {}, c11 = t4.c11 || {};
     const verdict = require("./battery/verdict.js").emitVerdict([
       ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || ""),
@@ -451,6 +523,11 @@ let kill = () => {};
       ok("11) Avisos: los de éxito redundantes (dividir, mover/fusionar, guardar/borrar pedido, interruptores de Opciones) no salen", (t11.silenciados) === 0, t11),
       ok("11) Avisos: los de cobro, sincronización manual, importación de opciones, errores y cambios hechos desde otro terminal SÍ salen", t11.cobro === 1 && t11.sync === 1 && t11.stock === 1 && t11.precio === 1 && t11.importadas === 1 && t11.error === 1 && t11.otroTerminal === 1, t11),
       ok("11) Avisos: uno idéntico repetido 4 veces sale UNA vez, nunca hay más de 3 a la vez y un error no se retira por el tope si hay otros", t11.repetido === 1 && t11.tope === 3 && (t11.conErrorTope || {}).n === 3 && (t11.conErrorTope || {}).hayError === true, t11),
+      ok("12) Cuenta dividida: el cuadro pregunta «toda la cuenta o una parte» y, con «una parte», deja elegir cual (devuelve el pedido de esa parte)", !t12.error && (t12.s1_pregunta || {}).hay === 2 && !!(t12.s1_pregunta || {}).r && (t12.s1_pregunta || {}).r.onlyTicketId === (t12.s1_pregunta || {}).esperado, t12.s1_pregunta),
+      ok("12) Mover SOLO una parte: la 1/2 se queda en M3 y la 2/2 pasa a M2; cada mesa enlaza con su parte y M3 sigue ocupada", !t12.error && JSON.stringify((t12.s1_mover || {}).loc) === JSON.stringify(["m2:(2/2)", "m3:(1/2)"]) && (t12.s1_mover || {}).enlaceM3 === (t12.s1_mover || {}).idP1 && (t12.s1_mover || {}).enlaceM2 === (t12.s1_mover || {}).idP2 && (t12.s1_mover || {}).estadoM3 === "ocupada", t12.s1_mover),
+      ok("12) Con la cuenta repartida entre dos mesas, las flechas del carrito no saltan a la parte de la OTRA mesa (el grupo tiene 2 partes pero cada mesa solo ve la suya)", !t12.error && (t12.s1_mover || {}).grupoEntero === 2 && (t12.s1_mover || {}).soloM3 === 1 && ((t12.s1_mover || {}).navP1 || {}).prev < 0 && ((t12.s1_mover || {}).navP1 || {}).next < 0 && ((t12.s1_mover || {}).navP2 || {}).prev < 0 && ((t12.s1_mover || {}).navP2 || {}).next < 0, t12.s1_mover),
+      ok("12) Revertir la división desde M3 solo une lo de M3: la parte de M2 no se toca", !t12.error && (t12.s1_revertir || {}).error === "" && ((t12.s1_revertir || {}).loc || []).some((l) => /^m2:.*\(2\/2\)$/.test(l)) && ((t12.s1_revertir || {}).loc || []).some((l) => /^m3:/.test(l)), t12.s1_revertir),
+      ok("12) Fusionar SOLO una parte con otra mesa ocupada: la mesa de origen sigue ocupada con la parte que se queda y no se pierden unidades ni importe", !t12.error && (t12.s2 || {}).ok === true && (t12.s2 || {}).estadoM3 === "ocupada" && /\(1\/2\)$/.test(String((t12.s2 || {}).enM3 || "")) && ((t12.s2 || {}).despues || {}).u === ((t12.s2 || {}).antes || {}).u && Math.abs(((t12.s2 || {}).despues || {}).total - ((t12.s2 || {}).antes || {}).total) < 0.02, t12.s2),
       ok("Al terminar las mesas de prueba quedan limpias", Array.isArray(out.limpio) && out.limpio.length === 0, out.limpio),
     ]);
     clearTimeout(hard); kill();
