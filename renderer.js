@@ -66678,6 +66678,10 @@ async function openDrawerNow({ source = "MAIN" } = {}) {
   }
 }
 
+// Si la clave de un cliente no puede leer las series (403/404), la comprobacion de conexion vuelve a la consulta de siempre (una factura) y se queda con ella:
+// asi una restriccion de permisos nunca hace creer al TPV que no hay conexion.
+let __fsPingUseFacturas = false;
+
 async function checkFSOnline() {
   if (isTutorialGlobalPauseActive()) {
     return navigator.onLine ? true : false;
@@ -66700,7 +66704,9 @@ async function checkFSOnline() {
     }
 
     const base = cfg.baseUrl.replace(/\/+$/, "");
-    const url = `${base}/facturaclientes?limit=1`;
+    // Comprobacion de conexion con FacturaScripts: una tabla PEQUEÑA (series). Antes pedia una factura (`facturaclientes?limit=1`) cada 5 s en cada TPV:
+    // la tabla de facturas es la mas grande y Lumi (2 TPV) hacia ~1.300 de esas peticiones en 3 horas contra su FacturaScripts, ya lento (2026-11-26).
+    const url = __fsPingUseFacturas ? `${base}/facturaclientes?limit=1` : `${base}/series?limit=1`;
 
     const controller = new AbortController();
     // 8s, no 3s: si justo en ese momento hay una recarga completa en marcha
@@ -66717,6 +66723,17 @@ async function checkFSOnline() {
         cache: "no-store",
         signal: controller.signal,
       });
+
+      if ((r.status === 403 || r.status === 404) && !__fsPingUseFacturas) {
+        __fsPingUseFacturas = true;
+        const r2 = await fetch(`${base}/facturaclientes?limit=1`, {
+          method: "GET",
+          headers: { Accept: "application/json", Token: cfg.apiKey },
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        return r2.ok;
+      }
 
       if (r.status === 429) {
         triggerApi429Cooldown(
@@ -66900,6 +66917,30 @@ async function startOnlineMonitor() {
     }
   }
 
+  // Ritmo de la comprobacion (2026-11-26, Lumi: su FacturaScripts va lento y esta era la peticion mas repetida): cada 5 s mientras haya dudas
+  // (sin conexion o inestable) y cada 10 s cuando todo va bien; con la ventana oculta, una vez por minuto. Al volver a verse, se comprueba al momento.
+  const ONLINE_POLL_FAST_MS = 5000;
+  const ONLINE_POLL_STABLE_MS = 10000;
+  const ONLINE_POLL_HIDDEN_MS = 60000;
+  let lastTickAt = 0;
+  function nextOnlineDelayMs() {
+    if (typeof document !== "undefined" && document.hidden) return ONLINE_POLL_HIDDEN_MS;
+    if (prevOk === true && consecutiveOfflineFails === 0) return ONLINE_POLL_STABLE_MS;
+    return ONLINE_POLL_FAST_MS;
+  }
+  async function scheduleOnlineTick() {
+    lastTickAt = Date.now();
+    try {
+      await tick();
+    } catch {}
+    setTimeout(scheduleOnlineTick, nextOnlineDelayMs());
+  }
+  try {
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && Date.now() - lastTickAt > ONLINE_POLL_FAST_MS) tick().catch(() => {});
+    });
+  } catch {}
+
   async function tickImpl() {
     const ok = await checkFSOnline().catch(() => false);
 
@@ -67064,7 +67105,8 @@ async function startOnlineMonitor() {
   }
 
   await tick();
-  setInterval(tick, 5000);
+  lastTickAt = Date.now();
+  setTimeout(scheduleOnlineTick, nextOnlineDelayMs());
 }
 
 // ===== [08][Z08.2] Cola offline: envio y encolado de facturas =====

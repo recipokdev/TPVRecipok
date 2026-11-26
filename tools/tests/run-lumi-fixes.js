@@ -533,6 +533,40 @@ let kill = () => {};
     } catch (e) { out.t13.error = String(e && e.message || e).slice(0, 300); }
     finally { await win.evaluate(async () => { try { setMesasInlineView("transacciones", { persist: false }); } catch (e) {} }); }
 
+    // ---------- 14) comprobacion de conexion: pide una tabla pequeña (series) cada ~10 s si todo va bien, no la de facturas cada 5 s; y un corte se sigue detectando
+    out.t14 = await win.evaluate(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const r = {};
+      const urls = [];
+      const real = window.fetch;
+      window.fetch = function (u, o) { urls.push([Date.now(), String(u)]); return real.apply(this, arguments); };
+      await sleep(36000);
+      const pings = urls.filter((x) => /\/series\?limit=1/.test(x[1])).map((x) => x[0]);
+      r.pings = pings.length;
+      r.facturas = urls.filter((x) => /\/facturaclientes\?limit=1/.test(x[1])).length;
+      const gaps = pings.slice(1).map((t, i) => Math.round((t - pings[i]) / 100) / 10);
+      r.huecos = gaps;
+      // corte: la consulta de conexion falla
+      window.fetch = function (u, o) { urls.push([Date.now(), String(u)]); if (/\/series\?limit=1/.test(String(u))) return Promise.reject(new TypeError("Failed to fetch")); return real.apply(this, arguments); };
+      const t0 = Date.now(); r.offlineTras = null;
+      for (let i = 0; i < 60 && r.offlineTras === null; i++) { await sleep(500); if (TPV_STATE.offline === true) r.offlineTras = Math.round((Date.now() - t0) / 1000); }
+      window.fetch = real;
+      const t1 = Date.now(); r.onlineTras = null;
+      for (let i = 0; i < 80 && r.onlineTras === null; i++) { await sleep(500); if (TPV_STATE.offline === false) r.onlineTras = Math.round((Date.now() - t1) / 1000); }
+      // permisos: si la clave no puede leer las series (403), vuelve a la consulta de siempre y NO se da por desconectado
+      r.fallback = await (async () => {
+        __fsPingUseFacturas = false;
+        const seen = [];
+        window.fetch = function (u, o) { const url = String(u); seen.push(url); if (/\/series\?limit=1/.test(url)) return Promise.resolve(new Response("{}", { status: 403 })); return real.apply(this, arguments); };
+        for (let i = 0; i < 40 && !seen.some((x) => /facturaclientes\?limit=1/.test(x)); i++) await sleep(500);
+        await sleep(1500);
+        const res = { facturasUsadas: seen.some((x) => /facturaclientes\?limit=1/.test(x)), desconectado: TPV_STATE.offline === true, usaFacturas: __fsPingUseFacturas === true };
+        window.fetch = real; __fsPingUseFacturas = false;
+        return res;
+      })();
+      return r;
+    });
+
     // ---------- limpieza
     await win.evaluate(async () => { await window.__clean(); });
     out.limpio = await win.evaluate(() => __loc());
@@ -543,7 +577,7 @@ let kill = () => {};
     try { await Promise.race([app.evaluate(({ session }) => session.defaultSession.flushStorageData()), sleep(4000)]); } catch {}
     console.log(JSON.stringify(out, null, 1));
     const ok = (name, cond, extra) => [name, !!cond, extra === undefined ? "" : typeof extra === "string" ? extra : JSON.stringify(extra)];
-    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {}, t7 = out.t7 || {}, t8 = out.t8 || {}, t9 = out.t9 || {}, t10 = out.t10 || {}, t11 = out.t11 || {}, t12 = out.t12 || {}, t13 = out.t13 || {};
+    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {}, t7 = out.t7 || {}, t8 = out.t8 || {}, t9 = out.t9 || {}, t10 = out.t10 || {}, t11 = out.t11 || {}, t12 = out.t12 || {}, t13 = out.t13 || {}, t14 = out.t14 || {};
     const c5 = t4.c5 || {}, c9 = t4.c9 || {}, c11 = t4.c11 || {};
     const verdict = require("./battery/verdict.js").emitVerdict([
       ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || ""),
@@ -590,6 +624,10 @@ let kill = () => {};
       ok("13) Preparar cuentas separadas: el plano enseña la mesa ocupada con la etiqueta «3 partes» y la ficha de una mesa LIBRE trae el botón «Preparar cuentas separadas»", !t13.error && (t13.plano || {}).clase === "state-ocupada" && (t13.plano || {}).partes === "3 partes" && (t13.boton || {}).hayPreparar === true, { plano: t13.plano, boton: t13.boton }),
       ok("13) Las cuentas preparadas (vacías) no se pierden: sobreviven a un refresco desde el servidor y están guardadas en el servidor", !t13.error && (t13.servidor || {}).locales === 3 && ((t13.servidor || {}).remotas || []).length === 3, t13.servidor),
       ok("13) Al abrir la mesa se carga la cuenta 1/3, se le añade un producto sin tocar las demás, y las flechas llevan a las otras cuentas de la misma mesa", !t13.error && /\(1\/3\)$/.test((t13.abrir || {}).cargada || "") && JSON.stringify(((t13.abrir || {}).lineas || [])) === JSON.stringify(["(1/3):1", "(2/3):0", "(3/3):0"]) && ((t13.abrir || {}).nav || {}).next >= 0, t13.abrir),
+      ok("14) Conexión: el TPV comprueba FacturaScripts con una tabla pequeña (series) y ya NO pide una factura cada 5 s", (t14.pings || 0) >= 2 && t14.facturas === 0, t14),
+      ok("14) Conexión: con todo bien comprueba cada ~10 s (no cada 5 s)", (t14.huecos || []).length >= 1 && (t14.huecos || []).every((g) => g >= 8 && g <= 14), t14.huecos),
+      ok("14) Conexión: si falla la comprobación, el TPV detecta el corte en menos de 25 s y recupera la conexión en menos de 20 s al volver", t14.offlineTras !== null && t14.offlineTras <= 25 && t14.onlineTras !== null && t14.onlineTras <= 20, { offlineTras: t14.offlineTras, onlineTras: t14.onlineTras }),
+      ok("14) Conexión: si la clave de un cliente no puede leer las series (403), el TPV vuelve a la consulta de siempre y no se da por desconectado", ((t14.fallback || {}).facturasUsadas === true) && ((t14.fallback || {}).desconectado === false) && ((t14.fallback || {}).usaFacturas === true), t14.fallback),
       ok("Al terminar las mesas de prueba quedan limpias", Array.isArray(out.limpio) && out.limpio.length === 0, out.limpio),
     ]);
     clearTimeout(hard); kill();
