@@ -567,6 +567,70 @@ let kill = () => {};
       return r;
     });
 
+    // ---------- 15) cobrar o borrar UNA parte de una cuenta dividida NO deja la mesa libre mientras queden partes sin cobrar
+    out.t15 = {};
+    try {
+      out.t15 = await win.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const uid = "tut-room-1::m4";
+        const r = {};
+        await window.__clean();
+        setMesasInlineView("mapa", { persist: false }); await sleep(1500);
+        const created = await prepareSplitMesa(uid, 3);
+        r.creadas = created ? created.length : 0;
+        const snap = () => { const st = loadMesasTablesStateForInline(); return { estado: String((st.tableStates || {})[uid] || ""), enlace: String((st.tableTicketMap || {})[uid] || ""), etapa: String(((st.tableMeta || {})[uid] || {}).serviceStage || "") }; };
+        const mine = () => parkedTickets.filter((x) => !x.paid && String(x.mesaUid || "") === uid);
+        const byPart = (n) => parkedTickets.find((x) => String(x.mesaUid || "") === uid && Number(x.splitPart) === n);
+        const p1 = created[0], p2 = created[1], p3 = created[2];
+        r.inicio = snap();
+        // cobro optimista + desvinculo de la parte 1 (lo que hace el cobro real)
+        const opt = applyOptimisticMesaCobrada(p1);
+        r.optimista = { keptOccupied: !!(opt && opt.keptOccupied), tras: snap() };
+        p1.paid = true; saveParkedTicketsCache();
+        unlinkMesaTicketByTicketId(p1.id, p1);
+        r.trasCobrar1 = Object.assign(snap(), { quedan: mine().length, esperado: String(p2.id) });
+        // borrar la parte 2 (queda la 3)
+        p2.paid = true; saveParkedTicketsCache();
+        unlinkMesaTicketByTicketId(p2.id, p2);
+        r.trasCobrar2 = Object.assign(snap(), { quedan: mine().length, esperado: String(p3.id) });
+        // cobrar la ultima: ahora SI queda libre
+        applyOptimisticMesaCobrada(p3);
+        p3.paid = true; saveParkedTicketsCache();
+        unlinkMesaTicketByTicketId(p3.id, p3);
+        r.trasCobrar3 = Object.assign(snap(), { quedan: mine().length });
+        // El «cobro» de esta prueba es solo local: se desmarcan para que la limpieza las borre tambien del servidor (si no, reaparecian en la siguiente ejecucion).
+        [p1, p2, p3].forEach((x) => { x.paid = false; }); saveParkedTicketsCache();
+        r.nombres = created.map((x) => String(x.name));
+        return r;
+      });
+    } catch (e) { out.t15.error = String(e && e.message || e).slice(0, 300); }
+    finally { await win.evaluate(async () => { try { await window.__clean(); setMesasInlineView("transacciones", { persist: false }); } catch (e) {} }); }
+
+    // ---------- 16) iniciar un pedido con UN solo TPV no avisa de «otro terminal» (el numero de ticket de pantalla aun vacio en el servidor no es un cambio ajeno)
+    out.t16 = {};
+    try {
+      out.t16 = await win.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        await window.__clean();
+        const vistos = []; const ot = window.toast;
+        window.toast = function (...a) { vistos.push(String(a[0])); return ot.apply(this, a); };
+        const r = {};
+        try {
+          // (mesa, productos, pausa entre productos): 0,5 s = un cajero rapido, cuando el servidor aun devuelve el pedido con UN producto (eco de su propio guardado)
+          for (const [mesa, n, pausa] of [["tut-room-1::m1", 1, 1200], ["tut-room-1::m2", 3, 1200], ["tut-room-1::m1", 4, 500]]) {
+            window.__sel(mesa); await sleep(800);
+            for (let i = 0; i < n; i++) { addToCart(window.__prods[i]); await sleep(pausa); }
+            await sleep(7000);
+          }
+          r.cart = cart.length;
+        } finally { window.toast = ot; }
+        r.avisosOtroTerminal = vistos.filter((x) => /desde otro terminal/i.test(x));
+        r.todos = vistos.slice(0, 6);
+        await window.__clean();
+        return r;
+      });
+    } catch (e) { out.t16.error = String(e && e.message || e).slice(0, 300); }
+
     // ---------- limpieza
     await win.evaluate(async () => { await window.__clean(); });
     out.limpio = await win.evaluate(() => __loc());
@@ -577,7 +641,7 @@ let kill = () => {};
     try { await Promise.race([app.evaluate(({ session }) => session.defaultSession.flushStorageData()), sleep(4000)]); } catch {}
     console.log(JSON.stringify(out, null, 1));
     const ok = (name, cond, extra) => [name, !!cond, extra === undefined ? "" : typeof extra === "string" ? extra : JSON.stringify(extra)];
-    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {}, t7 = out.t7 || {}, t8 = out.t8 || {}, t9 = out.t9 || {}, t10 = out.t10 || {}, t11 = out.t11 || {}, t12 = out.t12 || {}, t13 = out.t13 || {}, t14 = out.t14 || {};
+    const t1 = out.t1 || {}, t2 = out.t2 || {}, t3 = out.t3 || {}, t4 = out.t4 || {}, t5 = out.t5 || {}, t6 = out.t6 || {}, t7 = out.t7 || {}, t8 = out.t8 || {}, t9 = out.t9 || {}, t10 = out.t10 || {}, t11 = out.t11 || {}, t12 = out.t12 || {}, t13 = out.t13 || {}, t14 = out.t14 || {}, t15 = out.t15 || {}, t16 = out.t16 || {};
     const c5 = t4.c5 || {}, c9 = t4.c9 || {}, c11 = t4.c11 || {};
     const verdict = require("./battery/verdict.js").emitVerdict([
       ok("La prueba terminó sin errores", !out.ERROR, out.ERROR || ""),
@@ -628,6 +692,10 @@ let kill = () => {};
       ok("14) Conexión: con todo bien comprueba cada ~10 s (no cada 5 s)", (t14.huecos || []).length >= 1 && (t14.huecos || []).every((g) => g >= 8 && g <= 14), t14.huecos),
       ok("14) Conexión: si falla la comprobación, el TPV detecta el corte en menos de 25 s y recupera la conexión en menos de 20 s al volver", t14.offlineTras !== null && t14.offlineTras <= 25 && t14.onlineTras !== null && t14.onlineTras <= 20, { offlineTras: t14.offlineTras, onlineTras: t14.onlineTras }),
       ok("14) Conexión: si la clave de un cliente no puede leer las series (403), el TPV vuelve a la consulta de siempre y no se da por desconectado", ((t14.fallback || {}).facturasUsadas === true) && ((t14.fallback || {}).desconectado === false) && ((t14.fallback || {}).usaFacturas === true), t14.fallback),
+      ok("15) Cobrar una parte de una cuenta dividida NO libera la mesa mientras queden partes sin cobrar: sigue ocupada, conserva su etapa de servicio y se re-enlaza con la siguiente parte", !t15.error && t15.creadas === 3 && (t15.optimista || {}).keptOccupied === true && (t15.optimista.tras || {}).estado === "ocupada" && (t15.trasCobrar1 || {}).estado === "ocupada" && t15.trasCobrar1.enlace === t15.trasCobrar1.esperado && t15.trasCobrar1.quedan === 2 && t15.trasCobrar1.etapa === t15.inicio.etapa && (t15.trasCobrar2 || {}).estado === "ocupada" && t15.trasCobrar2.enlace === t15.trasCobrar2.esperado && t15.trasCobrar2.quedan === 1, t15),
+      ok("15) Al cobrar la ULTIMA parte la mesa SÍ queda libre y sin enlace", !t15.error && (t15.trasCobrar3 || {}).estado === "libre" && (t15.trasCobrar3 || {}).enlace === "" && (t15.trasCobrar3 || {}).quedan === 0, t15.trasCobrar3),
+      ok("15) Las cuentas preparadas se llaman con el numero corto de ticket (Ticket #123 (1/3)), no con el id interno larguisimo", !t15.error && (t15.nombres || []).length === 3 && t15.nombres.every((n, i) => /^Ticket #\d{1,4} \([123]\/3\)$/.test(n) && n.endsWith("(" + (i + 1) + "/3)")), t15.nombres),
+      ok("16) Iniciar un pedido (1 o varios productos seguidos) con un solo TPV NO enseña «Esta mesa se actualizó desde otro terminal»", !t16.error && t16.cart === 5 && (t16.avisosOtroTerminal || []).length === 0, t16),
       ok("Al terminar las mesas de prueba quedan limpias", Array.isArray(out.limpio) && out.limpio.length === 0, out.limpio),
     ]);
     clearTimeout(hard); kill();

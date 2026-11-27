@@ -1580,8 +1580,13 @@ async function apiSaveMesasLayoutRemote(nextState) {
     }
     const conflictLayout = data?.data?.layout;
     applyMesasLayoutConflictRecovery(conflictLayout);
-    // Solo se avisa al editar el diseño (ver renderer.js, mismo criterio).
-    if (state?.activeView === "diseno") {
+    // Solo se avisa al editar el diseño (ver renderer.js, mismo criterio) y no si la version que gano el choque la guardo este mismo TPV (la pantalla
+    // principal y este plano son dos escritores del mismo diseño).
+    let conflictIsOwnSave = false;
+    try {
+      conflictIsOwnSave = !!conflictUpdatedAt && localStorage.getItem("tpv_mesas_layout_own_save_at") === String(conflictUpdatedAt);
+    } catch {}
+    if (state?.activeView === "diseno" && !conflictIsOwnSave) {
       try {
         window.parent?.toast?.(
           "El diseño de Mesas se actualizó desde otro terminal. Se ha recargado la versión más reciente.",
@@ -1603,6 +1608,9 @@ async function apiSaveMesasLayoutRemote(nextState) {
   const savedUpdatedAt = data?.data?.updatedAt;
   if (savedUpdatedAt) {
     mesasLayoutLastKnownUpdatedAt = String(savedUpdatedAt);
+    try {
+      localStorage.setItem("tpv_mesas_layout_own_save_at", String(savedUpdatedAt));
+    } catch {}
   }
 
   return true;

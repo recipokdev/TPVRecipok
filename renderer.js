@@ -10296,7 +10296,13 @@ async function apiSaveMesasLayoutRemote(nextState) {
     // Solo se avisa si se esta editando el diseño de las salas: en el resto
     // de vistas la versión nueva se recarga sola y el aviso (que ademas salia
     // en cada arranque por un doble guardado inicial) solo asustaba.
-    if (MESAS_INLINE_VIEW === "diseno") {
+    // Y tampoco si la version que gano el choque la guardamos NOSOTROS (este TPV tiene dos escritores del mismo diseño: la pantalla principal y el
+    // plano de mesas): con un solo TPV decia «otro terminal» sin ser verdad (2026-11-27).
+    let conflictIsOwnSave = false;
+    try {
+      conflictIsOwnSave = !!conflictUpdatedAt && localStorage.getItem("tpv_mesas_layout_own_save_at") === String(conflictUpdatedAt);
+    } catch {}
+    if (MESAS_INLINE_VIEW === "diseno" && !conflictIsOwnSave) {
       toast?.(
         "El diseño de Mesas se actualizó desde otro terminal. Se ha recargado la versión más reciente.",
         "warn",
@@ -10318,6 +10324,10 @@ async function apiSaveMesasLayoutRemote(nextState) {
   const savedUpdatedAt = data?.data?.updatedAt;
   if (savedUpdatedAt) {
     mesasLayoutLastKnownUpdatedAt = String(savedUpdatedAt);
+    // Anota que ESTA version del diseño la guardamos nosotros (ver el 412 de arriba y mesas/mesas.js, que comparte esta clave).
+    try {
+      localStorage.setItem("tpv_mesas_layout_own_save_at", String(savedUpdatedAt));
+    } catch {}
   }
 
   return true;
@@ -11223,10 +11233,14 @@ async function checkTerminalPresenceOnce({ notify = true } = {}) {
       return true;
     });
 
-    const visibleCount = Math.max(
-      visibleCountRaw,
-      (currentSessionVisible ? 1 : 0) + foreignVisibleEntries.length,
-    );
+    // Con la lista de sesiones delante se cuenta SOLO lo que ya se filtro (arriba se descartan las sesiones huerfanas de este mismo equipo y terminal,
+    // p. ej. la de antes de reiniciar o actualizar, que el servidor mantiene hasta 35 s). Antes se tomaba el MAXIMO con el recuento del servidor, que
+    // las cuenta, y el filtro no servia de nada: «Hay 2 TPV activos» salia tras cada reinicio con un solo TPV (2026-11-27, Sergi).
+    const localVisibleCount = (currentSessionVisible ? 1 : 0) + foreignVisibleEntries.length;
+    const visibleCount =
+      entries.length && currentSessionVisible
+        ? localVisibleCount
+        : Math.max(visibleCountRaw, localVisibleCount);
     const position = currentSessionVisible
       ? Math.max(1, Math.min(visibleCount, positionRaw || 1))
       : positionRaw;
@@ -12222,6 +12236,37 @@ function normalizeTicketLinesForCompare(lines) {
   }));
 }
 
+// Lo que ESTE TPV ha enviado hace poco de cada pedido (2026-11-27, Sergi: «cada vez que inicio un pedido me dice que otro terminal ha modificado mi
+// pedido»). Si añades un segundo producto un instante despues del primero, el servidor aun devuelve el pedido con UN producto (el eco de tu propio
+// primer guardado) y eso se tomaba por «cambio de otro terminal»: aviso falso y, si cobrabas justo entonces, cobro cancelado. Un eco de lo que
+// enviamos nosotros hace menos de un minuto no es un cambio ajeno.
+const __parkedSentSnapshots = new Map();
+const PARKED_OWN_ECHO_MS = 60000;
+function parkedItemsSignature(items) {
+  return JSON.stringify(normalizeTicketLinesForCompare(items).map((l) => JSON.stringify(l)).sort());
+}
+function rememberSentParkedItems(ticket) {
+  try {
+    const id = String(ticket?.id ?? "").trim();
+    if (!id) return;
+    const now = Date.now();
+    const list = (__parkedSentSnapshots.get(id) || []).filter((x) => now - x.at <= PARKED_OWN_ECHO_MS);
+    list.push({ sig: parkedItemsSignature(ticket.items), at: now });
+    __parkedSentSnapshots.set(id, list.slice(-10));
+  } catch {}
+}
+function isOwnRecentEchoOfParkedItems(ticketId, items) {
+  try {
+    const list = __parkedSentSnapshots.get(String(ticketId ?? "").trim());
+    if (!list || !list.length) return false;
+    const sig = parkedItemsSignature(items);
+    const now = Date.now();
+    return list.some((x) => x.sig === sig && now - x.at <= PARKED_OWN_ECHO_MS);
+  } catch {
+    return false;
+  }
+}
+
 function hasUnsavedChangesForLoadedParkedTicket(ticket) {
   if (!ticket || ticket?.paid) return false;
 
@@ -12547,9 +12592,24 @@ function mergeRemoteChangesIntoLoadedParkedTicketIfAny() {
   const recovered = mergeMissingRemoteLinesIntoCart(ticket);
   saveParkedTicketsCache();
   renderCart?.();
+  // Eco de nuestro propio guardado (ver rememberSentParkedItems): se integra igual, pero sin avisar de «otro terminal».
+  if (ticket.__remoteIsOwnEcho) {
+    delete ticket.__remoteIsOwnEcho;
+    return true;
+  }
+  // Si otro TPV ha CAMBIADO ESTA MESA DE SITIO, el aviso que importa es el del cambio de mesa (handleLoadedTicketMovedToAnotherMesa, justo despues):
+  // no se enseña ademas el generico de «se actualizó» (salian los dos a la vez, 2026-11-27).
+  try {
+    const willAnnounceMove =
+      !!String(ticket.__movedFromMesaUid || "").trim() &&
+      MESAS_INLINE_ACTIVE &&
+      MESAS_INLINE_VIEW === "transacciones" &&
+      !hasUnsavedChangesForLoadedParkedTicket(ticket);
+    if (willAnnounceMove) return true;
+  } catch {}
   toast?.(
     recovered
-      ? "Esta mesa se actualizó desde otro terminal; se han combinado tus cambios con los del otro terminal."
+      ? "Otro terminal ha modificado esta mesa: se han añadido sus cambios a tu pedido."
       : "Esta mesa se actualizó desde otro terminal mientras estaba abierta.",
     "info",
     "Mesas",
@@ -13328,14 +13388,21 @@ async function prepareSplitMesa(mesaUid, count) {
   };
 
   const groupId = makeSplitGroupId();
+  // Igual que al aparcar un pedido normal: el NOMBRE lleva el numero corto de ticket (displayNo, max 9999), no el id interno (un numero
+  // larguisimo basado en la hora: salia «Ticket #1795770959606 (1/3)», 2026-11-27, Sergi). Todas las cuentas comparten ese numero y llevan su (i/n).
+  const displayNo = getNextSuggestedParkTicketDisplayNo();
   const firstId = getNextSuggestedParkTicketId();
-  const baseName = `Ticket #${firstId}`;
+  parkedCounter = displayNo;
+  saveParkedGlobalCounter(parkedCounter);
+  saveParkedGlobalIdCounter(firstId + n - 1);
+  const baseName = `Ticket #${displayNo}`;
   const slug = String(getCurrentSlugForReservations() || "").trim();
   const cajaId = String(getCajaIdSafe?.() || currentTerminal?.id || "").trim();
   const created = [];
   for (let i = 1; i <= n; i += 1) {
     const ticket = {
       id: firstId + (i - 1),
+      displayNo,
       slug,
       cajaId,
       createdAt: new Date(),
@@ -14027,6 +14094,25 @@ function linkMesaSelectionWithTicketId(ticketId) {
   renderMesasTransContextBar();
 }
 
+// Pedidos SIN cobrar que siguen en la mesa `mesaUid` aparte del que se cobra/borra (2026-11-27): cuando una cuenta dividida tiene varias partes en la
+// misma mesa, cobrar o borrar UNA no debe dejar la mesa libre (se perdia la etapa de servicio y, en el plano de la app de camareros y en el estado
+// guardado, la mesa figuraba libre con partes todavia por cobrar). Ordenados por numero de parte para enlazar con la primera que queda.
+function getOtherUnpaidTicketsInMesa(mesaUid, excludeTicketId) {
+  const uid = String(mesaUid || "").trim();
+  if (!uid) return [];
+  const exclude = String(excludeTicketId ?? "").trim();
+  return (Array.isArray(parkedTickets) ? parkedTickets : [])
+    .filter(
+      (t) =>
+        t &&
+        !t.paid &&
+        !t.closingInProgress &&
+        String(t.mesaUid || "").trim() === uid &&
+        (!exclude || String(t.id ?? "").trim() !== exclude),
+    )
+    .sort((a, b) => (Number(getTicketSplitMeta(a)?.part || 0) || 0) - (Number(getTicketSplitMeta(b)?.part || 0) || 0));
+}
+
 function unlinkMesaTicketByTicketId(ticketId, ticketRef = null) {
   if (!ticketId && !ticketRef) return;
 
@@ -14093,6 +14179,13 @@ function unlinkMesaTicketByTicketId(ticketId, ticketRef = null) {
 
   releasedUids.forEach((uid) => {
     if (!uid) return;
+    const stillHere = getOtherUnpaidTicketsInMesa(uid, ticketId);
+    if (stillHere.length) {
+      // Quedan otras partes sin cobrar en esta mesa: sigue ocupada y enlazada con la primera que queda (no se toca la etapa de servicio).
+      state.tableTicketMap[uid] = String(stillHere[0].id);
+      state.tableStates[uid] = "ocupada";
+      return;
+    }
     delete state.draftCartByTable[uid];
     state.tableStates[uid] = "libre";
 
@@ -19271,6 +19364,15 @@ function toast(message, type = "info", title = "") {
   if (prevLive && prevLive.el.isConnected) {
     clearTimeout(prevLive.timer);
     prevLive.timer = setTimeout(prevLive.hide, ttl);
+    // La barra de tiempo vuelve a empezar (el aviso se renueva).
+    try {
+      const bar = prevLive.el.querySelector(".toast-timer");
+      if (bar) {
+        bar.style.animation = "none";
+        void bar.offsetWidth;
+        bar.style.animation = "";
+      }
+    } catch {}
     return;
   }
 
@@ -19285,9 +19387,12 @@ function toast(message, type = "info", title = "") {
   const el = document.createElement("div");
   el.className = `toast ${type}`;
 
+  // Barra de tiempo (2026-11-27, Sergi): llena al aparecer y se vacia hacia la izquierda; cuando se acaba, el aviso se desvanece.
+  el.style.setProperty("--toast-ttl", `${ttl}ms`);
   el.innerHTML = `
     ${title ? `<div class="title">${title}</div>` : ""}
     <div>${message}</div>
+    <div class="toast-timer" aria-hidden="true"></div>
   `;
 
   container.appendChild(el);
@@ -25532,6 +25637,10 @@ function applyOptimisticMesaCobrada(ticket) {
     // -- al cobrar, la mesa queda LIBRE al instante. (Esa etapa intermedia dejaba mesas colgadas
     // como "cobrada" con un pedido abierto y permitia cobrarlas otra vez.) Si el cobro real falla,
     // revertOptimisticMesaCobrada devuelve la mesa a su estado anterior.
+    // Si quedan otras partes sin cobrar de la misma mesa (cuenta dividida), la mesa NO se libera.
+    if (getOtherUnpaidTicketsInMesa(uid, ticket?.id).length) {
+      return { uid, previousStatus, previousMeta, keptOccupied: true };
+    }
     mesasState.tableStates[uid] = "libre";
     {
       const nextMeta = { ...(previousMeta || {}) };
@@ -25742,7 +25851,8 @@ async function markParkedTicketAsPaidByIndex(
   try {
     const mesasState = loadMesasTablesStateForInline();
     const uid = resolveTicketMesaUid(ticket, mesasState);
-    if (uid) {
+    // Si quedan otras partes sin cobrar de la misma mesa (cuenta dividida), no se libera: unlinkMesaTicketByTicketId la re-enlaza con la siguiente.
+    if (uid && !getOtherUnpaidTicketsInMesa(uid, ticket?.id).length) {
       if (
         !mesasState.tableStates ||
         typeof mesasState.tableStates !== "object"
@@ -45935,6 +46045,7 @@ function syncParkedTicketsFromRemote(list) {
         prevItems.length &&
         (prevTs >= remoteTs || (localRevIsRecent && remoteTs <= 0) || localEditNotYetSeenByServer);
       delete merged.__remoteWinsNextSync;
+      delete merged.__remoteIsOwnEcho;
       if (remoteTs > 0) merged.__remoteUpdatedTs = remoteTs;
 
       if (shouldPreferLocalSnapshot) {
@@ -45990,6 +46101,8 @@ function syncParkedTicketsFromRemote(list) {
             JSON.stringify(normalizeTicketLinesForCompare(merged.items));
           if (!cartMatchesMerged) {
             merged.__remoteChangedWhileLoaded = true;
+            // ¿Lo que trae el servidor es solo el eco de algo que enviamos nosotros hace poco? Entonces no es un cambio de otro terminal.
+            if (isOwnRecentEchoOfParkedItems(ticket?.id ?? ticket?.ticketId, merged.items)) merged.__remoteIsOwnEcho = true;
             // Real de cliente (Asador el Gallo, 2026-10-07): mergeMissingRemoteLinesIntoCart
             // solo AÑADE lineas que falten -- nunca quitaba una linea que
             // alguien hubiera borrado de verdad en otro terminal, asi que el
@@ -47167,6 +47280,19 @@ async function tryParkedOpsSave(ticket, payload) {
   });
 }
 
+// ¿Son el mismo pedido la base (lo ultimo que confirmo el servidor) y lo que el servidor devuelve ahora? (2026-11-27, Sergi: «cada vez que inicio un
+// pedido me dice que otro terminal ha modificado mi pedido»). El numero de ticket de pantalla (`displayNo`) lo pone este TPV al crear el pedido y el
+// primer eco del servidor lo devuelve todavia vacio: esa diferencia NO es un cambio de otro terminal y disparaba el aviso (y, si se cobraba justo
+// entonces, abortaba el cobro pidiendo revisar el importe) en CADA pedido nuevo. Se ignora solo cuando un lado esta vacio.
+function parkedOpsDocsEquivalent(OPS, a, b) {
+  if (OPS.stable(a) === OPS.stable(b)) return true;
+  const da = Number(a?.header?.displayNo || 0) || 0;
+  const db = Number(b?.header?.displayNo || 0) || 0;
+  if (da && db && da !== db) return false;
+  const neutral = (d) => ({ ...d, header: { ...(d?.header || {}), displayNo: null } });
+  return OPS.stable(neutral(a)) === OPS.stable(neutral(b));
+}
+
 // Tras un refresco del servidor: integra la version remota en el pedido local sin perder los
 // cambios locales aun no enviados, y avanza la base. Solo para pedidos con guardado por
 // operaciones activo.
@@ -47252,12 +47378,13 @@ function parkedOpsReconcileRemoteIntoMerged(prev, remoteTicket, merged, opts = {
   // Solo si el pedido esta CARGADO en el carrito: si no, el carrito se construira mas tarde desde
   // `merged.items` (que ya trae lo remoto) y una integracion pendiente se sumaria otra vez
   // (visto con 2 TPV reales: la mesa se abria con 3 en vez de 2 en el TPV que no la tenia abierta).
-  if (opts.loadedInCart !== false && OPS.stable(entry.doc) !== OPS.stable(remoteDoc)) {
+  if (opts.loadedInCart !== false && !parkedOpsDocsEquivalent(OPS, entry.doc, remoteDoc)) {
     merged.__opsReconcile = {
       baseItems: prev?.__opsReconcile?.baseItems || entry.doc.items,
       remoteItems: rawRemoteItems,
     };
     merged.__remoteChangedWhileLoaded = true;
+    if (isOwnRecentEchoOfParkedItems(merged.id, rawRemoteItems)) merged.__remoteIsOwnEcho = true;
   }
 
   parkedOpsSetBase(slug, merged.id, remoteDoc, remoteUpdatedAt);
@@ -47447,6 +47574,7 @@ async function apiSaveParkedReservation(ticket) {
   const payload = buildParkedSavePayload(ticket, slug, cajaId);
 
   rememberTicketParkingMode(ticket, payload.parkingMode);
+  rememberSentParkedItems(ticket);
 
   // Guardado por operaciones (solo si el servidor lo activo para este cliente y modo).
   const opsResult = await tryParkedOpsSave(ticket, payload);
@@ -49338,7 +49466,7 @@ async function onPayButtonClick() {
       // los dos lados, pero se sigue abortando ESTE cobro -- cobrar es
       // demasiado sensible para seguir sin que el cajero confirme el importe
       // ya fusionado con un nuevo toque en Cobrar.
-      if (syncedTicket.__remoteChangedWhileLoaded) {
+      if (syncedTicket.__remoteChangedWhileLoaded && !syncedTicket.__remoteIsOwnEcho) {
         mergeMissingRemoteLinesIntoCart(syncedTicket);
         saveParkedTicketsCache();
         renderCart();
@@ -52428,7 +52556,7 @@ async function confirmSplitTicket() {
   // lo local ni lo remoto, pero se sigue abortando ESTA division y pidiendo
   // revisar/reintentar -- dividir la cuenta es demasiado sensible para
   // seguir adelante sin que el cajero vea el resultado fusionado primero.
-  if (loaded.__remoteChangedWhileLoaded) {
+  if (loaded.__remoteChangedWhileLoaded && !loaded.__remoteIsOwnEcho) {
     mergeMissingRemoteLinesIntoCart(loaded);
     saveParkedTicketsCache();
     renderCart();

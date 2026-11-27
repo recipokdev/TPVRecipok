@@ -5,7 +5,15 @@
       "version": "actual",
       "date": "",
       "title": "",
-      "changes": []
+      "changes": [
+        "ARREGLO: al editar el diseño de las salas, el aviso «El diseño de Mesas se actualizó desde otro terminal» ya no sale cuando el cambio lo guardó este mismo TPV (la pantalla principal y el plano de mesas guardan el mismo diseño y a veces chocan entre sí). Sigue avisando si lo cambió otro terminal de verdad.",
+        "MEJORA: los avisos que salen en una esquina llevan ahora una barra de tiempo: empieza llena, se va vaciando hacia la izquierda y, cuando se acaba, el aviso se desvanece. Así se ve cuánto le queda; si el mismo aviso se repite, la barra vuelve a empezar.",
+        "MEJORA: cuando otro terminal cambia una mesa de sitio, ya sale un solo aviso («El pedido de esta mesa se ha cambiado a M3 desde otro dispositivo») en vez de dos. Y al recibir productos añadidos desde otro terminal, el aviso dice «Otro terminal ha modificado esta mesa: se han añadido sus cambios a tu pedido».",
+        "ARREGLO: el aviso «Esta mesa se actualizó desde otro terminal» tampoco sale ya si añades un segundo producto un instante después del primero (el servidor aún devolvía el pedido con un solo producto, el eco de tu propio guardado, y se tomaba por un cambio ajeno; si cobrabas justo entonces, el cobro se cancelaba). Un eco de lo que guardó este mismo TPV hace menos de un minuto no cuenta como cambio de otro terminal.",
+        "ARREGLO: al iniciar un pedido ya no sale el aviso «Esta mesa se actualizó desde otro terminal» cuando solo estabas tú (el número de ticket de pantalla, que aún no había llegado al servidor, se tomaba por un cambio ajeno; si cobrabas justo entonces, además se cancelaba el cobro pidiendo revisar el importe). Solo avisa ya cuando otro terminal ha cambiado de verdad el pedido.",
+        "ARREGLO: el aviso «Hay 2 TPV activos en esta terminal» ya no sale con un solo TPV tras reiniciar o actualizar: la sesión anterior del mismo equipo, que el servidor tarda 35 segundos en olvidar, ya no cuenta como un segundo TPV.",
+        "ARREGLO: al cobrar o borrar una parte de una cuenta dividida, la mesa ya no se queda como libre mientras queden otras partes sin cobrar. Sigue ocupada, conserva su etapa de servicio y se enlaza con la siguiente parte; solo queda libre al cobrar la última."
+      ]
     },
     {
       "version": "0.2.74",

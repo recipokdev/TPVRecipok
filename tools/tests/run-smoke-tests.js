@@ -7598,7 +7598,7 @@ mustContain(
 );
 mustContain(
   renderer,
-  "if (loaded.__remoteChangedWhileLoaded) {",
+  "if (loaded.__remoteChangedWhileLoaded && !loaded.__remoteIsOwnEcho) {",
   "confirmSplitTicket refuses to split/unify using a stale cart when the loaded mesa ticket changed remotely since it was opened -- previously it could permanently drop lines added by another terminal while dividing the bill",
 );
 
@@ -7613,7 +7613,7 @@ mustContain(
 );
 mustContain(
   renderer,
-  "if (syncedTicket.__remoteChangedWhileLoaded) {",
+  "if (syncedTicket.__remoteChangedWhileLoaded && !syncedTicket.__remoteIsOwnEcho) {",
   "onPayButtonClick refuses to charge/invoice from a stale cart when the mesa changed remotely right before paying -- previously the real FacturaScripts invoice itself was built from the old cart (buildFsLinesFromCart(cart)), permanently under-billing real consumption with no natural way to bill the difference once the ticket is paid",
 );
 mustContain(
@@ -10121,7 +10121,7 @@ console.log("\n[SMOKE] Checking 2026-10-15 lineas ya enviadas a cocina: confirma
     renderer.includes('"Pendiente de enviar" : "No va a cocina"') &&
     styles.includes(".cart-batch-divider--pending") &&
     !renderer.includes('"Carrito recuperado tras cierre inesperado."') &&
-    renderer.includes('if (MESAS_INLINE_VIEW === "diseno") {') &&
+    renderer.includes('if (MESAS_INLINE_VIEW === "diseno" && !conflictIsOwnSave) {') &&
     renderer.includes("addUnitsAsNewLineAfterSentLine(item, q - (Number(item.qty) || 0));") &&
     renderer.includes("const kitchenSentForAdd = getKitchenSentQtyByLineId();") &&
     renderer.includes("waiterSent: !!String(line?.sentBatchAt || \"\").trim(),") &&
@@ -10348,7 +10348,7 @@ console.log("\n[SMOKE] Checking 2026-10-16 guardado por operaciones (cliente)\n"
     renderer.includes("if (currentParkedTicketIndex != null && Number(currentParkedTicketIndex) === idx) {") &&
     renderer.includes("const r = await postOps(p.ops, p.clientOpId);") &&
     renderer.includes("if (__parkedOpsLocks.has(key) || entry.pending) {") &&
-    renderer.includes("if (opts.loadedInCart !== false && OPS.stable(entry.doc) !== OPS.stable(remoteDoc)) {") &&
+    renderer.includes("if (opts.loadedInCart !== false && !parkedOpsDocsEquivalent(OPS, entry.doc, remoteDoc)) {") &&
     renderer.includes("JSON.stringify(normalizeTicketLinesForCompare(r.remoteItems))) return false;") &&
     renderer.includes("if (ticket.__opsReconcile && window.TPV_PARKED_OPS) {") &&
     renderer.includes('localStorage.getItem("tpv_parkedOpsDisabled") === "1"') &&
@@ -12891,7 +12891,19 @@ mustContain(renderer, "const TOAST_QUIET_OK_ADMIN_RE = [", "Las confirmaciones d
 mustContain(renderer, "function shouldSilenceToast(message, type, title) {", "Politica de avisos: los de exito redundantes (dividir, mover/fusionar, guardar/borrar pedido, interruptores de Opciones) no salen; los repetidos no se apilan y hay un maximo de 3 a la vez (Sergi, 26-nov-2026)");
 mustContain(renderer, "`${base}/series?limit=1`;", "La comprobacion de conexion pide una tabla pequeña de FacturaScripts (series), no una factura: Lumi hacia ~1.300 peticiones de facturas en 3 horas contra su FacturaScripts ya lento (26-nov-2026)");
 mustContain(renderer, "const ONLINE_POLL_STABLE_MS = 10000;", "La comprobacion de conexion va cada 10 s cuando todo va bien (5 s si hay dudas; una vez por minuto con la ventana oculta)");
+mustContain(renderer, "function getOtherUnpaidTicketsInMesa(mesaUid, excludeTicketId) {", "Cobrar o borrar UNA parte de una cuenta dividida no deja la mesa libre si quedan otras partes sin cobrar (27-nov-2026)");
+mustContain(renderer, "if (uid && !getOtherUnpaidTicketsInMesa(uid, ticket?.id).length) {", "El cobro de una parte no pone la mesa libre mientras queden otras partes sin cobrar");
+mustContain(renderer, "function parkedOpsDocsEquivalent(OPS, a, b) {", "El numero de ticket de pantalla (displayNo) vacio en el primer eco del servidor no cuenta como «cambio de otro terminal» (aviso falso en cada pedido nuevo, 27-nov-2026)");
+mustContain(renderer, "const localVisibleCount = (currentSessionVisible ? 1 : 0) + foreignVisibleEntries.length;", "El aviso «Hay N TPV activos» cuenta solo las sesiones ajenas reales (las huerfanas del mismo equipo y terminal no suman), no el maximo con el recuento del servidor");
+mustContain(renderer, '<div class="toast-timer" aria-hidden="true"></div>', "Los avisos llevan una barra de tiempo que se vacia hacia la izquierda hasta que el aviso se desvanece (Sergi, 27-nov-2026)");
+mustContain(renderer, 'localStorage.getItem("tpv_mesas_layout_own_save_at") === String(conflictUpdatedAt)', "El aviso «El diseño de Mesas se actualizó desde otro terminal» no sale si el choque lo provoco un guardado de ESTE mismo TPV (pantalla principal y plano son dos escritores; 27-nov-2026)");
+mustContain(mesasJs, 'localStorage.getItem("tpv_mesas_layout_own_save_at") === String(conflictUpdatedAt)', "El plano de mesas tampoco avisa de «otro terminal» cuando el choque viene de un guardado de este mismo TPV");
+mustContain(renderer, "function isOwnRecentEchoOfParkedItems(ticketId, items) {", "Un eco de lo que ESTE TPV acaba de guardar (el servidor devuelve el pedido con un producto menos si añades otro enseguida) no cuenta como «cambio de otro terminal» ni cancela el cobro (27-nov-2026)");
+mustContain(renderer, "rememberSentParkedItems(ticket);", "apiSaveParkedReservation recuerda lo que envia para reconocer su propio eco");
+mustContain(renderer, "const willAnnounceMove =", "Si otro TPV cambia la mesa de sitio solo sale el aviso del cambio de mesa, no tambien el generico de «se actualizo» (27-nov-2026)");
+mustContain(renderer, "Otro terminal ha modificado esta mesa: se han añadido sus cambios a tu pedido.", "El aviso al integrar los productos de otro terminal ya no dice «tus cambios» cuando el cajero no tenia ninguno pendiente");
 mustContain(renderer, "function inheritSplitLineIds(keptLines, sourceLines) {", "Al dividir, las lineas que se quedan en el pedido original conservan su _lineId: otro TPV que subio la cantidad de esa linea justo antes de enterarse ya no pierde su cambio (1 unidad perdida en ~la mitad de las pruebas de Dividir con 2 TPV, 26-nov-2026)");
+mustContain(renderer, "const baseName = `Ticket #${displayNo}`;", "Preparar cuentas separadas nombra las cuentas con el numero corto de ticket (displayNo), no con el id interno larguisimo (27-nov-2026)");
 mustContain(renderer, "async function prepareSplitMesa(mesaUid, count) {", "«Preparar cuentas separadas»: una mesa libre se divide en N cuentas vacias antes de que se sienten los clientes (Lumi/Sergi, 26-nov-2026)");
 mustContain(mesasJs, 'data-table-act="prepare-split"', "La ficha de una mesa libre del plano tiene el boton «Preparar cuentas separadas»");
 mustContain(renderer, "async function askMoveScopeForSplitMesa(sourceUid) {", "Al mover o fusionar una mesa con la cuenta dividida se pregunta si se mueve TODA la cuenta o SOLO UNA parte (Lumi/Sergi, 26-nov-2026)");

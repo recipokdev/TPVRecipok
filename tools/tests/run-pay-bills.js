@@ -46,7 +46,9 @@ function check(label, cond, extra) {
     const card = () => win.evaluate(() => document.querySelector('.pay-amount[data-codpago="TARJ"]').value);
     const change = () => win.evaluate(() => document.getElementById("payChangeBig").textContent);
     const sel = () => win.evaluate(() => payModalState.selectedCodpago);
-    const bill = (n) => win.click(`#payBills [data-k="bill:${n}"]`);
+    // El teclado de cobro ignora la MISMA tecla repetida en menos de 90 ms (antirrebote, ver bindPayKeypadOnce): con la pagina animada (barra de tiempo de los avisos)
+    // los clics seguidos de Playwright podian llegar mas juntos que eso, algo que una persona no puede hacer. Se deja un respiro entre billetes.
+    const bill = async (n) => { await win.click(`#payBills [data-k="bill:${n}"]`); await new Promise((r) => setTimeout(r, 130)); };
 
     const labels = await win.evaluate(() => [...document.querySelectorAll("#payBills .pay-bill")].map((b) => b.textContent.trim()));
     check("Salen los 4 billetes: 5, 10, 20 y 50 €", JSON.stringify(labels) === JSON.stringify(["5 €", "10 €", "20 €", "50 €"]), JSON.stringify(labels));
