@@ -5,6 +5,12 @@
       "version": "actual",
       "date": "",
       "title": "",
+      "changes": []
+    },
+    {
+      "version": "0.2.75",
+      "date": "2026-11-27",
+      "title": "Release 0.2.75",
       "changes": [
         "ARREGLO: al editar el diseño de las salas, el aviso «El diseño de Mesas se actualizó desde otro terminal» ya no sale cuando el cambio lo guardó este mismo TPV (la pantalla principal y el plano de mesas guardan el mismo diseño y a veces chocan entre sí). Sigue avisando si lo cambió otro terminal de verdad.",
         "MEJORA: los avisos que salen en una esquina llevan ahora una barra de tiempo: empieza llena, se va vaciando hacia la izquierda y, cuando se acaba, el aviso se desvanece. Así se ve cuánto le queda; si el mismo aviso se repite, la barra vuelve a empezar.",
